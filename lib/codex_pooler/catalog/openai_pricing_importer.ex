@@ -1,15 +1,13 @@
 defmodule CodexPooler.Catalog.OpenAIPricingImporter do
   @moduledoc false
 
-  alias CodexPooler.Catalog.PricingSnapshot
+  import Ecto.Query
+
+  alias CodexPooler.Catalog.{OpenAIPricingFormat, PricingSnapshot}
   alias CodexPooler.Repo
 
   @source "openai-json-pricing"
-  @importer_format_revision 1
-  @pricing_type "per_1m_tokens"
-  @supported_price_buckets ~w(default short_context long_context)
-  @supported_price_dimensions ~w(input cached_input cache_write output reasoning available)
-  @unavailable "unavailable"
+  @revision "2"
   @currency_code "USD"
   @billing_unit "token"
 
@@ -24,476 +22,276 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
 
   @spec import_file(term()) :: {:ok, import_result()} | {:error, importer_error()}
   def import_file(path) when is_binary(path) do
-    with {:ok, payload} <- decode_file(path) do
-      import_payload(payload, path)
+    with {:ok, raw} <- File.read(path),
+         {:ok, payload} <- decode(raw),
+         {:ok, classified} <- classify(payload) do
+      persist(classified, path)
+    else
+      {:error, reason} when is_atom(reason) -> {:error, file_error(reason)}
+      {:error, %{code: _code, message: _message} = error} -> {:error, error}
     end
   end
 
-  def import_file(_path), do: {:error, importer_error(:invalid_path, "path must be a string")}
+  def import_file(_path), do: {:error, error(:invalid_path, "path must be a string")}
 
   @spec import_url(term()) :: {:ok, import_result()} | {:error, importer_error()}
   def import_url(url) when is_binary(url) do
-    with {:ok, payload} <- fetch_url(url) do
-      import_payload(payload, url)
+    with {:ok, raw} <- fetch(url),
+         {:ok, payload} <- decode(raw),
+         {:ok, classified} <- classify(payload) do
+      persist(classified, url)
     end
   end
 
-  def import_url(_url), do: {:error, importer_error(:invalid_url, "url must be a string")}
+  def import_url(_url), do: {:error, error(:invalid_url, "url must be a string")}
 
-  defp import_payload(payload, source_url) do
-    with {:ok, generated_at, generated_at_raw, models} <- validate_payload(payload),
-         {:ok, rows, skipped} <- build_rows(models, generated_at, generated_at_raw, source_url) do
-      replace_rows(price_version(generated_at_raw), rows, skipped)
-    end
-  end
-
-  defp decode_file(path) do
-    with {:ok, raw} <- File.read(path),
-         {:ok, payload} <- Jason.decode(raw) do
-      {:ok, payload}
-    else
-      {:error, %Jason.DecodeError{} = error} ->
-        {:error, importer_error(:invalid_json, Exception.message(error))}
-
-      {:error, reason} ->
-        {:error, importer_error(:file_read_failed, format_file_error(reason))}
-    end
-  end
-
-  defp fetch_url(url) do
+  defp fetch(url) do
     case Req.get(url, decode_body: false, receive_timeout: :timer.seconds(30), retry: false) do
       {:ok, %{status: status, body: body}} when status in 200..299 and is_binary(body) ->
-        decode_json_body(body)
+        {:ok, body}
 
       {:ok, %{status: status}} ->
-        {:error, importer_error(:http_error, "pricing catalog returned HTTP #{status}")}
+        {:error, error(:http_error, "pricing catalog returned HTTP #{status}")}
 
-      {:error, %Req.TransportError{} = error} ->
-        {:error, importer_error(:http_transport_failed, Exception.message(error))}
+      {:error, %Req.TransportError{}} ->
+        {:error, error(:http_transport_failed, "pricing catalog transport failed")}
     end
   end
 
-  defp decode_json_body(body) do
-    case Jason.decode(body) do
+  defp decode(raw) do
+    case OpenAIPricingFormat.decode(raw) do
       {:ok, payload} ->
         {:ok, payload}
 
-      {:error, %Jason.DecodeError{} = error} ->
-        {:error, importer_error(:invalid_json, Exception.message(error))}
+      {:error, :invalid_json} ->
+        {:error, error(:invalid_json, "pricing catalog is not valid JSON")}
     end
   end
 
-  defp format_file_error(reason) when is_atom(reason),
-    do: reason |> :file.format_error() |> to_string()
+  defp classify(payload) do
+    case OpenAIPricingFormat.classify(payload) do
+      %{compatible?: true} = result ->
+        {:ok, %{result | generated_at_raw: payload["generated_at"]}}
 
-  defp validate_payload(%{"generated_at" => generated_at_raw, "models" => models})
-       when is_binary(generated_at_raw) and is_map(models) do
-    case DateTime.from_iso8601(generated_at_raw) do
-      {:ok, generated_at, _offset} ->
-        {:ok, usec_precision(generated_at), generated_at_raw, models}
+      %{errors: errors} ->
+        code =
+          if Enum.any?(errors, &(&1.code == :conflicting_service_tier_alias)),
+            do: :conflicting_service_tier_alias,
+            else: :incompatible_pricing_catalog
 
-      {:error, _reason} ->
-        {:error,
-         importer_error(:invalid_generated_at, "generated_at must be an ISO-8601 datetime")}
+        {:error, error(code, error_message(code))}
     end
   end
 
-  defp validate_payload(_payload) do
-    {:error,
-     importer_error(
-       :invalid_payload,
-       "payload must contain generated_at and models map"
-     )}
-  end
+  defp persist(classified, source_url) do
+    price_version = "#{classified.generated_at_raw}:importer-format-2"
+    captured_at = now()
 
-  defp build_rows(models, generated_at, generated_at_raw, path) do
-    now = now()
-
-    Enum.reduce_while(models, {:ok, [], 0}, fn {model_name, model_payload},
-                                               {:ok, rows, skipped} ->
-      case build_model_rows(model_name, model_payload, generated_at, generated_at_raw, path, now) do
-        {:ok, model_rows, model_skipped} ->
-          {:cont, {:ok, rows ++ model_rows, skipped + model_skipped}}
-
-        {:error, reason} ->
-          {:halt, {:error, reason}}
-      end
-    end)
-  end
-
-  defp build_model_rows(model_name, model_payload, generated_at, generated_at_raw, path, now)
-       when is_binary(model_name) and is_map(model_payload) do
-    pricing_type = Map.get(model_payload, "pricing_type")
-
-    if pricing_type == @pricing_type do
-      with {:ok, prices} <- fetch_prices(model_payload, model_name),
-           {:ok, model_identifier} <- model_identifier(model_name, model_payload) do
-        build_service_tier_rows(
-          model_identifier,
-          model_payload,
-          prices,
-          generated_at,
-          generated_at_raw,
-          path,
-          now
+    rows =
+      Enum.map(classified.rows, fn row ->
+        row_attrs(
+          row,
+          classified.generated_at,
+          classified.generated_at_raw,
+          price_version,
+          source_url,
+          captured_at
         )
-      end
-    else
-      {:ok, [], 1}
-    end
-  end
+      end)
 
-  defp build_model_rows(model_name, _model_payload, _generated_at, _generated_at_raw, _path, _now)
-       when is_binary(model_name) do
-    {:error, importer_error(:invalid_model_payload, "model #{model_name} payload must be a map")}
-  end
-
-  defp fetch_prices(%{"prices" => prices}, _model_name) when is_map(prices), do: {:ok, prices}
-
-  defp fetch_prices(_model_payload, model_name) do
-    {:error, importer_error(:invalid_model_payload, "model #{model_name} prices must be a map")}
-  end
-
-  defp model_identifier(_model_name, %{"model" => model}) when is_binary(model) and model != "",
-    do: {:ok, model}
-
-  defp model_identifier(model_name, _model_payload), do: {:ok, model_name}
-
-  defp build_service_tier_rows(
-         model_identifier,
-         model_payload,
-         prices,
-         generated_at,
-         generated_at_raw,
-         path,
-         now
-       ) do
-    Enum.reduce_while(prices, {:ok, [], 0}, fn {service_tier, tier_prices},
-                                               {:ok, rows, skipped} ->
-      case build_tier_row(
-             model_identifier,
-             model_payload,
-             service_tier,
-             tier_prices,
-             generated_at,
-             generated_at_raw,
-             path,
-             now
-           ) do
-        {:ok, tier_rows, tier_skipped} ->
-          {:cont, {:ok, rows ++ tier_rows, skipped + tier_skipped}}
-
-        {:error, reason} ->
-          {:halt, {:error, reason}}
-      end
-    end)
+    Repo.transaction(fn -> insert_rows(rows) end)
     |> case do
-      {:ok, rows, skipped} -> {:ok, rows, skipped}
-      {:error, reason} -> {:error, reason}
-    end
-  end
+      {:ok, inserted} ->
+        skipped = classified.summary.skipped_models + classified.summary.skipped_price_buckets
 
-  defp build_tier_row(
-         model_identifier,
-         model_payload,
-         service_tier,
-         tier_prices,
-         generated_at,
-         generated_at_raw,
-         path,
-         now
-       )
-       when is_binary(service_tier) and is_map(tier_prices) do
-    row_context = %{
-      generated_at: generated_at,
-      generated_at_raw: generated_at_raw,
-      model_identifier: model_identifier,
-      model_payload: model_payload,
-      now: now,
-      path: path,
-      service_tier: service_tier
-    }
-
-    tier_prices
-    |> Map.take(@supported_price_buckets)
-    |> Enum.reduce_while({:ok, [], 0}, fn {price_bucket, prices}, {:ok, rows, skipped} ->
-      case build_bucket_row(row_context, price_bucket, prices) do
-        {:ok, nil} -> {:cont, {:ok, rows, skipped + 1}}
-        {:ok, row} -> {:cont, {:ok, [row | rows], skipped}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, [], skipped} -> {:ok, [], skipped + 1}
-      {:ok, rows, skipped} -> {:ok, Enum.reverse(rows), skipped}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp build_tier_row(
-         model_identifier,
-         _model_payload,
-         service_tier,
-         _tier_prices,
-         _generated_at,
-         _generated_at_raw,
-         _path,
-         _now
-       )
-       when is_binary(service_tier) do
-    {:error,
-     importer_error(
-       :invalid_price_row,
-       "model #{model_identifier} tier #{service_tier} prices must be a map"
-     )}
-  end
-
-  defp build_bucket_row(%{} = row_context, price_bucket, prices) when is_map(prices) do
-    case build_snapshot_row(row_context, price_bucket, prices) do
-      {:ok, :skip} -> {:ok, nil}
-      other -> other
-    end
-  end
-
-  defp build_bucket_row(
-         %{model_identifier: model_identifier, service_tier: service_tier},
-         price_bucket,
-         _prices
-       ) do
-    {:error,
-     importer_error(
-       :invalid_price_row,
-       "model #{model_identifier} tier #{service_tier} #{price_bucket} pricing must be a map"
-     )}
-  end
-
-  defp build_snapshot_row(
-         %{
-           generated_at: generated_at,
-           generated_at_raw: generated_at_raw,
-           model_identifier: model_identifier,
-           model_payload: model_payload,
-           now: now,
-           path: path,
-           service_tier: service_tier
-         },
-         price_bucket,
-         default_prices
-       ) do
-    default_prices = Map.take(default_prices, @supported_price_dimensions)
-
-    cond do
-      unavailable_price_bucket?(default_prices) ->
         {:ok,
          %{
-           model_identifier: model_identifier,
-           price_version: price_version(generated_at_raw),
-           currency_code: @currency_code,
-           billing_unit: @billing_unit,
-           input_token_micros: nil,
-           cached_input_token_micros: nil,
-           cache_write_token_micros: nil,
-           output_token_micros: nil,
-           reasoning_token_micros: nil,
-           request_base_micros: nil,
-           effective_at: generated_at,
-           source_url: path,
-           captured_at: now,
-           config:
-             snapshot_config(model_payload, generated_at_raw, path, service_tier, price_bucket, %{
-               "availability" => @unavailable
-             })
+           inserted: inserted,
+           skipped: skipped,
+           total: inserted + skipped,
+           source: @source,
+           price_version: price_version
          }}
 
-      Map.has_key?(default_prices, "input") and Map.has_key?(default_prices, "output") ->
-        with {:ok, input} <-
-               required_decimal(default_prices, "input", model_identifier, service_tier),
-             {:ok, output} <-
-               required_decimal(default_prices, "output", model_identifier, service_tier),
-             {:ok, cached_input} <-
-               optional_decimal(default_prices, "cached_input", Decimal.new(0)),
-             {:ok, cache_write} <- cache_write_price(default_prices),
-             {:ok, reasoning, reasoning_source} <- reasoning_price(default_prices, output) do
-          {:ok,
-           %{
-             model_identifier: model_identifier,
-             price_version: price_version(generated_at_raw),
-             currency_code: @currency_code,
-             billing_unit: @billing_unit,
-             input_token_micros: usd_per_1m_to_token_micros(input),
-             cached_input_token_micros: usd_per_1m_to_token_micros(cached_input),
-             cache_write_token_micros: optional_token_micros(cache_write),
-             output_token_micros: usd_per_1m_to_token_micros(output),
-             reasoning_token_micros: usd_per_1m_to_token_micros(reasoning),
-             request_base_micros: Decimal.new(0),
-             effective_at: generated_at,
-             source_url: path,
-             captured_at: now,
-             config:
-               snapshot_config(
-                 model_payload,
-                 generated_at_raw,
-                 path,
-                 service_tier,
-                 price_bucket,
-                 %{
-                   "availability" => "priced",
-                   "reasoning_price_source" => reasoning_source
-                 }
-               )
-           }}
-        end
+      {:error, %{code: _code, message: _message} = error} ->
+        {:error, error}
 
-      true ->
-        {:ok, :skip}
+      {:error, _reason} ->
+        {:error, error(:concurrent_pricing_conflict, error_message(:concurrent_pricing_conflict))}
     end
   end
 
-  defp unavailable_price_bucket?(prices), do: Map.get(prices, "available") == false
+  defp insert_rows(rows) do
+    Enum.reduce(rows, 0, fn attrs, inserted ->
+      case Repo.insert(PricingSnapshot.insert_changeset(attrs), mode: :savepoint) do
+        {:ok, _snapshot} ->
+          inserted + 1
 
-  defp snapshot_config(model_payload, generated_at_raw, path, service_tier, price_bucket, extra) do
-    Map.merge(
-      %{
-        "source" => @source,
-        "importer_format_revision" => @importer_format_revision,
-        "source_generated_at" => generated_at_raw,
-        "source_path" => path,
-        "service_tier" => service_tier,
-        "price_bucket" => price_bucket,
-        "pricing_type" => @pricing_type,
-        "category" => string_or_nil(Map.get(model_payload, "category")),
-        "categories" => string_list_or_empty(Map.get(model_payload, "categories"))
-      },
-      extra
+        {:error, changeset} ->
+          resolve_unique_conflict(changeset, attrs, inserted)
+      end
+    end)
+  end
+
+  defp resolve_unique_conflict(changeset, attrs, inserted) do
+    if named_unique_conflict?(changeset) do
+      case reload_identity(attrs) do
+        [snapshot] ->
+          if semantic_equal?(persisted_semantics(snapshot), attrs_semantics(attrs)),
+            do: inserted,
+            else: rollback_conflict()
+
+        _rows ->
+          rollback_conflict()
+      end
+    else
+      rollback_conflict()
+    end
+  end
+
+  defp reload_identity(attrs) do
+    model_identifier = String.downcase(attrs.model_identifier)
+    price_version = attrs.price_version
+    service_tier = attrs.config["service_tier"]
+    price_bucket = attrs.config["price_bucket"]
+
+    Repo.all(
+      from snapshot in PricingSnapshot,
+        where:
+          fragment("lower(?)", snapshot.model_identifier) == ^model_identifier and
+            snapshot.price_version == ^price_version and
+            fragment("COALESCE(?->>'service_tier', '')", snapshot.config) == ^service_tier and
+            fragment("COALESCE(?->>'price_bucket', '')", snapshot.config) == ^price_bucket and
+            fragment("COALESCE(?->>'importer_format_revision', '')", snapshot.config) ==
+              ^@revision
     )
   end
 
-  defp required_decimal(map, key, model_identifier, service_tier) do
-    with {:ok, value} <- optional_decimal(map, key, nil),
-         false <- is_nil(value) do
-      {:ok, value}
-    else
-      true ->
-        {:error,
-         importer_error(
-           :invalid_price_row,
-           "model #{model_identifier} tier #{service_tier} default.#{key} must be present"
-         )}
+  defp named_unique_conflict?(changeset) do
+    Enum.any?(changeset.errors, fn
+      {_field, {_message, metadata}} ->
+        metadata[:constraint] == :unique and
+          to_string(metadata[:constraint_name]) == "pricing_snapshots_version_uq"
 
-      {:error, _reason} ->
-        {:error,
-         importer_error(
-           :invalid_price_row,
-           "model #{model_identifier} tier #{service_tier} default.#{key} must be numeric"
-         )}
-    end
-  end
-
-  defp optional_decimal(map, key, default) do
-    case Map.get(map, key) do
-      nil -> {:ok, default}
-      value -> parse_decimal_value(value)
-    end
-  end
-
-  defp parse_decimal_value(value) when is_integer(value), do: {:ok, Decimal.new(value)}
-
-  defp parse_decimal_value(value) when is_float(value) do
-    value
-    |> Float.to_string()
-    |> parse_decimal_string()
-  end
-
-  defp parse_decimal_value(%Decimal{} = value), do: {:ok, value}
-
-  defp parse_decimal_value(value) when is_binary(value), do: parse_decimal_string(value)
-  defp parse_decimal_value(_invalid), do: {:error, :invalid_decimal}
-
-  defp parse_decimal_string(value) do
-    case Decimal.parse(value) do
-      {parsed, ""} -> {:ok, parsed}
-      _invalid -> {:error, :invalid_decimal}
-    end
-  end
-
-  defp reasoning_price(default_prices, output) do
-    case optional_decimal(default_prices, "reasoning", nil) do
-      {:ok, %Decimal{} = reasoning} ->
-        {:ok, reasoning, "default.reasoning"}
-
-      {:ok, nil} ->
-        {:ok, output, "output_fallback"}
-
-      {:error, _reason} ->
-        {:error, importer_error(:invalid_price_row, "default.reasoning must be numeric")}
-    end
-  end
-
-  defp cache_write_price(prices) do
-    case optional_decimal(prices, "cache_write", nil) do
-      {:ok, nil} ->
-        {:ok, nil}
-
-      {:ok, %Decimal{} = cache_write} ->
-        if Decimal.negative?(cache_write) do
-          {:error, importer_error(:invalid_price_row, "default.cache_write must be nonnegative")}
-        else
-          {:ok, cache_write}
-        end
-
-      {:error, _reason} ->
-        {:error, importer_error(:invalid_price_row, "default.cache_write must be numeric")}
-    end
-  end
-
-  defp replace_rows(price_version, rows, skipped) do
-    Repo.transaction(fn ->
-      inserted_count = insert_rows(rows)
-
-      %{inserted: inserted_count, skipped: skipped, total: inserted_count + skipped}
+      _error ->
+        false
     end)
-    |> case do
-      {:ok, stats} ->
-        {:ok,
-         Map.merge(stats, %{
-           source: @source,
-           price_version: price_version
-         })}
-
-      {:error, reason} ->
-        {:error, importer_error(:import_failed, Exception.message(reason))}
-    end
   end
 
-  defp insert_rows([]), do: 0
-
-  defp insert_rows(rows) do
-    {count, _rows} = Repo.insert_all(PricingSnapshot, rows, on_conflict: :nothing)
-    count
+  defp row_attrs(row, effective_at, generated_at_raw, price_version, source_url, captured_at) do
+    %{
+      model_identifier: row.model_identifier,
+      price_version: price_version,
+      currency_code: @currency_code,
+      billing_unit: @billing_unit,
+      input_token_micros: row.input,
+      cached_input_token_micros: row.cached_input,
+      cache_write_token_micros: row.cache_write,
+      output_token_micros: row.output,
+      reasoning_token_micros: row.reasoning,
+      request_base_micros: row.request_base,
+      effective_at: effective_at,
+      source_url: source_url,
+      captured_at: captured_at,
+      config: %{
+        "source" => @source,
+        "importer_format_revision" => @revision,
+        "source_generated_at" => generated_at_raw,
+        "source_path" => source_url,
+        "service_tier" => row.service_tier,
+        "price_bucket" => row.price_bucket,
+        "pricing_type" => row.pricing_type,
+        "category" => row.category,
+        "categories" => row.categories,
+        "availability" => row.availability,
+        "reasoning_price_source" => row.reasoning_price_source
+      }
+    }
   end
 
-  defp usd_per_1m_to_token_micros(%Decimal{} = usd_per_1m), do: usd_per_1m
-
-  defp optional_token_micros(nil), do: nil
-  defp optional_token_micros(%Decimal{} = value), do: usd_per_1m_to_token_micros(value)
-
-  defp price_version(generated_at_raw),
-    do: "#{generated_at_raw}:importer-format-#{@importer_format_revision}"
-
-  defp string_or_nil(value) when is_binary(value), do: value
-  defp string_or_nil(_value), do: nil
-
-  defp string_list_or_empty(values) when is_list(values) do
-    values
-    |> Enum.filter(&is_binary/1)
+  defp persisted_semantics(snapshot) do
+    %{
+      model_identifier: String.downcase(snapshot.model_identifier),
+      price_version: snapshot.price_version,
+      revision: snapshot.config["importer_format_revision"],
+      service_tier: snapshot.config["service_tier"],
+      price_bucket: snapshot.config["price_bucket"],
+      currency_code: snapshot.currency_code,
+      billing_unit: snapshot.billing_unit,
+      availability: snapshot.config["availability"],
+      input: snapshot.input_token_micros,
+      cached_input: snapshot.cached_input_token_micros,
+      cache_write: snapshot.cache_write_token_micros,
+      output: snapshot.output_token_micros,
+      reasoning: snapshot.reasoning_token_micros,
+      request_base: snapshot.request_base_micros,
+      effective_at: snapshot.effective_at,
+      pricing_type: snapshot.config["pricing_type"],
+      category: snapshot.config["category"],
+      categories: snapshot.config["categories"],
+      reasoning_price_source: snapshot.config["reasoning_price_source"]
+    }
   end
 
-  defp string_list_or_empty(_values), do: []
+  defp attrs_semantics(attrs) do
+    %{
+      model_identifier: String.downcase(attrs.model_identifier),
+      price_version: attrs.price_version,
+      revision: attrs.config["importer_format_revision"],
+      service_tier: attrs.config["service_tier"],
+      price_bucket: attrs.config["price_bucket"],
+      currency_code: attrs.currency_code,
+      billing_unit: attrs.billing_unit,
+      availability: attrs.config["availability"],
+      input: attrs.input_token_micros,
+      cached_input: attrs.cached_input_token_micros,
+      cache_write: attrs.cache_write_token_micros,
+      output: attrs.output_token_micros,
+      reasoning: attrs.reasoning_token_micros,
+      request_base: attrs.request_base_micros,
+      effective_at: attrs.effective_at,
+      pricing_type: attrs.config["pricing_type"],
+      category: attrs.config["category"],
+      categories: attrs.config["categories"],
+      reasoning_price_source: attrs.config["reasoning_price_source"]
+    }
+  end
 
-  defp importer_error(code, message), do: %{code: code, message: message}
+  defp semantic_equal?(left, right) do
+    decimal_fields = ~w(input cached_input cache_write output reasoning request_base)a
 
-  defp usec_precision(%DateTime{microsecond: {microsecond, _precision}} = timestamp),
-    do: %DateTime{timestamp | microsecond: {microsecond, 6}}
+    Enum.all?(Map.keys(left), fn key ->
+      if key in decimal_fields do
+        decimal_equal?(left[key], right[key])
+      else
+        left[key] == right[key]
+      end
+    end)
+  end
 
+  defp decimal_equal?(nil, nil), do: true
+  defp decimal_equal?(%Decimal{} = left, %Decimal{} = right), do: Decimal.equal?(left, right)
+  defp decimal_equal?(_left, _right), do: false
+
+  defp rollback_conflict do
+    Repo.rollback(
+      error(:concurrent_pricing_conflict, error_message(:concurrent_pricing_conflict))
+    )
+  end
+
+  defp file_error(reason) do
+    error(:file_read_failed, reason |> :file.format_error() |> to_string())
+  end
+
+  defp error_message(:conflicting_service_tier_alias),
+    do: "fast and priority pricing aliases conflict"
+
+  defp error_message(:concurrent_pricing_conflict),
+    do: "concurrent pricing snapshot conflicts with candidate semantics"
+
+  defp error_message(:incompatible_pricing_catalog),
+    do: "pricing catalog is incompatible with the supported format"
+
+  defp error(code, message), do: %{code: code, message: message}
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 end

@@ -205,22 +205,7 @@ defmodule CodexPooler.JobsTest do
     end
 
     test "imports pricing snapshots from the published JSON catalog URL" do
-      pricing_payload = %{
-        "generated_at" => "2026-05-23T12:00:00Z",
-        "models" => %{
-          "gpt-job-pricing" => %{
-            "model" => "gpt-job-pricing",
-            "pricing_type" => "per_1m_tokens",
-            "prices" => %{
-              "standard" => %{
-                "default" => %{"input" => 1.25, "output" => 10.0}
-              }
-            }
-          }
-        },
-        "source" => "openai-json-pricing-test",
-        "source_url" => "https://example.com/pricing"
-      }
+      pricing_payload = pricing_job_payload("gpt-job-pricing")
 
       upstream = start_upstream(FakeUpstream.json_response(pricing_payload))
       source_url = FakeUpstream.url(upstream)
@@ -236,11 +221,127 @@ defmodule CodexPooler.JobsTest do
                from snapshot in CodexPooler.Catalog.PricingSnapshot,
                  where:
                    snapshot.model_identifier == "gpt-job-pricing" and
-                     snapshot.price_version == "2026-05-23T12:00:00Z:importer-format-1" and
+                     snapshot.price_version == "2026-05-23T12:00:00Z:importer-format-2" and
                      snapshot.source_url == ^source_url
              )
 
       assert [%{method: "GET", path: "/"}] = FakeUpstream.requests(upstream)
+    end
+
+    test "pricing import worker completes a compatible catalog on its first persisted attempt" do
+      upstream = start_upstream(FakeUpstream.json_response(pricing_job_payload("gpt-job-drain")))
+      set_pricing_url!(FakeUpstream.url(upstream))
+
+      assert {:ok, job} = PricingImportWorker.new(%{}) |> Oban.insert()
+
+      assert %{discard: 0, success: 1} =
+               Oban.drain_queue(queue: :jobs, with_scheduled: true, with_recursion: true)
+
+      job = Repo.get!(Oban.Job, job.id)
+      assert job.state == "completed"
+      assert job.attempt == 1
+      assert FakeUpstream.count(upstream) == 1
+
+      assert Repo.exists?(
+               from row in CodexPooler.Catalog.PricingSnapshot,
+                 where:
+                   row.model_identifier == "gpt-job-drain" and
+                     fragment("?->>'service_tier'", row.config) == "standard"
+             )
+    end
+
+    test "pricing import worker retries incompatible catalogs and persists sanitized errors" do
+      pricing_payload = put_in(pricing_job_payload("gpt-job-invalid"), ["models_count"], 2)
+      upstream = start_upstream(FakeUpstream.json_response(pricing_payload))
+      set_pricing_url!(FakeUpstream.url(upstream))
+
+      assert {:ok, job} = PricingImportWorker.new(%{}) |> Oban.insert()
+
+      assert %{discard: 1, success: 0} =
+               Oban.drain_queue(queue: :jobs, with_scheduled: true, with_recursion: true)
+
+      job = Repo.get!(Oban.Job, job.id)
+      assert job.state == "discarded"
+      assert job.attempt == 3
+      assert job.max_attempts == 3
+      assert length(job.errors) == 3
+      assert FakeUpstream.count(upstream) == 3
+      refute inspect(job.errors) =~ "models_count"
+
+      refute Repo.exists?(
+               from row in CodexPooler.Catalog.PricingSnapshot,
+                 where: row.model_identifier == "gpt-job-invalid"
+             )
+    end
+
+    test "pricing import worker retries invalid JSON and HTTP errors" do
+      cases = [
+        FakeUpstream.raw_response("{bad", status: 200),
+        FakeUpstream.raw_response("failure", status: 503)
+      ]
+
+      Enum.each(cases, fn mode ->
+        Repo.delete_all(Oban.Job)
+        upstream = start_upstream(mode)
+        set_pricing_url!(FakeUpstream.url(upstream))
+
+        assert {:ok, job} = PricingImportWorker.new(%{}) |> Oban.insert()
+
+        assert %{discard: 1, success: 0} =
+                 Oban.drain_queue(queue: :jobs, with_scheduled: true, with_recursion: true)
+
+        job = Repo.get!(Oban.Job, job.id)
+        assert job.state == "discarded"
+        assert job.attempt == 3
+        assert length(job.errors) == 3
+        assert FakeUpstream.count(upstream) == 3
+      end)
+    end
+
+    test "pricing import worker retries divergent fast and priority aliases" do
+      payload = pricing_job_payload("gpt-job-alias-conflict")
+
+      payload =
+        put_in(payload, ["models", "gpt-job-alias-conflict", "prices"], %{
+          "fast" => %{"default" => %{"input" => 1, "output" => 2}},
+          "priority" => %{"default" => %{"input" => 1, "output" => 3}}
+        })
+
+      upstream = start_upstream(FakeUpstream.json_response(payload))
+      set_pricing_url!(FakeUpstream.url(upstream))
+
+      assert {:ok, job} = PricingImportWorker.new(%{}) |> Oban.insert()
+
+      assert %{discard: 1, success: 0} =
+               Oban.drain_queue(queue: :jobs, with_scheduled: true, with_recursion: true)
+
+      job = Repo.get!(Oban.Job, job.id)
+      assert job.state == "discarded"
+      assert job.attempt == 3
+      assert length(job.errors) == 3
+      assert FakeUpstream.count(upstream) == 3
+
+      refute Repo.exists?(
+               from row in CodexPooler.Catalog.PricingSnapshot,
+                 where: row.model_identifier == "gpt-job-alias-conflict"
+             )
+    end
+
+    test "pricing import worker retries transport failures without candidate writes" do
+      source_url = unused_loopback_url()
+      set_pricing_url!(source_url)
+
+      assert {:error, %{code: :http_transport_failed}} = perform_job(PricingImportWorker, %{})
+      assert {:ok, job} = PricingImportWorker.new(%{}) |> Oban.insert()
+
+      assert %{discard: 1, success: 0} =
+               Oban.drain_queue(queue: :jobs, with_scheduled: true, with_recursion: true)
+
+      job = Repo.get!(Oban.Job, job.id)
+      assert job.state == "discarded"
+      assert job.attempt == 3
+      assert job.max_attempts == 3
+      assert length(job.errors) == 3
     end
   end
 
@@ -589,6 +690,59 @@ defmodule CodexPooler.JobsTest do
         Application.delete_env(:codex_pooler, CodexPooler.Upstreams)
       end
     end)
+  end
+
+  defp pricing_job_payload(identifier) do
+    generated_at = "2026-05-23T12:00:00Z"
+
+    %{
+      "generated_at" => generated_at,
+      "models" => %{
+        identifier => %{
+          "categories" => ["language_model"],
+          "category" => "language_model",
+          "model" => identifier,
+          "prices" => %{"standard" => %{"default" => %{"input" => 1.25, "output" => 10.0}}},
+          "pricing_type" => "per_1m_tokens",
+          "pricing_types" => ["per_1m_tokens"],
+          "timestamp" => generated_at
+        }
+      },
+      "models_count" => 1,
+      "source" => "synthetic",
+      "source_url" => "https://example.com/pricing.json",
+      "tools" => %{
+        "sample-tool" => %{
+          "details" => "Synthetic tool",
+          "price" => 0,
+          "pricing" => "$0",
+          "tool" => "Sample Tool"
+        }
+      },
+      "tools_count" => 1
+    }
+  end
+
+  defp set_pricing_url!(source_url) do
+    previous_url = InstanceSettings.current().catalog.openai_pricing_url
+
+    on_exit(fn ->
+      InstanceSettings.update_system_settings(InstanceSettings.ensure_singleton!(), %{
+        "catalog" => %{"openai_pricing_url" => previous_url}
+      })
+    end)
+
+    assert {:ok, _settings} =
+             InstanceSettings.update_system_settings(InstanceSettings.ensure_singleton!(), %{
+               "catalog" => %{"openai_pricing_url" => source_url}
+             })
+  end
+
+  defp unused_loopback_url do
+    {:ok, socket} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+    {:ok, port} = :inet.port(socket)
+    :ok = :gen_tcp.close(socket)
+    "http://127.0.0.1:#{port}"
   end
 
   defp start_upstream(mode) do

@@ -1,607 +1,334 @@
 defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
   use CodexPooler.DataCase, async: false
 
-  alias CodexPooler.Accounting
-  alias CodexPooler.Catalog.OpenAIPricingImporter
-  alias CodexPooler.Catalog.PricingSnapshot
+  alias CodexPooler.Catalog.{OpenAIPricingImporter, PricingSnapshot}
   alias CodexPooler.Repo
 
-  import Ecto.Query
   import CodexPooler.PoolerFixtures
 
-  @pricing_path Path.expand("../../../priv/pricing/openai/pricing.json", __DIR__)
+  @fixture Path.expand("../../fixtures/pricing/openai/2026-07-28.json", __DIR__)
 
-  test "imports vendored pricing transactionally and idempotently" do
-    count_before = pricing_count_for_version(current_price_version(vendored_price_version()))
+  test "imports revision 2 rows from the immutable fixture idempotently" do
+    assert {:ok, first} = OpenAIPricingImporter.import_file(@fixture)
+    assert first.price_version == "2026-07-28T17:25:03.915713Z:importer-format-2"
+    assert first.inserted == 208
+    assert first.skipped == 90
 
-    assert {:ok, first} = OpenAIPricingImporter.import_file(@pricing_path)
-    assert first.source == "openai-json-pricing"
-    assert first.inserted >= 0
-    assert String.ends_with?(first.price_version, ":importer-format-1")
-
-    count_after_first = pricing_count_for_version(first.price_version)
-    assert count_after_first > 0
-    assert count_after_first - count_before == first.inserted
-
-    gpt_models = ["gpt-5", "gpt-5-mini", "gpt-5-codex"]
-
-    present_models =
-      @pricing_path
-      |> File.read!()
-      |> Jason.decode!()
-      |> Map.fetch!("models")
-      |> Map.keys()
-      |> MapSet.new()
-
-    Enum.each(gpt_models, fn model ->
-      if MapSet.member?(present_models, model) do
-        assert Repo.exists?(
-                 from s in PricingSnapshot,
-                   where:
-                     s.model_identifier == ^model and
-                       fragment("?->>'service_tier'", s.config) == "standard" and
-                       fragment("?->>'price_bucket'", s.config) == "default"
-               )
-      end
-    end)
-
-    referenced_snapshot = Repo.one!(from s in PricingSnapshot, limit: 1)
-    setup = active_api_key_fixture()
-    %{assignment: assignment} = upstream_assignment_fixture(setup.pool)
-    request = request_fixture(setup)
-
-    attempt =
-      request
-      |> attempt_fixture(assignment)
-      |> Ecto.Changeset.change(pricing_snapshot_id: referenced_snapshot.id)
-      |> Repo.update!()
-
-    assert {:ok, second} = OpenAIPricingImporter.import_file(@pricing_path)
+    assert {:ok, second} = OpenAIPricingImporter.import_file(@fixture)
     assert second.inserted == 0
-    assert second.skipped == first.skipped
+    assert second.skipped == 90
 
-    assert Repo.get!(CodexPooler.Accounting.Attempt, attempt.id).pricing_snapshot_id ==
-             referenced_snapshot.id
-
-    assert pricing_count_for_version(first.price_version) == count_after_first
-  end
-
-  test "imports vendored gpt-5.6 output pricing separately from cache writes" do
-    assert {:ok, _result} = OpenAIPricingImporter.import_file(@pricing_path)
-
-    assert_gpt56_vendored_snapshot!("gpt-5.6-luna", %{
-      input: "1.0",
-      cached_input: "0.1",
-      output: "6.0",
-      cache_write: 1.25
-    })
-
-    assert_gpt56_vendored_snapshot!("gpt-5.6-terra", %{
-      input: "2.5",
-      cached_input: "0.25",
-      output: "15.0",
-      cache_write: 3.125
-    })
-
-    assert_gpt56_vendored_snapshot!("gpt-5.6-sol", %{
-      input: "5.0",
-      cached_input: "0.5",
-      output: "30.0",
-      cache_write: 6.25
-    })
-  end
-
-  test "maps decimals, config dimensions, and reasoning fallback correctly" do
-    path =
-      write_tmp_json!(%{
-        "generated_at" => "2026-04-30T17:21:57.551899Z",
-        "models" => %{
-          "fractional-model" => %{
-            "model" => "fractional-model",
-            "pricing_type" => "per_1m_tokens",
-            "category" => "language_model",
-            "categories" => ["language_model"],
-            "prices" => %{
-              "standard" => %{
-                "default" => %{
-                  "input" => Decimal.new("0.0125"),
-                  "cached_input" => Decimal.new("0.2"),
-                  "output" => Decimal.new("2.5")
-                },
-                "long_context" => %{
-                  "input" => Decimal.new("0.025"),
-                  "cached_input" => Decimal.new("0.4"),
-                  "output" => Decimal.new("3.75")
-                }
-              }
-            }
-          }
-        }
-      })
-
-    assert {:ok, _result} = OpenAIPricingImporter.import_file(path)
-
-    snapshot =
-      Repo.one!(
-        from s in PricingSnapshot,
-          where:
-            s.model_identifier == "fractional-model" and
-              fragment("?->>'price_bucket'", s.config) == "default"
-      )
-
-    long_context_snapshot =
-      Repo.one!(
-        from s in PricingSnapshot,
-          where:
-            s.model_identifier == "fractional-model" and
-              fragment("?->>'price_bucket'", s.config) == "long_context"
-      )
-
-    assert Decimal.equal?(snapshot.input_token_micros, Decimal.new("0.0125"))
-    assert Decimal.equal?(snapshot.cached_input_token_micros, Decimal.new("0.2"))
-    assert Decimal.equal?(snapshot.output_token_micros, Decimal.new("2.5"))
-    assert Decimal.equal?(snapshot.reasoning_token_micros, Decimal.new("2.5"))
-    assert Decimal.equal?(snapshot.request_base_micros, Decimal.new(0))
-
-    assert snapshot.config["source"] == "openai-json-pricing"
-    assert snapshot.config["source_generated_at"] == "2026-04-30T17:21:57.551899Z"
-    assert snapshot.config["service_tier"] == "standard"
-    assert snapshot.config["price_bucket"] == "default"
-    assert snapshot.config["pricing_type"] == "per_1m_tokens"
-    assert snapshot.config["category"] == "language_model"
-    assert snapshot.config["categories"] == ["language_model"]
-    assert snapshot.config["reasoning_price_source"] == "output_fallback"
-
-    assert Decimal.equal?(long_context_snapshot.input_token_micros, Decimal.new("0.025"))
-    assert Decimal.equal?(long_context_snapshot.cached_input_token_micros, Decimal.new("0.4"))
-    assert Decimal.equal?(long_context_snapshot.output_token_micros, Decimal.new("3.75"))
-    assert long_context_snapshot.config["service_tier"] == "standard"
-    assert long_context_snapshot.config["price_bucket"] == "long_context"
-    assert long_context_snapshot.config["availability"] == "priced"
-  end
-
-  test "imports optional cache-write rates per service tier and price bucket" do
-    path =
-      write_tmp_json!(%{
-        "generated_at" => "2026-07-12T10:00:00Z",
-        "models" => %{
-          "cache-write-priced-model" => %{
-            "model" => "cache-write-priced-model",
-            "pricing_type" => "per_1m_tokens",
-            "prices" => %{
-              "standard" => %{
-                "default" => %{
-                  "input" => 2,
-                  "cached_input" => 0.2,
-                  "cache_write" => 2.5,
-                  "output" => 10
-                },
-                "long_context" => %{
-                  "input" => 4,
-                  "cached_input" => 0.4,
-                  "cache_write" => 5,
-                  "output" => 15
-                }
-              },
-              "priority" => %{
-                "default" => %{
-                  "input" => 3,
-                  "cached_input" => 0.3,
-                  "output" => 12
-                }
-              }
-            }
-          }
-        }
-      })
-
-    assert {:ok, _result} = OpenAIPricingImporter.import_file(path)
-
-    snapshots =
+    rows =
       Repo.all(
-        from s in PricingSnapshot,
-          where: s.model_identifier == "cache-write-priced-model"
+        from snapshot in PricingSnapshot, where: snapshot.price_version == ^first.price_version
       )
 
-    snapshot_by_dimension =
-      Map.new(snapshots, &{{&1.config["service_tier"], &1.config["price_bucket"]}, &1})
-
-    assert default_rate =
-             Map.get(snapshot_by_dimension[{"standard", "default"}], :cache_write_token_micros)
-
-    assert Decimal.equal?(default_rate, Decimal.new("2.5"))
-
-    assert long_context_rate =
-             Map.get(
-               snapshot_by_dimension[{"standard", "long_context"}],
-               :cache_write_token_micros
-             )
-
-    assert Decimal.equal?(long_context_rate, Decimal.new("5"))
-
-    assert is_nil(
-             Map.get(snapshot_by_dimension[{"priority", "default"}], :cache_write_token_micros)
-           )
+    assert length(rows) == 208
+    assert Enum.all?(rows, &(&1.config["importer_format_revision"] == "2"))
+    refute Enum.any?(rows, &(&1.config["service_tier"] == "fast"))
   end
 
-  test "same generated_at re-import corrects an existing catalog revision" do
-    generated_at =
-      DateTime.utc_now()
-      |> DateTime.add(-60, :second)
-      |> DateTime.truncate(:second)
-      |> DateTime.to_iso8601()
-
-    first_snapshot = seed_legacy_pricing_revision!(generated_at, 2.5)
-
-    setup = active_api_key_fixture()
-    %{assignment: assignment} = upstream_assignment_fixture(setup.pool)
-    request = request_fixture(setup)
-
-    attempt =
-      request
-      |> attempt_fixture(assignment)
-      |> Ecto.Changeset.change(pricing_snapshot_id: first_snapshot.id)
-      |> Repo.update!()
-
-    assert {:ok, first_import} =
-             OpenAIPricingImporter.import_file(pricing_revision_path(generated_at, 3.25))
-
-    assert first_import.inserted == 1
-    assert first_import.price_version == "#{generated_at}:importer-format-1"
-
-    assert {:ok, retry_import} =
-             OpenAIPricingImporter.import_file(pricing_revision_path(generated_at, 3.25))
-
-    assert retry_import.inserted == 0
-    assert retry_import.price_version == first_import.price_version
-
-    snapshots =
-      Repo.all(
-        from s in PricingSnapshot,
-          where:
-            s.model_identifier == "corrected-cache-write-model" and
-              fragment("?->>'source_generated_at'", s.config) == ^generated_at,
-          order_by: [asc: s.config]
-      )
-
-    assert length(snapshots) == 2
-
-    original_snapshot = Enum.find(snapshots, &(&1.id == first_snapshot.id))
-
-    corrected_snapshot =
-      Enum.find(snapshots, fn snapshot ->
-        snapshot.id != first_snapshot.id and
-          is_integer(snapshot.config["importer_format_revision"])
-      end)
-
-    assert corrected_snapshot
-    assert original_snapshot.id == first_snapshot.id
-    assert original_snapshot.price_version == generated_at
-
-    assert DateTime.compare(
-             original_snapshot.effective_at,
-             elem(DateTime.from_iso8601(generated_at), 1)
-           ) ==
-             :eq
-
-    refute Map.has_key?(original_snapshot.config, "importer_format_revision")
-    assert original_snapshot.price_version != corrected_snapshot.price_version
-    assert corrected_snapshot.price_version == first_import.price_version
-    assert corrected_snapshot.effective_at == original_snapshot.effective_at
-    assert original_rate = original_snapshot.cache_write_token_micros
-    assert Decimal.equal?(original_rate, Decimal.new("2.5"))
-    assert corrected_rate = Map.get(corrected_snapshot, :cache_write_token_micros)
-    assert Decimal.equal?(corrected_rate, Decimal.new("3.25"))
-
-    assert Repo.get!(CodexPooler.Accounting.Attempt, attempt.id).pricing_snapshot_id ==
-             original_snapshot.id
-
-    model =
-      model_fixture(setup.pool, %{
-        exposed_model_id: "corrected-cache-write-model",
-        upstream_model_id: "corrected-cache-write-model"
-      })
-
-    assert {:ok, reserved} =
-             Accounting.reserve(
-               %{pool: setup.pool, api_key: setup.api_key},
-               model,
-               %{"model" => model.exposed_model_id, "max_output_tokens" => 1},
-               %{correlation_id: "corr-current-importer-revision"}
-             )
-
-    assert reserved.pricing_snapshot.id == corrected_snapshot.id
-  end
-
-  test "malformed and negative cache-write rates fail without persisting rows" do
-    Enum.each(["not-a-number", -0.01], fn cache_write ->
-      model_identifier = "invalid-cache-write-#{System.unique_integer([:positive])}"
-      count_before = Repo.aggregate(PricingSnapshot, :count)
-
-      assert {:error, %{code: :invalid_price_row}} =
-               OpenAIPricingImporter.import_file(cache_write_path(model_identifier, cache_write))
-
-      assert Repo.aggregate(PricingSnapshot, :count) == count_before
-
-      refute Repo.exists?(
-               from s in PricingSnapshot, where: s.model_identifier == ^model_identifier
-             )
-    end)
-  end
-
-  test "imports explicit unavailable pricing buckets as unpriced markers" do
-    path =
-      write_tmp_json!(%{
-        "generated_at" => "2026-06-15T04:50:14.549006Z",
-        "models" => %{
-          "unavailable-long-context-model" => %{
-            "model" => "unavailable-long-context-model",
-            "pricing_type" => "per_1m_tokens",
-            "category" => "language_model",
-            "categories" => ["language_model"],
-            "prices" => %{
-              "priority" => %{
-                "default" => %{
-                  "cached_input" => Decimal.new("0.5"),
-                  "input" => Decimal.new("5.0"),
-                  "output" => Decimal.new("30.0")
-                },
-                "long_context" => %{
-                  "available" => false
-                }
-              }
-            }
+  test "equal fast and priority aliases emit one canonical row with Decimal equality" do
+    payload =
+      valid_payload("alias-model", %{
+        "fast" => %{
+          "default" => %{
+            "input" => 1.0,
+            "cached_input" => 0.1,
+            "cache_write" => 1.25,
+            "output" => 2.0
+          }
+        },
+        "priority" => %{
+          "default" => %{
+            "input" => 1,
+            "cached_input" => 0.1,
+            "cache_write" => 1.25,
+            "output" => 2
           }
         }
       })
 
-    assert {:ok, result} = OpenAIPricingImporter.import_file(path)
-    assert result.inserted == 2
-    assert result.skipped == 0
+    assert {:ok, %{inserted: 1}} = OpenAIPricingImporter.import_file(write_json!(payload))
 
-    marker =
-      Repo.one!(
-        from s in PricingSnapshot,
-          where:
-            s.model_identifier == "unavailable-long-context-model" and
-              fragment("?->>'service_tier'", s.config) == "priority" and
-              fragment("?->>'price_bucket'", s.config) == "long_context"
-      )
+    assert snapshot =
+             Repo.one(from row in PricingSnapshot, where: row.model_identifier == "alias-model")
 
-    assert is_nil(marker.input_token_micros)
-    assert is_nil(marker.cached_input_token_micros)
-    assert is_nil(marker.output_token_micros)
-    assert is_nil(marker.reasoning_token_micros)
-    assert is_nil(marker.request_base_micros)
-    assert marker.config["availability"] == "unavailable"
+    assert snapshot.config["service_tier"] == "priority"
+    assert Decimal.equal?(snapshot.cache_write_token_micros, Decimal.new("1.25"))
   end
 
-  test "skips unsupported pricing_type and missing default buckets" do
-    path =
-      write_tmp_json!(%{
-        "generated_at" => "2026-04-30T17:21:57.551899Z",
-        "models" => %{
-          "skipped-by-type" => %{
-            "model" => "skipped-by-type",
-            "pricing_type" => "per_minute",
-            "prices" => %{}
-          },
-          "skipped-by-bucket" => %{
-            "model" => "skipped-by-bucket",
-            "pricing_type" => "per_1m_tokens",
-            "prices" => %{
-              "standard" => %{"text" => %{"input" => Decimal.new(1), "output" => Decimal.new(2)}}
-            }
-          }
-        }
+  test "divergent aliases return bounded conflict and write nothing" do
+    payload =
+      valid_payload("alias-conflict", %{
+        "fast" => %{"default" => %{"input" => 1, "output" => 2}},
+        "priority" => %{"default" => %{"input" => 1, "output" => 3}}
       })
 
-    assert {:ok, result} = OpenAIPricingImporter.import_file(path)
-    assert result.inserted == 0
-    assert result.skipped == 2
-    refute Repo.exists?(from s in PricingSnapshot, where: s.model_identifier == "skipped-by-type")
+    count = Repo.aggregate(PricingSnapshot, :count)
+
+    assert {:error, %{code: :conflicting_service_tier_alias, message: message}} =
+             OpenAIPricingImporter.import_file(write_json!(payload))
+
+    assert message == "fast and priority pricing aliases conflict"
+    assert Repo.aggregate(PricingSnapshot, :count) == count
+  end
+
+  test "duplicate raw JSON keys and normalized model collisions fail without writes" do
+    duplicate =
+      String.replace(
+        Jason.encode!(valid_payload()),
+        ~s("tools_count":1),
+        ~s("tools_count":1,"tools_count":1)
+      )
+
+    assert {:error, %{code: :invalid_json}} =
+             OpenAIPricingImporter.import_file(write_raw!(duplicate))
+
+    payload = valid_payload()
+    model = payload["models"]["sample-model"]
+
+    collision = %{
+      payload
+      | "models" => %{"sample-model" => model, " SAMPLE-MODEL " => model},
+        "models_count" => 2
+    }
+
+    assert {:error, %{code: :incompatible_pricing_catalog}} =
+             OpenAIPricingImporter.import_file(write_json!(collision))
 
     refute Repo.exists?(
-             from s in PricingSnapshot, where: s.model_identifier == "skipped-by-bucket"
+             from row in PricingSnapshot, where: row.model_identifier == "sample-model"
            )
   end
 
-  test "invalid json returns controlled error and leaves existing snapshots untouched" do
-    existing = seed_existing_snapshot!("preserve-invalid-json")
-    count_before = Repo.aggregate(PricingSnapshot, :count)
+  test "revision 2 canonical import preserves revision 1 fast rows and attempt references" do
+    generated_at = "2026-07-30T10:00:00Z"
+    legacy = seed_snapshot!("revision-model", generated_at, "fast", "1", 2)
 
-    path =
-      Path.join(System.tmp_dir!(), "pricing-invalid-#{System.unique_integer([:positive])}.json")
+    setup = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(setup.pool)
 
-    File.write!(path, "{not-json")
+    attempt =
+      setup
+      |> request_fixture()
+      |> attempt_fixture(assignment)
+      |> Ecto.Changeset.change(pricing_snapshot_id: legacy.id)
+      |> Repo.update!()
 
-    assert {:error, %{code: :invalid_json}} = OpenAIPricingImporter.import_file(path)
-    assert Repo.get(PricingSnapshot, existing.id)
-    assert Repo.aggregate(PricingSnapshot, :count) == count_before
-  end
-
-  test "missing file returns controlled file_read_failed error" do
-    assert {:error, %{code: :file_read_failed, message: message}} =
-             OpenAIPricingImporter.import_file("priv/pricing/openai/missing.json")
-
-    assert is_binary(message)
-    assert message != ""
-  end
-
-  test "malformed price row returns controlled error and rolls back replacement" do
-    existing = seed_existing_snapshot!("preserve-malformed-row")
-    count_before = Repo.aggregate(PricingSnapshot, :count)
-
-    path =
-      write_tmp_json!(%{
-        "generated_at" => "2026-04-30T17:21:57.551899Z",
-        "models" => %{
-          "bad-model" => %{
-            "model" => "bad-model",
-            "pricing_type" => "per_1m_tokens",
-            "prices" => %{
-              "standard" => %{"default" => %{"input" => "oops", "output" => Decimal.new(2)}}
-            }
-          }
-        }
-      })
-
-    assert {:error, %{code: :invalid_price_row}} = OpenAIPricingImporter.import_file(path)
-    assert Repo.get(PricingSnapshot, existing.id)
-    assert Repo.aggregate(PricingSnapshot, :count) == count_before
-    refute Repo.exists?(from s in PricingSnapshot, where: s.model_identifier == "bad-model")
-  end
-
-  defp pricing_count_for_version(price_version) do
-    Repo.aggregate(
-      from(s in PricingSnapshot,
-        where: s.price_version == ^price_version
-      ),
-      :count
-    )
-  end
-
-  defp vendored_price_version do
-    @pricing_path
-    |> File.read!()
-    |> Jason.decode!()
-    |> Map.fetch!("generated_at")
-  end
-
-  defp current_price_version(source_generated_at),
-    do: "#{source_generated_at}:importer-format-1"
-
-  defp assert_gpt56_vendored_snapshot!(model, expected) do
-    payload = @pricing_path |> File.read!() |> Jason.decode!()
-    source_prices = get_in(payload, ["models", model, "prices", "standard", "default"])
-
-    assert source_prices["cache_write"] == expected.cache_write
-    assert source_prices["cache_write"] != source_prices["output"]
-
-    snapshot =
-      Repo.one!(
-        from s in PricingSnapshot,
-          where:
-            fragment("?->>'source_generated_at'", s.config) == ^vendored_price_version() and
-              s.model_identifier == ^model and
-              fragment("?->>'service_tier'", s.config) == "standard" and
-              fragment("?->>'price_bucket'", s.config) == "default"
+    payload =
+      valid_payload(
+        "revision-model",
+        %{"fast" => %{"default" => %{"input" => 1, "output" => 2}}},
+        generated_at
       )
 
-    assert Decimal.equal?(snapshot.input_token_micros, Decimal.new(expected.input))
-    assert Decimal.equal?(snapshot.cached_input_token_micros, Decimal.new(expected.cached_input))
+    assert {:ok, %{inserted: 1, price_version: version}} =
+             OpenAIPricingImporter.import_file(write_json!(payload))
 
-    assert Decimal.equal?(
-             snapshot.cache_write_token_micros,
-             Decimal.from_float(expected.cache_write)
-           )
+    assert version == "#{generated_at}:importer-format-2"
+    assert Repo.get!(PricingSnapshot, legacy.id).config["service_tier"] == "fast"
+    assert Repo.get!(CodexPooler.Accounting.Attempt, attempt.id).pricing_snapshot_id == legacy.id
 
-    assert Decimal.equal?(snapshot.output_token_micros, Decimal.new(expected.output))
-    assert Decimal.equal?(snapshot.reasoning_token_micros, Decimal.new(expected.output))
+    assert Repo.one!(from row in PricingSnapshot, where: row.price_version == ^version).config[
+             "service_tier"
+           ] == "priority"
+
+    assert {:ok, %{inserted: 0}} = OpenAIPricingImporter.import_file(write_json!(payload))
   end
 
-  defp seed_existing_snapshot!(suffix) do
+  test "newer catalog omission preserves historical snapshots and attempt foreign keys" do
+    parent_at = "2026-07-30T10:00:00Z"
+    child_at = "2026-07-31T10:00:00Z"
+    parent = payload_with_models(parent_at, ["retained-model", "removed-model"])
+    child = payload_with_models(child_at, ["retained-model"])
+
+    assert {:ok, %{inserted: 2, price_version: parent_version}} =
+             OpenAIPricingImporter.import_file(write_json!(parent))
+
+    removed =
+      Repo.one!(
+        from row in PricingSnapshot,
+          where: row.model_identifier == "removed-model" and row.price_version == ^parent_version
+      )
+
+    frozen =
+      Map.take(removed, [
+        :id,
+        :price_version,
+        :config,
+        :input_token_micros,
+        :cached_input_token_micros,
+        :cache_write_token_micros,
+        :output_token_micros,
+        :reasoning_token_micros,
+        :request_base_micros,
+        :effective_at,
+        :captured_at
+      ])
+
+    setup = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(setup.pool)
+
+    attempt =
+      setup
+      |> request_fixture()
+      |> attempt_fixture(assignment)
+      |> Ecto.Changeset.change(pricing_snapshot_id: removed.id)
+      |> Repo.update!()
+
+    assert {:ok, %{inserted: 1, price_version: child_version}} =
+             OpenAIPricingImporter.import_file(write_json!(child))
+
+    refute Repo.exists?(
+             from row in PricingSnapshot,
+               where:
+                 row.model_identifier == "removed-model" and row.price_version == ^child_version
+           )
+
+    assert Map.take(Repo.get!(PricingSnapshot, removed.id), Map.keys(frozen)) == frozen
+    assert Repo.get!(CodexPooler.Accounting.Attempt, attempt.id).pricing_snapshot_id == removed.id
+
+    assert Repo.aggregate(
+             from(row in PricingSnapshot,
+               where: row.model_identifier in ["retained-model", "removed-model"]
+             ),
+             :count
+           ) == 3
+
+    assert {:ok, %{inserted: 0}} = OpenAIPricingImporter.import_file(write_json!(child))
+  end
+
+  test "identical unique-index winner reload is idempotent while divergent winner is bounded and rolls back" do
+    payload =
+      valid_payload("winner-model", %{
+        "standard" => %{"default" => %{"input" => 1, "output" => 2}}
+      })
+
+    path = write_json!(payload)
+    assert {:ok, %{inserted: 1}} = OpenAIPricingImporter.import_file(path)
+    assert {:ok, %{inserted: 0}} = OpenAIPricingImporter.import_file(path)
+
+    winner = Repo.one!(from row in PricingSnapshot, where: row.model_identifier == "winner-model")
+
+    Repo.update_all(from(row in PricingSnapshot, where: row.id == ^winner.id),
+      set: [output_token_micros: Decimal.new(99)]
+    )
+
+    count = Repo.aggregate(PricingSnapshot, :count)
+
+    assert {:error, %{code: :concurrent_pricing_conflict}} =
+             OpenAIPricingImporter.import_file(path)
+
+    assert Repo.aggregate(PricingSnapshot, :count) == count
+
+    assert Decimal.equal?(
+             Repo.get!(PricingSnapshot, winner.id).output_token_micros,
+             Decimal.new(99)
+           )
+  end
+
+  test "an invalid later row leaves existing snapshots untouched and rolls back candidate writes" do
+    existing = seed_snapshot!("existing-model", "2026-07-20T10:00:00Z", "standard", "1", 1)
+    payload = payload_with_models("2026-07-31T10:00:00Z", ["first-model", "bad-model"])
+
+    payload =
+      put_in(payload, ["models", "bad-model", "prices", "standard", "default", "output"], -1)
+
+    assert {:error, %{code: :incompatible_pricing_catalog}} =
+             OpenAIPricingImporter.import_file(write_json!(payload))
+
+    assert Repo.get!(PricingSnapshot, existing.id)
+
+    refute Repo.exists?(
+             from row in PricingSnapshot,
+               where: row.model_identifier in ["first-model", "bad-model"]
+           )
+  end
+
+  defp valid_payload(
+         identifier \\ "sample-model",
+         tiers \\ %{"standard" => %{"default" => %{"input" => 1, "output" => 2}}},
+         generated_at \\ "2026-07-28T00:00:00Z"
+       ) do
+    payload_with_models(generated_at, [identifier])
+    |> put_in(["models", identifier, "prices"], tiers)
+  end
+
+  defp payload_with_models(generated_at, identifiers) do
+    models =
+      Map.new(identifiers, fn identifier ->
+        {identifier,
+         %{
+           "categories" => ["language_model"],
+           "category" => "language_model",
+           "model" => identifier,
+           "prices" => %{"standard" => %{"default" => %{"input" => 1, "output" => 2}}},
+           "pricing_type" => "per_1m_tokens",
+           "pricing_types" => ["per_1m_tokens"],
+           "timestamp" => generated_at
+         }}
+      end)
+
+    %{
+      "generated_at" => generated_at,
+      "models" => models,
+      "models_count" => map_size(models),
+      "source" => "synthetic",
+      "source_url" => "https://example.com/pricing.json",
+      "tools" => %{
+        "sample-tool" => %{
+          "details" => "Synthetic tool",
+          "price" => 0,
+          "pricing" => "$0",
+          "tool" => "Sample Tool"
+        }
+      },
+      "tools_count" => 1
+    }
+  end
+
+  defp seed_snapshot!(identifier, generated_at, tier, revision, output) do
+    {:ok, effective_at, _offset} = DateTime.from_iso8601(generated_at)
+    effective_at = %DateTime{effective_at | microsecond: {elem(effective_at.microsecond, 0), 6}}
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     %PricingSnapshot{
-      model_identifier: "existing-#{suffix}",
-      price_version: "existing-version-#{suffix}",
+      model_identifier: identifier,
+      price_version: "#{generated_at}:importer-format-#{revision}",
       currency_code: "USD",
       billing_unit: "token",
       input_token_micros: Decimal.new(1),
       cached_input_token_micros: Decimal.new(0),
-      output_token_micros: Decimal.new(1),
-      reasoning_token_micros: Decimal.new(1),
-      request_base_micros: Decimal.new(0),
-      effective_at: now,
-      source_url: "seed",
-      captured_at: now,
-      config: %{"seed" => true}
-    }
-    |> Repo.insert!()
-  end
-
-  defp write_tmp_json!(payload) do
-    path =
-      Path.join(System.tmp_dir!(), "pricing-importer-#{System.unique_integer([:positive])}.json")
-
-    File.write!(path, Jason.encode!(payload))
-    path
-  end
-
-  defp pricing_revision_path(generated_at, cache_write) do
-    write_tmp_json!(%{
-      "generated_at" => generated_at,
-      "models" => %{
-        "corrected-cache-write-model" => %{
-          "model" => "corrected-cache-write-model",
-          "pricing_type" => "per_1m_tokens",
-          "prices" => %{
-            "standard" => %{
-              "default" => %{
-                "input" => 2,
-                "cached_input" => 0.2,
-                "cache_write" => cache_write,
-                "output" => 10
-              }
-            }
-          }
-        }
-      }
-    })
-  end
-
-  defp seed_legacy_pricing_revision!(generated_at, cache_write) do
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    {:ok, effective_at, _offset} = DateTime.from_iso8601(generated_at)
-    effective_at = %DateTime{effective_at | microsecond: {0, 6}}
-
-    %PricingSnapshot{
-      model_identifier: "corrected-cache-write-model",
-      price_version: generated_at,
-      currency_code: "USD",
-      billing_unit: "token",
-      input_token_micros: Decimal.new(2),
-      cached_input_token_micros: Decimal.new("0.2"),
-      output_token_micros: Decimal.new(10),
-      reasoning_token_micros: Decimal.new(10),
+      output_token_micros: Decimal.new(output),
+      reasoning_token_micros: Decimal.new(output),
       request_base_micros: Decimal.new(0),
       effective_at: effective_at,
-      source_url: "legacy-importer",
+      source_url: "seed",
       captured_at: now,
       config: %{
         "source" => "openai-json-pricing",
         "source_generated_at" => generated_at,
-        "service_tier" => "standard",
+        "service_tier" => tier,
         "price_bucket" => "default",
         "pricing_type" => "per_1m_tokens",
+        "category" => "language_model",
+        "categories" => ["language_model"],
         "availability" => "priced",
-        "legacy_cache_write_token_micros" => to_string(cache_write)
+        "reasoning_price_source" => "output_fallback",
+        "importer_format_revision" => revision
       }
     }
-    |> Map.put(:cache_write_token_micros, Decimal.from_float(cache_write))
     |> Repo.insert!()
   end
 
-  defp cache_write_path(model_identifier, cache_write) do
-    write_tmp_json!(%{
-      "generated_at" => "2026-07-12T12:00:00Z",
-      "models" => %{
-        model_identifier => %{
-          "model" => model_identifier,
-          "pricing_type" => "per_1m_tokens",
-          "prices" => %{
-            "standard" => %{
-              "default" => %{
-                "input" => 2,
-                "cached_input" => 0.2,
-                "cache_write" => cache_write,
-                "output" => 10
-              }
-            }
-          }
-        }
-      }
-    })
+  defp write_json!(payload), do: payload |> Jason.encode!() |> write_raw!()
+
+  defp write_raw!(raw) do
+    path =
+      Path.join(System.tmp_dir!(), "pricing-importer-#{System.unique_integer([:positive])}.json")
+
+    File.write!(path, raw)
+    path
   end
 end

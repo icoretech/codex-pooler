@@ -3,110 +3,294 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
 
   alias CodexPooler.Catalog.OpenAIPricingPreflight
 
-  test "reports complete import coverage for supported price buckets without side effects" do
-    payload = %{
-      "generated_at" => "2026-07-11T12:34:56Z",
-      "models" => %{
-        "gpt-example" => %{
-          "model" => "gpt-example",
-          "pricing_type" => "per_1m_tokens",
-          "prices" => %{
-            "standard" => %{
-              "default" => %{"input" => 1, "output" => 2},
-              "short_context" => %{"input" => "0.5", "cached_input" => 0.1, "output" => 1},
-              "long_context" => %{"available" => false}
-            }
+  @fixture Path.expand("../../fixtures/pricing/openai/2026-07-28.json", __DIR__)
+
+  test "classifies the immutable July 28 fixture with exact reviewed coverage" do
+    result = OpenAIPricingPreflight.validate_file(@fixture)
+
+    assert result.compatible?
+    assert result.errors == []
+    assert length(result.warnings) == 90
+
+    assert result.summary == %{
+             importable_rows: 208,
+             priced_rows: 199,
+             unavailable_rows: 9,
+             skipped_models: 8,
+             skipped_price_buckets: 82
+           }
+
+    assert Enum.frequencies_by(result.warnings, & &1.code) == %{
+             incomplete_price_bucket: 4,
+             unsupported_price_bucket: 78,
+             unsupported_pricing_type: 8
+           }
+
+    assert result.warnings == Enum.sort_by(result.warnings, &{&1.path, &1.code, &1.message})
+
+    assert Enum.filter(result.warnings, &(&1.code == :incomplete_price_bucket))
+           |> Enum.map(& &1.path) == [
+             "models.omni-moderation-latest.prices.standard.default",
+             "models.text-embedding-3-large.prices.standard.default",
+             "models.text-embedding-3-small.prices.standard.default",
+             "models.text-embedding-ada-002.prices.standard.default"
+           ]
+  end
+
+  test "strict root, model, and tool objects reject missing, extra, and wrong typed values" do
+    payload = valid_payload()
+
+    mutations = [
+      Map.delete(payload, "tools_count"),
+      Map.put(payload, "extra", true),
+      Map.put(payload, "models_count", 2),
+      Map.put(payload, "tools", %{}),
+      put_in(payload, ["tools", "sample-tool", "extra"], true),
+      put_in(payload, ["tools", "sample-tool", "price"], "1"),
+      put_in(payload, ["models", "future-model", "extra"], true),
+      put_in(payload, ["models", "future-model", "categories"], []),
+      put_in(payload, ["models", "future-model", "categories"], [
+        "language_model",
+        "language_model"
+      ]),
+      put_in(payload, ["models", "future-model", "timestamp"], "2026-07-29T00:00:00Z"),
+      put_in(payload, ["models", "future-model", "pricing_types"], ["per_minute"])
+    ]
+
+    Enum.each(mutations, fn candidate ->
+      refute OpenAIPricingPreflight.validate_payload(candidate).compatible?
+    end)
+  end
+
+  test "duplicate raw JSON keys at every object depth are invalid JSON" do
+    duplicate_documents = [
+      ~s({"generated_at":"2026-07-28T00:00:00Z","generated_at":"2026-07-28T00:00:00Z"}),
+      ~s({"root":{"model":1,"model":1}}),
+      ~s({"root":{"tier":{"default":{"input":1,"input":1}}}})
+    ]
+
+    Enum.each(duplicate_documents, fn raw ->
+      path = write_raw!(raw)
+
+      assert %{compatible?: false, errors: [%{code: :invalid_json}]} =
+               OpenAIPricingPreflight.validate_file(path)
+    end)
+  end
+
+  test "supports cache_write and exact priced and unavailable bucket shapes" do
+    payload = valid_payload()
+    result = OpenAIPricingPreflight.validate_payload(payload)
+    assert result.compatible?
+    assert result.summary.importable_rows == 1
+
+    unavailable =
+      put_in(payload, ["models", "future-model", "prices", "standard", "default"], %{
+        "available" => false
+      })
+
+    assert OpenAIPricingPreflight.validate_payload(unavailable).compatible?
+
+    incomplete =
+      put_in(
+        payload,
+        ["models", "future-model", "prices", "standard", "default"],
+        %{"input" => 1}
+      )
+
+    assert %{compatible?: true, warnings: [%{code: :incomplete_price_bucket}]} =
+             OpenAIPricingPreflight.validate_payload(incomplete)
+
+    invalid_buckets = [
+      %{"input" => 1, "output" => 2, "unknown" => 3},
+      %{"input" => 1, "output" => 2, "available" => false},
+      %{"available" => true},
+      %{"input" => "1", "output" => 2},
+      %{"input" => -1, "output" => 2},
+      %{"input" => 1, "output" => nil}
+    ]
+
+    Enum.each(invalid_buckets, fn bucket ->
+      candidate =
+        put_in(payload, ["models", "future-model", "prices", "standard", "default"], bucket)
+
+      refute OpenAIPricingPreflight.validate_payload(candidate).compatible?
+    end)
+  end
+
+  test "accepts every reviewed non-snapshot descriptor for future model identities" do
+    descriptors = [
+      {"audio", %{"cached_input" => 0, "input" => 1, "output" => 2}},
+      {"audio", %{"input" => 1, "output" => 2}},
+      {"audio", %{"output" => 2}},
+      {"image", %{"cached_input" => 0, "input" => 1}},
+      {"image", %{"cached_input" => 0, "input" => 1, "output" => 2}},
+      {"inference", %{"cached_input" => 0, "input" => 1, "output" => 2, "training" => 3}},
+      {"inference",
+       %{
+         "cached_input" => 0,
+         "input" => 1,
+         "output" => 2,
+         "training" => 3,
+         "training_unit" => "hour"
+       }},
+      {"inference", %{"input" => 1, "output" => 2, "training" => 3}},
+      {"inference_with_data_sharing",
+       %{
+         "cached_input" => 0,
+         "input" => 1,
+         "output" => 2,
+         "training" => 3,
+         "training_unit" => "hour"
+       }},
+      {"text", %{"cached_input" => 0, "input" => 1}},
+      {"text", %{"cached_input" => 0, "input" => 1, "output" => 2}},
+      {"text", %{"input" => 1}},
+      {"text", %{"input" => 1, "output" => 2}}
+    ]
+
+    Enum.each(descriptors, fn {bucket, values} ->
+      payload =
+        put_in(valid_payload(), ["models", "future-model", "prices", "standard"], %{
+          "default" => %{"input" => 1, "output" => 2},
+          bucket => values
+        })
+
+      result = OpenAIPricingPreflight.validate_payload(payload)
+      assert result.compatible?, inspect({bucket, result.errors})
+      assert Enum.any?(result.warnings, &(&1.code == :unsupported_price_bucket))
+    end)
+  end
+
+  test "descriptor mutations fail closed" do
+    mutations = [
+      {"image", %{"cached_input" => 0, "input" => 1, "quality" => "high"}},
+      {"inference", %{"input" => 1, "output" => 2, "training" => 3, "training_unit" => "minute"}},
+      {"text", %{"input" => "1"}},
+      {"numeric_bucket", %{"input" => 1, "output" => 2}}
+    ]
+
+    Enum.each(mutations, fn {bucket, values} ->
+      payload =
+        put_in(valid_payload(), ["models", "future-model", "prices", "standard"], %{
+          "default" => %{"input" => 1, "output" => 2},
+          bucket => values
+        })
+
+      refute OpenAIPricingPreflight.validate_payload(payload).compatible?
+    end)
+  end
+
+  test "unsupported top-level descriptors are structural rather than identity based" do
+    candidates = [
+      unsupported_payload("future-live", "mixed", ["per_1m_tokens", "per_minute"], %{
+        "standard" => %{
+          "audio" => %{"output" => 1},
+          "live_transcription" => %{"estimated_cost" => 2}
+        }
+      }),
+      unsupported_payload("future-minute", "per_minute", ["per_minute"], %{
+        "standard" => %{"transcription" => %{"estimated_cost" => 1, "input" => 2, "output" => 3}}
+      }),
+      unsupported_payload("future-video", "per_second", ["per_second"], %{
+        "batch" => %{
+          "720p" => %{
+            "landscape" => "1280x720",
+            "portrait" => "720x1280",
+            "price_per_second" => 1
           }
         }
-      }
-    }
+      })
+    ]
 
-    assert %{
-             compatible?: true,
-             errors: [],
-             summary: %{
-               importable_rows: 3,
-               priced_rows: 2,
-               unavailable_rows: 1,
-               skipped_models: 0,
-               skipped_price_buckets: 0
-             },
-             coverage: %{
-               supported_price_buckets: ["default", "short_context", "long_context"],
-               imported_price_buckets: %{
-                 "default" => 1,
-                 "long_context" => 1,
-                 "short_context" => 1
-               }
-             }
-           } = OpenAIPricingPreflight.validate_payload(payload)
+    Enum.each(candidates, fn payload ->
+      result = OpenAIPricingPreflight.validate_payload(payload)
+      assert result.compatible?
+      assert [%{code: :unsupported_pricing_type}] = result.warnings
+      assert result.summary.skipped_models == 1
+      assert result.summary.importable_rows == 0
+    end)
+
+    changed =
+      put_in(
+        List.last(candidates),
+        ["models", "future-video", "prices", "batch", "720p", "landscape"],
+        "720x1280"
+      )
+
+    refute OpenAIPricingPreflight.validate_payload(changed).compatible?
   end
 
-  test "fails closed for an unknown price bucket that the importer would silently omit" do
-    payload = valid_payload(%{"experimental_context" => %{"input" => 1, "output" => 2}})
-
-    result = OpenAIPricingPreflight.validate_payload(payload)
-
-    refute result.compatible?
-
-    assert %{
-             code: :unknown_price_bucket,
-             path: "models.gpt-example.prices.standard.experimental_context"
-           } =
-             Enum.find(result.errors, &(&1.code == :unknown_price_bucket))
-
-    assert result.summary.importable_rows == 1
-    assert result.summary.skipped_price_buckets == 1
-  end
-
-  test "fails closed for unknown pricing fields that are not represented by snapshots" do
-    payload = valid_payload(%{"default" => %{"input" => 1, "output" => 2, "cache_write" => 3}})
-
-    result = OpenAIPricingPreflight.validate_payload(payload)
-
-    refute result.compatible?
-
-    assert %{
-             code: :unknown_price_field,
-             path: "models.gpt-example.prices.standard.default.cache_write"
-           } =
-             Enum.find(result.errors, &(&1.code == :unknown_price_field))
-  end
-
-  test "returns a controlled invalid_json error without loading application services" do
-    path =
-      Path.join(System.tmp_dir!(), "pricing-preflight-#{System.unique_integer([:positive])}.json")
-
-    File.write!(path, "{bad json")
-
-    assert %{compatible?: false, errors: [%{code: :invalid_json}]} =
-             OpenAIPricingPreflight.validate_file(path)
-  end
-
-  test "returns a controlled file_read_failed error for a missing file" do
+  test "returns controlled file errors" do
     path =
       Path.join(System.tmp_dir!(), "missing-pricing-#{System.unique_integer([:positive])}.json")
 
-    assert %{
-             compatible?: false,
-             errors: [%{code: :file_read_failed, message: message, path: ^path}]
-           } = OpenAIPricingPreflight.validate_file(path)
-
-    assert message == :enoent |> :file.format_error() |> to_string()
+    assert %{compatible?: false, errors: [%{code: :file_read_failed, path: ^path}]} =
+             OpenAIPricingPreflight.validate_file(path)
   end
 
-  defp valid_payload(extra_buckets) do
+  defp valid_payload do
+    generated_at = "2026-07-28T00:00:00Z"
+
     %{
-      "generated_at" => "2026-07-11T12:34:56Z",
+      "generated_at" => generated_at,
       "models" => %{
-        "gpt-example" => %{
-          "model" => "gpt-example",
-          "pricing_type" => "per_1m_tokens",
+        "future-model" => %{
+          "categories" => ["language_model"],
+          "category" => "language_model",
+          "model" => "future-model",
           "prices" => %{
-            "standard" => Map.merge(%{"default" => %{"input" => 1, "output" => 2}}, extra_buckets)
-          }
+            "standard" => %{
+              "default" => %{
+                "input" => 1,
+                "cached_input" => 0.1,
+                "cache_write" => 1.25,
+                "output" => 2
+              }
+            }
+          },
+          "pricing_type" => "per_1m_tokens",
+          "pricing_types" => ["per_1m_tokens"],
+          "timestamp" => generated_at
         }
-      }
+      },
+      "models_count" => 1,
+      "source" => "synthetic",
+      "source_url" => "https://example.com/pricing.json",
+      "tools" => %{
+        "sample-tool" => %{
+          "details" => "Synthetic tool",
+          "price" => 0,
+          "pricing" => "$0",
+          "tool" => "Sample Tool"
+        }
+      },
+      "tools_count" => 1
     }
+  end
+
+  defp unsupported_payload(identifier, pricing_type, pricing_types, prices) do
+    payload = valid_payload()
+
+    model = %{
+      "categories" => ["other"],
+      "category" => "other",
+      "model" => identifier,
+      "prices" => prices,
+      "pricing_type" => pricing_type,
+      "pricing_types" => pricing_types,
+      "timestamp" => payload["generated_at"]
+    }
+
+    payload
+    |> Map.put("models", %{identifier => model})
+    |> Map.put("models_count", 1)
+  end
+
+  defp write_raw!(raw) do
+    path =
+      Path.join(System.tmp_dir!(), "pricing-preflight-#{System.unique_integer([:positive])}.json")
+
+    File.write!(path, raw)
+    path
   end
 end

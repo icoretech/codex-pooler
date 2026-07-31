@@ -7,6 +7,7 @@ defmodule Mix.Tasks.Pricing.ImportOpenaiTest do
   test "release-safe entrypoint uses the app priv path" do
     assert {:ok, result} = Catalog.import_openai_pricing_from_priv()
     assert result.source == "openai-json-pricing"
+    assert String.ends_with?(result.price_version, ":importer-format-2")
     assert result.total > 0
     assert result.inserted >= 0
   end
