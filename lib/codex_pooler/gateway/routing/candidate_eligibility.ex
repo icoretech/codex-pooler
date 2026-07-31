@@ -128,6 +128,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
           required(:visible_candidates_by_model_id) => %{optional(Ecto.UUID.t()) => [candidate()]},
           required(:candidate_snapshots) => [candidate()],
           optional(:selected_partition_assignment_ids) => [Ecto.UUID.t()],
+          optional(:canonical_partition_assignment_ids) => [[Ecto.UUID.t()]],
           optional(:valid_canonical_assignment_ids) => [Ecto.UUID.t()],
           required(:hydrated_at) => DateTime.t()
         }

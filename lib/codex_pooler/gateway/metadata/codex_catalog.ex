@@ -142,6 +142,16 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
     end)
   end
 
+  @spec canonical_source_partitions(Model.t(), [candidate()]) :: [selected_partition()]
+  def canonical_source_partitions(%Model{} = model, candidates) when is_list(candidates) do
+    model
+    |> canonical_pairs(candidates)
+    |> Enum.group_by(& &1.digest)
+    |> Enum.map(fn {_digest, pairs} -> build_partition(pairs, model) end)
+    |> Enum.sort_by(& &1.anchor)
+    |> Enum.map(&Map.delete(&1, :anchor))
+  end
+
   @spec valid_canonical_assignment_ids(Model.t(), [candidate()]) :: [Ecto.UUID.t()]
   def valid_canonical_assignment_ids(%Model{} = model, candidates) when is_list(candidates) do
     model
@@ -244,8 +254,8 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
 
   defp select_model_partition(%Model{} = model, candidates) when is_list(candidates) do
     model
-    |> canonical_pairs(candidates)
-    |> select_anchored_partition(model)
+    |> canonical_source_partitions(candidates)
+    |> List.first()
   end
 
   defp select_model_partition(%Model{}, _candidates), do: nil
@@ -285,14 +295,12 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
 
   defp valid_source_slug?(_source, %Model{}), do: false
 
-  defp select_anchored_partition([], %Model{}), do: nil
-
-  defp select_anchored_partition(pairs, %Model{} = model) do
+  defp build_partition(pairs, %Model{} = model) do
     anchor = Enum.min_by(pairs, &{&1.created_at, &1.assignment_id})
-    members = Map.fetch!(Enum.group_by(pairs, & &1.digest), anchor.digest)
 
     %{
-      assignment_ids: members |> Enum.map(& &1.assignment_id) |> Enum.sort(),
+      anchor: {anchor.created_at, anchor.assignment_id},
+      assignment_ids: pairs |> Enum.map(& &1.assignment_id) |> Enum.sort(),
       digest: anchor.digest,
       model: model,
       source: anchor.source

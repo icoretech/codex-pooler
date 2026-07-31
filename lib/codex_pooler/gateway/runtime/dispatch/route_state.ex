@@ -19,6 +19,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
     effective_model_serving_modes: %{},
     candidate_snapshots: [],
     candidates: [],
+    fallback_candidate_partitions: [],
     routing_settings: nil,
     quota_window_snapshots: %{},
     quota_snapshot_at: nil,
@@ -58,6 +59,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
           effective_model_serving_modes: effective_model_serving_modes(),
           candidate_snapshots: [candidate()],
           candidates: [candidate()],
+          fallback_candidate_partitions: [[candidate()]],
           routing_settings: RoutingSettings.t() | nil,
           quota_window_snapshots: quota_window_snapshots(),
           quota_snapshot_at: DateTime.t() | nil,
@@ -75,6 +77,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
           optional(:visible_models) => [Model.t()],
           optional(:effective_model_serving_modes) => effective_model_serving_modes(),
           optional(:candidate_snapshots) => [candidate()],
+          optional(:fallback_candidate_partitions) => [[candidate()]],
           optional(:routing_settings) => RoutingSettings.t() | nil,
           optional(:quota_window_snapshots) => quota_window_snapshots(),
           optional(:quota_snapshot_at) => DateTime.t() | nil,
@@ -96,6 +99,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
       effective_model_serving_modes: Map.get(attrs, :effective_model_serving_modes, %{}),
       candidate_snapshots: Map.get(attrs, :candidate_snapshots, candidates),
       candidates: candidates,
+      fallback_candidate_partitions: Map.get(attrs, :fallback_candidate_partitions, []),
       routing_settings: Map.get(attrs, :routing_settings),
       circuit_snapshots: circuit_snapshots(attrs),
       circuit_eligibility_snapshots: circuit_snapshots(attrs),
@@ -112,6 +116,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
   @spec put_candidates(t(), [candidate()]) :: t()
   def put_candidates(%__MODULE__{} = route_state, candidates) when is_list(candidates),
     do: %{route_state | candidates: candidates}
+
+  @spec put_fallback_candidate_partitions(t(), [[candidate()]]) :: t()
+  def put_fallback_candidate_partitions(%__MODULE__{} = route_state, partitions)
+      when is_list(partitions),
+      do: %{route_state | fallback_candidate_partitions: partitions}
 
   @spec put_reset_probe(t(), ResetProbe.t()) :: t()
   def put_reset_probe(%__MODULE__{} = route_state, %ResetProbe{} = reset_probe),
@@ -168,11 +177,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
 
   @spec preload_routing_snapshots(t(), auth(), Model.t(), RequestOptions.t()) :: t()
   def preload_routing_snapshots(
-        %__MODULE__{candidates: candidates} = route_state,
+        %__MODULE__{} = route_state,
         auth,
         %Model{} = model,
         %RequestOptions{} = request_options
       ) do
+    candidates = routing_snapshot_candidates(route_state)
     route_class = RequestOptions.route_class(request_options)
     {quota_window_snapshots, quota_snapshot_at} = load_quota_window_snapshot(candidates)
 
@@ -213,6 +223,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
 
   defp circuit_snapshots(attrs) do
     Map.get(attrs, :circuit_snapshots, Map.get(attrs, :circuit_eligibility_snapshots, %{}))
+  end
+
+  defp routing_snapshot_candidates(%__MODULE__{} = route_state) do
+    [route_state.candidates | route_state.fallback_candidate_partitions]
+    |> List.flatten()
+    |> Enum.uniq_by(fn {assignment, _identity} -> assignment.id end)
   end
 
   defp load_quota_window_snapshot(candidates) do

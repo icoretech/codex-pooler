@@ -639,6 +639,21 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
            ]
 
     assert candidate_ids(prepared.candidates) == [setup.assignment.id]
+
+    assert Enum.map(
+             prepared.route_state.fallback_candidate_partitions,
+             &candidate_ids/1
+           ) == [[divergent.assignment.id]]
+
+    assert Map.has_key?(
+             prepared.route_state.quota_window_snapshots,
+             divergent.identity.id
+           )
+
+    assert Map.has_key?(
+             prepared.route_state.circuit_snapshots,
+             divergent.assignment.id
+           )
   end
 
   test "a compatible hard-pinned continuation stays on a non-selected schema partition" do

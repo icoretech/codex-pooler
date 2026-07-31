@@ -140,9 +140,20 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
              request_options,
              model
            ) do
+      fallback_candidate_partitions =
+        fallback_candidate_partitions(
+          partition_input_candidates,
+          candidates,
+          visible_model_context,
+          endpoint,
+          request_options,
+          model
+        )
+
       route_state =
         route_state
         |> RouteState.put_candidates(candidates)
+        |> RouteState.put_fallback_candidate_partitions(fallback_candidate_partitions)
         |> RouteState.preload_routing_snapshots(auth, model, request_options)
         |> RouteState.put_reservation_snapshot_inputs(
           AccountingReservation.reservation_snapshot_inputs(
@@ -162,14 +173,21 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
     candidates_by_model_id = Map.get(visible_model_context, :candidates_by_model_id, %{})
     candidates = Map.get(candidates_by_model_id, model.id, [])
 
+    partitions = CodexCatalog.canonical_source_partitions(model, candidates)
+
     assignment_ids =
-      case CodexCatalog.select_canonical_sources([model], candidates_by_model_id) do
+      case partitions do
         [%{assignment_ids: assignment_ids}] -> assignment_ids
+        [%{assignment_ids: assignment_ids} | _partitions] -> assignment_ids
         [] -> []
       end
 
     visible_model_context
     |> Map.put(:selected_partition_assignment_ids, assignment_ids)
+    |> Map.put(
+      :canonical_partition_assignment_ids,
+      Enum.map(partitions, & &1.assignment_ids)
+    )
     |> Map.put(
       :valid_canonical_assignment_ids,
       CodexCatalog.valid_canonical_assignment_ids(model, candidates)
@@ -193,6 +211,63 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
        do: assignment_id
 
   defp codex_session_assignment_id(%RequestOptions{}), do: nil
+
+  defp fallback_candidate_partitions(
+         partition_input_candidates,
+         selected_candidates,
+         visible_model_context,
+         endpoint,
+         %RequestOptions{} = request_options,
+         %Model{} = model
+       ) do
+    if SessionContinuity.hard_pin_metadata(request_options, model) do
+      []
+    else
+      selected_assignment_ids =
+        selected_candidates
+        |> Enum.map(fn {assignment, _identity} -> assignment.id end)
+        |> MapSet.new()
+
+      candidates_by_assignment_id =
+        Map.new(partition_input_candidates, fn {assignment, _identity} = candidate ->
+          {assignment.id, candidate}
+        end)
+
+      visible_model_context
+      |> Map.get(:canonical_partition_assignment_ids, [])
+      |> Enum.flat_map(fn assignment_ids ->
+        candidates =
+          assignment_ids
+          |> Enum.reject(&MapSet.member?(selected_assignment_ids, &1))
+          |> Enum.flat_map(fn assignment_id ->
+            case Map.fetch(candidates_by_assignment_id, assignment_id) do
+              {:ok, candidate} -> [candidate]
+              :error -> []
+            end
+          end)
+
+        case filter_fallback_partition(candidates, endpoint, request_options, model) do
+          {:ok, candidates} -> [candidates]
+          {:error, _reason} -> []
+        end
+      end)
+    end
+  end
+
+  defp filter_fallback_partition(
+         candidates,
+         endpoint,
+         %RequestOptions{} = request_options,
+         %Model{} = model
+       ) do
+    with {:ok, candidates} <- SessionContinuity.filter_file_affinity(candidates, request_options),
+         {:ok, candidates} <- CandidateEligibility.maybe_filter_compact(endpoint, candidates),
+         {:ok, candidates} <-
+           SessionContinuity.apply_codex_session_assignment(candidates, request_options, model),
+         :ok <- ensure_candidates_available(candidates) do
+      {:ok, candidates}
+    end
+  end
 
   defp finish_partition_filtering(
          candidates,

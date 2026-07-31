@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.QuotaRefresh.{Executor, Plan}
   alias CodexPooler.Gateway.Routing.SavedResetAutoRedeem
+  alias CodexPooler.Gateway.Routing.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
 
   @type candidate :: CandidateEligibility.FilterInput.candidate()
@@ -34,8 +35,38 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
       when is_list(opts) do
     saved_reset_scan_at = saved_reset_scan_timestamp(opts)
     saved_reset_opts = saved_reset_options(opts)
-    request_options = filter_input.request_options
     quota_mode = Keyword.get(opts, :quota_mode, :required)
+
+    case filter_partition(
+           filter_input,
+           route_state,
+           quota_mode,
+           saved_reset_scan_at,
+           saved_reset_opts
+         ) do
+      {:ok, _candidates, _request_options, _route_state} = result ->
+        result
+
+      {:error, _reason} = primary_error ->
+        maybe_filter_fallback_partitions(
+          primary_error,
+          filter_input,
+          route_state,
+          quota_mode,
+          saved_reset_scan_at,
+          saved_reset_opts
+        )
+    end
+  end
+
+  defp filter_partition(
+         %CandidateEligibility.FilterInput{} = filter_input,
+         %RouteState{} = route_state,
+         quota_mode,
+         saved_reset_scan_at,
+         saved_reset_opts
+       ) do
+    request_options = filter_input.request_options
 
     with {:ok, candidates} <-
            CandidateEligibility.filter_circuit_eligible_candidates(filter_input, route_state),
@@ -63,6 +94,58 @@ defmodule CodexPooler.Gateway.Routing.RouteFiltering do
       {:ok, candidates, request_options, RouteState.put_candidates(route_state, candidates)}
     end
   end
+
+  defp maybe_filter_fallback_partitions(
+         {:error, %{code: code}} = primary_error,
+         %CandidateEligibility.FilterInput{} = filter_input,
+         %RouteState{fallback_candidate_partitions: fallback_partitions} = route_state,
+         quota_mode,
+         saved_reset_scan_at,
+         saved_reset_opts
+       )
+       when code in [
+              "no_eligible_backend",
+              :no_eligible_backend,
+              "quota_exhausted",
+              :quota_exhausted,
+              "quota_evidence_unavailable",
+              :quota_evidence_unavailable
+            ] and fallback_partitions != [] do
+    if SessionContinuity.hard_pin_metadata(
+         filter_input.request_options,
+         filter_input.model
+       ) == nil do
+      Enum.reduce_while(fallback_partitions, primary_error, fn candidates, _last_error ->
+        fallback_filter_input =
+          CandidateEligibility.FilterInput.put_candidates(filter_input, candidates)
+
+        fallback_route_state = RouteState.put_candidates(route_state, candidates)
+
+        case filter_partition(
+               fallback_filter_input,
+               fallback_route_state,
+               quota_mode,
+               saved_reset_scan_at,
+               saved_reset_opts
+             ) do
+          {:ok, _candidates, _request_options, _route_state} = result -> {:halt, result}
+          {:error, _reason} = error -> {:cont, error}
+        end
+      end)
+    else
+      primary_error
+    end
+  end
+
+  defp maybe_filter_fallback_partitions(
+         primary_error,
+         %CandidateEligibility.FilterInput{},
+         %RouteState{},
+         _quota_mode,
+         _saved_reset_scan_at,
+         _saved_reset_opts
+       ),
+       do: primary_error
 
   defp filter_quota_eligible_candidates(
          %CandidateEligibility.FilterInput{} = filter_input,

@@ -221,6 +221,132 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
                RouteFiltering.filter_candidates(filter_input)
     end
 
+    test "falls back to the next canonical partition when the selected partition is exhausted" do
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+      selected = active_upstream_assignment_fixture(pool, %{account_label: "Selected partition"})
+      fallback = active_upstream_assignment_fixture(pool, %{account_label: "Fallback partition"})
+
+      model =
+        model_fixture(pool, %{
+          exposed_model_id: "gpt-partition-fallback-#{System.unique_integer([:positive])}",
+          metadata: %{
+            "source_assignment_ids" => [selected.assignment.id, fallback.assignment.id]
+          }
+        })
+
+      selected_candidate = {selected.assignment, selected.identity}
+      fallback_candidate = {fallback.assignment, fallback.identity}
+      filter_input = filter_input(pool, api_key, model, [selected_candidate])
+
+      upsert_primary_quota!(selected.identity, Decimal.new("100"))
+      upsert_primary_quota!(fallback.identity, Decimal.new("15"))
+
+      route_state =
+        RouteState.new(%{
+          visible_model: model,
+          candidates: [selected_candidate],
+          fallback_candidate_partitions: [[fallback_candidate]]
+        })
+        |> RouteState.preload_routing_snapshots(
+          filter_input.auth,
+          model,
+          filter_input.request_options
+        )
+
+      assert {:ok, [{routed_assignment, _identity}], request_options, returned_route_state} =
+               RouteFiltering.filter_candidates_with_route_state(filter_input, route_state)
+
+      assert routed_assignment.id == fallback.assignment.id
+      assert request_options.routing.quota_decision["routing_state"] == "precise"
+      assert candidate_ids(returned_route_state.candidates) == [fallback.assignment.id]
+    end
+
+    test "keeps the selected canonical partition while it remains eligible" do
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+      selected = active_upstream_assignment_fixture(pool, %{account_label: "Selected partition"})
+      fallback = active_upstream_assignment_fixture(pool, %{account_label: "Fallback partition"})
+
+      model =
+        model_fixture(pool, %{
+          exposed_model_id: "gpt-partition-preferred-#{System.unique_integer([:positive])}",
+          metadata: %{
+            "source_assignment_ids" => [selected.assignment.id, fallback.assignment.id]
+          }
+        })
+
+      selected_candidate = {selected.assignment, selected.identity}
+      fallback_candidate = {fallback.assignment, fallback.identity}
+      filter_input = filter_input(pool, api_key, model, [selected_candidate])
+
+      upsert_primary_quota!(selected.identity, Decimal.new("15"))
+      upsert_primary_quota!(fallback.identity, Decimal.new("15"))
+
+      route_state =
+        RouteState.new(%{
+          visible_model: model,
+          candidates: [selected_candidate],
+          fallback_candidate_partitions: [[fallback_candidate]]
+        })
+        |> RouteState.preload_routing_snapshots(
+          filter_input.auth,
+          model,
+          filter_input.request_options
+        )
+
+      assert {:ok, [{routed_assignment, _identity}], _request_options, _route_state} =
+               RouteFiltering.filter_candidates_with_route_state(filter_input, route_state)
+
+      assert routed_assignment.id == selected.assignment.id
+    end
+
+    test "does not cross canonical partitions for a hard-pinned continuation" do
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+      selected = active_upstream_assignment_fixture(pool, %{account_label: "Pinned partition"})
+      fallback = active_upstream_assignment_fixture(pool, %{account_label: "Fallback partition"})
+
+      model =
+        model_fixture(pool, %{
+          exposed_model_id: "gpt-partition-hard-pin-#{System.unique_integer([:positive])}",
+          metadata: %{
+            "source_assignment_ids" => [selected.assignment.id, fallback.assignment.id]
+          }
+        })
+
+      selected_candidate = {selected.assignment, selected.identity}
+      fallback_candidate = {fallback.assignment, fallback.identity}
+
+      filter_input =
+        pool
+        |> filter_input(api_key, model, [selected_candidate])
+        |> then(fn input ->
+          request_options =
+            RequestOptions.put_continuity(
+              input.request_options,
+              previous_response_id: "response-hard-pin"
+            )
+
+          FilterInput.put_request_options(input, request_options)
+        end)
+
+      upsert_primary_quota!(selected.identity, Decimal.new("100"))
+      upsert_primary_quota!(fallback.identity, Decimal.new("15"))
+
+      route_state =
+        RouteState.new(%{
+          visible_model: model,
+          candidates: [selected_candidate],
+          fallback_candidate_partitions: [[fallback_candidate]]
+        })
+        |> RouteState.preload_routing_snapshots(
+          filter_input.auth,
+          model,
+          filter_input.request_options
+        )
+
+      assert {:error, %{code: "pinned_continuation_unavailable"}} =
+               RouteFiltering.filter_candidates_with_route_state(filter_input, route_state)
+    end
+
     test "does not redeem saved reset when auto policy is disabled by default" do
       {:ok, upstream} =
         FakeUpstream.start_link({:path_json, %{"/api/codex/usage" => {200, usage_payload(0)}}})
