@@ -21,6 +21,14 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   alias CodexPooler.Upstreams.CloudflareCookies
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
+  # Every field an owner success reply must carry, taken from what the local
+  # producer emits (`UpstreamWebsocketSession` request_success) and what the
+  # consumers destructure without a default: `record_upstream_websocket_body/3`
+  # needs `:body`, `WebsocketAttempt` dispatches on `:terminal`, and
+  # `Finalization.Websocket` destructures `:status` and `:headers`. Extend this
+  # list whenever a consumer starts requiring another field.
+  @owner_success_fields [:body, :terminal, :status, :headers]
+
   @regular_runtime_metadata_endpoints [
     "/backend-api/codex/responses",
     "/backend-api/codex/responses/compact"
@@ -657,27 +665,20 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     |> record_upstream_websocket_body(identity, request)
   end
 
-  defp owner_request_result({:ok, result}, identity, request, _request_options)
-       when is_map(result) and is_map_key(result, :terminal) and is_map_key(result, :body) do
-    {:ok, result}
-    |> record_upstream_websocket_body(identity, request)
-  end
+  # An owner success reply crosses a node boundary unvalidated, so it is checked
+  # against the whole contract before it is trusted: anything short of it —
+  # a non-map, or a map missing any required field — settles as one normal
+  # owner-crash failure instead of crashing the response task further down.
+  # The containment names the missing fields so it stays distinguishable from a
+  # real owner crash without putting the reply itself in a log.
+  defp owner_request_result({:ok, result}, identity, request, request_options) do
+    case owner_reply_missing_fields(result) do
+      [] ->
+        record_upstream_websocket_body({:ok, result}, identity, request)
 
-  # A malformed owner success reply — not a map, or a map missing either field
-  # every downstream consumer requires — must settle as one normal owner-crash
-  # failure instead of crashing the response task after the reply already
-  # crossed the node boundary. The containment is announced with a bounded shape
-  # label so it stays distinguishable from a real owner crash without putting
-  # the reply itself in a log.
-  defp owner_request_result({:ok, malformed_reply}, _identity, _request, request_options) do
-    Logger.warning(
-      "websocket owner reply malformed boundary=submit " <>
-        "reply_shape=#{owner_reply_shape(malformed_reply)} " <>
-        "canonical_error=owner_crashed " <>
-        "request_id=#{DiagnosticTaxonomy.safe_correlator(owner_request_id(request_options))}"
-    )
-
-    {:error, %{body: "", reason: :owner_crashed, headers: [], started: false}}
+      missing ->
+        contain_malformed_owner_reply(missing, request_options)
+    end
   end
 
   defp owner_request_result(
@@ -693,15 +694,31 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     {:error, %{body: "", reason: reason, headers: [], started: false}}
   end
 
-  defp owner_reply_shape(reply) when is_map(reply) do
-    if is_map_key(reply, :terminal), do: "map_without_body", else: "map_without_terminal"
+  defp contain_malformed_owner_reply(missing, request_options) do
+    Logger.warning(
+      "websocket owner reply malformed boundary=submit " <>
+        "missing=#{Enum.join(missing, ",")} " <>
+        "canonical_error=owner_crashed " <>
+        "request_id=#{DiagnosticTaxonomy.safe_correlator(owner_request_id(request_options))}"
+    )
+
+    {:error, %{body: "", reason: :owner_crashed, headers: [], started: false}}
   end
 
-  defp owner_reply_shape(_reply), do: "non_map"
+  defp owner_reply_missing_fields(reply) when is_map(reply) do
+    Enum.reject(@owner_success_fields, &Map.has_key?(reply, &1))
+  end
 
-  # The correlator is the upgrade request id every other websocket diagnostic
-  # emits under this key, so the containment warning joins the rest of the
-  # turn's log lines rather than sharing a key name with a different id space.
+  defp owner_reply_missing_fields(_reply), do: ["not_a_map"]
+
+  # The correlator is the upgrade request id the websocket lifecycle and owner
+  # diagnostics emit under this key, so the containment warning joins those
+  # lines instead of sharing a key name with a different id space. This runs
+  # inside the containment warning, which must not raise; a fallback clause is
+  # not the way to guarantee that here, because the caller's type makes one
+  # unreachable and the Dialyzer gate rejects it. Totality comes from
+  # `websocket_request/1` requiring a `%RequestOptions{}` whose
+  # `:request_metadata` is always a `%RequestMetadata{}`.
   defp owner_request_id(%RequestOptions{request_metadata: %{request_id: request_id}}),
     do: request_id
 

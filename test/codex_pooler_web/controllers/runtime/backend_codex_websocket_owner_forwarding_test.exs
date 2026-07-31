@@ -1973,7 +1973,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     # Both containment boundaries announce themselves with a bounded shape label
     # instead of silently masquerading as a real owner crash.
-    assert logs =~ "websocket owner reply malformed boundary=submit reply_shape=non_map"
+    assert logs =~ "websocket owner reply malformed boundary=submit missing=not_a_map"
     assert logs =~ "websocket owner reply malformed boundary=detach"
 
     assert [request] = request_logs(setup.pool.id)
