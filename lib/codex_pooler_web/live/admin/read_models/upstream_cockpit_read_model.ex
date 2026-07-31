@@ -490,17 +490,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   """
   @spec pending_relink_flow(oauth_flow_state()) :: map() | nil
   def pending_relink_flow(%{items: items}) when is_list(items) do
-    pending_relink_flow(%{items: items}, DateTime.utc_now())
+    find_pending_relink_flow(items, DateTime.utc_now())
   end
 
   def pending_relink_flow(_oauth_flows), do: nil
 
   @spec pending_relink_flow(oauth_flow_state(), DateTime.t()) :: map() | nil
   def pending_relink_flow(%{items: items}, %DateTime{} = now) when is_list(items) do
-    Enum.find(items, &actively_pending_flow?(&1, now))
+    find_pending_relink_flow(items, now)
   end
 
   def pending_relink_flow(_oauth_flows, _now), do: nil
+
+  defp find_pending_relink_flow(items, now) do
+    Enum.find(items, &actively_pending_flow?(&1, now))
+  end
 
   defp actively_pending_flow?(
          %{status: "pending", expires_at: %DateTime{} = expires_at},
