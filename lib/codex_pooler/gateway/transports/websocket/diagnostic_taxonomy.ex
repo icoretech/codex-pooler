@@ -6,6 +6,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy do
 
   @fingerprint_length 12
   @max_correlator_length 120
+  # Unknown codes render in cleartext when they satisfy the same allowlist the
+  # public relay applies to upstream-provided error codes (docs-site
+  # clients/openai-compatible.mdx); anything else keeps the fingerprint.
+  @unknown_code_allowlist ~r/^[A-Za-z0-9_.-]+$/
+  @max_unknown_code_bytes 80
   @known_error_codes MapSet.new(
                        OwnerErrorVocabulary.owner_error_codes() ++ ErrorCodes.known_error_codes()
                      )
@@ -27,7 +32,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy do
   def identifier(value) when is_atom(value), do: Atom.to_string(value)
 
   def identifier(value) when is_binary(value) do
-    if known_error_code?(value), do: value, else: fingerprint(value)
+    cond do
+      known_error_code?(value) -> value
+      relayable_unknown_code?(value) -> value
+      true -> fingerprint(value)
+    end
   end
 
   def identifier(_value), do: nil
@@ -62,6 +71,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy do
   def safe_correlator(_value), do: "none"
 
   defp known_error_code?(value), do: MapSet.member?(@known_error_codes, value)
+
+  defp relayable_unknown_code?(value) do
+    byte_size(value) <= @max_unknown_code_bytes and
+      Regex.match?(@unknown_code_allowlist, value) and
+      not sensitive_value?(value)
+  end
 
   defp fingerprint(value) do
     "sha256_" <>

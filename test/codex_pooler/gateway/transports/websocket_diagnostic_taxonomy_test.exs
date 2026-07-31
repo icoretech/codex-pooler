@@ -24,15 +24,31 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomyTest do
       assert "websocket_request_failed" in ErrorCodes.known_error_codes()
     end
 
-    test "fingerprints an unknown binary without returning its raw value" do
-      unknown_code = "synthetic_unlisted_provider_code"
-      identifier = DiagnosticTaxonomy.identifier(unknown_code)
-      malformed_identifier = DiagnosticTaxonomy.identifier(<<255>>)
+    test "renders an unknown code in cleartext when it passes the relay allowlist" do
+      assert DiagnosticTaxonomy.identifier("synthetic_unlisted_provider_code") ==
+               "synthetic_unlisted_provider_code"
 
-      assert identifier == "sha256_1e1bc1d1374f"
-      assert malformed_identifier =~ ~r/^sha256_[0-9a-f]{12}$/
-      refute identifier =~ unknown_code
-      assert DiagnosticTaxonomy.identifier(%{code: unknown_code}) == nil
+      assert DiagnosticTaxonomy.identifier("Provider.Code-v2") == "Provider.Code-v2"
+    end
+
+    test "fingerprints unknown binaries outside the relay allowlist" do
+      assert DiagnosticTaxonomy.identifier("has spaces inside") =~ ~r/^sha256_[0-9a-f]{12}$/
+      assert DiagnosticTaxonomy.identifier(<<255>>) =~ ~r/^sha256_[0-9a-f]{12}$/
+
+      oversized = String.duplicate("a", 81)
+      assert DiagnosticTaxonomy.identifier(oversized) =~ ~r/^sha256_[0-9a-f]{12}$/
+
+      refute DiagnosticTaxonomy.identifier("has spaces inside") =~ "has spaces"
+      assert DiagnosticTaxonomy.identifier(%{code: "any_code"}) == nil
+    end
+
+    test "fingerprints sensitive-looking unknown codes even when charset-clean" do
+      assert DiagnosticTaxonomy.identifier("bearer_expired") =~ ~r/^sha256_[0-9a-f]{12}$/
+
+      assert DiagnosticTaxonomy.identifier("invalid_authorization_value") =~
+               ~r/^sha256_[0-9a-f]{12}$/
+
+      refute DiagnosticTaxonomy.identifier("bearer_expired") =~ "bearer"
     end
   end
 
@@ -47,18 +63,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomyTest do
       assert DiagnosticTaxonomy.reason_code(%{"code" => "server_error"}) == "server_error"
     end
 
-    test "fingerprints unknown binary codes and rejects non-code structured terms" do
-      unknown_code = "synthetic_unknown_map_code"
-      direct_identifier = DiagnosticTaxonomy.reason_code(unknown_code)
-      map_identifier = DiagnosticTaxonomy.reason_code(%{"code" => unknown_code})
+    test "relays clean unknown codes, fingerprints unclean ones, rejects non-code terms" do
+      assert DiagnosticTaxonomy.reason_code("synthetic_unknown_map_code") ==
+               "synthetic_unknown_map_code"
 
-      assert direct_identifier =~ ~r/^sha256_[0-9a-f]{12}$/
-      assert map_identifier == direct_identifier
-      refute direct_identifier =~ unknown_code
-      refute map_identifier =~ unknown_code
+      assert DiagnosticTaxonomy.reason_code(%{"code" => "synthetic_unknown_map_code"}) ==
+               "synthetic_unknown_map_code"
+
+      unclean = "synthetic unknown with spaces"
+      unclean_identifier = DiagnosticTaxonomy.reason_code(unclean)
+      assert unclean_identifier =~ ~r/^sha256_[0-9a-f]{12}$/
+      refute unclean_identifier =~ "spaces"
 
       assert DiagnosticTaxonomy.reason_code(%{"reason" => :owner_busy}) == nil
-      assert DiagnosticTaxonomy.reason_code({unknown_code, :details}) == nil
+      assert DiagnosticTaxonomy.reason_code({"some_code", :details}) == nil
       assert DiagnosticTaxonomy.reason_code(code: :owner_busy) == nil
     end
   end

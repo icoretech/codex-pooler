@@ -177,13 +177,13 @@ defmodule CodexPoolerWeb.WebsocketConnectionLoggerTest do
       end)
     end
 
-    test "fingerprints unknown direct and map codes without exposing either raw value" do
+    test "relays clean unknown direct and map codes in cleartext" do
       unknown_direct = "synthetic_unknown_direct_code"
       unknown_map = "synthetic_unknown_map_code"
 
       for reason <- [unknown_direct, %{"code" => unknown_map}] do
         raw_code = if is_binary(reason), do: reason, else: reason["code"]
-        fingerprint = DiagnosticTaxonomy.identifier(raw_code)
+        assert DiagnosticTaxonomy.identifier(raw_code) == raw_code
 
         log =
           capture_lifecycle_log(
@@ -204,10 +204,38 @@ defmodule CodexPoolerWeb.WebsocketConnectionLoggerTest do
             ~w(error_code reason_class reason_code request_id)
           )
 
-        assert line =~ "error_code=#{fingerprint}"
-        assert line =~ "reason_code=#{fingerprint}"
-        refute log =~ raw_code
+        assert line =~ "error_code=#{raw_code}"
+        assert line =~ "reason_code=#{raw_code}"
       end
+    end
+
+    test "fingerprints unclean unknown codes without exposing the raw value" do
+      raw_code = "synthetic unknown code with spaces"
+      fingerprint = DiagnosticTaxonomy.identifier(raw_code)
+      assert fingerprint =~ ~r/^sha256_[0-9a-f]{12}$/
+
+      log =
+        capture_lifecycle_log(
+          fn ->
+            assert :ok =
+                     WebsocketConnectionLogger.log_failed_native_websocket_turn(
+                       %{request_id: "safe-request", error_code: raw_code},
+                       %{"code" => raw_code}
+                     )
+          end,
+          :warning
+        )
+
+      line =
+        assert_lifecycle_line!(
+          log,
+          WebsocketConnectionLogger.failed_native_websocket_turn_message(),
+          ~w(error_code reason_class reason_code request_id)
+        )
+
+      assert line =~ "error_code=#{fingerprint}"
+      assert line =~ "reason_code=#{fingerprint}"
+      refute log =~ raw_code
     end
 
     test "does not invent a reason code for a non-code map" do

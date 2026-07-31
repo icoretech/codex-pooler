@@ -949,7 +949,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         end
       end)
 
-    assert_native_turn_logs(logs, 2)
+    assert_native_turn_logs(logs, 2, [
+      "pinned_continuation_reauth_required",
+      "pinned_continuation_unavailable"
+    ])
   end
 
   test "websocket error frames leave unrelated errors without recovery fields" do
@@ -986,7 +989,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         end
       end)
 
-    assert_native_turn_logs(logs, 3)
+    assert_native_turn_logs(logs, 3, [
+      "session_assignment_unavailable",
+      "unsupported_model_capability",
+      "invalid_request"
+    ])
   end
 
   test "websocket client error frames classify prompt token and idempotency-bearing terms" do
@@ -1071,14 +1078,18 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     end
   end
 
-  defp assert_native_turn_logs(logs, expected_count) do
+  defp assert_native_turn_logs(logs, expected_count, cleartext_codes)
+       when is_list(cleartext_codes) do
     assert length(Regex.scan(~r/websocket native turn failed/, logs)) == expected_count
-    assert logs =~ ~r/error_code=sha256_[0-9a-f]{12}(?:\s|$)/
+
+    Enum.each(cleartext_codes, fn code ->
+      assert logs =~ "error_code=#{code}"
+    end)
+
+    refute logs =~ "error_code=sha256_"
   end
 
   defp assert_native_turn_logs(logs, expected_count, known_error_code) do
-    assert length(Regex.scan(~r/websocket native turn failed/, logs)) == expected_count
-    assert logs =~ "error_code=#{known_error_code}"
-    refute logs =~ "error_code=sha256_"
+    assert_native_turn_logs(logs, expected_count, [known_error_code])
   end
 end
