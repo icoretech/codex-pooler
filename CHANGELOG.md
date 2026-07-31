@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.5.10](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.9...codex-pooler-v0.5.10) (2026-07-31)
+
+
+### Features
+
+* **admin:** expose saved reset redemption cause ([f77dd8f](https://github.com/icoretech/codex-pooler/commit/f77dd8fe1c1f8d81a949447f7146749a33009926))
+
+
+### Bug Fixes
+
+* **accounting:** claim and recover websocket turns atomically ([927bb6f](https://github.com/icoretech/codex-pooler/commit/927bb6f7505b4d6c2f87e6dd7ce27b9335a2d978))
+* **catalog:** serve canonical upstream model metadata ([3b659d6](https://github.com/icoretech/codex-pooler/commit/3b659d693990aa30ff486cf59cf5661c5be7cdd2))
+* **deps:** update dependency astro to v7.1.5 ([#221](https://github.com/icoretech/codex-pooler/issues/221)) ([72c6b9b](https://github.com/icoretech/codex-pooler/commit/72c6b9bd998ee30bd116109b4cdc3759e462cb55))
+* **gateway:** capture and register websocket response identity ([ac2d870](https://github.com/icoretech/codex-pooler/commit/ac2d870e64f2374097636f21cce450a2e756ba75))
+* **gateway:** forward reserved namespace tool schemas untouched ([721e2d7](https://github.com/icoretech/codex-pooler/commit/721e2d738ec70d922e30d4fbd622249a85f60662))
+* **gateway:** harden compression and decompression boundaries ([a733a51](https://github.com/icoretech/codex-pooler/commit/a733a51784797dbc256cf62977af443220094667))
+* **gateway:** make routing and session continuity deterministic ([f4b4736](https://github.com/icoretech/codex-pooler/commit/f4b4736fc7a8f720e1cb2eeeee11b72da57c5b2f))
+* **gateway:** make streaming classification chunk-safe ([9b7db20](https://github.com/icoretech/codex-pooler/commit/9b7db209d4cd256c3aef92315c1ca46d462495d5))
+* **gateway:** make websocket owner terminal delivery idempotent ([eb71896](https://github.com/icoretech/codex-pooler/commit/eb718962b58c90023e40da4d4b43e0cf2d4e1b76))
+* **gateway:** preserve decoded websocket frame context ([ff4d7a6](https://github.com/icoretech/codex-pooler/commit/ff4d7a664c4af4d2c02a1d17da4eea26e9d014ea))
+* **gateway:** preserve input and compatibility semantics ([df9223d](https://github.com/icoretech/codex-pooler/commit/df9223d7a39e6754ab5cf09f67142da4af8bddaf))
+* **gateway:** preserve terminal websocket response identity ([376e34f](https://github.com/icoretech/codex-pooler/commit/376e34f61b14448eee8c981fd1eb6749da29e1f0))
+* **gateway:** preserve websocket owner on alias miss ([5043bd8](https://github.com/icoretech/codex-pooler/commit/5043bd8535915c47539a671534e05bef73a82c71))
+* **ingress:** accept settings structs in parser contract ([cf17909](https://github.com/icoretech/codex-pooler/commit/cf17909779c838b1f08385099a68af5bd4641644))
+* **instance-settings:** publish a secrets-free distributed cache ([16b81c6](https://github.com/icoretech/codex-pooler/commit/16b81c69348b37113919682dfb5267ef43a0b5fb))
+* **runtime:** gate reconciliation and preserve rate-limit events ([58b182d](https://github.com/icoretech/codex-pooler/commit/58b182d18fc4133c7e20294ed3bb754dd6a4caf8))
+* **saved-resets:** make scheduled rescue the sole expiry owner ([4e1170a](https://github.com/icoretech/codex-pooler/commit/4e1170abe319daf7130c0b25e725b7abac2c2549))
+* **ui:** make relative countdowns timezone-independent ([dd8c111](https://github.com/icoretech/codex-pooler/commit/dd8c111e32d7a62a7c6640b22971a82d0033dba6))
+
+
+### Performance Improvements
+
+* **transports:** reduce admission and file bridge overhead ([900b55b](https://github.com/icoretech/codex-pooler/commit/900b55b88db11b925afb71e05435bc75be44163c))
+
 ## [0.5.9](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.8...codex-pooler-v0.5.9) (2026-07-29)
 
 
