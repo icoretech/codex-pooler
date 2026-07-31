@@ -251,7 +251,25 @@ defmodule CodexPooler.JobsTest do
     end
 
     test "pricing import worker retries incompatible catalogs and persists sanitized errors" do
-      pricing_payload = put_in(pricing_job_payload("gpt-job-invalid"), ["models_count"], 2)
+      pricing_payload = pricing_job_payload("gpt-job-invalid")
+
+      pricing_payload =
+        pricing_payload
+        |> put_in(["models", "gpt-job-invalid", "category"], "other")
+        |> put_in(["models", "gpt-job-invalid", "categories"], ["other"])
+        |> put_in(["models", "gpt-job-invalid", "pricing_type"], "per_minute")
+        |> put_in(["models", "gpt-job-invalid", "pricing_types"], ["per_minute"])
+        |> put_in(["models", "gpt-job-invalid", "prices"], %{
+          "standard" => %{"transcription" => %{"estimated_cost" => 1}},
+          "priority" => %{"transcription" => %{"estimated_cost" => nil}}
+        })
+
+      direct_upstream = start_upstream(FakeUpstream.json_response(pricing_payload))
+      set_pricing_url!(FakeUpstream.url(direct_upstream))
+
+      assert {:error, %{code: :incompatible_pricing_catalog}} =
+               perform_job(PricingImportWorker, %{})
+
       upstream = start_upstream(FakeUpstream.json_response(pricing_payload))
       set_pricing_url!(FakeUpstream.url(upstream))
 
@@ -266,7 +284,7 @@ defmodule CodexPooler.JobsTest do
       assert job.max_attempts == 3
       assert length(job.errors) == 3
       assert FakeUpstream.count(upstream) == 3
-      refute inspect(job.errors) =~ "models_count"
+      refute inspect(job.errors) =~ "estimated_cost"
 
       refute Repo.exists?(
                from row in CodexPooler.Catalog.PricingSnapshot,
@@ -276,12 +294,16 @@ defmodule CodexPooler.JobsTest do
 
     test "pricing import worker retries invalid JSON and HTTP errors" do
       cases = [
-        FakeUpstream.raw_response("{bad", status: 200),
-        FakeUpstream.raw_response("failure", status: 503)
+        {FakeUpstream.raw_response("{bad", status: 200), :invalid_json},
+        {FakeUpstream.raw_response("failure", status: 503), :http_error}
       ]
 
-      Enum.each(cases, fn mode ->
+      Enum.each(cases, fn {mode, code} ->
         Repo.delete_all(Oban.Job)
+        direct_upstream = start_upstream(mode)
+        set_pricing_url!(FakeUpstream.url(direct_upstream))
+        assert {:error, %{code: ^code}} = perform_job(PricingImportWorker, %{})
+
         upstream = start_upstream(mode)
         set_pricing_url!(FakeUpstream.url(upstream))
 
@@ -310,6 +332,12 @@ defmodule CodexPooler.JobsTest do
       upstream = start_upstream(FakeUpstream.json_response(payload))
       set_pricing_url!(FakeUpstream.url(upstream))
 
+      assert {:error, %{code: :conflicting_service_tier_alias}} =
+               perform_job(PricingImportWorker, %{})
+
+      upstream = start_upstream(FakeUpstream.json_response(payload))
+      set_pricing_url!(FakeUpstream.url(upstream))
+
       assert {:ok, job} = PricingImportWorker.new(%{}) |> Oban.insert()
 
       assert %{discard: 1, success: 0} =
@@ -324,6 +352,46 @@ defmodule CodexPooler.JobsTest do
       refute Repo.exists?(
                from row in CodexPooler.Catalog.PricingSnapshot,
                  where: row.model_identifier == "gpt-job-alias-conflict"
+             )
+    end
+
+    test "pricing import worker retries concurrent pricing conflicts without changing the winner" do
+      identifier = "gpt-job-concurrent-conflict"
+      payload = pricing_job_payload(identifier)
+
+      winner_payload =
+        put_in(payload, ["models", identifier, "prices", "standard", "default", "output"], 99)
+
+      winner_upstream = start_upstream(FakeUpstream.json_response(winner_payload))
+      set_pricing_url!(FakeUpstream.url(winner_upstream))
+      assert :ok = perform_job(PricingImportWorker, %{})
+
+      direct_upstream = start_upstream(FakeUpstream.json_response(payload))
+      set_pricing_url!(FakeUpstream.url(direct_upstream))
+
+      assert {:error, %{code: :concurrent_pricing_conflict}} =
+               perform_job(PricingImportWorker, %{})
+
+      upstream = start_upstream(FakeUpstream.json_response(payload))
+      set_pricing_url!(FakeUpstream.url(upstream))
+      assert {:ok, job} = PricingImportWorker.new(%{}) |> Oban.insert()
+
+      assert %{discard: 1, success: 0} =
+               Oban.drain_queue(queue: :jobs, with_scheduled: true, with_recursion: true)
+
+      job = Repo.get!(Oban.Job, job.id)
+      assert job.state == "discarded"
+      assert job.attempt == job.max_attempts
+      assert job.max_attempts == 3
+      assert length(job.errors) == 3
+      assert FakeUpstream.count(upstream) == 3
+
+      assert Decimal.equal?(
+               Repo.one!(
+                 from row in CodexPooler.Catalog.PricingSnapshot,
+                   where: row.model_identifier == ^identifier
+               ).output_token_micros,
+               Decimal.new(99)
              )
     end
 

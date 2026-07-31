@@ -3,10 +3,14 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
   alias CodexPooler.Catalog.{OpenAIPricingImporter, PricingSnapshot}
   alias CodexPooler.Repo
+  alias Ecto.Adapters.SQL
+  alias Ecto.Adapters.SQL.Sandbox
 
   import CodexPooler.PoolerFixtures
 
   @fixture Path.expand("../../fixtures/pricing/openai/2026-07-28.json", __DIR__)
+  @barrier_timeout 5_000
+  @actor_timeout 10_000
 
   test "imports revision 2 rows from the immutable fixture idempotently" do
     assert {:ok, first} = OpenAIPricingImporter.import_file(@fixture)
@@ -72,6 +76,94 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
     assert message == "fast and priority pricing aliases conflict"
     assert Repo.aggregate(PricingSnapshot, :count) == count
+  end
+
+  test "asymmetric fast and priority bucket collections conflict in both directions without writes" do
+    base = %{"default" => %{"input" => 1, "output" => 2}}
+    extra = Map.put(base, "long_context", %{"input" => 3, "output" => 4})
+
+    Enum.each([{base, extra}, {extra, base}], fn {fast, priority} ->
+      identifier = "alias-asymmetric-#{System.unique_integer([:positive])}"
+      payload = valid_payload(identifier, %{"fast" => fast, "priority" => priority})
+      count = Repo.aggregate(PricingSnapshot, :count)
+
+      assert {:error, %{code: :conflicting_service_tier_alias}} =
+               OpenAIPricingImporter.import_file(write_json!(payload))
+
+      assert Repo.aggregate(PricingSnapshot, :count) == count
+      refute Repo.exists?(from row in PricingSnapshot, where: row.model_identifier == ^identifier)
+    end)
+  end
+
+  test "fast and priority aliases compare every independently variable pricing semantic" do
+    base = %{
+      "input" => 1,
+      "cached_input" => 0.5,
+      "cache_write" => 1.5,
+      "output" => 2,
+      "reasoning" => 2
+    }
+
+    mutations = [
+      input: &Map.put(&1, "input", 9),
+      cached_input: &Map.put(&1, "cached_input", 9),
+      cache_write: &Map.put(&1, "cache_write", 9),
+      output: &Map.put(&1, "output", 9),
+      reasoning: &Map.put(&1, "reasoning", 9),
+      availability: fn _values -> %{"available" => false} end,
+      reasoning_price_source: fn values -> Map.delete(values, "reasoning") end
+    ]
+
+    Enum.each(mutations, fn {field, mutate} ->
+      identifier = "alias-semantic-#{field}"
+
+      payload =
+        valid_payload(identifier, %{
+          "fast" => %{"default" => base},
+          "priority" => %{"default" => mutate.(base)}
+        })
+
+      assert {:error, %{code: :conflicting_service_tier_alias}} =
+               OpenAIPricingImporter.import_file(write_json!(payload)),
+             "expected #{field} divergence to conflict"
+
+      refute Repo.exists?(from row in PricingSnapshot, where: row.model_identifier == ^identifier)
+    end)
+  end
+
+  test "unsupported pricing types reject extra tiers before any candidate write" do
+    cases = [
+      unsupported_payload("mixed-extra", "mixed", ["per_1m_tokens", "per_minute"], %{
+        "standard" => %{"audio" => %{"output" => 1}},
+        "priority" => %{"ignored" => %{"arbitrary" => true}}
+      }),
+      unsupported_payload("minute-extra", "per_minute", ["per_minute"], %{
+        "standard" => %{"transcription" => %{"estimated_cost" => 1}},
+        "batch" => %{"transcription" => %{"estimated_cost" => 1}}
+      }),
+      unsupported_payload("minute-malformed", "per_minute", ["per_minute"], %{
+        "standard" => %{"transcription" => %{"estimated_cost" => 1}},
+        "priority" => %{"transcription" => %{"estimated_cost" => nil}}
+      }),
+      unsupported_payload("second-extra", "per_second", ["per_second"], %{
+        "priority" => %{
+          "720p" => %{
+            "landscape" => "1280x720",
+            "portrait" => "720x1280",
+            "price_per_second" => 1
+          }
+        }
+      })
+    ]
+
+    Enum.each(cases, fn payload ->
+      count = Repo.aggregate(PricingSnapshot, :count)
+
+      assert {:error, %{code: :incompatible_pricing_catalog}} =
+               OpenAIPricingImporter.import_file(write_json!(payload))
+
+      assert Repo.aggregate(PricingSnapshot, :count) == count
+    end)
   end
 
   test "duplicate raw JSON keys and normalized model collisions fail without writes" do
@@ -228,6 +320,147 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
            )
   end
 
+  test "concurrent winner comparison rejects every mutable pricing-semantic field" do
+    mutations = [
+      currency_code: fn snapshot -> Ecto.Changeset.change(snapshot, currency_code: "EUR") end,
+      billing_unit: fn snapshot -> Ecto.Changeset.change(snapshot, billing_unit: "request") end,
+      input: fn snapshot ->
+        Ecto.Changeset.change(snapshot, input_token_micros: Decimal.new(9))
+      end,
+      cached_input: fn snapshot ->
+        Ecto.Changeset.change(snapshot, cached_input_token_micros: Decimal.new(9))
+      end,
+      cache_write: fn snapshot ->
+        Ecto.Changeset.change(snapshot, cache_write_token_micros: Decimal.new(9))
+      end,
+      output: fn snapshot ->
+        Ecto.Changeset.change(snapshot, output_token_micros: Decimal.new(9))
+      end,
+      reasoning: fn snapshot ->
+        Ecto.Changeset.change(snapshot, reasoning_token_micros: Decimal.new(9))
+      end,
+      request_base: fn snapshot ->
+        Ecto.Changeset.change(snapshot, request_base_micros: Decimal.new(9))
+      end,
+      effective_at: fn snapshot ->
+        Ecto.Changeset.change(snapshot,
+          effective_at: DateTime.add(snapshot.effective_at, 1, :second)
+        )
+      end,
+      availability: &change_config(&1, "availability", "unavailable"),
+      pricing_type: &change_config(&1, "pricing_type", "different"),
+      category: &change_config(&1, "category", "different"),
+      categories: &change_config(&1, "categories", ["different"]),
+      reasoning_price_source: &change_config(&1, "reasoning_price_source", "different")
+    ]
+
+    Enum.each(mutations, fn {field, mutate} ->
+      identifier = "winner-semantic-#{field}"
+
+      payload =
+        valid_payload(identifier, %{
+          "standard" => %{
+            "default" => %{
+              "input" => 1,
+              "cached_input" => 0.5,
+              "cache_write" => 1.5,
+              "output" => 2,
+              "reasoning" => 2
+            }
+          }
+        })
+
+      path = write_json!(payload)
+      assert {:ok, %{inserted: 1}} = OpenAIPricingImporter.import_file(path)
+      winner = Repo.one!(from row in PricingSnapshot, where: row.model_identifier == ^identifier)
+      mutated = winner |> mutate.() |> Repo.update!()
+      count = Repo.aggregate(PricingSnapshot, :count)
+
+      assert {:error, %{code: :concurrent_pricing_conflict}} =
+               OpenAIPricingImporter.import_file(path),
+             "expected #{field} divergence to conflict"
+
+      assert Repo.aggregate(PricingSnapshot, :count) == count
+
+      assert persisted_snapshot_fields(Repo.get!(PricingSnapshot, winner.id)) ==
+               persisted_snapshot_fields(mutated)
+    end)
+  end
+
+  test "concurrent winner comparison ignores capture and source provenance only" do
+    identifier = "winner-provenance"
+    payload = valid_payload(identifier)
+    first_path = write_json!(payload)
+    second_path = write_json!(payload)
+
+    assert {:ok, %{inserted: 1}} = OpenAIPricingImporter.import_file(first_path)
+    winner = Repo.one!(from row in PricingSnapshot, where: row.model_identifier == ^identifier)
+
+    changed_config = Map.put(winner.config, "source_path", "different-provenance")
+
+    winner
+    |> Ecto.Changeset.change(
+      captured_at: DateTime.add(winner.captured_at, 1, :second),
+      source_url: "different-source",
+      config: changed_config
+    )
+    |> Repo.update!()
+
+    assert {:ok, %{inserted: 0}} = OpenAIPricingImporter.import_file(second_path)
+
+    assert Repo.aggregate(
+             from(row in PricingSnapshot, where: row.model_identifier == ^identifier),
+             :count
+           ) == 1
+  end
+
+  test "simultaneous identical imports wait on the unique index and accept the committed winner" do
+    identifier = "race-identical-#{System.unique_integer([:positive])}"
+    path = write_json!(valid_payload(identifier))
+    on_exit(fn -> cleanup_unboxed_snapshots([identifier]) end)
+
+    assert %{first: {:ok, %{inserted: 1}}, second: {:ok, %{inserted: 0}}} =
+             run_concurrent_imports(path, path)
+
+    assert unboxed_snapshot_count([identifier]) == 1
+  end
+
+  test "later divergent unique conflict rolls back an earlier candidate insert" do
+    unique = System.unique_integer([:positive])
+    first_identifier = "a-race-first-#{unique}"
+    conflict_identifier = "z-race-conflict-#{unique}"
+    on_exit(fn -> cleanup_unboxed_snapshots([first_identifier, conflict_identifier]) end)
+
+    winner = valid_payload(conflict_identifier)
+
+    winner =
+      put_in(
+        winner,
+        ["models", conflict_identifier, "prices", "standard", "default", "output"],
+        99
+      )
+
+    candidate =
+      payload_with_models("2026-07-28T00:00:00Z", [first_identifier, conflict_identifier])
+
+    assert %{
+             first: {:ok, %{inserted: 1}},
+             second: {:error, %{code: :concurrent_pricing_conflict}}
+           } =
+             run_concurrent_imports(
+               write_json!(winner),
+               write_json!(candidate)
+             )
+
+    refute unboxed_snapshot_exists?(first_identifier)
+    assert unboxed_snapshot_count([conflict_identifier]) == 1
+
+    assert Decimal.equal?(
+             unboxed_snapshot!(conflict_identifier).output_token_micros,
+             Decimal.new(99)
+           )
+  end
+
   test "an invalid later row leaves existing snapshots untouched and rolls back candidate writes" do
     existing = seed_snapshot!("existing-model", "2026-07-20T10:00:00Z", "standard", "1", 1)
     payload = payload_with_models("2026-07-31T10:00:00Z", ["first-model", "bad-model"])
@@ -288,6 +521,17 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     }
   end
 
+  defp unsupported_payload(identifier, pricing_type, pricing_types, prices) do
+    payload = payload_with_models("2026-07-28T00:00:00Z", [identifier])
+
+    payload
+    |> put_in(["models", identifier, "category"], "other")
+    |> put_in(["models", identifier, "categories"], ["other"])
+    |> put_in(["models", identifier, "pricing_type"], pricing_type)
+    |> put_in(["models", identifier, "pricing_types"], pricing_types)
+    |> put_in(["models", identifier, "prices"], prices)
+  end
+
   defp seed_snapshot!(identifier, generated_at, tier, revision, output) do
     {:ok, effective_at, _offset} = DateTime.from_iso8601(generated_at)
     effective_at = %DateTime{effective_at | microsecond: {elem(effective_at.microsecond, 0), 6}}
@@ -321,6 +565,176 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     }
     |> Repo.insert!()
   end
+
+  defp change_config(snapshot, key, value) do
+    Ecto.Changeset.change(snapshot, config: Map.put(snapshot.config, key, value))
+  end
+
+  defp persisted_snapshot_fields(snapshot) do
+    decimal_fields = [
+      :input_token_micros,
+      :cached_input_token_micros,
+      :cache_write_token_micros,
+      :output_token_micros,
+      :reasoning_token_micros,
+      :request_base_micros
+    ]
+
+    snapshot
+    |> Map.take([
+      :id,
+      :model_identifier,
+      :price_version,
+      :currency_code,
+      :billing_unit,
+      :effective_at,
+      :source_url,
+      :captured_at,
+      :config | decimal_fields
+    ])
+    |> Map.new(fn {field, value} ->
+      if field in decimal_fields and match?(%Decimal{}, value),
+        do: {field, Decimal.normalize(value)},
+        else: {field, value}
+    end)
+  end
+
+  defp run_concurrent_imports(first_path, second_path) do
+    parent = self()
+    barrier = make_ref()
+    handler_id = "pricing-import-race-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if Process.get({__MODULE__, barrier}) == true and pricing_snapshot_insert?(metadata) do
+            send(parent, {:pricing_winner_inserted, barrier})
+
+            receive do
+              {:release_pricing_winner, ^barrier} -> :ok
+            after
+              @actor_timeout -> raise "pricing winner release timed out"
+            end
+          end
+        end,
+        nil
+      )
+
+    first =
+      Task.async(fn ->
+        receive do
+          {:start_pricing_winner, ^barrier} ->
+            Sandbox.unboxed_run(Repo, fn ->
+              Repo.checkout(fn ->
+                Process.put({__MODULE__, barrier}, true)
+
+                try do
+                  OpenAIPricingImporter.import_file(first_path)
+                after
+                  Process.delete({__MODULE__, barrier})
+                end
+              end)
+            end)
+        end
+      end)
+
+    second_holder = {__MODULE__, barrier, :second_task}
+
+    try do
+      send(first.pid, {:start_pricing_winner, barrier})
+      assert_receive {:pricing_winner_inserted, ^barrier}, @barrier_timeout
+
+      second =
+        Task.async(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            Repo.checkout(fn ->
+              %{rows: [[backend_pid]]} = SQL.query!(Repo, "SELECT pg_backend_pid()", [])
+              send(parent, {:pricing_candidate_backend, barrier, backend_pid})
+              OpenAIPricingImporter.import_file(second_path)
+            end)
+          end)
+        end)
+
+      Process.put(second_holder, second)
+      assert_receive {:pricing_candidate_backend, ^barrier, candidate_backend}, @barrier_timeout
+      assert_unique_insert_wait!(candidate_backend)
+      send(first.pid, {:release_pricing_winner, barrier})
+
+      %{first: Task.await(first, @actor_timeout), second: Task.await(second, @actor_timeout)}
+    after
+      :telemetry.detach(handler_id)
+      send(first.pid, {:release_pricing_winner, barrier})
+      shutdown_task(first)
+      shutdown_task(Process.delete(second_holder))
+    end
+  end
+
+  defp assert_unique_insert_wait!(backend_pid, deadline \\ nil) do
+    deadline = deadline || System.monotonic_time(:millisecond) + @barrier_timeout
+
+    %{rows: rows} =
+      SQL.query!(
+        Repo,
+        "SELECT pg_blocking_pids($1) FROM pg_stat_activity " <>
+          "WHERE pid = $1 AND wait_event_type = 'Lock'",
+        [backend_pid]
+      )
+
+    case rows do
+      [[blocking_pids]] when blocking_pids != [] ->
+        :ok
+
+      _rows ->
+        if System.monotonic_time(:millisecond) >= deadline do
+          flunk("pricing candidate backend #{backend_pid} did not wait on the unique index")
+        else
+          receive do
+          after
+            20 -> assert_unique_insert_wait!(backend_pid, deadline)
+          end
+        end
+    end
+  end
+
+  defp pricing_snapshot_insert?(%{query: query}) when is_binary(query),
+    do: String.contains?(query, ~s(INSERT INTO "pricing_snapshots"))
+
+  defp pricing_snapshot_insert?(_metadata), do: false
+
+  defp unboxed_snapshot_count(identifiers) do
+    Sandbox.unboxed_run(Repo, fn ->
+      Repo.aggregate(
+        from(row in PricingSnapshot, where: row.model_identifier in ^identifiers),
+        :count
+      )
+    end)
+  end
+
+  defp unboxed_snapshot_exists?(identifier) do
+    Sandbox.unboxed_run(Repo, fn ->
+      Repo.exists?(from row in PricingSnapshot, where: row.model_identifier == ^identifier)
+    end)
+  end
+
+  defp unboxed_snapshot!(identifier) do
+    Sandbox.unboxed_run(Repo, fn ->
+      Repo.one!(from row in PricingSnapshot, where: row.model_identifier == ^identifier)
+    end)
+  end
+
+  defp cleanup_unboxed_snapshots(identifiers) do
+    Sandbox.unboxed_run(Repo, fn ->
+      Repo.delete_all(from row in PricingSnapshot, where: row.model_identifier in ^identifiers)
+    end)
+  end
+
+  defp shutdown_task(%Task{pid: pid} = task) when is_pid(pid) do
+    if Process.alive?(pid), do: Task.shutdown(task, :brutal_kill)
+  end
+
+  defp shutdown_task(_task), do: :ok
 
   defp write_json!(payload), do: payload |> Jason.encode!() |> write_raw!()
 

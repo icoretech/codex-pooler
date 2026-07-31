@@ -220,6 +220,60 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
     refute OpenAIPricingPreflight.validate_payload(changed).compatible?
   end
 
+  test "mixed and per-minute descriptors reject every non-standard tier" do
+    cases = [
+      unsupported_payload("future-mixed-extra", "mixed", ["per_1m_tokens", "per_minute"], %{
+        "standard" => %{"audio" => %{"output" => 1}},
+        "priority" => %{"ignored" => %{"arbitrary" => true}}
+      }),
+      unsupported_payload("future-minute-extra", "per_minute", ["per_minute"], %{
+        "standard" => %{"transcription" => %{"estimated_cost" => 1}},
+        "batch" => %{"transcription" => %{"estimated_cost" => 1}}
+      }),
+      unsupported_payload("future-minute-malformed", "per_minute", ["per_minute"], %{
+        "standard" => %{"transcription" => %{"estimated_cost" => 1}},
+        "priority" => %{"transcription" => %{"estimated_cost" => nil}}
+      })
+    ]
+
+    Enum.each(cases, fn payload ->
+      result = OpenAIPricingPreflight.validate_payload(payload)
+      refute result.compatible?
+      assert Enum.any?(result.errors, &(&1.code == :unsupported_pricing_type_shape))
+      assert result.summary.importable_rows == 0
+    end)
+
+    per_second =
+      unsupported_payload("future-video-extra", "per_second", ["per_second"], %{
+        "priority" => %{
+          "720p" => %{
+            "landscape" => "1280x720",
+            "portrait" => "720x1280",
+            "price_per_second" => 1
+          }
+        }
+      })
+
+    refute OpenAIPricingPreflight.validate_payload(per_second).compatible?
+  end
+
+  test "fast and priority aliases require identical normalized bucket collections" do
+    base = %{"default" => %{"input" => 1, "output" => 2}}
+    extra = Map.put(base, "short_context", %{"input" => 3, "output" => 4})
+
+    Enum.each([{base, extra}, {extra, base}], fn {fast, priority} ->
+      payload =
+        put_in(valid_payload(), ["models", "future-model", "prices"], %{
+          "fast" => fast,
+          "priority" => priority
+        })
+
+      result = OpenAIPricingPreflight.validate_payload(payload)
+      refute result.compatible?
+      assert Enum.any?(result.errors, &(&1.code == :conflicting_service_tier_alias))
+    end)
+  end
+
   test "returns controlled file errors" do
     path =
       Path.join(System.tmp_dir!(), "missing-pricing-#{System.unique_integer([:positive])}.json")

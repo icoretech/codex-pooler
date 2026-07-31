@@ -347,7 +347,8 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
     end
   end
 
-  defp unsupported_prices_valid?("mixed", %{"standard" => buckets}) when map_size(buckets) > 0 do
+  defp unsupported_prices_valid?("mixed", %{"standard" => buckets} = prices)
+       when map_size(prices) == 1 and map_size(buckets) > 0 do
     Enum.all?(buckets, fn
       {"audio", values} -> exact_numeric_keys?(values, ["output"])
       {"live_transcription", values} -> exact_numeric_keys?(values, ["estimated_cost"])
@@ -355,8 +356,8 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
     end)
   end
 
-  defp unsupported_prices_valid?("per_minute", %{"standard" => buckets})
-       when map_size(buckets) > 0 do
+  defp unsupported_prices_valid?("per_minute", %{"standard" => buckets} = prices)
+       when map_size(prices) == 1 and map_size(buckets) > 0 do
     Enum.all?(buckets, fn
       {"transcription", values} ->
         exact_numeric_keys?(values, ["estimated_cost"]) or
@@ -491,9 +492,53 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
 
   defp coalesce_alias_rows(state) do
     state.rows
-    |> Enum.group_by(&row_identity/1)
+    |> Enum.group_by(& &1.model_identifier)
     |> Enum.sort_by(&elem(&1, 0))
-    |> Enum.reduce(%{state | rows: []}, fn {_identity, rows}, acc -> coalesce_rows(acc, rows) end)
+    |> Enum.reduce(%{state | rows: []}, fn {_identifier, rows}, acc ->
+      coalesce_model_rows(acc, rows)
+    end)
+  end
+
+  defp coalesce_model_rows(state, rows) do
+    rows_by_tier = Enum.group_by(rows, & &1.service_tier)
+
+    Enum.reduce(rows_by_tier, state, fn {_tier, tier_rows}, acc ->
+      case Enum.group_by(tier_rows, & &1.raw_service_tier) do
+        %{"fast" => fast_rows, "priority" => priority_rows} = aliases
+        when map_size(aliases) == 2 ->
+          coalesce_alias_tiers(acc, fast_rows, priority_rows)
+
+        _non_alias ->
+          tier_rows
+          |> Enum.group_by(&row_identity/1)
+          |> Enum.reduce(acc, fn {_identity, identity_rows}, inner_acc ->
+            coalesce_rows(inner_acc, identity_rows)
+          end)
+      end
+    end)
+  end
+
+  defp coalesce_alias_tiers(state, fast_rows, priority_rows) do
+    fast = semantic_tier(fast_rows)
+    priority = semantic_tier(priority_rows)
+
+    if fast == priority do
+      Enum.reduce(fast_rows, state, fn row, acc ->
+        %{acc | rows: [Map.delete(row, :raw_service_tier) | acc.rows]}
+      end)
+    else
+      add_error(
+        state,
+        :conflicting_service_tier_alias,
+        "fast and priority pricing aliases conflict",
+        row_path(hd(fast_rows))
+      )
+    end
+  end
+
+  defp semantic_tier(rows) do
+    rows
+    |> Map.new(fn row -> {row.price_bucket, semantic_row(row)} end)
   end
 
   defp coalesce_rows(state, [row]),
