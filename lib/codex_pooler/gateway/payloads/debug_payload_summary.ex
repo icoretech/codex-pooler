@@ -11,7 +11,8 @@ defmodule CodexPooler.Gateway.Payloads.DebugPayloadSummary do
   def record(endpoint, payload, upstream_payload, opts, transport) do
     if enabled?() do
       summary = summary(endpoint, payload, upstream_payload, opts, transport)
-      response_id_preview = response_id_preview(Map.get(payload, "previous_response_id"))
+      previous_response_id_clear_preview =
+        previous_response_id_clear_preview(Map.get(payload, "previous_response_id"))
 
       Logger.info(fn ->
         [
@@ -21,7 +22,7 @@ defmodule CodexPooler.Gateway.Payloads.DebugPayloadSummary do
           "endpoint=#{summary["endpoint"] || "unknown"}",
           "previous_response_id_action=#{summary["previous_response_id_summary"]["action"]}",
           "previous_response_id_preview=#{summary["previous_response_id_summary"]["preview"] || "none"}",
-          "response_id_preview=#{response_id_preview || "none"}",
+          "previous_response_id_clear_preview=#{previous_response_id_clear_preview || "none"}",
           "client_json_bytes=#{summary["shape"]["client"]["json"]["bytes"]}",
           "client_approx_tokens=#{summary["shape"]["client"]["json"]["approx_tokens"]}",
           "upstream_json_bytes=#{summary["shape"]["upstream"]["json"]["bytes"]}",
@@ -259,13 +260,16 @@ defmodule CodexPooler.Gateway.Payloads.DebugPayloadSummary do
 
   defp enabled?, do: OperationalSettings.current().gateway_debug?
 
-  defp response_id_preview("resp_" <> suffix = response_id)
+  # The only provider response identifier available at request time is the
+  # continuation anchor the client sent, so the field is named for it rather
+  # than implying the identifier of the response this turn will produce.
+  defp previous_response_id_clear_preview("resp_" <> suffix = response_id)
        when byte_size(suffix) in 13..1020 do
     if response_id =~ ~r/\Aresp_[A-Za-z0-9_-]+\z/,
       do: "resp_" <> binary_part(suffix, 0, 12)
   end
 
-  defp response_id_preview(_response_id), do: nil
+  defp previous_response_id_clear_preview(_response_id), do: nil
 
   defp secret_preview(nil), do: nil
 

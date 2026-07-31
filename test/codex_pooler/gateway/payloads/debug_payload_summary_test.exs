@@ -29,7 +29,7 @@ defmodule CodexPooler.Gateway.Payloads.DebugPayloadSummaryTest do
 
     {summary, log} = record_with_log(response_id)
 
-    assert log =~ "response_id_preview=resp_abcdefghijkl"
+    assert log =~ "previous_response_id_clear_preview=resp_abcdefghijkl"
     refute log =~ response_id
     assert_hash_only_summary(summary, response_id, "resp_abcdefghijkl")
   end
@@ -46,7 +46,7 @@ defmodule CodexPooler.Gateway.Payloads.DebugPayloadSummaryTest do
         ] do
       {summary, log} = record_with_log(response_id)
 
-      assert log =~ "response_id_preview=none"
+      assert log =~ "previous_response_id_clear_preview=none"
       refute log =~ response_id
       assert_hash_only_summary(summary, response_id, nil)
     end
@@ -86,7 +86,7 @@ defmodule CodexPooler.Gateway.Payloads.DebugPayloadSummaryTest do
 
     assert hash_preview =~ ~r/\A[0-9a-f]{16}\z/
     refute hash_preview == response_id
-    refute Map.has_key?(summary, "response_id_preview")
+    refute Map.has_key?(summary, "previous_response_id_clear_preview")
 
     persisted = DebugPayloadSummary.attempt_metadata(%{gateway_debug_payload: summary})
     persisted_text = inspect(persisted)
@@ -94,7 +94,7 @@ defmodule CodexPooler.Gateway.Payloads.DebugPayloadSummaryTest do
     assert get_in(persisted, ["gateway_debug", "previous_response_id_summary", "preview"]) ==
              hash_preview
 
-    refute Map.has_key?(persisted["gateway_debug"], "response_id_preview")
+    refute Map.has_key?(persisted["gateway_debug"], "previous_response_id_clear_preview")
     refute persisted_text =~ response_id
 
     if clear_preview do
