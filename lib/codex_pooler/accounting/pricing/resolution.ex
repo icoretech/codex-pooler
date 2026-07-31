@@ -7,6 +7,7 @@ defmodule CodexPooler.Accounting.PricingResolution do
   alias CodexPooler.Accounting.PricingResolution.Costing
   alias CodexPooler.Catalog.{Model, PricingSnapshot}
   alias CodexPooler.Repo
+  alias CodexPooler.ServiceTier
 
   @default_price_bucket "default"
   @long_context_price_bucket "long_context"
@@ -180,9 +181,9 @@ defmodule CodexPooler.Accounting.PricingResolution do
 
     %{
       reasoning_effort: payload_reasoning_effort(payload) |> normalize_snapshot_value(),
-      requested_service_tier: normalize_snapshot_value(requested_tier),
-      actual_service_tier: normalize_snapshot_value(actual_tier),
-      service_tier: normalize_snapshot_value(effective_tier)
+      requested_service_tier: ServiceTier.canonicalize(requested_tier),
+      actual_service_tier: ServiceTier.canonicalize(actual_tier),
+      service_tier: ServiceTier.canonicalize(effective_tier)
     }
   end
 
@@ -210,6 +211,8 @@ defmodule CodexPooler.Accounting.PricingResolution do
          timestamp,
          batch_usage?
        ) do
+    requested_tier = ServiceTier.canonicalize(requested_tier)
+    actual_tier = ServiceTier.canonicalize(actual_tier)
     identifiers = pricing_identifiers(model, requested_model)
 
     case priceable_service_tier(requested_tier, actual_tier, batch_usage?) do
@@ -383,14 +386,27 @@ defmodule CodexPooler.Accounting.PricingResolution do
   @spec latest_pricing_snapshot([String.t()], String.t(), String.t(), DateTime.t()) ::
           PricingSnapshot.t() | nil
   defp latest_pricing_snapshot(identifiers, service_tier, price_bucket, timestamp) do
+    service_tier_aliases = ServiceTier.pricing_aliases(service_tier)
+    canonical_service_tier = ServiceTier.canonicalize(service_tier)
+
     Repo.one(
       from ps in PricingSnapshot,
         where:
           ps.model_identifier in ^identifiers and ps.effective_at <= ^timestamp and
-            fragment("?->>'service_tier'", ps.config) == ^service_tier and
+            fragment("?->>'service_tier'", ps.config) in ^service_tier_aliases and
             fragment("?->>'price_bucket'", ps.config) == ^price_bucket and
             fragment("?->>'pricing_type'", ps.config) == "per_1m_tokens",
-        order_by: [desc: ps.effective_at, desc: ps.captured_at, desc: ps.id],
+        order_by: [
+          desc: ps.effective_at,
+          desc: ps.captured_at,
+          asc:
+            fragment(
+              "CASE WHEN ?->>'service_tier' = ? THEN 0 ELSE 1 END",
+              ps.config,
+              ^canonical_service_tier
+            ),
+          desc: ps.id
+        ],
         limit: 1
     )
   end
@@ -486,11 +502,14 @@ defmodule CodexPooler.Accounting.PricingResolution do
           DateTime.t()
         ) :: snapshots_by_identifier()
   defp latest_pricing_snapshots_by_identifier(identifiers, service_tier, price_bucket, timestamp) do
+    service_tier_aliases = ServiceTier.pricing_aliases(service_tier)
+    canonical_service_tier = ServiceTier.canonicalize(service_tier)
+
     PricingSnapshot
     |> where(
       [ps],
       ps.model_identifier in ^identifiers and ps.effective_at <= ^timestamp and
-        fragment("?->>'service_tier'", ps.config) == ^service_tier and
+        fragment("?->>'service_tier'", ps.config) in ^service_tier_aliases and
         fragment("?->>'price_bucket'", ps.config) == ^price_bucket and
         fragment("?->>'pricing_type'", ps.config) == "per_1m_tokens"
     )
@@ -498,6 +517,12 @@ defmodule CodexPooler.Accounting.PricingResolution do
       asc: ps.model_identifier,
       desc: ps.effective_at,
       desc: ps.captured_at,
+      asc:
+        fragment(
+          "CASE WHEN ?->>'service_tier' = ? THEN 0 ELSE 1 END",
+          ps.config,
+          ^canonical_service_tier
+        ),
       desc: ps.id
     )
     |> Repo.all()
@@ -780,7 +805,11 @@ defmodule CodexPooler.Accounting.PricingResolution do
   end
 
   defp requested_service_tier(payload, opts) do
-    enforced_service_tier(opts) || attr(opts, :service_tier) || attr(payload, :service_tier)
+    opts
+    |> enforced_service_tier()
+    |> fallback(attr(opts, :service_tier))
+    |> fallback(attr(payload, :service_tier))
+    |> ServiceTier.canonicalize()
   end
 
   defp enforced_service_tier(opts) do
@@ -831,9 +860,11 @@ defmodule CodexPooler.Accounting.PricingResolution do
   defp batch_endpoint?(_endpoint), do: false
 
   defp actual_service_tier(usage, opts) do
-    attr(opts, :actual_service_tier) ||
-      metadata_service_tier(attr(opts, :attempt_metadata)) ||
-      attr(usage, :service_tier)
+    opts
+    |> attr(:actual_service_tier)
+    |> fallback(metadata_service_tier(attr(opts, :attempt_metadata)))
+    |> fallback(attr(usage, :service_tier))
+    |> ServiceTier.canonicalize()
   end
 
   defp metadata_service_tier(%{} = metadata) do
@@ -871,16 +902,7 @@ defmodule CodexPooler.Accounting.PricingResolution do
   defp mapped_service_tier("batch"), do: {:ok, "batch"}
   defp mapped_service_tier(_tier), do: {:unpriced, "unpriced_unsupported_tier"}
 
-  defp normalize_service_tier(nil), do: nil
-
-  defp normalize_service_tier(tier) when is_binary(tier) do
-    tier
-    |> String.trim()
-    |> String.downcase()
-    |> blank_to_nil()
-  end
-
-  defp normalize_service_tier(tier), do: tier |> to_string() |> normalize_service_tier()
+  defp normalize_service_tier(tier), do: ServiceTier.canonicalize(tier)
 
   defp requested_service_tier_snapshot(payload, request_metadata, pricing) do
     pricing.requested_service_tier ||

@@ -93,26 +93,47 @@ defmodule CodexPooler.AccountingTestSupport do
         "accounting-pricing-#{System.unique_integer([:positive])}.json"
       )
 
+    prices = Map.new(prices, fn {key, value} -> {key, json_number(value)} end)
+
     File.write!(
       path,
       Jason.encode!(%{
         "generated_at" => DateTime.to_iso8601(generated_at),
         "models" => %{
           model_identifier => %{
+            "categories" => ["language_model"],
+            "category" => "language_model",
             "model" => model_identifier,
             "pricing_type" => "per_1m_tokens",
+            "pricing_types" => ["per_1m_tokens"],
             "prices" => %{
               "standard" => %{
                 "default" => prices
               }
-            }
+            },
+            "timestamp" => DateTime.to_iso8601(generated_at)
           }
-        }
+        },
+        "models_count" => 1,
+        "source" => "synthetic",
+        "source_url" => "https://example.com/pricing.json",
+        "tools" => %{
+          "sample-tool" => %{
+            "details" => "Synthetic tool",
+            "price" => 0,
+            "pricing" => "$0",
+            "tool" => "Sample Tool"
+          }
+        },
+        "tools_count" => 1
       })
     )
 
     path
   end
+
+  defp json_number(%Decimal{} = value), do: Decimal.to_float(value)
+  defp json_number(value), do: value
 
   def pricing_config(overrides) do
     Map.merge(
