@@ -4061,7 +4061,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         end)
 
       assert_received {:generation_boundary_state, state}
-      refute_received {:codex_response_chunk, _extra_terminal}
+      refute_received {:codex_response_chunk, _task_pid, _extra_terminal}
       assert [first_upstream_request] = FakeUpstream.requests(upstream)
       assert FakeUpstream.websocket_connection_count(upstream) == 2
 
