@@ -829,6 +829,15 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "public /v1 terminal masking and shape remain unchanged"
 
       assert feature.contract =~
+               "a mid-stream upstream death after visible output authors exactly one native type:error frame with status 502, wire code upstream_request_failed, and the pinned message upstream request failed"
+
+      assert feature.contract =~
+               "carrying no terminal event, no sequence_number, and no socket close so the same socket serves later turns"
+
+      assert feature.contract =~
+               "every authored websocket frame carries error type invalid_request_error, defaulting independently to status 500 when its reason has no status and to wire code websocket_request_failed when its reason has no code and message"
+
+      assert feature.contract =~
                "an unresolved previous-response alias retains the current authenticated runtime"
 
       assert feature.contract =~

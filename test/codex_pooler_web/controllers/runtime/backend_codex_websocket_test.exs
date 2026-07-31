@@ -9733,6 +9733,89 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     refute log =~ "ordinary failure prompt sentinel"
   end
 
+  test "mid-stream upstream death after visible output authors exactly one error frame" do
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_sse_then_close([
+          %{
+            "type" => "response.created",
+            "response" => %{"id" => "resp_visible_then_death", "status" => "in_progress"}
+          },
+          %{"type" => "response.output_text.delta", "delta" => "partial visible output"}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, state} =
+      CodexResponsesSocket.init(%{
+        auth: auth,
+        opts: %{
+          request_id: "ws-visible-then-death",
+          accepted_turn_state: "ws-visible-then-death",
+          client_ip: "127.0.0.1"
+        }
+      })
+
+    payload =
+      Jason.encode!(%{
+        "type" => "response.create",
+        "model" => setup.model.exposed_model_id,
+        "input" => [],
+        "stream" => true,
+        "generate" => true
+      })
+
+    {{error_frame, state}, logs} =
+      capture_native_turn_warning(fn ->
+        assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+
+        assert {:push, {:text, created_frame}, state} = receive_socket_push(state)
+        assert %{"type" => "response.created"} = Jason.decode!(created_frame)
+
+        assert {:push, {:text, delta_frame}, state} = receive_socket_push(state)
+        assert %{"type" => "response.output_text.delta"} = Jason.decode!(delta_frame)
+
+        assert {:push, {:text, error_frame}, state} =
+                 receive_socket_done(state, @large_websocket_frame_timeout)
+
+        assert MapSet.size(state.tasks) == 0
+        {error_frame, state}
+      end)
+
+    assert error_frame ==
+             ~s({"error":{"code":"upstream_request_failed",) <>
+               ~s("message":"upstream request failed","param":null,) <>
+               ~s("type":"invalid_request_error"},"status":502,"type":"error"})
+
+    # Exactly one authored frame: nothing else is queued for the client.
+    refute_received {:codex_response_chunk, _chunk}
+    refute_received {:codex_response_done, _pid, _result}
+
+    assert_native_turn_warnings(logs, 1)
+    assert logs =~ "request_id=ws-visible-then-death"
+    assert logs =~ "error_code=upstream_request_failed"
+    assert logs =~ "visible_output=after_visible_output"
+    refute logs =~ "partial visible output"
+
+    # The socket is not closed by the failure and still serves the next turn.
+    FakeUpstream.set_mode(
+      upstream,
+      FakeUpstream.json_response(%{
+        "id" => "resp_after_visible_death",
+        "object" => "response",
+        "usage" => %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}
+      })
+    )
+
+    assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+    assert {:push, {:text, recovered_frame}, state} = receive_socket_push(state)
+    assert %{"id" => "resp_after_visible_death"} = Jason.decode!(recovered_frame)
+    assert {:ok, state} = receive_socket_done(state, @large_websocket_frame_timeout)
+    assert :ok = CodexResponsesSocket.terminate(:closed, state)
+  end
+
   test "direct native websocket output state resets before the next turn" do
     upstream =
       start_upstream(

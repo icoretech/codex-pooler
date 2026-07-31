@@ -1018,6 +1018,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         assert decoded["status"] == 500
         assert decoded["error"]["message"] == "websocket request failed: non_atom_reason"
         assert decoded["error"]["code"] == "websocket_request_failed"
+        assert decoded["error"]["type"] == "invalid_request_error"
 
         refute payload =~ "raw-idempotency-key-secret"
         refute payload =~ "raw websocket prompt"
