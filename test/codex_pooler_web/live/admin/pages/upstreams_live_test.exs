@@ -2141,6 +2141,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
            ) == 0
   end
 
+  @tag :saved_reset_redemption_cause
   test "confirms manual saved reset redemption from the upstream account dialog", %{
     conn: conn,
     scope: scope
@@ -2178,13 +2179,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
             "next_expires_at" => reset_expires_at
           },
           "saved_reset_redemption" => %{
+            "probe" => %{"token" => "saved-reset-dialog-sensitive-sentinel"},
+            "result" => %{"provider_body" => "saved-reset-dialog-sensitive-sentinel"},
+            "credit_id" => "saved-reset-dialog-sensitive-sentinel",
             "status" => "redeeming",
             "attempt_id" => Ecto.UUID.generate(),
             "generation" => 1,
             "trigger_kind" => "admin_manual",
             "started_at" => stale_started_at,
-            "finished_at" => nil,
-            "result" => nil
+            "finished_at" => nil
           }
         }
       })
@@ -2206,6 +2209,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(view, "#saved-reset-policy-dialog")
     assert has_element?(view, "#saved-reset-expiration-row-0")
+    refute has_element?(view, "#saved-reset-last-auto-redemption-cause")
+    refute render(view) =~ "saved-reset-dialog-sensitive-sentinel"
     refute has_element?(view, "#saved-reset-expiration-redeem-0")
     refute has_element?(view, "#saved-reset-expiration-mobile-redeem-0")
 
@@ -2252,6 +2257,98 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert job.args["trigger_kind"] == "admin_manual"
     refute Map.has_key?(job.args, "credit_id")
     refute Map.has_key?(job.args, "redeem_request_id")
+  end
+
+  @tag :saved_reset_redemption_cause
+  test "renders only the bounded automatic cause in the saved reset policy dialog", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{
+        slug: "saved-reset-dialog-auto-cause",
+        name: "Saved Reset Dialog Auto Cause"
+      })
+
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    %{identity: identity} =
+      active_upstream_assignment_fixture(pool, %{
+        account_label: "Automatic Saved Reset Dialog Codex",
+        metadata: %{
+          "saved_resets" => %{
+            "status" => "reported",
+            "available_count" => 1,
+            "available_expirations" => [
+              %{
+                "expires_at" => DateTime.to_iso8601(DateTime.add(now, 13, :day)),
+                "first_seen_at" => DateTime.to_iso8601(DateTime.add(now, -1, :day))
+              }
+            ]
+          },
+          "saved_reset_redemption" => %{
+            "trigger_kind" => "gateway_auto",
+            "trigger_detail" => "exhausted",
+            "probe" => %{"token" => "saved-reset-dialog-auto-sensitive-sentinel"},
+            "result" => %{"provider_body" => "saved-reset-dialog-auto-sensitive-sentinel"},
+            "credit_id" => "saved-reset-dialog-auto-sensitive-sentinel",
+            "arbitrary_metadata" => "saved-reset-dialog-auto-sensitive-sentinel"
+          }
+        }
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    view
+    |> element("#saved-reset-policy-upstream-account-#{identity.id}")
+    |> render_click()
+
+    assert has_element?(
+             view,
+             "#saved-reset-last-auto-redemption-cause",
+             "Last automatic redemption · Request · weekly exhausted"
+           )
+
+    refute render(view) =~ "saved-reset-dialog-auto-sensitive-sentinel"
+  end
+
+  @tag :saved_reset_redemption_cause
+  test "omits automatic redemption causes for manual, legacy, unknown, and incomplete records", %{
+    conn: conn,
+    scope: scope
+  } do
+    causes = [
+      {"manual", %{"trigger_kind" => "admin_manual", "trigger_detail" => "exhausted"}},
+      {"legacy", %{"status" => "succeeded"}},
+      {"unknown", %{"trigger_kind" => "gateway_auto", "trigger_detail" => "unrecognized"}},
+      {"incomplete", %{"trigger_kind" => "scheduled_expiry_rescue"}}
+    ]
+
+    for {cause_name, redemption} <- causes do
+      {:ok, pool} =
+        Pools.create_pool(scope, %{
+          slug: "saved-reset-dialog-#{cause_name}-cause",
+          name: "Saved Reset Dialog #{String.capitalize(cause_name)} Cause"
+        })
+
+      %{identity: identity} =
+        active_upstream_assignment_fixture(pool, %{
+          account_label: "#{String.capitalize(cause_name)} Saved Reset Dialog Codex",
+          metadata: %{
+            "saved_resets" => %{"status" => "reported", "available_count" => 1},
+            "saved_reset_redemption" => redemption
+          }
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+      view
+      |> element("#saved-reset-policy-upstream-account-#{identity.id}")
+      |> render_click()
+
+      refute has_element?(view, "#saved-reset-last-auto-redemption-cause")
+      refute has_element?(view, "#cockpit-saved-reset-last-auto-redemption-cause")
+    end
   end
 
   test "stale saved reset confirmation reloads account state before enqueueing", %{

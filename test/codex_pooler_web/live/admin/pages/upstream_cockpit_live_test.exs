@@ -1491,6 +1491,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
   @tag :saved_reset_cockpit
   @tag :relative_countdown_contract
+  @tag :saved_reset_redemption_cause
   test "saved reset cockpit metric, policy form, and confirmed manual redemption enqueue", %{
     conn: conn,
     scope: scope
@@ -1574,6 +1575,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
               }
             ],
             "next_expires_at" => first_expires_at_iso
+          },
+          "saved_reset_redemption" => %{
+            "trigger_kind" => "scheduled_expiry_rescue",
+            "trigger_detail" => "last_call",
+            "probe" => %{"token" => "saved-reset-cockpit-sensitive-sentinel"},
+            "result" => %{"provider_body" => "saved-reset-cockpit-sensitive-sentinel"},
+            "credit_id" => "saved-reset-cockpit-sensitive-sentinel"
           }
         }
       })
@@ -1619,6 +1627,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(view, "#{meter_selector}-policy", "inactive")
     assert has_element?(view, "#saved-reset-bank-disclosure summary #{meter_selector}")
     refute has_element?(view, "#saved-reset-bank-disclosure[open]")
+
+    assert has_element?(
+             view,
+             "#cockpit-saved-reset-last-auto-redemption-cause",
+             "Last automatic redemption · Scheduled · last call"
+           )
+
+    refute render(view) =~ "saved-reset-cockpit-sensitive-sentinel"
     assert has_element?(view, "#saved-reset-policy-disclosure", "off")
     assert has_element?(view, "#{meter_selector}-reset[title='#{first_expiration_label}']")
 
@@ -1731,6 +1747,41 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert job.args["trigger_kind"] == "admin_manual"
     refute Map.has_key?(job.args, "credit_id")
     refute Map.has_key?(job.args, "redeem_request_id")
+  end
+
+  @tag :saved_reset_redemption_cause
+  test "omits automatic redemption causes for manual, legacy, unknown, and incomplete records", %{
+    conn: conn,
+    scope: scope
+  } do
+    causes = [
+      {"manual", %{"trigger_kind" => "admin_manual", "trigger_detail" => "exhausted"}},
+      {"legacy", %{"status" => "succeeded"}},
+      {"unknown", %{"trigger_kind" => "gateway_auto", "trigger_detail" => "unrecognized"}},
+      {"incomplete", %{"trigger_kind" => "scheduled_expiry_rescue"}}
+    ]
+
+    for {cause_name, redemption} <- causes do
+      {:ok, pool} =
+        Pools.create_pool(scope, %{
+          slug: "saved-reset-cockpit-#{cause_name}-cause",
+          name: "Saved Reset Cockpit #{String.capitalize(cause_name)} Cause"
+        })
+
+      %{identity: identity} =
+        upstream_assignment_fixture(pool, %{
+          account_label: "#{String.capitalize(cause_name)} Saved Reset Cockpit Codex",
+          identity_metadata: %{
+            "saved_resets" => %{"status" => "reported", "available_count" => 1},
+            "saved_reset_redemption" => redemption
+          }
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+
+      refute has_element?(view, "#saved-reset-last-auto-redemption-cause")
+      refute has_element?(view, "#cockpit-saved-reset-last-auto-redemption-cause")
+    end
   end
 
   @tag :saved_reset_cockpit

@@ -225,6 +225,9 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseData do
 
   def saved_reset_policy(enabled), do: %{enabled?: enabled}
 
+  def saved_reset_cause(:request), do: %{label: "Request · weekly exhausted"}
+  def saved_reset_cause(:scheduled), do: %{label: "Scheduled · last call"}
+
   def protocols do
     for {id, transport} <- [
           {"websocket", "websocket"},

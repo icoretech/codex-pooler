@@ -74,6 +74,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
           />
         </summary>
         <div class="grid gap-3 px-4 pb-3">
+          <SavedResetComponents.saved_reset_last_auto_redemption_cause
+            id="cockpit-saved-reset-last-auto-redemption-cause"
+            cause={@cockpit.saved_resets.last_auto_redemption_cause}
+          />
           <div
             :if={@cockpit.saved_resets.available?}
             id="cockpit-saved-reset-expiration-summary"

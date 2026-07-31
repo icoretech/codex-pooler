@@ -790,6 +790,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
             >
               {@account.saved_reset_redemption_action.reason}
             </p>
+            <SavedResetComponents.saved_reset_last_auto_redemption_cause
+              id="saved-reset-last-auto-redemption-cause"
+              cause={@account.saved_resets.last_auto_redemption_cause}
+            />
           </div>
 
           <details

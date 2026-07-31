@@ -46,21 +46,92 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjectionTes
     end
   end
 
+  @tag :saved_reset_redemption_cause
+  test "projects only the five recognized automatic redemption causes" do
+    causes = %{
+      {"gateway_auto", "exhausted"} => "Request · weekly exhausted",
+      {"gateway_auto", "threshold"} => "Request · quota threshold",
+      {"scheduled_expiry_rescue", "exhausted"} => "Scheduled · weekly exhausted",
+      {"scheduled_expiry_rescue", "threshold"} => "Scheduled · quota threshold",
+      {"scheduled_expiry_rescue", "last_call"} => "Scheduled · last call"
+    }
+
+    for {{trigger_kind, trigger_detail}, label} <- causes do
+      snapshot =
+        SavedResetProjection.snapshot(
+          metadata("confirmed_by_upstream", %{
+            "trigger_kind" => trigger_kind,
+            "trigger_detail" => trigger_detail
+          }),
+          @prefs
+        )
+
+      assert snapshot.last_auto_redemption_cause == %{label: label}
+    end
+  end
+
+  @tag :saved_reset_redemption_cause
+  test "fails closed without rendering redemption metadata" do
+    sensitive_sentinel = "saved-reset-projection-sensitive-sentinel"
+
+    for redemption <- [
+          %{"trigger_kind" => "admin_manual", "trigger_detail" => "exhausted"},
+          %{"trigger_kind" => "gateway_auto", "trigger_detail" => "unrecognized"},
+          %{"trigger_kind" => "scheduled_expiry_rescue"},
+          %{"trigger_detail" => "last_call"},
+          %{"status" => "succeeded"}
+        ] do
+      snapshot =
+        SavedResetProjection.snapshot(
+          %{
+            "saved_reset_redemption" =>
+              Map.merge(redemption, %{
+                "probe" => %{"token" => sensitive_sentinel},
+                "result" => %{"body" => sensitive_sentinel},
+                "credit_id" => sensitive_sentinel,
+                "arbitrary_metadata" => sensitive_sentinel
+              })
+          },
+          @prefs
+        )
+
+      assert snapshot.last_auto_redemption_cause == nil
+      refute inspect(snapshot) =~ sensitive_sentinel
+    end
+  end
+
+  @tag :saved_reset_redemption_cause
   test "never leaks the probe correlation token to operators" do
     meta = metadata("confirmed_by_upstream", %{"probe" => %{"token" => "secret-probe-token"}})
 
     snapshot = SavedResetProjection.snapshot(meta, @prefs)
 
-    refute Map.has_key?(snapshot.last_redemption, "probe")
+    refute Map.has_key?(snapshot, :last_redemption)
     refute inspect(snapshot) =~ "secret-probe-token"
   end
 
+  @tag :saved_reset_redemption_cause
+  test "does not project a raw terminal reason" do
+    terminal_reason_sentinel = "saved-reset-terminal-reason-sensitive-sentinel"
+
+    snapshot =
+      SavedResetProjection.snapshot(
+        metadata("expired", %{"terminal_reason" => terminal_reason_sentinel}),
+        @prefs
+      )
+
+    refute Map.has_key?(snapshot.reset_lifecycle, :terminal_reason)
+    refute inspect(snapshot) =~ terminal_reason_sentinel
+  end
+
+  @tag :saved_reset_redemption_cause
   test "has no lifecycle for legacy records without a phase" do
     meta = %{"saved_reset_redemption" => %{"status" => "succeeded"}}
 
     snapshot = SavedResetProjection.snapshot(meta, @prefs)
 
     assert snapshot.reset_lifecycle == nil
+    assert snapshot.last_auto_redemption_cause == nil
   end
 
   test "projects a sanitized granted date from current saved-reset expiration rows" do

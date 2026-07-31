@@ -48,15 +48,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
           required(:expires_reported?) => boolean(),
           required(:in_progress?) => boolean(),
           required(:redemption_stale?) => boolean(),
-          required(:last_redemption) => map() | nil,
+          required(:last_auto_redemption_cause) => auto_redemption_cause() | nil,
           required(:reset_lifecycle) => reset_lifecycle() | nil
         }
+  @type auto_redemption_cause :: %{required(:label) => String.t()}
   @type reset_lifecycle :: %{
           required(:phase) => String.t(),
           required(:label) => String.t(),
           required(:consumed_at) => String.t() | nil,
-          required(:deadline_at) => String.t() | nil,
-          required(:terminal_reason) => String.t() | nil
+          required(:deadline_at) => String.t() | nil
         }
 
   @spec snapshot(UpstreamIdentity.t() | map() | nil, DateTimeDisplay.preferences()) :: snapshot()
@@ -66,18 +66,47 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
       |> SavedResets.snapshot()
       |> Map.update!(:available_expirations, &sanitize_available_expirations/1)
 
-    Map.merge(snapshot, %{
+    snapshot
+    |> Map.drop([:last_redemption])
+    |> Map.merge(%{
       next_expires_label: next_expires_label(snapshot, datetime_preferences),
       next_expires_title: next_expires_title(snapshot, datetime_preferences),
-      last_redemption: sanitize_last_redemption(snapshot.last_redemption),
+      last_auto_redemption_cause: last_auto_redemption_cause(snapshot.last_redemption),
       reset_lifecycle: reset_lifecycle(snapshot.last_redemption, datetime_preferences)
     })
   end
 
-  # Never surface the probe correlation token or any raw provider detail to
-  # operators; keep only the safe accounting fields.
-  defp sanitize_last_redemption(nil), do: nil
-  defp sanitize_last_redemption(%{} = redemption), do: Map.drop(redemption, ["probe"])
+  defp last_auto_redemption_cause(%{
+         "trigger_kind" => "gateway_auto",
+         "trigger_detail" => "exhausted"
+       }),
+       do: %{label: "Request · weekly exhausted"}
+
+  defp last_auto_redemption_cause(%{
+         "trigger_kind" => "gateway_auto",
+         "trigger_detail" => "threshold"
+       }),
+       do: %{label: "Request · quota threshold"}
+
+  defp last_auto_redemption_cause(%{
+         "trigger_kind" => "scheduled_expiry_rescue",
+         "trigger_detail" => "exhausted"
+       }),
+       do: %{label: "Scheduled · weekly exhausted"}
+
+  defp last_auto_redemption_cause(%{
+         "trigger_kind" => "scheduled_expiry_rescue",
+         "trigger_detail" => "threshold"
+       }),
+       do: %{label: "Scheduled · quota threshold"}
+
+  defp last_auto_redemption_cause(%{
+         "trigger_kind" => "scheduled_expiry_rescue",
+         "trigger_detail" => "last_call"
+       }),
+       do: %{label: "Scheduled · last call"}
+
+  defp last_auto_redemption_cause(_redemption), do: nil
 
   defp reset_lifecycle(%{"phase" => phase} = redemption, datetime_preferences)
        when is_map_key(@lifecycle_labels, phase) do
@@ -85,8 +114,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
       phase: phase,
       label: Map.fetch!(@lifecycle_labels, phase),
       consumed_at: format_lifecycle_datetime(redemption["consumed_at"], datetime_preferences),
-      deadline_at: format_lifecycle_datetime(redemption["deadline_at"], datetime_preferences),
-      terminal_reason: string_or_nil(redemption["terminal_reason"])
+      deadline_at: format_lifecycle_datetime(redemption["deadline_at"], datetime_preferences)
     }
   end
 
@@ -98,9 +126,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection do
       nil -> nil
     end
   end
-
-  defp string_or_nil(value) when is_binary(value), do: value
-  defp string_or_nil(_value), do: nil
 
   defp sanitize_available_expirations(rows) when is_list(rows) do
     Enum.map(rows, fn %{expires_at: expires_at, first_seen_at: first_seen_at} = row ->

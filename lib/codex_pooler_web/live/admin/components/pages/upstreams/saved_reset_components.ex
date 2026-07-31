@@ -107,6 +107,24 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
     """
   end
 
+  attr :id, :string, required: true
+  attr :cause, :map, default: nil
+
+  def saved_reset_last_auto_redemption_cause(%{cause: %{label: label}} = assigns)
+      when is_binary(label) do
+    ~H"""
+    <p id={@id} class="text-xs leading-5 text-base-content/60">
+      <span class="font-medium text-base-content/75">Last automatic redemption</span>
+      <span> · {@cause.label}</span>
+    </p>
+    """
+  end
+
+  def saved_reset_last_auto_redemption_cause(assigns) do
+    ~H"""
+    """
+  end
+
   attr :form, :any, required: true
 
   def saved_reset_policy_fields(assigns) do

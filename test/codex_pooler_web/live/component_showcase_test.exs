@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
   @showcase_route "/dev/component-showcase/:theme"
   @states ~w(loading empty stale error)
 
+  @tag :saved_reset_redemption_cause
   test "isolated showcase renders real primitives and required states in both themes" do
     for theme <- ~w(light dark) do
       {:ok, view, html} = mount_showcase(theme)
@@ -50,6 +51,18 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
       end
 
       assert has_element?(view, "#showcase-native-state-notes")
+
+      assert has_element?(
+               view,
+               "#showcase-saved-reset-request-cause",
+               "Last automatic redemption · Request · weekly exhausted"
+             )
+
+      assert has_element?(
+               view,
+               "#showcase-saved-reset-scheduled-cause",
+               "Last automatic redemption · Scheduled · last call"
+             )
 
       assert has_element?(
                view,

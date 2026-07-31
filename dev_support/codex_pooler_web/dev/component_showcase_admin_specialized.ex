@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseAdminSpecialized do
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMeter
+  alias CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents
   alias CodexPoolerWeb.Dev.ComponentShowcaseData
 
   attr :review_state, :string,
@@ -20,6 +21,8 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseAdminSpecialized do
       |> assign(:account, ComponentShowcaseData.account_card())
       |> assign(:quota_limits, ComponentShowcaseData.quota_limits())
       |> assign(:saved_resets, ComponentShowcaseData.saved_resets())
+      |> assign(:request_saved_reset_cause, ComponentShowcaseData.saved_reset_cause(:request))
+      |> assign(:scheduled_saved_reset_cause, ComponentShowcaseData.saved_reset_cause(:scheduled))
       |> assign(:active_policy, ComponentShowcaseData.saved_reset_policy(true))
       |> assign(:inactive_policy, ComponentShowcaseData.saved_reset_policy(false))
 
@@ -67,6 +70,14 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseAdminSpecialized do
               id="showcase-reset-meter-inactive"
               saved_resets={@saved_resets}
               saved_reset_policy={@inactive_policy}
+            />
+            <SavedResetComponents.saved_reset_last_auto_redemption_cause
+              id="showcase-saved-reset-request-cause"
+              cause={@request_saved_reset_cause}
+            />
+            <SavedResetComponents.saved_reset_last_auto_redemption_cause
+              id="showcase-saved-reset-scheduled-cause"
+              cause={@scheduled_saved_reset_cause}
             />
           </div>
         </AdminComponents.admin_surface>
