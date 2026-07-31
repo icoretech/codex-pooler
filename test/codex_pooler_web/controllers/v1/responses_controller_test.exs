@@ -485,7 +485,13 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     upstream =
       start_upstream(public_websocket_completed_response("resp_v1_websocket_public"))
 
-    setup = gateway_setup(upstream)
+    setup =
+      gateway_setup(upstream,
+        model_metadata: %{
+          "upstream_model" => %{"service_tiers" => [%{"id" => "priority"}]}
+        }
+      )
+
     request_count = Repo.aggregate(Request, :count)
     assert :ok = Events.subscribe_pool(setup.pool)
     port = start_public_endpoint!()
@@ -512,7 +518,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
           "model" => setup.model.exposed_model_id,
           "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
           "stream" => true,
-          "generate" => true
+          "generate" => true,
+          "service_tier" => "fast"
         })
 
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
@@ -528,6 +535,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert captured.path == "/backend-api/codex/responses"
       assert captured.json["type"] == "response.create"
       assert captured.json["generate"] == true
+      assert captured.json["service_tier"] == "priority"
 
       assert_no_continuity_headers_forwarded!(captured)
 
@@ -1268,6 +1276,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              "response" => %{
                "id" => "resp_v1_non_stream",
                "status" => "completed",
+               "service_tier" => "fast",
                "output" => [
                  %{
                    "type" => "message",
@@ -1286,7 +1295,12 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         ])
       )
 
-    setup = gateway_setup(upstream)
+    setup =
+      gateway_setup(upstream,
+        model_metadata: %{
+          "upstream_model" => %{"service_tiers" => [%{"id" => "priority"}]}
+        }
+      )
 
     conn =
       conn
@@ -1294,10 +1308,16 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       |> post("/v1/responses", %{
         "model" => setup.model.exposed_model_id,
         "input" => "synthetic v1 response",
+        "service_tier" => "fast",
         "reasoning" => %{"effort" => "focused"}
       })
 
-    assert %{"id" => "resp_v1_non_stream", "object" => "response", "usage" => usage} =
+    assert %{
+             "id" => "resp_v1_non_stream",
+             "object" => "response",
+             "service_tier" => "fast",
+             "usage" => usage
+           } =
              json_response(conn, 200)
 
     assert usage["input_tokens"] == 23
@@ -1310,6 +1330,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert captured.path == "/backend-api/codex/responses"
     assert captured.json["stream"] == true
     assert captured.json["store"] == false
+    assert captured.json["service_tier"] == "priority"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "succeeded"
@@ -1353,6 +1374,87 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert log.token_counts.total_tokens == 52
     refute Map.has_key?(log.token_counts, :input_tokens_details)
     refute Map.has_key?(log.token_counts, :output_tokens_details)
+  end
+
+  test "POST /v1/responses rejects invalid service tiers before dispatch", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    for tier <- ["ultrafast", nil, 1, []] do
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic invalid tier",
+          "service_tier" => tier
+        })
+
+      assert %{"error" => %{"code" => "invalid_request", "param" => "service_tier"}} =
+               json_response(response, 400)
+    end
+
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
+    assert Repo.aggregate(LedgerEntry, :count) == 0
+  end
+
+  test "POST /v1/responses lets an enforced priority tier override an admitted client tier", %{
+    conn: conn
+  } do
+    upstream = start_upstream(reasoning_policy_responses_upstream())
+
+    setup =
+      gateway_setup(upstream,
+        model_metadata: %{
+          "upstream_model" => %{"service_tiers" => [%{"id" => "priority"}]}
+        }
+      )
+
+    setup.api_key
+    |> Ecto.Changeset.change(enforced_service_tier: "priority")
+    |> Repo.update!()
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic priority override",
+        "service_tier" => "default"
+      })
+
+    assert %{"id" => "resp_reasoning_policy_v1"} = json_response(response, 200)
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.json["service_tier"] == "priority"
+  end
+
+  test "POST /v1/responses rejects an enforced tier unsupported by every candidate", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    setup.api_key
+    |> Ecto.Changeset.change(enforced_service_tier: "priority")
+    |> Repo.update!()
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic unsupported enforced tier",
+        "service_tier" => "default"
+      })
+
+    assert %{"error" => %{"code" => "no_compatible_backend"}} = json_response(response, 503)
+    assert FakeUpstream.count(upstream) == 0
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "rejected"
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
+
+    assert Repo.aggregate(from(l in LedgerEntry, where: l.request_id == ^request.id), :count) == 0
   end
 
   @tag :programmatic_tool_calling

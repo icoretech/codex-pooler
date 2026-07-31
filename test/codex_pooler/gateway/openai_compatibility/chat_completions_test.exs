@@ -3,6 +3,24 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
 
   alias CodexPooler.Gateway.OpenAICompatibility.ChatCompletions
 
+  describe "normalize_response/2" do
+    test "preserves a literal provider service tier and omits absent or non-string tiers" do
+      payload = %{"model" => "gpt-example"}
+
+      assert ChatCompletions.normalize_response(
+               %{"id" => "resp_fast", "status" => "completed", "service_tier" => "fast"},
+               payload
+             )["service_tier"] == "fast"
+
+      for response <- [
+            %{"id" => "resp_absent", "status" => "completed"},
+            %{"id" => "resp_non_string", "status" => "completed", "service_tier" => 1}
+          ] do
+        refute Map.has_key?(ChatCompletions.normalize_response(response, payload), "service_tier")
+      end
+    end
+  end
+
   describe "normalize_stream_data/2" do
     test "carries split stream parser state explicitly" do
       state = ChatCompletions.stream_state(%{"model" => "gpt-example"})
@@ -147,6 +165,58 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
       assert Enum.map(tool_calls, & &1["id"]) == ["call_terminal_only"]
     end
 
+    test "adds a literal tier only to chunks emitted after it is observed" do
+      state =
+        ChatCompletions.stream_state(%{
+          "model" => "gpt-example",
+          "stream_options" => %{"include_usage" => true}
+        })
+
+      early =
+        sse_event("response.output_text.delta", %{
+          "type" => "response.output_text.delta",
+          "delta" => "before tier"
+        })
+        |> IO.iodata_to_binary()
+
+      assert {early_output, state} = ChatCompletions.normalize_stream_data(early, state)
+      refute Enum.any?(normalized_sse_payloads(early_output), &Map.has_key?(&1, "service_tier"))
+
+      terminal =
+        sse_event("response.completed", %{
+          "type" => "response.completed",
+          "response" => %{
+            "id" => "resp_late_tier",
+            "status" => "completed",
+            "service_tier" => "fast",
+            "usage" => %{"input_tokens" => 2, "output_tokens" => 3, "total_tokens" => 5}
+          }
+        })
+        |> IO.iodata_to_binary()
+
+      assert {terminal_output, _state} = ChatCompletions.normalize_stream_data(terminal, state)
+
+      assert Enum.all?(normalized_sse_payloads(terminal_output), fn payload ->
+               payload["service_tier"] == "fast"
+             end)
+    end
+
+    test "omits absent and non-string observed stream tiers" do
+      for tier <- [nil, 1] do
+        state = ChatCompletions.stream_state(%{"model" => "gpt-example"})
+
+        stream =
+          sse_event("response.created", %{
+            "type" => "response.created",
+            "response" => %{"id" => "resp_tier_omitted", "service_tier" => tier}
+          })
+          |> IO.iodata_to_binary()
+
+        assert {output, _state} = ChatCompletions.normalize_stream_data(stream, state)
+        refute Enum.any?(normalized_sse_payloads(output), &Map.has_key?(&1, "service_tier"))
+      end
+    end
+
     test "blank event labels use the data type while nonblank mismatches remain rejected" do
       failed = %{
         "type" => "response.failed",
@@ -256,6 +326,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
     normalized
     |> String.split("\n\n", trim: true)
     |> Enum.map(&String.replace_prefix(&1, "data: ", ""))
+    |> Enum.reject(&String.contains?(&1, "[DONE]"))
     |> Enum.map(&Jason.decode!/1)
   end
 end

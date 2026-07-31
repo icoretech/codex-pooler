@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
 
   alias CodexPooler.Gateway.OpenAICompatibility.{Error, Matrix, Responses, Validation}
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.ServiceTier
 
   @locally_unsupported_fields ~w(audio frequency_penalty logit_bias logprobs modalities n prediction presence_penalty seed stop top_logprobs user web_search_options)
   @service_tiers ~w(auto default flex priority scale)
@@ -95,7 +96,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
   defp validate_reasoning_effort(_payload), do: :ok
 
   defp validate_service_tier(%{"service_tier" => tier}) when is_binary(tier) do
-    tier = normalize_enum(tier)
+    tier = ServiceTier.canonicalize(tier)
 
     if tier in @service_tiers,
       do: :ok,
@@ -760,7 +761,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
 
   defp maybe_put(acc, source, "service_tier" = key) do
     case Map.fetch(source, key) do
-      {:ok, value} when is_binary(value) -> Map.put(acc, key, normalize_enum(value))
+      {:ok, value} when is_binary(value) -> Map.put(acc, key, value)
       {:ok, value} -> Map.put(acc, key, value)
       :error -> acc
     end

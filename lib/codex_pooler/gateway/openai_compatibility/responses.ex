@@ -12,6 +12,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
     ToolSchemaLowering
   }
 
+  alias CodexPooler.ServiceTier
+
   @reasoning_contexts ~w(auto current_turn all_turns)
   @reasoning_summaries ~w(auto concise detailed)
   @service_tiers ~w(auto default flex priority scale)
@@ -266,7 +268,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   end
 
   defp validate_service_tier(%{"service_tier" => tier}) when is_binary(tier) do
-    normalized = tier |> String.trim() |> String.downcase()
+    normalized = ServiceTier.canonicalize(tier)
 
     if normalized in @service_tiers do
       :ok
@@ -332,9 +334,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
 
   defp normalize_forwarded_enums(payload) do
     payload
-    |> normalize_string_field("service_tier")
+    |> normalize_service_tier()
     |> normalize_reasoning_fields()
   end
+
+  defp normalize_service_tier(%{"service_tier" => tier} = payload) when is_binary(tier),
+    do: Map.put(payload, "service_tier", ServiceTier.canonicalize(tier))
+
+  defp normalize_service_tier(payload), do: payload
 
   defp normalize_string_field(payload, field) do
     case Map.fetch(payload, field) do

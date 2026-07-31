@@ -120,6 +120,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
              "response" => %{
                "id" => "resp_chat_non_stream",
                "status" => "completed",
+               "service_tier" => "fast",
                "model" => "provider-gpt-test-model",
                "output" => [
                  %{
@@ -133,12 +134,18 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
         ])
       )
 
-    setup = gateway_setup(upstream)
+    setup =
+      gateway_setup(upstream,
+        model_metadata: %{
+          "upstream_model" => %{"service_tiers" => [%{"id" => "priority"}]}
+        }
+      )
 
     payload =
       chat_payload(setup)
       |> Map.put("moderation", %{"model" => "omni-moderation-latest"})
       |> Map.put("reasoning_effort", "focused")
+      |> Map.put("service_tier", "fast")
 
     conn =
       conn
@@ -148,6 +155,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert %{
              "id" => "resp_chat_non_stream",
              "object" => "chat.completion",
+             "service_tier" => "fast",
              "choices" => [
                %{
                  "index" => 0,
@@ -167,6 +175,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert captured.json["model"] == setup.model.upstream_model_id
     assert captured.json["stream"] == true
     assert captured.json["store"] == false
+    assert captured.json["service_tier"] == "priority"
     assert captured.json["moderation"] == %{"model" => "omni-moderation-latest"}
 
     assert captured.json["instructions"] == "Synthetic system"
@@ -492,7 +501,11 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
           {"response.created",
            %{
              "type" => "response.created",
-             "response" => %{"id" => "resp_chat_stream", "status" => "in_progress"}
+             "response" => %{
+               "id" => "resp_chat_stream",
+               "status" => "in_progress",
+               "service_tier" => "fast"
+             }
            }},
           {"response.output_text.delta",
            %{"type" => "response.output_text.delta", "delta" => "streamed answer"}},
@@ -528,6 +541,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert conn.resp_body =~ "\"content\":\"streamed answer\""
     assert conn.resp_body =~ "\"finish_reason\":\"stop\""
     assert conn.resp_body =~ "\"choices\":[]"
+    assert Enum.all?(chat_chunks(conn.resp_body), &(&1["service_tier"] == "fast"))
 
     assert conn.resp_body =~
              "\"usage\":{\"completion_tokens\":4,\"prompt_tokens\":3,\"total_tokens\":7}"
@@ -545,6 +559,27 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.transport == "http_sse"
     assert request.status == "succeeded"
+  end
+
+  test "POST /v1/chat/completions rejects invalid service tiers before dispatch", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    for tier <- ["ultrafast", nil, 1, []] do
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/chat/completions", Map.put(chat_payload(setup), "service_tier", tier))
+
+      assert %{"error" => %{"code" => "invalid_request", "param" => "service_tier"}} =
+               json_response(response, 400)
+    end
+
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
+    assert Repo.aggregate(LedgerEntry, :count) == 0
   end
 
   @tag :streaming_chat

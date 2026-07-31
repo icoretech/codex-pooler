@@ -24,6 +24,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
       ]
     }
     |> put_if_present("usage", usage(decoded))
+    |> put_if_present("service_tier", service_tier(response_map(decoded)))
   end
 
   @type stream_state :: %{
@@ -31,6 +32,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
           required(:id) => String.t(),
           required(:created) => integer(),
           required(:model) => String.t() | nil,
+          required(:service_tier) => String.t() | nil,
           required(:role_sent?) => boolean(),
           required(:visible_seen?) => boolean(),
           required(:terminal_seen?) => boolean(),
@@ -189,6 +191,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
         {[], state}
 
       terminal_event?(type) ->
+        state = sync_response_state(state, decoded)
         {data, state} = terminal_stream_chunk(type, decoded, state)
         {data, %{state | terminal_seen?: true}}
 
@@ -299,32 +302,36 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
   end
 
   defp moderation_stream_chunk(moderation, state) do
-    payload = %{
-      "id" => state.id,
-      "object" => "chat.completion.chunk",
-      "created" => state.created,
-      "model" => state.model,
-      "choices" => [],
-      "moderation" => moderation
-    }
+    payload =
+      %{
+        "id" => state.id,
+        "object" => "chat.completion.chunk",
+        "created" => state.created,
+        "model" => state.model,
+        "choices" => [],
+        "moderation" => moderation
+      }
+      |> put_if_present("service_tier", state.service_tier)
 
     {["data: ", Jason.encode!(payload), "\n\n"], mark_visible(state)}
   end
 
   defp chat_sse_chunk(delta, finish_reason, state) do
-    payload = %{
-      "id" => state.id,
-      "object" => "chat.completion.chunk",
-      "created" => state.created,
-      "model" => state.model,
-      "choices" => [
-        %{
-          "index" => 0,
-          "delta" => delta,
-          "finish_reason" => finish_reason
-        }
-      ]
-    }
+    payload =
+      %{
+        "id" => state.id,
+        "object" => "chat.completion.chunk",
+        "created" => state.created,
+        "model" => state.model,
+        "choices" => [
+          %{
+            "index" => 0,
+            "delta" => delta,
+            "finish_reason" => finish_reason
+          }
+        ]
+      }
+      |> put_if_present("service_tier", state.service_tier)
 
     ["data: ", Jason.encode!(payload), "\n\n"]
   end
@@ -335,6 +342,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
       id: "chatcmpl_" <> Ecto.UUID.generate(),
       created: System.system_time(:second),
       model: Map.get(chat_payload, "model"),
+      service_tier: nil,
       role_sent?: false,
       visible_seen?: false,
       terminal_seen?: false,
@@ -346,14 +354,16 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
   defp usage_stream_chunk(decoded, %{include_usage?: true} = state) do
     case usage(decoded) do
       usage when is_map(usage) and usage != %{} ->
-        payload = %{
-          "id" => state.id,
-          "object" => "chat.completion.chunk",
-          "created" => state.created,
-          "model" => state.model,
-          "choices" => [],
-          "usage" => usage
-        }
+        payload =
+          %{
+            "id" => state.id,
+            "object" => "chat.completion.chunk",
+            "created" => state.created,
+            "model" => state.model,
+            "choices" => [],
+            "usage" => usage
+          }
+          |> put_if_present("service_tier", state.service_tier)
 
         ["data: ", Jason.encode!(payload), "\n\n"]
 
@@ -373,7 +383,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
       state
       | id: decoded_string(response, "id") || state.id,
         created: created(response, state.created),
-        model: model(response, state)
+        model: model(response, state),
+        service_tier: service_tier(decoded) || service_tier(response) || state.service_tier
     }
   end
 
@@ -553,6 +564,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
   end
 
   defp decoded_string(_decoded, _key), do: nil
+
+  defp service_tier(decoded), do: decoded_string(decoded, "service_tier")
 
   defp put_if_present(map, _key, nil), do: map
   defp put_if_present(map, key, value), do: Map.put(map, key, value)

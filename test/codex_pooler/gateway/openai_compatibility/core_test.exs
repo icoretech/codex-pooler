@@ -667,6 +667,30 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   @tag :responses_coercion
+  test "Responses canonicalizes the fast service tier alias before forwarding" do
+    assert {:ok, result} =
+             Responses.coerce(%{
+               "model" => "gpt-fixture-text",
+               "input" => "synthetic input",
+               "service_tier" => " FAST "
+             })
+
+    assert result.payload["service_tier"] == "priority"
+  end
+
+  @tag :responses_coercion
+  test "Responses retains service tier validation for unsupported and non-string values" do
+    for tier <- ["ultrafast", nil, 1, []] do
+      assert {:error, %{status: 400, code: "invalid_request", param: "service_tier"}} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => "synthetic input",
+                 "service_tier" => tier
+               })
+    end
+  end
+
+  @tag :responses_coercion
   test "Chat maps supported SDK controls instead of silently dropping them" do
     payload = %{
       "model" => "gpt-fixture-text",
@@ -719,6 +743,18 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     assert result.payload["reasoning"] == %{"effort" => "low"}
     assert result.payload["service_tier"] == "priority"
     assert result.payload["text"]["verbosity"] == "high"
+  end
+
+  @tag :responses_coercion
+  test "Chat forwards the fast service tier alias through Responses once" do
+    assert {:ok, result} =
+             Chat.coerce(%{
+               "model" => "gpt-fixture-text",
+               "messages" => [%{"role" => "user", "content" => "Synthetic user"}],
+               "service_tier" => "fast"
+             })
+
+    assert result.payload["service_tier"] == "priority"
   end
 
   @tag :responses_coercion
