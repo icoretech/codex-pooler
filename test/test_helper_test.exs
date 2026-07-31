@@ -1,5 +1,5 @@
 defmodule CodexPooler.TestHelperTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   @native_turn_console_filter :codex_pooler_test_native_turn_console_filter
 

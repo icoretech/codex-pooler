@@ -1066,8 +1066,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   defp maybe_put_terminal_upstream_error(_decoded, %ReceiveState{} = receive_state),
     do: receive_state
 
-  defp maybe_put_success_response_id(result, "response.completed", response_id),
-    do: Map.put(result, :response_id, response_id)
+  defp maybe_put_success_response_id(result, terminal, response_id)
+       when terminal in ["response.completed", "response.done"] and is_binary(response_id),
+       do: Map.put(result, :response_id, response_id)
 
   defp maybe_put_success_response_id(result, _terminal, _response_id), do: result
 

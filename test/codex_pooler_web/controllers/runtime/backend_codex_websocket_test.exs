@@ -1848,6 +1848,65 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     refute logs =~ response_id
   end
 
+  test "websocket response.done completion registers its response identity alias" do
+    response_id = "ws-finalization-done-#{System.unique_integer([:positive])}"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_text_frames([
+          Jason.encode!(%{
+            "type" => "response.done",
+            "response" => %{"id" => response_id, "status" => "completed"}
+          })
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{accepted_turn_state: "ws-finalization-done"})
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               Jason.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => [],
+                 "stream" => true,
+                 "generate" => true
+               }),
+               %{request_id: "ws-finalization-done", codex_session: session},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    assert_received {:websocket_frame, frame}
+    assert get_in(Jason.decode!(frame), ["response", "id"]) == response_id
+    assert [request] = await_succeeded_pool_requests!(setup.pool.id, 1)
+
+    assert [alias_record] =
+             Repo.all(
+               from(alias_record in BridgeSessionAlias,
+                 where:
+                   alias_record.codex_session_id == ^session.id and
+                     alias_record.alias_kind == "previous_response_id" and
+                     alias_record.status == "active"
+               )
+             )
+
+    assert alias_record.alias_hash == :crypto.hash(:sha256, response_id)
+
+    persisted =
+      inspect({
+        request.request_metadata,
+        alias_record,
+        Accounting.list_request_logs(setup.pool, filters: %{request_id: request.id})
+      })
+
+    refute persisted =~ response_id
+  end
+
   test "websocket completed finalization falls back to its body identity and re-entry stays exactly once" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)

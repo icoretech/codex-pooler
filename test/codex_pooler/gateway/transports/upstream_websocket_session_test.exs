@@ -1681,6 +1681,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     )
   end
 
+  test "propagates a response.done identity in the successful structured result" do
+    response_id = "response-identity-done"
+
+    frame =
+      Jason.encode!(%{
+        "type" => "response.done",
+        "response" => %{"id" => response_id, "status" => "completed"}
+      })
+
+    assert {:ok, %{response_id: ^response_id, terminal: "response.completed"}} =
+             request_websocket_frames([frame])
+  end
+
   test "ignores malformed, disallowed, repeated, and conflicting response identities" do
     first_response_id = "response-identity-first"
 
@@ -1802,8 +1815,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         "response" => %{"status" => "completed"}
       })
 
-    assert {:ok, %{response_id: nil, terminal: "response.completed"}} =
-             request_websocket_frames([frame])
+    assert {:ok, %{terminal: "response.completed"} = result} = request_websocket_frames([frame])
+    refute Map.has_key?(result, :response_id)
   end
 
   test "non-101 websocket upgrade failure preserves the leaf reason and drops the body" do
