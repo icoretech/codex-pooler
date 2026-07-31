@@ -1338,9 +1338,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     receive do
       {:codex_response_chunk, task_pid, frame} ->
         CodexResponsesSocket.handle_info({:codex_response_chunk, task_pid, frame}, state)
-
-      {:codex_response_chunk, frame} ->
-        CodexResponsesSocket.handle_info({:codex_response_chunk, frame}, state)
     after
       @detection_timeout_ms -> flunk("expected websocket response chunk")
     end

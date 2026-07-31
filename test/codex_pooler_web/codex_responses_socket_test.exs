@@ -9,10 +9,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
   @tag :task_1_pin
   test "PIN-P03 backend GET websocket preserves done and legacy JSON frame bytes" do
+    task_pid = self()
+
     state = %{
       opts: RequestOptions.for_websocket(%{}),
-      tasks: MapSet.new(),
-      task_monitors: %{}
+      tasks: MapSet.new([task_pid]),
+      task_monitors: %{},
+      native_turn_output_task_pids: MapSet.new()
     }
 
     frames = [
@@ -22,10 +25,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     for frame <- frames do
       assert {:push, {:text, pushed}, next_state} =
-               CodexResponsesSocket.handle_info({:codex_response_chunk, frame}, state)
+               CodexResponsesSocket.handle_info({:codex_response_chunk, task_pid, frame}, state)
 
       assert pushed == frame
-      assert next_state == state
+      assert next_state.native_turn_output_task_pids == MapSet.new([task_pid])
+      assert Map.delete(next_state, :native_turn_output_task_pids) == Map.delete(state, :native_turn_output_task_pids)
     end
   end
 

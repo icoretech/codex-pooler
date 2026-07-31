@@ -55,10 +55,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   @impl WebSock
-  def handle_info({:codex_response_chunk, data}, state) when is_binary(data) do
-    {:push, {:text, Adapter.downstream_response_chunk(data)}, state}
-  end
-
+  # Chunks are attributed to their producing turn by pid. A chunk from a task the
+  # socket no longer tracks belongs to a turn that already settled, so it is
+  # dropped rather than injected into whatever turn is running now.
   def handle_info({:codex_response_chunk, task_pid, data}, state)
       when is_pid(task_pid) and is_binary(data) do
     cond do

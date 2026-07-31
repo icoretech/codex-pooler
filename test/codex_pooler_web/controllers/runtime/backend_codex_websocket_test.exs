@@ -5099,7 +5099,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
       assert log =~ "codex_pooler gateway_debug payload"
       assert log =~ "previous_response_id_action=preserved"
-      assert log =~ "response_id_preview=resp_ws_debug_too"
+      assert log =~ "previous_response_id_clear_preview=resp_ws_debug_too"
       assert log =~ "client_json_bytes="
       assert log =~ "client_approx_tokens="
       assert log =~ "upstream_json_bytes="
@@ -5127,7 +5127,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
       debug = attempt.response_metadata["gateway_debug"]
       refute Map.has_key?(debug, "previous_response_id")
-      refute Map.has_key?(debug, "response_id_preview")
+      refute Map.has_key?(debug, "previous_response_id_clear_preview")
       assert debug["previous_response_id_summary"]["action"] == "preserved"
       assert debug["previous_response_id_summary"]["preview"] =~ ~r/\A[0-9a-f]{16}\z/
       assert debug["items"]["tool_result_types"] == ["custom_tool_call_output"]
@@ -9898,15 +9898,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert :ok = CodexResponsesSocket.terminate(:closed, state)
   end
 
-  test "untagged late native chunks do not claim the currently tracked task" do
+  test "late native chunks from an untracked task are dropped and claim no output" do
     current_task = socket_test_task()
-    on_exit(fn -> send(current_task, :stop) end)
+    settled_task = socket_test_task()
+    on_exit(fn -> Enum.each([current_task, settled_task], &send(&1, :stop)) end)
 
     state = direct_socket_task_state([current_task], "ws-untagged-late-chunk")
     frame = Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "stale"})
 
-    assert {:push, {:text, ^frame}, state_after_chunk} =
-             CodexResponsesSocket.handle_info({:codex_response_chunk, frame}, state)
+    # A chunk produced by a turn the socket no longer tracks must not reach the
+    # client on the current turn, and must not mark the current task as having
+    # produced visible output.
+    assert {:ok, state_after_chunk} =
+             CodexResponsesSocket.handle_info({:codex_response_chunk, settled_task, frame}, state)
 
     assert state_after_chunk == state
 
@@ -11114,9 +11118,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     receive do
       {:codex_response_chunk, task_pid, frame} ->
         CodexResponsesSocket.handle_info({:codex_response_chunk, task_pid, frame}, state)
-
-      {:codex_response_chunk, frame} ->
-        CodexResponsesSocket.handle_info({:codex_response_chunk, frame}, state)
     after
       timeout_ms -> flunk("expected websocket response chunk")
     end
