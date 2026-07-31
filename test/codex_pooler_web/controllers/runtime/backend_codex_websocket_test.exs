@@ -9789,8 +9789,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                ~s("message":"upstream request failed","param":null,) <>
                ~s("type":"invalid_request_error"},"status":502,"type":"error"})
 
-    # Exactly one authored frame: nothing else is queued for the client.
-    refute_received {:codex_response_chunk, _chunk}
+    # Exactly one authored frame: nothing else is queued for the client. The
+    # chunk pattern must carry the task pid, which is the arity production
+    # actually sends.
+    refute_received {:codex_response_chunk, _task_pid, _chunk}
     refute_received {:codex_response_done, _pid, _result}
 
     assert_native_turn_warnings(logs, 1)

@@ -9,7 +9,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy do
   # Unknown codes render in cleartext when they satisfy the same allowlist the
   # public relay applies to upstream-provided error codes (docs-site
   # clients/openai-compatible.mdx); anything else keeps the fingerprint.
-  @unknown_code_allowlist ~r/^[A-Za-z0-9_.-]+$/
+  @unknown_code_allowlist ~r/\A[A-Za-z0-9_.-]+\z/
   @max_unknown_code_bytes 80
   @known_error_codes MapSet.new(
                        OwnerErrorVocabulary.owner_error_codes() ++ ErrorCodes.known_error_codes()

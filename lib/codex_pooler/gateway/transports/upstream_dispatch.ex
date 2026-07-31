@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
   require Logger
 
+  alias CodexPooler.Accounting.Request, as: AccountingRequest
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.TransportEnvelope
@@ -694,9 +695,9 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp owner_reply_shape(reply) when is_map(reply), do: "map_without_terminal"
   defp owner_reply_shape(_reply), do: "non_map"
 
-  defp owner_request_id(%Request{request_options: %RequestOptions{} = request_options}),
-    do: request_options.request_metadata.request_id
-
+  # `request` here is the accounting row, not the dispatch struct, so the
+  # correlator comes from its correlation id.
+  defp owner_request_id(%AccountingRequest{correlation_id: correlation_id}), do: correlation_id
   defp owner_request_id(_request), do: nil
 
   defp record_upstream_websocket_body(result, identity, request)

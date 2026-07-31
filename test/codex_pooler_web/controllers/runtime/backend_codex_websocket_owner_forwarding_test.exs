@@ -1982,6 +1982,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert request.response_status_code == 502
     assert request.last_error_code == "owner_crashed"
 
+    # The submit-boundary line must carry a real correlator, not the fallback.
+    assert logs =~ "canonical_error=owner_crashed request_id=#{request.correlation_id}"
+
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "failed"
 

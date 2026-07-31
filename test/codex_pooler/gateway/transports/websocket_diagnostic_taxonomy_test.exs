@@ -35,6 +35,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomyTest do
       assert DiagnosticTaxonomy.identifier("has spaces inside") =~ ~r/^sha256_[0-9a-f]{12}$/
       assert DiagnosticTaxonomy.identifier(<<255>>) =~ ~r/^sha256_[0-9a-f]{12}$/
 
+      # Control characters must not survive: a trailing newline would otherwise
+      # split a log line and let the tail forge diagnostic key=value pairs.
+      assert DiagnosticTaxonomy.identifier("clean_code\n") =~ ~r/^sha256_[0-9a-f]{12}$/
+      assert DiagnosticTaxonomy.identifier("clean_code\nerror_code=forged") =~
+               ~r/^sha256_[0-9a-f]{12}$/
+
       oversized = String.duplicate("a", 81)
       assert DiagnosticTaxonomy.identifier(oversized) =~ ~r/^sha256_[0-9a-f]{12}$/
 
