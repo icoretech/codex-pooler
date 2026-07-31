@@ -38,6 +38,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard
+  alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMeter
+  alias CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents
   alias CodexPoolerWeb.DateTimeDisplay
 
   setup :register_and_log_in_user
@@ -255,6 +257,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(view, "##{unknown_card_id}-tokens-panel[aria-hidden='false']")
   end
 
+  @tag :relative_countdown_contract
   test "renders anchored and floating Spark reset semantics from the shared quota projection", %{
     conn: conn,
     scope: scope
@@ -1458,6 +1461,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute html =~ "Workspace reference legacy"
   end
 
+  @tag :relative_countdown_contract
   test "opens saved reset dialog from the header badge and toggles the Pools mini panel", %{
     conn: conn,
     scope: scope
@@ -5791,6 +5795,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
            )
   end
 
+  @tag :relative_countdown_contract
   test "renders safe auth age and token refresh diagnostics without exposing tokens", %{
     conn: conn,
     scope: scope
@@ -5883,6 +5888,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute html =~ refresh_token
   end
 
+  @tag :relative_countdown_contract
   test "renders projection-backed auth expiration beneath the account header", %{
     conn: conn,
     scope: scope
@@ -5949,6 +5955,69 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              view,
              "#upstream-account-#{future_identity.id} header #upstream-account-#{future_identity.id}-routing-readiness"
            )
+  end
+
+  @tag :relative_countdown_contract
+  test "saved reset countdown components preserve future, due, expired, and malformed states" do
+    now = ~U[2026-07-31 12:00:00.000000Z]
+    subsecond_future = ~U[2026-07-31 12:00:00.999999Z]
+    preferences = %{datetime_format: "default", timezone: "Etc/UTC"}
+
+    table_html =
+      render_component(&SavedResetComponents.saved_reset_expiration_table/1,
+        id: "fixed-saved-reset-expirations",
+        saved_resets: %{
+          available_expirations: [],
+          available_expires_at: [subsecond_future, now, DateTime.add(now, -1, :second), "invalid"]
+        },
+        datetime_preferences: preferences,
+        now: now
+      )
+
+    assert table_html =~ ~s(id="fixed-saved-reset-expirations-time-left-0")
+    assert table_html =~ "&lt;1m"
+    assert table_html =~ ~s(id="fixed-saved-reset-expirations-time-left-1")
+    assert table_html =~ ~s(id="fixed-saved-reset-expirations-time-left-2")
+    assert table_html =~ ~s(id="fixed-saved-reset-expirations-time-left-3")
+    assert table_html |> String.split("expired") |> length() == 3
+    assert table_html =~ "unknown time"
+    assert table_html =~ "unknown"
+
+    base_saved_resets = %{
+      available_count: 1,
+      label: "1 saved reset",
+      next_expires_title: "fixed expiry"
+    }
+
+    future_meter =
+      render_component(&SavedResetMeter.saved_reset_meter/1,
+        id: "fixed-future-meter",
+        saved_resets: Map.put(base_saved_resets, :next_expires_at, subsecond_future),
+        saved_reset_policy: %{enabled?: false},
+        now: now
+      )
+
+    due_meter =
+      render_component(&SavedResetMeter.saved_reset_meter/1,
+        id: "fixed-due-meter",
+        saved_resets: Map.put(base_saved_resets, :next_expires_at, now),
+        saved_reset_policy: %{enabled?: false},
+        now: now
+      )
+
+    malformed_meter =
+      render_component(&SavedResetMeter.saved_reset_meter/1,
+        id: "fixed-malformed-meter",
+        saved_resets: Map.put(base_saved_resets, :next_expires_at, "invalid"),
+        saved_reset_policy: %{enabled?: false},
+        now: now
+      )
+
+    assert future_meter =~ ~s(id="fixed-future-meter-reset")
+    assert future_meter =~ "&lt;1m"
+    assert due_meter =~ ~s(id="fixed-due-meter-reset")
+    assert due_meter =~ "expired"
+    refute malformed_meter =~ ~s(id="fixed-malformed-meter-reset")
   end
 
   test "does not duplicate token refresh failure prefixes", %{conn: conn, scope: scope} do

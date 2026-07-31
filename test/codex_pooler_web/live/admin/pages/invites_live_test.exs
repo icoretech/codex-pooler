@@ -14,6 +14,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLiveTest do
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Mailer
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.Admin.InvitesPageComponents
 
   setup :owner_session
 
@@ -50,6 +51,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLiveTest do
     refute has_element?(view, "#invite-page-create-action")
   end
 
+  @tag :relative_countdown_contract
   test "lists Pool invites and links from the sidebar under operators", %{
     conn: conn,
     scope: scope
@@ -99,6 +101,45 @@ defmodule CodexPoolerWeb.Admin.InvitesLiveTest do
     assert has_element?(view, "#invite-reissue-#{invite.id}", "Reissue")
     assert has_element?(view, "#invite-revoke-open-#{invite.id}", "Revoke")
     refute has_element?(view, "#invite-revoke-#{invite.id}")
+  end
+
+  @tag :relative_countdown_contract
+  test "invite expiry labels preserve fixed future, due, expired, and missing states" do
+    now = ~U[2026-07-31 12:00:00.000000Z]
+
+    base_invite = %{
+      status: "active",
+      pool_name: "Example Pool",
+      invited_email: "invitee@example.com",
+      inviter_email: "operator@example.com",
+      accepted_by_email: nil,
+      accepted_at: nil,
+      revoked_at: nil,
+      email_sent_at: nil,
+      created_at: now
+    }
+
+    invites = %{
+      items: [
+        Map.merge(base_invite, %{id: "future", expires_at: ~U[2026-07-31 12:00:00.999999Z]}),
+        Map.merge(base_invite, %{id: "due", expires_at: now}),
+        Map.merge(base_invite, %{id: "expired", expires_at: DateTime.add(now, -1, :second)}),
+        Map.merge(base_invite, %{id: "missing", expires_at: nil})
+      ]
+    }
+
+    html =
+      render_component(&InvitesPageComponents.invites_table/1,
+        invites: invites,
+        mailer_configured?: false,
+        datetime_preferences: %{datetime_format: "default", timezone: "Etc/UTC"},
+        now: now
+      )
+
+    assert html =~ ~r/id="invite-expires-future"[^>]*>\s*in &lt;1 minute/s
+    assert html =~ ~r/id="invite-expires-due"[^>]*>\s*Expired/s
+    assert html =~ ~r/id="invite-expires-expired"[^>]*>\s*Expired/s
+    assert html =~ ~r/id="invite-expires-missing"[^>]*>\s*No expiry/s
   end
 
   test "renders the invite creation surface on the invites page", %{

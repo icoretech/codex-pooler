@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
   alias CodexPooler.Jobs.RuntimeStateCleanupWorker
   alias CodexPooler.Jobs.TokenRefreshWorker
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.Admin.JobsPresentation
   alias CodexPoolerWeb.Admin.JobsReadModel
 
   test "redirects unauthenticated operators to login" do
@@ -318,6 +319,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
     refute rendered =~ "authorization-bearer-value"
   end
 
+  @tag :relative_countdown_contract
   test "renders absolute job timestamps with operator preferences while keeping relative next run",
        %{
          conn: conn,
@@ -386,6 +388,61 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
     assert has_element?(view, "#job-detail-attempted-at", "2026-05-04 12:01")
     assert has_element?(view, "#job-detail-completed-at", "2026-05-04 12:02")
     refute render(view) =~ "10:02:00 UTC"
+  end
+
+  @tag :relative_countdown_contract
+  test "scheduled, retry, and cron next-run labels preserve instant-based due rounding" do
+    now = ~U[2026-07-31 12:00:30Z]
+    preferences = %{datetime_format: "short", timezone: "Europe/Rome"}
+
+    scheduled =
+      worker_card_for(:token_refresh, now, preferences, %{
+        state: "scheduled",
+        attempt: 0,
+        max_attempts: 3,
+        inserted_at: now,
+        scheduled_at: now
+      })
+
+    retry =
+      worker_card_for(:token_refresh, now, preferences, %{
+        state: "retryable",
+        attempt: 1,
+        max_attempts: 3,
+        inserted_at: now,
+        attempted_at: now,
+        scheduled_at: DateTime.add(now, 61, :second)
+      })
+
+    subsecond_future =
+      worker_card_for(:token_refresh, now, preferences, %{
+        state: "scheduled",
+        attempt: 0,
+        max_attempts: 3,
+        inserted_at: now,
+        scheduled_at: ~U[2026-07-31 12:00:30.999999Z]
+      })
+
+    expired =
+      worker_card_for(:token_refresh, now, preferences, %{
+        state: "scheduled",
+        attempt: 0,
+        max_attempts: 3,
+        inserted_at: DateTime.add(now, -1, :second),
+        scheduled_at: DateTime.add(now, -1, :second)
+      })
+
+    cron =
+      JobsPresentation.worker_cards(%{}, preferences, now)
+      |> Enum.find(&(&1.key == :account_reconciliation))
+
+    assert scheduled.next_run == "Due now"
+    assert subsecond_future.next_run == "in <1m"
+    assert expired.next_run == "Due now"
+    assert retry.next_run == "in 2m"
+    assert retry.next_run_title == "2026-07-31 14:01"
+    assert cron.next_run == "in <1m"
+    assert cron.next_run_title == "2026-07-31 14:01"
   end
 
   test "jobs read model owns admin jobs page state" do
@@ -908,6 +965,33 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
 
   defp worker_card_selector(worker_group) do
     "#job-worker-card-#{String.replace(Atom.to_string(worker_group), "_", "-")}"
+  end
+
+  defp worker_card_for(group, now, preferences, pending_job) do
+    pending_job =
+      Map.merge(
+        %{
+          attempted_at: nil,
+          cancelled_at: nil,
+          completed_at: nil,
+          discarded_at: nil,
+          errors: [],
+          worker: "CodexPooler.Jobs.TokenRefreshWorker"
+        },
+        pending_job
+      )
+
+    summary = %{
+      latest: pending_job,
+      latest_success: nil,
+      latest_failure: nil,
+      pending: pending_job,
+      open: [],
+      unresolved_failures: []
+    }
+
+    JobsPresentation.worker_cards(%{group => summary}, preferences, now)
+    |> Enum.find(&(&1.key == group))
   end
 
   defp maybe_put_worker_name(updates) do

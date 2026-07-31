@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
 
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting, as: ResetFormatting
   alias CodexPoolerWeb.DateTimeDisplay
+  alias CodexPoolerWeb.RelativeTime
 
   @shine_stagger_seconds 1.2
 
@@ -12,13 +13,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
   attr :saved_resets, :map, required: true
   attr :datetime_preferences, :map, required: true
   attr :empty_label, :string, default: "Expiration dates not reported"
+  attr :now, :any, default: nil
 
   def saved_reset_expiration_table(assigns) do
+    now = assigns.now || DateTime.utc_now()
+
     assigns =
       assign(
         assigns,
         :rows,
-        expiration_rows(assigns.saved_resets, assigns.datetime_preferences, DateTime.utc_now())
+        expiration_rows(assigns.saved_resets, assigns.datetime_preferences, now)
       )
 
     ~H"""
@@ -319,7 +323,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
     case ResetFormatting.parse_datetime(value) do
       %DateTime{} = expires_at ->
         parts = DateTimeDisplay.format_datetime_parts(expires_at, datetime_preferences)
-        seconds_until_expiration = DateTime.diff(expires_at, now, :second)
+        seconds_until_expiration = RelativeTime.seconds_until(expires_at, now)
+        future? = DateTime.compare(expires_at, now) == :gt
 
         %{
           index: index,
@@ -327,8 +332,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
           date_label: parts.date,
           time_label: parts.time,
           title: DateTimeDisplay.format_datetime(expires_at, datetime_preferences),
-          expired?: seconds_until_expiration <= 0,
-          time_left_label: time_left_label(seconds_until_expiration),
+          expired?: !future?,
+          time_left_label: time_left_label(seconds_until_expiration, future?),
           source_label: "seen",
           source_date_label: "not recorded",
           source_title: nil,
@@ -396,7 +401,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
     total_seconds = DateTime.diff(expires_at, source_at, :second)
 
     if total_seconds > 0 do
-      (DateTime.diff(expires_at, now, :second) / total_seconds)
+      (RelativeTime.seconds_until(expires_at, now) / total_seconds)
       |> min(1.0)
       |> max(0.0)
     end
@@ -404,11 +409,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
 
   defp life_fraction(_source_at, _expires_at, _now), do: nil
 
-  defp time_left_label(seconds) when seconds > 0 do
-    precise_duration_label(seconds)
-  end
-
-  defp time_left_label(_seconds), do: "expired"
+  defp time_left_label(seconds, true), do: precise_duration_label(max(seconds, 0))
+  defp time_left_label(_seconds, false), do: "expired"
 
   defp precise_duration_label(seconds) when seconds >= 60 do
     total_minutes = div(seconds, 60)

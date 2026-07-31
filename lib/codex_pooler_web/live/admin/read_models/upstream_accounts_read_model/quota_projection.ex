@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   alias CodexPooler.Upstreams.Quota.WindowSelector
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting
   alias CodexPoolerWeb.DateTimeDisplay
+  alias CodexPoolerWeb.RelativeTime
 
   @quota_priming_labels %{
     "unknown" => "Priming pending",
@@ -558,9 +559,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     do: {:unknown, nil, nil, nil}
 
   defp quota_reset_label(%DateTime{} = reset_at, %DateTime{} = snapshot_at) do
-    seconds_until_reset = DateTime.diff(reset_at, snapshot_at, :second)
+    seconds_until_reset = RelativeTime.seconds_until(reset_at, snapshot_at)
 
-    if seconds_until_reset > 0 do
+    if DateTime.compare(reset_at, snapshot_at) == :gt do
       "in #{Formatting.format_reset_duration(seconds_until_reset)}"
     else
       "due"

@@ -27,6 +27,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   }
 
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
+  alias CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary
   alias CodexPoolerWeb.Admin.UpstreamCockpitReadModel
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.ReconciliationStatus
   alias CodexPoolerWeb.DateTimeDisplay
@@ -400,6 +401,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
            )
   end
 
+  @tag :relative_countdown_contract
   test "cockpit read model exposes safe OAuth relink summaries without transient secrets", %{
     conn: conn,
     scope: scope
@@ -450,6 +452,42 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     refute html =~ authorization_url
     refute html =~ "admin_cockpit_test"
     refute html =~ "code_verifier"
+  end
+
+  @tag :relative_countdown_contract
+  test "OAuth relink card keeps a subsecond future deadline actionable at a fixed instant" do
+    now = ~U[2026-07-31 12:00:00.000000Z]
+
+    flow = %{
+      id: Ecto.UUID.generate(),
+      flow_kind: "browser",
+      status: "pending",
+      inserted_at: DateTime.add(now, -120, :second),
+      last_polled_at: DateTime.add(now, -30, :second),
+      expires_at: ~U[2026-07-31 12:00:00.999999Z],
+      device: nil
+    }
+
+    cockpit = %{oauth_flows: %{items: [flow]}}
+
+    future_html =
+      render_component(&Summary.relink_card/1,
+        cockpit: cockpit,
+        datetime_preferences: %{datetime_format: "default", timezone: "Etc/UTC"},
+        now: now
+      )
+
+    due_html =
+      render_component(&Summary.relink_card/1,
+        cockpit: %{oauth_flows: %{items: [%{flow | expires_at: now}]}},
+        datetime_preferences: %{datetime_format: "default", timezone: "Etc/UTC"},
+        now: now
+      )
+
+    assert future_html =~ ~s(id="upstream-cockpit-relink")
+    assert future_html =~ ~s(id="upstream-cockpit-relink-expiry")
+    assert future_html =~ "expires just now"
+    assert due_html == ""
   end
 
   test "renders the relink timeline for a pending device flow", %{conn: conn, scope: scope} do
@@ -1452,6 +1490,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   end
 
   @tag :saved_reset_cockpit
+  @tag :relative_countdown_contract
   test "saved reset cockpit metric, policy form, and confirmed manual redemption enqueue", %{
     conn: conn,
     scope: scope

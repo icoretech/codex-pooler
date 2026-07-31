@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.DateTimeDisplay
+  alias CodexPoolerWeb.RelativeTime
   alias Phoenix.LiveView.JS
 
   @invite_docs_url "https://docs.codex-pooler.com/operators/invites/#active-invite-actions"
@@ -79,8 +80,11 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
   attr :invites, :map, required: true
   attr :mailer_configured?, :boolean, required: true
   attr :datetime_preferences, :map, required: true
+  attr :now, :any, default: nil
 
   def invites_table(assigns) do
+    assigns = assign(assigns, :now, assigns.now || DateTime.utc_now())
+
     ~H"""
     <AdminComponents.empty_state
       :if={@invites.items == []}
@@ -172,7 +176,7 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
                 class="whitespace-nowrap text-center text-xs text-base-content/70"
                 title={datetime_label(invite.expires_at, @datetime_preferences)}
               >
-                {expiry_label(invite.expires_at)}
+                {expiry_label(invite.expires_at, @now)}
               </td>
               <td class="text-right">
                 <.invite_actions_menu
@@ -349,13 +353,13 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
     DateTimeDisplay.format_datetime(datetime, datetime_preferences)
   end
 
-  defp expiry_label(nil), do: "No expiry"
+  defp expiry_label(nil, _now), do: "No expiry"
 
-  defp expiry_label(%DateTime{} = datetime) do
-    diff_seconds = DateTime.diff(datetime, DateTime.utc_now(), :second)
+  defp expiry_label(%DateTime{} = datetime, %DateTime{} = now) do
+    diff_seconds = RelativeTime.seconds_until(datetime, now)
 
     cond do
-      diff_seconds <= 0 ->
+      DateTime.compare(datetime, now) != :gt ->
         "Expired"
 
       diff_seconds < 60 ->

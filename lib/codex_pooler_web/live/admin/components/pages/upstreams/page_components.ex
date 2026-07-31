@@ -10,6 +10,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents
+  alias CodexPoolerWeb.RelativeTime
   alias Phoenix.HTML.Form
 
   @oauth_docs_url "https://docs.codex-pooler.com/operators/upstreams/#openai-oauth-upstream-linking"
@@ -880,9 +881,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   end
 
   defp next_expires_in(%{next_expires_at: value}) do
+    now = DateTime.utc_now()
+
     with %DateTime{} = expires_at <- ResetFormatting.parse_datetime(value),
-         seconds when seconds > 0 <- DateTime.diff(expires_at, DateTime.utc_now(), :second) do
-      ResetFormatting.format_reset_duration(seconds)
+         :gt <- DateTime.compare(expires_at, now) do
+      expires_at
+      |> RelativeTime.seconds_until(now)
+      |> ResetFormatting.format_reset_duration()
     else
       _missing_or_expired -> nil
     end

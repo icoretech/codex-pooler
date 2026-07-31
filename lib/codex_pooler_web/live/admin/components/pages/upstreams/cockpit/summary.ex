@@ -18,13 +18,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
   """
   attr :cockpit, :map, required: true
   attr :datetime_preferences, :map, required: true
+  attr :now, :any, default: nil
 
   def relink_card(assigns) do
+    now = assigns.now || DateTime.utc_now()
+
     assigns =
-      assign(
-        assigns,
+      assigns
+      |> assign(:now, now)
+      |> assign(
         :flow,
-        UpstreamCockpitReadModel.pending_relink_flow(assigns.cockpit.oauth_flows)
+        UpstreamCockpitReadModel.pending_relink_flow(assigns.cockpit.oauth_flows, now)
       )
 
     ~H"""
@@ -68,7 +72,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
           done
           connector
           title={relink_issued_title(@flow.flow_kind)}
-          time={ResetFormatting.relative_time_label(@flow.inserted_at)}
+          time={ResetFormatting.relative_time_label(@flow.inserted_at, @now)}
           time_title={Formatting.format_oauth_flow_time(@flow.inserted_at, @datetime_preferences)}
           hint={relink_issued_hint(@flow.flow_kind)}
         >
@@ -108,7 +112,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
         <.relink_step
           pulse_class={relink_dot_class(@flow.flow_kind)}
           title={relink_waiting_title(@flow.flow_kind)}
-          time={relink_checked_label(@flow)}
+          time={relink_checked_label(@flow, @now)}
           time_title={Formatting.format_oauth_flow_time(@flow.last_polled_at, @datetime_preferences)}
           hint={relink_waiting_hint(@flow.flow_kind)}
         />
@@ -121,7 +125,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
           class="inline-flex items-baseline gap-1.5 text-[11px] tabular-nums text-base-content/55"
         >
           <.icon name="hero-clock" class="size-3 shrink-0 translate-y-0.5" />
-          <span>expires {ResetFormatting.relative_time_label(@flow.expires_at)}</span>
+          <span>expires {ResetFormatting.relative_time_label(@flow.expires_at, @now)}</span>
         </span>
         <button
           id="upstream-cockpit-relink-cancel"
@@ -214,10 +218,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
   defp relink_waiting_hint(_kind),
     do: "Completion arrives via callback once the sign-in finishes."
 
-  defp relink_checked_label(%{last_polled_at: %DateTime{} = polled_at}),
-    do: "checked #{ResetFormatting.relative_time_label(polled_at)}"
+  defp relink_checked_label(%{last_polled_at: %DateTime{} = polled_at}, now),
+    do: "checked #{ResetFormatting.relative_time_label(polled_at, now)}"
 
-  defp relink_checked_label(_flow), do: nil
+  defp relink_checked_label(_flow, _now), do: nil
 
   @doc """
   Credential card: the account rendered as a badge — avatar with a lifecycle

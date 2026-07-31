@@ -5,6 +5,8 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
 
   use CodexPoolerWeb, :html
 
+  alias CodexPoolerWeb.RelativeTime
+
   attr :flash, :map, required: true
   attr :current_scope, :any, required: true
   attr :contract, :any, required: true
@@ -14,8 +16,11 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
   attr :completed_onboarding, :any, required: true
   attr :invite_state, :atom, required: true
   attr :error_message, :any, required: true
+  attr :now, :any, default: nil
 
   def invite_page(assigns) do
+    assigns = assign(assigns, :now, assigns.now || DateTime.utc_now())
+
     ~H"""
     <Layouts.app flash={@flash} current_scope={@current_scope} chrome={:invite}>
       <section class="mx-auto grid min-h-[calc(100svh-4rem)] w-full max-w-6xl items-center px-4 py-8 sm:px-6 lg:px-8">
@@ -86,7 +91,7 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
                       Expires
                     </dt>
                     <dd id="invite-expiry-countdown" class="mt-2 font-semibold text-base-content">
-                      {expiry_countdown(@contract.expires_at)}
+                      {expiry_countdown(@contract.expires_at, @now)}
                     </dd>
                   </div>
                 </dl>
@@ -256,20 +261,20 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
   defp invite_status_label(status) when is_binary(status), do: String.capitalize(status)
   defp invite_status_label(_status), do: "Unknown"
 
-  defp expiry_countdown(nil), do: "No expiry date"
+  defp expiry_countdown(nil, _now), do: "No expiry date"
 
-  defp expiry_countdown(expires_at) when is_binary(expires_at) do
+  defp expiry_countdown(expires_at, now) when is_binary(expires_at) do
     case DateTime.from_iso8601(expires_at) do
-      {:ok, expires_at, _offset} -> expiry_countdown(expires_at)
+      {:ok, expires_at, _offset} -> expiry_countdown(expires_at, now)
       _error -> "Expiry unavailable"
     end
   end
 
-  defp expiry_countdown(%DateTime{} = expires_at) do
-    seconds = DateTime.diff(expires_at, DateTime.utc_now(), :second)
+  defp expiry_countdown(%DateTime{} = expires_at, %DateTime{} = now) do
+    seconds = RelativeTime.seconds_until(expires_at, now)
 
     cond do
-      seconds <= 0 -> "Expired"
+      DateTime.compare(expires_at, now) != :gt -> "Expired"
       seconds < 60 -> "Expires in under 1 minute"
       seconds < 3_600 -> "Expires in #{ceil_div(seconds, 60)} minutes"
       seconds < 86_400 -> "Expires in #{ceil_div(seconds, 3_600)} hours"

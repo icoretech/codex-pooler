@@ -797,7 +797,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
 
     case Formatting.parse_datetime(expires_at) do
       %DateTime{} = timestamp ->
-        state = if DateTime.compare(timestamp, now) == :gt, do: "known_future", else: "known_past"
+        state =
+          if DateTime.compare(timestamp, now) == :gt,
+            do: "known_future",
+            else: "known_past"
 
         %{
           state: state,

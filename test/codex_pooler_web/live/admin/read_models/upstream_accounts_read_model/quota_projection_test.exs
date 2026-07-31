@@ -133,6 +133,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
       assert projection.reconciliation.status == "succeeded"
     end
 
+    @tag :relative_countdown_contract
     test "keeps attempt, successful refresh, evidence age, and credential expiry distinct" do
       now = ~U[2026-07-13 12:00:00Z]
       identity = active_upstream_identity_fixture()
@@ -167,6 +168,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
       assert future.credential_expiry.state == "known_future"
       assert future.credential_expiry.expires_at == future_expiry
       assert future.credential_expiry.age == "in 1h"
+
+      subsecond_future_expiry = ~U[2026-07-13 12:00:00.999999Z]
+
+      subsecond_future =
+        identity
+        |> Map.put(:metadata, %{
+          "access_token_expires_at" => DateTime.to_iso8601(subsecond_future_expiry)
+        })
+        |> UpstreamAccountsReadModel.identity_observability([], [], now)
+
+      assert subsecond_future.credential_expiry.state == "known_future"
+      assert subsecond_future.credential_expiry.expires_at == subsecond_future_expiry
+      assert subsecond_future.credential_expiry.age == "just now"
 
       past =
         identity
@@ -564,8 +578,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
   end
 
   @tag :quota_spark_projection
+  @tag :relative_countdown_contract
   test "anchored Spark weekly evidence keeps the countdown and absolute reset title" do
-    observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    observed_at = ~U[2026-07-31 12:00:00Z]
 
     rows =
       [spark_window("secondary", 10_080, observed_at, metadata: %{"reset_state" => "anchored"})]
@@ -582,6 +597,37 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
                  weekly.reset_at,
                  DateTimeDisplay.preferences_for_user(nil)
                )
+  end
+
+  @tag :relative_countdown_contract
+  test "anchored reset state stays future for a subsecond target and due at the instant" do
+    snapshot_at = ~U[2026-07-31 12:00:00.000000Z]
+    subsecond_future = ~U[2026-07-31 12:00:00.999999Z]
+    preferences = DateTimeDisplay.preferences_for_user(nil)
+
+    future_rows =
+      [
+        spark_window("secondary", 10_080, snapshot_at,
+          reset_at: subsecond_future,
+          metadata: %{"reset_state" => "anchored"}
+        )
+      ]
+      |> QuotaProjection.quota_limit_rows(preferences, snapshot_at)
+
+    due_rows =
+      [
+        spark_window("secondary", 10_080, snapshot_at,
+          reset_at: snapshot_at,
+          metadata: %{"reset_state" => "anchored"}
+        )
+      ]
+      |> QuotaProjection.quota_limit_rows(preferences, snapshot_at)
+
+    assert Enum.find(future_rows, &(&1.key == "model-codex_spark-secondary-10080")).reset_label ==
+             "in <1m"
+
+    assert Enum.find(due_rows, &(&1.key == "model-codex_spark-secondary-10080")).reset_label ==
+             "due"
   end
 
   @tag :quota_spark_projection

@@ -69,6 +69,20 @@ test("formats the compact quota countdown", () => {
 	assert.equal(formatRelativeCountdown("not-a-date", now), null);
 });
 
+test("equivalent ISO offsets preserve the same instant countdown across DST", () => {
+	const now = Date.parse("2026-10-25T00:30:00Z");
+	const targets = [
+		"2026-10-25T02:30:00Z",
+		"2026-10-25T04:30:00+02:00",
+		"2026-10-24T22:30:00-04:00",
+	];
+
+	assert.deepEqual(
+		targets.map((target) => formatRelativeCountdown(target, now)),
+		["2h", "2h", "2h"],
+	);
+});
+
 test("repaints until the reset is due and then stops", () => {
 	const now = Date.parse("2026-07-23T12:00:00Z");
 	const clock = new FakeClock(now);

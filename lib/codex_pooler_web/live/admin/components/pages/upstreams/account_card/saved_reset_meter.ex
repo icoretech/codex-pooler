@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
   use CodexPoolerWeb, :html
 
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting, as: ResetFormatting
+  alias CodexPoolerWeb.RelativeTime
 
   attr :id, :string, required: true
   attr :identity_id, :string, required: true
@@ -50,9 +51,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
   attr :saved_resets, :map, required: true
   attr :saved_reset_policy, :map, required: true
   attr :class, :any, default: nil
+  attr :now, :any, default: nil
 
   def saved_reset_meter(assigns) do
     redemption_status = saved_reset_redemption_status(assigns.saved_resets)
+    now = assigns.now || DateTime.utc_now()
 
     assigns =
       assigns
@@ -64,7 +67,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
         saved_reset_meter_label(assigns.saved_resets, redemption_status)
       )
       |> assign(:meter_count_label, saved_reset_meter_count_label(assigns.saved_resets))
-      |> assign(:meter_reset_label, saved_reset_meter_reset_label(assigns.saved_resets))
+      |> assign(:meter_reset_label, saved_reset_meter_reset_label(assigns.saved_resets, now))
       |> assign(:meter_policy_active, saved_reset_policy_active?(assigns.saved_reset_policy))
       |> assign(:redemption_status, redemption_status)
 
@@ -268,19 +271,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
   defp saved_reset_meter_count_label(saved_resets),
     do: "x#{saved_reset_meter_value(saved_resets)}"
 
-  defp saved_reset_meter_reset_label(%{next_expires_at: expires_at}) do
+  defp saved_reset_meter_reset_label(%{next_expires_at: expires_at}, now) do
     case ResetFormatting.parse_datetime(expires_at) do
-      %DateTime{} = expires_at -> reset_time_left_label(expires_at)
+      %DateTime{} = expires_at -> reset_time_left_label(expires_at, now)
       nil -> nil
     end
   end
 
-  defp saved_reset_meter_reset_label(_saved_resets), do: nil
+  defp saved_reset_meter_reset_label(_saved_resets, _now), do: nil
 
-  defp reset_time_left_label(%DateTime{} = expires_at) do
-    seconds_until_expiration = DateTime.diff(expires_at, DateTime.utc_now(), :second)
+  defp reset_time_left_label(%DateTime{} = expires_at, %DateTime{} = now) do
+    seconds_until_expiration = RelativeTime.seconds_until(expires_at, now)
 
-    if seconds_until_expiration > 0 do
+    if DateTime.compare(expires_at, now) == :gt do
       ResetFormatting.format_reset_duration(seconds_until_expiration)
     else
       "expired"

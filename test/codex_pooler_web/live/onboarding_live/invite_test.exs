@@ -16,7 +16,9 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.EncryptedSecret
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
+  alias CodexPoolerWeb.OnboardingLive.Invite.Components
 
+  @tag :relative_countdown_contract
   test "renders a valid invite link without authentication" do
     pool = pool_fixture(%{slug: "team-alpha", name: "Team Alpha"})
     scope = fixture_owner_scope()
@@ -53,6 +55,41 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
     refute html =~ "oauth/authorize"
     refute html =~ "The device-code flow keeps browser callbacks out of this public page"
     refute html =~ token
+  end
+
+  @tag :relative_countdown_contract
+  test "public invite countdown preserves fixed future, due, expired, missing, and malformed states" do
+    now = ~U[2026-07-31 12:00:00.000000Z]
+
+    for {expires_at, expected} <- [
+          {~U[2026-07-31 12:00:00.999999Z], "Expires in under 1 minute"},
+          {now, "Expired"},
+          {DateTime.add(now, -1, :second), "Expired"},
+          {nil, "No expiry date"},
+          {"invalid", "Expiry unavailable"}
+        ] do
+      html =
+        render_component(&Components.invite_page/1,
+          flash: %{},
+          current_scope: nil,
+          contract: %{
+            pool_name: "Example Pool",
+            inviter_label: "operator@example.com",
+            invited_email: "invitee@example.com",
+            status: "active",
+            expires_at: expires_at
+          },
+          device_authorization: nil,
+          device_polling?: false,
+          device_poll_status: "",
+          completed_onboarding: nil,
+          invite_state: :active,
+          error_message: nil,
+          now: now
+        )
+
+      assert html =~ ~r/id="invite-expiry-countdown"[^>]*>\s*#{Regex.escape(expected)}/s
+    end
   end
 
   test "bootstrap and login use the public auth chrome" do

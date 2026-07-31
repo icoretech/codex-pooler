@@ -490,15 +490,25 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   """
   @spec pending_relink_flow(oauth_flow_state()) :: map() | nil
   def pending_relink_flow(%{items: items}) when is_list(items) do
-    Enum.find(items, &actively_pending_flow?/1)
+    pending_relink_flow(%{items: items}, DateTime.utc_now())
   end
 
   def pending_relink_flow(_oauth_flows), do: nil
 
-  defp actively_pending_flow?(%{status: "pending", expires_at: %DateTime{} = expires_at}),
-    do: DateTime.after?(expires_at, DateTime.utc_now())
+  @spec pending_relink_flow(oauth_flow_state(), DateTime.t()) :: map() | nil
+  def pending_relink_flow(%{items: items}, %DateTime{} = now) when is_list(items) do
+    Enum.find(items, &actively_pending_flow?(&1, now))
+  end
 
-  defp actively_pending_flow?(_flow), do: false
+  def pending_relink_flow(_oauth_flows, _now), do: nil
+
+  defp actively_pending_flow?(
+         %{status: "pending", expires_at: %DateTime{} = expires_at},
+         %DateTime{} = now
+       ),
+       do: DateTime.after?(expires_at, now)
+
+  defp actively_pending_flow?(_flow, _now), do: false
 
   # Failed, expired, and cancelled relink flows emit no audit event (only
   # successful completions do), so these feed rows are their only surface.

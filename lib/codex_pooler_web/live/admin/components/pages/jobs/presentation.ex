@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
   alias CodexPoolerWeb.Admin.BadgeComponents
   alias CodexPoolerWeb.Admin.JobsPresentation.{State, Targets}
   alias CodexPoolerWeb.DateTimeDisplay
+  alias CodexPoolerWeb.RelativeTime
   alias Oban.Cron.Expression
 
   @visible_open_marker_limit 8
@@ -618,10 +619,10 @@ defmodule CodexPoolerWeb.Admin.JobsPresentation do
   defp relative_time(nil, _now), do: "Unknown"
 
   defp relative_time(%DateTime{} = datetime, %DateTime{} = now) do
-    diff_seconds = DateTime.diff(datetime, now, :second)
+    diff_seconds = RelativeTime.seconds_until(datetime, now)
 
     cond do
-      diff_seconds <= 0 ->
+      DateTime.compare(datetime, now) != :gt ->
         "Due now"
 
       diff_seconds < 60 ->

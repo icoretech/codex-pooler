@@ -1,7 +1,7 @@
 defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting do
   @moduledoc false
 
-  alias CodexPoolerWeb.DateTimeDisplay
+  alias CodexPoolerWeb.{DateTimeDisplay, RelativeTime}
 
   @spec timestamp_status_label(String.t(), DateTime.t() | nil, DateTimeDisplay.preferences()) ::
           String.t()
@@ -19,12 +19,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting do
 
   @spec relative_time_label(DateTime.t(), DateTime.t()) :: String.t()
   def relative_time_label(%DateTime{} = timestamp, %DateTime{} = now) do
-    diff = DateTime.diff(now, timestamp, :second)
+    seconds_until = RelativeTime.seconds_until(timestamp, now)
 
     cond do
-      diff < -60 -> "in #{format_reset_duration(abs(diff))}"
-      diff < 60 -> "just now"
-      true -> "#{format_reset_duration(diff)} ago"
+      seconds_until > 60 -> "in #{format_reset_duration(seconds_until)}"
+      seconds_until > -60 -> "just now"
+      true -> "#{format_reset_duration(-seconds_until)} ago"
     end
   end
 
