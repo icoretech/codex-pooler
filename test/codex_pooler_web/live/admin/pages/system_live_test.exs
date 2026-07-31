@@ -381,15 +381,31 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
       "generated_at" => "2026-05-23T12:00:00Z",
       "models" => %{
         "gpt-system-live-pricing" => %{
+          "categories" => ["language_model"],
+          "category" => "language_model",
           "model" => "gpt-system-live-pricing",
           "pricing_type" => "per_1m_tokens",
+          "pricing_types" => ["per_1m_tokens"],
           "prices" => %{
             "standard" => %{
               "default" => %{"input" => 1.25, "output" => 10.0}
             }
-          }
+          },
+          "timestamp" => "2026-05-23T12:00:00Z"
         }
-      }
+      },
+      "models_count" => 1,
+      "source" => "synthetic",
+      "source_url" => "https://example.com/pricing.json",
+      "tools" => %{
+        "sample-tool" => %{
+          "details" => "Synthetic tool",
+          "price" => 0,
+          "pricing" => "$0",
+          "tool" => "Sample Tool"
+        }
+      },
+      "tools_count" => 1
     }
 
     upstream = start_upstream(FakeUpstream.json_response(pricing_payload))
@@ -416,7 +432,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
              from snapshot in PricingSnapshot,
                where:
                  snapshot.model_identifier == "gpt-system-live-pricing" and
-                   snapshot.price_version == "2026-05-23T12:00:00Z:importer-format-1" and
+                   snapshot.price_version == "2026-05-23T12:00:00Z:importer-format-2" and
                    snapshot.source_url == ^source_url
            )
 
