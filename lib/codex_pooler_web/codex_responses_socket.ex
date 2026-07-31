@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   @behaviour WebSock
 
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Gateway.Websocket.Adapter
@@ -60,16 +61,23 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   def handle_info({:codex_response_chunk, task_pid, data}, state)
       when is_pid(task_pid) and is_binary(data) do
-    if active_public_turn?(state, task_pid) and not public_turn_aborted?(state) do
-      public_chunk_result(data, state)
-    else
-      {:ok, state}
+    cond do
+      active_public_turn?(state, task_pid) and not public_turn_aborted?(state) ->
+        public_chunk_result(data, state)
+
+      tracked_response_task?(state, task_pid) and
+          not Adapter.public_responses_stream?(state) ->
+        state = mark_native_turn_output_pushed(state, task_pid)
+        {:push, {:text, Adapter.downstream_response_chunk(data)}, state}
+
+      true ->
+        {:ok, state}
     end
   end
 
   def handle_info({:websocket_owner_runtime_recovered, _, _, _} = message, state) do
     case Adapter.accept_recovered_runtime(message, state) do
-      {:ok, state} -> {:ok, state}
+      {:ok, state} -> {:ok, reset_owner_turn_output(state)}
       :drop -> {:ok, state}
     end
   end
@@ -136,6 +144,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         state =
           state
           |> remove_tracked_response_task(pid, ref)
+          |> remove_native_turn_output(pid)
           |> maybe_start_queued_response_task()
 
         {:ok, state}
@@ -227,6 +236,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> Map.put(:public_turn_owner_complete?, false)
     |> Map.put(:public_turn_aborted?, false)
     |> Map.put(:public_turn_output_committed?, false)
+    |> Map.put(:native_turn_output_task_pids, MapSet.new())
   end
 
   defp handle_owner_frame(message, state) do
@@ -264,7 +274,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       state,
       Map.fetch!(state, :public_response_task_pid),
       payload,
-      false
+      active_owner_turn_visible_output?(state)
     )
 
     state =
@@ -280,7 +290,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       state,
       Map.fetch!(state, :public_response_task_pid),
       payload,
-      true
+      active_owner_turn_visible_output?(state)
     )
 
     if match?(
@@ -311,6 +321,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp handle_non_public_owner_payload({:data, data}, state) do
+    state = mark_active_native_owner_turn_output(state)
     {:push, {:text, Adapter.downstream_response_chunk(data)}, state}
   end
 
@@ -319,13 +330,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       state,
       tracked_response_task_pid(state),
       payload,
-      false
+      active_owner_turn_visible_output?(state)
     )
 
     state =
       state
       |> Map.put(:websocket_owner_drain_observed?, true)
       |> cancel_tracked_response_tasks(:owner_drained)
+      |> reset_owner_turn_output()
 
     {:push, {:text, Jason.encode!(Adapter.websocket_error(payload))}, state}
   end
@@ -335,7 +347,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp handle_non_public_owner_payload(:complete, state) do
-    {:ok, Map.put(state, :websocket_owner_active_turn_reconnect?, false)}
+    state =
+      state
+      |> Map.put(:websocket_owner_active_turn_reconnect?, false)
+      |> reset_owner_turn_output()
+
+    {:ok, state}
   end
 
   defp public_chunk_result(data, state) do
@@ -425,6 +442,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     state =
       state
       |> remove_tracked_response_task(pid)
+      |> remove_native_turn_output(pid)
       |> maybe_start_queued_response_task()
 
     {:ok, state}
@@ -438,6 +456,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     state =
       state
       |> remove_tracked_response_task(pid)
+      |> remove_native_turn_output(pid)
       |> maybe_start_queued_response_task()
 
     {:ok, state}
@@ -447,6 +466,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     state =
       state
       |> remove_tracked_response_task(pid)
+      |> remove_native_turn_output(pid)
       |> maybe_start_queued_response_task()
 
     {:push, {:text, Jason.encode!(Adapter.websocket_error(reason))}, state}
@@ -462,6 +482,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     state =
       state
       |> remove_tracked_response_task(pid)
+      |> remove_native_turn_output(pid)
       |> maybe_start_queued_response_task()
 
     {:push, {:text, Jason.encode!(Adapter.websocket_error(reason))}, state}
@@ -473,6 +494,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     state =
       state
       |> remove_tracked_response_task(pid)
+      |> remove_native_turn_output(pid)
       |> maybe_start_queued_response_task()
 
     {:push, {:text, Jason.encode!(Adapter.websocket_error(reason))}, state}
@@ -482,6 +504,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     state =
       state
       |> remove_tracked_response_task(pid)
+      |> remove_native_turn_output(pid)
       |> maybe_start_queued_response_task()
 
     {:ok, state}
@@ -528,6 +551,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp abort_public_turn(state, reason) do
     state
     |> Map.put(:public_turn_aborted?, true)
+    |> Map.put(:public_turn_output_committed?, false)
     |> Map.put(:queued_response_payloads, :queue.new())
     |> cancel_tracked_response_tasks(reason)
   end
@@ -601,6 +625,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     case Adapter.maybe_retarget_before_start(payload, state) do
       {:ok, state} ->
         state = maybe_mark_request_response_work_started(state, payload)
+
         parent = self()
         {:ok, pid} = start_response_task(parent, payload, state)
         monitor = Process.monitor(pid)
@@ -652,6 +677,15 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     state
     |> Map.get(:tasks, MapSet.new())
     |> Enum.find(&is_pid/1)
+  end
+
+  defp active_native_owner_turn_pid(state) do
+    if owner_forwarded_socket?(state) and not Adapter.public_responses_stream?(state) do
+      case Map.get(state, :tasks, MapSet.new()) |> MapSet.to_list() do
+        [pid] when is_pid(pid) -> pid
+        _tasks -> nil
+      end
+    end
   end
 
   defp public_response_payload?(payload, state) do
@@ -842,11 +876,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     Websocket.run_websocket_response(auth, payload, opts, fn data ->
       Process.put(:response_task_visible_output?, true)
 
-      if Adapter.public_responses_stream?(opts) do
-        send(parent, {:codex_response_chunk, task_pid, data})
-      else
-        send(parent, {:codex_response_chunk, data})
-      end
+      send(parent, {:codex_response_chunk, task_pid, data})
     end)
   end
 
@@ -855,6 +885,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp log_failed_native_websocket_turn(state, pid, reason, visible_output?) do
+    visible_output? = direct_turn_visible_output?(state, pid, visible_output?)
+
     state
     |> failed_native_websocket_turn_metadata(pid, reason, visible_output?)
     |> WebsocketConnectionLogger.log_failed_native_websocket_turn(reason)
@@ -876,7 +908,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       transport: websocket_turn_transport(opts),
       route_class: websocket_turn_route_class(opts),
       error_code: websocket_turn_error_code(reason),
-      phase: "receive",
       elapsed_ms: socket_elapsed_ms(Map.get(state, :connection_started_at_monotonic_ms)),
       codex_session_id: session_id(Map.get(state, :codex_session)),
       visible_output: websocket_turn_visible_output(visible_output?)
@@ -902,7 +933,65 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp websocket_turn_error_code(%{code: code}) when is_atom(code), do: Atom.to_string(code)
   defp websocket_turn_error_code(%{code: code}) when is_binary(code), do: code
-  defp websocket_turn_error_code(_reason), do: "websocket_request_failed"
+  defp websocket_turn_error_code(_reason), do: ErrorCodes.websocket_request_failed_code()
+
+  defp direct_turn_visible_output?(state, pid, task_local_visible_output?) do
+    if active_public_turn?(state, pid) do
+      task_local_visible_output?
+    else
+      state
+      |> Map.get(:native_turn_output_task_pids, MapSet.new())
+      |> MapSet.member?(pid)
+    end
+  end
+
+  defp active_owner_turn_visible_output?(state) do
+    if Adapter.public_responses_stream?(state) do
+      Map.get(state, :public_turn_output_committed?, false)
+    else
+      case active_native_owner_turn_pid(state) do
+        pid when is_pid(pid) ->
+          state
+          |> Map.get(:native_turn_output_task_pids, MapSet.new())
+          |> MapSet.member?(pid)
+
+        nil ->
+          false
+      end
+    end
+  end
+
+  defp mark_active_native_owner_turn_output(state) do
+    case active_native_owner_turn_pid(state) do
+      pid when is_pid(pid) -> mark_native_turn_output_pushed(state, pid)
+      nil -> state
+    end
+  end
+
+  defp reset_owner_turn_output(state) do
+    state
+    |> Map.put(:native_turn_output_task_pids, MapSet.new())
+    |> Map.put(:public_turn_output_committed?, false)
+  end
+
+  defp mark_native_turn_output_pushed(state, pid) when is_pid(pid) do
+    Map.update(
+      state,
+      :native_turn_output_task_pids,
+      MapSet.new([pid]),
+      &MapSet.put(&1, pid)
+    )
+  end
+
+  defp remove_native_turn_output(state, pid) when is_pid(pid) do
+    case Map.fetch(state, :native_turn_output_task_pids) do
+      {:ok, task_pids} ->
+        Map.put(state, :native_turn_output_task_pids, MapSet.delete(task_pids, pid))
+
+      :error ->
+        state
+    end
+  end
 
   defp websocket_turn_visible_output(true), do: :after_visible_output
   defp websocket_turn_visible_output(false), do: :before_visible_output

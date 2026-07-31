@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Websocket do
   alias CodexPooler.Gateway.Transports.Admission
 
   alias CodexPooler.Gateway.Transports.Websocket.{
+    OwnerErrorDiagnostics,
     UpstreamWebsocketSession,
     WebsocketOwnerContract,
     WebsocketOwnerForwarder,
@@ -98,7 +99,7 @@ defmodule CodexPooler.Gateway.Websocket do
         replace_and_attach_unavailable_owner(session, opts)
 
       {:error, reason} ->
-        {:error, reason}
+        owner_attach_error(reason, session, opts)
     end
   end
 
@@ -362,8 +363,12 @@ defmodule CodexPooler.Gateway.Websocket do
            start_owner_session_from_previous_response_id(auth, retarget_opts) do
       retarget_owner_runtime_to_session(current_session, runtime, target_session, retarget_opts)
     else
-      {:error, :session_not_found} -> {:ok, runtime}
-      {:error, reason} -> owner_retarget_error(reason)
+      {:error, :session_not_found} ->
+        log_owner_retarget_alias_miss("previous_response_id", current_session, retarget_opts)
+        {:ok, runtime}
+
+      {:error, reason} ->
+        owner_retarget_error(reason, current_session, retarget_opts)
     end
   end
 
@@ -428,9 +433,33 @@ defmodule CodexPooler.Gateway.Websocket do
            start_owner_session_from_turn_state(auth, retarget_opts) do
       retarget_owner_runtime_to_session(current_session, runtime, target_session, retarget_opts)
     else
-      {:error, :session_not_found} -> {:ok, runtime}
-      {:error, reason} -> owner_retarget_error(reason)
+      {:error, :session_not_found} ->
+        log_owner_retarget_alias_miss("turn_state", current_session, retarget_opts)
+        {:ok, runtime}
+
+      {:error, reason} ->
+        owner_retarget_error(reason, current_session, retarget_opts)
     end
+  end
+
+  defp log_owner_retarget_alias_miss(
+         alias_kind,
+         %CodexSession{} = session,
+         %RequestOptions{} = opts
+       ) do
+    metadata =
+      [
+        alias_kind: alias_kind,
+        outcome: "current_runtime",
+        request_id: request_id(opts),
+        codex_session_id: session.id,
+        owner_instance_id: session.owner_instance_id,
+        proxy_instance_id: Atom.to_string(node())
+      ]
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> Enum.map_join(" ", fn {key, value} -> "#{key}=#{safe_log_token(value)}" end)
+
+    Logger.info("websocket owner retarget alias miss " <> metadata)
   end
 
   @spec retarget_owner_runtime_to_session(
@@ -456,7 +485,7 @@ defmodule CodexPooler.Gateway.Websocket do
        ) do
     target_session
     |> prepare_owner_websocket_session_with_recovery(retarget_opts, true)
-    |> owner_runtime_retarget_result()
+    |> owner_runtime_retarget_result(target_session, retarget_opts)
   end
 
   @spec owner_retarget_websocket_opts(opts(), websocket_runtime(), String.t()) ::
@@ -469,37 +498,41 @@ defmodule CodexPooler.Gateway.Websocket do
 
   @spec start_owner_session_from_previous_response_id(auth(), RequestOptions.t()) ::
           {:ok, CodexSession.t()}
-          | {:error, :session_not_found | WebsocketOwnerContract.owner_error()}
+          | {:error, term()}
   defp start_owner_session_from_previous_response_id(auth, %RequestOptions{} = opts) do
     case SessionContinuity.start_codex_session_from_previous_response_id(auth, opts) do
       {:ok, %CodexSession{} = session} -> {:ok, session}
       {:error, :session_not_found} -> {:error, :session_not_found}
-      {:error, reason} -> owner_retarget_error(reason)
+      {:error, reason} -> {:error, reason}
     end
   end
 
   @spec start_owner_session_from_turn_state(auth(), RequestOptions.t()) ::
           {:ok, CodexSession.t()}
-          | {:error, :session_not_found | WebsocketOwnerContract.owner_error()}
+          | {:error, term()}
   defp start_owner_session_from_turn_state(auth, %RequestOptions{} = opts) do
     case SessionContinuity.start_codex_session_from_turn_state(auth, opts) do
       {:ok, %CodexSession{} = session} -> {:ok, session}
       {:error, :session_not_found} -> {:error, :session_not_found}
-      {:error, reason} -> owner_retarget_error(reason)
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  @spec owner_runtime_retarget_result({:ok, websocket_runtime()} | {:error, term()}) ::
+  @spec owner_runtime_retarget_result(
+          {:ok, websocket_runtime()} | {:error, term()},
+          CodexSession.t(),
+          RequestOptions.t()
+        ) ::
           owner_runtime_retarget_result()
-  defp owner_runtime_retarget_result({:ok, runtime}), do: {:ok, runtime}
-  defp owner_runtime_retarget_result({:error, reason}), do: owner_retarget_error(reason)
+  defp owner_runtime_retarget_result({:ok, runtime}, _session, _opts), do: {:ok, runtime}
 
-  @spec owner_retarget_error(term()) :: {:error, WebsocketOwnerContract.owner_error()}
-  defp owner_retarget_error(reason) do
-    if WebsocketOwnerContract.owner_error?(reason),
-      do: {:error, reason},
-      else: {:error, :owner_unavailable}
-  end
+  defp owner_runtime_retarget_result({:error, reason}, session, opts),
+    do: owner_retarget_error(reason, session, opts)
+
+  @spec owner_retarget_error(term(), CodexSession.t(), RequestOptions.t()) ::
+          {:error, WebsocketOwnerContract.owner_error()}
+  defp owner_retarget_error(reason, session, opts),
+    do: OwnerErrorDiagnostics.normalize(reason, :retarget, owner_error_context(session, opts))
 
   @spec monitor_websocket_owner(CodexSession.t() | nil) ::
           {:ok, pid(), reference()} | {:error, :owner_unavailable}
@@ -622,35 +655,33 @@ defmodule CodexPooler.Gateway.Websocket do
     with :ok <- SessionContinuity.validate_owner_token(session, owner_lease_token),
          {:ok, owner} <-
            WebsocketOwnerForwarder.resolve_owner(session, owner_forwarder_opts(opts)) do
-      owner_detach_result(detach_owner(owner, session.id, downstream, opts))
+      owner_detach_result(detach_owner(owner, session.id, downstream, opts), session, opts)
     else
       {:error, :stale_owner} -> :ok
-      {:error, reason} -> owner_detach_error(reason)
+      {:error, reason} -> owner_detach_error(reason, session, opts)
     end
   end
 
   def detach_websocket_owner_downstream(_session, _owner_lease_token, _downstream, _opts), do: :ok
 
-  defp owner_detach_error(reason) do
-    if WebsocketOwnerContract.owner_error?(reason),
-      do: {:error, reason},
-      else: {:error, :owner_unavailable}
-  end
+  defp owner_detach_error(reason, session, opts),
+    do: OwnerErrorDiagnostics.normalize(reason, :detach, owner_error_context(session, opts))
 
-  defp owner_detach_result(:ok), do: :ok
-  defp owner_detach_result({:error, :stale_owner}), do: :ok
-  defp owner_detach_result({:error, :stale_downstream}), do: :detached_stale_downstream
-  defp owner_detach_result({:error, :duplicate_downstream}), do: :detached_stale_downstream
-  defp owner_detach_result({:error, reason}), do: owner_detach_error(reason)
+  defp owner_detach_result(:ok, _session, _opts), do: :ok
+  defp owner_detach_result({:error, :stale_owner}, _session, _opts), do: :ok
+
+  defp owner_detach_result({:error, reason}, _session, _opts)
+       when reason in [:stale_downstream, :duplicate_downstream],
+       do: :detached_stale_downstream
+
+  defp owner_detach_result({:error, reason}, session, opts),
+    do: owner_detach_error(reason, session, opts)
 
   defp active_turn_reconnect?(%{active_turn_reconnect?: true}), do: true
   defp active_turn_reconnect?(_downstream), do: false
 
-  defp owner_attach_error(reason) do
-    if WebsocketOwnerContract.owner_error?(reason),
-      do: {:error, reason},
-      else: {:error, :owner_unavailable}
-  end
+  defp owner_attach_error(reason, session, opts),
+    do: OwnerErrorDiagnostics.normalize(reason, :attach, owner_error_context(session, opts))
 
   @spec close_websocket_session(pid() | term()) :: :ok
   def close_websocket_session(pid) when is_pid(pid), do: UpstreamWebsocketSession.close(pid)
@@ -750,7 +781,7 @@ defmodule CodexPooler.Gateway.Websocket do
            WebsocketOwnerForwarder.resolve_owner(session, owner_forwarder_opts(opts)) do
       attach_owner(owner, session.id, owner_downstream_target(opts), opts)
     else
-      {:error, reason} -> owner_attach_error(reason)
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -830,6 +861,15 @@ defmodule CodexPooler.Gateway.Websocket do
 
   defp owner_lookup_metadata(owner_instance_id, opts) do
     [owner_instance_id: owner_instance_id, request_id: request_id(opts)]
+  end
+
+  defp owner_error_context(%CodexSession{} = session, %RequestOptions{} = opts) do
+    %{
+      request_id: request_id(opts),
+      codex_session_id: session.id,
+      owner_instance_id: session.owner_instance_id,
+      proxy_instance_id: Atom.to_string(node())
+    }
   end
 
   defp maybe_put_owner_upstream(start_opts, %RequestOptions{

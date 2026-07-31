@@ -14,6 +14,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   }
 
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
 
@@ -345,7 +346,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   end
 
   defp failed_error_response(endpoint, _code, _reason) do
-    error(502, "upstream_request_failed", Metadata.upstream_failure_message(endpoint))
+    error(
+      502,
+      ErrorCodes.upstream_request_failed_code(),
+      Metadata.upstream_failure_message(endpoint)
+    )
   end
 
   defp elapsed_ms(started), do: max(System.monotonic_time(:millisecond) - started, 0)

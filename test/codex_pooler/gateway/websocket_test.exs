@@ -78,6 +78,27 @@ defmodule CodexPooler.Gateway.WebsocketTest do
     end
   end
 
+  defmodule CollapsedOwnerReasonNodeClient do
+    @moduledoc false
+
+    @behaviour CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder.NodeClient
+
+    @remote_node :"codex_pooler@collapsed-owner.example"
+
+    @impl true
+    def connected_app_nodes, do: [@remote_node]
+
+    @impl true
+    def app_node?(node), do: node == @remote_node
+
+    @impl true
+    def call_owner(_node, _module, :remote_attach_downstream, _args, _timeout),
+      do: {:error, %{body: "", reason: :synthetic_attach_failure}}
+
+    def call_owner(_node, _module, :remote_cancel_downstream, _args, _timeout),
+      do: {:error, %{body: "", reason: "raw detach sentinel"}}
+  end
+
   test "owner forwarding keeps the rolling RPC argument shapes" do
     downstream = %{
       pid: self(),
@@ -138,11 +159,16 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       previous_response_id = previous_response_id("same")
       register_previous_response_alias!(runtime.codex_session, api_key, previous_response_id)
 
-      assert {:ok, ^runtime} =
-               Gateway.retarget_websocket_owner_runtime(auth, runtime, %{
-                 "type" => "response.create",
-                 "previous_response_id" => previous_response_id
-               })
+      {result, logs} =
+        with_info_log(fn ->
+          Gateway.retarget_websocket_owner_runtime(auth, runtime, %{
+            "type" => "response.create",
+            "previous_response_id" => previous_response_id
+          })
+        end)
+
+      assert {:ok, ^runtime} = result
+      refute logs =~ "websocket owner retarget alias miss"
     end
 
     test "attaches the authorized different-session owner runtime before returning it", %{
@@ -207,14 +233,25 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       {:ok, runtime} = owner_runtime(auth, "owner-runtime-unknown-turn-state")
       owner_pid = owner_pid!(runtime.codex_session.id)
       owner_state_before = :sys.get_state(owner_pid)
+      turn_state = owner_turn_state("unknown-turn-state-sentinel")
+      request_id = "unknown-turn-state-request"
 
-      assert {:ok, ^runtime} =
-               Gateway.retarget_websocket_owner_runtime(auth, runtime, %{
-                 "type" => "response.create",
-                 "client_metadata" => %{
-                   "x-codex-turn-state" => owner_turn_state("unknown")
-                 }
-               })
+      {result, logs} =
+        with_info_log(fn ->
+          Gateway.retarget_websocket_owner_runtime(
+            auth,
+            runtime,
+            %{
+              "type" => "response.create",
+              "client_metadata" => %{"x-codex-turn-state" => turn_state}
+            },
+            request_id: request_id
+          )
+        end)
+
+      assert {:ok, ^runtime} = result
+      assert_owner_retarget_alias_miss_log!(logs, runtime, "turn_state", request_id)
+      refute logs =~ turn_state
 
       assert :sys.get_state(owner_pid) == owner_state_before
       assert {:ok, ^owner_pid} = WebsocketOwnerSession.lookup(runtime.codex_session.id)
@@ -268,12 +305,25 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       owner_pid = owner_pid!(runtime.codex_session.id)
       owner_state_before = :sys.get_state(owner_pid)
       owner_session_ids = local_owner_session_ids()
+      previous_response_id = previous_response_id("guessed-alias-sentinel")
+      request_id = "guessed-alias-request"
 
-      assert {:ok, returned_runtime} =
-               Gateway.retarget_websocket_owner_runtime(auth, runtime, %{
-                 "type" => "response.create",
-                 "previous_response_id" => previous_response_id("guessed")
-               })
+      {result, logs} =
+        with_info_log(fn ->
+          Gateway.retarget_websocket_owner_runtime(
+            auth,
+            runtime,
+            %{
+              "type" => "response.create",
+              "previous_response_id" => previous_response_id
+            },
+            request_id: request_id
+          )
+        end)
+
+      assert {:ok, returned_runtime} = result
+      assert_owner_retarget_alias_miss_log!(logs, runtime, "previous_response_id", request_id)
+      refute logs =~ previous_response_id
 
       assert_runtime_unchanged!(runtime, returned_runtime)
       assert :sys.get_state(owner_pid) == owner_state_before
@@ -411,6 +461,57 @@ defmodule CodexPooler.Gateway.WebsocketTest do
                BridgeOwnerLease
                |> where([lease], lease.codex_session_id == ^target_session.id)
                |> Repo.one!()
+    end
+
+    test "logs safe attach context before an injected owner reason collapses", %{auth: auth} do
+      remote_owner = Atom.to_string(:"codex_pooler@collapsed-owner.example")
+      request_id = "request-attach-collapse"
+
+      logs =
+        capture_log(fn ->
+          assert {:error, :owner_unavailable} =
+                   Gateway.prepare_websocket_session(auth, %{
+                     accepted_turn_state: owner_turn_state("owner-attach-collapse"),
+                     owner_instance_id: remote_owner,
+                     request_id: request_id,
+                     websocket_owner_forwarder_opts: [node_client: CollapsedOwnerReasonNodeClient]
+                   })
+        end)
+
+      assert_owner_collapse_log!(logs, "attach", "unknown", request_id)
+      assert logs =~ "owner_instance_id=#{String.replace(remote_owner, "@", "_")}"
+    end
+
+    test "logs safe detach context before an injected non-code reason collapses", %{auth: auth} do
+      remote_owner = Atom.to_string(:"codex_pooler@collapsed-owner.example")
+      request_id = "request-detach-collapse"
+
+      {:ok, session} =
+        Gateway.start_codex_session(
+          auth,
+          Map.put(owner_opts("owner-detach-collapse"), :owner_instance_id, remote_owner)
+        )
+
+      downstream = %{pid: self(), epoch: 1, correlation_id: "synthetic-downstream"}
+
+      logs =
+        capture_log(fn ->
+          assert {:error, :owner_unavailable} =
+                   Gateway.detach_websocket_owner_downstream(
+                     session,
+                     session.owner_lease_token,
+                     downstream,
+                     request_id: request_id,
+                     websocket_owner_forwarder_opts: [node_client: CollapsedOwnerReasonNodeClient]
+                   )
+        end)
+
+      assert_owner_collapse_log!(logs, "detach", "unknown", request_id)
+      assert logs =~ "codex_session_id=#{session.id}"
+      assert logs =~ "owner_instance_id=#{String.replace(remote_owner, "@", "_")}"
+      refute logs =~ "raw detach sentinel"
+      refute logs =~ "synthetic-downstream"
+      refute logs =~ session.owner_lease_token
     end
 
     @tag :rollout_drain_t3
@@ -648,6 +749,38 @@ defmodule CodexPooler.Gateway.WebsocketTest do
 
     assert returned_runtime.websocket_owner_lease_token ==
              runtime.websocket_owner_lease_token
+  end
+
+  defp assert_owner_retarget_alias_miss_log!(logs, runtime, alias_kind, request_id) do
+    assert logs =~ "websocket owner retarget alias miss"
+    assert logs =~ "alias_kind=#{alias_kind}"
+    assert logs =~ "outcome=current_runtime"
+    assert logs =~ "request_id=#{request_id}"
+    assert logs =~ "codex_session_id=#{runtime.codex_session.id}"
+    assert logs =~ "owner_instance_id=#{runtime.codex_session.owner_instance_id}"
+    assert logs =~ "proxy_instance_id=#{node()}"
+
+    assert length(Regex.scan(~r/websocket owner retarget alias miss/, logs)) == 1
+  end
+
+  defp assert_owner_collapse_log!(logs, boundary, reason_code, request_id) do
+    assert length(Regex.scan(~r/websocket owner reason collapsed/, logs)) == 1
+    assert logs =~ "boundary=#{boundary}"
+    assert logs =~ "reason_code=#{reason_code}"
+    assert logs =~ "canonical_error=owner_unavailable"
+    assert logs =~ "request_id=#{request_id}"
+    assert logs =~ "proxy_instance_id=#{String.replace(Atom.to_string(node()), "@", "_")}"
+  end
+
+  defp with_info_log(fun) when is_function(fun, 0) do
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+
+    try do
+      with_log([level: :info], fun)
+    after
+      Logger.configure(level: previous_level)
+    end
   end
 
   defp assert_owner_not_started!(codex_session_id) do

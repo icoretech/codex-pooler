@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   alias CodexPooler.Gateway.ErrorSanitizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Websocket
@@ -196,7 +197,7 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
     %{
       "message" => "websocket request failed: #{ErrorSanitizer.safe_reason(reason)}",
       "type" => "invalid_request_error",
-      "code" => "websocket_request_failed",
+      "code" => ErrorCodes.websocket_request_failed_code(),
       "param" => nil
     }
   end

@@ -560,7 +560,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                  )
       end)
 
-    assert_native_turn_logs(logs, 1)
+    assert_native_turn_logs(logs, 1, "server_error")
   end
 
   test "owner-forwarded liveness failure closes without fabricating a terminal" do
@@ -686,7 +686,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         done_state
       end)
 
-    assert_native_turn_logs(logs, 1)
+    assert_native_turn_logs(logs, 1, "owner_drained")
   end
 
   test "owner drain logs one native turn failure before its late task completion" do
@@ -734,9 +734,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         assert MapSet.size(done_state.tasks) == 0
       end)
 
-    assert_native_turn_logs(logs, 1)
-    assert logs =~ "request_id=#{failure_log_fingerprint("ws-owner-drain-native-log")}"
-    assert logs =~ "error_code=#{failure_log_fingerprint("owner_drained")}"
+    assert_native_turn_logs(logs, 1, "owner_drained")
+    assert logs =~ "request_id=ws-owner-drain-native-log"
   end
 
   test "non-public owner drain logs one native turn failure from its late task completion" do
@@ -782,9 +781,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         assert MapSet.size(done_state.tasks) == 0
       end)
 
-    assert_native_turn_logs(logs, 1)
-    assert logs =~ "request_id=#{failure_log_fingerprint("ws-owner-drain-late-native-log")}"
-    assert logs =~ "error_code=#{failure_log_fingerprint("owner_drained")}"
+    assert_native_turn_logs(logs, 1, "owner_drained")
+    assert logs =~ "request_id=ws-owner-drain-late-native-log"
   end
 
   @tag :task_1_fix_red
@@ -873,7 +871,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
           final_signal_state
         end)
 
-      assert_native_turn_logs(native_turn_logs, 1)
+      assert_native_turn_logs(native_turn_logs, 1, "owner_drained")
 
       send(owner_pid, :stop)
       assert_receive {:DOWN, ^owner_monitor, :process, ^owner_pid, :normal}
@@ -1019,7 +1017,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         refute payload =~ "websocket-secret-token"
       end)
 
-    assert_native_turn_logs(logs, 1)
+    assert_native_turn_logs(logs, 1, "websocket_request_failed")
   end
 
   defp public_turn_state(task_pid, overrides \\ %{}) when is_pid(task_pid) do
@@ -1062,13 +1060,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     end
   end
 
-  defp failure_log_fingerprint(value) when is_binary(value) do
-    "sha256_" <>
-      (:crypto.hash(:sha256, value)
-       |> Base.encode16(case: :lower)
-       |> String.slice(0, 12))
-  end
-
   defp with_native_turn_log(level, fun) when level in [:info, :warning] and is_function(fun, 0) do
     previous_level = Logger.level()
     Logger.configure(level: level)
@@ -1082,6 +1073,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
   defp assert_native_turn_logs(logs, expected_count) do
     assert length(Regex.scan(~r/websocket native turn failed/, logs)) == expected_count
-    assert logs =~ "error_code=sha256_"
+    assert logs =~ ~r/error_code=sha256_[0-9a-f]{12}(?:\s|$)/
+  end
+
+  defp assert_native_turn_logs(logs, expected_count, known_error_code) do
+    assert length(Regex.scan(~r/websocket native turn failed/, logs)) == expected_count
+    assert logs =~ "error_code=#{known_error_code}"
+    refute logs =~ "error_code=sha256_"
   end
 end

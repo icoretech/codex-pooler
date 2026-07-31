@@ -4320,6 +4320,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         end)
 
       assert_native_turn_warnings(logs, 1)
+      assert logs =~ "request_id=ws-partial-close-no-reconnect"
+      assert logs =~ "error_code=upstream_request_failed"
+      assert logs =~ "reason_code=upstream_request_failed"
+      assert logs =~ "visible_output=after_visible_output"
+      refute logs =~ "phase=receive"
+      refute logs =~ "fake upstream closed after partial frame"
+      refute logs =~ "resp_ws_partial_close"
 
       assert %{"type" => "error", "error" => %{"code" => "upstream_request_failed"}} =
                Jason.decode!(error_frame)
@@ -5092,6 +5099,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
       assert log =~ "codex_pooler gateway_debug payload"
       assert log =~ "previous_response_id_action=preserved"
+      assert log =~ "response_id_preview=resp_ws_debug_too"
       assert log =~ "client_json_bytes="
       assert log =~ "client_approx_tokens="
       assert log =~ "upstream_json_bytes="
@@ -5119,7 +5127,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
       debug = attempt.response_metadata["gateway_debug"]
       refute Map.has_key?(debug, "previous_response_id")
+      refute Map.has_key?(debug, "response_id_preview")
       assert debug["previous_response_id_summary"]["action"] == "preserved"
+      assert debug["previous_response_id_summary"]["preview"] =~ ~r/\A[0-9a-f]{16}\z/
       assert debug["items"]["tool_result_types"] == ["custom_tool_call_output"]
       assert debug["shape"]["client"]["json"]["bytes"] > 0
       assert debug["shape"]["client"]["json"]["approx_tokens"] > 0
@@ -5154,7 +5164,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       metadata_text = inspect(debug)
       refute metadata_text =~ "debug output must stay hidden"
       refute metadata_text =~ "metadata value must stay hidden"
-      refute metadata_text =~ "resp_ws_debug_tool_origin"
+      refute metadata_text =~ "resp_ws_debug_too"
       refute metadata_text =~ "call_debug_sample"
     after
       CodexResponsesSocket.terminate(:closed, state)
@@ -9711,15 +9721,160 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       end)
 
     assert length(Regex.scan(~r/websocket native turn failed/, log)) == 1
-    assert log =~ "request_id=#{failure_log_fingerprint("ws-ordinary-task-failure-log")}"
+    assert log =~ "request_id=ws-ordinary-task-failure-log"
     assert log =~ "endpoint=_backend-api_codex_responses"
     assert log =~ "transport=websocket"
     assert log =~ "route_class=proxy_websocket"
-    assert log =~ "error_code=#{failure_log_fingerprint("upstream_request_failed")}"
-    assert log =~ "phase=receive"
+    assert log =~ "error_code=upstream_request_failed"
+    assert log =~ "reason_code=upstream_request_failed"
     assert log =~ "visible_output=before_visible_output"
+    refute log =~ "phase=receive"
     refute log =~ "websocket response task failed"
     refute log =~ "ordinary failure prompt sentinel"
+  end
+
+  test "direct native websocket output state resets before the next turn" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_websocket_output_reset",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, state} =
+      CodexResponsesSocket.init(%{
+        auth: auth,
+        opts: %{
+          request_id: "ws-direct-output-reset",
+          accepted_turn_state: "ws-direct-output-reset",
+          client_ip: "127.0.0.1"
+        }
+      })
+
+    first_payload =
+      Jason.encode!(%{
+        "type" => "response.create",
+        "model" => setup.model.exposed_model_id,
+        "input" => [],
+        "stream" => true,
+        "generate" => true
+      })
+
+    assert {:ok, state} = CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, state)
+    assert state.native_turn_output_task_pids == MapSet.new()
+
+    assert {:push, {:text, first_frame}, state} = receive_socket_push(state)
+    assert %{"id" => "resp_websocket_output_reset"} = Jason.decode!(first_frame)
+    assert state.native_turn_output_task_pids == state.tasks
+
+    assert {:ok, state} = receive_socket_done(state, @large_websocket_frame_timeout)
+    assert state.native_turn_output_task_pids == MapSet.new()
+
+    FakeUpstream.set_mode(upstream, FakeUpstream.websocket_sse_then_close([]))
+
+    second_payload =
+      Jason.encode!(%{
+        "type" => "response.create",
+        "model" => setup.model.exposed_model_id,
+        "input" => [],
+        "stream" => true,
+        "generate" => true
+      })
+
+    {error_frame, logs} =
+      capture_native_turn_warning(fn ->
+        assert {:ok, state} =
+                 CodexResponsesSocket.handle_in({second_payload, [opcode: :text]}, state)
+
+        assert state.native_turn_output_task_pids == MapSet.new()
+
+        assert {:push, {:text, error_frame}, state} =
+                 receive_socket_done(state, @large_websocket_frame_timeout)
+
+        assert state.native_turn_output_task_pids == MapSet.new()
+        error_frame
+      end)
+
+    assert %{"type" => "error", "error" => %{"code" => "upstream_request_failed"}} =
+             Jason.decode!(error_frame)
+
+    assert_native_turn_warnings(logs, 1)
+    assert logs =~ "request_id=ws-direct-output-reset"
+    assert logs =~ "error_code=upstream_request_failed"
+    assert logs =~ "reason_code=upstream_request_failed"
+    assert logs =~ "visible_output=before_visible_output"
+    refute logs =~ "phase=receive"
+    refute logs =~ "resp_websocket_output_reset"
+    assert :ok = CodexResponsesSocket.terminate(:closed, state)
+  end
+
+  test "untagged late native chunks do not claim the currently tracked task" do
+    current_task = socket_test_task()
+    on_exit(fn -> send(current_task, :stop) end)
+
+    state = direct_socket_task_state([current_task], "ws-untagged-late-chunk")
+    frame = Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "stale"})
+
+    assert {:push, {:text, ^frame}, state_after_chunk} =
+             CodexResponsesSocket.handle_info({:codex_response_chunk, frame}, state)
+
+    assert state_after_chunk == state
+
+    {_result, logs} =
+      capture_native_turn_warning(fn ->
+        CodexResponsesSocket.handle_info(
+          {:codex_response_done, current_task,
+           {:response_task_result,
+            {:error,
+             %{status: 502, code: "upstream_request_failed", message: "upstream request failed"}},
+            false}},
+          state_after_chunk
+        )
+      end)
+
+    assert_native_turn_warnings(logs, 1)
+    assert logs =~ "request_id=ws-untagged-late-chunk"
+    assert logs =~ "visible_output=before_visible_output"
+  end
+
+  test "one direct task completion does not clear another task's pushed output" do
+    output_task = socket_test_task()
+    silent_task = socket_test_task()
+    on_exit(fn -> send(output_task, :stop) end)
+    on_exit(fn -> send(silent_task, :stop) end)
+
+    state = direct_socket_task_state([output_task, silent_task], "ws-concurrent-direct-output")
+    frame = Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "visible"})
+
+    assert {:push, {:text, ^frame}, state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_chunk, output_task, frame},
+               state
+             )
+
+    assert {:ok, state} =
+             CodexResponsesSocket.handle_info({:codex_response_done, silent_task, :ok}, state)
+
+    {_result, logs} =
+      capture_native_turn_warning(fn ->
+        CodexResponsesSocket.handle_info(
+          {:codex_response_done, output_task,
+           {:response_task_result,
+            {:error,
+             %{status: 502, code: "upstream_request_failed", message: "upstream request failed"}},
+            false}},
+          state
+        )
+      end)
+
+    assert_native_turn_warnings(logs, 1)
+    assert logs =~ "request_id=ws-concurrent-direct-output"
+    assert logs =~ "visible_output=after_visible_output"
   end
 
   test "successful websocket response tasks do not log native turn failures" do
@@ -10017,7 +10172,24 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
   defp assert_native_turn_warnings(logs, expected_count) do
     assert length(Regex.scan(~r/websocket native turn failed/, logs)) == expected_count
-    assert logs =~ "error_code=sha256_"
+  end
+
+  defp direct_socket_task_state(tasks, request_id) do
+    %{
+      opts: websocket_lifecycle_request_options(request_id),
+      tasks: MapSet.new(tasks),
+      task_monitors: %{},
+      queued_response_payloads: :queue.new(),
+      native_turn_output_task_pids: MapSet.new()
+    }
+  end
+
+  defp socket_test_task do
+    spawn(fn ->
+      receive do
+        :stop -> :ok
+      end
+    end)
   end
 
   defp websocket_lifecycle_request_options(request_id, attrs \\ []) when is_binary(request_id) do
@@ -10855,17 +11027,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
   defp receive_socket_push(state, timeout_ms) do
     receive do
+      {:codex_response_chunk, task_pid, frame} ->
+        CodexResponsesSocket.handle_info({:codex_response_chunk, task_pid, frame}, state)
+
       {:codex_response_chunk, frame} ->
         CodexResponsesSocket.handle_info({:codex_response_chunk, frame}, state)
     after
       timeout_ms -> flunk("expected websocket response chunk")
     end
-  end
-
-  defp failure_log_fingerprint(value) when is_binary(value) do
-    "sha256_" <>
-      (:crypto.hash(:sha256, value)
-       |> Base.encode16(case: :lower)
-       |> String.slice(0, 12))
   end
 end

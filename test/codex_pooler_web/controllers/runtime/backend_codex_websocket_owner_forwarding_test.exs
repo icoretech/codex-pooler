@@ -57,11 +57,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.Gateway.Websocket, as: Gateway
+  alias CodexPooler.Gateway.Websocket.Adapter
   alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
@@ -319,6 +321,167 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
+  end
+
+  test "owner-forwarded native failure after accepted data logs visible output" do
+    task_pid = socket_test_task()
+    on_exit(fn -> stop_socket_test_task(task_pid) end)
+
+    state = owner_output_state(task_pid, "ws-owner-output-after-data")
+    downstream = state.websocket_owner_downstream
+    frame = Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "visible"})
+
+    assert {:push, {:text, ^frame}, state} =
+             CodexResponsesSocket.handle_info(
+               owner_frame(downstream, {:data, frame}),
+               state
+             )
+
+    assert state.native_turn_output_task_pids == MapSet.new([task_pid])
+
+    {result, logs} =
+      with_info_log(fn ->
+        CodexResponsesSocket.handle_info(
+          owner_frame(downstream, owner_error_payload(:owner_drained)),
+          state
+        )
+      end)
+
+    assert {:push, {:text, error_frame}, failed_state} = result
+
+    assert %{"type" => "error", "error" => %{"code" => "owner_drained"}} =
+             Jason.decode!(error_frame)
+
+    assert failed_state.native_turn_output_task_pids == MapSet.new()
+    assert_native_owner_turn_log!(logs, "ws-owner-output-after-data", "after_visible_output")
+  end
+
+  test "owner-forwarded native failure before data logs no visible output" do
+    task_pid = socket_test_task()
+    on_exit(fn -> stop_socket_test_task(task_pid) end)
+
+    state = owner_output_state(task_pid, "ws-owner-output-before-data")
+    downstream = state.websocket_owner_downstream
+
+    {result, logs} =
+      with_info_log(fn ->
+        CodexResponsesSocket.handle_info(
+          owner_frame(downstream, owner_error_payload(:owner_drained)),
+          state
+        )
+      end)
+
+    assert {:push, {:text, error_frame}, failed_state} = result
+
+    assert %{"type" => "error", "error" => %{"code" => "owner_drained"}} =
+             Jason.decode!(error_frame)
+
+    assert failed_state.native_turn_output_task_pids == MapSet.new()
+    assert_native_owner_turn_log!(logs, "ws-owner-output-before-data", "before_visible_output")
+  end
+
+  test "owner-forwarded native output state resets before a second turn" do
+    first_task_pid = socket_test_task()
+    second_task_pid = socket_test_task()
+    on_exit(fn -> stop_socket_test_task(first_task_pid) end)
+    on_exit(fn -> stop_socket_test_task(second_task_pid) end)
+
+    state = owner_output_state(first_task_pid, "ws-owner-output-second-turn")
+    downstream = state.websocket_owner_downstream
+    frame = Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "first"})
+
+    assert {:push, {:text, ^frame}, state} =
+             CodexResponsesSocket.handle_info(
+               owner_frame(downstream, {:data, frame}),
+               state
+             )
+
+    assert {:ok, state} =
+             CodexResponsesSocket.handle_info(owner_frame(downstream, :complete), state)
+
+    assert state.native_turn_output_task_pids == MapSet.new()
+
+    state = replace_owner_output_task(state, first_task_pid, second_task_pid)
+
+    {result, logs} =
+      with_info_log(fn ->
+        CodexResponsesSocket.handle_info(
+          owner_frame(downstream, owner_error_payload(:owner_drained)),
+          state
+        )
+      end)
+
+    assert {:push, {:text, _error_frame}, failed_state} = result
+    assert failed_state.native_turn_output_task_pids == MapSet.new()
+    assert_native_owner_turn_log!(logs, "ws-owner-output-second-turn", "before_visible_output")
+  end
+
+  test "owner-forwarded public rate-limit-only data does not commit output" do
+    task_pid = socket_test_task()
+    on_exit(fn -> stop_socket_test_task(task_pid) end)
+
+    state = public_owner_output_state(task_pid, "ws-owner-public-rate-only")
+    downstream = state.websocket_owner_downstream
+
+    rate_limit_frame =
+      Jason.encode!(%{
+        "type" => "codex.rate_limits",
+        "rate_limits" => %{"primary" => %{"used_percent" => 42}}
+      })
+
+    assert {:push, {:text, normalized_frame}, state} =
+             CodexResponsesSocket.handle_info(
+               public_owner_frame(downstream, task_pid, {:data, rate_limit_frame}),
+               state
+             )
+
+    assert %{"type" => "codex.rate_limits"} = Jason.decode!(normalized_frame)
+    refute state.public_turn_output_committed?
+
+    {result, logs} =
+      with_info_log(fn ->
+        CodexResponsesSocket.handle_info(
+          public_owner_frame(
+            downstream,
+            task_pid,
+            owner_error_payload(:upstream_stream_error)
+          ),
+          state
+        )
+      end)
+
+    assert {:push, {:text, _error_frame}, failed_state} = result
+    refute failed_state.public_turn_output_committed?
+    assert_native_owner_turn_log!(logs, "ws-owner-public-rate-only", "before_visible_output")
+  end
+
+  test "late stale owner epoch data cannot commit the active native turn" do
+    task_pid = socket_test_task()
+    on_exit(fn -> stop_socket_test_task(task_pid) end)
+
+    state = owner_output_state(task_pid, "ws-owner-output-stale-epoch", 2)
+    active_downstream = state.websocket_owner_downstream
+    stale_downstream = %{active_downstream | epoch: 1}
+    stale_frame = Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "stale"})
+
+    assert {:ok, ^state} =
+             CodexResponsesSocket.handle_info(
+               owner_frame(stale_downstream, {:data, stale_frame}),
+               state
+             )
+
+    {result, logs} =
+      with_info_log(fn ->
+        CodexResponsesSocket.handle_info(
+          owner_frame(active_downstream, owner_error_payload(:owner_drained)),
+          state
+        )
+      end)
+
+    assert {:push, {:text, _error_frame}, failed_state} = result
+    assert failed_state.native_turn_output_task_pids == MapSet.new()
+    assert_native_owner_turn_log!(logs, "ws-owner-output-stale-epoch", "before_visible_output")
+    refute logs =~ "delta=stale"
   end
 
   test "owner-forwarded websocket reasoning denial cannot bypass pre-dispatch policy" do
@@ -1827,9 +1990,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                  state
                )
 
-      assert {:ok, state} = receive_socket_done(state)
-      assert {:push, {:text, failed_frame}, _state} = receive_socket_push(state)
+      assert {:push, {:text, failed_frame}, state} = receive_socket_push(state)
       assert %{"type" => "response.failed"} = Jason.decode!(failed_frame)
+      assert {:ok, _state} = receive_socket_done(state)
 
       assert FakeUpstream.count(pinned_upstream) == 2
       assert FakeUpstream.count(fallback_upstream) == 0
@@ -2548,7 +2711,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         })
 
       {_state, logs} =
-        with_log([level: :warning], fn ->
+        with_info_log(fn ->
           assert {:ok, state} =
                    CodexResponsesSocket.handle_in({continuation_payload, [opcode: :text]}, state)
 
@@ -2561,6 +2724,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           state
         end)
 
+      assert logs =~ "websocket owner retarget alias miss"
+      assert logs =~ "alias_kind=previous_response_id"
+      assert logs =~ "outcome=current_runtime"
+      assert logs =~ "request_id=ws-owner-reused-alias-miss"
+      assert logs =~ "codex_session_id=#{state.codex_session.id}"
+      assert logs =~ "owner_instance_id=#{state.codex_session.owner_instance_id}"
+      assert logs =~ "proxy_instance_id=#{node()}"
+      refute logs =~ previous_response_id
       refute logs =~ "owner_unavailable"
       refute logs =~ "status=503"
       assert_no_leak!("reused alias miss logs", logs)
@@ -5257,8 +5428,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert line =~ "endpoint=#{expected_endpoint}"
     assert line =~ "transport=websocket"
     assert line =~ "route_class=proxy_websocket"
-    assert line =~ "codex_session_id=#{String.slice(session.id, 0, 8)}"
-    refute line =~ session.id
+    assert line =~ "codex_session_id=#{session.id}"
     assert line =~ "owner_instance_id=#{expected_owner_instance_id}"
     assert line =~ "proxy_instance_id=#{expected_proxy_instance_id}"
 
@@ -6823,6 +6993,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
+  defp with_info_log(fun) when is_function(fun, 0) do
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+
+    try do
+      with_log([level: :info], fun)
+    after
+      Logger.configure(level: previous_level)
+    end
+  end
+
   defp capture_websocket_lifecycle_log(fun) when is_function(fun, 0) do
     previous_level = Logger.level()
     Logger.configure(level: :info)
@@ -6869,6 +7050,84 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           Map.new(extra_opts)
         )
     })
+  end
+
+  defp owner_output_state(task_pid, request_id, epoch \\ 1) when is_pid(task_pid) do
+    downstream = %{pid: self(), epoch: epoch, correlation_id: "correlation-#{request_id}"}
+
+    %{
+      opts: %{request_id: request_id},
+      tasks: MapSet.new([task_pid]),
+      task_monitors: %{},
+      queued_response_payloads: :queue.new(),
+      native_turn_output_task_pids: MapSet.new(),
+      websocket_owner_downstream: downstream,
+      websocket_owner_drain_observed?: false,
+      websocket_owner_active_turn_reconnect?: false,
+      connection_started_at_monotonic_ms: System.monotonic_time(:millisecond)
+    }
+  end
+
+  defp public_owner_output_state(task_pid, request_id) when is_pid(task_pid) do
+    task_pid
+    |> owner_output_state(request_id)
+    |> Map.put(:opts, public_owner_request_options(request_id))
+    |> Map.put(:public_response_task_pid, task_pid)
+    |> Map.put(
+      :public_responses_websocket_state,
+      Adapter.public_responses_turn_state()
+    )
+    |> Map.put(:public_turn_task_done?, false)
+    |> Map.put(:public_turn_owner_complete?, false)
+    |> Map.put(:public_turn_aborted?, false)
+    |> Map.put(:public_turn_output_committed?, false)
+  end
+
+  defp public_owner_request_options(request_id) do
+    %{request_id: request_id}
+    |> RequestOptions.for_websocket()
+    |> RequestOptions.put_openai_compatibility(public_openai_responses_stream: true)
+  end
+
+  defp replace_owner_output_task(state, previous_task_pid, next_task_pid) do
+    state
+    |> Map.put(:tasks, MapSet.new([next_task_pid]))
+    |> Map.put(:task_monitors, %{})
+    |> Map.update!(:native_turn_output_task_pids, &MapSet.delete(&1, previous_task_pid))
+  end
+
+  defp owner_frame(downstream, payload) do
+    {:websocket_owner_frame, downstream.correlation_id, downstream.epoch, payload}
+  end
+
+  defp public_owner_frame(downstream, owner_turn_id, payload) do
+    {:websocket_owner_frame, downstream.correlation_id, downstream.epoch, owner_turn_id, payload}
+  end
+
+  defp owner_error_payload(reason) do
+    assert {:ok, payload} =
+             WebsocketOwnerContract.safe_error_payload(reason, nil)
+
+    {:error, reason, payload}
+  end
+
+  defp assert_native_owner_turn_log!(logs, request_id, visible_output) do
+    assert length(Regex.scan(~r/websocket native turn failed/, logs)) == 1
+    assert logs =~ "request_id=#{request_id}"
+    assert logs =~ "visible_output=#{visible_output}"
+    refute logs =~ "phase=receive"
+  end
+
+  defp socket_test_task do
+    spawn(fn ->
+      receive do
+        :stop -> :ok
+      end
+    end)
+  end
+
+  defp stop_socket_test_task(task_pid) when is_pid(task_pid) do
+    if Process.alive?(task_pid), do: send(task_pid, :stop)
   end
 
   defp owner_lifecycle_request_options(request_id, turn_state, extra_opts \\ []) do

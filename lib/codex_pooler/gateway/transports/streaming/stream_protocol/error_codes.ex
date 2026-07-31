@@ -10,6 +10,41 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
     "websocket_connection_limit_reached"
   ]
   @websocket_auth_refresh_event_codes ["invalid_api_key", "invalid_authentication"]
+  @previous_response_miss_codes [
+    "previous_response_not_found",
+    "invalid_previous_response_id"
+  ]
+  @stream_incomplete_code "stream_incomplete"
+  @previous_response_not_found_code "previous_response_not_found"
+  @server_error_code "server_error"
+  @rate_limit_exceeded_code "rate_limit_exceeded"
+  @terminal_default_code "upstream_websocket_terminal_failure"
+  @upstream_request_failed_code "upstream_request_failed"
+  @websocket_request_failed_code "websocket_request_failed"
+
+  @known_error_codes Enum.uniq(
+                       @retryable_first_event_codes ++
+                         @websocket_auth_refresh_event_codes ++
+                         @previous_response_miss_codes ++
+                         [
+                           @stream_incomplete_code,
+                           @previous_response_not_found_code,
+                           @server_error_code,
+                           @rate_limit_exceeded_code,
+                           @terminal_default_code,
+                           @upstream_request_failed_code,
+                           @websocket_request_failed_code
+                         ]
+                     )
+
+  @spec known_error_codes() :: [String.t()]
+  def known_error_codes, do: @known_error_codes
+
+  @spec upstream_request_failed_code() :: String.t()
+  def upstream_request_failed_code, do: @upstream_request_failed_code
+
+  @spec websocket_request_failed_code() :: String.t()
+  def websocket_request_failed_code, do: @websocket_request_failed_code
 
   @spec terminal_error_code(binary(), String.t() | nil) :: String.t()
   def terminal_error_code(body, terminal) do
@@ -22,12 +57,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
         {:ok, decoded} -> error_code_from_decoded(decoded)
         {:error, _error} -> nil
       end
-    end) || terminal || "upstream_websocket_terminal_failure"
+    end) || terminal || @terminal_default_code
   end
 
   @spec client_visible_error_code(String.t() | nil) :: String.t() | nil
-  def client_visible_error_code("previous_response_not_found"), do: "stream_incomplete"
-  def client_visible_error_code("invalid_previous_response_id"), do: "stream_incomplete"
+  def client_visible_error_code(code) when code in @previous_response_miss_codes,
+    do: @stream_incomplete_code
+
   def client_visible_error_code(code), do: code
 
   @spec upstream_error_code(map()) :: String.t() | nil
@@ -66,8 +102,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
       previous_response_miss_code?(semantic_code) ->
         semantic_code
 
-      previous_response_id_param?(error) and explicit_code == "stream_incomplete" ->
-        "previous_response_not_found"
+      previous_response_id_param?(error) and explicit_code == @stream_incomplete_code ->
+        @previous_response_not_found_code
 
       true ->
         useful_error_code(explicit_code) || useful_error_code(explicit_type) || semantic_code
@@ -92,9 +128,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
   def websocket_auth_refresh_event_code?(_code), do: false
 
   @spec previous_response_miss_code?(String.t() | nil) :: boolean()
-  def previous_response_miss_code?(code)
-      when code in ["previous_response_not_found", "invalid_previous_response_id"],
-      do: true
+  def previous_response_miss_code?(code) when code in @previous_response_miss_codes, do: true
 
   def previous_response_miss_code?(_code), do: false
 
@@ -167,9 +201,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
   defp wrapped_error_envelope_code(_decoded), do: nil
 
   defp status_error_code(status) when is_integer(status) and status >= 500 and status <= 599,
-    do: "server_error"
+    do: @server_error_code
 
-  defp status_error_code(429), do: "rate_limit_exceeded"
+  defp status_error_code(429), do: @rate_limit_exceeded_code
   defp status_error_code(_status), do: nil
 
   defp decoded_status(decoded) do
@@ -194,14 +228,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes do
        when is_binary(message) do
     if String.contains?(message, "Previous response with id") or
          String.contains?(message, "previous_response_id") do
-      "previous_response_not_found"
+      @previous_response_not_found_code
     end
   end
 
   defp websocket_error_code_from_error(%{"message" => message}) when is_binary(message) do
     if String.contains?(message, "Previous response with id") or
          String.contains?(message, "previous_response_id") do
-      "previous_response_not_found"
+      @previous_response_not_found_code
     end
   end
 

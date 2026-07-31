@@ -1336,6 +1336,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
 
   def receive_socket_push(state) do
     receive do
+      {:codex_response_chunk, task_pid, frame} ->
+        CodexResponsesSocket.handle_info({:codex_response_chunk, task_pid, frame}, state)
+
       {:codex_response_chunk, frame} ->
         CodexResponsesSocket.handle_info({:codex_response_chunk, frame}, state)
     after

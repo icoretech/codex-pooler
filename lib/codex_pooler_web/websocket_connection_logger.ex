@@ -3,6 +3,8 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
 
   require Logger
 
+  alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
+
   @init_failed_message "websocket init failed before request reservation"
   @closed_message "websocket closed before request reservation"
   @failed_native_websocket_turn_message "websocket native turn failed"
@@ -16,29 +18,13 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
     :error_code,
     :phase,
     :reason_class,
+    :reason_code,
     :elapsed_ms,
     :codex_session_id,
     :visible_output,
     :owner_instance_id,
     :proxy_instance_id,
     :downstream_epoch
-  ]
-
-  @id_prefix_length 8
-  @failure_identifier_hash_length 12
-
-  @sensitive_value_patterns [
-    "auth.json",
-    "authorization",
-    "bearer",
-    "cookie",
-    "header",
-    "idempotency",
-    "payload",
-    "prompt",
-    "raw_request_body",
-    "upstream_body",
-    "websocket_frame"
   ]
 
   @type event_metadata :: keyword() | map()
@@ -64,7 +50,10 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
 
   @spec log_failed_native_websocket_turn(event_metadata(), term()) :: :ok
   def log_failed_native_websocket_turn(metadata, reason) do
-    metadata = normalize_metadata(metadata)
+    metadata =
+      metadata
+      |> normalize_metadata()
+      |> put_native_reason_code(reason)
 
     log_event(
       failed_native_websocket_turn_level(metadata_value(metadata, :error_code)),
@@ -142,77 +131,48 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
 
   defp failure_log_metadata(metadata) do
     metadata
-    |> replace_failure_identifier(:request_id)
-    |> replace_failure_identifier(:error_code)
+    |> replace_failure_correlator(:request_id)
+    |> replace_failure_code(:error_code)
   end
 
-  defp replace_failure_identifier(metadata, key) do
+  defp replace_failure_correlator(metadata, key) do
     value = metadata_value(metadata, key)
+    metadata = Map.delete(metadata, Atom.to_string(key))
+    Map.put(metadata, key, DiagnosticTaxonomy.safe_correlator(value))
+  end
 
+  defp replace_failure_code(metadata, key) do
+    value = metadata_value(metadata, key)
     metadata = Map.delete(metadata, Atom.to_string(key))
 
-    case failure_identifier(value) do
+    case DiagnosticTaxonomy.identifier(value) do
       nil -> Map.delete(metadata, key)
       identifier -> Map.put(metadata, key, identifier)
     end
   end
 
-  defp failure_identifier(value) when is_binary(value) do
-    "sha256_" <>
-      (:crypto.hash(:sha256, value)
-       |> Base.encode16(case: :lower)
-       |> String.slice(0, @failure_identifier_hash_length))
+  defp put_native_reason_code(metadata, reason) do
+    metadata =
+      metadata
+      |> Map.delete(:reason_code)
+      |> Map.delete("reason_code")
+
+    case DiagnosticTaxonomy.reason_code(reason) do
+      nil -> metadata
+      reason_code -> Map.put(metadata, :reason_code, reason_code)
+    end
   end
 
-  defp failure_identifier(value) when is_atom(value), do: Atom.to_string(value)
-  defp failure_identifier(_value), do: nil
-
-  defp safe_log_value(:codex_session_id, value), do: safe_id_prefix(value)
   defp safe_log_value(_key, value), do: safe_log_value(value)
 
   defp safe_log_value(value) when is_atom(value),
-    do: value |> Atom.to_string() |> safe_binary_value()
+    do: value |> Atom.to_string() |> DiagnosticTaxonomy.safe_correlator()
 
   defp safe_log_value(value) when is_integer(value), do: Integer.to_string(value)
 
   defp safe_log_value(value) when is_binary(value) do
-    safe_binary_value(value)
+    DiagnosticTaxonomy.safe_correlator(value)
   end
 
   defp safe_log_value(_value), do: "unknown"
-
-  defp safe_id_prefix(value) when is_binary(value) do
-    case safe_binary_value(value) do
-      "redacted" -> "redacted"
-      "unknown" -> "unknown"
-      sanitized -> String.slice(sanitized, 0, @id_prefix_length)
-    end
-  end
-
-  defp safe_id_prefix(_value), do: "unknown"
-
-  defp safe_binary_value(value) when is_binary(value) do
-    if sensitive_value?(value) do
-      "redacted"
-    else
-      value
-      |> sanitize_binary_value()
-      |> case do
-        "" -> "unknown"
-        sanitized -> sanitized
-      end
-    end
-  end
-
-  defp sanitize_binary_value(value) do
-    value
-    |> String.replace(~r/[^a-zA-Z0-9_.:-]+/, "_")
-    |> String.slice(0, 120)
-  end
-
-  defp sensitive_value?(value) do
-    normalized = String.downcase(value)
-
-    Enum.any?(@sensitive_value_patterns, &String.contains?(normalized, &1))
-  end
 end
