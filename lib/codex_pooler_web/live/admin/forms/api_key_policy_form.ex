@@ -604,5 +604,5 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
   end
 
   defp canonicalize_service_tier(value) when is_binary(value), do: ServiceTier.canonicalize(value)
-  defp canonicalize_service_tier(value), do: blank_to_nil(value)
+  defp canonicalize_service_tier(value), do: value
 end

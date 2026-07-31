@@ -139,7 +139,10 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLivePolicyTest do
     assert {:error, :api_key_disabled} = Access.normalize_api_key_policy(edited)
   end
 
-  test "service tier form retains one canonical Fast/Priority option" do
+  test "service tier form retains one canonical Fast/Priority option and preserves invalid types",
+       %{
+         scope: scope
+       } do
     options = ApiKeyPolicyForm.service_tier_options()
 
     assert Enum.count(options, fn {_label, value} -> value == "priority" end) == 1
@@ -152,8 +155,24 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLivePolicyTest do
     assert %{enforced_service_tier: "latency_preview"} =
              ApiKeyPolicyForm.attrs(%{"enforced_service_tier" => "latency_preview"})
 
-    assert %{enforced_service_tier: "123"} =
-             ApiKeyPolicyForm.attrs(%{"enforced_service_tier" => 123})
+    Enum.each([:fast, [:fast], %{tier: "fast"}, {"fast", :tier}, 123], fn invalid_tier ->
+      attrs = ApiKeyPolicyForm.attrs(%{"enforced_service_tier" => invalid_tier})
+
+      assert attrs.enforced_service_tier == invalid_tier
+
+      {:ok, pool} =
+        Pools.create_pool(scope, %{
+          slug: "invalid-tier-#{System.unique_integer([:positive])}",
+          name: "Invalid tier"
+        })
+
+      assert {:error, %{code: :invalid_policy, message: "enforced_service_tier is invalid"}} =
+               Access.create_api_key(
+                 scope,
+                 pool,
+                 Map.put(attrs, :display_name, "Invalid tier key")
+               )
+    end)
   end
 
   test "reasoning policy modes create, edit, clear stale values, and survive remount", %{
