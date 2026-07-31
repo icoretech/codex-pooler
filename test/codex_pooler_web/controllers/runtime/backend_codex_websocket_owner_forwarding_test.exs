@@ -1971,10 +1971,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     refute logs =~ "banana"
     refute logs =~ "websocket response task failed"
 
-    # Both containment boundaries announce themselves with a bounded shape label
-    # instead of silently masquerading as a real owner crash.
-    assert logs =~ "websocket owner reply malformed boundary=submit missing=not_a_map"
-    assert logs =~ "websocket owner reply malformed boundary=detach"
+    # Both containment boundaries announce themselves under the same classifying
+    # key instead of silently masquerading as a real owner crash, so one query
+    # finds both.
+    assert logs =~
+             "websocket owner reply malformed boundary=submit " <>
+               "reply_shape=not_a_map missing=not_a_map"
+
+    assert logs =~
+             "websocket owner reply malformed boundary=detach " <>
+               "reply_shape=ok_tuple_with_value canonical_error=owner_crashed"
 
     assert [request] = request_logs(setup.pool.id)
     assert request.status == "failed"

@@ -591,7 +591,11 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
                    {:error, %{body: "", reason: :owner_crashed, headers: [], started: false}}
         end)
 
+      expected_shape =
+        if expected_missing_fields == "not_a_map", do: "not_a_map", else: "map_missing_fields"
+
       assert logs =~ "websocket owner reply malformed boundary=submit"
+      assert logs =~ "reply_shape=#{expected_shape} "
       assert logs =~ "missing=#{expected_missing_fields} "
       assert logs =~ "canonical_error=owner_crashed"
       refute logs =~ "banana"
