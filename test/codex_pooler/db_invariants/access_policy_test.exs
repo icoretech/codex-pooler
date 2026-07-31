@@ -132,6 +132,18 @@ defmodule CodexPooler.DBInvariants.AccessPolicyTest do
       )
     end)
 
+    assert_db_constraint("api_keys_enforced_service_tier_check", fn ->
+      Repo.query!(
+        """
+        INSERT INTO api_keys (
+          pool_id, display_name, key_prefix, key_hash, status, created_by_user_id,
+          enforced_service_tier
+        ) VALUES ($1, 'Raw fast service tier', 'sk_policy_raw_fast_tier', $2, 'active', $3, 'fast')
+        """,
+        [pool_id, <<"policy-raw-fast-tier">>, user_id]
+      )
+    end)
+
     api_key_id = create_api_key!(pool_id, user_id, "sk_policy_binding_weekly")
 
     assert_db_error(:check_violation, fn ->

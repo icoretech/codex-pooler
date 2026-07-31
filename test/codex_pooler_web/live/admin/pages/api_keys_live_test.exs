@@ -175,7 +175,27 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
     assert has_element?(view, "#api_key_enforced_service_tier")
     assert has_element?(view, "#api_key_enforced_service_tier option", "Leave unchanged")
     assert has_element?(view, "#api_key_enforced_service_tier option", "Auto - upstream chooses")
+
+    assert has_element?(
+             view,
+             "#api_key_enforced_service_tier option[value='priority']",
+             "Fast/Priority mode"
+           )
+
+    service_tier_options =
+      view
+      |> element("#api_key_enforced_service_tier")
+      |> render()
+      |> then(&Regex.scan(~r/<option\b[^>]*>/, &1))
+
+    assert 1 ==
+             Enum.count(service_tier_options, fn [option] ->
+               String.contains?(option, "value=\"priority\"")
+             end)
+
     assert has_element?(view, "#api_key_enforced_service_tier option", "Scale - scale capacity")
+
+    refute has_element?(view, "#api_key_enforced_service_tier option[value='fast']")
     refute has_element?(view, "#api_key_enforced_service_tier option[value='ultrafast']")
 
     select_api_key_section(view, :limits)

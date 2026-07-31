@@ -10,6 +10,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLivePolicyTest do
   alias CodexPooler.Catalog.SyncRun
   alias CodexPooler.Pools
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.Admin.ApiKeyPolicyForm
 
   setup :register_and_log_in_user
 
@@ -77,7 +78,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLivePolicyTest do
           "enforced_model_identifier" => "custom/manual-test-model",
           "enforced_reasoning_effort" => "none",
           "reasoning_policy_mode" => "always_use",
-          "enforced_service_tier" => "priority",
+          "enforced_service_tier" => "fast",
           "default_max_tokens_per_week" => "100000",
           "operator_notes" => "limited rollout"
         }
@@ -97,6 +98,11 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLivePolicyTest do
     assert policy.enforced_model_identifier == "custom/manual-test-model"
     assert policy.enforced_reasoning_effort == "none"
     assert policy.enforced_service_tier == "priority"
+
+    assert {:ok, authorized_policy} =
+             Access.authorize_api_key_policy(policy, %{model: "GPT-ALLOWED"})
+
+    assert authorized_policy.enforced_service_tier == "priority"
 
     assert %APIKeyPolicyBinding{max_tokens_per_week: 100_000} =
              Repo.get_by!(APIKeyPolicyBinding, api_key_id: api_key.id, binding_scope: "default")
@@ -131,6 +137,23 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLivePolicyTest do
     assert edited.status == "paused"
     assert edited.allowed_model_identifiers == nil
     assert {:error, :api_key_disabled} = Access.normalize_api_key_policy(edited)
+  end
+
+  test "service tier form retains one canonical Fast/Priority option" do
+    options = ApiKeyPolicyForm.service_tier_options()
+
+    assert Enum.count(options, fn {_label, value} -> value == "priority" end) == 1
+    assert {"Fast/Priority mode", "priority"} in options
+    refute Enum.any?(options, fn {_label, value} -> value == "fast" end)
+
+    assert %{enforced_service_tier: "priority"} =
+             ApiKeyPolicyForm.attrs(%{"enforced_service_tier" => "fast"})
+
+    assert %{enforced_service_tier: "latency_preview"} =
+             ApiKeyPolicyForm.attrs(%{"enforced_service_tier" => "latency_preview"})
+
+    assert %{enforced_service_tier: "123"} =
+             ApiKeyPolicyForm.attrs(%{"enforced_service_tier" => 123})
   end
 
   test "reasoning policy modes create, edit, clear stale values, and survive remount", %{

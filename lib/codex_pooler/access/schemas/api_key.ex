@@ -4,6 +4,8 @@ defmodule CodexPooler.Access.APIKey do
 
   import Ecto.Changeset
 
+  alias CodexPooler.ServiceTier
+
   @derive {Inspect, except: [:key_hash]}
   @reasoning_efforts ~w(none minimal low medium high xhigh max ultra)
   @service_tiers ~w(auto default flex priority scale)
@@ -61,6 +63,7 @@ defmodule CodexPooler.Access.APIKey do
     |> update_change(:display_name, &String.trim/1)
     |> update_change(:allowed_model_identifiers, &normalize_model_identifiers/1)
     |> update_change(:enforced_model_identifier, &normalize_model_identifier/1)
+    |> update_change(:enforced_service_tier, &canonicalize_service_tier/1)
     |> update_change(:metadata, &normalize_metadata/1)
     |> validate_required([
       :pool_id,
@@ -110,6 +113,13 @@ defmodule CodexPooler.Access.APIKey do
   end
 
   defp normalize_model_identifier(value), do: value
+
+  defp canonicalize_service_tier(nil), do: nil
+
+  defp canonicalize_service_tier(value) when is_binary(value),
+    do: ServiceTier.canonicalize(value) || value
+
+  defp canonicalize_service_tier(value), do: value
 
   defp normalize_metadata(metadata) when is_map(metadata), do: metadata
   defp normalize_metadata(_metadata), do: %{}

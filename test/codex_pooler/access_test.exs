@@ -5,6 +5,7 @@ defmodule CodexPooler.AccessTest do
   alias CodexPooler.Access.{APIKey, APIKeyPolicyBinding}
   alias CodexPooler.Access.APIKeys.TouchDebounce
   alias CodexPooler.Accounts.Scope
+  alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Pools
   alias CodexPooler.Repo
 
@@ -646,6 +647,48 @@ defmodule CodexPooler.AccessTest do
                Access.normalize_api_key_policy(%{enforced_reasoning_effort: " Ultra "})
 
       assert policy.enforced_reasoning_effort == "ultra"
+    end
+
+    @tag :api_key_policy_contract
+    test "canonicalizes fast service tiers before persistence and authorization" do
+      {scope, pool} = owner_scope_and_pool()
+
+      assert {:ok, %{api_key: api_key, raw_key: raw_key}} =
+               Access.create_api_key(scope, pool, %{
+                 display_name: "Fast service tier key",
+                 enforced_service_tier: " FAST "
+               })
+
+      persisted = Repo.get!(APIKey, api_key.id)
+      assert persisted.enforced_service_tier == "priority"
+
+      assert {:ok, policy} = Access.normalize_api_key_policy(persisted)
+      assert policy.enforced_service_tier == "priority"
+
+      assert {:ok, authorized_policy} =
+               Access.authorize_api_key_policy(policy, %{model: "any-model"})
+
+      assert authorized_policy.enforced_service_tier == "priority"
+
+      assert {:ok, %{api_key: updated}} =
+               Access.update_api_key_with_policy(scope, api_key, %{
+                 enforced_service_tier: "fast"
+               })
+
+      assert updated.enforced_service_tier == "priority"
+      assert Repo.get!(APIKey, api_key.id).enforced_service_tier == "priority"
+
+      for tier <- ["latency_preview", 123] do
+        assert {:error, %{code: :invalid_policy, message: "enforced_service_tier is invalid"}} =
+                 Access.create_api_key(scope, pool, %{
+                   display_name: "Invalid service tier #{inspect(tier)}",
+                   enforced_service_tier: tier
+                 })
+      end
+
+      assert audit = Repo.get_by(AuditEvent, action: "api_key.create", target_id: api_key.id)
+      assert audit.details["enforced_service_tier"] == "priority"
+      refute inspect(audit.details) =~ raw_key
     end
 
     @tag :api_key_policy_contract

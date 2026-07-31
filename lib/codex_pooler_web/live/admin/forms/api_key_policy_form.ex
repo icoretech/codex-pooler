@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Access.APIKeyPolicyBinding
   alias CodexPooler.Pools.Pool
+  alias CodexPooler.ServiceTier
 
   @type params :: %{String.t() => term()}
   @type attrs :: %{atom() => term()}
@@ -112,7 +113,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       enforced_model_identifier: blank_to_nil(params["enforced_model_identifier"]),
       enforced_reasoning_effort: reasoning_effort_attrs.enforced_reasoning_effort,
       maximum_reasoning_effort: reasoning_effort_attrs.maximum_reasoning_effort,
-      enforced_service_tier: blank_to_nil(params["enforced_service_tier"]),
+      enforced_service_tier: canonicalize_service_tier(params["enforced_service_tier"]),
       default_policy: default_policy_attrs(params),
       model_policies: model_policy_attrs(params),
       metadata: %{
@@ -173,7 +174,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
       {"Auto - upstream chooses", "auto"},
       {"Default - standard capacity", "default"},
       {"Flex - flexible capacity", "flex"},
-      {"Priority - fast responses", "priority"},
+      {"Fast/Priority mode", "priority"},
       {"Scale - scale capacity", "scale"}
     ]
   end
@@ -601,4 +602,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPolicyForm do
     value = String.trim(to_string(value))
     if value == "", do: nil, else: value
   end
+
+  defp canonicalize_service_tier(value) when is_binary(value), do: ServiceTier.canonicalize(value)
+  defp canonicalize_service_tier(value), do: blank_to_nil(value)
 end

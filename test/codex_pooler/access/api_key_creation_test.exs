@@ -496,6 +496,36 @@ defmodule CodexPooler.Access.APIKeyCreationTest do
 
       assert valid_api_key_changeset.valid?
 
+      priority_api_key_changeset =
+        APIKey.changeset(%APIKey{}, %{
+          pool_id: Ecto.UUID.generate(),
+          display_name: "Priority policy key",
+          key_prefix: "sk_typed_policy_priority",
+          key_hash: <<"typed-policy-priority">>,
+          status: "active",
+          enforced_service_tier: "priority"
+        })
+
+      assert priority_api_key_changeset.valid?
+
+      assert Ecto.Changeset.get_change(priority_api_key_changeset, :enforced_service_tier) ==
+               "priority"
+
+      fast_api_key_changeset =
+        APIKey.changeset(%APIKey{}, %{
+          pool_id: Ecto.UUID.generate(),
+          display_name: "Fast policy key",
+          key_prefix: "sk_typed_policy_fast",
+          key_hash: <<"typed-policy-fast">>,
+          status: "active",
+          enforced_service_tier: " FAST "
+        })
+
+      assert fast_api_key_changeset.valid?
+
+      assert Ecto.Changeset.get_change(fast_api_key_changeset, :enforced_service_tier) ==
+               "priority"
+
       none_reasoning_api_key_changeset =
         APIKey.changeset(%APIKey{}, %{
           pool_id: Ecto.UUID.generate(),
@@ -563,6 +593,21 @@ defmodule CodexPooler.Access.APIKeyCreationTest do
 
       refute ultrafast_api_key_changeset.valid?
       assert "is invalid" in errors_on(ultrafast_api_key_changeset).enforced_service_tier
+
+      blank_service_tier_changeset =
+        APIKey.changeset(%APIKey{}, %{
+          pool_id: Ecto.UUID.generate(),
+          display_name: "Blank service tier policy key",
+          key_prefix: "sk_typed_policy_blank_service_tier",
+          key_hash: <<"typed-policy-blank-service-tier">>,
+          status: "active",
+          enforced_service_tier: " "
+        })
+
+      assert blank_service_tier_changeset.valid?
+
+      assert Ecto.Changeset.get_change(blank_service_tier_changeset, :enforced_service_tier) ==
+               nil
 
       binding_changeset =
         APIKeyPolicyBinding.changeset(%APIKeyPolicyBinding{}, %{

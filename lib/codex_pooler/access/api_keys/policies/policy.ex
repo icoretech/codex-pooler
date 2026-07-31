@@ -3,6 +3,7 @@ defmodule CodexPooler.Access.APIKeys.Policy do
 
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounts.Scope
+  alias CodexPooler.ServiceTier
 
   @status_active "active"
   @status_paused "paused"
@@ -301,11 +302,16 @@ defmodule CodexPooler.Access.APIKeys.Policy do
 
   defp normalize_enforced_service_tier(attrs) do
     normalize_enforced_enum(
-      input(attrs, [:enforced_service_tier, "enforced_service_tier"]),
+      attrs
+      |> input([:enforced_service_tier, "enforced_service_tier"])
+      |> canonicalize_service_tier(),
       @service_tiers,
       "enforced_service_tier is invalid"
     )
   end
+
+  defp canonicalize_service_tier(value) when is_binary(value), do: ServiceTier.canonicalize(value)
+  defp canonicalize_service_tier(value), do: value
 
   defp normalize_enforced_enum(nil, _allowed, _message), do: {:ok, nil}
 
