@@ -11,7 +11,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway, as: RuntimeGateway
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Persistence.{BridgeSessionAlias, CodexSession}
+  alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, BridgeSessionAlias, CodexSession}
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
@@ -22,6 +22,61 @@ defmodule CodexPooler.Gateway.WebsocketTest do
 
   @websocket_frame_timeout 1_000
   @supported_compression_model "gpt-4o"
+
+  defmodule StaleOwnerAttachmentNodeClient do
+    @moduledoc false
+
+    import Ecto.Query
+
+    @behaviour CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder.NodeClient
+
+    alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession}
+    alias CodexPooler.Repo
+
+    @remote_node :"codex_pooler@stale-owner.example"
+
+    @impl true
+    def connected_app_nodes, do: [@remote_node]
+
+    @impl true
+    def app_node?(node), do: node == @remote_node
+
+    @impl true
+    def call_owner(
+          _node,
+          _module,
+          :remote_attach_downstream,
+          [codex_session_id | _args],
+          _timeout
+        ) do
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      replacement_token = Ecto.UUID.generate()
+      expires_at = DateTime.add(now, 90, :second)
+
+      CodexSession
+      |> Repo.get!(codex_session_id)
+      |> Ecto.Changeset.change(%{
+        owner_lease_token: replacement_token,
+        owner_lease_expires_at: expires_at,
+        last_heartbeat_at: now,
+        updated_at: now
+      })
+      |> Repo.update!()
+
+      BridgeOwnerLease
+      |> where([lease], lease.codex_session_id == ^codex_session_id and lease.status == "active")
+      |> Repo.one!()
+      |> Ecto.Changeset.change(%{
+        lease_token: replacement_token,
+        renewed_at: now,
+        expires_at: expires_at,
+        updated_at: now
+      })
+      |> Repo.update!()
+
+      {:error, :stale_owner}
+    end
+  end
 
   test "owner forwarding keeps the rolling RPC argument shapes" do
     downstream = %{
@@ -179,7 +234,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       owner_pid = owner_pid!(current_runtime.codex_session.id)
       owner_state_before = :sys.get_state(owner_pid)
 
-      assert {:error, :owner_unavailable} =
+      assert {:ok, ^current_runtime} =
                Gateway.retarget_websocket_owner_runtime(auth, current_runtime, %{
                  "type" => "response.create",
                  "previous_response_id" => previous_response_id("guessed-precedence"),
@@ -188,7 +243,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
 
       assert :sys.get_state(owner_pid) == owner_state_before
       assert {:ok, ^owner_pid} = WebsocketOwnerSession.lookup(current_runtime.codex_session.id)
-      assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(target_session.id)
+      assert_owner_not_started!(target_session.id)
 
       previous_response_id = previous_response_id("valid-precedence")
 
@@ -206,22 +261,156 @@ defmodule CodexPooler.Gateway.WebsocketTest do
                })
     end
 
-    test "refuses guessed aliases with a sanitized owner error and preserves current runtime", %{
+    test "treats guessed aliases as cache misses and preserves the current owner runtime", %{
       auth: auth
     } do
       {:ok, runtime} = owner_runtime(auth, "owner-runtime-refusal")
       owner_pid = owner_pid!(runtime.codex_session.id)
       owner_state_before = :sys.get_state(owner_pid)
+      owner_session_ids = local_owner_session_ids()
 
-      assert {:error, :owner_unavailable} =
+      assert {:ok, returned_runtime} =
                Gateway.retarget_websocket_owner_runtime(auth, runtime, %{
                  "type" => "response.create",
                  "previous_response_id" => previous_response_id("guessed")
                })
 
-      assert ^runtime = runtime
+      assert_runtime_unchanged!(runtime, returned_runtime)
       assert :sys.get_state(owner_pid) == owner_state_before
       assert {:ok, ^owner_pid} = WebsocketOwnerSession.lookup(runtime.codex_session.id)
+      assert local_owner_session_ids() == owner_session_ids
+    end
+
+    test "treats expired aliases as cache misses without starting the expired target owner", %{
+      api_key: api_key,
+      auth: auth
+    } do
+      {:ok, runtime} = owner_runtime(auth, "owner-runtime-expired-current")
+
+      {:ok, target_session} =
+        Gateway.start_codex_session(auth, owner_opts("owner-runtime-expired"))
+
+      previous_response_id = previous_response_id("expired")
+
+      register_previous_response_alias!(target_session, api_key, previous_response_id,
+        expires_at: DateTime.add(DateTime.utc_now(), -1, :second)
+      )
+
+      assert_alias_miss_keeps_runtime!(auth, runtime, previous_response_id, target_session.id)
+    end
+
+    test "treats aliases from another Pool as cache misses without starting the foreign owner", %{
+      auth: auth
+    } do
+      {:ok, runtime} = owner_runtime(auth, "owner-runtime-other-pool-current")
+      other_key = active_api_key_fixture()
+      {:ok, other_auth} = Access.authenticate_authorization_header(other_key.authorization)
+
+      {:ok, target_session} =
+        Gateway.start_codex_session(other_auth, owner_opts("owner-runtime-other-pool"))
+
+      previous_response_id = previous_response_id("other-pool")
+      register_previous_response_alias!(target_session, other_key.api_key, previous_response_id)
+
+      assert_alias_miss_keeps_runtime!(auth, runtime, previous_response_id, target_session.id)
+    end
+
+    test "treats aliases from another API key as cache misses without starting the foreign owner",
+         %{
+           auth: auth
+         } do
+      {:ok, runtime} = owner_runtime(auth, "owner-runtime-other-key-current")
+      other_key = active_api_key_fixture(auth.pool)
+
+      {:ok, target_session} =
+        Gateway.start_codex_session(auth, owner_opts("owner-runtime-other-key"))
+
+      previous_response_id = previous_response_id("other-key")
+      register_previous_response_alias!(target_session, other_key.api_key, previous_response_id)
+
+      assert_alias_miss_keeps_runtime!(auth, runtime, previous_response_id, target_session.id)
+    end
+
+    test "preserves an enabled owner-forwarding failure exactly", %{auth: auth} do
+      {:ok, runtime} = owner_runtime(auth, "owner-runtime-forwarding-disabled")
+      Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, false)
+
+      assert {:error, :owner_forwarding_disabled} =
+               Gateway.retarget_websocket_owner_runtime(auth, runtime, %{
+                 "type" => "response.create",
+                 "previous_response_id" => previous_response_id("forwarding-disabled")
+               })
+    end
+
+    test "preserves a resolved owner attachment failure exactly", %{api_key: api_key, auth: auth} do
+      {:ok, current_runtime} = owner_runtime(auth, "owner-runtime-attach-current")
+      {:ok, target_runtime} = owner_runtime(auth, "owner-runtime-attach-target")
+      previous_response_id = previous_response_id("owner-busy")
+
+      register_previous_response_alias!(
+        target_runtime.codex_session,
+        api_key,
+        previous_response_id
+      )
+
+      current_owner_pid = owner_pid!(current_runtime.codex_session.id)
+      current_owner_state_before = :sys.get_state(current_owner_pid)
+      target_owner_pid = owner_pid!(target_runtime.codex_session.id)
+      target_owner_state_before = :sys.get_state(target_owner_pid)
+
+      assert {:error, :owner_busy} =
+               Gateway.retarget_websocket_owner_runtime(
+                 auth,
+                 current_runtime,
+                 %{
+                   "type" => "response.create",
+                   "previous_response_id" => previous_response_id
+                 },
+                 websocket_owner_reject_if_busy?: true
+               )
+
+      assert :sys.get_state(current_owner_pid) == current_owner_state_before
+      assert :sys.get_state(target_owner_pid) == target_owner_state_before
+    end
+
+    test "preserves stale-owner errors when a resolved alias fences its remote owner", %{
+      api_key: api_key,
+      auth: auth
+    } do
+      {:ok, current_runtime} = owner_runtime(auth, "owner-runtime-stale-owner-current")
+      remote_owner = Atom.to_string(:"codex_pooler@stale-owner.example")
+
+      {:ok, target_session} =
+        Gateway.start_codex_session(
+          auth,
+          Map.put(
+            owner_opts("owner-runtime-stale-owner-target"),
+            :owner_instance_id,
+            remote_owner
+          )
+        )
+
+      previous_response_id = previous_response_id("stale-owner")
+      register_previous_response_alias!(target_session, api_key, previous_response_id)
+
+      assert {:error, :stale_owner} =
+               Gateway.retarget_websocket_owner_runtime(
+                 auth,
+                 current_runtime,
+                 %{
+                   "type" => "response.create",
+                   "previous_response_id" => previous_response_id
+                 },
+                 websocket_owner_forwarder_opts: [node_client: StaleOwnerAttachmentNodeClient]
+               )
+
+      assert %CodexSession{owner_instance_id: ^remote_owner} =
+               Repo.get!(CodexSession, target_session.id)
+
+      assert %BridgeOwnerLease{owner_instance_id: ^remote_owner, status: "active"} =
+               BridgeOwnerLease
+               |> where([lease], lease.codex_session_id == ^target_session.id)
+               |> Repo.one!()
     end
 
     @tag :rollout_drain_t3
@@ -440,7 +629,43 @@ defmodule CodexPooler.Gateway.WebsocketTest do
     "resp_owner_runtime_#{label}_#{System.unique_integer([:positive])}"
   end
 
-  defp register_previous_response_alias!(%CodexSession{} = session, api_key, previous_response_id) do
+  defp assert_alias_miss_keeps_runtime!(auth, runtime, previous_response_id, target_session_id) do
+    owner_session_ids = local_owner_session_ids()
+
+    assert {:ok, returned_runtime} =
+             Gateway.retarget_websocket_owner_runtime(auth, runtime, %{
+               "type" => "response.create",
+               "previous_response_id" => previous_response_id
+             })
+
+    assert_runtime_unchanged!(runtime, returned_runtime)
+    assert local_owner_session_ids() == owner_session_ids
+    assert_owner_not_started!(target_session_id)
+  end
+
+  defp assert_runtime_unchanged!(runtime, returned_runtime) do
+    assert returned_runtime.codex_session.id == runtime.codex_session.id
+
+    assert returned_runtime.websocket_owner_lease_token ==
+             runtime.websocket_owner_lease_token
+  end
+
+  defp assert_owner_not_started!(codex_session_id) do
+    assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(codex_session_id)
+  end
+
+  defp local_owner_session_ids do
+    WebsocketOwnerSession.Registry
+    |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
+    |> Enum.sort()
+  end
+
+  defp register_previous_response_alias!(
+         %CodexSession{} = session,
+         api_key,
+         previous_response_id,
+         attrs \\ []
+       ) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     %BridgeSessionAlias{}
@@ -452,7 +677,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       alias_hash: :crypto.hash(:sha256, previous_response_id),
       alias_preview: "synthetic-prev",
       status: "active",
-      expires_at: DateTime.add(now, 300, :second),
+      expires_at: Keyword.get(attrs, :expires_at, DateTime.add(now, 300, :second)),
       last_seen_at: now,
       metadata: %{},
       created_at: now,

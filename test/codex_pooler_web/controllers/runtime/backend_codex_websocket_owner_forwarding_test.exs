@@ -11,7 +11,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     exist, and does not create a client-visible request by itself.
   - `owner_unavailable` during request/processed forwarding before upstream
     I/O: request and attempt finalize failed, turn finalizes failed, HTTP/status
-    503, code `owner_unavailable`.
+    503, code `owner_unavailable`. An unresolved `previous_response_id` alias
+    is instead a retarget cache miss: it retains the current authenticated
+    runtime without an owner-outage error; the unchanged generation guard may
+    later reject that continuation with `previous_response_not_found`.
   - `owner_drained` after the rollout deadline: request and attempt failed,
     response status 499, turn interrupted, session interrupted, lease release
     reason `owner_drained`; before that deadline, active turns remain alive.
@@ -2351,7 +2354,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     refute inspect(request_logs(setup.pool.id)) =~ "owner_drained"
   end
 
-  test "owner-forwarded retarget refuses cross-pool previous response aliases before dispatch" do
+  test "owner-forwarded retarget keeps the current runtime for a cross-pool alias cache miss before the generation guard" do
     origin_upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
     target_upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
     origin_setup = gateway_setup(origin_upstream)
@@ -2388,26 +2391,25 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           "request_id" => "ws-owner-cross-scope-refused"
         })
 
-      assert {:ok, refused_state} =
-               CodexResponsesSocket.handle_in({payload, [opcode: :text]}, origin_state)
+      {retarget_admitted_state, logs} =
+        with_log([level: :warning], fn ->
+          assert {:ok, retarget_admitted_state} =
+                   CodexResponsesSocket.handle_in({payload, [opcode: :text]}, origin_state)
 
-      assert refused_state.codex_session.id == origin_session.id
-      assert refused_state.websocket_owner_lease_token == origin_lease_token
-      assert refused_state.websocket_owner_downstream == origin_downstream
+          assert retarget_admitted_state.codex_session.id == origin_session.id
+          assert retarget_admitted_state.websocket_owner_lease_token == origin_lease_token
+          assert retarget_admitted_state.websocket_owner_downstream == origin_downstream
 
-      assert {:push, {:text, error_frame}, refused_state} = receive_socket_done(refused_state)
+          assert {:ok, retarget_admitted_state} = receive_socket_done(retarget_admitted_state)
 
-      assert %{
-               "status" => 503,
-               "error" => %{
-                 "code" => "owner_unavailable",
-                 "message" => "websocket owner is unavailable"
-               }
-             } = Jason.decode!(error_frame)
+          retarget_admitted_state
+        end)
 
-      assert refused_state.codex_session.id == origin_session.id
-      assert refused_state.websocket_owner_lease_token == origin_lease_token
-      assert refused_state.websocket_owner_downstream == origin_downstream
+      refute logs =~ "owner_unavailable"
+      refute logs =~ "status=503"
+      assert retarget_admitted_state.codex_session.id == origin_session.id
+      assert retarget_admitted_state.websocket_owner_lease_token == origin_lease_token
+      assert retarget_admitted_state.websocket_owner_downstream == origin_downstream
       assert {:ok, _origin_owner_pid} = WebsocketOwnerSession.lookup(origin_session.id)
 
       assert {:ok, _target_owner_pid} =
@@ -2415,11 +2417,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       assert FakeUpstream.count(origin_upstream) == 0
       assert FakeUpstream.count(target_upstream) == 0
-      assert FakeUpstream.websocket_connection_count(origin_upstream) == 0
+      assert FakeUpstream.websocket_connection_count(origin_upstream) == 1
       assert FakeUpstream.websocket_connection_count(target_upstream) == 0
-      assert [] = request_logs(origin_setup.pool.id)
+      assert [guarded_request] = request_logs(origin_setup.pool.id)
+      assert guarded_request.status == "failed"
+      assert guarded_request.last_error_code == "stream_incomplete"
+
+      assert [guarded_attempt] =
+               Repo.all(from(a in Attempt, where: a.request_id == ^guarded_request.id))
+
+      assert guarded_attempt.response_metadata["transport_failure"]["termination_source"] ==
+               "continuation_generation_guard"
+
       assert [] = request_logs(target_setup.pool.id)
-      assert_no_leak!("cross-scope retarget error frame", error_frame)
       assert_no_leak_in_persistence!(origin_setup.pool.id)
       assert_no_leak_in_persistence!(target_setup.pool.id)
     after
@@ -2427,7 +2437,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
-  test "owner-forwarded retarget refuses stale previous response aliases without local fallback" do
+  test "owner-forwarded retarget keeps the current runtime for an expired alias cache miss before the generation guard" do
     upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
     setup = gateway_setup(upstream)
     previous_response_id = "#{@sentinel}-stale-alias"
@@ -2456,26 +2466,25 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           "request_id" => "ws-owner-stale-alias-refused"
         })
 
-      assert {:ok, refused_state} =
-               CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+      {retarget_admitted_state, logs} =
+        with_log([level: :warning], fn ->
+          assert {:ok, retarget_admitted_state} =
+                   CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
 
-      assert refused_state.codex_session.id == session.id
-      assert refused_state.websocket_owner_lease_token == lease_token
-      assert refused_state.websocket_owner_downstream == downstream
+          assert retarget_admitted_state.codex_session.id == session.id
+          assert retarget_admitted_state.websocket_owner_lease_token == lease_token
+          assert retarget_admitted_state.websocket_owner_downstream == downstream
 
-      assert {:push, {:text, error_frame}, refused_state} = receive_socket_done(refused_state)
+          assert {:ok, retarget_admitted_state} = receive_socket_done(retarget_admitted_state)
 
-      assert %{
-               "status" => 503,
-               "error" => %{
-                 "code" => "owner_unavailable",
-                 "message" => "websocket owner is unavailable"
-               }
-             } = Jason.decode!(error_frame)
+          retarget_admitted_state
+        end)
 
-      assert refused_state.codex_session.id == session.id
-      assert refused_state.websocket_owner_lease_token == lease_token
-      assert refused_state.websocket_owner_downstream == downstream
+      refute logs =~ "owner_unavailable"
+      refute logs =~ "status=503"
+      assert retarget_admitted_state.codex_session.id == session.id
+      assert retarget_admitted_state.websocket_owner_lease_token == lease_token
+      assert retarget_admitted_state.websocket_owner_downstream == downstream
       assert {:ok, _owner_pid} = WebsocketOwnerSession.lookup(session.id)
       assert FakeUpstream.count(upstream) == 0
       assert FakeUpstream.websocket_connection_count(upstream) == 0
@@ -2484,6 +2493,66 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert_no_leak_in_persistence!(setup.pool.id)
     after
       CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
+  test "owner-forwarded retarget keeps the current runtime for guessed and cross-key alias cache misses" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    alternate_key = CodexPooler.PoolerFixtures.api_key_fixture(setup.pool)
+    previous_response_id = "#{@sentinel}-cross-key-alias"
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, alternate_auth} = Access.authenticate_authorization_header(alternate_key.authorization)
+    {:ok, origin_state} = owner_socket(auth, "ws-owner-cache-miss-origin", "cache-miss-origin")
+
+    {:ok, target_state} =
+      owner_socket(alternate_auth, "ws-owner-cache-miss-target", "cache-miss-target")
+
+    origin_session = origin_state.codex_session
+    origin_lease_token = origin_state.websocket_owner_lease_token
+    origin_downstream = origin_state.websocket_owner_downstream
+
+    try do
+      ensure_previous_response_alias!(
+        target_state.codex_session,
+        alternate_key.api_key,
+        previous_response_id
+      )
+
+      {returned_runtimes, logs} =
+        with_log([level: :warning], fn ->
+          for alias_miss <- ["#{@sentinel}-guessed-alias", previous_response_id] do
+            assert {:ok, returned_runtime} =
+                     Gateway.retarget_websocket_owner_runtime(auth, origin_state, %{
+                       "type" => "response.create",
+                       "previous_response_id" => alias_miss
+                     })
+
+            returned_runtime
+          end
+        end)
+
+      refute logs =~ "owner_unavailable"
+      refute logs =~ "status=503"
+
+      for returned_runtime <- returned_runtimes do
+        assert returned_runtime.codex_session.id == origin_session.id
+        assert returned_runtime.websocket_owner_lease_token == origin_lease_token
+        assert returned_runtime.websocket_owner_downstream == origin_downstream
+      end
+
+      assert {:ok, _origin_owner_pid} = WebsocketOwnerSession.lookup(origin_session.id)
+
+      assert {:ok, _target_owner_pid} =
+               WebsocketOwnerSession.lookup(target_state.codex_session.id)
+
+      assert FakeUpstream.count(upstream) == 0
+      assert [] = request_logs(setup.pool.id)
+      assert_no_leak_in_persistence!(setup.pool.id)
+    after
+      CodexResponsesSocket.terminate(:closed, origin_state)
+      CodexResponsesSocket.terminate(:closed, target_state)
     end
   end
 

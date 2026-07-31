@@ -361,6 +361,9 @@ defmodule CodexPooler.Gateway.Websocket do
          {:ok, %CodexSession{} = target_session} <-
            start_owner_session_from_previous_response_id(auth, retarget_opts) do
       retarget_owner_runtime_to_session(current_session, runtime, target_session, retarget_opts)
+    else
+      {:error, :session_not_found} -> {:ok, runtime}
+      {:error, reason} -> owner_retarget_error(reason)
     end
   end
 
@@ -465,10 +468,12 @@ defmodule CodexPooler.Gateway.Websocket do
   end
 
   @spec start_owner_session_from_previous_response_id(auth(), RequestOptions.t()) ::
-          {:ok, CodexSession.t()} | {:error, WebsocketOwnerContract.owner_error()}
+          {:ok, CodexSession.t()}
+          | {:error, :session_not_found | WebsocketOwnerContract.owner_error()}
   defp start_owner_session_from_previous_response_id(auth, %RequestOptions{} = opts) do
     case SessionContinuity.start_codex_session_from_previous_response_id(auth, opts) do
       {:ok, %CodexSession{} = session} -> {:ok, session}
+      {:error, :session_not_found} -> {:error, :session_not_found}
       {:error, reason} -> owner_retarget_error(reason)
     end
   end
