@@ -379,24 +379,9 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
       end)
   end
 
-  @spec expiring_reset?(
-          UpstreamIdentity.t(),
-          [AccountQuotaWindow.t()],
-          SavedResets.auto_policy_projection(),
-          DateTime.t()
-        ) :: boolean()
-  def expiring_reset?(%UpstreamIdentity{} = identity, windows, policy, %DateTime{} = timestamp)
-      when is_list(windows) do
-    SavedResets.expires_soon?(identity, timestamp) and
-      Enum.any?(windows, fn window ->
-        weekly_used_window?(window, timestamp) and
-          natural_reset_far_enough?(window.reset_at, policy.min_blocked_minutes, timestamp)
-      end)
-  end
-
   defp trigger_current?(
          trigger,
-         identity,
+         _identity,
          policy,
          windows_by_identity_id,
          identity_windows,
@@ -416,9 +401,6 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
           latched_identity_ids,
           timestamp
         )
-
-      :expiring_reset ->
-        expiring_reset?(identity, identity_windows, policy, timestamp)
     end
   end
 
@@ -436,10 +418,6 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
     weekly_usable_window?(window, timestamp) and
       used_percent_at_or_above?(window.used_percent, policy.quota_threshold_percent) and
       natural_reset_far_enough?(window.reset_at, policy.min_blocked_minutes, timestamp)
-  end
-
-  defp weekly_used_window?(window, timestamp) do
-    weekly_usable_window?(window, timestamp) and used_percent_above_zero?(window.used_percent)
   end
 
   defp scheduled_saved_reset_state(snapshot, policy) do

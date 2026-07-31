@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
   use CodexPooler.DataCase, async: false
 
   import CodexPooler.PoolerFixtures
+  import ExUnit.CaptureLog
 
   alias CodexPooler.Catalog
   alias CodexPooler.FakeUpstream
@@ -397,6 +398,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert [] = FakeUpstream.requests(upstream)
     end
 
+    @tag :saved_reset_redemption_cause
     test "auto redeems saved reset and refilters when weekly account quota is exhausted" do
       {:ok, upstream} =
         FakeUpstream.start_link(
@@ -416,8 +418,8 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       upsert_weekly_exhausted_quota!(identity)
       filter_input = filter_input(pool, api_key, assignment, identity, "auto-enabled")
 
-      assert {:ok, [{%{id: assignment_id}, %{id: identity_id}}], filtered_options} =
-               RouteFiltering.filter_candidates(filter_input)
+      {{:ok, [{%{id: assignment_id}, %{id: identity_id}}], filtered_options}, log} =
+        with_info_log(fn -> RouteFiltering.filter_candidates(filter_input) end)
 
       assert assignment_id == assignment.id
       assert identity_id == identity.id
@@ -431,9 +433,76 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
 
       persisted = Repo.reload!(identity)
       assert get_in(persisted.metadata, ["saved_reset_redemption", "result", "code"]) == "reset"
+
+      assert get_in(persisted.metadata, ["saved_reset_redemption", "trigger_detail"]) ==
+               "exhausted"
+
+      assert log =~ "trigger_kind=gateway_auto trigger_detail=exhausted"
       metadata_json = Jason.encode!(persisted.metadata)
       refute metadata_json =~ consume_request.json["redeem_request_id"]
       refute metadata_json =~ "credit_id"
+    end
+
+    @tag :saved_reset_redemption_cause
+    test "logs bounded gateway causes and preserves them on provider noop and failure" do
+      provider_code_sentinel = "providersentinel7c91"
+
+      for {trigger, detail, consume_response} <- [
+            {:blocked_weekly_exhaustion, "exhausted", {200, %{"code" => "nothing_to_reset"}}},
+            {:threshold_pressure, "threshold",
+             {502,
+              %{
+                "code" => provider_code_sentinel,
+                "message" => "provider-sensitive-body"
+              }}}
+          ] do
+        {:ok, upstream} =
+          FakeUpstream.start_link(
+            {:path_json,
+             %{
+               "/api/codex/rate-limit-reset-credits/consume" => consume_response,
+               "/api/codex/usage" => {200, usage_payload(0)}
+             }}
+          )
+
+        %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+        %{identity: identity, assignment: assignment} =
+          active_upstream_assignment_fixture(pool, %{metadata: saved_reset_metadata(upstream, 1)})
+
+        policy =
+          if trigger == :threshold_pressure,
+            do: %{
+              saved_reset_auto_redeem_trigger_mode: "threshold",
+              saved_reset_auto_redeem_quota_threshold_percent: 95
+            },
+            else: %{}
+
+        identity = enable_saved_reset_auto_redeem!(identity, policy)
+
+        if trigger == :threshold_pressure do
+          upsert_weekly_pressure_quota!(identity, Decimal.new("96"))
+        else
+          upsert_weekly_exhausted_quota!(identity)
+        end
+
+        filter_input = filter_input(pool, api_key, assignment, identity, "cause-#{detail}")
+
+        {_result, log} = with_info_log(fn -> RouteFiltering.filter_candidates(filter_input) end)
+
+        redemption = Repo.reload!(identity).metadata["saved_reset_redemption"]
+        assert redemption["trigger_detail"] == detail
+        assert redemption["status"] in ["noop", "failed"]
+        assert log =~ "trigger_kind=gateway_auto trigger_detail=#{detail}"
+        refute Jason.encode!(redemption) =~ provider_code_sentinel
+        refute log =~ provider_code_sentinel
+        refute log =~ "provider-sensitive-body"
+
+        if trigger == :threshold_pressure do
+          assert redemption["result"]["code"] == "provider_error"
+          assert log =~ "result_code=provider_error"
+        end
+      end
     end
 
     test "normal redemption refilters from a newer persisted snapshot and preserves route state" do
@@ -903,6 +972,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert [] = FakeUpstream.requests(circuit_open_upstream)
     end
 
+    @tag :saved_reset_expiry_ownership
     test "threshold locked recheck is scoped to circuit-eligible candidate identities" do
       {:ok, upstream} =
         FakeUpstream.start_link(
@@ -965,6 +1035,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert usage_request.path == "/api/codex/usage"
     end
 
+    @tag :saved_reset_redemption_cause
     test "auto redeems saved reset before exhaustion when every candidate is near weekly limit" do
       {:ok, upstream} =
         FakeUpstream.start_link(
@@ -999,8 +1070,8 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           "threshold-enabled"
         )
 
-      assert {:ok, filtered_candidates, _filtered_options} =
-               RouteFiltering.filter_candidates(filter_input)
+      {{:ok, filtered_candidates, _filtered_options}, log} =
+        with_info_log(fn -> RouteFiltering.filter_candidates(filter_input) end)
 
       assert Enum.map(filtered_candidates, fn {assignment, _identity} -> assignment.id end) == [
                first.assignment.id,
@@ -1011,8 +1082,13 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert consume_request.method == "POST"
       assert consume_request.path == "/api/codex/rate-limit-reset-credits/consume"
       assert usage_request.path == "/api/codex/usage"
+
+      redemption = Repo.reload!(first_identity).metadata["saved_reset_redemption"]
+      assert redemption["trigger_detail"] == "threshold"
+      assert log =~ "trigger_kind=gateway_auto trigger_detail=threshold"
     end
 
+    @tag :saved_reset_expiry_ownership
     test "threshold auto redemption waits when natural weekly reset is inside the blocked buffer" do
       {:ok, upstream} =
         FakeUpstream.start_link(
@@ -1052,37 +1128,43 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert [] = FakeUpstream.requests(upstream)
     end
 
-    test "auto redeems saved reset before exhaustion when a usable reset expires soon" do
-      {:ok, upstream} =
-        FakeUpstream.start_link(
-          {:path_json,
-           %{
-             "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
-             "/api/codex/usage" => {200, usage_payload(0)}
-           }}
-        )
+    @tag :saved_reset_expiry_ownership
+    test "request traffic never redeems solely because a saved reset is nearing expiration" do
+      scan_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+      for {scenario, expires_in_seconds} <- [
+            remaining_23h59: 23 * 60 * 60 + 59 * 60,
+            inside_final_90_minutes: 60 * 60
+          ] do
+        {:ok, upstream} = auto_redeem_fake()
+        %{pool: pool, api_key: api_key} = active_api_key_fixture()
 
-      %{identity: identity, assignment: assignment} =
-        active_upstream_assignment_fixture(pool, %{
-          metadata: saved_reset_metadata(upstream, 1, expiring_saved_reset_attrs())
-        })
+        %{identity: identity, assignment: assignment} =
+          active_upstream_assignment_fixture(pool, %{
+            metadata:
+              saved_reset_metadata(
+                upstream,
+                1,
+                saved_reset_expiration_attrs(scan_at, expires_in_seconds)
+              )
+          })
 
-      identity = enable_saved_reset_auto_redeem!(identity)
-      upsert_weekly_pressure_quota!(identity, Decimal.new("25"))
-      filter_input = filter_input(pool, api_key, assignment, identity, "expiring-reset")
+        identity = enable_saved_reset_auto_redeem!(identity)
+        upsert_weekly_pressure_quota!(identity, Decimal.new("25"))
+        filter_input = filter_input(pool, api_key, assignment, identity, "expiry-#{scenario}")
 
-      assert {:ok, [{%{id: assignment_id}, %{id: identity_id}}], _filtered_options} =
-               RouteFiltering.filter_candidates(filter_input)
+        assert {:ok, [{%{id: assignment_id}, %{id: identity_id}}], _filtered_options} =
+                 RouteFiltering.filter_candidates(filter_input, saved_reset_scan_at: scan_at)
 
-      assert assignment_id == assignment.id
-      assert identity_id == identity.id
+        assert assignment_id == assignment.id
+        assert identity_id == identity.id
+        assert [] = FakeUpstream.requests(upstream), "scenario=#{scenario}"
 
-      [consume_request, usage_request] = assert_auto_redeem_usage_requests(upstream)
-      assert consume_request.method == "POST"
-      assert consume_request.path == "/api/codex/rate-limit-reset-credits/consume"
-      assert usage_request.path == "/api/codex/usage"
+        persisted = Repo.reload!(identity)
+
+        refute Map.has_key?(persisted.metadata || %{}, "saved_reset_redemption"),
+               "scenario=#{scenario}"
+      end
     end
 
     test "route-state saved reset probe narrows an otherwise eligible sibling to the claimed lane" do
@@ -1153,33 +1235,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert Enum.any?(FakeUpstream.requests(upstream), &(&1.path == "/api/codex/usage"))
     end
 
-    test "expiring saved reset auto redemption waits when no weekly usage would be recovered" do
-      {:ok, upstream} =
-        FakeUpstream.start_link(
-          {:path_json,
-           %{
-             "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
-             "/api/codex/usage" => {200, usage_payload(1)}
-           }}
-        )
-
-      %{pool: pool, api_key: api_key} = active_api_key_fixture()
-
-      %{identity: identity, assignment: assignment} =
-        active_upstream_assignment_fixture(pool, %{
-          metadata: saved_reset_metadata(upstream, 1, expiring_saved_reset_attrs())
-        })
-
-      identity = enable_saved_reset_auto_redeem!(identity)
-      upsert_weekly_pressure_quota!(identity, Decimal.new("0"))
-      filter_input = filter_input(pool, api_key, assignment, identity, "expiring-unused")
-
-      assert {:ok, _filtered_candidates, _filtered_options} =
-               RouteFiltering.filter_candidates(filter_input)
-
-      assert [] = FakeUpstream.requests(upstream)
-    end
-
+    @tag :saved_reset_expiry_ownership
     test "early auto redemption waits when another candidate is not near the weekly limit" do
       {:ok, upstream} =
         FakeUpstream.start_link(
@@ -1278,6 +1334,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert [] = FakeUpstream.requests(upstream)
     end
 
+    @tag :saved_reset_expiry_ownership
     test "auto redemption requires weekly-account-only quota exhaustion" do
       {:ok, upstream} =
         FakeUpstream.start_link(
@@ -1468,9 +1525,8 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
     }
   end
 
-  defp expiring_saved_reset_attrs do
-    timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    expires_at = timestamp |> DateTime.add(1, :hour) |> DateTime.to_iso8601()
+  defp saved_reset_expiration_attrs(timestamp, expires_in_seconds) do
+    expires_at = timestamp |> DateTime.add(expires_in_seconds, :second) |> DateTime.to_iso8601()
     observed_at = DateTime.to_iso8601(timestamp)
 
     %{
@@ -1582,6 +1638,17 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
            ] = FakeUpstream.requests(upstream)
 
     [consume_request, usage_request]
+  end
+
+  defp with_info_log(fun) when is_function(fun, 0) do
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+
+    try do
+      with_log([level: :info], fun)
+    after
+      Logger.configure(level: previous_level)
+    end
   end
 
   defp usage_payload(available_count) do

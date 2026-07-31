@@ -173,6 +173,8 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
          scan_timestamp,
          opts
        ) do
+    trigger_detail = trigger_detail(trigger)
+
     case SavedResetRedemption.redeem(assignment,
            trigger_kind: "gateway_auto",
            started_at: scan_timestamp,
@@ -181,7 +183,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
            receive_timeout: 15_000
          ) do
       {:ok, %{applied?: true, code: code} = redeem_result} ->
-        log_redemption(assignment, identity, "gateway_auto", code, true)
+        log_redemption(assignment, identity, "gateway_auto", trigger_detail, code, true)
 
         route_after_redemption(
           result,
@@ -193,16 +195,32 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
         )
 
       {:ok, %{applied?: applied?, code: code}} ->
-        log_redemption(assignment, identity, "gateway_auto", code, applied?)
+        log_redemption(assignment, identity, "gateway_auto", trigger_detail, code, applied?)
         result
 
       {:error, reason} ->
-        log_redemption(assignment, identity, "gateway_auto", safe_reason(reason), false)
+        log_redemption(
+          assignment,
+          identity,
+          "gateway_auto",
+          trigger_detail,
+          safe_reason(reason),
+          false
+        )
+
         result
     end
   rescue
     exception in [DBConnection.ConnectionError, Ecto.QueryError, Postgrex.Error] ->
-      log_redemption(assignment, identity, "gateway_auto", safe_reason(exception), false)
+      log_redemption(
+        assignment,
+        identity,
+        "gateway_auto",
+        trigger_detail(trigger),
+        safe_reason(exception),
+        false
+      )
+
       result
   end
 
@@ -473,16 +491,8 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
   defp redeemable_candidate?(_candidate, _timestamp), do: false
 
   defp early_redeemable_candidate(candidate, candidates, timestamp) when is_list(candidates) do
-    cond do
-      threshold_redeemable_candidate?(candidate, candidates, timestamp) ->
-        {candidate, :threshold_pressure}
-
-      expiring_redeemable_candidate?(candidate, timestamp) ->
-        {candidate, :expiring_reset}
-
-      true ->
-        nil
-    end
+    if threshold_redeemable_candidate?(candidate, candidates, timestamp),
+      do: {candidate, :threshold_pressure}
   end
 
   defp threshold_redeemable_candidate?(
@@ -499,19 +509,6 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
   defp threshold_redeemable_candidate?(_candidate, _candidates, _timestamp), do: false
 
-  defp expiring_redeemable_candidate?(
-         {%PoolUpstreamAssignment{}, %UpstreamIdentity{} = identity} = candidate,
-         timestamp
-       ) do
-    policy = SavedResets.auto_policy(identity)
-
-    saved_reset_available?(identity, policy, timestamp) and
-      SavedResets.expires_soon?(identity, timestamp) and
-      redeemable_expiring_weekly_window?(candidate, policy, timestamp)
-  end
-
-  defp expiring_redeemable_candidate?(_candidate, _timestamp), do: false
-
   defp saved_reset_available?(%UpstreamIdentity{} = identity, policy, timestamp) do
     AutoEligibility.gateway_auto_ready?(identity, policy, timestamp)
   end
@@ -524,19 +521,6 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
     identity
     |> Windows.list_quota_windows(timestamp)
     |> AutoEligibility.blocked_weekly_exhaustion?(policy, timestamp)
-  end
-
-  defp redeemable_expiring_weekly_window?(
-         {%PoolUpstreamAssignment{}, %UpstreamIdentity{} = identity},
-         policy,
-         timestamp
-       ) do
-    AutoEligibility.expiring_reset?(
-      identity,
-      Windows.list_quota_windows(identity, timestamp),
-      policy,
-      timestamp
-    )
   end
 
   defp all_candidates_at_threshold?([], _policy, _timestamp), do: false
@@ -623,16 +607,20 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
     end
   end
 
-  defp log_redemption(assignment, identity, trigger_kind, code, applied?) do
+  defp log_redemption(assignment, identity, trigger_kind, trigger_detail, code, applied?) do
     Logger.info(
       "saved reset auto redemption result " <>
         "pool_upstream_assignment_id=#{assignment.id} " <>
         "upstream_identity_id=#{identity.id} " <>
         "trigger_kind=#{trigger_kind} " <>
+        "trigger_detail=#{trigger_detail} " <>
         "result_code=#{code} " <>
         "applied=#{applied?}"
     )
   end
+
+  defp trigger_detail(:blocked_weekly_exhaustion), do: "exhausted"
+  defp trigger_detail(:threshold_pressure), do: "threshold"
 
   defp safe_reason(%{code: code}) when is_atom(code), do: Atom.to_string(code)
   defp safe_reason(%{code: code}) when is_binary(code), do: sanitize_token(code)

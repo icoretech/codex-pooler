@@ -26,6 +26,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   end
 
   describe "redeem/2" do
+    @tag :saved_reset_redemption_cause
     test "redeems ChatGPT style credit with list and consume calls" do
       {:ok, fake} =
         FakeUpstream.start_link(
@@ -76,6 +77,79 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       metadata_json = Jason.encode!(persisted.metadata)
       refute metadata_json =~ "credit_1"
       refute metadata_json =~ redeem_request_id
+    end
+
+    @tag :saved_reset_redemption_cause
+    test "gateway cause is derived from normalized trigger and survives claimed noops and failures" do
+      for {trigger, detail, status, provider_status, provider_code, result_code} <- [
+            {:blocked_weekly_exhaustion, "exhausted", :noop, 200, "nothing_to_reset",
+             "nothing_to_reset"},
+            {:threshold_pressure, "threshold", :failed, 502, "provider_rejected",
+             "provider_error"}
+          ] do
+        parent = self()
+        release_ref = make_ref()
+
+        {:ok, fake} =
+          FakeUpstream.start_link(
+            FakeUpstream.barrier_json_response(%{"code" => provider_code},
+              status: provider_status,
+              notify: parent,
+              release_ref: release_ref
+            )
+          )
+
+        %{identity: identity, assignment: assignment} =
+          assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+        policy =
+          if trigger == :threshold_pressure,
+            do: %{
+              saved_reset_auto_redeem_trigger_mode: "threshold",
+              saved_reset_auto_redeem_quota_threshold_percent: 95
+            },
+            else: %{}
+
+        identity = enable_saved_reset_auto_redeem!(identity, policy)
+
+        if trigger == :threshold_pressure do
+          upsert_weekly_pressure_quota!(identity, Decimal.new("96"))
+        else
+          upsert_weekly_exhausted_quota!(identity)
+        end
+
+        context =
+          assignment
+          |> gateway_auto_context(identity, trigger)
+          |> Map.put(:trigger_detail, "caller-controlled-provider-token")
+
+        task =
+          Task.async(fn ->
+            Sandbox.allow(Repo, parent, self())
+
+            SavedResetRedemption.redeem(assignment,
+              trigger_kind: "gateway_auto",
+              gateway_auto_context: context
+            )
+          end)
+
+        assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid,
+                        ^release_ref},
+                       5_000
+
+        claim = Repo.reload!(identity).metadata["saved_reset_redemption"]
+        assert claim["status"] == "redeeming"
+        assert claim["trigger_detail"] == detail
+        refute Jason.encode!(claim) =~ "caller-controlled-provider-token"
+
+        send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
+        assert {:ok, %{status: ^status, code: ^result_code}} = Task.await(task, 5_000)
+
+        finalized = Repo.reload!(identity).metadata["saved_reset_redemption"]
+        assert finalized["status"] == Atom.to_string(status)
+        assert finalized["trigger_detail"] == detail
+        refute Jason.encode!(finalized) =~ "caller-controlled-provider-token"
+      end
     end
 
     test "redeems Codex style credit without credit id" do
@@ -829,6 +903,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert [] = FakeUpstream.requests(fake)
     end
 
+    @tag :saved_reset_expiry_ownership
     test "gateway auto selects same-source exhaustion before logical cross-source ranking" do
       {:ok, fake} = codex_reset_fake(0)
 
@@ -934,35 +1009,34 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert [] = FakeUpstream.requests(fake)
     end
 
-    test "gateway auto does not consume when persisted identity lost expiring eligibility" do
+    @tag :saved_reset_expiry_ownership
+    test "gateway auto rejects the retired expiration trigger before side effects" do
       {:ok, fake} = codex_reset_fake(0)
 
       %{identity: identity, assignment: assignment} =
-        assignment_with_fake(fake, "/api/codex/usage", "codex_api",
-          saved_resets:
-            saved_resets_with_expirations()
-            |> Map.merge(expiring_saved_reset_attrs())
-            |> Map.put("path_style", "codex_api")
-            |> Map.put("usage_path", "/api/codex/usage")
-        )
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
 
-      stale_identity = enable_saved_reset_auto_redeem!(identity)
-      upsert_weekly_pressure_quota!(stale_identity, Decimal.new("25"))
-      context = gateway_auto_context(assignment, stale_identity, :expiring_reset)
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
 
-      update_saved_resets!(stale_identity, %{
-        "available_expires_at" => [],
-        "available_expirations" => [],
-        "next_expires_at" => nil
-      })
+      retired_trigger = String.to_atom("expiring" <> "_reset")
+      context = gateway_auto_context(assignment, identity, retired_trigger)
 
-      assert {:ok, %{status: :noop, applied?: false}} =
+      assert {:ok,
+              %{
+                status: :noop,
+                applied?: false,
+                code: "gateway_auto_context_invalid"
+              }} =
                SavedResetRedemption.redeem(assignment,
                  trigger_kind: "gateway_auto",
                  gateway_auto_context: context
                )
 
       assert [] = FakeUpstream.requests(fake)
+
+      persisted = Repo.reload!(identity)
+      refute Map.has_key?(persisted.metadata || %{}, "saved_reset_redemption")
     end
 
     test "gateway auto rejects malformed context without provider request" do
@@ -1461,6 +1535,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                )
     end
 
+    @tag :saved_reset_redemption_cause
     test "eligible scheduled rescue consumes once through the shared redemption pipeline" do
       %{as_of: as_of, fake: fake, identity: identity, assignment: assignment} =
         scheduled_expiry_fixture()
@@ -1607,6 +1682,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       end
     end
 
+    @tag :saved_reset_redemption_cause
     test "legacy redemption records remain readable without scheduled evidence fields" do
       as_of = ~U[2026-07-29 12:00:00Z]
       legacy = redemption_metadata("scheduled_expiry_rescue", DateTime.add(as_of, -5, :minute))
@@ -2346,6 +2422,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   end
 
   describe "concurrent gateway redemption (multi-node safety)" do
+    @tag :saved_reset_expiry_ownership
     test "two concurrent redeems on the same identity consume exactly one credit" do
       {:ok, fake} =
         FakeUpstream.start_link(
@@ -2430,6 +2507,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert provider_consume_count(fake) == 1
     end
 
+    @tag :saved_reset_expiry_ownership
     @tag :separate_backend_automatic_claimant_race
     test "scheduled and gateway automatic claims share the identity consume latch" do
       {:ok, fake} = codex_reset_fake(0)
@@ -2437,6 +2515,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
       fixture = committed_scheduled_expiry_race_fixture!(fake)
       on_exit(fn -> cleanup_committed_scheduled_expiry_race_fixture!(fixture) end)
+
+      run_unboxed(fn ->
+        identity = Repo.get!(UpstreamIdentity, fixture.identity_id)
+        upsert_weekly_exhausted_quota!(identity)
+      end)
 
       gateway_assignment_id = List.last(fixture.assignment_ids)
 
@@ -2457,7 +2540,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
             SavedResetRedemption.redeem(assignment,
               trigger_kind: "gateway_auto",
-              gateway_auto_context: gateway_auto_context(assignment, identity, :expiring_reset),
+              gateway_auto_context:
+                gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion),
               started_at: fixture.as_of,
               receive_timeout: 15_000
             )
@@ -2979,6 +3063,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert [] = FakeUpstream.requests(fake)
     end
 
+    @tag :saved_reset_expiry_ownership
     test "the threshold trigger cannot bypass the latch" do
       {:ok, fake} = codex_reset_fake(0)
 
@@ -3362,20 +3447,6 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       "granted_at" => "2026-06-20T00:00:00Z",
       "raw_payload" => %{"unsafe" => true},
       "reason" => nil
-    }
-  end
-
-  defp expiring_saved_reset_attrs do
-    timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    expires_at = timestamp |> DateTime.add(1, :hour) |> DateTime.to_iso8601()
-    observed_at = DateTime.to_iso8601(timestamp)
-
-    %{
-      "available_expires_at" => [expires_at],
-      "available_expirations" => [%{"expires_at" => expires_at, "first_seen_at" => observed_at}],
-      "next_expires_at" => expires_at,
-      "expires_observed_at" => observed_at,
-      "expires_refresh_attempted_at" => observed_at
     }
   end
 

@@ -143,10 +143,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
           />
           <span class="grid gap-1">
             <span class="text-sm font-semibold leading-5 text-base-content">
-              Blocked or expiring
+              Weekly quota blocked
             </span>
             <span class="text-xs leading-5 text-base-content/60">
-              Waits for weekly quota exhaustion. A reset expiring within 24 hours may be rescued early once this account has weekly usage.
+              Request traffic can recover weekly exhaustion. Expiration rescue runs only through scheduled account checks.
             </span>
           </span>
         </label>

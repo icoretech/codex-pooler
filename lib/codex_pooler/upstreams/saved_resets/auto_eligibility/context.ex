@@ -1,9 +1,9 @@
 defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
   @moduledoc false
 
-  @triggers [:blocked_weekly_exhaustion, :threshold_pressure, :expiring_reset]
+  @triggers [:blocked_weekly_exhaustion, :threshold_pressure]
 
-  @type trigger :: :blocked_weekly_exhaustion | :threshold_pressure | :expiring_reset
+  @type trigger :: :blocked_weekly_exhaustion | :threshold_pressure
   @type t :: %{
           required(:trigger) => trigger(),
           required(:pool_upstream_assignment_id) => Ecto.UUID.t(),

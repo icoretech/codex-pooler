@@ -27,6 +27,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   @identity_disabled IdentityStatus.disabled_status()
   @scheduled_expiry_trigger "scheduled_expiry_rescue"
   @known_noop_codes ~w(already_redeemed no_credit nothing_to_reset)
+  @known_provider_result_codes ["reset" | @known_noop_codes]
 
   @type trigger_kind :: String.t()
 
@@ -99,6 +100,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           required(:trigger_kind) => trigger_kind(),
           required(:started_at) => DateTime.t(),
           required(:receive_timeout) => non_neg_integer(),
+          optional(:trigger_detail) => String.t(),
           optional(:scheduled_decision_evidence) => scheduled_decision_evidence()
         }
 
@@ -269,6 +271,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
   defp normalize_gateway_auto_context(_trigger_kind, _context), do: {:ok, nil}
 
+  defp gateway_auto_trigger_detail(%{trigger: :blocked_weekly_exhaustion}), do: "exhausted"
+  defp gateway_auto_trigger_detail(%{trigger: :threshold_pressure}), do: "threshold"
+  defp gateway_auto_trigger_detail(_context), do: nil
+
   defp claim_attempt(
          assignment,
          identity,
@@ -349,7 +355,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
               @scheduled_expiry_trigger,
               receive_timeout,
               decision_at,
-              scheduled_burn_context
+              scheduled_burn_context,
+              nil
             )
 
           {:noop, code} ->
@@ -427,7 +434,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           current_assignment,
           trigger_kind,
           receive_timeout,
-          started_at
+          started_at,
+          nil,
+          gateway_auto_trigger_detail(gateway_auto_context)
         )
 
       {:noop, code} ->
@@ -537,7 +546,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          trigger_kind,
          receive_timeout,
          started_at,
-         scheduled_burn_context \\ nil
+         scheduled_burn_context,
+         trigger_detail
        ) do
     case encode_claim_scheduled_decision_evidence(scheduled_burn_context) do
       {:ok, scheduled_decision_evidence} ->
@@ -554,6 +564,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
             "finished_at" => nil,
             "result" => nil
           }
+          |> put_trigger_detail(trigger_detail)
           |> put_scheduled_decision_evidence(scheduled_decision_evidence)
           |> put_carried_applied_consume(metadata["saved_reset_redemption"] || %{})
 
@@ -568,6 +579,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           started_at: started_at,
           receive_timeout: receive_timeout
         }
+        |> maybe_put_claim_trigger_detail(trigger_detail)
         |> maybe_put_claim_scheduled_decision_evidence(scheduled_decision_evidence)
 
       {:error, :invalid_decision_evidence} ->
@@ -933,6 +945,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
         base =
           base
+          |> put_trigger_detail(claim[:trigger_detail])
           |> put_scheduled_decision_evidence(claim[:scheduled_decision_evidence])
           |> put_carried_applied_consume(redemption)
 
@@ -1075,6 +1088,16 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
   defp encode_claim_scheduled_decision_evidence(context),
     do: encode_scheduled_decision_evidence(context)
+
+  defp put_trigger_detail(record, detail) when detail in ["exhausted", "threshold"],
+    do: Map.put(record, "trigger_detail", detail)
+
+  defp put_trigger_detail(record, _detail), do: record
+
+  defp maybe_put_claim_trigger_detail(claim, detail) when detail in ["exhausted", "threshold"],
+    do: Map.put(claim, :trigger_detail, detail)
+
+  defp maybe_put_claim_trigger_detail(claim, _detail), do: claim
 
   defp encode_trigger_detail(value)
        when value in ["immediate_expiry", "exhausted", "threshold", "last_call"],
@@ -1417,7 +1440,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
       |> String.trim("_")
       |> String.slice(0, 80)
 
-    if code == "", do: "unknown_result", else: code
+    if code in @known_provider_result_codes, do: code, else: "provider_error"
   end
 
   defp assignment_id(%PoolUpstreamAssignment{id: id}), do: id
