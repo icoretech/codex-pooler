@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.RouteClass
+  alias CodexPooler.ServiceTier
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.StatusVocabulary.Assignment, as: AssignmentStatus
   alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
@@ -648,7 +649,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
   end
 
   defp service_tier_supported?(metadata, tier) do
-    tier = ModelMetadata.normalize_capability_value(tier)
+    tier = comparable_service_tier(tier)
 
     if tier in ["auto", "default"] do
       true
@@ -658,7 +659,7 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
   end
 
   defp service_tier_requires_explicit_support?(tier) when is_binary(tier) do
-    tier = ModelMetadata.normalize_capability_value(tier)
+    tier = comparable_service_tier(tier)
     tier not in ["", "auto", "default"]
   end
 
@@ -670,14 +671,20 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
       |> ModelMetadata.list_metadata("service_tiers")
       |> Enum.map(&service_tier_id/1)
       |> Enum.reject(&is_nil/1)
-      |> Enum.map(&ModelMetadata.normalize_capability_value/1)
+      |> Enum.map(&comparable_service_tier/1)
 
     speed_tiers =
       metadata
       |> ModelMetadata.list_metadata("additional_speed_tiers")
-      |> Enum.map(&ModelMetadata.normalize_capability_value/1)
+      |> Enum.map(&comparable_service_tier/1)
 
-    tier in service_tiers or tier in speed_tiers
+    comparable_service_tier(tier) in service_tiers or comparable_service_tier(tier) in speed_tiers
+  end
+
+  defp comparable_service_tier(tier) do
+    tier
+    |> ModelMetadata.normalize_capability_value()
+    |> ServiceTier.canonicalize()
   end
 
   defp service_tier_id(%{"id" => id}) when is_binary(id), do: id

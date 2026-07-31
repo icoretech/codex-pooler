@@ -28,6 +28,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     backend_responses_envelope
     upstream_error_param
     rejection_metadata
+    backend_fast_service_tier
     responses_chat
     response_body_cap
     backend_v1_alias_surface

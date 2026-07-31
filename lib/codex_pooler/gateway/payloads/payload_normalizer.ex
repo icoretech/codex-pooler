@@ -9,6 +9,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.ToolResultShape
   alias CodexPooler.Gateway.Payloads.ToolSchemaLowering
+  alias CodexPooler.ServiceTier
 
   @backend_turn_state_client_metadata_key "x-codex-turn-state"
   @websocket_responses_lite_client_metadata_key "ws_request_header_x_openai_internal_codex_responses_lite"
@@ -73,6 +74,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     payload =
       payload
       |> apply_enforced_payload_policy(request_options)
+      |> canonicalize_backend_fast_service_tier()
       |> omit_upstream_auto_default_service_tier()
 
     applied_effort = reasoning_effort(payload)
@@ -557,6 +559,17 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   end
 
   defp apply_enforced_service_tier(payload, _tier), do: payload
+
+  defp canonicalize_backend_fast_service_tier(%{"service_tier" => tier} = payload)
+       when is_binary(tier) do
+    if ServiceTier.fast_mode?(tier) do
+      Map.put(payload, "service_tier", "priority")
+    else
+      payload
+    end
+  end
+
+  defp canonicalize_backend_fast_service_tier(payload), do: payload
 
   defp omit_upstream_auto_default_service_tier(%{"service_tier" => tier} = payload)
        when is_binary(tier) do

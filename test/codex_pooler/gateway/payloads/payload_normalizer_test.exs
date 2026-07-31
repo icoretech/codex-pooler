@@ -427,7 +427,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       assert {:ok, ^malformed_payload} = PayloadNormalizer.normalize(malformed_payload)
     end
 
-    test "omits absent, auto, and default service tiers while preserving concrete tiers upstream" do
+    test "omits neutral tiers, canonicalizes binary fast, and preserves other backend tiers" do
       model = %Model{upstream_model_id: "provider-model"}
 
       for payload <- [
@@ -449,6 +449,34 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       end
 
       for tier <- ["priority", "flex", "scale", "latency_preview"] do
+        payload = %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => tier}
+        request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(
+                   payload,
+                   model,
+                   "/backend-api/codex/responses",
+                   request_options
+                 )
+
+        assert Jason.decode!(encoded)["service_tier"] == tier
+      end
+
+      fast_payload = %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => "fast"}
+      fast_options = RequestOptions.build(%{}, "/backend-api/codex/responses", fast_payload)
+
+      assert {:ok, fast_encoded} =
+               PayloadNormalizer.upstream_payload(
+                 fast_payload,
+                 model,
+                 "/backend-api/codex/responses",
+                 fast_options
+               )
+
+      assert Jason.decode!(fast_encoded)["service_tier"] == "priority"
+
+      for tier <- [123, nil, ["fast"], %{"id" => "fast"}] do
         payload = %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => tier}
         request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
 
@@ -1628,6 +1656,27 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                PayloadNormalizer.upstream_payload(
                  %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => "default"},
                  model,
+                 "/backend-api/codex/responses",
+                 request_options
+               )
+
+      assert Jason.decode!(encoded)["service_tier"] == "priority"
+    end
+
+    test "canonicalizes an enforced binary fast tier after it overrides the client tier" do
+      payload = %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => "latency_preview"}
+
+      request_options =
+        RequestOptions.build(
+          %{api_key_policy: %{enforced_service_tier: "fast"}},
+          "/backend-api/codex/responses",
+          payload
+        )
+
+      assert {:ok, encoded} =
+               PayloadNormalizer.upstream_payload(
+                 payload,
+                 %Model{upstream_model_id: "provider-model"},
                  "/backend-api/codex/responses",
                  request_options
                )

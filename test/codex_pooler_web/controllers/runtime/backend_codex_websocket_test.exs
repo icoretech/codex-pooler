@@ -826,6 +826,52 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     end
   end
 
+  test "backend websocket canonicalizes fast and preserves the provider response frame" do
+    provider_payload = %{
+      "id" => "resp_backend_ws_fast_tier",
+      "object" => "response",
+      "service_tier" => "fast",
+      "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+    }
+
+    upstream = start_upstream(FakeUpstream.json_response(provider_payload))
+
+    setup =
+      gateway_setup(upstream,
+        model_metadata: %{
+          "upstream_model" => %{
+            "service_tiers" => [%{"id" => "priority", "name" => "Priority"}]
+          }
+        }
+      )
+
+    port = start_public_endpoint!()
+    turn_state = "ws-fast-tier-#{System.unique_integer([:positive])}"
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
+
+    try do
+      payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
+          "service_tier" => "fast",
+          "stream" => true,
+          "generate" => true
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert frame == Jason.encode!(provider_payload)
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.json["service_tier"] == "priority"
+      conn
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   test "backend websocket preserves namespace tools and lowers ordinary functions" do
     upstream =
       start_upstream(

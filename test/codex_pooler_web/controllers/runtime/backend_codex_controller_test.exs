@@ -3950,6 +3950,69 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute metadata_text =~ "upstream-token"
   end
 
+  test "POST /backend-api/codex/responses canonicalizes fast and preserves provider response bytes" do
+    provider_payload = %{
+      "id" => "resp_backend_fast_tier",
+      "object" => "response",
+      "service_tier" => "fast",
+      "usage" => %{"input_tokens" => 4, "output_tokens" => 2, "total_tokens" => 6}
+    }
+
+    upstream = start_upstream(FakeUpstream.json_response(provider_payload))
+
+    setup =
+      gateway_setup(upstream,
+        model_metadata: %{
+          "upstream_model" => %{
+            "service_tiers" => [%{"id" => "priority", "name" => "Priority"}]
+          }
+        }
+      )
+
+    conn =
+      build_conn()
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic fast tier request",
+        "service_tier" => "fast"
+      })
+
+    assert conn.status == 200
+    assert conn.resp_body == Jason.encode!(provider_payload)
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.json["service_tier"] == "priority"
+  end
+
+  test "POST /backend-api/codex/responses denies unadvertised fast aliases before work" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    conn =
+      build_conn()
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic denied fast tier request",
+        "service_tier" => "fast"
+      })
+
+    assert %{"error" => %{"code" => "no_compatible_backend"}} = json_response(conn, 503)
+    assert FakeUpstream.count(upstream) == 0
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "rejected"
+    assert request.last_error_code == "no_compatible_backend"
+    refute inspect(request.request_metadata) =~ "synthetic denied fast tier request"
+    refute inspect(request.request_metadata) =~ setup.raw_key
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry, where: entry.request_id == ^request.id),
+             :count
+           ) == 0
+  end
+
   test "POST /backend-api/codex/responses does not cross a divergent capability partition",
        %{conn: conn} do
     incompatible_upstream =

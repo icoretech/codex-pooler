@@ -232,6 +232,22 @@ defmodule CodexPooler.CompatibilityMatrix do
         "non-429 HTTP 4xx rejection metadata is extracted from a bounded private streaming drain or the bounded materialized body, projected only on failed-attempt detail, and publishes bounded code, type, param, message-presence, and message-byte facts without raw provider bodies or messages"
     },
     %{
+      slug: :backend_fast_service_tier,
+      status: :supported,
+      current: :canonical_priority_routing_alias,
+      categories: [:route, :auth, :error, :streaming, :ownership],
+      routes: [
+        %{method: :post, path: "/backend-api/codex/responses"},
+        %{method: :post, path: "/backend-api/codex/v1/responses"},
+        %{method: :get, path: "/backend-api/codex/responses", transport: "websocket"},
+        %{method: :get, path: "/backend-api/codex/v1/responses", transport: "websocket"}
+      ],
+      future_routes: [],
+      fixture: :backend_responses_envelope,
+      contract:
+        "backend Responses HTTP and websocket routes canonicalize binary client or enforced service_tier fast to upstream priority, compare advertised fast and priority as equivalent without rewriting catalog metadata, preserve every other backend tier value or type, and relay provider bytes, frames, and service-tier vocabulary unchanged"
+    },
+    %{
       slug: :responses_chat,
       status: :supported,
       current: :proxied_json_and_sse,

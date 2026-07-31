@@ -251,6 +251,48 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
       assert candidate_ids(filtered) == ["assignment-supported"]
     end
 
+    test "fast and priority match either advertised service-tier alias without mutating metadata" do
+      for {requested, advertised} <- [{"fast", "priority"}, {"priority", "fast"}] do
+        model = model_with_tier_support("assignment-supported", advertised)
+        original_metadata = model.metadata
+        candidates = [candidate("assignment-supported"), candidate("assignment-plain")]
+        payload = %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => requested}
+        request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+
+        assert {:ok, filtered} =
+                 CandidateEligibility.filter_runtime_compatible_candidates(
+                   filter_input(model, payload, request_options, candidates)
+                 )
+
+        assert candidate_ids(filtered) == ["assignment-supported"]
+        assert model.metadata == original_metadata
+
+        assert get_in(model.metadata, [
+                 "source_assignment_models",
+                 "assignment-supported",
+                 "service_tiers",
+                 Access.at(0),
+                 "id"
+               ]) == advertised
+      end
+    end
+
+    test "fast and priority match either advertised additional-speed-tier alias" do
+      for {requested, advertised} <- [{"fast", "priority"}, {"priority", "fast"}] do
+        model = model_with_speed_tier_support("assignment-supported", advertised)
+        candidates = [candidate("assignment-supported"), candidate("assignment-plain")]
+        payload = %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => requested}
+        request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+
+        assert {:ok, filtered} =
+                 CandidateEligibility.filter_runtime_compatible_candidates(
+                   filter_input(model, payload, request_options, candidates)
+                 )
+
+        assert candidate_ids(filtered) == ["assignment-supported"]
+      end
+    end
+
     test "a concrete unsupported tier produces no compatible backend" do
       model = model_with_tier_support("assignment-supported", "priority")
       candidates = [candidate("assignment-supported"), candidate("assignment-plain")]
@@ -332,6 +374,26 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
       request_options =
         RequestOptions.build(
           %{api_key_policy: %{enforced_service_tier: "priority"}},
+          "/backend-api/codex/responses",
+          payload
+        )
+
+      assert {:ok, filtered} =
+               CandidateEligibility.filter_runtime_compatible_candidates(
+                 filter_input(model, payload, request_options, candidates)
+               )
+
+      assert candidate_ids(filtered) == ["assignment-supported"]
+    end
+
+    test "an api-key enforced fast alias matches advertised priority and overrides the client tier" do
+      model = model_with_tier_support("assignment-supported", "priority")
+      candidates = [candidate("assignment-supported"), candidate("assignment-plain")]
+      payload = %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => "latency_preview"}
+
+      request_options =
+        RequestOptions.build(
+          %{api_key_policy: %{enforced_service_tier: "fast"}},
           "/backend-api/codex/responses",
           payload
         )
@@ -781,6 +843,25 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
               %{"id" => supported_tier, "name" => supported_tier, "description" => supported_tier}
             ],
             "additional_speed_tiers" => []
+          },
+          "assignment-plain" => %{
+            "capabilities" => %{"responses" => true},
+            "service_tiers" => [],
+            "additional_speed_tiers" => []
+          }
+        }
+      }
+    }
+  end
+
+  defp model_with_speed_tier_support(supported_assignment_id, supported_tier) do
+    %Model{
+      metadata: %{
+        "source_assignment_models" => %{
+          supported_assignment_id => %{
+            "capabilities" => %{"responses" => true},
+            "service_tiers" => [],
+            "additional_speed_tiers" => [supported_tier]
           },
           "assignment-plain" => %{
             "capabilities" => %{"responses" => true},
