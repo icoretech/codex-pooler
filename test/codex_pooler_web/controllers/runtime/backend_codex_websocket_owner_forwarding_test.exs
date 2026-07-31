@@ -2487,9 +2487,251 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert retarget_admitted_state.websocket_owner_downstream == downstream
       assert {:ok, _owner_pid} = WebsocketOwnerSession.lookup(session.id)
       assert FakeUpstream.count(upstream) == 0
-      assert FakeUpstream.websocket_connection_count(upstream) == 0
-      assert [] = request_logs(setup.pool.id)
-      assert_no_leak!("stale alias retarget error frame", error_frame)
+      assert FakeUpstream.websocket_connection_count(upstream) == 1
+
+      assert [guarded_request] = request_logs(setup.pool.id)
+      assert guarded_request.status == "failed"
+      assert guarded_request.last_error_code == "stream_incomplete"
+
+      assert [guarded_attempt] =
+               Repo.all(from(a in Attempt, where: a.request_id == ^guarded_request.id))
+
+      assert guarded_attempt.response_metadata["transport_failure"]["termination_source"] ==
+               "continuation_generation_guard"
+
+      assert_no_leak_in_persistence!(setup.pool.id)
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
+  @tag :continuation_generation_boundary
+  test "owner-forwarded alias cache miss forwards unchanged on the reused current connection" do
+    previous_response_id = "#{@sentinel}-reused-alias-miss"
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_reused_alias_miss_anchor",
+             "object" => "response"
+           }),
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_reused_alias_miss_continuation",
+             "object" => "response"
+           })
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = owner_socket(auth, "ws-owner-reused-alias-miss", "reused-alias-miss")
+
+    try do
+      anchor_payload =
+        websocket_payload(setup, "owner reused alias miss anchor", %{
+          "request_id" => "ws-owner-reused-alias-miss-anchor"
+        })
+
+      assert {:ok, state} =
+               CodexResponsesSocket.handle_in({anchor_payload, [opcode: :text]}, state)
+
+      assert {:push, {:text, anchor_frame}, state} = receive_owner_socket_push(state)
+      assert owner_response_id(anchor_frame) == "resp_owner_reused_alias_miss_anchor"
+      assert {:ok, state} = receive_socket_done(state)
+
+      continuation_payload =
+        websocket_payload(setup, @sentinel, %{
+          "previous_response_id" => previous_response_id,
+          "request_id" => "ws-owner-reused-alias-miss-continuation"
+        })
+
+      {_state, logs} =
+        with_log([level: :warning], fn ->
+          assert {:ok, state} =
+                   CodexResponsesSocket.handle_in({continuation_payload, [opcode: :text]}, state)
+
+          assert {:push, {:text, continuation_frame}, state} = receive_owner_socket_push(state)
+
+          assert owner_response_id(continuation_frame) ==
+                   "resp_owner_reused_alias_miss_continuation"
+
+          assert {:ok, state} = receive_socket_done(state)
+          state
+        end)
+
+      refute logs =~ "owner_unavailable"
+      refute logs =~ "status=503"
+      assert_no_leak!("reused alias miss logs", logs)
+
+      assert FakeUpstream.count(upstream) == 2
+      assert FakeUpstream.websocket_connection_count(upstream) == 1
+
+      assert [anchor_request, continuation_request] = await_upstream_requests(upstream, 2)
+
+      assert anchor_request.websocket_connection_id ==
+               continuation_request.websocket_connection_id
+
+      assert continuation_request.json["previous_response_id"] == previous_response_id
+
+      assert [anchor_log, continuation_log] = request_logs(setup.pool.id)
+      assert anchor_log.status == "succeeded"
+      assert continuation_log.status == "succeeded"
+      assert_no_leak_in_persistence!(setup.pool.id)
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
+  @tag :continuation_generation_boundary
+  test "owner-forwarded alias cache miss guards a replacement connection then reuses it for a full request" do
+    previous_response_id = "#{@sentinel}-replacement-alias-miss"
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_replacement_alias_miss_anchor",
+             "object" => "response"
+           }),
+           FakeUpstream.json_response(%{
+             "id" => "resp_owner_replacement_alias_miss_full_retry",
+             "object" => "response"
+           })
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = owner_socket(auth, "ws-owner-replacement-alias-miss", "replacement-alias-miss")
+
+    try do
+      anchor_payload =
+        websocket_payload(setup, "owner replacement alias miss anchor", %{
+          "request_id" => "ws-owner-replacement-alias-miss-anchor"
+        })
+
+      assert {:ok, state} =
+               CodexResponsesSocket.handle_in({anchor_payload, [opcode: :text]}, state)
+
+      assert {:push, {:text, anchor_frame}, state} = receive_owner_socket_push(state)
+      assert owner_response_id(anchor_frame) == "resp_owner_replacement_alias_miss_anchor"
+      assert {:ok, state} = receive_socket_done(state)
+
+      assert {:ok, owner_pid} = WebsocketOwnerSession.lookup(state.codex_session.id)
+      upstream_pid = :sys.get_state(owner_pid).upstream_pid
+      assert :ok = UpstreamWebsocketSession.invalidate_connection(upstream_pid)
+
+      continuation_payload =
+        websocket_payload(setup, @sentinel, %{
+          "previous_response_id" => previous_response_id,
+          "request_id" => "ws-owner-replacement-alias-miss-continuation"
+        })
+
+      {state, logs} =
+        with_log([level: :warning], fn ->
+          assert {:ok, state} =
+                   CodexResponsesSocket.handle_in({continuation_payload, [opcode: :text]}, state)
+
+          assert {:push, {:text, guard_terminal}, state} = receive_owner_socket_push(state)
+          assert Jason.decode!(guard_terminal) == Jason.decode!(native_owner_retry_terminal())
+          assert {:ok, state} = receive_socket_done(state)
+          refute_received {:websocket_owner_frame, _, _, {:data, ^guard_terminal}}
+          state
+        end)
+
+      refute logs =~ "owner_unavailable"
+      refute logs =~ "status=503"
+      assert_no_leak!("replacement alias miss logs", logs)
+
+      assert FakeUpstream.count(upstream) == 1
+      assert FakeUpstream.websocket_connection_count(upstream) == 2
+
+      assert [anchor_request, guarded_request] = request_logs(setup.pool.id)
+      assert anchor_request.status == "succeeded"
+      assert guarded_request.status == "failed"
+      assert guarded_request.last_error_code == "stream_incomplete"
+
+      assert [guarded_attempt] =
+               Repo.all(from(a in Attempt, where: a.request_id == ^guarded_request.id))
+
+      assert guarded_attempt.status == "failed"
+      assert guarded_attempt.network_error_code == "stream_incomplete"
+
+      assert guarded_attempt.response_metadata["transport_failure"] == %{
+               "connection_use" => "reconnected",
+               "phase" => "send_payload",
+               "pre_visible_output" => true,
+               "reason" => "previous_response_generation_mismatch",
+               "reason_class" => "previous_response_generation_mismatch",
+               "termination_source" => "continuation_generation_guard",
+               "terminal_seen" => false,
+               "text_frame_count" => 0,
+               "upstream_committed" => false
+             }
+
+      assert %{
+               "generation" => 2,
+               "reconnected" => true,
+               "reused" => false
+             } = guarded_attempt.response_metadata["upstream_websocket_connection"]
+
+      assert Repo.aggregate(
+               from(entry in LedgerEntry,
+                 where:
+                   entry.request_id == ^guarded_request.id and entry.entry_kind == "settlement"
+               ),
+               :count
+             ) == 1
+
+      assert Repo.aggregate(
+               from(bridge_alias in BridgeSessionAlias,
+                 where:
+                   bridge_alias.pool_id == ^setup.pool.id and
+                     bridge_alias.api_key_id == ^setup.api_key.id and
+                     bridge_alias.alias_kind == "previous_response_id" and
+                     bridge_alias.alias_hash == ^:crypto.hash(:sha256, previous_response_id)
+               ),
+               :count
+             ) == 0
+
+      full_retry_payload =
+        websocket_payload(setup, "owner replacement alias miss full retry", %{
+          "request_id" => "ws-owner-replacement-alias-miss-full-retry"
+        })
+
+      assert {:ok, state} =
+               CodexResponsesSocket.handle_in({full_retry_payload, [opcode: :text]}, state)
+
+      assert {:push, {:text, full_retry_frame}, state} = receive_owner_socket_push(state)
+      assert owner_response_id(full_retry_frame) == "resp_owner_replacement_alias_miss_full_retry"
+      assert {:ok, _state} = receive_socket_done(state)
+
+      assert FakeUpstream.count(upstream) == 2
+      assert FakeUpstream.websocket_connection_count(upstream) == 2
+
+      assert [anchor_upstream_request, full_retry_upstream_request] =
+               await_upstream_requests(upstream, 2)
+
+      assert anchor_upstream_request.websocket_connection_id !=
+               full_retry_upstream_request.websocket_connection_id
+
+      refute Map.has_key?(full_retry_upstream_request.json, "previous_response_id")
+
+      assert [^anchor_request, ^guarded_request, full_retry_request] = request_logs(setup.pool.id)
+      assert full_retry_request.status == "succeeded"
+
+      assert [full_retry_attempt] =
+               Repo.all(from(a in Attempt, where: a.request_id == ^full_retry_request.id))
+
+      assert %{
+               "generation" => 2,
+               "reconnected" => false,
+               "reused" => true
+             } = full_retry_attempt.response_metadata["upstream_websocket_connection"]
+
       assert_no_leak_in_persistence!(setup.pool.id)
     after
       CodexResponsesSocket.terminate(:closed, state)
@@ -6053,6 +6295,165 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     |> Map.merge(extra)
     |> Jason.encode!()
   end
+
+  test "direct owner continuity chains three settled turns on one upstream connection" do
+    assert_owner_three_turn_continuity_chain(:direct)
+  end
+
+  test "proxy owner continuity chains three settled turns on one upstream connection" do
+    assert_owner_three_turn_continuity_chain(:proxy)
+  end
+
+  defp assert_owner_three_turn_continuity_chain(route) do
+    response_ids =
+      Enum.map(1..3, fn turn ->
+        "resp_owner_three_turn_#{route}_#{turn}_#{System.unique_integer([:positive])}"
+      end)
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         Enum.map(response_ids, fn response_id ->
+           FakeUpstream.json_response(%{"id" => response_id, "object" => "response"})
+         end)}
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    turn_state = "owner-three-turn-#{route}-#{System.unique_integer([:positive])}"
+
+    {:ok, state} =
+      owner_socket(auth, "ws-owner-three-turn-#{route}", turn_state)
+
+    state = maybe_proxy_owner_state(state, route)
+
+    try do
+      state = run_owner_three_turn_chain(response_ids, route, auth, state, setup)
+
+      assert FakeUpstream.count(upstream) == 3
+      assert FakeUpstream.websocket_connection_count(upstream) == 1
+
+      assert [first_upstream_request, second_upstream_request, third_upstream_request] =
+               await_upstream_requests(upstream, 3)
+
+      assert Enum.uniq(
+               Enum.map(
+                 [first_upstream_request, second_upstream_request, third_upstream_request],
+                 & &1.websocket_connection_id
+               )
+             )
+             |> length() == 1
+
+      refute Map.has_key?(first_upstream_request.json, "previous_response_id")
+      assert second_upstream_request.json["previous_response_id"] == Enum.at(response_ids, 0)
+      assert third_upstream_request.json["previous_response_id"] == Enum.at(response_ids, 1)
+
+      assert [first_request, second_request, third_request] = request_logs(setup.pool.id)
+
+      assert_three_turn_persistence(
+        [first_request, second_request, third_request],
+        response_ids,
+        state.codex_session.id
+      )
+
+      assert Enum.map([first_request, second_request, third_request], & &1.correlation_id) ==
+               Enum.map(1..3, &"ws-owner-three-turn-#{route}-#{&1}")
+
+      assert_no_leak_in_persistence!(setup.pool.id)
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
+  defp run_owner_three_turn_chain(response_ids, route, auth, state, setup) do
+    response_ids
+    |> Enum.with_index(1)
+    |> Enum.reduce({state, nil}, fn {response_id, turn}, {state, previous_response_id} ->
+      request_id = "ws-owner-three-turn-#{route}-#{turn}"
+      extra = owner_continuation_extra(request_id, previous_response_id)
+      payload = websocket_payload(setup, "owner three turn #{route} #{turn}", extra)
+
+      assert :ok = run_owner_continuity_turn(route, auth, state, payload)
+      assert {:push, {:text, frame}, state} = receive_owner_socket_push(state)
+      assert owner_response_id(frame) == response_id
+      assert {:ok, state} = receive_owner_continuity_complete(route, state)
+
+      assert %{active_turn: nil} =
+               :sys.get_state(WebsocketOwnerSession.lookup(state.codex_session.id) |> elem(1))
+
+      {state, response_id}
+    end)
+    |> elem(0)
+  end
+
+  defp owner_continuation_extra(request_id, nil), do: %{"request_id" => request_id}
+
+  defp owner_continuation_extra(request_id, previous_response_id) do
+    %{"request_id" => request_id, "previous_response_id" => previous_response_id}
+  end
+
+  defp assert_three_turn_persistence(requests, response_ids, codex_session_id) do
+    for {request, response_id} <- Enum.zip(requests, response_ids) do
+      assert request.status == "succeeded"
+      assert_request_settled_once(request)
+      assert_active_response_alias(codex_session_id, response_id)
+    end
+  end
+
+  defp assert_request_settled_once(request) do
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 1
+
+    assert Repo.aggregate(
+             from(a in Attempt, where: a.request_id == ^request.id and a.status == "succeeded"),
+             :count
+           ) == 1
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+             ),
+             :count
+           ) == 1
+
+    assert Repo.aggregate(from(t in CodexTurn, where: t.request_id == ^request.id), :count) == 1
+
+    assert Repo.aggregate(
+             from(t in CodexTurn, where: t.request_id == ^request.id and t.status == "succeeded"),
+             :count
+           ) == 1
+  end
+
+  defp assert_active_response_alias(codex_session_id, response_id) do
+    assert Repo.aggregate(
+             from(alias_record in BridgeSessionAlias,
+               where:
+                 alias_record.codex_session_id == ^codex_session_id and
+                   alias_record.alias_kind == "previous_response_id" and
+                   alias_record.alias_hash == ^:crypto.hash(:sha256, response_id) and
+                   alias_record.status == "active"
+             ),
+             :count
+           ) == 1
+  end
+
+  defp run_owner_continuity_turn(:direct, _auth, state, payload) do
+    case CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state) do
+      {:ok, _state} -> :ok
+    end
+  end
+
+  defp run_owner_continuity_turn(:proxy, auth, state, payload) do
+    Gateway.run_websocket_response(
+      auth,
+      payload,
+      owner_response_options(state, owner_node_opts(state, :proxy)),
+      fn _data -> :ok end
+    )
+  end
+
+  defp receive_owner_continuity_complete(:direct, state), do: receive_socket_done(state)
+
+  defp receive_owner_continuity_complete(:proxy, state), do: receive_owner_socket_complete(state)
 
   defp assert_owner_continuation_generation_boundary(route) do
     previous_response_id = "resp_owner_generation_anchor_#{route}"

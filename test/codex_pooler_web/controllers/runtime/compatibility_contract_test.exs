@@ -828,6 +828,12 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "exact previous_response_not_found client retry signal"
       assert feature.contract =~ "public /v1 terminal masking and shape remain unchanged"
 
+      assert feature.contract =~
+               "an unresolved previous-response alias retains the current authenticated runtime"
+
+      assert feature.contract =~
+               "successful native turns register hashed previous-response aliases independent of retained-body completeness"
+
       assert fixture.native_continuation_generation_guard == %{
                scope: "native_backend_websocket_exact_previous_response_not_found",
                marked_continuation_connection_use: "reused_only",

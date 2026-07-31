@@ -1338,15 +1338,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       end)
 
     barriers = await_two_sender_barriers(controls)
+    assert %{active_turn: %{task_ref: stale_task_ref}} = :sys.get_state(owner)
     release_controlled(barriers, controls, :task_result)
     %{active_turn: active_turn} = await_pending_terminal_result(owner)
     stale_timeout = active_turn.terminal_delivery_timeout
+    stale_result = active_turn.pending_result
     release_controlled(barriers, controls, :nonterminal_frames)
     terminal_barrier = await_controlled_barrier(:terminal_frames, controls)
     release_controlled(terminal_barrier, controls, :terminal_frames)
 
     assert_receive {:websocket_owner_frame, "duplicate-terminal", 1, {:data, ^terminal_frame}}
-    assert Task.await(submit_task, 1_000) == terminal_result(terminal_frame, "response.completed")
+    assert {:ok, result} = Task.await(submit_task, 1_000)
+    assert result == terminal_result(terminal_frame, "response.completed") |> elem(1)
+    refute Map.has_key?(result, :response_id)
     assert_receive {:websocket_owner_frame, "duplicate-terminal", 1, :complete}
     refute_received {:websocket_owner_frame, "duplicate-terminal", 1, {:data, ^terminal_frame}}
 
@@ -1354,10 +1358,28 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     send(owner, {:websocket_owner_terminal_delivery_timeout, stale_turn_ref, stale_timer_token})
     assert %{active_turn: nil} = :sys.get_state(owner)
 
+    {:ok, reconnected_downstream} =
+      WebsocketOwnerSession.attach_downstream(
+        owner,
+        downstream_target("reconnect-after-terminal")
+      )
+
+    assert reconnected_downstream.epoch == downstream.epoch + 1
+
     next_submit_task =
-      Task.async(fn -> WebsocketOwnerSession.submit_frame(owner, downstream, "next-turn") end)
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_frame(owner, reconnected_downstream, "next-turn")
+      end)
 
     next_barriers = await_two_sender_barriers(controls)
+    assert %{active_turn: %{ref: next_turn_ref}} = :sys.get_state(owner)
+
+    send(owner, {stale_task_ref, stale_result})
+    send(owner, {:websocket_owner_terminal_delivery_timeout, stale_turn_ref, stale_timer_token})
+    send(owner, {:websocket_owner_upstream_frame, active_turn.ref, terminal_frame})
+
+    assert %{active_turn: %{ref: ^next_turn_ref, pending_result: nil}} = :sys.get_state(owner)
+
     release_controlled(next_barriers, controls, :nonterminal_frames)
     next_terminal_barrier = await_controlled_barrier(:terminal_frames, controls)
     release_controlled(next_terminal_barrier, controls, :terminal_frames)
@@ -1366,10 +1388,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert Task.await(next_submit_task, 1_000) ==
              terminal_result(terminal_frame, "response.completed")
 
-    assert_receive {:websocket_owner_frame, "duplicate-terminal", 1, :complete}
+    assert_receive {:websocket_owner_frame, "reconnect-after-terminal", 2, :complete}
 
-    refute_received {:websocket_owner_frame, "duplicate-terminal", 1,
+    refute_received {:websocket_owner_frame, "reconnect-after-terminal", 2,
                      {:error, :upstream_websocket_terminal_delivery_timeout, _payload}}
+
+    assert %{active_turn: nil} = :sys.get_state(owner)
   end
 
   test "detach while a terminal result is pending keeps client disconnect precedence", context do
