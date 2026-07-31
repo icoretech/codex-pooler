@@ -11,11 +11,13 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
 
   alias CodexPooler.Gateway.Persistence.{
     BridgeOwnerLease,
+    BridgeSessionAlias,
     CodexSession,
     CodexTurn,
     SessionContinuity
   }
 
+  alias CodexPooler.Gateway.Persistence.SessionContinuity.Aliases
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
@@ -54,6 +56,171 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     end)
 
     :ok
+  end
+
+  describe "continuity response aliases" do
+    test "explicit normalized response identity wins over a conflicting response body" do
+      auth = auth_fixture()
+      session = continuity_session_fixture(auth, "explicit-precedence")
+      explicit_response_id = " explicit-response-#{System.unique_integer([:positive])} "
+      normalized_response_id = String.trim(explicit_response_id)
+      body_response_id = "body-response-#{System.unique_integer([:positive])}"
+
+      assert :ok =
+               SessionContinuity.register_codex_session_continuity(
+                 session,
+                 %{},
+                 %{"id" => body_response_id},
+                 owner_request_options(response_id: explicit_response_id)
+               )
+
+      assert [alias_record] = active_response_aliases(auth, normalized_response_id)
+      assert alias_record.alias_hash == :crypto.hash(:sha256, normalized_response_id)
+
+      assert alias_record.alias_preview ==
+               alias_record.alias_hash |> Base.encode16(case: :lower) |> String.slice(0, 16)
+
+      refute inspect(Map.from_struct(alias_record)) =~ normalized_response_id
+      refute active_response_aliases(auth, body_response_id) != []
+    end
+
+    test "response body identity registers when an explicit identity is absent" do
+      auth = auth_fixture()
+      session = continuity_session_fixture(auth, "body-fallback")
+      response_id = "body-response-#{System.unique_integer([:positive])}"
+
+      assert :ok =
+               SessionContinuity.register_codex_session_continuity(
+                 session,
+                 %{},
+                 Jason.encode!(%{"id" => response_id}),
+                 owner_request_options([])
+               )
+
+      assert [_alias_record] = active_response_aliases(auth, response_id)
+    end
+
+    test "blank identity and an id-less body register no response alias" do
+      auth = auth_fixture()
+      session = continuity_session_fixture(auth, "blank-identity")
+
+      assert :ok =
+               SessionContinuity.register_codex_session_continuity(
+                 session,
+                 %{},
+                 %{"status" => "completed"},
+                 owner_request_options(response_id: "  ")
+               )
+
+      assert [] = response_aliases_for_session(session.id)
+    end
+
+    test "repeated registration keeps one active scoped response alias with its configured ttl" do
+      auth = auth_fixture()
+      session = continuity_session_fixture(auth, "deduplicated-registration")
+      response_id = "deduplicated-response-#{System.unique_integer([:positive])}"
+      request_options = owner_request_options(response_id: response_id)
+
+      assert :ok =
+               SessionContinuity.register_codex_session_continuity(
+                 session,
+                 %{},
+                 %{},
+                 request_options
+               )
+
+      assert :ok =
+               SessionContinuity.register_codex_session_continuity(
+                 session,
+                 %{},
+                 %{},
+                 request_options
+               )
+
+      assert [alias_record] = active_response_aliases(auth, response_id)
+
+      assert DateTime.diff(alias_record.expires_at, alias_record.last_seen_at, :second) ==
+               24 * 60 * 60
+    end
+
+    test "response aliases stay pool and api-key scoped and expire from continuity lookup" do
+      primary_auth = auth_fixture()
+
+      %{api_key: alternate_api_key} =
+        active_api_key_fixture(primary_auth.pool, %{
+          created_by_user_id: primary_auth.pool.created_by_user_id
+        })
+
+      alternate_auth = %{pool: primary_auth.pool, api_key: alternate_api_key}
+
+      other_pool =
+        pool_fixture(%{created_by_user_id: primary_auth.pool.created_by_user_id})
+
+      %{api_key: other_pool_api_key} =
+        active_api_key_fixture(other_pool, %{
+          created_by_user_id: primary_auth.pool.created_by_user_id
+        })
+
+      other_pool_auth = %{pool: other_pool, api_key: other_pool_api_key}
+      response_id = "scoped-response-#{System.unique_integer([:positive])}"
+
+      primary_session = continuity_session_fixture(primary_auth, "primary-scope")
+      alternate_session = continuity_session_fixture(alternate_auth, "alternate-scope")
+      other_pool_session = continuity_session_fixture(other_pool_auth, "other-pool-scope")
+
+      for {session, auth} <- [
+            {primary_session, primary_auth},
+            {alternate_session, alternate_auth},
+            {other_pool_session, other_pool_auth}
+          ] do
+        assert :ok =
+                 SessionContinuity.register_codex_session_continuity(
+                   session,
+                   %{},
+                   %{},
+                   owner_request_options(response_id: response_id)
+                 )
+
+        assert [_alias_record] = active_response_aliases(auth, response_id)
+      end
+
+      assert [primary_alias] = active_response_aliases(primary_auth, response_id)
+      assert [alternate_alias] = active_response_aliases(alternate_auth, response_id)
+      assert [other_pool_alias] = active_response_aliases(other_pool_auth, response_id)
+
+      assert Enum.uniq([primary_alias.id, alternate_alias.id, other_pool_alias.id]) |> length() ==
+               3
+
+      for {auth, session} <- [
+            {primary_auth, primary_session},
+            {alternate_auth, alternate_session},
+            {other_pool_auth, other_pool_session}
+          ] do
+        assert {:ok, %CodexSession{id: session_id}} =
+                 Repo.transaction(fn ->
+                   Aliases.active_session_for_update(
+                     auth.pool.id,
+                     auth.api_key.id,
+                     "previous_response_id",
+                     response_id,
+                     DateTime.utc_now()
+                   )
+                 end)
+
+        assert session_id == session.id
+      end
+
+      assert {:ok, nil} =
+               Repo.transaction(fn ->
+                 Aliases.active_session_for_update(
+                   primary_auth.pool.id,
+                   primary_auth.api_key.id,
+                   "previous_response_id",
+                   response_id,
+                   primary_alias.expires_at
+                 )
+               end)
+    end
   end
 
   @tag :session_start_race
@@ -786,6 +953,36 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     session = Repo.get!(CodexSession, session.id)
 
     %{auth: auth, session: session, token: session.owner_lease_token}
+  end
+
+  defp continuity_session_fixture(auth, prefix) do
+    assert {:ok, %CodexSession{} = session} =
+             Gateway.start_codex_session(auth, %{
+               accepted_turn_state: "#{prefix}-#{System.unique_integer([:positive])}",
+               owner_instance_id: "node-#{prefix}"
+             })
+
+    session
+  end
+
+  defp active_response_aliases(auth, response_id) do
+    Repo.all(
+      from alias_record in BridgeSessionAlias,
+        where:
+          alias_record.pool_id == ^auth.pool.id and alias_record.api_key_id == ^auth.api_key.id and
+            alias_record.alias_kind == "previous_response_id" and
+            alias_record.alias_hash == ^:crypto.hash(:sha256, response_id) and
+            alias_record.status == "active"
+    )
+  end
+
+  defp response_aliases_for_session(session_id) do
+    Repo.all(
+      from alias_record in BridgeSessionAlias,
+        where:
+          alias_record.codex_session_id == ^session_id and
+            alias_record.alias_kind == "previous_response_id"
+    )
   end
 
   defp active_lease!(session_id) do

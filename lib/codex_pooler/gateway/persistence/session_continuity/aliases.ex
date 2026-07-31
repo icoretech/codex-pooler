@@ -87,9 +87,15 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.Aliases do
 
   @spec continuity_opts(RequestOptions.t(), map(), map() | binary()) :: RequestOptions.t()
   def continuity_opts(%RequestOptions{} = request_options, payload, response_body) do
+    response_id =
+      case blank_to_nil(request_options.continuity.response_id) do
+        nil -> response_id_from_body(response_body)
+        response_id -> response_id
+      end
+
     request_options
     |> ContinuityPayload.put_previous_response_id(payload)
-    |> RequestOptions.put_continuity(response_id: response_id_from_body(response_body))
+    |> RequestOptions.put_continuity(response_id: response_id)
   end
 
   defp maybe_require_active_owner_lease(query, "previous_response_id", _now), do: query

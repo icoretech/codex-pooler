@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
     :timeouts,
     :message_mapper,
     :frame_observer,
+    :response_id,
     :terminal_upstream_error_code,
     :terminal_upstream_error_param,
     :termination_source,
@@ -39,6 +40,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
             CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.message_mapper(),
           frame_observer:
             CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.frame_observer(),
+          response_id: String.t() | nil,
           terminal_upstream_error_code: String.t() | nil,
           terminal_upstream_error_param: String.t() | nil,
           termination_source: atom() | nil,

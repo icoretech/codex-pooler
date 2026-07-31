@@ -4,11 +4,12 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
   import ExUnit.CaptureLog
+  import Ecto.Query
 
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Persistence.CodexSession
+  alias CodexPooler.Gateway.Persistence.{BridgeSessionAlias, CodexSession}
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
   alias CodexPooler.Gateway.Transports.RejectionBody
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
@@ -446,8 +447,9 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
            }
   end
 
-  test "one-shot websocket request preserves success metadata and omits it on initial upgrade failure" do
-    {:ok, success_upstream} = FakeUpstream.start_link(websocket_success("one-shot-success"))
+  test "one-shot websocket request preserves its structured response identity" do
+    response_id = "one-shot-response-identity"
+    {:ok, success_upstream} = FakeUpstream.start_link(websocket_success(response_id))
     on_exit(fn -> FakeUpstream.stop(success_upstream) end)
 
     success_request =
@@ -456,7 +458,9 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
         websocket_request_options()
       )
 
-    assert {:ok, success} = UpstreamDispatch.websocket_request(success_request)
+    assert {:ok, %{response_id: ^response_id} = success} =
+             UpstreamDispatch.websocket_request(success_request)
+
     success_connection = Map.fetch!(success, :upstream_websocket_connection)
 
     assert success_connection == %{
@@ -465,7 +469,65 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
              reused: false,
              reconnected: false
            }
+  end
 
+  test "legacy remote bare ok stays identity-less and does not register an alias", %{auth: auth} do
+    remote_node = :"codex_pooler@legacy-owner.example"
+
+    %{session: session, lease_token: lease_token} =
+      owner_session_fixture(auth, Atom.to_string(remote_node))
+
+    forwarder_opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => {:return, :ok}}
+      )
+
+    request_options =
+      websocket_owner_request_options(
+        session,
+        lease_token,
+        %{pid: self(), epoch: 1, correlation_id: "corr-legacy-owner-result"},
+        forwarder_opts
+      )
+
+    alias_ids_before =
+      Repo.all(
+        from(alias_record in BridgeSessionAlias,
+          where: alias_record.codex_session_id == ^session.id,
+          select: alias_record.id,
+          order_by: [asc: alias_record.id]
+        )
+      )
+
+    request = %UpstreamDispatch.Request{
+      url: "https://upstream.example.test/backend-api/codex/responses",
+      token: "redacted",
+      upstream_payload: "{}",
+      identity: upstream_identity(),
+      accounting_request: nil,
+      writer: fn _message -> :ok end,
+      request_options: request_options
+    }
+
+    assert {:ok, %{body: "", terminal: "response.completed", status: 200, headers: []} = result} =
+             UpstreamDispatch.websocket_request(request)
+
+    assert result == %{body: "", terminal: "response.completed", status: 200, headers: []}
+    refute Map.has_key?(result, :response_id)
+
+    assert Repo.all(
+             from(alias_record in BridgeSessionAlias,
+               where: alias_record.codex_session_id == ^session.id,
+               select: alias_record.id,
+               order_by: [asc: alias_record.id]
+             )
+           ) == alias_ids_before
+
+    assert_receive {:websocket_owner_harness_node_call,
+                    %{node: ^remote_node, function: :remote_submit_request, arity: 4}}
+  end
+
+  test "one-shot websocket request omits connection metadata on initial upgrade failure" do
     {:ok, failed_upstream} =
       FakeUpstream.start_link(
         FakeUpstream.websocket_upgrade_error(%{"error" => %{"code" => "initial_rejected"}},
@@ -475,11 +537,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     on_exit(fn -> FakeUpstream.stop(failed_upstream) end)
 
-    failure_request =
-      websocket_dispatch_request(
-        failed_upstream,
-        websocket_request_options()
-      )
+    failure_request = websocket_dispatch_request(failed_upstream, websocket_request_options())
 
     assert {:error, failure} = UpstreamDispatch.websocket_request(failure_request)
     assert %{body: "", reason: {:websocket_upgrade_failed, 401, _headers}} = failure

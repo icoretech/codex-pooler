@@ -645,6 +645,50 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert %{active_turn: nil} = :sys.get_state(owner)
   end
 
+  test "local owner preserves the structured response identity through terminal settlement",
+       context do
+    response_id = "resp_local_owner_identity"
+    terminal_frame = terminal_frame("response.completed", response_id)
+
+    expected_result =
+      terminal_result(terminal_frame, "response.completed")
+      |> elem(1)
+      |> Map.put(:response_id, response_id)
+
+    controls = WebsocketOwnerNodeHarness.two_sender_controls()
+
+    upstream =
+      WebsocketOwnerNodeHarness.two_sender_upstream_boundary(self(), controls,
+        terminal_frames: [terminal_frame],
+        task_result: {:ok, expected_result}
+      )
+
+    {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    {:ok, downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("local-response-identity"))
+
+    submit_task =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+      end)
+
+    barriers = await_two_sender_barriers(controls)
+    release_controlled(barriers, controls, :task_result)
+    release_controlled(barriers, controls, :nonterminal_frames)
+    terminal_barrier = await_controlled_barrier(:terminal_frames, controls)
+    release_controlled(terminal_barrier, controls, :terminal_frames)
+
+    assert Task.await(submit_task, 1_000) == {:ok, expected_result}
+
+    assert_receive {:websocket_owner_frame, "local-response-identity", 1,
+                    {:data, ^terminal_frame}}
+
+    assert_receive {:websocket_owner_frame, "local-response-identity", 1, :complete}
+    assert %{active_turn: nil} = :sys.get_state(owner)
+  end
+
   test "classified terminal delivery does not reparse a non-JSON downstream frame", context do
     terminal_frame = "terminal-frame-already-classified"
     terminal_result = terminal_result(terminal_frame, "response.completed")

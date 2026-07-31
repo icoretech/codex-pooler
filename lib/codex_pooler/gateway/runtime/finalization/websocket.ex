@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
 
   alias CodexPooler.Gateway.Runtime.Finalization.{
@@ -52,6 +53,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
            )
          ) do
       {:ok, _finalized} ->
+        request_options = request_options_with_response_id(request_options, finalization)
         SideEffects.record_success(context, payload, body, request_options, callbacks)
 
         {:ok, %{status: 200, headers: [], websocket_messages: []}}
@@ -60,6 +62,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
         {:error, gateway_error}
     end
   end
+
+  defp request_options_with_response_id(
+         %RequestOptions{} = request_options,
+         %{response_id: response_id}
+       )
+       when is_binary(response_id) do
+    case String.trim(response_id) do
+      "" -> request_options
+      response_id -> RequestOptions.put_continuity(request_options, response_id: response_id)
+    end
+  end
+
+  defp request_options_with_response_id(request_options, _finalization), do: request_options
 
   @spec finalize_terminal(SelectedCandidateContext.t(), map()) :: {:ok, map()} | {:error, map()}
   def finalize_terminal(context, finalization) do

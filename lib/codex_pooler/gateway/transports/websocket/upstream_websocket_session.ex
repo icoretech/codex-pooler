@@ -46,6 +46,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           required(:terminal) => binary(),
           required(:status) => 200,
           required(:headers) => response_headers(),
+          optional(:response_id) => String.t(),
           optional(:upstream_websocket_connection) => upstream_websocket_connection(),
           optional(:websocket_frame_headers) => map(),
           optional(:upstream_error_param) => String.t()
@@ -713,7 +714,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         receive_events(state, %{receive_state | transport_signal: nil})
 
       {:terminal, state, receive_state, terminal} ->
-        {{:ok,
+        result =
           %{
             body: receive_body(receive_state),
             terminal: terminal,
@@ -722,7 +723,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
             upstream_error_code: receive_state.terminal_upstream_error_code,
             upstream_error_param: receive_state.terminal_upstream_error_param,
             websocket_frame_headers: receive_state.websocket_frame_headers
-          }}, state}
+          }
+          |> maybe_put_success_response_id(terminal, receive_state.response_id)
+
+        {{:ok, result}, state}
 
       {:failure, state, receive_state, reason} ->
         {{:error,
@@ -864,6 +868,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     receive_state =
       raw_decoded
       |> maybe_put_terminal_upstream_error(receive_state)
+      |> maybe_put_response_id(raw_decoded)
       |> put_websocket_frame_headers(raw_decoded)
       |> increment_text_frame_count()
       |> append_receive_body(text)
@@ -1060,6 +1065,50 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp maybe_put_terminal_upstream_error(_decoded, %ReceiveState{} = receive_state),
     do: receive_state
+
+  defp maybe_put_success_response_id(result, "response.completed", response_id),
+    do: Map.put(result, :response_id, response_id)
+
+  defp maybe_put_success_response_id(result, _terminal, _response_id), do: result
+
+  @response_identity_event_types [
+    "response.created",
+    "response.in_progress",
+    "response.queued",
+    "response.completed",
+    "response.done"
+  ]
+  @max_response_id_bytes 1_024
+
+  defp maybe_put_response_id(%ReceiveState{response_id: nil} = receive_state, %{} = decoded) do
+    response_id =
+      case Map.fetch(decoded, "type") do
+        {:ok, type} when type in @response_identity_event_types ->
+          get_in(decoded, ["response", "id"])
+
+        :error ->
+          Map.get(decoded, "id")
+
+        _typed_or_invalid ->
+          nil
+      end
+
+    case bounded_response_id(response_id) do
+      nil -> receive_state
+      response_id -> %{receive_state | response_id: response_id}
+    end
+  end
+
+  defp maybe_put_response_id(%ReceiveState{} = receive_state, _decoded), do: receive_state
+
+  defp bounded_response_id(response_id) when is_binary(response_id) do
+    response_id = String.trim(response_id)
+
+    if response_id != "" and byte_size(response_id) <= @max_response_id_bytes,
+      do: response_id
+  end
+
+  defp bounded_response_id(_response_id), do: nil
 
   defp put_websocket_frame_headers(%ReceiveState{} = receive_state, decoded) do
     case StreamProtocol.websocket_error_frame_headers(decoded) do

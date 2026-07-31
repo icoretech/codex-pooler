@@ -715,6 +715,44 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
              )
   end
 
+  test "in-process remote owner forwarding preserves a structured response identity", %{
+    auth: auth
+  } do
+    remote_node = :"codex_pooler@structured-success-app.example"
+    remote_node_string = Atom.to_string(remote_node)
+
+    %{session: session, token: token} =
+      owner_session_fixture(auth, remote_node_string, "identity")
+
+    response_id = "resp_remote_harness_identity"
+
+    structured_result = %{
+      body: "",
+      terminal: "response.completed",
+      status: 200,
+      headers: [],
+      websocket_frame_headers: %{},
+      response_id: response_id
+    }
+
+    opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => {:return, {:ok, structured_result}}}
+      )
+
+    assert {:ok, ^structured_result} =
+             WebsocketOwnerForwarder.submit_request(
+               session,
+               token,
+               downstream("corr-structured-success"),
+               request("structured-success-request"),
+               opts
+             )
+
+    assert_receive {:websocket_owner_harness_node_call,
+                    %{node: ^remote_node, function: :remote_submit_request, arity: 4}}
+  end
+
   test "remote timeout maps to owner_forward_timeout within configured timeout", %{auth: auth} do
     remote_node = :"codex_pooler@timeout-app.example"
     remote_node_string = Atom.to_string(remote_node)
@@ -1152,6 +1190,64 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
                     {:data, _terminal}}
 
     assert_receive {:websocket_owner_frame, "corr-peer-legacy-continuation", 1, :complete}
+  end
+
+  test "real peer owner preserves a structured response identity" do
+    peer_node = start_current_peer!("response_identity_owner")
+    response_id = "resp_real_peer_identity"
+
+    upstream =
+      start_fake_upstream(FakeUpstream.websocket_text_frames([terminal_frame(response_id)]))
+
+    persistence =
+      :erpc.call(peer_node, WebsocketOwnerNodeHarness, :fake_persistence_boundary, [])
+
+    session_id = "real-peer-response-identity"
+
+    assert {:ok, owner_pid} =
+             :erpc.call(peer_node, WebsocketOwnerSession, :start_owner, [
+               [
+                 codex_session_id: session_id,
+                 owner_lease_token: "synthetic-response-identity-owner-token",
+                 owner_instance_id: Atom.to_string(peer_node),
+                 owner_renewal_ms: 60_000,
+                 persistence: persistence
+               ]
+             ])
+
+    assert node(owner_pid) == peer_node
+
+    client = WebsocketOwnerForwarder.ERPCNodeClient
+
+    assert {:ok, attached} =
+             client.call_owner(
+               peer_node,
+               WebsocketOwnerForwarder,
+               :remote_attach_downstream,
+               [session_id, downstream("corr-real-peer-response-identity")],
+               @peer_detection_timeout_ms
+             )
+
+    assert {:ok, %{response_id: ^response_id} = result} =
+             client.call_owner(
+               peer_node,
+               WebsocketOwnerForwarder,
+               :remote_submit_request,
+               [
+                 session_id,
+                 attached,
+                 request("real-peer-response-identity", FakeUpstream.url(upstream)),
+                 []
+               ],
+               @peer_detection_timeout_ms
+             )
+
+    assert %{terminal: "response.completed", status: 200} = result
+
+    assert_receive {:websocket_owner_frame, "corr-real-peer-response-identity", 1,
+                    {:data, _terminal}}
+
+    assert_receive {:websocket_owner_frame, "corr-real-peer-response-identity", 1, :complete}
   end
 
   test "real peer owner captures its node-local timeout and recovery captures the recovering node timeout",

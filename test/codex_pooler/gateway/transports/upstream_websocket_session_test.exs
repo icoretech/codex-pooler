@@ -1633,6 +1633,179 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert String.ends_with?(full_body, retained_body)
   end
 
+  test "retains an early response identity after a large body suffix evicts its frame" do
+    response_id = "response-identity-early"
+
+    frames = [
+      Jason.encode!(%{
+        "type" => "response.created",
+        "response" => %{"id" => response_id}
+      }),
+      Jason.encode!(%{
+        "type" => "response.output_text.delta",
+        "delta" => String.duplicate("x", 70_000)
+      }),
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"status" => "completed"}
+      })
+    ]
+
+    assert {:ok, %{body: body, response_id: ^response_id}} = request_websocket_frames(frames)
+    refute String.contains?(body, response_id)
+  end
+
+  test "captures nested identities from each allowlisted typed lifecycle or success frame" do
+    Enum.each(
+      [
+        "response.created",
+        "response.in_progress",
+        "response.queued",
+        "response.completed",
+        "response.done"
+      ],
+      fn type ->
+        response_id = "response-identity-#{type}"
+
+        frames =
+          [
+            Jason.encode!(%{
+              "type" => type,
+              "response" => %{"id" => "  #{response_id}  ", "status" => "completed"}
+            })
+          ]
+          |> maybe_append_terminal_frame(type)
+
+        assert {:ok, %{response_id: ^response_id}} = request_websocket_frames(frames)
+      end
+    )
+  end
+
+  test "ignores malformed, disallowed, repeated, and conflicting response identities" do
+    first_response_id = "response-identity-first"
+
+    frames = [
+      ~s({"type":"response.created","id":"typed-top-level-id"}),
+      ~s({"type":"response.metadata","response_id":"metadata-response-id"}),
+      ~s({"response_id":"typeless-response-id"}),
+      ~s({"type":"response.created","response":{"id":"   "}}),
+      Jason.encode!(%{"type" => "response.created", "response" => %{"id" => 1}}),
+      Jason.encode!(%{
+        "type" => "response.created",
+        "response" => %{"id" => String.duplicate("x", 1_025)}
+      }),
+      ~s({"type":"response.created","response":{"id":"unterminated"),
+      ~s(["not-an-object"]),
+      Jason.encode!(%{
+        "type" => "response.created",
+        "response" => %{"id" => first_response_id}
+      }),
+      Jason.encode!(%{
+        "type" => "response.in_progress",
+        "response" => %{"id" => first_response_id}
+      }),
+      Jason.encode!(%{
+        "type" => "response.queued",
+        "response" => %{"id" => "response-identity-conflict"}
+      }),
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"status" => "completed"}
+      })
+    ]
+
+    assert {:ok, %{response_id: ^first_response_id}} = request_websocket_frames(frames)
+  end
+
+  test "captures a typeless whole-response id but omits identities from failures" do
+    typeless_id = "response-identity-typeless"
+    typeless_frame = Jason.encode!(%{"id" => "  #{typeless_id}  "})
+
+    assert {:ok, %{response_id: ^typeless_id, terminal: "response.completed"}} =
+             request_websocket_frames([typeless_frame])
+
+    created =
+      Jason.encode!(%{
+        "type" => "response.created",
+        "response" => %{"id" => "response-identity-failure"}
+      })
+
+    upstream = start_upstream(FakeUpstream.websocket_sse_then_close([Jason.decode!(created)]))
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    assert {:error, failure} =
+             UpstreamWebsocketSession.request(
+               session,
+               websocket_request(FakeUpstream.url(upstream))
+             )
+
+    refute Map.has_key?(failure, :response_id)
+  end
+
+  test "omits a captured identity from failed and incomplete terminal results" do
+    Enum.each(
+      [
+        {"response.failed", "failed"},
+        {"response.incomplete", "incomplete"}
+      ],
+      fn {type, status} ->
+        frames = [
+          Jason.encode!(%{
+            "type" => "response.created",
+            "response" => %{"id" => "response-identity-semantic-#{status}"}
+          }),
+          Jason.encode!(%{
+            "type" => type,
+            "response" => %{"status" => status}
+          })
+        ]
+
+        assert {:ok, result} = request_websocket_frames(frames)
+        assert result.terminal == type
+        refute Map.has_key?(result, :response_id)
+      end
+    )
+  end
+
+  test "captures the raw lifecycle identity when the mapped frame strips its response object" do
+    response_id = "response-identity-raw"
+
+    mapper = fn text ->
+      case Jason.decode!(text) do
+        %{"type" => "response.created"} -> ~s({"type":"response.created"})
+        _frame -> text
+      end
+    end
+
+    frames = [
+      Jason.encode!(%{
+        "type" => "response.created",
+        "response" => %{"id" => response_id}
+      }),
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"status" => "completed"}
+      })
+    ]
+
+    assert {:ok, %{body: body, response_id: ^response_id}} =
+             request_websocket_frames(frames, message_mapper: mapper)
+
+    refute String.contains?(body, response_id)
+  end
+
+  test "completes without a response identity when no valid identity was captured" do
+    frame =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"status" => "completed"}
+      })
+
+    assert {:ok, %{response_id: nil, terminal: "response.completed"}} =
+             request_websocket_frames([frame])
+  end
+
   test "non-101 websocket upgrade failure preserves the leaf reason and drops the body" do
     upstream =
       start_upstream(
@@ -1893,6 +2066,33 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   defp websocket_success(response_id) do
     FakeUpstream.json_response(%{"id" => response_id, "object" => "response"})
+  end
+
+  defp request_websocket_frames(frames, request_opts \\ []) do
+    upstream = start_upstream(FakeUpstream.websocket_text_frames(frames))
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request =
+      request_opts
+      |> Enum.into(%{})
+      |> then(&struct(websocket_request(FakeUpstream.url(upstream)), &1))
+
+    UpstreamWebsocketSession.request(session, request)
+  end
+
+  defp maybe_append_terminal_frame(frames, type)
+       when type in ["response.completed", "response.done"],
+       do: frames
+
+  defp maybe_append_terminal_frame(frames, _type) do
+    frames ++
+      [
+        Jason.encode!(%{
+          "type" => "response.completed",
+          "response" => %{"status" => "completed"}
+        })
+      ]
   end
 
   defp websocket_request(base_url) do
