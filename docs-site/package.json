@@ -5,7 +5,9 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "check": "astro check"
+    "check": "astro check && npm run check:dashboard",
+    "build:dashboard": "node dashboards/build.mjs",
+    "check:dashboard": "node dashboards/build.mjs --check"
   },
   "dependencies": {
     "@astrojs/starlight": "0.41.5",
@@ -14,6 +16,7 @@
   },
   "devDependencies": {
     "@astrojs/check": "0.9.10",
+    "@grafana/grafana-foundation-sdk": "^11.6.0-cogv0.0.x.1769699379",
     "typescript": "6.0.3"
   },
   "overrides": {
