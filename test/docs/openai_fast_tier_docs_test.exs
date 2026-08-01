@@ -134,9 +134,8 @@ defmodule CodexPooler.OpenAIFastTierDocsTest do
 
   defp validate_fragments(fragments) do
     with :ok <- reject_internal_paths(fragments),
-         :ok <- reject_disallowed_runtime_endpoints(fragments),
-         :ok <- reject_collapsed_fidelity_claim(fragments) do
-      :ok
+         :ok <- reject_disallowed_runtime_endpoints(fragments) do
+      reject_collapsed_fidelity_claim(fragments)
     end
   end
 
