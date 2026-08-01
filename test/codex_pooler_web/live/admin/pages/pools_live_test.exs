@@ -2904,6 +2904,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert_no_pending_pool_traffic_refresh(view)
 
     view |> element("#edit-pool-#{pool.id}") |> render_click()
+    _ = render_async(view)
 
     view
     |> element("#pool-edit-dialog-tab-routing")
