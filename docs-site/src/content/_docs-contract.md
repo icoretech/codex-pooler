@@ -62,6 +62,15 @@ Allowed public claims:
 
 OpenAI Responses remote MCP tool definitions are unsupported request shapes inside `POST /v1/responses`, not unsupported routes. This includes top-level `tools[type=mcp]` and nested `input[type=additional_tools].tools[type=mcp]`.
 
+### Service-tier vocabulary
+
+For new public client configuration, document `priority` as the canonical
+`service_tier` spelling. Document `fast` only as an accepted equivalent request
+spelling. Backend `/backend-api/codex` relay routes preserve provider bytes,
+frames, and service-tier vocabulary unchanged. The narrow `/v1` surface
+translates supported request and response shapes, while any projected provider
+`service_tier` value retains its literal provider vocabulary.
+
 Routed public `/v1` endpoints that must be described as deterministic unsupported behavior:
 
 - `POST /v1/responses/compact`, deterministic unsupported compact route before gateway dispatch

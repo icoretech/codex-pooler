@@ -1,6 +1,6 @@
 # Codex Pooler Public Docs For Agents
 
-Last reviewed: 2026-06-28
+Last reviewed: 2026-08-01
 
 Canonical docs base: https://docs.codex-pooler.com/
 Canonical llms index: https://docs.codex-pooler.com/llms.txt
@@ -55,6 +55,11 @@ Client base URLs:
 - Selected OpenAI SDK-compatible clients use https://codex-pooler.example.com/v1.
 - Operator metadata tools use https://codex-pooler.example.com/mcp.
 - Local setup uses http://localhost:4000 with the same paths.
+
+Service-tier compatibility:
+- Use priority as the canonical service_tier spelling for new client configuration. fast is an accepted equivalent request spelling.
+- /backend-api/codex relays provider bytes, frames, and service-tier vocabulary unchanged.
+- /v1 translates supported OpenAI request and response shapes while preserving any projected provider service_tier value in its literal provider vocabulary.
 
 Supported route families:
 - /backend-api: Codex backend compatibility route for authenticated Codex clients. Important paths include /backend-api/codex/models, /backend-api/codex/responses, /backend-api/codex/responses/compact, /backend-api/codex/v1/* aliases, /backend-api/files, /backend-api/transcribe, and usage routes such as /backend-api/wham/usage.

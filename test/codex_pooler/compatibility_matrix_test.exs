@@ -5,6 +5,22 @@ defmodule CodexPooler.CompatibilityMatrixTest do
   alias CodexPooler.Pools.RoutingSettings
 
   describe "catalog and Responses runtime contract" do
+    test "pins fast as a priority alias without collapsing relay and translation fidelity" do
+      backend = CompatibilityMatrix.by_slug!(:backend_fast_service_tier)
+      translated = CompatibilityMatrix.by_slug!(:responses_chat)
+
+      assert backend.current == :canonical_priority_routing_alias
+      assert backend.contract =~ "fast to upstream priority"
+
+      assert backend.contract =~
+               "relay provider bytes, frames, and service-tier vocabulary unchanged"
+
+      assert translated.contract =~
+               "accept client service_tier fast as canonical upstream priority"
+
+      assert translated.contract =~ "preserve literal provider service_tier output"
+    end
+
     test "makes backend model catalog ETag derivation machine-readable" do
       feature = CompatibilityMatrix.by_slug!(:backend_models_etag)
       fixture = CompatibilityMatrix.fixture!(:backend_models_etag)

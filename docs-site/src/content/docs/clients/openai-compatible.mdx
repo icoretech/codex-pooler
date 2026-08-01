@@ -33,6 +33,16 @@ Bearer <pool-api-key>
 
 For local setup, use `http://localhost:4000/v1`.
 
+## Service tier compatibility
+
+Use `service_tier: "priority"` for priority processing. `fast` is an accepted
+equivalent request spelling, but `priority` is the canonical spelling for new
+configuration. On `/v1`, Codex Pooler translates supported OpenAI request and
+response shapes while preserving any projected provider `service_tier` value in
+its literal provider vocabulary. Codex backend relay routes under
+`/backend-api/codex` preserve provider bytes, frames, and service-tier
+vocabulary unchanged.
+
 ## Tool-specific setup pages
 
 Use the dedicated setup pages when configuring an agent or editor that has its own provider shape:
