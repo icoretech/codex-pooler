@@ -32,8 +32,6 @@ defmodule CodexPoolerWeb.EndpointHttp2HalfOpenStreamTest do
 
   import Bitwise
 
-  @moduletag :capture_log
-
   # RFC9113§6 frame types and §11.2 flags.
   @data 0x0
   @headers 0x1
@@ -52,11 +50,10 @@ defmodule CodexPoolerWeb.EndpointHttp2HalfOpenStreamTest do
   @barrier_stream_id 3
 
   # The connection-idle backstop is a scenario budget: it is the behaviour under
-  # test. Everything else here is failure detection and must stay well above it,
-  # because a listener start plus a TCP round trip can take seconds when the
-  # suite saturates the machine. The default `assert_receive` window of 100ms is
-  # nowhere near enough.
-  @idle_timeout_ms 1_000
+  # test. It must still leave enough time for Bandit's request process to run
+  # while the suite saturates the machine. Everything else here is failure
+  # detection and stays above that scenario budget.
+  @idle_timeout_ms 5_000
   @recv_timeout 15_000
 
   defmodule RaiseAfterChunkPlug do
@@ -71,33 +68,35 @@ defmodule CodexPoolerWeb.EndpointHttp2HalfOpenStreamTest do
     def chunk_payload, do: @chunk_payload
 
     @impl Plug
-    def init(test_pid), do: test_pid
+    def init(opts), do: opts
 
     @impl Plug
-    def call(%Plug.Conn{path_info: ["stream-then-raise"]} = conn, test_pid) do
+    def call(%Plug.Conn{path_info: ["stream-then-raise"]} = conn, _opts) do
       conn = Plug.Conn.send_chunked(conn, 200)
       {:ok, _conn} = Plug.Conn.chunk(conn, @chunk_payload)
-      send(test_pid, {:streaming, self()})
 
       raise "mid-stream failure"
     end
 
-    def call(%Plug.Conn{path_info: ["barrier"]} = conn, _test_pid) do
+    def call(%Plug.Conn{path_info: ["barrier"]} = conn, _opts) do
       Plug.Conn.send_resp(conn, 200, "barrier")
     end
   end
 
   describe "cleartext HTTP/2 (h2c)" do
     test "a mid-stream crash closes the stream without END_STREAM or RST_STREAM" do
+      attach_mid_stream_failure_handler()
+
       port = start_listener()
       socket = connect_h2c(port)
 
       send_request(socket, @aborted_stream_id, "/stream-then-raise", port)
 
-      # The request process has written headers and one chunk and is about to
-      # raise; wait for it to die so Bandit's error path has already run and any
-      # frame it would emit is queued ahead of what we ask for next.
-      assert_receive {:streaming, stream_pid}, @recv_timeout
+      # Observe Bandit's real request-exception event instead of making the Plug
+      # emit a test-only message after response output. Once that process is down,
+      # the error path has run and any frame it would emit is queued ahead of the
+      # ordered barrier below.
+      assert_receive {:mid_stream_failure, stream_pid}, @recv_timeout
       monitor_ref = Process.monitor(stream_pid)
       assert_receive {:DOWN, ^monitor_ref, :process, ^stream_pid, _reason}, @recv_timeout
 
@@ -150,18 +149,22 @@ defmodule CodexPoolerWeb.EndpointHttp2HalfOpenStreamTest do
 
       send_request(socket, @aborted_stream_id, "/stream-then-raise", port)
 
-      assert_receive {:streaming, stream_pid}, @recv_timeout
-      monitor_ref = Process.monitor(stream_pid)
-      assert_receive {:DOWN, ^monitor_ref, :process, ^stream_pid, _reason}, @recv_timeout
-
       frames = collect_until_closed(socket)
+      aborted = Enum.filter(frames, &(&1.stream_id == @aborted_stream_id))
 
       assert Enum.any?(frames, &(&1.type == @goaway)),
              "expected the idle connection to be closed with GOAWAY: #{summarize(frames)}"
 
-      refute frames
-             |> Enum.filter(&(&1.stream_id == @aborted_stream_id))
-             |> Enum.any?(&flag?(&1, @end_stream)),
+      assert Enum.any?(aborted, &(&1.type == @headers)),
+             "expected response headers on the aborted stream"
+
+      assert Enum.any?(
+               aborted,
+               &(&1.type == @data and &1.payload == RaiseAfterChunkPlug.chunk_payload())
+             ),
+             "expected the first chunk to reach the peer before the idle timeout"
+
+      refute Enum.any?(aborted, &flag?(&1, @end_stream)),
              "aborted stream was terminated with END_STREAM: #{summarize(frames)}"
     end
   end
@@ -179,8 +182,6 @@ defmodule CodexPoolerWeb.EndpointHttp2HalfOpenStreamTest do
           "host: 127.0.0.1:#{port}\r\n",
           "\r\n"
         ])
-
-      assert_receive {:streaming, _pid}, @recv_timeout
 
       response = read_until_closed(socket, [])
 
@@ -223,6 +224,32 @@ defmodule CodexPoolerWeb.EndpointHttp2HalfOpenStreamTest do
     end
   end
 
+  defp attach_mid_stream_failure_handler do
+    test_pid = self()
+    handler_id = {__MODULE__, test_pid, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:bandit, :request, :exception],
+        fn _event, _measurements, metadata, _config ->
+          case metadata do
+            %{
+              conn: %{request_path: "/stream-then-raise"},
+              plug: {RaiseAfterChunkPlug, _opts}
+            } ->
+              send(test_pid, {:mid_stream_failure, self()})
+
+            _metadata ->
+              :ok
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
+
   defp endpoint_http_2_options do
     :codex_pooler
     |> Application.fetch_env!(CodexPoolerWeb.Endpoint)
@@ -233,7 +260,13 @@ defmodule CodexPoolerWeb.EndpointHttp2HalfOpenStreamTest do
   defp start_listener(extra_options \\ []) do
     options =
       Keyword.merge(
-        [plug: {RaiseAfterChunkPlug, self()}, port: 0, ip: {127, 0, 0, 1}, startup_log: false],
+        [
+          plug: {RaiseAfterChunkPlug, []},
+          port: 0,
+          ip: {127, 0, 0, 1},
+          startup_log: false,
+          http_options: [log_exceptions_with_status_codes: []]
+        ],
         extra_options
       )
 
