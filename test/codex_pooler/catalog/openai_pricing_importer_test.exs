@@ -56,6 +56,29 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
   @barrier_timeout 5_000
   @actor_timeout 10_000
 
+  defmodule GenericExceptionAdapter do
+    def run(request) do
+      {request, %Req.HTTPError{protocol: :http1, reason: "credential-bearing transport detail"}}
+    end
+  end
+
+  test "bounds generic Req adapter exceptions as transport failures" do
+    original_options = Req.default_options()
+    Req.default_options(adapter: GenericExceptionAdapter)
+    on_exit(fn -> Req.default_options(original_options) end)
+
+    source_url = "https://user:secret@example.com/pricing.json"
+
+    assert {:error,
+            %{code: :http_transport_failed, message: "pricing catalog transport failed"} = error} =
+             OpenAIPricingImporter.import_url(source_url)
+
+    rendered_error = inspect(error)
+    refute rendered_error =~ "credential-bearing transport detail"
+    refute rendered_error =~ source_url
+    refute rendered_error =~ "secret"
+  end
+
   test "imports revision 2 rows from the immutable fixture idempotently" do
     assert {:ok, first} = OpenAIPricingImporter.import_file(@fixture)
     assert first.price_version == "2026-07-28T17:25:03.915713Z:importer-format-2"

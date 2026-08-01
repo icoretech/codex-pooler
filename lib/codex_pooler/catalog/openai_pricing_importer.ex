@@ -53,7 +53,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
       {:ok, %{status: status}} ->
         {:error, error(:http_error, "pricing catalog returned HTTP #{status}")}
 
-      {:error, %Req.TransportError{}} ->
+      {:error, exception} when is_exception(exception) ->
         {:error, error(:http_transport_failed, "pricing catalog transport failed")}
     end
   end
