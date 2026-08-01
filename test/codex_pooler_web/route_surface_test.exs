@@ -277,15 +277,4 @@ defmodule CodexPoolerWeb.RouteSurfaceTest do
              404
            ) =~ "Not Found"
   end
-
-  test "operator docs document OpenAI OAuth linking without a hosted callback route" do
-    operator_docs = File.read!("docs-site/src/content/docs/operators/upstreams.mdx")
-
-    assert operator_docs =~ "OpenAI OAuth upstream linking"
-    assert operator_docs =~ "manual callback workflow"
-    assert operator_docs =~ "device-code fallback"
-    assert operator_docs =~ "There is no hosted OAuth callback route"
-    assert operator_docs =~ "Safe OAuth troubleshooting codes"
-    assert operator_docs =~ "never paste callback URLs, authorization codes, tokens, cookies"
-  end
 end

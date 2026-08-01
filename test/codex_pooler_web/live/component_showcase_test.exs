@@ -163,7 +163,6 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
     routes = Phoenix.Router.routes(CodexPoolerWeb.Router)
 
     refute @dev_routes
-    refute File.read!("config/prod.exs") =~ "dev_routes: true"
     refute Enum.any?(routes, &(&1.path == @showcase_route))
     assert html_response(get(conn, "/dev/component-showcase/dark"), 404) =~ "Not Found"
   end

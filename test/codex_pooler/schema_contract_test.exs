@@ -1064,11 +1064,25 @@ defmodule CodexPooler.SchemaContractTest do
   end
 
   test "phoenix filter parameters keep instance setting secret fields redacted" do
-    config_source = File.read!(Path.expand("../../config/config.exs", __DIR__))
+    sensitive_keys = [
+      "token",
+      "password",
+      "bearer_token",
+      "bearer_token_action",
+      "password_action"
+    ]
 
-    for key <- ["token", "password", "bearer_token", "bearer_token_action", "password_action"] do
-      assert config_source =~ ~s("#{key}")
+    filtered =
+      sensitive_keys
+      |> Map.new(&{&1, "synthetic-secret"})
+      |> Map.put("safe", "visible")
+      |> Phoenix.Logger.filter_values()
+
+    for key <- sensitive_keys do
+      assert filtered[key] == "[FILTERED]"
     end
+
+    assert filtered["safe"] == "visible"
   end
 
   test "quota evidence identity records are deterministic duplicates" do

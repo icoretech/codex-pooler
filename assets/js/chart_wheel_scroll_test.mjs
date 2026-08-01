@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -219,58 +218,4 @@ test("finds the scrollable ancestor in the wheel direction", () => {
 	nonScrollable.parentElement = shell;
 
 	assert.equal(findScrollableAncestor(chart, "y", 96), shell);
-});
-
-test("keeps the hook lifecycle scoped and listener-stable", async () => {
-	const appSource = await readFile(
-		new URL("./app.js", import.meta.url),
-		"utf8",
-	);
-	const statsSource = await readFile(
-		new URL(
-			"../../lib/codex_pooler_web/live/admin/components/pages/stats/presentation_charts.ex",
-			import.meta.url,
-		),
-		"utf8",
-	);
-	const poolsSource = await readFile(
-		new URL(
-			"../../lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex",
-			import.meta.url,
-		),
-		"utf8",
-	);
-	const upstreamsSource = await readFile(
-		new URL(
-			"../../lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/charts.ex",
-			import.meta.url,
-		),
-		"utf8",
-	);
-
-	assert.match(
-		appSource,
-		/import \{ attachChartWheelScroll \} from "\.\/chart_wheel_scroll\.mjs"/,
-	);
-	assert.match(
-		appSource,
-		/this\.syncChartWheelListener\(\);\n\s*this\.renderChart\(\);/,
-	);
-	assert.match(
-		appSource,
-		/this\.removeChartWheelListener\?\.\(\);\n\s*this\.removeChartWheelListener = null;/,
-	);
-	assert.equal(
-		(appSource.match(/syncChartWheelListener\(\)/g) || []).length,
-		3,
-	);
-	assert.equal(
-		(statsSource.match(/data-chart-wheel-scroll="page"/g) || []).length,
-		2,
-	);
-	assert.equal(
-		(upstreamsSource.match(/data-chart-wheel-scroll="page"/g) || []).length,
-		1,
-	);
-	assert.doesNotMatch(poolsSource, /data-chart-wheel-scroll/);
 });

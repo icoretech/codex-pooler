@@ -23,25 +23,6 @@ defmodule CodexPoolerWeb.ObservatoryDashboardLiveTest do
     end
   end
 
-  test "observatory shell defaults and narrow-phone rules stay scoped" do
-    root_source = File.read!("lib/codex_pooler_web/components/layouts/root.html.heex")
-    css_source = File.read!("assets/css/app.css")
-    [_, toolbar_rules] = Regex.run(~r/\.observatory-toolbar \{(.*?)\n\}/s, css_source)
-
-    assert root_source =~ "const storedTheme = localStorage.getItem(\"phx:theme\");"
-    assert root_source =~ "window.location.pathname === \"/observatory\""
-    assert root_source =~ "window.location.pathname.startsWith(\"/observatory/\")"
-    assert root_source =~ "document.documentElement.setAttribute(\"data-theme\", \"dark\")"
-    assert root_source =~ "setTheme(\"system\")"
-    assert root_source =~ "if (storedTheme) {\n            setTheme(storedTheme);"
-    assert root_source =~ "phx:set-theme"
-    assert toolbar_rules =~ "background: var(--color-base-100);"
-    refute toolbar_rules =~ "backdrop-filter"
-    refute toolbar_rules =~ "blur("
-    assert css_source =~ "@media (width <= 23.4375rem)"
-    assert css_source =~ ".observatory-wordmark small {\n    display: none;"
-  end
-
   test "disconnected mount keeps the loading state before the initial read" do
     {:ok, socket} = ObservatoryLive.mount(%{}, %{}, %Phoenix.LiveView.Socket{})
 

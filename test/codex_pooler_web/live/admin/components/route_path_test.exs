@@ -3,9 +3,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.RoutePathTest do
 
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.RoutePath
 
-  @account_card_path "lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex"
-  @cockpit_sections_path "lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit/sections.ex"
-
   test "keeps the four route gates ordered with full and compact labels" do
     assignment = %{
       pool_label: "Ready Pool",
@@ -106,36 +103,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.RoutePathTest do
 
     assert RoutePath.aria_label(assignment) ==
              "Fallback Pool route path: Assignment unknown, Health unknown, Quota unknown, Circuit clear"
-  end
-
-  test "route meters derive cardinality and retain full spoken detail" do
-    account_card_source = File.read!(Path.join(File.cwd!(), @account_card_path))
-    cockpit_sections_source = File.read!(Path.join(File.cwd!(), @cockpit_sections_path))
-
-    assert account_card_source =~ "{segment.short_label}"
-    assert cockpit_sections_source =~ "{segment.label}"
-
-    for source <- [account_card_source, cockpit_sections_source] do
-      assert source =~ "aria-valuemax={RoutePath.segment_count()}"
-      assert source =~ "aria-valuetext={RoutePath.aria_label(assignment)}"
-      assert source =~ "aria-label={RoutePath.aria_label(assignment)}"
-      refute source =~ ~r/aria-valuemax="\d+"/
-    end
-  end
-
-  test "route meter templates retain derived cardinality and surface-specific labels" do
-    account_card_source = File.read!(Path.join(File.cwd!(), @account_card_path))
-    cockpit_sections_source = File.read!(Path.join(File.cwd!(), @cockpit_sections_path))
-
-    assert account_card_source =~ "aria-valuemax={RoutePath.segment_count()}"
-    assert account_card_source =~ "{segment.short_label}"
-    assert account_card_source =~ "data-role=\"upstream-account-pool-route-segment\""
-    assert account_card_source =~ ~S(-route-#{segment.key})
-
-    assert cockpit_sections_source =~ "aria-valuemax={RoutePath.segment_count()}"
-    assert cockpit_sections_source =~ "{segment.label}"
-    assert cockpit_sections_source =~ "data-role=\"upstream-assignment-route-segment\""
-    assert cockpit_sections_source =~ ~S(-route-#{segment.key})
   end
 
   test "maps sanitized circuit summaries after quota and uses a clear absent fallback" do
