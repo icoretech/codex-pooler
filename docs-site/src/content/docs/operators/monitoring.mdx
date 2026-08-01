@@ -32,12 +32,20 @@ Build your Grafana or Prometheus dashboard around the signals needed to correlat
 3. BEAM process count, port count, total run queue, CPU run queue, and IO run queue
 4. app restarts, OOM events, and current pod last terminated reason
 5. request rate, HTTP status class rate, and p95 endpoint/router latency
-6. gateway admission accepted, queued, rejected, timed-out, and queue-time p95 signals
-7. stream-buffer oversized and truncated events
+6. gateway admission accepted, queued, rejected, timed-out, queue-time p95, and per-pod running or queued saturation by route class
+7. bounded stream outcomes, websocket bridge fallbacks, and stream-buffer oversized or truncated events
 8. Ecto query rate, queries per request, hot query sources by safe source and SQL command, unknown query rate, and DB queue p95
 9. routing circuit transition rate by transition, route class, and bounded reason class
 
 Read the dashboard as a correlation view. If cgroup memory climbs while BEAM total stays flat, look outside normal BEAM heap attribution. If `vm_memory_binary_bytes` climbs with cgroup memory, inspect streaming response retention, file bodies, and upstream transport buffering. If process count, ports, or run queue climb, inspect stuck request processes, websocket ownership, and overloaded route classes.
+
+Admission saturation is local to each app pod. `codex_pooler_gateway_admission_running` and `codex_pooler_gateway_admission_queued` report the current state by route class on the reporting pod, not a cluster-wide queue. Every route class reports an explicit value, including zero. Normal exposition is 18 series per app pod, with a bounded ceiling of 20 including the invalid-label fallback. Select or aggregate pods deliberately when comparing capacity across replicas.
+
+The new gateway metrics are bounded at the source. Stream outcomes are `succeeded`, `failed`, `settlement_failed`, or `interrupted`; invalid values become `unknown`. Their downstream and upstream transport labels are `http_sse`, `websocket`, or `unknown`, giving at most 45 series per app pod across five effective outcomes and two three-value transport vocabularies. `settlement_failed` is attempt-scoped, so concurrent failed terminal settlement attempts can each emit it. Websocket bridge fallbacks have at most 20 reason series per app pod, while precommit buffer overflow is a separate untagged counter. Together with the admission gauges and circuit additions, this work adds approximately 266 bounded time series per app pod.
+
+Oversized stream-buffer histogram observations saturate at 128 MiB for Prometheus export, so p95 remains finite. The runtime's raw telemetry event and stream-buffer behavior are unchanged.
+
+The downloadable starter dashboard includes these queries now. Apply the application release, then add the matching panels to your live dashboard and refresh the published screenshot. Don't treat the screenshot above or any existing deployed dashboard as evidence that these new panels are already live.
 
 ![Codex Pooler Grafana runtime triage dashboard](/codex-pooler-grafana.png)
 
@@ -84,8 +92,8 @@ increase(kube_pod_container_status_restarts_total{
 ```
 
 ```text
-rate(codex_pooler_gateway_stream_buffer_oversized_count_total[5m])
-rate(codex_pooler_gateway_stream_buffer_truncated_count_total[5m])
+rate(codex_pooler_gateway_stream_buffer_oversized_count[5m])
+rate(codex_pooler_gateway_stream_buffer_truncated_count[5m])
 ```
 
 ```text
@@ -121,6 +129,39 @@ histogram_quantile(0.95,
     }[5m])
   )
 )
+```
+
+```text
+codex_pooler_gateway_admission_running{
+  namespace="codex-pooler",
+  job="codex-pooler-app"
+}
+codex_pooler_gateway_admission_queued{
+  namespace="codex-pooler",
+  job="codex-pooler-app"
+}
+```
+
+```text
+sum by (outcome, downstream_transport, upstream_transport) (
+  rate(codex_pooler_gateway_stream_outcome_count{
+    namespace="codex-pooler",
+    job="codex-pooler-app"
+  }[5m])
+)
+```
+
+```text
+sum by (reason) (
+  rate(codex_pooler_gateway_websocket_bridge_fallback_count{
+    namespace="codex-pooler",
+    job="codex-pooler-app"
+  }[5m])
+)
+sum(rate(codex_pooler_gateway_websocket_bridge_precommit_overflow_count{
+  namespace="codex-pooler",
+  job="codex-pooler-app"
+}[5m]))
 ```
 
 ```text

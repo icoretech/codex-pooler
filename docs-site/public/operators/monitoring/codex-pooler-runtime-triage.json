@@ -1057,7 +1057,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (buffer, transport, route_class, endpoint) (rate(codex_pooler_gateway_stream_buffer_oversized_count_total{namespace=\"$namespace\", pod=~\"${pod:regex}\"}[$__rate_interval]) or rate(codex_pooler_gateway_stream_buffer_oversized_count{namespace=\"$namespace\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "expr": "sum by (buffer, transport, route_class, endpoint) (rate(codex_pooler_gateway_stream_buffer_oversized_count{namespace=\"$namespace\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
           "refId": "",
           "legendFormat": "oversized {{transport}} {{route_class}} {{endpoint}}",
           "range": true,
@@ -1065,7 +1065,7 @@
           "editorMode": "code"
         },
         {
-          "expr": "sum by (buffer, transport, route_class, endpoint) (rate(codex_pooler_gateway_stream_buffer_truncated_count_total{namespace=\"$namespace\", pod=~\"${pod:regex}\"}[$__rate_interval]) or rate(codex_pooler_gateway_stream_buffer_truncated_count{namespace=\"$namespace\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "expr": "sum by (buffer, transport, route_class, endpoint) (rate(codex_pooler_gateway_stream_buffer_truncated_count{namespace=\"$namespace\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
           "refId": "",
           "legendFormat": "truncated {{transport}} {{route_class}} {{endpoint}}",
           "range": true,
@@ -1089,6 +1089,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
+      "description": "Oversized observations are saturated at 128 MiB for Prometheus histogram export, keeping p95 finite. This changes telemetry only, not stream-buffer handling or the raw telemetry event.",
       "fieldConfig": {
         "defaults": {
           "unit": "bytes",
@@ -1336,6 +1337,66 @@
       }
     },
     {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Admission Saturation",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Current per-pod local admission state. Sum only after selecting the pods you mean to inspect: each app pod reports its own running and queued work by route class.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "codex_pooler_gateway_admission_running{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}",
+          "refId": "",
+          "legendFormat": "{{pod}} {{route_class}} running",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        },
+        {
+          "expr": "codex_pooler_gateway_admission_queued{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}",
+          "refId": "",
+          "legendFormat": "{{pod}} {{route_class}} queued",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 57
+      }
+    },
+    {
       "type": "row",
       "collapsed": false,
       "id": 0,
@@ -1343,7 +1404,7 @@
       "title": "Database / Ecto Query Pressure",
       "gridPos": {
         "x": 0,
-        "y": 57,
+        "y": 64,
         "h": 1,
         "w": 24
       }
@@ -1396,7 +1457,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 58
+        "y": 65
       }
     },
     {
@@ -1447,7 +1508,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 58
+        "y": 65
       }
     },
     {
@@ -1499,7 +1560,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 58
+        "y": 65
       }
     },
     {
@@ -1550,7 +1611,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 65
+        "y": 72
       }
     },
     {
@@ -1601,7 +1662,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 65
+        "y": 72
       }
     },
     {
@@ -1652,7 +1713,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 65
+        "y": 72
       }
     },
     {
@@ -1704,7 +1765,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 72
+        "y": 79
       }
     },
     {
@@ -1756,7 +1817,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 72
+        "y": 79
       }
     },
     {
@@ -1808,7 +1869,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 72
+        "y": 79
       }
     },
     {
@@ -1819,7 +1880,7 @@
       "title": "Restart Evidence",
       "gridPos": {
         "x": 0,
-        "y": 79,
+        "y": 86,
         "h": 1,
         "w": 24
       }
@@ -1880,7 +1941,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 80
+        "y": 87
       }
     },
     {
@@ -1913,7 +1974,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 80
+        "y": 87
       }
     },
     {
@@ -1924,7 +1985,7 @@
       "title": "Admin Stats Dashboard",
       "gridPos": {
         "x": 0,
-        "y": 87,
+        "y": 94,
         "h": 1,
         "w": 24
       }
@@ -1978,7 +2039,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 88
+        "y": 95
       }
     },
     {
@@ -2030,7 +2091,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 88
+        "y": 95
       }
     },
     {
@@ -2082,7 +2143,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 88
+        "y": 95
       }
     },
     {
@@ -2134,7 +2195,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 95
+        "y": 102
       }
     },
     {
@@ -2186,7 +2247,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 95
+        "y": 102
       }
     },
     {
@@ -2197,7 +2258,7 @@
       "title": "Gateway Outcomes",
       "gridPos": {
         "x": 0,
-        "y": 102,
+        "y": 109,
         "h": 1,
         "w": 24
       }
@@ -2251,7 +2312,119 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 103
+        "y": 110
+      }
+    },
+    {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Stream Outcome Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "First-settlement stream outcomes by bounded outcome and downstream or upstream transport. The metric has at most 45 series per app pod.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (outcome, downstream_transport, upstream_transport) (rate(codex_pooler_gateway_stream_outcome_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "refId": "",
+          "legendFormat": "{{outcome}} {{downstream_transport}} -> {{upstream_transport}}",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 110
+      }
+    },
+    {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Websocket Bridge Fallback Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Pre-content bridge fallbacks by bounded reason. There are at most 20 reason series per app pod; precommit buffer overflows remain a separate untagged counter.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (reason) (rate(codex_pooler_gateway_websocket_bridge_fallback_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "refId": "",
+          "legendFormat": "{{reason}}",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        },
+        {
+          "expr": "sum(rate(codex_pooler_gateway_websocket_bridge_precommit_overflow_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "refId": "",
+          "legendFormat": "precommit overflow",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 119
       }
     },
     {
@@ -2303,7 +2476,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 103
+        "y": 119
       }
     },
     {
@@ -2355,7 +2528,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 112
+        "y": 128
       }
     }
   ]
