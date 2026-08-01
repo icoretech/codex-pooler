@@ -14,6 +14,7 @@ defmodule CodexPooler.AccountingTest do
 
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
+  alias CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
 
@@ -302,16 +303,46 @@ defmodule CodexPooler.AccountingTest do
 
       usage = %{status: "usage_known", input_tokens: 7, output_tokens: 3, total_tokens: 10}
 
-      assert {:ok, first} =
-               Accounting.finalize_success(reserved.request, attempt, usage, %{
+      assert {:ok, internal_first} =
+               Accounting.finalize_success_with_disposition(reserved.request, attempt, usage, %{
                  response_status_code: 200
                })
+
+      assert internal_first.finalization_disposition == :inserted
+      assert AttemptSettlement.first_settlement?(internal_first)
+
+      assert {:ok, internal_second} =
+               Accounting.finalize_success_with_disposition(
+                 internal_first.request,
+                 internal_first.attempt,
+                 usage,
+                 %{response_status_code: 200}
+               )
+
+      assert internal_second.finalization_disposition == :reused
+      refute AttemptSettlement.first_settlement?(internal_second)
+      refute AttemptSettlement.first_settlement?(:reused)
+
+      assert {:ok, first} =
+               Accounting.finalize_success(
+                 internal_second.request,
+                 internal_second.attempt,
+                 usage,
+                 %{
+                   response_status_code: 200
+                 }
+               )
 
       assert {:ok, second} =
-               Accounting.finalize_success(first.request, first.attempt, usage, %{
-                 response_status_code: 200
+               Accounting.finalize_request(first.request, first.attempt, %{
+                 request_status: "succeeded",
+                 attempt_status: "succeeded",
+                 response_status_code: 200,
+                 usage: usage
                })
 
+      assert Map.keys(first) |> Enum.sort() == [:attempt, :release, :request, :settlement]
+      assert Map.keys(second) |> Enum.sort() == [:attempt, :release, :request, :settlement]
       assert first.settlement.id == second.settlement.id
       assert first.release.id == second.release.id
 
@@ -389,13 +420,28 @@ defmodule CodexPooler.AccountingTest do
 
       assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
 
-      assert {:ok, failed} =
-               Accounting.finalize_failure(reserved.request, attempt, %{
+      assert {:ok, internal_failed} =
+               Accounting.finalize_failure_with_disposition(reserved.request, attempt, %{
                  last_error_code: "owner_drained",
                  now: first_timestamp,
                  usage: %{status: "usage_unknown", source: "owner_drained"}
                })
 
+      assert internal_failed.finalization_disposition == :inserted
+      assert AttemptSettlement.first_settlement?(internal_failed)
+
+      assert {:ok, failed} =
+               Accounting.finalize_failure(
+                 internal_failed.request,
+                 internal_failed.attempt,
+                 %{
+                   last_error_code: "owner_drained",
+                   now: first_timestamp,
+                   usage: %{status: "usage_unknown", source: "owner_drained"}
+                 }
+               )
+
+      assert Map.keys(failed) |> Enum.sort() == [:attempt, :release, :request, :settlement]
       assert failed.request.status == "failed"
       assert failed.settlement.usage_status == "usage_unknown"
 
@@ -408,12 +454,33 @@ defmodule CodexPooler.AccountingTest do
         total_tokens: 10
       }
 
-      assert {:ok, reconciled} =
-               Accounting.finalize_success(failed.request, failed.attempt, known_usage, %{
-                 now: known_timestamp,
-                 response_status_code: 200
-               })
+      assert {:ok, internal_reconciled} =
+               Accounting.finalize_success_with_disposition(
+                 failed.request,
+                 failed.attempt,
+                 known_usage,
+                 %{
+                   now: known_timestamp,
+                   response_status_code: 200
+                 }
+               )
 
+      assert internal_reconciled.finalization_disposition == :replaced
+      refute AttemptSettlement.first_settlement?(internal_reconciled)
+      refute AttemptSettlement.first_settlement?(:replaced)
+
+      assert {:ok, reconciled} =
+               Accounting.finalize_success(
+                 internal_reconciled.request,
+                 internal_reconciled.attempt,
+                 known_usage,
+                 %{
+                   now: known_timestamp,
+                   response_status_code: 200
+                 }
+               )
+
+      assert Map.keys(reconciled) |> Enum.sort() == [:attempt, :release, :request, :settlement]
       assert reconciled.request.status == "succeeded"
       assert reconciled.request.usage_status == "usage_known"
       assert reconciled.attempt.status == "succeeded"
@@ -946,6 +1013,8 @@ defmodule CodexPooler.AccountingTest do
                  last_error_code: "timeout_mid_stream"
                })
 
+      assert Map.keys(first) |> Enum.sort() == [:attempt, :release, :request, :settlement]
+      assert Map.keys(second) |> Enum.sort() == [:attempt, :release, :request, :settlement]
       assert first.settlement.id == second.settlement.id
       assert first.request.status == "failed"
       assert first.settlement.usage_status == "usage_unknown"

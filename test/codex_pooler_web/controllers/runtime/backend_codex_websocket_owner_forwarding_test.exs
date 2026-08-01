@@ -1962,20 +1962,33 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       )
 
     logs =
-      capture_log(fn ->
-        try do
-          assert {:error, %{code: "owner_crashed", status: 502}} =
-                   Gateway.run_websocket_response(
-                     auth,
-                     websocket_payload(setup, "malformed owner reply"),
-                     owner_response_options(remote_state, node_opts),
-                     fn _data -> :ok end
-                   )
-        after
-          # The forced malformed reply also reaches the remote detach call, so
-          # terminate doubles as the detach-containment regression.
-          assert :ok = CodexResponsesSocket.terminate(:closed, remote_state)
-        end
+      capture_stream_outcome_telemetry(fn ->
+        logs =
+          capture_log(fn ->
+            try do
+              assert {:error, %{code: "owner_crashed", status: 502}} =
+                       Gateway.run_websocket_response(
+                         auth,
+                         websocket_payload(setup, "malformed owner reply"),
+                         owner_response_options(remote_state, node_opts),
+                         fn _data -> :ok end
+                       )
+            after
+              # The forced malformed reply also reaches the remote detach call, so
+              # terminate doubles as the detach-containment regression.
+              assert :ok = CodexResponsesSocket.terminate(:closed, remote_state)
+            end
+          end)
+
+        assert_receive {:stream_outcome,
+                        %{
+                          outcome: "failed",
+                          downstream_transport: "websocket",
+                          upstream_transport: "websocket"
+                        }}
+
+        refute_received {:stream_outcome, _metadata}
+        logs
       end)
 
     refute logs =~ private_owner_body
@@ -7330,6 +7343,27 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         order_by: [asc: r.admitted_at]
       )
     )
+  end
+
+  defp capture_stream_outcome_telemetry(fun) do
+    handler_id = "owner-stream-outcome-#{System.unique_integer([:positive])}"
+    parent = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :stream, :outcome],
+        fn _event, _measurements, metadata, _config ->
+          send(parent, {:stream_outcome, metadata})
+        end,
+        nil
+      )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach(handler_id)
+    end
   end
 
   defp assert_websocket_lifecycle_line!(logs, message, required_keys, optional_keys) do

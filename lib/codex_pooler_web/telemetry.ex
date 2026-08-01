@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.Telemetry do
   import Telemetry.Metrics
 
   alias CodexPooler.Gateway.Routing.CircuitTelemetry
+  alias CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary
   alias CodexPooler.RouteClass
 
   @type metric :: Telemetry.Metrics.t()
@@ -10,12 +11,18 @@ defmodule CodexPoolerWeb.Telemetry do
   @type http_tags :: %{method: String.t(), status_class: String.t()}
   @type http_route_tags :: %{method: String.t(), route: String.t(), status_class: String.t()}
   @type admission_tags :: %{route_class: String.t(), transport: String.t()}
+  @type admission_saturation_tags :: %{route_class: String.t()}
   @type admin_stats_reload_tags :: %{stage: String.t(), window: String.t(), scope: String.t()}
   @type admin_stats_build_tags :: %{outcome: String.t(), window: String.t(), scope: String.t()}
   @type request_logs_reload_tags :: %{stage: String.t(), scope: String.t()}
   @type stream_finalization_tags :: %{
           usage_status: String.t(),
           usage_source: String.t(),
+          downstream_transport: String.t(),
+          upstream_transport: String.t()
+        }
+  @type stream_outcome_tags :: %{
+          outcome: String.t(),
           downstream_transport: String.t(),
           upstream_transport: String.t()
         }
@@ -29,6 +36,7 @@ defmodule CodexPoolerWeb.Telemetry do
           route_class: String.t(),
           reason_class: String.t()
         }
+  @type bridge_fallback_tags :: %{reason: String.t()}
 
   @repo_query_buckets [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]
   @admission_queue_buckets [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]
@@ -43,6 +51,21 @@ defmodule CodexPoolerWeb.Telemetry do
   @stream_usage_sources ~w(upstream_usage websocket_upstream_usage unknown)
   @stream_downstream_transports ~w(http_sse websocket unknown)
   @stream_upstream_transports ~w(http_sse websocket unknown)
+  @stream_outcomes ~w(succeeded failed settlement_failed interrupted)
+  @bridge_fallback_structural_reasons ~w(
+    bridge_submit_crash
+    owner_call_timeout
+    owner_not_running
+    task_down
+    bridge_no_first_event
+    upstream_websocket_closed_before_terminal
+    upstream_websocket_error
+  )
+  @bridge_fallback_reasons Enum.uniq(
+                             @bridge_fallback_structural_reasons ++
+                               OwnerErrorVocabulary.owner_error_codes() ++ ["unknown"]
+                           )
+
   @quota_cycle_scopes ~w(account model)
   @quota_cycle_decisions ~w(
     same_cycle_refreshed
@@ -79,7 +102,8 @@ defmodule CodexPoolerWeb.Telemetry do
         perf_probe_child(),
         CodexPoolerWeb.Telemetry.MemorySampler,
         {:telemetry_poller, period: 10_000},
-        prometheus_reporter_child()
+        prometheus_reporter_child(),
+        admission_sampler_child()
       ]
       |> Enum.reject(&is_nil/1)
 
@@ -393,6 +417,20 @@ defmodule CodexPoolerWeb.Telemetry do
         description: "Gateway admission queue time for timed-out requests.",
         reporter_options: [buckets: @admission_queue_buckets]
       ),
+      last_value("codex_pooler.gateway.admission.running",
+        event_name: [:codex_pooler, :gateway, :admission, :saturation],
+        measurement: &admission_saturation_measurement(&1, :running),
+        tags: [:route_class],
+        tag_values: &admission_saturation_tag_values/1,
+        description: "Current locally admitted gateway requests by route class."
+      ),
+      last_value("codex_pooler.gateway.admission.queued",
+        event_name: [:codex_pooler, :gateway, :admission, :saturation],
+        measurement: &admission_saturation_measurement(&1, :queued),
+        tags: [:route_class],
+        tag_values: &admission_saturation_tag_values/1,
+        description: "Current locally queued gateway requests by route class."
+      ),
       counter("codex_pooler.gateway.stream_buffer.oversized.count",
         event_name: [:codex_pooler, :gateway, :stream_buffer, :oversized],
         measurement: :count,
@@ -401,11 +439,13 @@ defmodule CodexPoolerWeb.Telemetry do
       ),
       distribution("codex_pooler.gateway.stream_buffer.oversized.bytes",
         event_name: [:codex_pooler, :gateway, :stream_buffer, :oversized],
-        measurement: :bytes,
+        measurement: fn measurements -> min(Map.fetch!(measurements, :bytes), 134_217_728) end,
         tags: [:buffer, :transport, :route_class, :endpoint],
         unit: :byte,
         description: "Size of oversized incomplete stream buffers.",
-        reporter_options: [buckets: [65_536, 131_072, 262_144, 524_288, 1_048_576, 2_097_152]]
+        reporter_options: [
+          buckets: [1_048_576, 2_097_152, 8_388_608, 16_777_216, 33_554_432, 134_217_728]
+        ]
       ),
       counter("codex_pooler.gateway.stream_buffer.truncated.count",
         event_name: [:codex_pooler, :gateway, :stream_buffer, :truncated],
@@ -427,6 +467,25 @@ defmodule CodexPoolerWeb.Telemetry do
         tags: [:usage_status, :usage_source, :downstream_transport, :upstream_transport],
         tag_values: &stream_finalization_tag_values/1,
         description: "Finalized gateway streams by bounded usage and transport metadata."
+      ),
+      counter("codex_pooler.gateway.stream.outcome.count",
+        event_name: [:codex_pooler, :gateway, :stream, :outcome],
+        measurement: :count,
+        tags: [:outcome, :downstream_transport, :upstream_transport],
+        tag_values: &stream_outcome_tag_values/1,
+        description: "Gateway stream outcomes by bounded outcome and transport metadata."
+      ),
+      counter("codex_pooler.gateway.websocket_bridge.fallback.count",
+        event_name: [:codex_pooler, :gateway, :websocket_bridge, :fallback],
+        measurement: :count,
+        tags: [:reason],
+        tag_values: &bridge_fallback_tag_values/1,
+        description: "Websocket bridge fallbacks by bounded reason."
+      ),
+      counter("codex_pooler.gateway.websocket_bridge.precommit_overflow.count",
+        event_name: [:codex_pooler, :gateway, :websocket_bridge, :precommit_overflow],
+        measurement: :count,
+        description: "Websocket bridge precommit buffer overflows."
       ),
       counter("codex_pooler.quota.cycle.decision.count",
         event_name: [:codex_pooler, :quota, :cycle, :decision],
@@ -456,8 +515,15 @@ defmodule CodexPoolerWeb.Telemetry do
     end
   end
 
+  @spec admission_sampler_child() :: module() | nil
+  defp admission_sampler_child do
+    if prometheus_reporter_enabled?() do
+      CodexPoolerWeb.Telemetry.AdmissionSampler
+    end
+  end
+
   @spec prometheus_reporter_enabled?() :: boolean()
-  defp prometheus_reporter_enabled? do
+  def prometheus_reporter_enabled? do
     System.get_env("OBAN_MODE") not in @prometheus_reporter_disabled_oban_modes
   end
 
@@ -560,6 +626,19 @@ defmodule CodexPoolerWeb.Telemetry do
     }
   end
 
+  @spec admission_saturation_tag_values(map()) :: admission_saturation_tags()
+  defp admission_saturation_tag_values(metadata) do
+    %{route_class: admin_stats_enum_value(metadata[:route_class], RouteClass.all())}
+  end
+
+  @spec admission_saturation_measurement(map(), :running | :queued) :: non_neg_integer()
+  defp admission_saturation_measurement(measurements, key) do
+    case Map.get(measurements, key) do
+      value when is_integer(value) -> max(value, 0)
+      _value -> 0
+    end
+  end
+
   @spec admin_stats_reload_tag_values(map()) :: admin_stats_reload_tags()
   defp admin_stats_reload_tag_values(metadata) do
     %{
@@ -622,6 +701,29 @@ defmodule CodexPoolerWeb.Telemetry do
         admin_stats_enum_value(metadata[:upstream_transport], @stream_upstream_transports)
     }
   end
+
+  @spec stream_outcome_tag_values(map()) :: stream_outcome_tags()
+  defp stream_outcome_tag_values(metadata) do
+    %{
+      outcome: admin_stats_enum_value(metadata[:outcome], @stream_outcomes),
+      downstream_transport:
+        admin_stats_enum_value(metadata[:downstream_transport], @stream_downstream_transports),
+      upstream_transport:
+        admin_stats_enum_value(metadata[:upstream_transport], @stream_upstream_transports)
+    }
+  end
+
+  @spec bridge_fallback_tag_values(map()) :: bridge_fallback_tags()
+  defp bridge_fallback_tag_values(metadata) do
+    %{reason: bridge_fallback_reason(metadata[:reason])}
+  end
+
+  @spec bridge_fallback_reason(term()) :: String.t()
+  defp bridge_fallback_reason(reason) when is_binary(reason) do
+    if reason in @bridge_fallback_reasons, do: reason, else: "unknown"
+  end
+
+  defp bridge_fallback_reason(_reason), do: "unknown"
 
   @spec quota_cycle_decision_tag_values(map()) :: quota_cycle_decision_tags()
   defp quota_cycle_decision_tag_values(metadata) do

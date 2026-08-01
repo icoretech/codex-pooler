@@ -75,6 +75,22 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     on_exit(fn -> :telemetry.detach(handler_id) end)
   end
 
+  defp attach_fallback_handler(test_pid) do
+    handler_id = "websocket-bridge-fallback-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :websocket_bridge, :fallback],
+        fn event, measurements, metadata, pid ->
+          send(pid, {:fallback, event, measurements, metadata})
+        end,
+        test_pid
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
+
   test "an abnormally exiting submit task falls back with a scrubbed reason and no log" do
     logs =
       capture_log(fn ->
@@ -466,12 +482,17 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
   end
 
   test "an owner error before data falls back with the owner error reason" do
+    attach_fallback_handler(self())
     stream = start_armed(blocking_submit())
     ref = stream.ref
 
     owner_frame(stream, {:error, :owner_busy, %{"status" => 409}})
 
     assert_receive {^ref, {:preflight, {:fallback, :owner_busy}}}, @detection_timeout_ms
+
+    assert_receive {:fallback, [:codex_pooler, :gateway, :websocket_bridge, :fallback],
+                    %{count: 1}, %{reason: "owner_busy"}},
+                   @detection_timeout_ms
   end
 
   test "a submit error settling before any frame falls back immediately" do

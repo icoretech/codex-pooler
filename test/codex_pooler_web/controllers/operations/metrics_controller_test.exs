@@ -16,9 +16,12 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
 
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Gateway.Routing.CircuitState
+  alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
   alias CodexPooler.Repo
+  alias CodexPooler.RouteClass
+  alias CodexPoolerWeb.Telemetry.AdmissionSampler
 
   defmodule FailingRepo do
     def insert(_struct, _opts),
@@ -208,6 +211,219 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
     end
   end
 
+  test "exposes bounded stream outcomes without identifier metadata", %{conn: conn} do
+    :telemetry.execute(
+      [:codex_pooler, :gateway, :stream, :outcome],
+      %{count: 1},
+      %{
+        outcome: "interrupted",
+        downstream_transport: "http_sse",
+        upstream_transport: "websocket",
+        request_id: "request-identifier",
+        upstream_identity_id: "identity-identifier"
+      }
+    )
+
+    :telemetry.execute(
+      [:codex_pooler, :gateway, :stream, :outcome],
+      %{count: 1},
+      %{
+        outcome: "banana",
+        downstream_transport: "banana",
+        upstream_transport: "banana",
+        request_id: "unsafe-request-identifier",
+        upstream_identity_id: "unsafe-identity-identifier"
+      }
+    )
+
+    conn = get(conn, ~p"/metrics")
+
+    assert conn.status == 200
+
+    metric_lines =
+      conn.resp_body
+      |> String.split("\n", trim: true)
+      |> Enum.filter(&String.starts_with?(&1, "codex_pooler_gateway_stream_outcome_count"))
+
+    assert ~s(codex_pooler_gateway_stream_outcome_count{downstream_transport="http_sse",outcome="interrupted",upstream_transport="websocket"} 1) in metric_lines
+
+    assert ~s(codex_pooler_gateway_stream_outcome_count{downstream_transport="unknown",outcome="unknown",upstream_transport="unknown"} 1) in metric_lines
+
+    for line <- metric_lines do
+      refute line =~ "request_id"
+      refute line =~ "upstream_identity_id"
+      refute line =~ "unsafe-request-identifier"
+      refute line =~ "unsafe-identity-identifier"
+    end
+  end
+
+  test "exposes sampler-driven admission saturation with only route class labels", %{
+    conn: conn
+  } do
+    snapshot =
+      RouteClass.all()
+      |> Map.new(&{&1, %{running: 0, queued: 0}})
+      |> Map.put("invalid_route_class", %{running: 99, queued: 99})
+
+    sampler_name = {:global, {:metrics_admission_sampler, System.unique_integer([:positive])}}
+
+    {:ok, sampler} =
+      start_supervised(
+        {AdmissionSampler,
+         name: sampler_name,
+         enabled?: true,
+         interval_ms: 60_000,
+         snapshot_reader: fn -> {:ok, snapshot} end}
+      )
+
+    _state = :sys.get_state(sampler)
+
+    saturation_lines =
+      conn
+      |> get(~p"/metrics")
+      |> Map.fetch!(:resp_body)
+      |> String.split("\n", trim: true)
+      |> Enum.filter(fn line ->
+        String.starts_with?(line, "codex_pooler_gateway_admission_") and
+          (String.contains?(line, "_running{") or String.contains?(line, "_queued{"))
+      end)
+
+    assert length(saturation_lines) == 18
+
+    for line <- saturation_lines do
+      assert line =~ ~s(route_class=")
+      refute line =~ "request_id"
+      refute line =~ "transport="
+      refute line =~ "invalid_route_class"
+      refute line =~ "99"
+    end
+  end
+
+  test "exposes bounded bridge telemetry without fallback detail labels", %{conn: conn} do
+    owner_busy_metric =
+      "codex_pooler_gateway_websocket_bridge_fallback_count{reason=\"owner_busy\"}"
+
+    unknown_metric = "codex_pooler_gateway_websocket_bridge_fallback_count{reason=\"unknown\"}"
+    overflow_metric = "codex_pooler_gateway_websocket_bridge_precommit_overflow_count"
+
+    fallback_baselines =
+      conn
+      |> get(~p"/metrics")
+      |> Map.fetch!(:resp_body)
+      |> String.split("\n", trim: true)
+      |> Enum.reduce(
+        %{owner_busy_metric => 0, unknown_metric => 0, overflow_metric => 0},
+        fn line, baselines ->
+          case String.split(line, " ", parts: 2) do
+            [metric, sample] ->
+              if Map.has_key?(baselines, metric) do
+                Map.put(baselines, metric, String.to_integer(sample))
+              else
+                baselines
+              end
+
+            _other ->
+              baselines
+          end
+        end
+      )
+
+    :telemetry.execute(
+      [:codex_pooler, :gateway, :websocket_bridge, :fallback],
+      %{count: 1},
+      %{reason: "owner_busy", request_id: "unsafe-request-identifier"}
+    )
+
+    :telemetry.execute(
+      [:codex_pooler, :gateway, :websocket_bridge, :fallback],
+      %{count: 1},
+      %{reason: "provider-specific-reason", upstream_identity_id: "unsafe-identity-identifier"}
+    )
+
+    :telemetry.execute(
+      [:codex_pooler, :gateway, :websocket_bridge, :precommit_overflow],
+      %{count: 1, frames: 65, bytes: 1_048_577},
+      %{max_frames: 64, max_bytes: 1_048_576}
+    )
+
+    conn = get(build_conn(), ~p"/metrics")
+
+    assert conn.status == 200
+
+    metric_lines =
+      conn.resp_body
+      |> String.split("\n", trim: true)
+      |> Enum.filter(&String.starts_with?(&1, "codex_pooler_gateway_websocket_bridge_"))
+
+    assert "#{owner_busy_metric} #{fallback_baselines[owner_busy_metric] + 1}" in metric_lines
+
+    assert "#{unknown_metric} #{fallback_baselines[unknown_metric] + 1}" in metric_lines
+
+    assert "#{overflow_metric} #{fallback_baselines[overflow_metric] + 1}" in metric_lines
+
+    for line <- metric_lines do
+      refute line =~ "frames="
+      refute line =~ "bytes="
+      refute line =~ "max_frames="
+      refute line =~ "max_bytes="
+      refute line =~ "request_id"
+      refute line =~ "upstream_identity_id"
+      refute line =~ "unsafe-request-identifier"
+      refute line =~ "unsafe-identity-identifier"
+    end
+  end
+
+  test "saturates oversized stream-buffer histogram observations without changing raw telemetry",
+       %{
+         conn: conn
+       } do
+    event = [:codex_pooler, :gateway, :stream_buffer, :oversized]
+    handler_id = {__MODULE__, self(), System.unique_integer([:positive])}
+    test_pid = self()
+    observed_bytes = 134_217_729
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        event,
+        fn ^event, measurements, _metadata, ^test_pid ->
+          send(test_pid, {handler_id, measurements})
+        end,
+        test_pid
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    finite_bucket =
+      ~s(codex_pooler_gateway_stream_buffer_oversized_bytes_bucket{buffer="oversized_saturation",endpoint="saturation_endpoint",route_class="proxy_stream",transport="http_sse",le="134217728"})
+
+    infinite_bucket =
+      ~s(codex_pooler_gateway_stream_buffer_oversized_bytes_bucket{buffer="oversized_saturation",endpoint="saturation_endpoint",route_class="proxy_stream",transport="http_sse",le="+Inf"})
+
+    baselines = histogram_bucket_baselines(conn, [finite_bucket, infinite_bucket])
+
+    BufferTelemetry.record_oversized_incomplete(
+      "oversized_saturation",
+      observed_bytes,
+      8_388_608,
+      endpoint: "saturation_endpoint",
+      route_class: "proxy_stream",
+      transport: "http_sse"
+    )
+
+    assert_receive {^handler_id, %{bytes: ^observed_bytes, count: 1, max_bytes: 8_388_608}}
+
+    metric_lines =
+      build_conn()
+      |> get(~p"/metrics")
+      |> Map.fetch!(:resp_body)
+      |> String.split("\n", trim: true)
+
+    assert "#{finite_bucket} #{baselines[finite_bucket] + 1}" in metric_lines
+    assert "#{infinite_bucket} #{baselines[infinite_bucket] + 1}" in metric_lines
+    assert baselines[finite_bucket] + 1 == baselines[infinite_bucket] + 1
+  end
+
   test "exports bounded circuit transitions without circuit identity or raw reasons", %{
     conn: conn
   } do
@@ -321,6 +537,22 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
     body
     |> String.split("\n", trim: true)
     |> Enum.filter(&String.contains?(&1, "codex_pooler_admin_stats_"))
+  end
+
+  defp histogram_bucket_baselines(conn, bucket_names) do
+    conn
+    |> get(~p"/metrics")
+    |> Map.fetch!(:resp_body)
+    |> String.split("\n", trim: true)
+    |> Enum.reduce(Map.new(bucket_names, &{&1, 0}), fn line, baselines ->
+      case String.split(line, " ", parts: 2) do
+        [metric, sample] when is_map_key(baselines, metric) ->
+          Map.put(baselines, metric, String.to_integer(sample))
+
+        _other ->
+          baselines
+      end
+    end)
   end
 
   defp metrics_content_type?(conn) do

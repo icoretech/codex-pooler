@@ -29,6 +29,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
 
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.TransportFailureReason
+  alias CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
 
@@ -69,6 +70,19 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
     "response.content_part.added",
     "response.reasoning_summary_part.added"
   ]
+  @fallback_structural_reason_codes ~w(
+    bridge_submit_crash
+    owner_call_timeout
+    owner_not_running
+    task_down
+    bridge_no_first_event
+    upstream_websocket_closed_before_terminal
+    upstream_websocket_error
+  )
+  @fallback_reason_codes MapSet.new(
+                           @fallback_structural_reason_codes ++
+                             OwnerErrorVocabulary.owner_error_codes()
+                         )
 
   @spec start(String.t(), keyword()) :: t()
   def start(correlation_id, opts \\ []) when is_binary(correlation_id) do
@@ -446,9 +460,20 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
     send(parent, {ref, {:preflight, {:fallback, reason}}})
   end
 
-  defp fallback_reason_label(reason) when is_atom(reason), do: reason
-  defp fallback_reason_label({label, _detail}) when is_atom(label), do: label
-  defp fallback_reason_label(_reason), do: :upstream_websocket_error
+  defp fallback_reason_label(reason) when is_atom(reason) do
+    reason
+    |> Atom.to_string()
+    |> fallback_reason_code()
+  end
+
+  defp fallback_reason_label({label, _detail}) when is_atom(label),
+    do: fallback_reason_label(label)
+
+  defp fallback_reason_label(_reason), do: "unknown"
+
+  defp fallback_reason_code(reason) do
+    if MapSet.member?(@fallback_reason_codes, reason), do: reason, else: "unknown"
+  end
 
   defp report_stream_error(parent, ref, reason) do
     send(parent, {ref, {:preflight, :stream}})

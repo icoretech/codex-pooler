@@ -17,20 +17,35 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement do
   @type attrs :: %{optional(atom()) => term()}
   @type usage :: %{optional(atom()) => term()} | %{optional(String.t()) => term()}
   @type gateway_error :: Contracts.gateway_error()
-  @type settlement_result :: {:ok, term()} | {:error, gateway_error()}
+  @type finalization_result ::
+          {:ok, Accounting.internal_request_result_row()} | {:error, gateway_error()}
+  @type settlement_result ::
+          finalization_result()
+          | {:ok, Accounting.request_result_row() | Attempt.t()}
 
-  @spec finalize_success(Request.t(), Attempt.t(), usage(), attrs()) :: settlement_result()
+  @doc false
+  @spec first_settlement?(
+          Accounting.internal_request_result_row()
+          | Accounting.finalization_disposition()
+        ) :: boolean()
+  def first_settlement?(%{finalization_disposition: disposition}),
+    do: first_settlement?(disposition)
+
+  def first_settlement?(:inserted), do: true
+  def first_settlement?(disposition) when disposition in [:replaced, :reused], do: false
+
+  @spec finalize_success(Request.t(), Attempt.t(), usage(), attrs()) :: finalization_result()
   def finalize_success(request, attempt, usage, attrs) do
-    Accounting.finalize_success(request, attempt, usage, attrs)
+    Accounting.finalize_success_with_disposition(request, attempt, usage, attrs)
     |> SessionContinuity.complete_codex_turn(CodexTurn.succeeded_status(), nil)
     |> accounting_result(:finalize_success, request, attempt)
   end
 
-  @spec finalize_failure(Request.t(), Attempt.t(), attrs()) :: settlement_result()
+  @spec finalize_failure(Request.t(), Attempt.t(), attrs()) :: finalization_result()
   def finalize_failure(request, attempt, attrs) do
     attrs = Map.new(attrs)
 
-    Accounting.finalize_failure(request, attempt, attrs)
+    Accounting.finalize_failure_with_disposition(request, attempt, attrs)
     |> SessionContinuity.complete_codex_turn(
       CodexTurn.failed_status(),
       Map.get(attrs, :last_error_code)
@@ -39,12 +54,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement do
   end
 
   @spec finalize_partial_stream_failure(Request.t(), Attempt.t(), usage(), attrs()) ::
-          settlement_result()
+          finalization_result()
   def finalize_partial_stream_failure(request, attempt, usage, attrs) do
     attrs = Map.new(attrs)
     error_code = Map.get(attrs, :last_error_code)
 
-    Accounting.finalize_partial_stream_failure(request, attempt, usage, attrs)
+    Accounting.finalize_partial_stream_failure_with_disposition(request, attempt, usage, attrs)
     |> SessionContinuity.complete_codex_turn(partial_stream_turn_status(error_code), error_code)
     |> accounting_result(:finalize_partial_stream_failure, request, attempt)
   end

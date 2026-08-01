@@ -7,6 +7,14 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
   alias CodexPooler.InstanceSettings.Settings
   alias CodexPooler.RouteClass
 
+  defmodule BlockingSaturationServer do
+    use GenServer
+
+    def start_link(opts), do: GenServer.start_link(__MODULE__, :ok, opts)
+    def init(:ok), do: {:ok, :ok}
+    def handle_call(:saturation, _from, state), do: {:noreply, state}
+  end
+
   setup do
     old_config = Application.get_env(:codex_pooler, OperationalSettings, [])
     Admission.reset_for_test()
@@ -85,6 +93,57 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
              queue_limit: 8,
              queue_timeout_ms: 5_000
            }
+  end
+
+  test "saturation returns every route class with safe zero values before admission" do
+    assert {:ok, snapshot} = Admission.saturation()
+
+    assert Map.keys(snapshot) |> Enum.sort() == Enum.sort(RouteClass.all())
+
+    for route_class <- RouteClass.all() do
+      assert %{running: 0, queued: 0} == snapshot[route_class]
+    end
+
+    refute inspect(snapshot) =~ "lease"
+    refute inspect(snapshot) =~ "monitor"
+    refute inspect(snapshot) =~ "request_id"
+    refute inspect(snapshot) =~ "pid"
+  end
+
+  test "saturation tracks running and queued leases without exposing private state" do
+    setup_settings(settings_with_queues())
+    Admission.reset_for_test()
+    attach_telemetry()
+
+    assert {:ok, held} = Admission.acquire("proxy_stream", %{request_id: "held-stream"})
+
+    queued =
+      Task.async(fn ->
+        Admission.acquire("proxy_stream", %{request_id: "queued-stream"})
+      end)
+
+    assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :enqueued],
+                    _measurements, %{route_class: "proxy_stream"}}
+
+    assert {:ok, snapshot} = Admission.saturation()
+    assert %{running: 1, queued: 1} = snapshot["proxy_stream"]
+
+    refute inspect(snapshot) =~ "held-stream"
+    refute inspect(snapshot) =~ "queued-stream"
+    refute inspect(snapshot) =~ "leases"
+    refute inspect(snapshot) =~ "monitors"
+
+    Admission.release(held)
+    assert {:ok, lease} = Task.await(queued, 1_000)
+    Admission.release(lease)
+  end
+
+  test "saturation distinguishes timeout from an unavailable server" do
+    name = {:global, {:blocking_saturation, System.unique_integer([:positive])}}
+    {:ok, _pid} = start_supervised({BlockingSaturationServer, name: name})
+
+    assert {:error, :timeout} = Admission.saturation(name, 1)
+    assert {:error, :unavailable} = Admission.saturation(:missing_admission_server, 10)
   end
 
   test "operational settings backfill the MCP bulkhead for existing settings rows" do

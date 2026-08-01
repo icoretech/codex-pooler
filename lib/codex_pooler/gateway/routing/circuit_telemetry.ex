@@ -20,6 +20,9 @@ defmodule CodexPooler.Gateway.Routing.CircuitTelemetry do
     upstream_network_error
     upstream_model_unavailable
     upstream_stream_error
+    stream_idle_timeout
+    upstream_response_too_large
+    invalid_upstream_base_url
     client_disconnected
     none
     unknown

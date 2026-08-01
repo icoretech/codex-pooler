@@ -42,6 +42,16 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
   @type accounting_error :: Metadata.accounting_error()
   @type request_result_row :: %{required(:request) => Request.t(), optional(atom()) => term()}
   @type request_result :: {:ok, request_result_row()} | {:error, accounting_error()}
+  @type finalization_disposition :: :inserted | :replaced | :reused
+
+  @type internal_request_result_row :: %{
+          required(:request) => Request.t(),
+          required(:finalization_disposition) => finalization_disposition(),
+          optional(atom()) => term()
+        }
+
+  @type internal_request_result ::
+          {:ok, internal_request_result_row()} | {:error, accounting_error()}
 
   @spec reserve(auth(), model_ref(), map(), map()) :: request_result()
   def reserve(auth, model_or_id, payload, opts \\ %{})
@@ -299,6 +309,19 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
 
   @spec finalize_request(Request.t(), Attempt.t(), map()) :: request_result()
   def finalize_request(%Request{} = request, %Attempt{} = attempt, attrs \\ %{}) do
+    request
+    |> finalize_request_with_disposition(attempt, attrs)
+    |> strip_finalization_disposition()
+  end
+
+  @doc false
+  @spec finalize_request_with_disposition(Request.t(), Attempt.t(), map()) ::
+          internal_request_result()
+  def finalize_request_with_disposition(
+        %Request{} = request,
+        %Attempt{} = attempt,
+        attrs \\ %{}
+      ) do
     timestamp = now(attrs)
     request_status = Map.get(attrs, :request_status, Map.get(attrs, :status, "succeeded"))
 
@@ -333,7 +356,13 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
               source_event_id: LedgerEntries.release_source_event_id(request.id)
             )
 
-          %{request: request, attempt: attempt, settlement: settlement, release: release}
+          %{
+            request: request,
+            attempt: attempt,
+            settlement: settlement,
+            release: release,
+            finalization_disposition: :reused
+          }
 
         action ->
           previous_request = request
@@ -367,7 +396,13 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
 
           record_settlement_fact!(settlement, settlement_status)
 
-          %{request: request, attempt: attempt, settlement: settlement, release: release}
+          %{
+            request: request,
+            attempt: attempt,
+            settlement: settlement,
+            release: release,
+            finalization_disposition: finalization_disposition(settlement_status)
+          }
       end
     end)
     |> unwrap_transaction()
@@ -536,6 +571,15 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
 
   defp record_settlement_fact!(settlement, _status),
     do: RequestLogFacts.record_settlement_written!(settlement)
+
+  defp finalization_disposition(:inserted), do: :inserted
+  defp finalization_disposition(:replaced), do: :replaced
+  defp finalization_disposition(:existing), do: :reused
+
+  defp strip_finalization_disposition({:ok, result}),
+    do: {:ok, Map.delete(result, :finalization_disposition)}
+
+  defp strip_finalization_disposition({:error, _reason} = error), do: error
 
   defp tap_request_log_event({:ok, %{request: request}} = result, reason) do
     Events.broadcast_request_logs(request.pool_id, reason, %{

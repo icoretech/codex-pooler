@@ -308,7 +308,16 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
              "generation" => 1,
              "reused" => false,
              "reconnected" => false
-           } = upstream_connection(attempt)
+           } = connection = upstream_connection(attempt)
+
+    assert Map.take(
+             attempt.response_metadata,
+             ~w(upstream_transport upstream_websocket_bridge upstream_websocket_connection)
+           ) == %{
+             "upstream_transport" => "websocket",
+             "upstream_websocket_bridge" => true,
+             "upstream_websocket_connection" => connection
+           }
 
     assert settlement_count(request) == 1
 

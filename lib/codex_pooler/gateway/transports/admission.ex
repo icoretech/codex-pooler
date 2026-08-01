@@ -36,6 +36,12 @@ defmodule CodexPooler.Gateway.Transports.Admission do
           required(:param) => nil,
           required(:route_class) => String.t()
         }
+  @type saturation_snapshot :: %{
+          required(RouteClass.t()) => %{
+            required(:running) => non_neg_integer(),
+            required(:queued) => non_neg_integer()
+          }
+        }
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
@@ -44,6 +50,15 @@ defmodule CodexPooler.Gateway.Transports.Admission do
 
   @spec route_classes() :: [String.t()]
   def route_classes, do: @route_classes
+
+  @spec saturation(GenServer.server(), timeout()) ::
+          {:ok, saturation_snapshot()} | {:error, :timeout | :unavailable}
+  def saturation(server \\ __MODULE__, timeout \\ 1_000) do
+    {:ok, GenServer.call(server, :saturation, timeout)}
+  catch
+    :exit, {:timeout, _call} -> {:error, :timeout}
+    :exit, _reason -> {:error, :unavailable}
+  end
 
   @spec acquire(String.t(), map(), map()) :: {:ok, lease()} | {:error, overload_reason()}
   def acquire(route_class, metadata \\ %{}, opts \\ %{})
@@ -99,6 +114,8 @@ defmodule CodexPooler.Gateway.Transports.Admission do
 
   @impl GenServer
   def handle_call(:reset, _from, _state), do: {:reply, :ok, %__MODULE__{}}
+
+  def handle_call(:saturation, _from, state), do: {:reply, saturation_snapshot(state), state}
 
   def handle_call({:acquire, route_class, metadata, settings, server}, from, state) do
     config = bulkhead_config(settings, route_class)
@@ -304,6 +321,18 @@ defmodule CodexPooler.Gateway.Transports.Admission do
 
   defp put_class(state, route_class, class) do
     %{state | classes: Map.put(state.classes, route_class, class)}
+  end
+
+  defp saturation_snapshot(state) do
+    Map.new(@route_classes, fn route_class ->
+      class = class_state(state, route_class)
+
+      {route_class,
+       %{
+         running: max(class.running, 0),
+         queued: max(:queue.len(class.queue), 0)
+       }}
+    end)
   end
 
   defp lease(server, route_class),

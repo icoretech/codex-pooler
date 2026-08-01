@@ -2,7 +2,9 @@ defmodule CodexPoolerWeb.TelemetryTest do
   use ExUnit.Case, async: false
 
   alias CodexPooler.Gateway.Routing.CircuitTelemetry
+  alias CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary
   alias CodexPooler.RouteClass
+  alias CodexPoolerWeb.Telemetry.AdmissionSampler
 
   setup do
     original_oban_mode = System.get_env("OBAN_MODE")
@@ -23,7 +25,13 @@ defmodule CodexPoolerWeb.TelemetryTest do
     for role <- [nil, "web", "all"] do
       set_oban_mode(role)
 
-      assert :prometheus_metrics in telemetry_child_ids()
+      child_ids = telemetry_child_ids()
+      reporter_index = Enum.find_index(child_ids, &(&1 == :prometheus_metrics))
+      sampler_index = Enum.find_index(child_ids, &(&1 == AdmissionSampler))
+
+      assert is_integer(reporter_index)
+      assert is_integer(sampler_index)
+      assert reporter_index < sampler_index
     end
   end
 
@@ -36,6 +44,7 @@ defmodule CodexPoolerWeb.TelemetryTest do
       assert CodexPoolerWeb.Telemetry.MemorySampler in child_ids
       assert :telemetry_poller in child_ids
       refute :prometheus_metrics in child_ids
+      refute AdmissionSampler in child_ids
     end
   end
 
@@ -196,6 +205,92 @@ defmodule CodexPoolerWeb.TelemetryTest do
              metric.tag_values.(%{route_class: "unsafe class", transport: nil})
   end
 
+  test "exports admission saturation gauges with one bounded route class tag" do
+    metrics = CodexPoolerWeb.Telemetry.prometheus_metrics()
+
+    for {name, key} <- [
+          {"codex_pooler.gateway.admission.running", :running},
+          {"codex_pooler.gateway.admission.queued", :queued}
+        ] do
+      metric = metric_by_name(metrics, name)
+
+      assert %Telemetry.Metrics.LastValue{
+               event_name: [:codex_pooler, :gateway, :admission, :saturation],
+               measurement: measurement,
+               tags: [:route_class]
+             } = metric
+
+      assert is_function(measurement, 1)
+      assert measurement.(%{key => 3}) == 3
+      assert measurement.(%{key => -1}) == 0
+      assert measurement.(%{}) == 0
+
+      assert %{route_class: "proxy_stream"} =
+               metric.tag_values.(%{route_class: "proxy_stream"})
+
+      assert %{route_class: "unknown"} =
+               metric.tag_values.(%{route_class: "caller-controlled-identifier"})
+
+      tag_values =
+        (RouteClass.all() ++ ["caller-controlled-identifier"])
+        |> Enum.map(&metric.tag_values.(%{route_class: &1}).route_class)
+        |> MapSet.new()
+
+      assert MapSet.size(tag_values) == length(RouteClass.all()) + 1
+    end
+
+    assert (length(RouteClass.all()) + 1) * 2 == 20
+  end
+
+  test "caps exported oversized stream-buffer observations at 128 MiB" do
+    metric =
+      CodexPoolerWeb.Telemetry.prometheus_metrics()
+      |> metric_by_name("codex_pooler.gateway.stream_buffer.oversized.bytes")
+
+    assert %Telemetry.Metrics.Distribution{
+             event_name: [:codex_pooler, :gateway, :stream_buffer, :oversized],
+             measurement: measurement,
+             tags: [:buffer, :transport, :route_class, :endpoint],
+             unit: :byte,
+             reporter_options: reporter_options
+           } = metric
+
+    assert is_function(measurement, 1)
+    assert measurement.(%{bytes: 134_217_729}) == 134_217_728
+
+    assert Keyword.fetch!(reporter_options, :buckets) == [
+             1_048_576,
+             2_097_152,
+             8_388_608,
+             16_777_216,
+             33_554_432,
+             134_217_728
+           ]
+  end
+
+  test "preserves raw truncated stream-buffer observations and buckets" do
+    metric =
+      CodexPoolerWeb.Telemetry.prometheus_metrics()
+      |> metric_by_name("codex_pooler.gateway.stream_buffer.truncated.bytes")
+
+    assert %Telemetry.Metrics.Distribution{
+             event_name: [:codex_pooler, :gateway, :stream_buffer, :truncated],
+             measurement: :bytes,
+             tags: [:buffer, :transport, :route_class, :endpoint],
+             unit: :byte,
+             reporter_options: reporter_options
+           } = metric
+
+    assert Keyword.fetch!(reporter_options, :buckets) == [
+             65_536,
+             131_072,
+             262_144,
+             524_288,
+             1_048_576,
+             2_097_152
+           ]
+  end
+
   test "exports stream finalization and quota cycle counters with exact bounded tags" do
     metrics = CodexPoolerWeb.Telemetry.prometheus_metrics()
 
@@ -262,6 +357,122 @@ defmodule CodexPoolerWeb.TelemetryTest do
              })
   end
 
+  test "exports stream outcomes with exact bounded tags and a 45-series ceiling" do
+    metric =
+      CodexPoolerWeb.Telemetry.prometheus_metrics()
+      |> metric_by_name("codex_pooler.gateway.stream.outcome.count")
+
+    assert %Telemetry.Metrics.Counter{
+             event_name: [:codex_pooler, :gateway, :stream, :outcome],
+             measurement: :count,
+             tags: [:outcome, :downstream_transport, :upstream_transport]
+           } = metric
+
+    assert %{
+             outcome: "interrupted",
+             downstream_transport: "http_sse",
+             upstream_transport: "websocket"
+           } =
+             metric.tag_values.(%{
+               outcome: :interrupted,
+               downstream_transport: :http_sse,
+               upstream_transport: "websocket",
+               request_id: "request-identifier",
+               upstream_identity_id: "identity-identifier"
+             })
+
+    assert %{outcome: "unknown", downstream_transport: "unknown", upstream_transport: "unknown"} =
+             metric.tag_values.(%{
+               outcome: "banana",
+               downstream_transport: "browser-event",
+               upstream_transport: nil
+             })
+
+    outcome_values =
+      ~w(succeeded failed settlement_failed interrupted banana)
+      |> Enum.map(&metric.tag_values.(%{outcome: &1}).outcome)
+      |> MapSet.new()
+
+    downstream_transport_values =
+      ~w(http_sse websocket unknown banana)
+      |> Enum.map(&metric.tag_values.(%{downstream_transport: &1}).downstream_transport)
+      |> MapSet.new()
+
+    upstream_transport_values =
+      ~w(http_sse websocket unknown banana)
+      |> Enum.map(&metric.tag_values.(%{upstream_transport: &1}).upstream_transport)
+      |> MapSet.new()
+
+    assert outcome_values ==
+             MapSet.new(~w(succeeded failed settlement_failed interrupted unknown))
+
+    assert downstream_transport_values == MapSet.new(~w(http_sse websocket unknown))
+    assert upstream_transport_values == MapSet.new(~w(http_sse websocket unknown))
+
+    assert MapSet.size(outcome_values) * MapSet.size(downstream_transport_values) *
+             MapSet.size(upstream_transport_values) == 45
+
+    planned_bounded_delta =
+      45 +
+        20 +
+        1 +
+        (length(RouteClass.all()) + 1) * 2 +
+        (840 - 660)
+
+    assert planned_bounded_delta == 266
+  end
+
+  test "exports bridge fallback and precommit overflow metrics with bounded labels" do
+    metrics = CodexPoolerWeb.Telemetry.prometheus_metrics()
+
+    assert %Telemetry.Metrics.Counter{
+             event_name: [:codex_pooler, :gateway, :websocket_bridge, :fallback],
+             measurement: :count,
+             tags: [:reason]
+           } =
+             fallback_metric =
+             metric_by_name(metrics, "codex_pooler.gateway.websocket_bridge.fallback.count")
+
+    expected_reasons =
+      MapSet.new(
+        [
+          "bridge_submit_crash",
+          "owner_call_timeout",
+          "owner_not_running",
+          "task_down",
+          "bridge_no_first_event",
+          "upstream_websocket_closed_before_terminal",
+          "upstream_websocket_error"
+          | OwnerErrorVocabulary.owner_error_codes()
+        ] ++ ["unknown"]
+      )
+
+    actual_reasons =
+      expected_reasons
+      |> Enum.map(&fallback_metric.tag_values.(%{reason: &1}).reason)
+      |> Kernel.++([
+        fallback_metric.tag_values.(%{reason: :owner_busy}).reason,
+        fallback_metric.tag_values.(%{reason: "provider-specific-reason"}).reason
+      ])
+      |> MapSet.new()
+
+    assert fallback_metric.tag_values.(%{reason: "owner_busy"}).reason == "owner_busy"
+    assert fallback_metric.tag_values.(%{reason: :owner_busy}).reason == "unknown"
+    assert fallback_metric.tag_values.(%{reason: "provider-specific-reason"}).reason == "unknown"
+    assert actual_reasons == expected_reasons
+    assert MapSet.size(actual_reasons) == 20
+
+    assert %Telemetry.Metrics.Counter{
+             event_name: [:codex_pooler, :gateway, :websocket_bridge, :precommit_overflow],
+             measurement: :count,
+             tags: []
+           } =
+             metric_by_name(
+               metrics,
+               "codex_pooler.gateway.websocket_bridge.precommit_overflow.count"
+             )
+  end
+
   test "exports routing circuit transitions with exact bounded tags" do
     metric =
       CodexPoolerWeb.Telemetry.prometheus_metrics()
@@ -312,7 +523,7 @@ defmodule CodexPoolerWeb.TelemetryTest do
              })
   end
 
-  test "keeps routing circuit vocabularies aligned within the 660 series ceiling" do
+  test "keeps routing circuit vocabularies aligned within the 840 series ceiling" do
     metric =
       CodexPoolerWeb.Telemetry.prometheus_metrics()
       |> metric_by_name("codex_pooler.gateway.routing.circuit.transition.count")
@@ -347,7 +558,7 @@ defmodule CodexPoolerWeb.TelemetryTest do
     assert "retryable_upstream_status" in reason_class_values
 
     assert MapSet.size(transition_values) * MapSet.size(route_class_values) *
-             MapSet.size(reason_class_values) == 660
+             MapSet.size(reason_class_values) == 840
   end
 
   test "exports admin request-log reload metrics with bounded tags" do

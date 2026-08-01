@@ -526,6 +526,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
         status: websocket_response_status(response),
         headers: req_response_headers(Map.get(response, :headers, []))
       },
+      upstream_transport: :websocket,
       upstream_websocket_connection: Map.get(response, :upstream_websocket_connection)
     }
   end
@@ -630,6 +631,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
     %ResponseContext{
       context: context,
       response: %Req.Response{status: 200, headers: Map.get(response, :headers, [])},
+      upstream_transport: :websocket,
       upstream_websocket_connection: Map.get(response, :upstream_websocket_connection)
     }
   end

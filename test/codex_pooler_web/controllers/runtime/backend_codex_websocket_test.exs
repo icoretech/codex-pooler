@@ -1967,14 +1967,48 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         setup,
         auth,
         session,
-        Jason.encode!(%{"id" => body_response_id})
+        Jason.encode!(%{
+          "id" => body_response_id,
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
       )
 
-    assert {:ok, %{status: 200, websocket_messages: []}} =
-             Finalization.finalize_completed_websocket_response(context, finalization)
+    capture_native_stream_telemetry(fn ->
+      assert {:ok, %{status: 200, websocket_messages: []}} =
+               Finalization.finalize_completed_websocket_response(context, finalization)
 
-    assert {:ok, %{status: 200, websocket_messages: []}} =
-             Finalization.finalize_completed_websocket_response(context, finalization)
+      assert_receive {:stream_finalization,
+                      %{
+                        usage_status: "usage_known",
+                        usage_source: "upstream_usage",
+                        downstream_transport: "websocket",
+                        upstream_transport: "websocket"
+                      }}
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "succeeded",
+                        downstream_transport: "websocket",
+                        upstream_transport: "websocket"
+                      }}
+
+      refute_received {:stream_finalization, _metadata}
+      refute_received {:stream_outcome, _metadata}
+
+      assert {:ok, %{status: 200, websocket_messages: []}} =
+               Finalization.finalize_completed_websocket_response(context, finalization)
+
+      assert_receive {:stream_finalization,
+                      %{
+                        usage_status: "usage_known",
+                        usage_source: "upstream_usage",
+                        downstream_transport: "websocket",
+                        upstream_transport: "websocket"
+                      }}
+
+      refute_received {:stream_finalization, _metadata}
+      refute_received {:stream_outcome, _metadata}
+    end)
 
     assert [request] =
              Repo.all(from(request in Request, where: request.id == ^context.reserved.request.id))
@@ -2035,6 +2069,334 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       })
 
     refute persisted =~ body_response_id
+  end
+
+  test "websocket completed settlement rollback emits one attempt-scoped failure outcome" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{accepted_turn_state: "ws-finalization-rollback"})
+
+    {context, finalization} =
+      completed_websocket_finalization_context!(
+        setup,
+        auth,
+        session,
+        Jason.encode!(%{
+          "id" => "ws-finalization-rollback",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    mismatched =
+      gateway_upstream(
+        setup.pool,
+        start_upstream(FakeUpstream.json_response(%{"data" => []})),
+        "upstream-token-settlement-mismatch",
+        compact?: false
+      )
+
+    mismatched_attempt =
+      context.attempt
+      |> Ecto.Changeset.change(upstream_identity_id: mismatched.identity.id)
+      |> Repo.update!()
+
+    context = %{context | attempt: mismatched_attempt}
+
+    capture_stream_outcome_telemetry(fn ->
+      log =
+        capture_log(fn ->
+          assert {:error,
+                  %{
+                    status: 500,
+                    code: "gateway_accounting_failed",
+                    message: "gateway accounting finalization failed"
+                  }} = Finalization.finalize_completed_websocket_response(context, finalization)
+        end)
+
+      assert log =~ "reason=upstream_reference_mismatch"
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "settlement_failed",
+                        downstream_transport: "websocket",
+                        upstream_transport: "websocket"
+                      }}
+
+      refute_received {:stream_outcome, _metadata}
+    end)
+
+    assert Repo.reload!(context.reserved.request).status == "in_progress"
+    assert Repo.reload!(mismatched_attempt).status == "in_progress"
+  end
+
+  test "websocket transport finalizer owns the first client disconnect outcome" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{accepted_turn_state: "ws-finalizer-disconnect"})
+
+    {context, finalization} =
+      completed_websocket_finalization_context!(setup, auth, session, "")
+
+    failed_finalization =
+      finalization
+      |> Map.drop([:callbacks, :status])
+      |> Map.merge(%{reason: :client_disconnected, headers: []})
+
+    capture_stream_outcome_telemetry(fn ->
+      assert {:error, %{status: 499, code: "client_disconnected"}} =
+               Finalization.finalize_failed_websocket_response(context, failed_finalization)
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "interrupted",
+                        downstream_transport: "websocket",
+                        upstream_transport: "websocket"
+                      }}
+
+      assert {:error, %{status: 499, code: "client_disconnected"}} =
+               Finalization.finalize_failed_websocket_response(context, failed_finalization)
+
+      refute_received {:stream_outcome, _metadata}
+    end)
+  end
+
+  test "websocket failed finalization stays silent for reused and usage-replaced settlements" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    for {suffix, initial_usage} <- [
+          {"reused",
+           %{status: "usage_known", input_tokens: 4, output_tokens: 3, total_tokens: 7}},
+          {"replaced", %{status: "usage_unknown", source: "owner_drained"}}
+        ] do
+      {:ok, session} =
+        Gateway.start_codex_session(auth, %{
+          accepted_turn_state: "ws-failed-settlement-#{suffix}"
+        })
+
+      body =
+        Jason.encode!(%{
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+
+      {context, finalization} =
+        completed_websocket_finalization_context!(setup, auth, session, body)
+
+      assert {:ok, _settled} =
+               Accounting.finalize_failure_with_disposition(
+                 context.reserved.request,
+                 context.attempt,
+                 %{
+                   response_status_code: 502,
+                   last_error_code: "upstream_request_failed",
+                   usage: initial_usage
+                 }
+               )
+
+      failed_finalization =
+        finalization
+        |> Map.drop([:callbacks, :status])
+        |> Map.merge(%{reason: :upstream_stream_interrupted, headers: []})
+
+      capture_stream_outcome_telemetry(fn ->
+        assert {:error, %{status: 502, code: "upstream_request_failed"}} =
+                 Finalization.finalize_failed_websocket_response(context, failed_finalization)
+
+        refute_received {:stream_outcome, _metadata}
+      end)
+
+      assert Repo.reload!(context.reserved.request).status == "failed"
+      assert Repo.reload!(context.attempt).status == "failed"
+    end
+  end
+
+  test "native retry boundaries keep both already-finalized lifecycle errors uncounted" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    for lifecycle <- [:request, :attempt] do
+      {:ok, session} =
+        Gateway.start_codex_session(auth, %{
+          accepted_turn_state: "ws-native-#{lifecycle}-already-finalized"
+        })
+
+      {context, finalization} =
+        completed_websocket_finalization_context!(setup, auth, session, "")
+
+      context = %{context | allow_retry?: true}
+
+      expected_code =
+        case lifecycle do
+          :request ->
+            assert {:ok, _settled} =
+                     Accounting.finalize_failure(
+                       context.reserved.request,
+                       context.attempt,
+                       %{
+                         response_status_code: 502,
+                         last_error_code: "upstream_request_failed",
+                         usage_status: "usage_unknown"
+                       }
+                     )
+
+            "request_already_finalized"
+
+          :attempt ->
+            assert {:ok, %Attempt{status: "retryable_failed"}} =
+                     Accounting.record_retryable_attempt_failure(context.attempt, %{
+                       response_status_code: 502,
+                       last_error_code: "upstream_request_timeout"
+                     })
+
+            "attempt_already_finalized"
+        end
+
+      failed_finalization =
+        finalization
+        |> Map.drop([:callbacks, :status])
+        |> Map.merge(%{reason: :upstream_request_timeout, headers: []})
+
+      capture_stream_outcome_telemetry(fn ->
+        assert {:error, %{status: 499, code: ^expected_code}} =
+                 Finalization.finalize_failed_websocket_response(context, failed_finalization)
+
+        refute_received {:stream_outcome, _metadata}
+      end)
+    end
+  end
+
+  test "concurrent native settlement rollbacks each emit an attempt-scoped failure" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{accepted_turn_state: "ws-concurrent-settlement-failure"})
+
+    {context, finalization} =
+      completed_websocket_finalization_context!(
+        setup,
+        auth,
+        session,
+        Jason.encode!(%{
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    mismatched =
+      gateway_upstream(
+        setup.pool,
+        start_upstream(FakeUpstream.json_response(%{"data" => []})),
+        "upstream-token-concurrent-settlement-mismatch",
+        compact?: false
+      )
+
+    mismatched_attempt =
+      context.attempt
+      |> Ecto.Changeset.change(upstream_identity_id: mismatched.identity.id)
+      |> Repo.update!()
+
+    context = %{context | attempt: mismatched_attempt}
+    parent = self()
+    release_ref = make_ref()
+
+    capture_stream_outcome_telemetry(fn ->
+      tasks =
+        for label <- [:first, :second] do
+          Task.async(fn ->
+            Sandbox.allow(Repo, parent, self())
+            send(parent, {:native_settlement_failure_ready, label, self(), release_ref})
+
+            receive do
+              {:release_native_settlement_failure, ^release_ref} -> :ok
+            after
+              5_000 -> flunk("native settlement failure task #{label} was not released")
+            end
+
+            {result, _log} =
+              with_log(fn ->
+                Finalization.finalize_completed_websocket_response(context, finalization)
+              end)
+
+            result
+          end)
+        end
+
+      task_pids =
+        for _label <- [:first, :second] do
+          assert_receive {:native_settlement_failure_ready, _label, pid, ^release_ref}, 5_000
+          pid
+        end
+
+      Enum.each(task_pids, &send(&1, {:release_native_settlement_failure, release_ref}))
+
+      assert [
+               {:error, %{code: "gateway_accounting_failed"}},
+               {:error, %{code: "gateway_accounting_failed"}}
+             ] = Task.await_many(tasks, 10_000)
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "settlement_failed",
+                        downstream_transport: "websocket",
+                        upstream_transport: "websocket"
+                      }}
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "settlement_failed",
+                        downstream_transport: "websocket",
+                        upstream_transport: "websocket"
+                      }}
+
+      refute_received {:stream_outcome, _metadata}
+    end)
+
+    assert Repo.reload!(context.reserved.request).status == "in_progress"
+    assert Repo.reload!(mismatched_attempt).status == "in_progress"
+  end
+
+  test "interruption-first settlement makes the native transport finalizer silent" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{accepted_turn_state: "ws-interruption-first"})
+
+    {context, finalization} =
+      completed_websocket_finalization_context!(setup, auth, session, "")
+
+    failed_finalization =
+      finalization
+      |> Map.drop([:callbacks, :status])
+      |> Map.merge(%{reason: :client_disconnected, headers: []})
+
+    capture_stream_outcome_telemetry(fn ->
+      assert {:ok, %{interrupted_turn_count: 1}} =
+               Gateway.interrupt_codex_turn(session, %{
+                 request_id: context.request_options.request_metadata.request_id,
+                 reason: "client_disconnected",
+                 reconnect_window_seconds: 300
+               })
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "interrupted",
+                        downstream_transport: "websocket",
+                        upstream_transport: "websocket"
+                      }}
+
+      assert {:error, %{status: 499, code: "client_disconnected"}} =
+               Finalization.finalize_failed_websocket_response(context, failed_finalization)
+
+      refute_received {:stream_outcome, _metadata}
+    end)
+
+    assert Repo.reload!(context.reserved.request).status == "failed"
+    assert Repo.reload!(context.attempt).status == "failed"
   end
 
   test "id-less and failed websocket terminals do not register response aliases" do
@@ -7027,24 +7389,35 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     setup = gateway_setup(upstream)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
-    assert {:error,
-            %{
-              code: "upstream_request_failed",
-              message: "upstream request failed",
-              status: 502
-            }} =
-             execute_websocket_response(
-               auth,
-               Jason.encode!(%{
-                 "type" => "response.create",
-                 "model" => setup.model.exposed_model_id,
-                 "input" => "non-101 websocket upgrade rejection",
-                 "stream" => true,
-                 "generate" => true
-               }),
-               %{request_id: "ws-upgrade-rejected"},
-               fn frame -> send(self(), {:websocket_frame, frame}) end
-             )
+    capture_stream_outcome_telemetry(fn ->
+      assert {:error,
+              %{
+                code: "upstream_request_failed",
+                message: "upstream request failed",
+                status: 502
+              }} =
+               execute_websocket_response(
+                 auth,
+                 Jason.encode!(%{
+                   "type" => "response.create",
+                   "model" => setup.model.exposed_model_id,
+                   "input" => "non-101 websocket upgrade rejection",
+                   "stream" => true,
+                   "generate" => true
+                 }),
+                 %{request_id: "ws-upgrade-rejected"},
+                 fn frame -> send(self(), {:websocket_frame, frame}) end
+               )
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "failed",
+                        downstream_transport: "websocket",
+                        upstream_transport: "websocket"
+                      }}
+
+      refute_received {:stream_outcome, _metadata}
+    end)
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "failed"
@@ -7608,6 +7981,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert [attempt] = Repo.all(from(a in Attempt))
     assert attempt.status == "failed"
     assert attempt.network_error_code == "upstream_terminal_failure"
+    assert attempt.transport == "websocket"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "failed"
@@ -8275,19 +8649,30 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
-    assert :ok =
-             execute_websocket_response(
-               auth,
-               Jason.encode!(%{
-                 "type" => "response.create",
-                 "model" => setup.model.exposed_model_id,
-                 "input" => "retry first websocket connection limit",
-                 "stream" => true,
-                 "generate" => true
-               }),
-               %{request_id: request_id},
-               fn frame -> send(self(), {:websocket_frame, frame}) end
-             )
+    capture_stream_outcome_telemetry(fn ->
+      assert :ok =
+               execute_websocket_response(
+                 auth,
+                 Jason.encode!(%{
+                   "type" => "response.create",
+                   "model" => setup.model.exposed_model_id,
+                   "input" => "retry first websocket connection limit",
+                   "stream" => true,
+                   "generate" => true
+                 }),
+                 %{request_id: request_id},
+                 fn frame -> send(self(), {:websocket_frame, frame}) end
+               )
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "succeeded",
+                        downstream_transport: "websocket",
+                        upstream_transport: "websocket"
+                      }}
+
+      refute_received {:stream_outcome, _metadata}
+    end)
 
     assert_received {:websocket_frame, frame}
     assert %{"id" => "resp_ws_connection_limit_retry"} = Jason.decode!(frame)
@@ -8348,6 +8733,101 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     metadata_text = inspect({request.request_metadata, first_attempt.response_metadata})
     refute metadata_text =~ setup.authorization
     refute metadata_text =~ "upstream-token"
+  end
+
+  @tag :feature_websocket_connection_limit_retry
+  test "websocket connection limit retry emits only the eventual exhausted native outcome" do
+    connection_limit_failure =
+      FakeUpstream.sse_stream(
+        [
+          {"error",
+           %{
+             "type" => "error",
+             "status" => 400,
+             "code" => "websocket_connection_limit_reached",
+             "message" => "open a replacement websocket connection"
+           }}
+        ],
+        done: false
+      )
+
+    upstream = start_upstream({:sequence, [connection_limit_failure, connection_limit_failure]})
+    setup = gateway_setup(upstream)
+
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_connection_limit_exhausted_fallback_should_not_run"
+        })
+      )
+
+    fallback =
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-exhausted-fallback",
+        compact?: false
+      )
+
+    prime_routing_quota!(fallback.identity)
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+      )
+
+    request_id =
+      seed_preferring_assignment(
+        [setup.assignment.id, fallback.assignment.id],
+        setup.assignment.id
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    capture_stream_outcome_telemetry(fn ->
+      assert :ok =
+               execute_websocket_response(
+                 auth,
+                 Jason.encode!(%{
+                   "type" => "response.create",
+                   "model" => setup.model.exposed_model_id,
+                   "input" => "exhaust the native websocket connection limit retry",
+                   "stream" => true,
+                   "generate" => true
+                 }),
+                 %{request_id: request_id},
+                 fn frame -> send(self(), {:websocket_frame, frame}) end
+               )
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "failed",
+                        downstream_transport: "websocket",
+                        upstream_transport: "websocket"
+                      }}
+
+      refute_received {:stream_outcome, _metadata}
+    end)
+
+    assert_received {:websocket_frame, frame}
+
+    assert %{"type" => "response.failed", "code" => "websocket_connection_limit_reached"} =
+             Jason.decode!(frame)
+
+    assert [first_attempt, second_attempt] =
+             Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
+
+    assert first_attempt.status == "retryable_failed"
+    assert first_attempt.retryable == true
+    assert second_attempt.status == "failed"
+    assert second_attempt.retryable == false
+    assert first_attempt.pool_upstream_assignment_id == setup.assignment.id
+    assert second_attempt.pool_upstream_assignment_id == setup.assignment.id
+    assert FakeUpstream.count(fallback_upstream) == 0
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.retry_count == 1
+    assert request.last_error_code == "websocket_connection_limit_reached"
   end
 
   @tag :feature_websocket_connection_limit_retry
@@ -9209,6 +9689,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
              "type" => "response.failed",
              "response" => %{"error" => %{"code" => "stream_incomplete"}}
            } = Jason.decode!(frame)
+
+    assert attempt = Repo.one(from(a in Attempt))
+    assert attempt.transport == "websocket"
 
     assert FakeUpstream.count(upstream) == 1
     assert FakeUpstream.count(fallback_upstream) == 0
@@ -11136,6 +11619,55 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
        started: System.monotonic_time(:millisecond),
        callbacks: callbacks
      }}
+  end
+
+  defp capture_native_stream_telemetry(fun) do
+    handler_id = "native-stream-telemetry-#{System.unique_integer([:positive])}"
+    parent = self()
+
+    :ok =
+      :telemetry.attach_many(
+        handler_id,
+        [
+          [:codex_pooler, :gateway, :stream, :finalization],
+          [:codex_pooler, :gateway, :stream, :outcome]
+        ],
+        fn
+          [:codex_pooler, :gateway, :stream, :finalization], _measurements, metadata, _config ->
+            send(parent, {:stream_finalization, metadata})
+
+          [:codex_pooler, :gateway, :stream, :outcome], _measurements, metadata, _config ->
+            send(parent, {:stream_outcome, metadata})
+        end,
+        nil
+      )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp capture_stream_outcome_telemetry(fun) do
+    handler_id = "native-stream-outcome-#{System.unique_integer([:positive])}"
+    parent = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :stream, :outcome],
+        fn _event, _measurements, metadata, _config ->
+          send(parent, {:stream_outcome, metadata})
+        end,
+        nil
+      )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach(handler_id)
+    end
   end
 
   defp native_previous_response_retry_event do

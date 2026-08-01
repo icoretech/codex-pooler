@@ -10,6 +10,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.Session, as: SessionStatus
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.Turn, as: TurnStatus
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
+  alias CodexPooler.Gateway.Runtime.Finalization.Streaming
   alias CodexPooler.Repo
 
   require Logger
@@ -69,6 +70,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
   def recover_owner_lifecycle_leftovers(_session_id, _owner_reason, _opts), do: {:ok, :ok}
 
   defp interrupt_session(session_id, %RequestOptions{} = opts, reason) do
+    caller_owned_transaction? = Repo.in_transaction?()
     now = now()
     reconnect_window = reconnect_window_seconds(opts)
     next_status = if reconnect_window > 0, do: @session_interrupted, else: @session_closed
@@ -83,14 +85,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
             reason,
             now,
             next_status,
-            lease_expires_at
+            lease_expires_at,
+            caller_owned_transaction?
           )
 
         nil ->
-          %{interrupted_turn_count: 0}
+          interruption_result(0, [])
       end
     end)
-    |> unwrap_transaction()
+    |> finalize_transaction(caller_owned_transaction?)
   end
 
   defp interrupt_owned_session(
@@ -99,7 +102,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
          reason,
          now,
          next_status,
-         lease_expires_at
+         lease_expires_at,
+         caller_owned_transaction?
        ) do
     if terminating_owner_still_owns_session?(session, opts) do
       in_progress_turns =
@@ -107,7 +111,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         |> in_progress_turns_for_session()
         |> Enum.filter(&owner_carried_turn?/1)
 
-      Enum.each(in_progress_turns, &interrupt_turn!(&1, reason, now))
+      interrupted_outcomes =
+        in_progress_turns
+        |> Enum.map(&interrupt_turn!(&1, opts, reason, now, caller_owned_transaction?))
+        |> Enum.reject(&is_nil/1)
 
       session
       |> Ecto.Changeset.change(%{
@@ -120,54 +127,62 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
       })
       |> Repo.update!()
 
-      %{interrupted_turn_count: length(in_progress_turns)}
+      interruption_result(length(in_progress_turns), interrupted_outcomes)
     else
-      %{interrupted_turn_count: 0}
+      interruption_result(0, [])
     end
   end
 
   defp interrupt_session_turn(session_id, request_id, %RequestOptions{} = opts, reason) do
+    caller_owned_transaction? = Repo.in_transaction?()
     now = now()
     reconnect_window = reconnect_window_seconds(opts)
     next_status = if reconnect_window > 0, do: @session_interrupted, else: @session_closed
     lease_expires_at = if reconnect_window > 0, do: DateTime.add(now, reconnect_window, :second)
 
+    interruption_context = %{
+      session_id: session_id,
+      request_id: request_id,
+      opts: opts,
+      reason: reason,
+      now: now,
+      next_status: next_status,
+      lease_expires_at: lease_expires_at,
+      caller_owned_transaction?: caller_owned_transaction?
+    }
+
     Repo.transaction(fn ->
       session_id
       |> codex_session_for_update()
-      |> interrupt_session_turn_for_request(
-        session_id,
-        request_id,
-        reason,
-        now,
-        next_status,
-        lease_expires_at
-      )
+      |> interrupt_session_turn_for_request(interruption_context)
     end)
-    |> unwrap_transaction()
+    |> finalize_transaction(caller_owned_transaction?)
   end
 
-  defp interrupt_session_turn_for_request(
-         nil,
-         _session_id,
-         _request_id,
-         _reason,
-         _now,
-         _status,
-         _expires_at
-       ),
-       do: %{interrupted_turn_count: 0}
+  defp interrupt_session_turn_for_request(nil, _interruption_context),
+    do: interruption_result(0, [])
 
-  defp interrupt_session_turn_for_request(
-         %CodexSession{} = session,
-         session_id,
-         request_id,
-         reason,
-         now,
-         next_status,
-         lease_expires_at
-       ) do
-    interrupted_count = interrupt_turn_for_request(session_id, request_id, reason, now)
+  defp interrupt_session_turn_for_request(%CodexSession{} = session, interruption_context) do
+    %{
+      session_id: session_id,
+      request_id: request_id,
+      opts: opts,
+      reason: reason,
+      now: now,
+      next_status: next_status,
+      lease_expires_at: lease_expires_at,
+      caller_owned_transaction?: caller_owned_transaction?
+    } = interruption_context
+
+    {interrupted_count, interrupted_outcomes} =
+      interrupt_turn_for_request(
+        session_id,
+        request_id,
+        opts,
+        reason,
+        now,
+        caller_owned_transaction?
+      )
 
     session
     |> Ecto.Changeset.change(%{
@@ -180,31 +195,48 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     })
     |> Repo.update!()
 
-    %{interrupted_turn_count: interrupted_count}
+    interruption_result(interrupted_count, interrupted_outcomes)
   end
 
-  defp interrupt_turn_for_request(session_id, request_id, reason, now) do
+  defp interrupt_turn_for_request(
+         session_id,
+         request_id,
+         opts,
+         reason,
+         now,
+         caller_owned_transaction?
+       ) do
     case in_progress_turn_for_request(session_id, request_id) do
       %CodexTurn{} = turn ->
-        interrupt_turn!(turn, reason, now)
-        1
+        marker = interrupt_turn!(turn, opts, reason, now, caller_owned_transaction?)
+        {1, if(marker, do: [marker], else: [])}
 
       nil ->
-        0
+        {0, []}
     end
   end
 
-  defp interrupt_turn!(%CodexTurn{} = turn, reason, now) do
+  defp interrupt_turn!(%CodexTurn{} = turn, opts, reason, now, caller_owned_transaction?) do
     request = request_for_update(turn.request_id)
     attempt = latest_attempt_for_update(turn.request_id)
 
     cond do
       request_completed_successfully?(request, attempt) ->
         complete_interrupted_turn!(turn, attempt, @turn_succeeded, nil, now)
+        nil
 
       request && request.status in ["accepted", "in_progress"] && active_attempt?(attempt) ->
-        finalize_interrupted_request!(request, attempt, reason)
+        marker =
+          finalize_interrupted_request!(
+            request,
+            attempt,
+            opts,
+            reason,
+            caller_owned_transaction?
+          )
+
         complete_interrupted_turn!(turn, attempt, @turn_interrupted, reason, now)
+        marker
 
       request && request.status in ["accepted", "in_progress"] ->
         request
@@ -218,6 +250,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
         |> Repo.update!()
 
         complete_interrupted_turn!(turn, attempt, @turn_interrupted, reason, now)
+        interruption_marker("interrupted", opts, "unknown")
 
       true ->
         complete_interrupted_turn!(
@@ -227,11 +260,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
           terminal_error_code(request),
           now
         )
+
+        nil
     end
   end
 
-  defp finalize_interrupted_request!(request, attempt, reason) do
-    case Accounting.finalize_request(request, attempt, %{
+  defp finalize_interrupted_request!(request, attempt, opts, reason, caller_owned_transaction?) do
+    case Accounting.finalize_request_with_disposition(request, attempt, %{
            request_status: "failed",
            attempt_status: "failed",
            response_status_code: 499,
@@ -239,12 +274,32 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
            error_message: "websocket client disconnected before the turn completed",
            usage: %{status: "usage_unknown", source: reason}
          }) do
-      {:ok, _result} -> :ok
-      {:error, error} -> Repo.rollback({:interrupt_accounting_failed, error})
+      {:ok, %{finalization_disposition: :inserted}} ->
+        interruption_marker("interrupted", opts, bounded_transport(attempt.transport))
+
+      {:ok, %{finalization_disposition: disposition}}
+      when disposition in [:reused, :replaced] ->
+        nil
+
+      {:error, error} ->
+        rollback_interrupted_accounting(error, opts, attempt, caller_owned_transaction?)
     end
   rescue
     exception ->
-      Repo.rollback({:interrupt_accounting_failed, exception})
+      rollback_interrupted_accounting(exception, opts, attempt, caller_owned_transaction?)
+  end
+
+  defp rollback_interrupted_accounting(error, _opts, _attempt, true) do
+    Repo.rollback({:interrupt_accounting_failed, error})
+  end
+
+  defp rollback_interrupted_accounting(error, opts, attempt, false) do
+    Repo.rollback(
+      public_error: {:interrupt_accounting_failed, error},
+      interrupted_outcomes: [
+        interruption_marker("settlement_failed", opts, bounded_transport(attempt.transport))
+      ]
+    )
   end
 
   defp in_progress_turns_for_session(session_id) do
@@ -413,6 +468,47 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-  defp unwrap_transaction({:ok, value}), do: {:ok, value}
-  defp unwrap_transaction({:error, reason}), do: {:error, reason}
+  defp interruption_result(interrupted_turn_count, interrupted_outcomes) do
+    %{
+      public_result: %{interrupted_turn_count: interrupted_turn_count},
+      interrupted_outcomes: interrupted_outcomes
+    }
+  end
+
+  defp interruption_marker(outcome, opts, upstream_transport) do
+    %{
+      outcome: outcome,
+      downstream_transport: Streaming.downstream_transport(opts),
+      upstream_transport: upstream_transport
+    }
+  end
+
+  defp bounded_transport(transport) when transport in ["http_sse", "websocket"], do: transport
+  defp bounded_transport(_transport), do: "unknown"
+
+  defp finalize_transaction(
+         {:ok, %{public_result: public_result, interrupted_outcomes: markers}},
+         caller_owned_transaction?
+       ) do
+    unless caller_owned_transaction?, do: Enum.each(markers, &emit_interrupted_outcome/1)
+    {:ok, public_result}
+  end
+
+  defp finalize_transaction(
+         {:error, [public_error: public_error, interrupted_outcomes: markers]},
+         caller_owned_transaction?
+       ) do
+    unless caller_owned_transaction?, do: Enum.each(markers, &emit_interrupted_outcome/1)
+    {:error, public_error}
+  end
+
+  defp finalize_transaction({:error, reason}, _caller_owned_transaction?), do: {:error, reason}
+
+  defp emit_interrupted_outcome(marker) do
+    Streaming.emit_stream_outcome(
+      marker.outcome,
+      marker.downstream_transport,
+      marker.upstream_transport
+    )
+  end
 end

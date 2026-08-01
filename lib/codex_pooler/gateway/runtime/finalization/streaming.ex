@@ -51,6 +51,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
     usage = stream_usage(body, stream_state)
     attempt_metadata = upstream_websocket_attempt_metadata(response_context)
     upstream_websocket_connection = attempt_metadata.upstream_websocket_connection
+    transports = resolved_transports(response_context, attempt_metadata)
 
     case AttemptSettlement.finalize_success(
            reserved.request,
@@ -67,12 +68,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
            )
          ) do
       {:ok, _finalized} = result ->
-        record_stream_finalization(usage, request_options, upstream_websocket_connection)
+        emit_stream_finalization(
+          usage,
+          transports.downstream_transport,
+          transports.upstream_transport
+        )
+
+        emit_settlement_outcome(result, "succeeded", transports)
         SideEffects.record_success(context, payload, body, request_options, callbacks)
 
         result
 
       {:error, _gateway_error} = error ->
+        emit_settlement_failure(error, transports)
         error
     end
   end
@@ -107,6 +115,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
       end
 
     with :ok <- health_result do
+      websocket_attempt_metadata = upstream_websocket_attempt_metadata(response_context)
+
       AttemptSettlement.record_retryable_failure(
         context.reserved.request,
         context.attempt,
@@ -119,6 +129,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
           attempt_metadata:
             first_event_attempt_metadata(
               response_context,
+              websocket_attempt_metadata,
               failure,
               "retryable_first_event"
             ),
@@ -144,35 +155,50 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
         do: :ok,
         else: record_terminal_health_failure(health_code, response.headers, context)
 
-    with :ok <- health_result do
-      AttemptSettlement.finalize_partial_stream_failure(
-        context.reserved.request,
-        context.attempt,
-        stream_usage(body, nil),
-        SettlementAttrs.partial_stream_failure(
-          context,
-          response.status,
-          code,
-          "upstream stream returned first event #{code}",
-          first_event_attempt_metadata(
-            response_context,
-            failure,
-            "first_event_stream_failure"
+    case health_result do
+      :ok ->
+        websocket_attempt_metadata = upstream_websocket_attempt_metadata(response_context)
+        transports = resolved_transports(response_context, websocket_attempt_metadata)
+
+        result =
+          AttemptSettlement.finalize_partial_stream_failure(
+            context.reserved.request,
+            context.attempt,
+            stream_usage(body, nil),
+            SettlementAttrs.partial_stream_failure(
+              context,
+              response.status,
+              code,
+              "upstream stream returned first event #{code}",
+              first_event_attempt_metadata(
+                response_context,
+                websocket_attempt_metadata,
+                failure,
+                "first_event_stream_failure"
+              )
+            )
           )
-        )
-      )
+
+        emit_terminal_outcome(result, code, transports)
+        result
+
+      {:error, _gateway_error} = error ->
+        error
     end
   end
 
-  @spec first_event_attempt_metadata(ResponseContext.t(), map(), String.t()) :: map()
+  @spec first_event_attempt_metadata(ResponseContext.t(), map(), map(), String.t()) :: map()
   defp first_event_attempt_metadata(
-         %ResponseContext{context: context, response: response} = response_context,
+         %ResponseContext{context: context, response: response},
+         websocket_attempt_metadata,
          failure,
          error_kind
        ) do
     response
     |> Metadata.first_event_stream_metadata(failure, error_kind, context.request_options)
-    |> merge_upstream_websocket_connection(response_context)
+    |> merge_upstream_websocket_connection(
+      websocket_attempt_metadata.upstream_websocket_connection
+    )
   end
 
   @spec finalize_failure(binary(), term(), ResponseContext.t()) :: finalization_result()
@@ -186,44 +212,100 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
     code = error_code(reason)
     terminal_failure = terminal_failure_reason(reason)
     websocket_attempt_metadata = upstream_websocket_attempt_metadata(response_context)
+    transports = resolved_transports(response_context, websocket_attempt_metadata)
 
-    with :ok <-
-           record_stream_failure_health(reason, code, terminal_failure, response.headers, context) do
-      attempt_metadata =
-        response
-        |> Metadata.response_metadata("stream_interrupted", context.request_options)
-        |> Metadata.merge_stream_state_metadata(stream_state)
-        |> merge_upstream_websocket_connection(
-          websocket_attempt_metadata.upstream_websocket_connection
-        )
-        |> Metadata.maybe_put_masked_error_metadata(
-          terminal_failure && terminal_failure.upstream_code,
-          code
-        )
-        |> Metadata.maybe_put_upstream_error_param(terminal_failure)
-        |> TransportFailureReason.maybe_put_upstream_stream_interrupted_metadata(reason, body)
-        |> merge_websocket_transport_failure(
-          websocket_attempt_metadata.transport_failure,
-          stream_state
-        )
+    case record_stream_failure_health(
+           reason,
+           code,
+           terminal_failure,
+           response.headers,
+           context
+         ) do
+      :ok ->
+        attempt_metadata =
+          response
+          |> Metadata.response_metadata("stream_interrupted", context.request_options)
+          |> Metadata.merge_stream_state_metadata(stream_state)
+          |> merge_upstream_websocket_connection(
+            websocket_attempt_metadata.upstream_websocket_connection
+          )
+          |> Metadata.maybe_put_masked_error_metadata(
+            terminal_failure && terminal_failure.upstream_code,
+            code
+          )
+          |> Metadata.maybe_put_upstream_error_param(terminal_failure)
+          |> TransportFailureReason.maybe_put_upstream_stream_interrupted_metadata(reason, body)
+          |> merge_websocket_transport_failure(
+            websocket_attempt_metadata.transport_failure,
+            stream_state
+          )
 
-      AttemptSettlement.finalize_partial_stream_failure(
-        context.reserved.request,
-        context.attempt,
-        stream_usage(body, stream_state),
-        SettlementAttrs.partial_stream_failure(
-          context,
-          response.status,
-          code,
-          Metadata.safe_reason(reason),
-          attempt_metadata
-        )
+        result =
+          AttemptSettlement.finalize_partial_stream_failure(
+            context.reserved.request,
+            context.attempt,
+            stream_usage(body, stream_state),
+            SettlementAttrs.partial_stream_failure(
+              context,
+              response.status,
+              code,
+              Metadata.safe_reason(reason),
+              attempt_metadata
+            )
+          )
+
+        emit_terminal_outcome(result, code, transports)
+        result
+
+      {:error, _gateway_error} = error ->
+        error
+    end
+  end
+
+  defp emit_terminal_outcome(result, code, transports) do
+    outcome = if code == "client_disconnected", do: "interrupted", else: "failed"
+
+    case result do
+      {:ok, _finalized} -> emit_settlement_outcome(result, outcome, transports)
+      {:error, _gateway_error} -> emit_settlement_failure(result, transports)
+    end
+  end
+
+  defp emit_settlement_outcome({:ok, finalized}, outcome, transports) do
+    if AttemptSettlement.first_settlement?(finalized) do
+      emit_stream_outcome(
+        outcome,
+        transports.downstream_transport,
+        transports.upstream_transport
       )
     end
   end
 
-  defp merge_upstream_websocket_connection(metadata, %ResponseContext{} = response_context) do
-    merge_upstream_websocket_connection(metadata, upstream_websocket_connection(response_context))
+  defp emit_settlement_failure(
+         {:error, %{code: "gateway_accounting_failed"}},
+         transports
+       ) do
+    emit_stream_outcome(
+      "settlement_failed",
+      transports.downstream_transport,
+      transports.upstream_transport
+    )
+  end
+
+  defp emit_settlement_failure({:error, _gateway_error}, _transports), do: :ok
+
+  defp resolved_transports(
+         %ResponseContext{context: context, upstream_transport: transport_override},
+         websocket_attempt_metadata
+       ) do
+    %{
+      downstream_transport: downstream_transport(context.request_options),
+      upstream_transport:
+        upstream_transport(
+          transport_override,
+          websocket_attempt_metadata.upstream_websocket_connection
+        )
+    }
   end
 
   defp merge_upstream_websocket_connection(metadata, connection) do
@@ -246,9 +328,6 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
 
   defp upstream_websocket_attempt_metadata(%ResponseContext{}),
     do: %{upstream_websocket_connection: nil, transport_failure: nil}
-
-  defp upstream_websocket_connection(%ResponseContext{} = response_context),
-    do: upstream_websocket_attempt_metadata(response_context).upstream_websocket_connection
 
   defp merge_websocket_transport_failure(metadata, transport_failure, stream_state) do
     transport_failure =
@@ -445,15 +524,31 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
     StreamUsageObserver.usage(stream_state_usage(stream_state)) || ResponseUsage.from_sse(body)
   end
 
-  defp record_stream_finalization(usage, request_options, upstream_websocket_connection) do
+  @doc false
+  @spec emit_stream_finalization(map(), String.t(), String.t()) :: :ok
+  def emit_stream_finalization(usage, downstream_transport, upstream_transport) do
     :telemetry.execute(
       [:codex_pooler, :gateway, :stream, :finalization],
       %{count: 1},
       %{
         usage_status: usage[:status],
         usage_source: usage_source_class(usage),
-        downstream_transport: downstream_transport(request_options),
-        upstream_transport: upstream_transport(upstream_websocket_connection)
+        downstream_transport: downstream_transport,
+        upstream_transport: upstream_transport
+      }
+    )
+  end
+
+  @doc false
+  @spec emit_stream_outcome(String.t(), String.t(), String.t()) :: :ok
+  def emit_stream_outcome(outcome, downstream_transport, upstream_transport) do
+    :telemetry.execute(
+      [:codex_pooler, :gateway, :stream, :outcome],
+      %{count: 1},
+      %{
+        outcome: outcome,
+        downstream_transport: downstream_transport,
+        upstream_transport: upstream_transport
       }
     )
   end
@@ -464,11 +559,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   defp usage_source_class(%{status: "usage_known"}), do: "upstream_usage"
   defp usage_source_class(_usage), do: "unknown"
 
-  defp downstream_transport(%{transport: %{transport: transport}}), do: transport
-  defp downstream_transport(_request_options), do: "unknown"
+  @doc false
+  @spec downstream_transport(term()) :: String.t()
+  def downstream_transport(%{transport: %{transport: transport}})
+      when transport in ["http_sse", "websocket"],
+      do: transport
 
-  defp upstream_transport(nil), do: "http_sse"
-  defp upstream_transport(_connection), do: "websocket"
+  def downstream_transport(_request_options), do: "unknown"
+
+  @doc false
+  @spec upstream_transport(:websocket | nil, term()) :: String.t()
+  def upstream_transport(:websocket, _connection), do: "websocket"
+  def upstream_transport(nil, nil), do: "http_sse"
+  def upstream_transport(nil, _connection), do: "websocket"
 
   defp stream_state_usage(%{usage_observer: %{} = usage_state}), do: usage_state
   defp stream_state_usage(_stream_state), do: StreamUsageObserver.new()

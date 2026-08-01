@@ -27,6 +27,16 @@ defmodule CodexPooler.Accounting do
   @type accounting_error :: %{required(:code) => atom(), required(:message) => String.t()}
   @type request_result_row :: %{required(:request) => Request.t(), optional(atom()) => term()}
   @type request_result :: {:ok, request_result_row()} | {:error, accounting_error()}
+  @type finalization_disposition :: :inserted | :replaced | :reused
+
+  @type internal_request_result_row :: %{
+          required(:request) => Request.t(),
+          required(:finalization_disposition) => finalization_disposition(),
+          optional(atom()) => term()
+        }
+
+  @type internal_request_result ::
+          {:ok, internal_request_result_row()} | {:error, accounting_error()}
 
   @spec reserve(auth(), model_ref(), map(), map()) :: request_result()
   defdelegate reserve(auth, model_or_id, payload, opts \\ %{}), to: RequestLifecycle
@@ -81,6 +91,12 @@ defmodule CodexPooler.Accounting do
   @spec finalize_request(Request.t(), Attempt.t(), map()) :: request_result()
   defdelegate finalize_request(request, attempt, attrs \\ %{}), to: RequestLifecycle
 
+  @doc false
+  @spec finalize_request_with_disposition(Request.t(), Attempt.t(), map()) ::
+          internal_request_result()
+  defdelegate finalize_request_with_disposition(request, attempt, attrs \\ %{}),
+    to: RequestLifecycle
+
   @spec finalize_success(Request.t(), Attempt.t(), map(), map()) :: request_result()
   def finalize_success(%Request{} = request, %Attempt{} = attempt, usage, opts \\ %{}) do
     opts =
@@ -89,6 +105,23 @@ defmodule CodexPooler.Accounting do
       |> Map.merge(%{request_status: "succeeded", attempt_status: "succeeded", usage: usage})
 
     finalize_request(request, attempt, opts)
+  end
+
+  @doc false
+  @spec finalize_success_with_disposition(Request.t(), Attempt.t(), map(), map()) ::
+          internal_request_result()
+  def finalize_success_with_disposition(
+        %Request{} = request,
+        %Attempt{} = attempt,
+        usage,
+        opts \\ %{}
+      ) do
+    opts =
+      opts
+      |> Map.new()
+      |> Map.merge(%{request_status: "succeeded", attempt_status: "succeeded", usage: usage})
+
+    finalize_request_with_disposition(request, attempt, opts)
   end
 
   @spec finalize_reservation_failure(Request.t(), map()) :: request_result()
@@ -117,6 +150,21 @@ defmodule CodexPooler.Accounting do
     finalize_request(request, attempt, opts)
   end
 
+  @doc false
+  @spec finalize_failure_with_disposition(Request.t(), Attempt.t(), map()) ::
+          internal_request_result()
+  def finalize_failure_with_disposition(%Request{} = request, %Attempt{} = attempt, opts \\ %{}) do
+    opts = Map.new(opts)
+
+    opts =
+      Map.merge(opts, %{
+        request_status: "failed",
+        attempt_status: Map.get(opts, :attempt_status, "failed")
+      })
+
+    finalize_request_with_disposition(request, attempt, opts)
+  end
+
   @spec finalize_partial_stream_failure(Request.t(), Attempt.t(), map(), map()) ::
           request_result()
   def finalize_partial_stream_failure(
@@ -137,6 +185,33 @@ defmodule CodexPooler.Accounting do
       })
 
     finalize_request(request, attempt, opts)
+  end
+
+  @doc false
+  @spec finalize_partial_stream_failure_with_disposition(
+          Request.t(),
+          Attempt.t(),
+          map(),
+          map()
+        ) :: internal_request_result()
+  def finalize_partial_stream_failure_with_disposition(
+        %Request{} = request,
+        %Attempt{} = attempt,
+        usage \\ %{},
+        opts \\ %{}
+      ) do
+    opts = Map.new(opts)
+
+    opts =
+      Map.merge(opts, %{
+        request_status: "failed",
+        attempt_status: "failed",
+        usage:
+          Map.merge(%{status: "usage_unknown", source: "partial_stream_failure"}, Map.new(usage)),
+        last_error_code: Map.get(opts, :last_error_code, "stream_interrupted")
+      })
+
+    finalize_request_with_disposition(request, attempt, opts)
   end
 
   @spec list_ledger_entries_for_request(Request.t() | Ecto.UUID.t()) :: [term()]

@@ -147,6 +147,64 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     assert {:arity, 3} = :erlang.fun_info(handlers.finalize_failure, :arity)
   end
 
+  test "shared stream finalization helpers resolve bounded transports and emit exact labels" do
+    request_options = %{transport: %{transport: "http_sse"}}
+    parent = self()
+    handler_id = "stream-finalization-helpers-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach_many(
+        handler_id,
+        [
+          [:codex_pooler, :gateway, :stream, :finalization],
+          [:codex_pooler, :gateway, :stream, :outcome]
+        ],
+        fn event, measurements, metadata, _config ->
+          send(parent, {event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    assert Streaming.downstream_transport(request_options) == "http_sse"
+    assert Streaming.downstream_transport(%{transport: %{transport: "http_json"}}) == "unknown"
+    assert Streaming.downstream_transport(nil) == "unknown"
+    assert Streaming.upstream_transport(nil, nil) == "http_sse"
+    assert Streaming.upstream_transport(nil, %{generation: 1}) == "websocket"
+    assert Streaming.upstream_transport(:websocket, nil) == "websocket"
+
+    assert :ok =
+             Streaming.emit_stream_finalization(
+               %{status: "usage_known", source: "websocket_upstream_usage"},
+               "http_sse",
+               "websocket"
+             )
+
+    assert_receive {
+      [:codex_pooler, :gateway, :stream, :finalization],
+      %{count: 1},
+      %{
+        usage_status: "usage_known",
+        usage_source: "websocket_upstream_usage",
+        downstream_transport: "http_sse",
+        upstream_transport: "websocket"
+      }
+    }
+
+    assert :ok = Streaming.emit_stream_outcome("interrupted", "websocket", "websocket")
+
+    assert_receive {
+      [:codex_pooler, :gateway, :stream, :outcome],
+      %{count: 1},
+      %{
+        outcome: "interrupted",
+        downstream_transport: "websocket",
+        upstream_transport: "websocket"
+      }
+    }
+  end
+
   test "stream success persists public Responses summary metadata" do
     {setup, _first_upstream, _second_upstream} =
       stream_retry_setup(
@@ -198,6 +256,525 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     assert summary["terminal_seen"] == true
     assert summary["terminal_kind"] == "completed"
     assert summary["finish_class"] == "completed"
+  end
+
+  test "stream finalization prefers a native transport override and otherwise infers bridge transport" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+    request_options = request_options(auth, payload, setup)
+    body = backend_response_success_sse("resp_transport_resolution")
+
+    cases = [
+      {:websocket, nil, "websocket"},
+      {nil, %{lifecycle_id: Ecto.UUID.generate(), generation: 1}, "websocket"},
+      {nil, nil, "http_sse"}
+    ]
+
+    capture_stream_finalization_telemetry(fn ->
+      for {upstream_transport, upstream_websocket_connection, expected_transport} <- cases do
+        assert {:ok, reserved} =
+                 Accounting.reserve(auth, setup.model, payload, %{
+                   endpoint: @endpoint_path,
+                   transport: "http_sse",
+                   correlation_id: "transport-resolution-#{System.unique_integer([:positive])}",
+                   request_metadata: %{}
+                 })
+
+        assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+        context =
+          retry_context(setup, auth, request_options, reserved.request,
+            candidates: [{setup.assignment, setup.identity}],
+            attempt: attempt
+          )
+
+        response_context = %ResponseContext{
+          context: context,
+          response: sse_response(),
+          upstream_transport: upstream_transport,
+          upstream_websocket_connection: upstream_websocket_connection
+        }
+
+        assert {:ok, _finalized} =
+                 Streaming.finalize_success(
+                   body,
+                   response_context,
+                   finalization_callbacks()
+                 )
+
+        assert_receive {:stream_finalization, %{upstream_transport: ^expected_transport}}, 1_000
+      end
+    end)
+  end
+
+  test "HTTP stream outcomes belong only to the first inserted settlement" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+    request_options = request_options(auth, payload, setup)
+    body = backend_response_success_sse("resp_stream_outcome_ownership")
+
+    capture_stream_outcome_telemetry(fn ->
+      assert {:ok, reserved} =
+               Accounting.reserve(auth, setup.model, payload, %{
+                 endpoint: @endpoint_path,
+                 transport: "http_sse",
+                 correlation_id: "stream-outcome-inserted-#{System.unique_integer([:positive])}",
+                 request_metadata: %{}
+               })
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      response_context = %ResponseContext{
+        context:
+          retry_context(setup, auth, request_options, reserved.request,
+            candidates: [{setup.assignment, setup.identity}],
+            attempt: attempt
+          ),
+        response: sse_response()
+      }
+
+      assert {:ok, %{finalization_disposition: :inserted}} =
+               Streaming.finalize_success(body, response_context, finalization_callbacks())
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "succeeded",
+                        downstream_transport: "http_sse",
+                        upstream_transport: "http_sse"
+                      }}
+
+      assert {:ok, %{finalization_disposition: :reused}} =
+               Streaming.finalize_success(body, response_context, finalization_callbacks())
+
+      refute_received {:stream_outcome, _metadata}
+
+      assert {:ok, replaced_reserved} =
+               Accounting.reserve(auth, setup.model, payload, %{
+                 endpoint: @endpoint_path,
+                 transport: "http_sse",
+                 correlation_id: "stream-outcome-replaced-#{System.unique_integer([:positive])}",
+                 request_metadata: %{}
+               })
+
+      assert {:ok, replaced_attempt} =
+               Accounting.create_attempt(replaced_reserved.request, setup.assignment)
+
+      assert {:ok, _unknown_settlement} =
+               Accounting.finalize_partial_stream_failure(
+                 replaced_reserved.request,
+                 replaced_attempt,
+                 %{},
+                 %{last_error_code: "upstream_stream_error"}
+               )
+
+      replaced_context = %ResponseContext{
+        context:
+          retry_context(setup, auth, request_options, replaced_reserved.request,
+            candidates: [{setup.assignment, setup.identity}],
+            attempt: replaced_attempt
+          ),
+        response: sse_response()
+      }
+
+      assert {:ok, %{finalization_disposition: :replaced}} =
+               Streaming.finalize_success(body, replaced_context, finalization_callbacks())
+
+      refute_received {:stream_outcome, _metadata}
+    end)
+  end
+
+  test "HTTP stream ordinary terminal failures emit exactly one failed outcome" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+    request_options = request_options(auth, payload, setup)
+
+    capture_stream_outcome_telemetry(fn ->
+      assert {:ok, reserved} =
+               Accounting.reserve(auth, setup.model, payload, %{
+                 endpoint: @endpoint_path,
+                 transport: "http_sse",
+                 correlation_id: "stream-outcome-failed-#{System.unique_integer([:positive])}",
+                 request_metadata: %{}
+               })
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      response_context = %ResponseContext{
+        context:
+          retry_context(setup, auth, request_options, reserved.request,
+            candidates: [{setup.assignment, setup.identity}],
+            attempt: attempt
+          ),
+        response: sse_response()
+      }
+
+      assert {:ok, %{finalization_disposition: :inserted}} =
+               Streaming.finalize_failure("", :upstream_stream_interrupted, response_context)
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "failed",
+                        downstream_transport: "http_sse",
+                        upstream_transport: "http_sse"
+                      }}
+
+      refute_receive {:stream_outcome, _metadata}, 50
+    end)
+  end
+
+  test "HTTP stream client-disconnected terminal failures emit exactly one interrupted outcome" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+    request_options = request_options(auth, payload, setup)
+
+    capture_stream_outcome_telemetry(fn ->
+      assert {:ok, reserved} =
+               Accounting.reserve(auth, setup.model, payload, %{
+                 endpoint: @endpoint_path,
+                 transport: "http_sse",
+                 correlation_id:
+                   "stream-outcome-interrupted-#{System.unique_integer([:positive])}",
+                 request_metadata: %{}
+               })
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      response_context = %ResponseContext{
+        context:
+          retry_context(setup, auth, request_options, reserved.request,
+            candidates: [{setup.assignment, setup.identity}],
+            attempt: attempt
+          ),
+        response: sse_response()
+      }
+
+      assert {:ok, %{finalization_disposition: :inserted}} =
+               Streaming.finalize_failure("", {:chunk, :closed}, response_context)
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "interrupted",
+                        downstream_transport: "http_sse",
+                        upstream_transport: "http_sse"
+                      }}
+
+      refute_receive {:stream_outcome, _metadata}, 50
+    end)
+  end
+
+  test "HTTP stream terminal finalization stays silent when the request is already finalized" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+    request_options = request_options(auth, payload, setup)
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, payload, %{
+               endpoint: @endpoint_path,
+               transport: "http_sse",
+               correlation_id:
+                 "stream-outcome-request-finalized-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    response_context = %ResponseContext{
+      context:
+        retry_context(setup, auth, request_options, reserved.request,
+          candidates: [{setup.assignment, setup.identity}],
+          attempt: attempt
+        ),
+      response: sse_response()
+    }
+
+    capture_stream_outcome_telemetry(fn ->
+      assert {:ok, %{finalization_disposition: :inserted}} =
+               Streaming.finalize_failure("", :upstream_stream_interrupted, response_context)
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "failed",
+                        downstream_transport: "http_sse",
+                        upstream_transport: "http_sse"
+                      }}
+
+      assert {:error, %{code: "request_already_finalized"}} =
+               Streaming.record_retryable_first_event_failure(
+                 "",
+                 %{code: "server_error", upstream_code: nil, event_type: "response.failed"},
+                 response_context,
+                 record_health?: false
+               )
+
+      refute_receive {:stream_outcome, _metadata}, 50
+    end)
+  end
+
+  test "HTTP stream terminal finalization stays silent when the attempt is already finalized" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+    request_options = request_options(auth, payload, setup)
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, payload, %{
+               endpoint: @endpoint_path,
+               transport: "http_sse",
+               correlation_id:
+                 "stream-outcome-attempt-finalized-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    assert {:ok, %Attempt{status: "retryable_failed"}} =
+             Accounting.record_retryable_attempt_failure(attempt, %{
+               response_status_code: 502,
+               last_error_code: "upstream_request_timeout"
+             })
+
+    response_context = %ResponseContext{
+      context:
+        retry_context(setup, auth, request_options, reserved.request,
+          candidates: [{setup.assignment, setup.identity}],
+          attempt: attempt
+        ),
+      response: sse_response()
+    }
+
+    capture_stream_outcome_telemetry(fn ->
+      assert {:error, %{code: "attempt_already_finalized"}} =
+               Streaming.record_retryable_first_event_failure(
+                 "",
+                 %{code: "server_error", upstream_code: nil, event_type: "response.failed"},
+                 response_context,
+                 record_health?: false
+               )
+
+      refute_receive {:stream_outcome, _metadata}, 50
+
+      assert {:ok, %{finalization_disposition: :inserted}} =
+               Streaming.finalize_failure("", :upstream_stream_interrupted, response_context)
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "failed",
+                        downstream_transport: "http_sse",
+                        upstream_transport: "http_sse"
+                      }}
+
+      refute_receive {:stream_outcome, _metadata}, 50
+    end)
+  end
+
+  test "first-event stream outcomes emit only after terminal settlement" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+    request_options = request_options(auth, payload, setup)
+    failure = %{code: "server_error", upstream_code: nil, event_type: "response.failed"}
+
+    capture_stream_outcome_telemetry(fn ->
+      assert {:ok, retry_reserved} =
+               Accounting.reserve(auth, setup.model, payload, %{
+                 endpoint: @endpoint_path,
+                 transport: "http_sse",
+                 correlation_id: "stream-outcome-retry-#{System.unique_integer([:positive])}",
+                 request_metadata: %{}
+               })
+
+      assert {:ok, retry_attempt} =
+               Accounting.create_attempt(retry_reserved.request, setup.assignment)
+
+      retry_response_context = %ResponseContext{
+        context:
+          retry_context(setup, auth, request_options, retry_reserved.request,
+            candidates: [{setup.assignment, setup.identity}],
+            attempt: retry_attempt
+          ),
+        response: sse_response()
+      }
+
+      assert {:ok, %Attempt{status: "retryable_failed"}} =
+               Streaming.record_retryable_first_event_failure(
+                 "",
+                 failure,
+                 retry_response_context,
+                 record_health?: false
+               )
+
+      refute_received {:stream_outcome, _metadata}
+
+      assert {:error, %{code: "attempt_already_finalized"}} =
+               Streaming.record_retryable_first_event_failure(
+                 "",
+                 failure,
+                 retry_response_context,
+                 record_health?: false
+               )
+
+      refute_received {:stream_outcome, _metadata}
+
+      assert {:ok, terminal_reserved} =
+               Accounting.reserve(auth, setup.model, payload, %{
+                 endpoint: @endpoint_path,
+                 transport: "http_sse",
+                 correlation_id:
+                   "stream-outcome-first-event-#{System.unique_integer([:positive])}",
+                 request_metadata: %{}
+               })
+
+      assert {:ok, terminal_attempt} =
+               Accounting.create_attempt(terminal_reserved.request, setup.assignment)
+
+      terminal_response_context = %ResponseContext{
+        context:
+          retry_context(setup, auth, request_options, terminal_reserved.request,
+            candidates: [{setup.assignment, setup.identity}],
+            attempt: terminal_attempt
+          ),
+        response: sse_response()
+      }
+
+      assert {:ok, %{finalization_disposition: :inserted}} =
+               Streaming.finalize_first_event_failure(
+                 "",
+                 failure,
+                 terminal_response_context
+               )
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "failed",
+                        downstream_transport: "http_sse",
+                        upstream_transport: "http_sse"
+                      }}
+
+      assert {:ok, health_failure_reserved} =
+               Accounting.reserve(auth, setup.model, payload, %{
+                 endpoint: @endpoint_path,
+                 transport: "http_sse",
+                 correlation_id:
+                   "stream-outcome-health-failure-#{System.unique_integer([:positive])}",
+                 request_metadata: %{}
+               })
+
+      invalid_context = %ResponseContext{
+        terminal_response_context
+        | context:
+            retry_context(
+              setup,
+              auth,
+              request_options,
+              invalid_request(health_failure_reserved.request.id),
+              candidates: [{setup.assignment, setup.identity}],
+              attempt: nil
+            )
+      }
+
+      capture_log(fn ->
+        assert {:error, %{code: "gateway_accounting_failed"}} =
+                 Streaming.finalize_first_event_failure(
+                   "",
+                   %{failure | code: "upstream_request_timeout"},
+                   invalid_context
+                 )
+      end)
+
+      refute_received {:stream_outcome, _metadata}
+    end)
+  end
+
+  test "HTTP stream settlement failure emits once after a real accounting rollback" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+    request_options = request_options(auth, payload, setup)
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, payload, %{
+               endpoint: @endpoint_path,
+               transport: "http_sse",
+               correlation_id: "stream-outcome-rollback-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    mismatched_attempt =
+      attempt
+      |> Ecto.Changeset.change(upstream_identity_id: setup.fallback_identity.id)
+      |> Repo.update!()
+
+    response_context = %ResponseContext{
+      context:
+        retry_context(setup, auth, request_options, reserved.request,
+          candidates: [{setup.assignment, setup.identity}],
+          attempt: mismatched_attempt
+        ),
+      response: sse_response()
+    }
+
+    capture_stream_outcome_telemetry(fn ->
+      log =
+        capture_log(fn ->
+          assert {:error,
+                  %{
+                    status: 500,
+                    code: "gateway_accounting_failed",
+                    message: "gateway accounting finalization failed"
+                  }} =
+                   Streaming.finalize_success(
+                     backend_response_success_sse("resp_stream_outcome_rollback"),
+                     response_context,
+                     finalization_callbacks()
+                   )
+        end)
+
+      assert log =~ "reason=upstream_reference_mismatch"
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "settlement_failed",
+                        downstream_transport: "http_sse",
+                        upstream_transport: "http_sse"
+                      }}
+
+      refute_received {:stream_outcome, _metadata}
+    end)
+
+    assert Repo.aggregate(
+             from(entry in CodexPooler.Accounting.LedgerEntry,
+               where:
+                 entry.request_id == ^reserved.request.id and entry.entry_kind == "settlement"
+             ),
+             :count,
+             :id
+           ) == 0
+
+    assert Repo.reload!(reserved.request).status == "in_progress"
+    assert Repo.reload!(mismatched_attempt).status == "in_progress"
   end
 
   test "stream partial failure persists public Responses summary metadata" do
@@ -900,13 +1477,22 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
       response: %{sse_response() | body: stream}
     }
 
-    assert {:ok, _finalized} =
-             Streaming.finalize_failure(
-               body,
-               {:upstream_stream_interrupted, :upstream_websocket_terminal_delivery_timeout},
-               response_context,
-               state
-             )
+    capture_stream_outcome_telemetry(fn ->
+      assert {:ok, %{finalization_disposition: :inserted}} =
+               Streaming.finalize_failure(
+                 body,
+                 {:upstream_stream_interrupted, :upstream_websocket_terminal_delivery_timeout},
+                 response_context,
+                 state
+               )
+
+      assert_receive {:stream_outcome,
+                      %{
+                        outcome: "failed",
+                        downstream_transport: "http_sse",
+                        upstream_transport: "websocket"
+                      }}
+    end)
 
     assert [request] = Repo.all(from(r in Request, where: r.id == ^reserved.request.id))
     assert request.status == "failed"
@@ -1395,6 +1981,48 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
       register_continuity: fn _request_options, _payload, _body -> :ok end,
       stream_result: fn _response, _context -> :ok end
     }
+  end
+
+  defp capture_stream_finalization_telemetry(fun) do
+    handler_id = "stream-lifecycle-#{System.unique_integer([:positive])}"
+    parent = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :stream, :finalization],
+        fn _event, _measurements, metadata, _config ->
+          send(parent, {:stream_finalization, metadata})
+        end,
+        nil
+      )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp capture_stream_outcome_telemetry(fun) do
+    handler_id = "stream-outcome-#{System.unique_integer([:positive])}"
+    parent = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :stream, :outcome],
+        fn _event, _measurements, metadata, _config ->
+          send(parent, {:stream_outcome, metadata})
+        end,
+        nil
+      )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach(handler_id)
+    end
   end
 
   defp execute_backend_stream(setup, release_ref, _request_suffix, opts \\ []) do

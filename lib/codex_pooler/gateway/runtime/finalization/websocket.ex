@@ -36,10 +36,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
     } =
       context
 
+    usage = ResponseUsage.from_websocket_body(body)
+    transports = resolved_transports(context)
+
     case AttemptSettlement.finalize_success(
            reserved.request,
            attempt,
-           ResponseUsage.from_websocket_body(body),
+           usage,
            SettlementAttrs.success(
              context,
              status,
@@ -53,13 +56,21 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
              started: started
            )
          ) do
-      {:ok, _finalized} ->
+      {:ok, _finalized} = result ->
+        Streaming.emit_stream_finalization(
+          usage,
+          transports.downstream_transport,
+          transports.upstream_transport
+        )
+
+        emit_settlement_outcome(result, "succeeded", transports)
         request_options = request_options_with_response_id(request_options, finalization)
         SideEffects.record_success(context, payload, body, request_options, callbacks)
 
         {:ok, %{status: 200, headers: [], websocket_messages: []}}
 
-      {:error, gateway_error} ->
+      {:error, gateway_error} = error ->
+        emit_settlement_failure(error, transports)
         {:error, gateway_error}
     end
   end
@@ -164,6 +175,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
 
   defp settle_terminal_failure(context, finalization, body, code, attempt_metadata) do
     %{reserved: reserved, attempt: attempt} = context
+    transports = resolved_transports(context)
 
     case AttemptSettlement.finalize_partial_stream_failure(
            reserved.request,
@@ -178,10 +190,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
              started: finalization.started
            )
          ) do
-      {:ok, _finalized} ->
+      {:ok, _finalized} = result ->
+        emit_settlement_outcome(result, "failed", transports)
         {:ok, %{status: 200, headers: [], websocket_messages: []}}
 
-      {:error, gateway_error} ->
+      {:error, gateway_error} = error ->
+        emit_settlement_failure(error, transports)
         {:error, gateway_error}
     end
   end
@@ -197,6 +211,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
       context
 
     code = "client_disconnected"
+    transports = resolved_transports(context)
 
     case AttemptSettlement.finalize_partial_stream_failure(
            reserved.request,
@@ -217,10 +232,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
              started: started
            )
          ) do
-      {:ok, _finalized} ->
+      {:ok, _finalized} = result ->
+        emit_settlement_outcome(result, "interrupted", transports)
         {:error, error(499, code, Metadata.upstream_failure_message(endpoint))}
 
-      {:error, gateway_error} ->
+      {:error, gateway_error} = error ->
+        emit_settlement_failure(error, transports)
         {:error, gateway_error}
     end
   end
@@ -239,6 +256,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
     %{body: body, headers: headers, started: started} = finalization
     %{reserved: reserved, attempt: attempt, request_options: request_options} = context
     {:ok, owner_payload} = WebsocketOwnerContract.safe_error_payload(reason, nil)
+    transports = resolved_transports(context)
 
     case AttemptSettlement.finalize_partial_stream_failure(
            reserved.request,
@@ -259,13 +277,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
              started: started
            )
          ) do
-      {:ok, _finalized} ->
+      {:ok, _finalized} = result ->
+        emit_settlement_outcome(result, "failed", transports)
+
         {:error,
          error(owner_payload.status, owner_payload.code, owner_payload.message, nil, %{
            owner_error: owner_payload.metadata.owner_error
          })}
 
-      {:error, gateway_error} ->
+      {:error, gateway_error} = error ->
+        emit_settlement_failure(error, transports)
         {:error, gateway_error}
     end
   end
@@ -319,6 +340,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   defp finalize_failed_after_health(context, finalization, code, metadata) do
     %{body: body, reason: reason, started: started} = finalization
     %{reserved: reserved, attempt: attempt, endpoint: endpoint} = context
+    transports = resolved_transports(context)
 
     case AttemptSettlement.finalize_partial_stream_failure(
            reserved.request,
@@ -333,12 +355,44 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
              started: started
            )
          ) do
-      {:ok, _finalized} ->
+      {:ok, _finalized} = result ->
+        emit_settlement_outcome(result, "failed", transports)
         {:error, failed_error_response(endpoint, code, reason)}
 
-      {:error, gateway_error} ->
+      {:error, gateway_error} = error ->
+        emit_settlement_failure(error, transports)
         {:error, gateway_error}
     end
+  end
+
+  defp emit_settlement_outcome({:ok, finalized}, outcome, transports) do
+    if AttemptSettlement.first_settlement?(finalized) do
+      Streaming.emit_stream_outcome(
+        outcome,
+        transports.downstream_transport,
+        transports.upstream_transport
+      )
+    end
+  end
+
+  defp emit_settlement_failure(
+         {:error, %{code: "gateway_accounting_failed"}},
+         transports
+       ) do
+    Streaming.emit_stream_outcome(
+      "settlement_failed",
+      transports.downstream_transport,
+      transports.upstream_transport
+    )
+  end
+
+  defp emit_settlement_failure({:error, _gateway_error}, _transports), do: :ok
+
+  defp resolved_transports(context) do
+    %{
+      downstream_transport: Streaming.downstream_transport(context.request_options),
+      upstream_transport: "websocket"
+    }
   end
 
   defp failed_error_response(_endpoint, "stream_idle_timeout", reason) do
