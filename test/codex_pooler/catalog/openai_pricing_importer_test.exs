@@ -205,6 +205,17 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     assert Decimal.equal?(snapshot.cache_write_token_micros, Decimal.new("1.25"))
   end
 
+  test "semantic equality requires identical key sets in both directions" do
+    left = %{input: Decimal.new("1.0"), output: Decimal.new("2")}
+    equal = %{input: Decimal.new("1"), output: Decimal.new("2.0")}
+    extra = Map.put(equal, :availability, "available")
+
+    assert OpenAIPricingImporter.semantic_equal?(left, equal)
+    assert OpenAIPricingImporter.semantic_equal?(equal, left)
+    refute OpenAIPricingImporter.semantic_equal?(left, extra)
+    refute OpenAIPricingImporter.semantic_equal?(extra, left)
+  end
+
   test "divergent aliases return bounded conflict and write nothing" do
     payload =
       valid_payload("alias-conflict", %{

@@ -257,16 +257,21 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
     }
   end
 
-  defp semantic_equal?(left, right) do
+  @doc false
+  @spec semantic_equal?(map(), map()) :: boolean()
+  def semantic_equal?(left, right) do
     decimal_fields = ~w(input cached_input cache_write output reasoning request_base)a
+    left_keys = Map.keys(left) |> MapSet.new()
+    right_keys = Map.keys(right) |> MapSet.new()
 
-    Enum.all?(Map.keys(left), fn key ->
-      if key in decimal_fields do
-        decimal_equal?(left[key], right[key])
-      else
-        left[key] == right[key]
-      end
-    end)
+    MapSet.equal?(left_keys, right_keys) and
+      Enum.all?(left_keys, fn key ->
+        if key in decimal_fields do
+          decimal_equal?(left[key], right[key])
+        else
+          left[key] == right[key]
+        end
+      end)
   end
 
   defp decimal_equal?(nil, nil), do: true
