@@ -57,7 +57,7 @@ defmodule CodexPooler.MixProject do
       {:ecto_sql, "== 3.14.0"},
       {:postgrex, "== 0.22.3"},
       {:phoenix_html, "== 4.3.0"},
-      {:phoenix_live_reload, "== 1.6.2", only: :dev},
+      {:phoenix_live_reload, "== 1.7.0", only: :dev},
       {:phoenix_live_view, "== 1.2.8"},
       {:lazy_html, "== 0.1.12", only: :test},
       {:oban, "== 2.23.0"},
