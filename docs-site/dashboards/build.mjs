@@ -38,6 +38,26 @@ require_(
 require_(built.metadata === undefined, "server-managed metadata leaked into the output");
 require_(built.status === undefined, "server-managed status leaked into the output");
 
+// Visible controls must affect a query, datasource, link, annotation, or a
+// dependent variable. Otherwise the dashboard offers an operator a control
+// that cannot change anything.
+const templateVariables = built.templating?.list ?? [];
+const variableUsage = JSON.stringify({
+  panels: built.panels,
+  annotations: built.annotations,
+  links: built.links,
+  templating: templateVariables,
+});
+
+for (const variable of templateVariables) {
+  const escapedName = variable.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const reference = new RegExp(
+    `\\$(?:${escapedName}(?![A-Za-z0-9_])|\\{${escapedName}(?::[^}]*)?\\})`,
+  );
+
+  require_(reference.test(variableUsage), `template variable "${variable.name}" is never referenced`);
+}
+
 if (problems.length > 0) {
   console.error("build:dashboard FAILED");
   for (const problem of problems) console.error(`  - ${problem}`);

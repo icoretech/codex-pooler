@@ -64,9 +64,6 @@ function buildPanel(spec) {
 function withVariables(builder) {
   return builder
     .withVariable(
-      new dashboard.DatasourceVariableBuilder("datasource").label("Datasource").type("prometheus"),
-    )
-    .withVariable(
       new dashboard.QueryVariableBuilder("cluster")
         .label("Cluster")
         .datasource(DATASOURCE)
@@ -88,9 +85,6 @@ function withVariables(builder) {
         .refresh(dashboard.VariableRefresh.OnDashboardLoad)
         .multi(true)
         .includeAll(true),
-    )
-    .withVariable(
-      new dashboard.CustomVariableBuilder("resolution").label("Resolution").values("10s,15s,30s,1m"),
     );
 }
 
