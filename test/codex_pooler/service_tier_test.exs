@@ -53,14 +53,12 @@ defmodule CodexPooler.ServiceTierTest do
   end
 
   test "canonicalization never creates atoms from tier input" do
-    before = :erlang.system_info(:atom_count)
+    tier = "unseen_service_tier_#{System.unique_integer([:positive])}"
 
-    assert ServiceTier.canonicalize("task_1_unseen_service_tier") == "task_1_unseen_service_tier"
+    assert_raise ArgumentError, fn -> String.to_existing_atom(tier) end
+    assert ServiceTier.canonicalize(tier) == tier
+    assert ServiceTier.pricing_aliases(tier) == [tier]
 
-    assert ServiceTier.pricing_aliases("task_1_unseen_service_tier") == [
-             "task_1_unseen_service_tier"
-           ]
-
-    assert :erlang.system_info(:atom_count) == before
+    assert_raise ArgumentError, fn -> String.to_existing_atom(tier) end
   end
 end
