@@ -231,6 +231,8 @@ Routing settings are split into selection policy, continuity, and compatibility.
 
 Eligible families are backend Responses, backend `/v1/responses`, backend and public translated chat completions, public `/v1/responses`, backend compact routes, and websocket `response.create` dispatches. Multipart, file, audio, image, admin, MCP, usage, and other non-Responses requests are not eligible. Public `/v1/responses/compact` remains unsupported because it has no upstream compact dispatch.
 
+Within eligible tool outputs, valid JSON objects or arrays can be minified even when they are surrounded by ordinary explanatory text. Every surrounding byte stays unchanged. Quoted JSON-looking text, malformed or over-limit spans, and protected exact-output tool results remain pass-through.
+
 Request compression is fail-open. If scanning, token counting, rewriting, or limits fail, the original request body is sent upstream and request logs record a safe `payload_compression` status and reason. JSON bodies over 1 MiB skip before scanning, and a dispatch processes at most 50 output candidates. Token counting is local and in-process using tokenizer data shipped with the application; it does not call OpenAI or load a local model.
 
 Request logs may show compression savings when safe aggregate data exists. The UI prefers saved token count and token savings percent, then falls back to saved bytes and byte savings percent when token counts are unavailable.

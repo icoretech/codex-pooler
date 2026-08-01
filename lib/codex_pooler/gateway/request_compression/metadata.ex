@@ -30,6 +30,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Metadata do
   )
   @strategy_names ~w(
     diff
+    embedded_json_lossless
     json_array_lossless
     json_document_lossless
     log_output

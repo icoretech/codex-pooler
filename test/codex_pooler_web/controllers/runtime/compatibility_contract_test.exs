@@ -421,7 +421,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
              ]
     end
 
-    test "documents request compression search and diff input shapes" do
+    test "documents request compression supported input shapes" do
       feature = CompatibilityMatrix.by_slug!(:request_compression)
       fixture = CompatibilityMatrix.fixture!(:request_compression)
 
@@ -437,6 +437,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "WebSearch, WebFetch, web_search, web_fetch"
       assert feature.contract =~ "external retrieval"
       assert feature.contract =~ "output-only function tool results fail closed"
+      assert feature.contract =~ "valid JSON object or array spans embedded in ordinary prose"
+      assert feature.contract =~ "quoted JSON-looking text"
 
       assert fixture.protected_tool_outputs == %{
                default_function_names: [
@@ -460,6 +462,13 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "ordinary prose"
 
       assert fixture.supported_input_shapes == %{
+               embedded_json: %{
+                 container_kinds: ["object", "array"],
+                 surrounding_bytes: "preserved",
+                 quoted_json_looking_text: "preserved",
+                 malformed_or_over_limit_behavior: "original_output_preserved",
+                 maximum_spans: 50
+               },
                search_results: [
                  "classic_path_line",
                  "grouped_heading",

@@ -1,10 +1,25 @@
 defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
   @moduledoc false
 
+  alias CodexPooler.Gateway.RequestCompression.EmbeddedJson
+
   @type kind ::
-          :json_array | :json_document | :diff | :html | :search | :build | :source_code | :text
+          :json_array
+          | :json_document
+          | :embedded_json
+          | :diff
+          | :html
+          | :search
+          | :build
+          | :source_code
+          | :text
   @type strategy ::
-          :json_array_lossless | :json_document_lossless | :diff | :search_results | :log_output
+          :json_array_lossless
+          | :json_document_lossless
+          | :embedded_json_lossless
+          | :diff
+          | :search_results
+          | :log_output
   @type decision :: %{
           required(:kind) => kind(),
           required(:confidence) => float(),
@@ -15,6 +30,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
   @strategies %{
     json_array: :json_array_lossless,
     json_document: :json_document_lossless,
+    embedded_json: :embedded_json_lossless,
     diff: :diff,
     search: :search_results,
     build: :log_output
@@ -103,6 +119,9 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetector do
 
       (points = source_points(content, lines)) >= 50 ->
         decision(:source_code, points)
+
+      EmbeddedJson.embedded?(content) ->
+        decision(:embedded_json, 100)
 
       true ->
         decision(:text, 100)

@@ -2839,6 +2839,84 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_compressed_payload_metadata!(attempt, "proxy_http", "http_json", "json_array_lossless")
   end
 
+  test "POST /backend-api/codex/responses compresses embedded JSON in eligible function output",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_backend_embedded_json_compressed",
+          "object" => "response",
+          "status" => "completed",
+          "output" => [],
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream, supported_compression_model_opts())
+    enable_request_compression!(setup.pool)
+    prefix = "synthetic report begins\n"
+    suffix = "\nsynthetic report ends"
+    original_json = Jason.encode!(%{"rows" => compression_rows_fixture()}, pretty: true)
+    original_output = prefix <> original_json <> suffix
+    call_id = "call_backend_embedded_json_compressed"
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => [
+          %{
+            "type" => "function_call",
+            "call_id" => call_id,
+            "name" => "run_command",
+            "arguments" => "{}"
+          },
+          %{
+            "type" => "function_call_output",
+            "call_id" => call_id,
+            "output" => original_output
+          }
+        ]
+      })
+
+    assert %{"id" => "resp_backend_embedded_json_compressed"} = json_response(conn, 200)
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+
+    compressed_output =
+      captured.json["input"]
+      |> Enum.find(&(&1["type"] == "function_call_output"))
+      |> Map.fetch!("output")
+
+    assert String.starts_with?(compressed_output, prefix)
+    assert String.ends_with?(compressed_output, suffix)
+
+    compressed_json =
+      binary_part(
+        compressed_output,
+        byte_size(prefix),
+        byte_size(compressed_output) - byte_size(prefix) - byte_size(suffix)
+      )
+
+    assert Jason.decode!(compressed_json) == Jason.decode!(original_json)
+    assert byte_size(compressed_json) < byte_size(original_json)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.transport == "http_json"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+    assert_compressed_payload_metadata!(
+      attempt,
+      "proxy_http",
+      "http_json",
+      "embedded_json_lossless"
+    )
+
+    refute inspect(attempt.response_metadata["payload_compression"]) =~ call_id
+  end
+
   @tag :installation_id_metadata
   test "POST /backend-api/codex/responses forwards only approved lineage metadata headers",
        %{conn: conn} do

@@ -645,6 +645,87 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       )
     end
 
+    test "enabled pool compresses embedded JSON in eligible backend websocket function output" do
+      upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "id" => "resp_ws_embedded_json_compressed",
+            "object" => "response",
+            "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+          })
+        )
+
+      setup = gateway_setup(upstream, supported_compression_model_opts())
+      enable_request_compression!(setup.pool)
+      {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+      {:ok, session} = Gateway.start_codex_session(auth, accepted_turn_state: "ws-embedded-json")
+      prefix = "synthetic websocket report begins\n"
+      suffix = "\nsynthetic websocket report ends"
+
+      original_json =
+        Jason.encode!(%{"rows" => Enum.map(1..24, &%{"id" => &1, "active" => true})},
+          pretty: true
+        )
+
+      original_output = prefix <> original_json <> suffix
+      call_id = "call_ws_embedded_json"
+
+      assert :ok =
+               execute_websocket_response(
+                 auth,
+                 backend_function_tool_output_payload(setup, original_output, call_id),
+                 websocket_request_options(session, "ws-embedded-json-compressed"),
+                 fn frame -> send(self(), {:websocket_frame, frame}) end
+               )
+
+      assert_receive {:websocket_frame, frame}, @websocket_frame_timeout
+      assert %{"id" => "resp_ws_embedded_json_compressed"} = Jason.decode!(frame)
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.method == "WEBSOCKET"
+      assert captured.path == "/backend-api/codex/responses"
+
+      compressed_output =
+        captured.json["input"]
+        |> Enum.find(&(&1["type"] == "function_call_output"))
+        |> Map.fetch!("output")
+
+      assert String.starts_with?(compressed_output, prefix)
+      assert String.ends_with?(compressed_output, suffix)
+
+      compressed_json =
+        binary_part(
+          compressed_output,
+          byte_size(prefix),
+          byte_size(compressed_output) - byte_size(prefix) - byte_size(suffix)
+        )
+
+      assert Jason.decode!(compressed_json) == Jason.decode!(original_json)
+      assert byte_size(compressed_json) < byte_size(original_json)
+
+      assert [request] = request_rows(setup.pool.id)
+      assert request.transport == "websocket"
+      assert request.status == "succeeded"
+
+      assert [attempt] = attempt_rows(request)
+
+      assert %{
+               "enabled" => true,
+               "attempted" => true,
+               "status" => "compressed",
+               "route_class" => "proxy_websocket",
+               "transport" => "websocket",
+               "candidate_count" => 1,
+               "compressed_count" => 1,
+               "skipped_count" => 0,
+               "strategies" => strategies
+             } = metadata = attempt.response_metadata["payload_compression"]
+
+      assert "embedded_json_lossless" in strategies
+      assert metadata["original_tokens"] > metadata["compressed_tokens"]
+      refute_payload_compression_leak!(metadata, [call_id])
+    end
+
     test "enabled pool preserves output-only public websocket tool output before upstream send" do
       upstream =
         start_upstream(
@@ -879,6 +960,29 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       "input" => [
         %{
           "type" => "local_shell_call_output",
+          "call_id" => call_id,
+          "output" => output
+        }
+      ],
+      "stream" => true,
+      "generate" => true
+    }
+    |> Jason.encode!()
+  end
+
+  defp backend_function_tool_output_payload(setup, output, call_id) do
+    %{
+      "type" => "response.create",
+      "model" => setup.model.exposed_model_id,
+      "input" => [
+        %{
+          "type" => "function_call",
+          "call_id" => call_id,
+          "name" => "run_command",
+          "arguments" => "{}"
+        },
+        %{
+          "type" => "function_call_output",
           "call_id" => call_id,
           "output" => output
         }

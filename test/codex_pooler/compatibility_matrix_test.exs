@@ -181,6 +181,7 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert feature.contract =~ "fail-open"
       assert feature.contract =~ "metadata-only"
       assert feature.contract =~ "payload_compression"
+      assert feature.contract =~ "valid JSON object or array spans embedded in ordinary prose"
 
       assert Map.fetch!(fixture, :pool_gate) == %{
                setting: "request_compression_enabled",
@@ -190,6 +191,14 @@ defmodule CodexPooler.CompatibilityMatrixTest do
 
       assert Map.fetch!(fixture, :direction) == "request_side_only"
       assert Map.fetch!(fixture, :failure_mode) == "fail_open_original_request"
+
+      assert get_in(fixture, [:supported_input_shapes, :embedded_json]) == %{
+               container_kinds: ["object", "array"],
+               surrounding_bytes: "preserved",
+               quoted_json_looking_text: "preserved",
+               malformed_or_over_limit_behavior: "original_output_preserved",
+               maximum_spans: 50
+             }
 
       assert Map.fetch!(fixture, :privacy) == %{
                raw_outputs_stored: false,

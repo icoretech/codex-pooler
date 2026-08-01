@@ -90,6 +90,33 @@ defmodule CodexPooler.Gateway.RequestCompression.ContentDetectorTest do
              } = ContentDetector.detect(object_stream)
     end
 
+    test "detects minifiable JSON containers embedded in otherwise ordinary text" do
+      embedded_object =
+        %{
+          "records" =>
+            Enum.map(1..8, fn index ->
+              %{"index" => index, "label" => "synthetic record #{index}", "active" => true}
+            end)
+        }
+        |> Jason.encode!(pretty: true)
+
+      content = "synthetic prefix\n" <> embedded_object <> "\nsynthetic suffix"
+
+      assert %{
+               kind: :embedded_json,
+               confidence: 1.0,
+               compressible: true,
+               strategy: :embedded_json_lossless
+             } = ContentDetector.detect(content)
+
+      assert_noop(
+        :text,
+        ContentDetector.detect("synthetic quoted value " <> Jason.encode!(embedded_object))
+      )
+
+      assert_noop(:text, ContentDetector.detect("synthetic prefix {\n  \"broken\": true"))
+    end
+
     test "keeps single objects and malformed object streams out of array detection" do
       assert %{kind: :json_document, strategy: :json_document_lossless} =
                ContentDetector.detect(~S({"status":"ok"}))

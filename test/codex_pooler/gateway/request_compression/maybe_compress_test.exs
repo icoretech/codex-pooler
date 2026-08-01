@@ -706,6 +706,77 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       refute inspect(metadata) =~ "call_json_document_compression"
     end
 
+    test "rewrites embedded JSON in eligible prose tool output while preserving surrounding bytes" do
+      prefix = "synthetic report begins\n"
+      suffix = "\nsynthetic report ends"
+
+      original_json =
+        %{
+          "rows" =>
+            Enum.map(1..16, fn index ->
+              %{
+                "id" => index,
+                "label" => "synthetic row #{index}",
+                "nested" => %{"active" => true, "values" => [index, index + 1]}
+              }
+            end),
+          "summary" => %{"count" => 16, "source" => "synthetic"}
+        }
+        |> Jason.encode!(pretty: true)
+
+      original_output = prefix <> original_json <> suffix
+
+      body =
+        Jason.encode!(%{
+          "model" => @supported_model,
+          "input" => [
+            %{
+              "type" => "function_call",
+              "call_id" => "call_embedded_json_compression",
+              "name" => "run_command",
+              "arguments" => "{}"
+            },
+            %{
+              "type" => "function_call_output",
+              "call_id" => "call_embedded_json_compression",
+              "output" => original_output
+            }
+          ]
+        })
+
+      {context, request_options} = request_context(body)
+
+      assert {compressed_body, compressed_options} =
+               RequestCompression.maybe_compress(body, context, request_options)
+
+      assert compressed_body != body
+
+      compressed_output = first_output(compressed_body)
+      assert String.starts_with?(compressed_output, prefix)
+      assert String.ends_with?(compressed_output, suffix)
+
+      compressed_json =
+        binary_part(
+          compressed_output,
+          byte_size(prefix),
+          byte_size(compressed_output) - byte_size(prefix) - byte_size(suffix)
+        )
+
+      assert Jason.decode!(compressed_json) == Jason.decode!(original_json)
+      assert byte_size(compressed_json) < byte_size(original_json)
+
+      assert %{
+               "status" => "compressed",
+               "candidate_count" => 1,
+               "compressed_count" => 1,
+               "skipped_count" => 0
+             } = metadata = compressed_options.runtime.payload_compression
+
+      assert "embedded_json_lossless" in metadata["strategies"]
+      assert metadata["original_tokens"] > metadata["compressed_tokens"]
+      refute inspect(metadata) =~ "call_embedded_json_compression"
+    end
+
     test "rewrites nul-delimited search-result function-output strings" do
       omitted_sentinel = "nul search omitted sentinel"
       original_output = compression_nul_search_fixture(omitted_sentinel)
