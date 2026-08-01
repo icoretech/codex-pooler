@@ -2,7 +2,7 @@ local releaseBranch = 'release-please--branches--main--components--codex-pooler'
 local registry = 'registry.icorete.ch';
 local image = 'registry.icorete.ch/icoretech/codex-pooler';
 local helmVersion = 'v4.2.3';
-local nodeImage = 'node:26.5.0-slim';
+local nodeImage = 'node:26.5.1-slim';
 
 [
   {
