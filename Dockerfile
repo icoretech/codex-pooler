@@ -52,7 +52,8 @@ COPY assets assets
 COPY lib lib
 COPY priv priv
 
-RUN mix compile \
+RUN mix compile --warnings-as-errors \
+  && mix quality.xref \
   && mix assets.deploy \
   && mix release
 

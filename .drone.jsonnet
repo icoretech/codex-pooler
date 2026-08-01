@@ -1,8 +1,9 @@
 local releaseBranch = 'release-please--branches--main--components--codex-pooler';
 local registry = 'registry.icorete.ch';
 local image = 'registry.icorete.ch/icoretech/codex-pooler';
+local buildxPlugin = 'plugins/buildx:1.3.23';
+local tagImage = 'alpine/git:latest';
 local helmVersion = 'v4.2.3';
-local nodeImage = 'node:26.5.1-slim';
 
 [
   {
@@ -37,22 +38,11 @@ local nodeImage = 'node:26.5.1-slim';
     ],
     steps: [
       {
-        name: 'assets-deps',
-        image: nodeImage,
-        environment: {
-          NPM_CONFIG_UPDATE_NOTIFIER: 'false',
-        },
-        commands: [
-          'npm ci --prefix assets',
-        ],
-      },
-      {
         name: 'quality',
         image: 'elixir:1.20.1-otp-28-slim',
-        depends_on: ['assets-deps'],
         commands: [
           'apt-get update',
-          'apt-get install -y --no-install-recommends build-essential ca-certificates curl git nodejs python3 ripgrep tar tzdata',
+          'apt-get install -y --no-install-recommends build-essential ca-certificates curl git python3 ripgrep tar tzdata',
           'curl -fsSLO https://get.helm.sh/helm-' + helmVersion + '-linux-amd64.tar.gz',
           'curl -fsSLO https://get.helm.sh/helm-' + helmVersion + '-linux-amd64.tar.gz.sha256sum',
           'sha256sum -c helm-' + helmVersion + '-linux-amd64.tar.gz.sha256sum',
@@ -62,14 +52,9 @@ local nodeImage = 'node:26.5.1-slim';
           'mix local.hex --force',
           'mix local.rebar --force',
           'mix deps.get',
-          'mix format --check-formatted',
           'mix compile --warnings-as-errors',
-          'MIX_ENV=prod mix compile --warnings-as-errors',
-          'MIX_ENV=prod mix quality.xref',
-          'mix ecto.create --quiet',
-          'mix ecto.migrate --quiet',
-          'mix test',
-          'mix assets.deploy',
+          'mix format --check-formatted',
+          'TEST_FAST_COMMAND="mix test --warnings-as-errors" make test-fast N=4',
         ],
         environment: {
           MIX_ENV: 'test',
@@ -83,7 +68,7 @@ local nodeImage = 'node:26.5.1-slim';
       },
       {
         name: 'tag',
-        image: 'registry.icorete.ch/proxy-dockerhub/alpine/git',
+        image: tagImage,
         depends_on: ['quality'],
         commands: [
           'CUSTOM_BRANCH_NAME=$(basename "${DRONE_SOURCE_BRANCH:-$DRONE_BRANCH}" | tr "[:upper:]" "[:lower:]" | sed "s/_/-/g")',
@@ -96,12 +81,13 @@ local nodeImage = 'node:26.5.1-slim';
       },
       {
         name: 'build-and-push-main',
-        image: 'thegeeklab/drone-docker-buildx',
+        image: buildxPlugin,
         privileged: true,
         depends_on: ['tag'],
         settings: {
           purge: true,
           no_cache: true,
+          pull_image: true,
           platforms: ['linux/amd64'],
           repo: image,
           registry: registry,
@@ -115,16 +101,18 @@ local nodeImage = 'node:26.5.1-slim';
         },
         when: {
           branch: ['main'],
+          event: ['push'],
         },
       },
       {
         name: 'build-no-push',
-        image: 'thegeeklab/drone-docker-buildx',
+        image: buildxPlugin,
         privileged: true,
         depends_on: ['tag'],
         settings: {
           dry_run: true,
           purge: true,
+          pull_image: true,
           no_cache: true,
           platforms: ['linux/amd64'],
           repo: image,
@@ -135,6 +123,7 @@ local nodeImage = 'node:26.5.1-slim';
           branch: {
             exclude: ['main'],
           },
+          event: ['push'],
         },
       },
     ],
