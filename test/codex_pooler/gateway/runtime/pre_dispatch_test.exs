@@ -583,6 +583,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
         account_label: "Candidate invariance fallback upstream"
       })
 
+    fallback_assignment =
+      fallback_assignment
+      |> Ecto.Changeset.change(created_at: DateTime.add(setup.assignment.created_at, 1, :second))
+      |> Repo.update!()
+
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
     payload = %{"model" => setup.model.exposed_model_id, "input" => "candidate invariance"}
     options = request_options(auth, payload, [])
