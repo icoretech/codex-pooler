@@ -766,10 +766,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbe do
   end
 
   defp usage_headers(access_token, chatgpt_account_id) do
-    headers = [
-      {"authorization", "Bearer " <> String.trim(access_token)},
-      {"accept", "application/json"}
-    ]
+    headers = [{"authorization", "Bearer " <> String.trim(access_token)}]
 
     if send_chatgpt_account_header?(chatgpt_account_id) do
       headers ++
