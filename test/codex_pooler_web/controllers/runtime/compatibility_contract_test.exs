@@ -285,7 +285,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
              }
     end
 
-    test "documents catalog, envelope, and safe error diagnostics as separate contracts" do
+    @tag :external_issues_229_231
+    test "documents catalog capacity, envelope, and safe error diagnostics as separate contracts" do
       models_etag = CompatibilityMatrix.by_slug!(:backend_models_etag)
       responses_etag = CompatibilityMatrix.by_slug!(:backend_responses_etag)
       envelope = CompatibilityMatrix.by_slug!(:backend_responses_envelope)
@@ -293,6 +294,18 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
       assert models_etag.contract =~ "policy-visible effective catalog body"
       assert models_etag.contract =~ "eventual"
+
+      assert models_etag.canonical_partition.new_turn_capacity == %{
+               backend_codex_catalog_driven: "selected_partition_only",
+               translated_openai_responses: "all_valid_canonical_assignments"
+             }
+
+      assert models_etag.contract =~
+               "backend Codex catalog-driven new turns use the selected partition"
+
+      assert models_etag.contract =~
+               "translated OpenAI Responses capacity includes all valid canonical assignments"
+
       assert responses_etag.contract =~ "exact authenticated backend models ETag"
       assert responses_etag.contract =~ "never relayed from upstream"
       assert envelope.contract =~ "exactly one reasoning.encrypted_content include"

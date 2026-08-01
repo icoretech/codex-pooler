@@ -9,6 +9,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   alias CodexPooler.Gateway.Payloads.InputShape
   alias CodexPooler.Gateway.Payloads.ReasoningEffort
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.OpenAICompatibility
   alias CodexPooler.Gateway.Payloads.StrictSchema
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.ModelMetadata
@@ -121,20 +122,22 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
            ),
          {:ok, request_options} <-
            SessionContinuity.attach_codex_session(auth, payload, request_options),
-         partition_input_candidates = candidates,
+         canonical_filter_input_candidates = candidates,
+         allowed_canonical_assignment_ids =
+           allowed_canonical_assignment_ids(visible_model_context, request_options),
          {:ok, candidates} <-
-           CandidateEligibility.filter_selected_partition_candidates(
+           CandidateEligibility.filter_allowed_canonical_candidates(
              candidates,
-             visible_model_context.selected_partition_assignment_ids,
+             allowed_canonical_assignment_ids,
              continuity_assignment_ids(
                request_options,
                visible_model_context.valid_canonical_assignment_ids
              )
            ),
          {:ok, candidates} <-
-           finish_partition_filtering(
+           finish_canonical_filtering(
              candidates,
-             partition_input_candidates,
+             canonical_filter_input_candidates,
              visible_model_context.valid_canonical_assignment_ids,
              endpoint,
              request_options,
@@ -194,9 +197,20 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
 
   defp codex_session_assignment_id(%RequestOptions{}), do: nil
 
-  defp finish_partition_filtering(
+  defp allowed_canonical_assignment_ids(
+         visible_model_context,
+         %RequestOptions{openai_compatibility: compatibility}
+       ) do
+    if OpenAICompatibility.translated_responses_surface?(compatibility) do
+      visible_model_context.valid_canonical_assignment_ids
+    else
+      visible_model_context.selected_partition_assignment_ids
+    end
+  end
+
+  defp finish_canonical_filtering(
          candidates,
-         partition_input_candidates,
+         canonical_filter_input_candidates,
          valid_canonical_assignment_ids,
          endpoint,
          %RequestOptions{} = request_options,
@@ -212,10 +226,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
         {:ok, candidates}
       end
 
-    if canonical_partition_zero_work?(
+    if canonical_filter_zero_work?(
          result,
          candidates,
-         partition_input_candidates,
+         canonical_filter_input_candidates,
          valid_canonical_assignment_ids,
          request_options
        ) do
@@ -225,34 +239,34 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
     end
   end
 
-  defp canonical_partition_zero_work?(
+  defp canonical_filter_zero_work?(
          _result,
          [],
-         _partition_input_candidates,
+         _canonical_filter_input_candidates,
          _valid_canonical_assignment_ids,
          %RequestOptions{}
        ),
        do: true
 
-  defp canonical_partition_zero_work?(
+  defp canonical_filter_zero_work?(
          {:error, %{code: "pinned_continuation_unavailable"}},
          _candidates,
-         partition_input_candidates,
+         canonical_filter_input_candidates,
          valid_canonical_assignment_ids,
          %RequestOptions{} = request_options
        ) do
     assignment_id = codex_session_assignment_id(request_options)
 
     is_binary(assignment_id) and
-      Enum.any?(partition_input_candidates, fn {assignment, _identity} ->
+      Enum.any?(canonical_filter_input_candidates, fn {assignment, _identity} ->
         assignment.id == assignment_id
       end) and assignment_id not in valid_canonical_assignment_ids
   end
 
-  defp canonical_partition_zero_work?(
+  defp canonical_filter_zero_work?(
          _result,
          _candidates,
-         _partition_input_candidates,
+         _canonical_filter_input_candidates,
          _valid_canonical_assignment_ids,
          %RequestOptions{}
        ),

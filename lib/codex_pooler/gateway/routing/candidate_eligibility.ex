@@ -287,20 +287,20 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
     end
   end
 
-  @spec filter_selected_partition_candidates(
+  @spec filter_allowed_canonical_candidates(
           [candidate()],
           [Ecto.UUID.t()],
           [Ecto.UUID.t()]
         ) :: {:ok, [candidate()]}
-  def filter_selected_partition_candidates(
+  def filter_allowed_canonical_candidates(
         candidates,
-        selected_assignment_ids,
+        allowed_canonical_assignment_ids,
         pinned_assignment_ids
       )
-      when is_list(candidates) and is_list(selected_assignment_ids) and
+      when is_list(candidates) and is_list(allowed_canonical_assignment_ids) and
              is_list(pinned_assignment_ids) do
     allowed_assignment_ids =
-      selected_assignment_ids
+      allowed_canonical_assignment_ids
       |> Kernel.++(pinned_assignment_ids)
       |> MapSet.new()
 

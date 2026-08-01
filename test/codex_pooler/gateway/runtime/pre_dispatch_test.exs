@@ -614,7 +614,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert RequestOptions.model_serving_mode(full_prepared.request_options) == "full"
   end
 
-  test "new turns use only assignments from the selected canonical schema partition" do
+  @tag :external_issues_229_231
+  @tag :issue_231
+  test "backend Codex catalog-driven new turns use only assignments from the selected canonical schema partition" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {model, divergent} = add_divergent_assignment!(setup)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
@@ -641,6 +643,155 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert candidate_ids(prepared.candidates) == [setup.assignment.id]
   end
 
+  @tag :external_issues_229_231
+  @tag :issue_231
+  test "translated Responses turns use every valid canonical assignment once" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {model, divergent} = add_divergent_assignment!(setup)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = %{"model" => model.exposed_model_id, "input" => "translated partitioned turn"}
+
+    options =
+      auth
+      |> request_options(payload, [])
+      |> RequestOptions.mark_openai_compatibility_origin(
+        "/v1/responses",
+        "/backend-api/codex/responses"
+      )
+
+    {result, queries} =
+      count_repo_sources(fn ->
+        PreDispatch.prepare(auth, @endpoint_path, payload, options, model)
+      end)
+
+    assert {:ok, prepared} = result
+
+    assert candidate_ids(prepared.route_state.candidate_snapshots) == [
+             setup.assignment.id,
+             divergent.assignment.id
+           ]
+
+    assert prepared.route_state.visible_model_context.selected_partition_assignment_ids == [
+             setup.assignment.id
+           ]
+
+    assert prepared.route_state.visible_model_context.valid_canonical_assignment_ids ==
+             Enum.sort([setup.assignment.id, divergent.assignment.id])
+
+    assert candidate_ids(prepared.candidates) == [
+             setup.assignment.id,
+             divergent.assignment.id
+           ]
+
+    assert Map.keys(prepared.route_state.quota_window_snapshots) |> Enum.sort() ==
+             Enum.sort([setup.identity.id, divergent.identity.id])
+
+    assert Map.keys(prepared.route_state.circuit_snapshots) |> Enum.sort() ==
+             Enum.sort([setup.assignment.id, divergent.assignment.id])
+
+    assert Map.get(queries, "account_quota_windows", 0) == 1
+    assert Map.get(queries, "routing_circuit_states", 0) == 1
+  end
+
+  @tag :external_issues_229_231
+  @tag :issue_231
+  test "translated Responses excludes malformed canonical assignments" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {model, divergent} = add_divergent_assignment!(setup)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    model =
+      model
+      |> Ecto.Changeset.change(%{
+        metadata: %{
+          model.metadata
+          | "source_assignment_models" => %{
+              setup.assignment.id =>
+                get_in(model.metadata, ["source_assignment_models", setup.assignment.id]),
+              divergent.assignment.id => "malformed"
+            }
+        }
+      })
+      |> Repo.update!()
+
+    payload = %{"model" => model.exposed_model_id, "input" => "malformed alternate"}
+
+    options =
+      auth
+      |> request_options(payload, [])
+      |> RequestOptions.mark_openai_compatibility_origin(
+        "/v1/chat/completions",
+        "/backend-api/codex/responses"
+      )
+
+    assert {:ok, prepared} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, options, model)
+
+    assert prepared.route_state.visible_model_context.valid_canonical_assignment_ids == [
+             setup.assignment.id
+           ]
+
+    assert candidate_ids(prepared.candidates) == [setup.assignment.id]
+  end
+
+  @tag :external_issues_229_231
+  @tag :issue_231
+  test "raw backend provenance and non-Responses translations stay selected-only" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {model, divergent} = add_divergent_assignment!(setup)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = %{"model" => model.exposed_model_id, "input" => "selected-only control"}
+
+    raw_backend_options =
+      auth
+      |> request_options(payload, [])
+      |> RequestOptions.put_openai_compatibility(source_endpoint: "/backend-api/codex/responses")
+
+    media_options =
+      auth
+      |> request_options(payload, [])
+      |> RequestOptions.mark_openai_compatibility_origin(
+        "/v1/images/generations",
+        "/backend-api/codex/images/generations"
+      )
+
+    for options <- [raw_backend_options, media_options] do
+      assert {:ok, prepared} =
+               PreDispatch.prepare(auth, @endpoint_path, payload, options, model)
+
+      assert prepared.route_state.visible_model_context.valid_canonical_assignment_ids ==
+               Enum.sort([setup.assignment.id, divergent.assignment.id])
+
+      assert candidate_ids(prepared.candidates) == [setup.assignment.id]
+    end
+  end
+
+  @tag :external_issues_229_231
+  @tag :issue_231
+  test "translated Responses keeps pre-attached file affinity exact" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {model, divergent} = add_divergent_assignment!(setup)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = %{"model" => model.exposed_model_id, "input" => "file-affinity turn"}
+
+    options =
+      auth
+      |> request_options(payload, [])
+      |> RequestOptions.mark_openai_compatibility_origin(
+        "/v1/responses",
+        "/backend-api/codex/responses"
+      )
+      |> RequestOptions.put_routing(file_affinity_assignment_id: divergent.assignment.id)
+
+    assert {:ok, prepared} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, options, model)
+
+    assert prepared.request_options.routing.file_affinity_assignment_id == divergent.assignment.id
+    assert candidate_ids(prepared.candidates) == [divergent.assignment.id]
+  end
+
+  @tag :external_issues_229_231
+  @tag :issue_231
   test "a compatible hard-pinned continuation stays on a non-selected schema partition" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {model, divergent} = add_divergent_assignment!(setup)
@@ -673,16 +824,29 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
         previous_response_id: payload["previous_response_id"]
       )
 
+    translated_options =
+      RequestOptions.mark_openai_compatibility_origin(
+        options,
+        "/v1/responses",
+        "/backend-api/codex/responses"
+      )
+
     assert {:ok, prepared} =
              PreDispatch.prepare(auth, @endpoint_path, payload, options, model)
+
+    assert {:ok, translated_prepared} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, translated_options, model)
 
     assert prepared.route_state.visible_model_context.selected_partition_assignment_ids == [
              setup.assignment.id
            ]
 
     assert candidate_ids(prepared.candidates) == [divergent.assignment.id]
+    assert candidate_ids(translated_prepared.candidates) == [divergent.assignment.id]
   end
 
+  @tag :external_issues_229_231
+  @tag :issue_231
   test "a new turn fails closed when no routable assignment has a valid canonical source" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
@@ -711,6 +875,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert Repo.all(Request) == []
   end
 
+  @tag :external_issues_229_231
+  @tag :issue_231
   test "a hard-pinned continuation rejects an assignment with malformed canonical source metadata" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)

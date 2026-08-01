@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.Continuity
+  alias CodexPooler.Gateway.Payloads.RequestOptions.OpenAICompatibility
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request
@@ -360,6 +361,97 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
       refute native_options.openai_compatibility.public_openai_responses_stream
       assert public_options.openai_compatibility.source_endpoint == "/v1/responses"
       assert public_options.openai_compatibility.public_openai_responses_stream
+    end
+
+    @tag :external_issues_229_231
+    @tag :issue_231
+    test "translated Responses surface requires trusted source provenance and the exact backend endpoint" do
+      payload = %{"model" => "example-model"}
+
+      public_responses =
+        %{}
+        |> RequestOptions.build("/backend-api/codex/responses", payload)
+        |> RequestOptions.mark_openai_compatibility_origin(
+          "/v1/responses",
+          "/backend-api/codex/responses"
+        )
+
+      public_chat =
+        %{}
+        |> RequestOptions.build("/backend-api/codex/responses", payload)
+        |> RequestOptions.mark_openai_compatibility_origin(
+          "/v1/chat/completions",
+          "/backend-api/codex/responses"
+        )
+
+      backend_chat =
+        %{}
+        |> RequestOptions.build("/backend-api/codex/responses", payload)
+        |> RequestOptions.mark_openai_compatibility_origin(
+          "/backend-api/codex/v1/chat/completions",
+          "/backend-api/codex/responses"
+        )
+
+      sse =
+        RequestOptions.put_openai_compatibility(public_responses,
+          public_openai_responses_stream: true
+        )
+
+      websocket = RequestOptions.for_websocket(sse, payload)
+      raw_backend = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+
+      raw_backend_source =
+        RequestOptions.build(
+          %{openai_source_endpoint: "/backend-api/codex/responses"},
+          "/backend-api/codex/responses",
+          payload
+        )
+
+      wrong_media_endpoint =
+        %{}
+        |> RequestOptions.build("/backend-api/codex/images/generations", payload)
+        |> RequestOptions.mark_openai_compatibility_origin(
+          "/v1/images/generations",
+          "/backend-api/codex/images/generations"
+        )
+
+      malformed_source =
+        RequestOptions.build(
+          %{
+            openai_source_endpoint: "https://example.com/v1/responses",
+            openai_translated_endpoint: "/backend-api/codex/responses"
+          },
+          "/backend-api/codex/responses",
+          payload
+        )
+
+      assert OpenAICompatibility.translated_responses_surface?(
+               public_responses.openai_compatibility
+             )
+
+      assert OpenAICompatibility.translated_responses_surface?(public_chat.openai_compatibility)
+      assert OpenAICompatibility.translated_responses_surface?(backend_chat.openai_compatibility)
+      assert OpenAICompatibility.translated_responses_surface?(sse.openai_compatibility)
+      assert OpenAICompatibility.translated_responses_surface?(websocket.openai_compatibility)
+
+      refute OpenAICompatibility.translated_responses_surface?(raw_backend.openai_compatibility)
+
+      refute OpenAICompatibility.translated_responses_surface?(
+               raw_backend_source.openai_compatibility
+             )
+
+      refute OpenAICompatibility.translated_responses_surface?(
+               wrong_media_endpoint.openai_compatibility
+             )
+
+      refute OpenAICompatibility.translated_responses_surface?(
+               malformed_source.openai_compatibility
+             )
+
+      assert websocket.openai_compatibility.source_endpoint == "/v1/responses"
+
+      assert websocket.openai_compatibility.translated_endpoint ==
+               "/backend-api/codex/responses"
     end
 
     test "keeps local alias provenance separate from live websocket continuity" do
