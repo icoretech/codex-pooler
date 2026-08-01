@@ -7,7 +7,7 @@ defmodule CodexPooler.UpstreamsTest do
   alias CodexPooler.Accounts.{Scope, User}
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Jobs.AccountReconciliationWorker
+  alias CodexPooler.Jobs.{AccountReconciliationWorker, CatalogSyncWorker}
   alias CodexPooler.MCP.Tools.QuotaMetadata
   alias CodexPooler.Pools
   alias CodexPooler.Quotas
@@ -16,7 +16,7 @@ defmodule CodexPooler.UpstreamsTest do
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Auth.{CodexAuth, CodexAuthJson, TokenRefresh}
   alias CodexPooler.Upstreams.CloudflareCookies
-  alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
+  alias CodexPooler.Upstreams.Lifecycle.{AccountAudit, IdentityLifecycle}
   alias CodexPooler.Upstreams.TokenLinking
 
   alias CodexPooler.Upstreams.Quota
@@ -36,6 +36,7 @@ defmodule CodexPooler.UpstreamsTest do
 
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
+  import ExUnit.CaptureLog, only: [capture_log: 1]
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [
@@ -2486,6 +2487,9 @@ defmodule CodexPooler.UpstreamsTest do
       assert {:ok, result} =
                Upstreams.pause_account_for_scope(scope, identity, %{reason: "operator_pause"})
 
+      assert result |> Map.keys() |> Enum.sort() ==
+               [:assignments, :identity, :secret_status, :status]
+
       assert result.status == :paused
       assert result.identity.status == "paused"
       assert result.secret_status == :present
@@ -2499,6 +2503,10 @@ defmodule CodexPooler.UpstreamsTest do
       assert Upstreams.list_eligible_pool_assignments(pool) == []
 
       assert {:ok, result} = Upstreams.reactivate_account_for_scope(scope, identity, %{})
+
+      assert result |> Map.keys() |> Enum.sort() ==
+               [:assignments, :identity, :secret_status, :status]
+
       assert result.status == :active
       assert result.identity.status == "active"
       assert result.secret_status == :present
@@ -2531,6 +2539,300 @@ defmodule CodexPooler.UpstreamsTest do
 
       assert message == "upstream access token is missing"
       assert Upstreams.list_eligible_pool_assignments(pool) == []
+    end
+
+    @tag :external_issues_229_231
+    @tag :issue_229
+    test "pause and reactivation persist one manual catalog sync without changing results" do
+      Repo.delete_all(Oban.Job)
+      scope = fixture_owner_scope()
+      pool = pool_fixture()
+
+      identity =
+        active_identity_fixture(%{
+          chatgpt_account_id: "acct_issue_229_lifecycle",
+          account_label: "Issue 229 lifecycle"
+        })
+
+      configure_upstream_secret_key!()
+      token = generated_secret("issue-229-lifecycle")
+
+      assert {:ok, assignment} = PoolAssignments.create_pool_assignment(pool, identity, %{})
+      assert {:ok, assignment} = PoolAssignments.activate_pool_assignment(assignment)
+
+      assert {:ok, _secret} =
+               Upstreams.store_encrypted_secret(identity, %{
+                 secret_kind: "access_token",
+                 plaintext: token
+               })
+
+      {pause_result, pause_queries} =
+        capture_repo_queries(fn ->
+          Upstreams.pause_account_for_scope(scope, identity, %{reason: "issue_229_pause"})
+        end)
+
+      assert {:ok,
+              %{
+                status: :paused,
+                identity: %UpstreamIdentity{status: "paused"},
+                assignments: [%PoolUpstreamAssignment{id: assignment_id, status: "paused"}],
+                secret_status: :present
+              } = paused_result} = pause_result
+
+      assert assignment_id == assignment.id
+
+      assert Map.keys(paused_result) |> Enum.sort() ==
+               [:assignments, :identity, :secret_status, :status]
+
+      assert [pause_job] = all_enqueued(worker: CatalogSyncWorker)
+      assert pause_job.args == %{"pool_id" => pool.id, "trigger_kind" => "manual"}
+      refute inspect(pause_job.args) =~ token
+      refute inspect(pause_job.args) =~ identity.chatgpt_account_id
+
+      audit_insert_index =
+        Enum.find_index(pause_queries, &insert_query_for?(&1, "audit_events"))
+
+      job_insert_index =
+        Enum.find_index(pause_queries, &insert_query_for?(&1, "oban_jobs"))
+
+      assert is_integer(audit_insert_index)
+      assert is_integer(job_insert_index)
+      assert audit_insert_index < job_insert_index
+      assert Enum.count(pause_queries, &active_pools_query?/1) == 1
+
+      Repo.delete_all(from job in Oban.Job, where: job.id == ^pause_job.id)
+      assert [] = all_enqueued(worker: CatalogSyncWorker)
+
+      assert {:ok,
+              %{
+                status: :active,
+                identity: %UpstreamIdentity{status: "active"},
+                assignments: [%PoolUpstreamAssignment{id: ^assignment_id, status: "active"}],
+                secret_status: :present
+              } = active_result} =
+               Upstreams.reactivate_account_for_scope(scope, identity, %{})
+
+      assert Map.keys(active_result) |> Enum.sort() ==
+               [:assignments, :identity, :secret_status, :status]
+
+      assert [reactivate_job] = all_enqueued(worker: CatalogSyncWorker)
+      assert reactivate_job.args == %{"pool_id" => pool.id, "trigger_kind" => "manual"}
+      refute inspect(reactivate_job.args) =~ token
+      refute inspect(reactivate_job.args) =~ identity.chatgpt_account_id
+    end
+
+    @tag :external_issues_229_231
+    @tag :issue_229
+    test "best-effort audit preserves its result while strict audit rejection propagates" do
+      Repo.delete_all(Oban.Job)
+      scope = fixture_owner_scope()
+      pool = pool_fixture()
+
+      identity =
+        active_identity_fixture(%{
+          chatgpt_account_id: "acct_issue_229_audit_rejection",
+          account_label: "Issue 229 audit rejection"
+        })
+
+      assert {:ok, assignment} = PoolAssignments.create_pool_assignment(pool, identity, %{})
+      assert {:ok, assignment} = PoolAssignments.activate_pool_assignment(assignment)
+
+      result = %{
+        status: :paused,
+        identity: identity,
+        assignments: [assignment],
+        secret_status: :missing
+      }
+
+      {best_effort_result, best_effort_queries} =
+        capture_repo_queries(fn ->
+          {:ok, result}
+          |> AccountAudit.record_change(scope, "request.issue_229_rejected")
+        end)
+
+      assert best_effort_result == {:ok, result}
+      refute Enum.any?(best_effort_queries, &active_pools_query?/1)
+
+      {strict_result, strict_queries} =
+        capture_repo_queries(fn ->
+          {:ok, result}
+          |> AccountAudit.record_change_strict(scope, "request.issue_229_rejected")
+        end)
+
+      assert strict_result == {:error, :runtime_events_not_recorded}
+      refute Enum.any?(strict_queries, &active_pools_query?/1)
+      assert [] = all_enqueued(worker: CatalogSyncWorker)
+    end
+
+    @tag :external_issues_229_231
+    @tag :issue_229
+    test "strict lifecycle audit persistence failure performs no active pool read or catalog enqueue" do
+      Repo.delete_all(Oban.Job)
+      scope = fixture_owner_scope()
+      pool = pool_fixture()
+
+      identity =
+        active_identity_fixture(%{
+          chatgpt_account_id: "acct_issue_229_audit_persistence_failure",
+          account_label: "Issue 229 audit persistence failure"
+        })
+
+      assert {:ok, assignment} = PoolAssignments.create_pool_assignment(pool, identity, %{})
+      assert {:ok, _assignment} = PoolAssignments.activate_pool_assignment(assignment)
+
+      install_upstream_lifecycle_audit_failure_trigger!()
+
+      {_raised, queries} =
+        capture_repo_queries(fn ->
+          assert_raise Postgrex.Error, fn ->
+            Repo.transaction(fn ->
+              Upstreams.pause_account_for_scope(scope, identity, %{})
+            end)
+          end
+        end)
+
+      refute Enum.any?(queries, &active_pools_query?/1)
+      assert [] = all_enqueued(worker: CatalogSyncWorker)
+    end
+
+    @tag :external_issues_229_231
+    @tag :issue_229
+    test "pause enqueues distinct active pools and ignores duplicate, disabled, and unrelated assignments" do
+      Repo.delete_all(Oban.Job)
+      scope = fixture_owner_scope()
+      first_pool = pool_fixture(%{name: "Issue 229 first active"})
+      second_pool = pool_fixture(%{name: "Issue 229 second active"})
+      disabled_pool = pool_fixture(%{name: "Issue 229 disabled", status: "disabled"})
+      unrelated_pool = pool_fixture(%{name: "Issue 229 unrelated"})
+
+      identity =
+        active_identity_fixture(%{
+          chatgpt_account_id: "acct_issue_229_pool_filter",
+          account_label: "Issue 229 pool filter"
+        })
+
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      first_assignment =
+        insert_lifecycle_assignment!(first_pool, identity, "active", now)
+
+      Repo.query!("DROP INDEX pool_upstream_assignments_identity_uq")
+      _duplicate_assignment = insert_lifecycle_assignment!(first_pool, identity, "active", now)
+      _second_assignment = insert_lifecycle_assignment!(second_pool, identity, "active", now)
+
+      _disabled_assignment =
+        insert_lifecycle_assignment!(disabled_pool, identity, "active", now)
+
+      _unrelated_assignment =
+        insert_lifecycle_assignment!(unrelated_pool, identity, "deleted", now)
+
+      assert {:ok, %{status: :paused, assignments: assignments}} =
+               Upstreams.pause_account_for_scope(scope, identity, %{})
+
+      assert Enum.count(assignments, &(&1.pool_id == first_pool.id and &1.status == "paused")) ==
+               2
+
+      assert Repo.get!(PoolUpstreamAssignment, first_assignment.id).status == "paused"
+
+      assert Enum.any?(assignments, fn assignment ->
+               assignment.pool_id == unrelated_pool.id and assignment.status == "deleted"
+             end)
+
+      jobs = all_enqueued(worker: CatalogSyncWorker)
+
+      assert MapSet.new(Enum.map(jobs, & &1.args)) ==
+               MapSet.new([
+                 %{"pool_id" => first_pool.id, "trigger_kind" => "manual"},
+                 %{"pool_id" => second_pool.id, "trigger_kind" => "manual"}
+               ])
+
+      assert length(jobs) == 2
+
+      expected_pool_ids =
+        Pools.list_active_pools()
+        |> Enum.filter(&(&1.id in [first_pool.id, second_pool.id]))
+        |> Enum.map(& &1.id)
+
+      assert Enum.map(jobs, & &1.args["pool_id"]) == Enum.reverse(expected_pool_ids)
+      refute Enum.any?(jobs, &(&1.args["pool_id"] == disabled_pool.id))
+      refute Enum.any?(jobs, &(&1.args["pool_id"] == unrelated_pool.id))
+    end
+
+    @tag :external_issues_229_231
+    @tag :issue_229
+    test "failed reactivation preserves its error and enqueues no catalog sync" do
+      Repo.delete_all(Oban.Job)
+      scope = fixture_owner_scope()
+      pool = pool_fixture()
+
+      identity =
+        active_identity_fixture(%{
+          chatgpt_account_id: "acct_issue_229_missing_secret",
+          account_label: "Issue 229 missing secret"
+        })
+
+      assert {:ok, assignment} = PoolAssignments.create_pool_assignment(pool, identity, %{})
+      assert {:ok, _assignment} = PoolAssignments.activate_pool_assignment(assignment)
+      assert {:ok, %{status: :paused}} = Upstreams.pause_account_for_scope(scope, identity, %{})
+
+      Repo.delete_all(Oban.Job)
+
+      {{result, queries}, log} =
+        ExUnit.CaptureLog.with_log(fn ->
+          capture_repo_queries(fn ->
+            Upstreams.reactivate_account_for_scope(scope, identity, %{})
+          end)
+        end)
+
+      assert {:error,
+              %{
+                code: :upstream_secret_not_routable,
+                message: "upstream access token is missing"
+              }} = result
+
+      refute Enum.any?(queries, &active_pools_query?/1)
+      assert [] = all_enqueued(worker: CatalogSyncWorker)
+      refute log =~ identity.chatgpt_account_id
+      refute log =~ identity.account_label
+    end
+
+    @tag :external_issues_229_231
+    @tag :issue_229
+    test "catalog storage failure is nonfatal and logs only bounded metadata" do
+      Repo.delete_all(Oban.Job)
+      scope = fixture_owner_scope()
+      pool = pool_fixture()
+
+      identity =
+        active_identity_fixture(%{
+          chatgpt_account_id: "acct_issue_229_enqueue_failure",
+          account_label: "Issue 229 enqueue failure"
+        })
+
+      assert {:ok, assignment} = PoolAssignments.create_pool_assignment(pool, identity, %{})
+      assert {:ok, _assignment} = PoolAssignments.activate_pool_assignment(assignment)
+
+      Repo.query!("ALTER TABLE oban_jobs DROP CONSTRAINT positive_max_attempts")
+
+      Repo.query!(
+        "ALTER TABLE oban_jobs ADD CONSTRAINT positive_max_attempts CHECK (max_attempts > 3)"
+      )
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{status: :paused, identity: paused_identity}} =
+                   Upstreams.pause_account_for_scope(scope, identity, %{})
+
+          assert paused_identity.status == "paused"
+        end)
+
+      assert [] = all_enqueued(worker: CatalogSyncWorker)
+      assert [_event] = audit_events("upstream_account.pause", identity.id)
+      assert log =~ "pool_id=#{pool.id}"
+      assert log =~ "trigger_kind=manual"
+      assert log =~ "reason=rollback"
+      refute log =~ identity.chatgpt_account_id
+      refute log =~ identity.account_label
     end
 
     @tag :lifecycle_soft_delete
@@ -12927,6 +13229,90 @@ defmodule CodexPooler.UpstreamsTest do
   defp fixture_owner_scope do
     %{user: user} = bootstrap_owner_fixture()
     Scope.for_user(user, ["instance_owner"])
+  end
+
+  defp insert_lifecycle_assignment!(pool, identity, status, timestamp) do
+    %PoolUpstreamAssignment{
+      pool_id: pool.id,
+      upstream_identity_id: identity.id,
+      assignment_label: "Issue 229 assignment",
+      status: status,
+      health_status: "active",
+      eligibility_status: "eligible",
+      created_at: timestamp,
+      updated_at: timestamp,
+      metadata: %{}
+    }
+    |> Repo.insert!()
+  end
+
+  defp capture_repo_queries(fun) do
+    parent = self()
+    handler_id = "upstreams-repo-query-capture-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and is_binary(metadata[:query]) do
+            send(parent, {handler_id, metadata.query})
+          end
+        end,
+        nil
+      )
+
+    try do
+      result = fun.()
+      {result, drain_repo_queries(handler_id, [])}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_repo_queries(handler_id, queries) do
+    receive do
+      {^handler_id, query} -> drain_repo_queries(handler_id, [query | queries])
+    after
+      0 -> Enum.reverse(queries)
+    end
+  end
+
+  defp insert_query_for?(query, table) do
+    query = String.downcase(query)
+    String.contains?(query, "insert") and String.contains?(query, ~s["#{table}"])
+  end
+
+  defp active_pools_query?(query) do
+    query = String.downcase(query)
+
+    String.contains?(query, "select") and
+      String.contains?(query, ~s[from "pools"]) and
+      String.contains?(query, ~s["status"]) and
+      String.contains?(query, "order by")
+  end
+
+  defp install_upstream_lifecycle_audit_failure_trigger! do
+    Repo.query!("""
+    CREATE FUNCTION pg_temp.reject_upstream_lifecycle_audit() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+      IF NEW.action IN ('upstream_account.pause', 'upstream_account.reactivate') THEN
+        RAISE EXCEPTION 'forced upstream lifecycle audit failure' USING ERRCODE = '23514';
+      END IF;
+
+      RETURN NEW;
+    END
+    $$
+    """)
+
+    Repo.query!("""
+    CREATE TRIGGER reject_upstream_lifecycle_audit
+    BEFORE INSERT ON audit_events
+    FOR EACH ROW EXECUTE FUNCTION pg_temp.reject_upstream_lifecycle_audit()
+    """)
+
+    :ok
   end
 
   defp runtime_secret(label), do: Enum.join(["upstreams", label, "secret", "redacted"], "-")
