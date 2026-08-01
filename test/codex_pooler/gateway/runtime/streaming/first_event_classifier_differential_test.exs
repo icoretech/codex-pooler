@@ -199,29 +199,62 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
     assert :binary.referenced_byte_size(retained) == byte_size(retained)
   end
 
-  @tag timeout: 120_000
-  test "production build buffers residue after an ordinary complete SSE block" do
+  test "production compilation omits test-only gates and buffers ordinary residue" do
+    source = Path.expand("lib/codex_pooler/gateway/runtime/streaming/stream_attempt.ex")
+
+    compile_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "codex-pooler-stream-attempt-prod-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir!(compile_dir)
+    on_exit(fn -> File.rm_rf!(compile_dir) end)
+
+    code_path_args =
+      Enum.flat_map(:code.get_path(), fn code_path ->
+        ["-pa", List.to_string(code_path)]
+      end)
+
+    elixirc = System.find_executable("elixirc") || flunk("elixirc executable not found")
+
+    {compile_output, compile_status} =
+      System.cmd(
+        elixirc,
+        [
+          "-e",
+          "Mix.start(); Mix.env(:prod)",
+          "--ignore-module-conflict",
+          "--warnings-as-errors",
+          "-o",
+          compile_dir
+        ] ++
+          code_path_args ++ [source],
+        env: [{"MIX_ENV", "prod"}],
+        stderr_to_stdout: true
+      )
+
+    assert compile_status == 0, compile_output
+
     script = """
-    alias CodexPooler.Gateway.Runtime.Streaming.StreamAttempt
+    module = CodexPooler.Gateway.Runtime.Streaming.StreamAttempt
+    false = function_exported?(module, :classify_first_event, 4)
 
-    {:buffered, state} =
-      StreamAttempt.classify_first_event("ordinary", StreamAttempt.first_event_state())
-
-    {:buffered, state} = StreamAttempt.classify_first_event("\\n\\nremainder", state)
+    {:buffered, state} = module.classify_first_event("ordinary", module.first_event_state())
+    {:buffered, state} = module.classify_first_event("\\n\\nremainder", state)
 
     true = state.buffer == "ordinary\\n\\nremainder"
     ["remainder"] = state.parser.residue_chunks
     IO.puts("production ordinary residue: ok")
     """
 
+    elixir = System.find_executable("elixir") || flunk("elixir executable not found")
+
     {output, status} =
-      System.cmd("mix", ["run", "--no-start", "-e", script],
-        env: [
-          {"MIX_ENV", "prod"},
-          {"DATABASE_URL", "ecto://postgres:postgres@localhost/codex_pooler_prod_compile"},
-          {"SECRET_KEY_BASE", String.duplicate("s", 64)},
-          {"CODEX_POOLER_UPSTREAM_SECRET_KEY", String.duplicate("u", 32)}
-        ],
+      System.cmd(
+        elixir,
+        code_path_args ++ ["-pa", compile_dir, "-e", script],
+        env: [{"MIX_ENV", "prod"}],
         stderr_to_stdout: true
       )
 

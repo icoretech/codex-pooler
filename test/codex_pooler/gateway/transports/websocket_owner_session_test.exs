@@ -19,6 +19,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPoolerWeb.CodexResponsesSocket
 
+  @pending_terminal_observation_timeout_ms 5_000
   @sentinel "SECRET_SENTINEL_DO_NOT_STORE_123"
 
   setup do
@@ -2137,20 +2138,31 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
   defp await_active_turn_cleared(owner, 0), do: :sys.get_state(owner)
 
-  defp await_pending_terminal_result(owner, attempts \\ 100)
+  defp await_pending_terminal_result(owner) do
+    deadline =
+      System.monotonic_time(:millisecond) + @pending_terminal_observation_timeout_ms
 
-  defp await_pending_terminal_result(owner, attempts) when attempts > 0 do
-    case :sys.get_state(owner) do
+    await_pending_terminal_result_until(owner, deadline)
+  end
+
+  defp await_pending_terminal_result_until(owner, deadline) do
+    state = :sys.get_state(owner)
+
+    case state do
       %{active_turn: %{pending_result: pending_result}} = state when not is_nil(pending_result) ->
         state
 
       _state ->
-        yield_once({:await_pending_terminal_result, owner, attempts})
-        await_pending_terminal_result(owner, attempts - 1)
+        if System.monotonic_time(:millisecond) >= deadline do
+          state
+        else
+          receive do
+          after
+            1 -> await_pending_terminal_result_until(owner, deadline)
+          end
+        end
     end
   end
-
-  defp await_pending_terminal_result(owner, 0), do: :sys.get_state(owner)
 
   defp start_pending_terminal_turn(context, label, owner_opts \\ []) do
     terminal_frame = terminal_frame("response.completed", "resp_#{label}")
