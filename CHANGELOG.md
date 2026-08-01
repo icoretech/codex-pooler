@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.5.11](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.10...codex-pooler-v0.5.11) (2026-08-01)
+
+
+### Features
+
+* **access:** normalize fast policy tier to priority ([6959244](https://github.com/icoretech/codex-pooler/commit/695924492ba6e670896e28d5e8bca05cc5921ad3))
+* **accounting:** price legacy fast tier metadata ([18e6003](https://github.com/icoretech/codex-pooler/commit/18e6003083b85ad1ca0499a47e37cb353b901f2d))
+* **catalog:** import fast pricing updates safely ([565b728](https://github.com/icoretech/codex-pooler/commit/565b7284ac597058e9263a900b427e36a2f4d6af))
+* **docs:** generate the public dashboard from code ([6185773](https://github.com/icoretech/codex-pooler/commit/6185773fd9901b6e2a8a81994998b9035d070602))
+* **gateway:** canonicalize fast service tier requests ([335e469](https://github.com/icoretech/codex-pooler/commit/335e469b754eff1a9ab269a04c972a5a37c7213e))
+* **observability:** add bounded response id previews ([1fc72c8](https://github.com/icoretech/codex-pooler/commit/1fc72c84ffc07880f6b252bceb0f1ce1d78a2ceb))
+* **openai:** accept fast service tier alias ([3d07b60](https://github.com/icoretech/codex-pooler/commit/3d07b60063805c8ddf93b9a72fad484d9496c2bf))
+* **routing:** match equivalent fast and priority tiers ([65907f7](https://github.com/icoretech/codex-pooler/commit/65907f7eff011cc414976ba271133c44ace2a002))
+
+
+### Bug Fixes
+
+* **access:** reject non-binary service tiers ([c74b941](https://github.com/icoretech/codex-pooler/commit/c74b941dd67e2b4eab767e261aa746e329530dee))
+* **accounting:** resolve mixed-case pricing identifiers ([1d4a7ac](https://github.com/icoretech/codex-pooler/commit/1d4a7ac971280e650bf01b241f21efb628a5741b))
+* **admin:** align pending relink flow input with its contract ([5615825](https://github.com/icoretech/codex-pooler/commit/5615825ac40ae0798863a5b4dbdddf055c1f8f29))
+* **admin:** share fast tier request log display ([43b8dc7](https://github.com/icoretech/codex-pooler/commit/43b8dc7c9f6c1d266f02ac03b167aa2cfb71c59b))
+* **catalog:** bound Req adapter errors ([acb81b4](https://github.com/icoretech/codex-pooler/commit/acb81b4b7eedbc79e58b66c7a53cf0ffb8180f68))
+* **catalog:** reject incomplete fast pricing aliases ([d87cee0](https://github.com/icoretech/codex-pooler/commit/d87cee08cdd3b6cba13200678020ae8520e6e549))
+* **catalog:** require matching pricing semantic keys ([f93b6e5](https://github.com/icoretech/codex-pooler/commit/f93b6e516a8322e40fd17c9a128514949ca40337))
+* **catalog:** update admin pricing import fixture ([911e393](https://github.com/icoretech/codex-pooler/commit/911e393be29d05c0d19403e475024bf7785584f3))
+* **deps:** update dependency daisyui to v5.7.8 ([#224](https://github.com/icoretech/codex-pooler/issues/224)) ([30f8b65](https://github.com/icoretech/codex-pooler/commit/30f8b650afd9c07c7e63fa00ad11320714a2c978))
+* **deps:** update dependency daisyui to v5.7.9 ([#233](https://github.com/icoretech/codex-pooler/issues/233)) ([483d671](https://github.com/icoretech/codex-pooler/commit/483d67113cc912cd1fd4692e0b6b26edcc6aab34))
+* **deps:** update Swoosh, Phoenix LiveReload, and Astro ([d1a6a0d](https://github.com/icoretech/codex-pooler/commit/d1a6a0d03173b22ca58776ad62ca98f8ead04676))
+* **docs:** remove inactive dashboard controls ([8889890](https://github.com/icoretech/codex-pooler/commit/8889890d74e2de1af3996da3c43a3df68d1feb79))
+* **gateway:** contain terminal-only owner replies and restore formatting ([d852123](https://github.com/icoretech/codex-pooler/commit/d852123126d1c4725281763ccced6a9f48462161))
+* **gateway:** pin native chunk attribution and drop its dead clause ([c2795ae](https://github.com/icoretech/codex-pooler/commit/c2795ae9f4335249bbd8ee1f9384de0bf6c38fa5))
+* **gateway:** preserve non-fast backend service tiers ([66ae666](https://github.com/icoretech/codex-pooler/commit/66ae666975895bbd8add99e524ccde2f8de83cbf))
+* **gateway:** settle malformed websocket owner replies ([533da1c](https://github.com/icoretech/codex-pooler/commit/533da1cef4d07b8a2c3bda93f31242f235f4476c))
+* **gateway:** validate owner replies against the whole contract ([a7d6d49](https://github.com/icoretech/codex-pooler/commit/a7d6d49d7d71c1c02bdee5a85940661d021b672e))
+* **gateway:** validate remote websocket owner replies ([f52e6a1](https://github.com/icoretech/codex-pooler/commit/f52e6a12d64ccb45ced8156babc5d2776e72db03))
+* **observability:** correct websocket diagnostic correlator and allowlist anchors ([265c176](https://github.com/icoretech/codex-pooler/commit/265c1764cf9c041f6266259848c5dcc0ffa2c82f))
+* **observability:** give both containment boundaries one classifying key ([da3b217](https://github.com/icoretech/codex-pooler/commit/da3b217883183926a048433eaa4558d545093277))
+* **observability:** join the containment warning to its turn ([5c8d6ad](https://github.com/icoretech/codex-pooler/commit/5c8d6ada65c26631b2a1e29ae7889cfb6182d9c6))
+* **observability:** name the debug preview for the id it actually shows ([18b7f87](https://github.com/icoretech/codex-pooler/commit/18b7f878ca167be7ff7bcc14fd2da4b6af1fb371))
+* **observability:** preserve websocket failure diagnostics ([359669f](https://github.com/icoretech/codex-pooler/commit/359669f6179738cdf0da7cc09c39a50ee939ee68))
+* **observability:** render sanitized unknown websocket codes ([e5c148b](https://github.com/icoretech/codex-pooler/commit/e5c148b3ebaf035ab92e3f3ef38138ce41a785ff))
+
 ## [0.5.10](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.9...codex-pooler-v0.5.10) (2026-07-31)
 
 
