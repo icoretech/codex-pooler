@@ -135,19 +135,19 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
 
   defp resolve_unique_conflict(changeset, attrs, inserted) do
     if named_unique_conflict?(changeset) do
-      case reload_identity(attrs) do
-        [snapshot] ->
-          if semantic_equal?(persisted_semantics(snapshot), attrs_semantics(attrs)),
-            do: inserted,
-            else: rollback_conflict()
-
-        _rows ->
-          rollback_conflict()
-      end
+      resolve_reloaded_identity(reload_identity(attrs), attrs, inserted)
     else
       rollback_conflict()
     end
   end
+
+  defp resolve_reloaded_identity([snapshot], attrs, inserted) do
+    if semantic_equal?(persisted_semantics(snapshot), attrs_semantics(attrs)),
+      do: inserted,
+      else: rollback_conflict()
+  end
+
+  defp resolve_reloaded_identity(_rows, _attrs, _inserted), do: rollback_conflict()
 
   defp reload_identity(attrs) do
     model_identifier = String.downcase(attrs.model_identifier)

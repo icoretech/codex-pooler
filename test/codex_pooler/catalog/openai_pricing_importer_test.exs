@@ -784,17 +784,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
       Task.async(fn ->
         receive do
           {:start_pricing_winner, ^barrier} ->
-            Sandbox.unboxed_run(Repo, fn ->
-              Repo.checkout(fn ->
-                Process.put({__MODULE__, barrier}, true)
-
-                try do
-                  OpenAIPricingImporter.import_file(first_path)
-                after
-                  Process.delete({__MODULE__, barrier})
-                end
-              end)
-            end)
+            run_pricing_winner(first_path, barrier)
         end
       end)
 
@@ -827,6 +817,20 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
       shutdown_task(first)
       shutdown_task(Process.delete(second_holder))
     end
+  end
+
+  defp run_pricing_winner(path, barrier) do
+    Sandbox.unboxed_run(Repo, fn ->
+      Repo.checkout(fn ->
+        Process.put({__MODULE__, barrier}, true)
+
+        try do
+          OpenAIPricingImporter.import_file(path)
+        after
+          Process.delete({__MODULE__, barrier})
+        end
+      end)
+    end)
   end
 
   defp assert_unique_insert_wait!(backend_pid, deadline \\ nil) do

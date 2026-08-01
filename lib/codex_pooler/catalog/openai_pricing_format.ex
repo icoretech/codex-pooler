@@ -509,12 +509,16 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
           coalesce_alias_tiers(acc, fast_rows, priority_rows)
 
         _non_alias ->
-          tier_rows
-          |> Enum.group_by(&row_identity/1)
-          |> Enum.reduce(acc, fn {_identity, identity_rows}, inner_acc ->
-            coalesce_rows(inner_acc, identity_rows)
-          end)
+          coalesce_identity_rows(acc, tier_rows)
       end
+    end)
+  end
+
+  defp coalesce_identity_rows(state, rows) do
+    rows
+    |> Enum.group_by(&row_identity/1)
+    |> Enum.reduce(state, fn {_identity, identity_rows}, acc ->
+      coalesce_rows(acc, identity_rows)
     end)
   end
 
@@ -616,12 +620,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
     keys = Enum.map(values, &elem(&1, 0))
 
     if length(keys) == MapSet.size(MapSet.new(keys)) do
-      Enum.reduce_while(values, {:ok, %{}}, fn {key, value}, {:ok, acc} ->
-        case ordered_to_maps(value) do
-          {:ok, converted} -> {:cont, {:ok, Map.put(acc, key, converted)}}
-          error -> {:halt, error}
-        end
-      end)
+      Enum.reduce_while(values, {:ok, %{}}, &convert_ordered_entry/2)
     else
       {:error, :duplicate_key}
     end
@@ -641,6 +640,13 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
   end
 
   defp ordered_to_maps(value), do: {:ok, value}
+
+  defp convert_ordered_entry({key, value}, {:ok, acc}) do
+    case ordered_to_maps(value) do
+      {:ok, converted} -> {:cont, {:ok, Map.put(acc, key, converted)}}
+      error -> {:halt, error}
+    end
+  end
 
   defp validate_model_identity(state, normalized_key, normalized_model, path) do
     if not is_nil(normalized_key) and normalized_key == normalized_model do
