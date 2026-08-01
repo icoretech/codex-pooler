@@ -46,6 +46,15 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.OpenAICompatibility do
     }
   end
 
+  @spec translated_responses_surface?(t()) :: boolean()
+  def translated_responses_surface?(%__MODULE__{
+        source_endpoint: source_endpoint,
+        translated_endpoint: "/backend-api/codex/responses"
+      }),
+      do: not is_nil(source_endpoint)
+
+  def translated_responses_surface?(%__MODULE__{}), do: false
+
   @spec metadata(t()) :: map()
   def metadata(%__MODULE__{} = compatibility) do
     metadata =

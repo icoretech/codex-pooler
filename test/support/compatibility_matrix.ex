@@ -74,7 +74,10 @@ defmodule CodexPooler.CompatibilityMatrix do
         anchor_order: ["created_at", "assignment_id"],
         selection: "partition_containing_minimum_anchor",
         api_key_policy_stage: "post_selection_admission_and_projection",
-        new_turn_capacity: "selected_partition_only",
+        new_turn_capacity: %{
+          backend_codex_catalog_driven: "selected_partition_only",
+          translated_openai_responses: "all_valid_canonical_assignments"
+        },
         pinned_continuation: "valid_canonical_hard_pin_may_cross_partition",
         selected_partition_exhaustion: %{
           accounting_disposition: "zero_work",
@@ -87,7 +90,7 @@ defmodule CodexPooler.CompatibilityMatrix do
         }
       },
       contract:
-        "backend model aliases return the same policy-visible effective catalog body and deterministic weak ETag from the canonical pristine-source partition whose anchor is the minimum created_at plus assignment id; API-key policy decides admission and projection only after canonical selection and never chooses or rewrites the partition; divergent sources are excluded from new-turn capacity while valid canonical hard pins may continue on their pinned partition; selected-partition exhaustion and malformed-source hard pins fail before accounting or upstream work; cache coherence across processes or replicas is eventual after a successful Responses token is observed"
+        "backend model aliases return the same policy-visible effective catalog body and deterministic weak ETag from the canonical pristine-source partition whose anchor is the minimum created_at plus assignment id; API-key policy decides admission and projection only after canonical selection and never chooses or rewrites the partition; backend Codex catalog-driven new turns use the selected partition, while translated OpenAI Responses capacity includes all valid canonical assignments after concrete request compatibility; valid canonical hard pins may continue on their pinned partition; selected-partition exhaustion and malformed-source hard pins fail before accounting or upstream work; cache coherence across processes or replicas is eventual after a successful Responses token is observed"
     },
     %{
       slug: :backend_responses_etag,

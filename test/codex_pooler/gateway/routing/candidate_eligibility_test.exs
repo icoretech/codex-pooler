@@ -427,37 +427,43 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
     end
   end
 
-  describe "filter_selected_partition_candidates/3" do
-    test "keeps selected partition assignments and an otherwise eligible continuity assignment" do
+  describe "filter_allowed_canonical_candidates/3" do
+    @tag :external_issues_229_231
+    @tag :issue_231
+    test "keeps allowed canonical and continuity assignments in input order" do
       selected = candidate("assignment-selected")
       pinned = candidate("assignment-pinned")
       divergent = candidate("assignment-divergent")
 
       assert {:ok, filtered} =
-               CandidateEligibility.filter_selected_partition_candidates(
+               CandidateEligibility.filter_allowed_canonical_candidates(
                  [selected, pinned, divergent],
-                 ["assignment-selected"],
-                 ["assignment-pinned"]
+                 ["assignment-pinned"],
+                 ["assignment-selected"]
                )
 
       assert candidate_ids(filtered) == ["assignment-selected", "assignment-pinned"]
     end
 
-    test "restricts an unpinned turn to the selected partition" do
+    @tag :external_issues_229_231
+    @tag :issue_231
+    test "restricts an unpinned backend Codex catalog-driven turn to the selected partition" do
       selected = candidate("assignment-selected")
       divergent = candidate("assignment-divergent")
 
       assert {:ok, [^selected]} =
-               CandidateEligibility.filter_selected_partition_candidates(
+               CandidateEligibility.filter_allowed_canonical_candidates(
                  [selected, divergent],
                  ["assignment-selected"],
                  []
                )
     end
 
+    @tag :external_issues_229_231
+    @tag :issue_231
     test "returns an empty shortlist when neither a selected nor continuity assignment remains" do
       assert {:ok, []} =
-               CandidateEligibility.filter_selected_partition_candidates(
+               CandidateEligibility.filter_allowed_canonical_candidates(
                  [candidate("assignment-divergent")],
                  [],
                  []

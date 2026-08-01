@@ -17,11 +17,20 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     ]
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
-    only: [auth: 2, gateway_setup: 1, gateway_setup: 2, start_upstream: 1]
+    only: [
+      auth: 2,
+      gateway_setup: 1,
+      gateway_setup: 2,
+      gateway_upstream: 4,
+      prime_weekly_exhausted_quota!: 1,
+      prime_weekly_probe_quota!: 1,
+      start_upstream: 1
+    ]
 
   alias CodexPooler.Accounting.{Attempt, Request, RequestLogs}
   alias CodexPooler.Accounting.LedgerEntry
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Metadata.CanonicalModelSource
 
   alias CodexPooler.Gateway.Persistence.{
     BridgeDemotion,
@@ -199,6 +208,73 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "succeeded"
+  end
+
+  @tag :external_issues_229_231
+  @tag :issue_231
+  test "POST /v1/chat/completions uses a divergent healthy canonical alternate", %{conn: conn} do
+    selected_upstream =
+      start_upstream(FakeUpstream.json_response(%{"id" => "selected_must_not_dispatch"}))
+
+    alternate_upstream = start_upstream(issue_231_completed_chat_response())
+
+    {setup, alternate, source_proof} =
+      issue_231_chat_gateway_setup(selected_upstream, alternate_upstream)
+
+    assert source_proof.selected_digest != source_proof.alternate_digest
+
+    response =
+      conn
+      |> auth(setup)
+      |> post(
+        "/v1/chat/completions",
+        setup
+        |> chat_payload()
+        |> Map.put("service_tier", "priority")
+        |> Map.put("reasoning_effort", "high")
+        |> put_in(["messages", Access.at(1), "content"], "issue-231-private-chat-input")
+      )
+
+    assert %{"id" => "resp_issue_231_chat", "object" => "chat.completion"} =
+             json_response(response, 200)
+
+    assert FakeUpstream.count(selected_upstream) == 0
+    assert [captured] = FakeUpstream.requests(alternate_upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["model"] == setup.model.upstream_model_id
+    assert captured.json["service_tier"] == "priority"
+    assert get_in(captured.json, ["reasoning", "effort"]) == "high"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.pool_id == setup.pool.id
+    assert request.api_key_id == setup.api_key.id
+    assert request.model_id == setup.model.id
+    assert request.status == "succeeded"
+    assert request.endpoint == "/backend-api/codex/responses"
+
+    assert get_in(request.request_metadata, ["openai_compatibility", "source_endpoint"]) ==
+             "/v1/chat/completions"
+
+    assert get_in(request.request_metadata, ["openai_compatibility", "translated_endpoint"]) ==
+             "/backend-api/codex/responses"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+    assert attempt.pool_upstream_assignment_id == alternate.assignment.id
+    assert attempt.upstream_identity_id == alternate.identity.id
+    assert attempt.model_id == setup.model.id
+
+    metadata_text =
+      inspect({request.request_metadata, attempt.response_metadata, RequestLogs.list(setup.pool)})
+
+    refute metadata_text =~ "issue-231-private-chat-input"
+    refute metadata_text =~ "supported_reasoning_levels"
+    refute metadata_text =~ "default_reasoning_level"
+    refute metadata_text =~ "default_service_tier"
+    refute metadata_text =~ "used_percent"
+    refute metadata_text =~ setup.authorization
+    refute metadata_text =~ setup.raw_key
+    refute metadata_text =~ "upstream-token-issue-231"
   end
 
   @tag :model_serving_modes
@@ -1993,6 +2069,78 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
         %{"role" => "user", "content" => "Synthetic user"}
       ]
     }
+  end
+
+  defp issue_231_chat_gateway_setup(selected_upstream, alternate_upstream) do
+    setup = gateway_setup(selected_upstream, quota?: false)
+
+    alternate =
+      gateway_upstream(
+        setup.pool,
+        alternate_upstream,
+        "upstream-token-issue-231-chat-alternate",
+        compact?: false
+      )
+
+    prime_weekly_exhausted_quota!(setup.identity)
+    prime_weekly_probe_quota!(alternate.identity)
+
+    source = get_in(setup.model.metadata, ["source_assignment_models", setup.assignment.id])
+
+    selected_source =
+      source
+      |> Map.put("service_tiers", [%{"id" => "priority"}])
+      |> Map.put("default_reasoning_level", "medium")
+      |> Map.put("default_service_tier", "default")
+
+    alternate_source =
+      selected_source
+      |> Map.put("default_reasoning_level", "high")
+      |> Map.put("default_service_tier", "priority")
+
+    metadata =
+      setup.model.metadata
+      |> Map.put("source_assignment_ids", [setup.assignment.id, alternate.assignment.id])
+      |> Map.put("source_assignment_models", %{
+        setup.assignment.id => selected_source,
+        alternate.assignment.id => alternate_source
+      })
+
+    model =
+      setup.model
+      |> Ecto.Changeset.change(%{source_assignment_count: 2, metadata: metadata})
+      |> Repo.update!()
+
+    {:ok, selected_canonical} = CanonicalModelSource.canonical_source(selected_source)
+    {:ok, alternate_canonical} = CanonicalModelSource.canonical_source(alternate_source)
+
+    {%{setup | model: model}, alternate,
+     %{
+       selected_digest: selected_canonical.digest,
+       alternate_digest: alternate_canonical.digest
+     }}
+  end
+
+  defp issue_231_completed_chat_response do
+    FakeUpstream.sse_stream([
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{
+           "id" => "resp_issue_231_chat",
+           "status" => "completed",
+           "model" => "provider-gpt-test-model",
+           "service_tier" => "priority",
+           "output" => [
+             %{
+               "type" => "message",
+               "content" => [%{"type" => "output_text", "text" => "synthetic chat answer"}]
+             }
+           ],
+           "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+         }
+       }}
+    ])
   end
 
   defp put_chat_model_serving_mode!(setup, mode) do

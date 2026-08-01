@@ -21,7 +21,8 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert translated.contract =~ "preserve literal provider service_tier output"
     end
 
-    test "makes backend model catalog ETag derivation machine-readable" do
+    @tag :external_issues_229_231
+    test "makes backend model catalog ETag derivation and surface capacity machine-readable" do
       feature = CompatibilityMatrix.by_slug!(:backend_models_etag)
       fixture = CompatibilityMatrix.fixture!(:backend_models_etag)
 
@@ -40,6 +41,20 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                aliases_share_exact_body_and_token: true,
                cache_coherence: "eventual_after_successful_responses_token"
              }
+
+      assert feature.canonical_partition.new_turn_capacity == %{
+               backend_codex_catalog_driven: "selected_partition_only",
+               translated_openai_responses: "all_valid_canonical_assignments"
+             }
+
+      assert feature.contract =~
+               "same policy-visible effective catalog body and deterministic weak ETag"
+
+      assert feature.contract =~
+               "backend Codex catalog-driven new turns use the selected partition"
+
+      assert feature.contract =~
+               "translated OpenAI Responses capacity includes all valid canonical assignments"
     end
 
     test "pins exact backend Responses catalog header equality and exclusions" do

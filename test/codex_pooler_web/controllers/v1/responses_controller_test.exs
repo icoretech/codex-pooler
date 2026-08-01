@@ -27,6 +27,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       pricing_config: 1,
       pricing_snapshot!: 2,
       prime_routing_quota!: 1,
+      prime_weekly_exhausted_quota!: 1,
+      prime_weekly_probe_quota!: 1,
       public_websocket_receive_close!: 3,
       public_websocket_receive_text!: 3,
       public_websocket_send_text!: 4,
@@ -43,6 +45,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   alias CodexPooler.Accounting.{Attempt, DailyRollup, LedgerEntry, Request, RequestLogs}
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Metadata.CanonicalModelSource
   alias CodexPooler.Gateway.OpenAICompatibility.Responses
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -1393,6 +1396,166 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert log.token_counts.total_tokens == 52
     refute Map.has_key?(log.token_counts, :input_tokens_details)
     refute Map.has_key?(log.token_counts, :output_tokens_details)
+  end
+
+  @tag :external_issues_229_231
+  @tag :issue_231
+  test "POST /v1/responses uses a divergent healthy canonical alternate for JSON and SSE", %{
+    conn: conn
+  } do
+    for stream? <- [false, true] do
+      selected_upstream =
+        start_upstream(FakeUpstream.json_response(%{"id" => "selected_must_not_dispatch"}))
+
+      alternate_upstream =
+        start_upstream(issue_231_completed_response("resp_issue_231_responses_#{stream?}"))
+
+      {setup, alternate, source_proof} =
+        issue_231_gateway_setup(selected_upstream, alternate_upstream, divergent?: true)
+
+      assert source_proof.selected_digest != source_proof.alternate_digest
+
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "issue-231-private-responses-input",
+          "stream" => stream?,
+          "service_tier" => "priority",
+          "reasoning" => %{"effort" => "high"}
+        })
+
+      if stream? do
+        assert response.status == 200
+        assert [content_type] = get_resp_header(response, "content-type")
+        assert content_type =~ "text/event-stream"
+        assert response.resp_body =~ "response.completed"
+        assert response.resp_body =~ "resp_issue_231_responses_true"
+      else
+        assert %{"id" => "resp_issue_231_responses_false", "object" => "response"} =
+                 json_response(response, 200)
+      end
+
+      assert FakeUpstream.count(selected_upstream) == 0
+      assert [captured] = FakeUpstream.requests(alternate_upstream)
+      assert captured.path == "/backend-api/codex/responses"
+      assert captured.json["model"] == setup.model.upstream_model_id
+      assert captured.json["service_tier"] == "priority"
+      assert get_in(captured.json, ["reasoning", "effort"]) == "high"
+
+      assert_issue_231_successful_accounting!(setup, alternate, "/v1/responses")
+    end
+  end
+
+  @tag :external_issues_229_231
+  @tag :issue_231
+  test "POST /v1/responses keeps identical canonical sources eligible under weekly quota", %{
+    conn: conn
+  } do
+    selected_upstream =
+      start_upstream(FakeUpstream.json_response(%{"id" => "selected_must_not_dispatch"}))
+
+    alternate_upstream =
+      start_upstream(issue_231_completed_response("resp_issue_231_identical_control"))
+
+    {setup, alternate, source_proof} =
+      issue_231_gateway_setup(selected_upstream, alternate_upstream, divergent?: false)
+
+    assert source_proof.selected_digest == source_proof.alternate_digest
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "issue-231-private-identical-control",
+        "service_tier" => "priority",
+        "reasoning" => %{"effort" => "high"}
+      })
+
+    assert %{"id" => "resp_issue_231_identical_control"} = json_response(response, 200)
+    assert FakeUpstream.count(selected_upstream) == 0
+    assert FakeUpstream.count(alternate_upstream) == 1
+    assert_issue_231_successful_accounting!(setup, alternate, "/v1/responses")
+  end
+
+  @tag :external_issues_229_231
+  @tag :issue_231
+  @tag :issue_231_all_exhausted
+  test "POST /v1/responses rejects all divergent weekly-exhausted candidates without dispatch", %{
+    conn: conn
+  } do
+    selected_upstream =
+      start_upstream(FakeUpstream.json_response(%{"id" => "selected_must_not_dispatch"}))
+
+    alternate_upstream =
+      start_upstream(FakeUpstream.json_response(%{"id" => "alternate_must_not_dispatch"}))
+
+    {setup, alternate, source_proof} =
+      issue_231_gateway_setup(selected_upstream, alternate_upstream, divergent?: true)
+
+    assert source_proof.selected_digest != source_proof.alternate_digest
+
+    Repo.delete_all(
+      from(window in CodexPooler.Upstreams.Quota.AccountQuotaWindow,
+        where: window.upstream_identity_id == ^alternate.identity.id
+      )
+    )
+
+    prime_weekly_exhausted_quota!(alternate.identity)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "issue-231-private-all-exhausted-input",
+        "service_tier" => "priority",
+        "reasoning" => %{"effort" => "high"}
+      })
+
+    assert %{
+             "error" => %{
+               "code" => "quota_exhausted",
+               "message" => "upstream request failed",
+               "type" => "server_error"
+             }
+           } = json_response(response, 503)
+
+    assert FakeUpstream.count(selected_upstream) == 0
+    assert FakeUpstream.count(alternate_upstream) == 0
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.pool_id == setup.pool.id
+    assert request.api_key_id == setup.api_key.id
+    assert request.model_id == setup.model.id
+    assert request.endpoint == "/backend-api/codex/responses"
+    assert request.status == "rejected"
+    assert request.last_error_code == "quota_exhausted"
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
+
+    exclusions = request.request_metadata["candidate_exclusions"]
+
+    assert MapSet.new(exclusions, fn exclusion ->
+             {exclusion["pool_upstream_assignment_id"], exclusion["upstream_identity_id"]}
+           end) ==
+             MapSet.new([
+               {setup.assignment.id, setup.identity.id},
+               {alternate.assignment.id, alternate.identity.id}
+             ])
+
+    assert Enum.all?(exclusions, fn exclusion ->
+             exclusion["reasons"]
+             |> hd()
+             |> Map.fetch!("reason_codes") == ["exhausted"]
+           end)
+
+    assert_issue_231_private_metadata!(
+      {request.request_metadata, RequestLogs.list(setup.pool)},
+      setup
+    )
   end
 
   test "POST /v1/responses rejects invalid service tiers before dispatch", %{conn: conn} do
@@ -7956,6 +8119,120 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       |> Repo.update!()
 
     %{setup | model: model}
+  end
+
+  defp issue_231_gateway_setup(selected_upstream, alternate_upstream, opts) do
+    setup = gateway_setup(selected_upstream, quota?: false)
+
+    alternate =
+      gateway_upstream(
+        setup.pool,
+        alternate_upstream,
+        "upstream-token-issue-231-alternate",
+        compact?: false
+      )
+
+    prime_weekly_exhausted_quota!(setup.identity)
+    prime_weekly_probe_quota!(alternate.identity)
+
+    source = get_in(setup.model.metadata, ["source_assignment_models", setup.assignment.id])
+
+    selected_source =
+      source
+      |> Map.put("service_tiers", [%{"id" => "priority"}])
+      |> Map.put("default_reasoning_level", "medium")
+      |> Map.put("default_service_tier", "default")
+
+    alternate_source =
+      if Keyword.fetch!(opts, :divergent?) do
+        selected_source
+        |> Map.put("default_reasoning_level", "high")
+        |> Map.put("default_service_tier", "priority")
+      else
+        selected_source
+      end
+
+    metadata =
+      setup.model.metadata
+      |> Map.put("source_assignment_ids", [setup.assignment.id, alternate.assignment.id])
+      |> Map.put("source_assignment_models", %{
+        setup.assignment.id => selected_source,
+        alternate.assignment.id => alternate_source
+      })
+
+    model =
+      setup.model
+      |> Ecto.Changeset.change(%{source_assignment_count: 2, metadata: metadata})
+      |> Repo.update!()
+
+    {:ok, selected_canonical} = CanonicalModelSource.canonical_source(selected_source)
+    {:ok, alternate_canonical} = CanonicalModelSource.canonical_source(alternate_source)
+
+    {%{setup | model: model}, alternate,
+     %{
+       selected_digest: selected_canonical.digest,
+       alternate_digest: alternate_canonical.digest
+     }}
+  end
+
+  defp issue_231_completed_response(response_id) do
+    FakeUpstream.sse_stream([
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{
+           "id" => response_id,
+           "status" => "completed",
+           "model" => "provider-gpt-test-model",
+           "service_tier" => "priority",
+           "output" => [],
+           "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+         }
+       }}
+    ])
+  end
+
+  defp assert_issue_231_successful_accounting!(setup, alternate, source_endpoint) do
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.pool_id == setup.pool.id
+    assert request.api_key_id == setup.api_key.id
+    assert request.model_id == setup.model.id
+    assert request.status == "succeeded"
+    assert request.endpoint == "/backend-api/codex/responses"
+    assert_issue_231_origin_metadata!(request, source_endpoint)
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+    assert attempt.pool_upstream_assignment_id == alternate.assignment.id
+    assert attempt.upstream_identity_id == alternate.identity.id
+    assert attempt.model_id == setup.model.id
+
+    assert_issue_231_private_metadata!(
+      {request.request_metadata, attempt.response_metadata, RequestLogs.list(setup.pool)},
+      setup
+    )
+  end
+
+  defp assert_issue_231_origin_metadata!(request, source_endpoint) do
+    assert get_in(request.request_metadata, ["openai_compatibility", "surface"]) == "openai_v1"
+
+    assert get_in(request.request_metadata, ["openai_compatibility", "source_endpoint"]) ==
+             source_endpoint
+
+    assert get_in(request.request_metadata, ["openai_compatibility", "translated_endpoint"]) ==
+             "/backend-api/codex/responses"
+  end
+
+  defp assert_issue_231_private_metadata!(metadata, setup) do
+    metadata_text = inspect(metadata)
+    refute metadata_text =~ "issue-231-private-"
+    refute metadata_text =~ "supported_reasoning_levels"
+    refute metadata_text =~ "default_reasoning_level"
+    refute metadata_text =~ "default_service_tier"
+    refute metadata_text =~ "used_percent"
+    refute metadata_text =~ setup.authorization
+    refute metadata_text =~ setup.raw_key
+    refute metadata_text =~ "upstream-token-issue-231"
   end
 
   defp setup_runtime_ingress_override(%OperationalSettings{} = settings) do
