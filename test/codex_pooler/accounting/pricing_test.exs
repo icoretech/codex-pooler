@@ -99,6 +99,135 @@ defmodule CodexPooler.Accounting.PricingTest do
       assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(800))
     end
 
+    test "historical mixed-case identifiers resolve across exact and suffix availability paths" do
+      setup = accounting_setup()
+      unique = System.unique_integer([:positive])
+      timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      cases = [
+        %{path: :exact, availability: :priced},
+        %{path: :exact, availability: :unavailable},
+        %{path: :suffix, availability: :priced},
+        %{path: :suffix, availability: :unavailable}
+      ]
+
+      Enum.each(cases, fn test_case ->
+        base_identifier =
+          "gpt-legacy-case-#{test_case.path}-#{test_case.availability}-#{unique}"
+
+        requested_identifier =
+          if test_case.path == :suffix, do: base_identifier <> "-spark", else: base_identifier
+
+        model =
+          model_fixture(setup.pool, %{
+            exposed_model_id: requested_identifier,
+            upstream_model_id: requested_identifier,
+            pricing_ref: requested_identifier
+          })
+
+        pricing_snapshot_fixture(setup.pricing, %{
+          model_identifier: base_identifier,
+          price_version: "older-canonical-#{test_case.path}-#{test_case.availability}",
+          config: pricing_config(%{"service_tier" => "priority"}),
+          effective_at: DateTime.add(timestamp, -120, :second),
+          captured_at: DateTime.add(timestamp, -120, :second)
+        })
+
+        historical_config =
+          case test_case.availability do
+            :priced ->
+              pricing_config(%{"service_tier" => "fast"})
+
+            :unavailable ->
+              pricing_config(%{
+                "service_tier" => "fast",
+                "availability" => "unavailable"
+              })
+          end
+
+        historical_attrs = %{
+          model_identifier: String.upcase(base_identifier),
+          price_version: "newer-historical-#{test_case.path}-#{test_case.availability}",
+          config: historical_config,
+          effective_at: DateTime.add(timestamp, -60, :second),
+          captured_at: DateTime.add(timestamp, -60, :second)
+        }
+
+        historical_attrs =
+          if test_case.availability == :unavailable do
+            Map.merge(historical_attrs, %{
+              input_token_micros: nil,
+              cached_input_token_micros: nil,
+              output_token_micros: nil,
+              reasoning_token_micros: nil,
+              request_base_micros: nil
+            })
+          else
+            historical_attrs
+          end
+
+        historical = pricing_snapshot_fixture(setup.pricing, historical_attrs)
+
+        assert {:ok, reserved} =
+                 Accounting.reserve(
+                   setup.auth,
+                   model,
+                   %{"model" => requested_identifier, "service_tier" => "priority"},
+                   %{
+                     correlation_id:
+                       "corr-legacy-case-#{test_case.path}-#{test_case.availability}-#{unique}"
+                   }
+                 )
+
+        case test_case.availability do
+          :priced ->
+            assert reserved.pricing_status == "priced"
+            assert reserved.pricing_snapshot.id == historical.id
+
+          :unavailable ->
+            assert reserved.pricing_status == "unpriced_unavailable_price_bucket"
+            assert is_nil(reserved.pricing_snapshot)
+        end
+
+        if test_case.path == :suffix do
+          assert reserved.reservation.details["alias"] == %{
+                   "source" => "suffix_inference",
+                   "from" => requested_identifier,
+                   "to" => String.upcase(base_identifier)
+                 }
+        else
+          refute Map.has_key?(reserved.reservation.details, "alias")
+        end
+      end)
+
+      missing_tier_identifier = "gpt-legacy-case-missing-tier-#{unique}"
+
+      missing_tier_model =
+        model_fixture(setup.pool, %{
+          exposed_model_id: missing_tier_identifier,
+          upstream_model_id: missing_tier_identifier,
+          pricing_ref: missing_tier_identifier
+        })
+
+      pricing_snapshot_fixture(setup.pricing, %{
+        model_identifier: String.upcase(missing_tier_identifier),
+        price_version: "historical-missing-tier",
+        config: pricing_config(%{"service_tier" => "standard"}),
+        effective_at: DateTime.add(timestamp, -60, :second),
+        captured_at: DateTime.add(timestamp, -60, :second)
+      })
+
+      assert {:ok, missing_tier_reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 missing_tier_model,
+                 %{"model" => missing_tier_identifier, "service_tier" => "flex"},
+                 %{correlation_id: "corr-legacy-case-missing-tier-#{unique}"}
+               )
+
+      assert missing_tier_reserved.pricing_status == "unpriced_missing_tier"
+    end
+
     test "models without pricing refs use upstream model pricing" do
       setup = accounting_setup()
 

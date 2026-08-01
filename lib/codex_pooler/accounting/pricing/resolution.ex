@@ -386,13 +386,15 @@ defmodule CodexPooler.Accounting.PricingResolution do
   @spec latest_pricing_snapshot([String.t()], String.t(), String.t(), DateTime.t()) ::
           PricingSnapshot.t() | nil
   defp latest_pricing_snapshot(identifiers, service_tier, price_bucket, timestamp) do
+    normalized_identifiers = normalize_pricing_identifiers(identifiers)
     service_tier_aliases = ServiceTier.pricing_aliases(service_tier)
     canonical_service_tier = ServiceTier.canonicalize(service_tier)
 
     Repo.one(
       from ps in PricingSnapshot,
         where:
-          ps.model_identifier in ^identifiers and ps.effective_at <= ^timestamp and
+          fragment("lower(?)", ps.model_identifier) in ^normalized_identifiers and
+            ps.effective_at <= ^timestamp and
             fragment("?->>'service_tier'", ps.config) in ^service_tier_aliases and
             fragment("?->>'price_bucket'", ps.config) == ^price_bucket and
             fragment("?->>'pricing_type'", ps.config) == "per_1m_tokens",
@@ -502,19 +504,21 @@ defmodule CodexPooler.Accounting.PricingResolution do
           DateTime.t()
         ) :: snapshots_by_identifier()
   defp latest_pricing_snapshots_by_identifier(identifiers, service_tier, price_bucket, timestamp) do
+    normalized_identifiers = normalize_pricing_identifiers(identifiers)
     service_tier_aliases = ServiceTier.pricing_aliases(service_tier)
     canonical_service_tier = ServiceTier.canonicalize(service_tier)
 
     PricingSnapshot
     |> where(
       [ps],
-      ps.model_identifier in ^identifiers and ps.effective_at <= ^timestamp and
+      fragment("lower(?)", ps.model_identifier) in ^normalized_identifiers and
+        ps.effective_at <= ^timestamp and
         fragment("?->>'service_tier'", ps.config) in ^service_tier_aliases and
         fragment("?->>'price_bucket'", ps.config) == ^price_bucket and
         fragment("?->>'pricing_type'", ps.config) == "per_1m_tokens"
     )
     |> order_by([ps],
-      asc: ps.model_identifier,
+      asc: fragment("lower(?)", ps.model_identifier),
       desc: ps.effective_at,
       desc: ps.captured_at,
       asc:
@@ -527,7 +531,7 @@ defmodule CodexPooler.Accounting.PricingResolution do
     )
     |> Repo.all()
     |> Enum.reduce(%{}, fn snapshot, snapshots ->
-      Map.put_new(snapshots, snapshot.model_identifier, snapshot)
+      Map.put_new(snapshots, normalize_pricing_identifier(snapshot.model_identifier), snapshot)
     end)
   end
 
@@ -655,7 +659,7 @@ defmodule CodexPooler.Accounting.PricingResolution do
 
   @spec candidate_snapshot_match(suffix_candidate(), map()) :: [map()]
   defp candidate_snapshot_match(candidate, snapshots_by_identifier) do
-    case Map.fetch(snapshots_by_identifier, candidate.to) do
+    case Map.fetch(snapshots_by_identifier, normalize_pricing_identifier(candidate.to)) do
       {:ok, snapshot} -> [Map.put(candidate, :snapshot, snapshot)]
       :error -> []
     end
@@ -668,9 +672,12 @@ defmodule CodexPooler.Accounting.PricingResolution do
     nearest_distance = matches |> Enum.map(& &1.distance) |> Enum.min()
     nearest_matches = Enum.filter(matches, &(&1.distance == nearest_distance))
 
-    case nearest_matches |> Enum.map(& &1.snapshot.model_identifier) |> Enum.uniq() do
-      [model_identifier] ->
-        match = Enum.find(nearest_matches, &(&1.snapshot.model_identifier == model_identifier))
+    case nearest_matches
+         |> Enum.map(&normalize_pricing_identifier(&1.snapshot.model_identifier))
+         |> Enum.uniq() do
+      [_normalized_identifier] ->
+        match = hd(nearest_matches)
+        model_identifier = match.snapshot.model_identifier
 
         {match.snapshot, suffix_alias_metadata(match.from, model_identifier)}
 
@@ -699,11 +706,14 @@ defmodule CodexPooler.Accounting.PricingResolution do
 
   @spec missing_pricing_snapshot(pricing_context()) :: map()
   defp missing_pricing_snapshot(context) do
+    normalized_identifiers = normalize_pricing_identifiers(context.identifiers)
+
     model_snapshot_exists? =
       Repo.exists?(
         from ps in PricingSnapshot,
           where:
-            ps.model_identifier in ^context.identifiers and ps.effective_at <= ^context.timestamp and
+            fragment("lower(?)", ps.model_identifier) in ^normalized_identifiers and
+              ps.effective_at <= ^context.timestamp and
               fragment("?->>'price_bucket'", ps.config) == "default" and
               fragment("?->>'pricing_type'", ps.config) == "per_1m_tokens"
       )
@@ -903,6 +913,18 @@ defmodule CodexPooler.Accounting.PricingResolution do
   defp mapped_service_tier(_tier), do: {:unpriced, "unpriced_unsupported_tier"}
 
   defp normalize_service_tier(tier), do: ServiceTier.canonicalize(tier)
+
+  defp normalize_pricing_identifiers(identifiers) do
+    identifiers
+    |> Enum.map(&normalize_pricing_identifier/1)
+    |> Enum.uniq()
+  end
+
+  defp normalize_pricing_identifier(identifier) do
+    identifier
+    |> String.trim()
+    |> String.downcase()
+  end
 
   defp requested_service_tier_snapshot(payload, request_metadata, pricing) do
     pricing.requested_service_tier ||
