@@ -1061,21 +1061,28 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
     WebsocketOwnerNodeHarness.release_controlled(barrier_pid, controls, stage)
   end
 
-  defp await_pending_terminal_result(owner, attempts \\ 100)
+  defp await_pending_terminal_result(owner) do
+    deadline = System.monotonic_time(:millisecond) + @detection_timeout_ms
+    await_pending_terminal_result_until(owner, deadline)
+  end
 
-  defp await_pending_terminal_result(owner, attempts) when attempts > 0 do
+  defp await_pending_terminal_result_until(owner, deadline) do
     case :sys.get_state(owner) do
       %{active_turn: %{pending_result: pending_result} = active_turn}
       when not is_nil(pending_result) ->
         active_turn
 
       _state ->
-        :erlang.yield()
-        await_pending_terminal_result(owner, attempts - 1)
+        if System.monotonic_time(:millisecond) >= deadline do
+          flunk("owner never retained terminal result")
+        else
+          receive do
+          after
+            1 -> await_pending_terminal_result_until(owner, deadline)
+          end
+        end
     end
   end
-
-  defp await_pending_terminal_result(_owner, 0), do: flunk("owner never retained terminal result")
 
   defp websocket_request do
     %UpstreamWebsocketSession.Request{
