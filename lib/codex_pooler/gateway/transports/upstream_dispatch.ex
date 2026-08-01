@@ -665,21 +665,16 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     |> record_upstream_websocket_body(identity, request)
   end
 
-  # An owner success reply crosses a node boundary unvalidated, so every field
-  # its consumers require must be present before it is trusted: a non-map, or a
-  # map missing any of them, settles as one normal owner-crash failure instead
-  # of crashing the response task further down. Presence is all this checks —
-  # a reply carrying every key with a wrong-typed value would still fail
-  # downstream, which no producer in any released version can do. The
-  # containment names the missing fields so it stays distinguishable from a real
-  # owner crash without putting the reply itself in a log.
+  # An owner success reply crosses a node boundary, so validate the producer's
+  # contract before any consumer destructures or combines its values. A bad
+  # shape settles as one normal owner-crash failure without logging the reply.
   defp owner_request_result({:ok, result}, identity, request, request_options) do
-    case owner_reply_missing_fields(result) do
-      [] ->
+    case owner_reply_problem(result) do
+      :ok ->
         record_upstream_websocket_body({:ok, result}, identity, request)
 
-      missing ->
-        contain_malformed_owner_reply(missing, request_options)
+      problem ->
+        contain_malformed_owner_reply(problem, request_options)
     end
   end
 
@@ -696,11 +691,13 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     {:error, %{body: "", reason: reason, headers: [], started: false}}
   end
 
-  defp contain_malformed_owner_reply(missing, request_options) do
+  defp contain_malformed_owner_reply(problem, request_options) do
+    {reply_shape, detail} = owner_reply_log_detail(problem)
+
     Logger.warning(
       "websocket owner reply malformed boundary=submit " <>
-        "reply_shape=#{owner_reply_shape(missing)} " <>
-        "missing=#{Enum.join(missing, ",")} " <>
+        "reply_shape=#{reply_shape} " <>
+        "#{detail} " <>
         "canonical_error=owner_crashed " <>
         "request_id=#{DiagnosticTaxonomy.safe_correlator(owner_request_id(request_options))}"
     )
@@ -708,16 +705,72 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     {:error, %{body: "", reason: :owner_crashed, headers: [], started: false}}
   end
 
-  defp owner_reply_missing_fields(reply) when is_map(reply) do
-    Enum.reject(@owner_success_fields, &Map.has_key?(reply, &1))
+  defp owner_reply_problem(reply) when is_map(reply) do
+    case Enum.reject(@owner_success_fields, &Map.has_key?(reply, &1)) do
+      [] ->
+        case owner_reply_invalid_fields(reply) do
+          [] -> :ok
+          invalid -> {:invalid, invalid}
+        end
+
+      missing ->
+        {:missing, missing}
+    end
   end
 
-  defp owner_reply_missing_fields(_reply), do: ["not_a_map"]
+  defp owner_reply_problem(_reply), do: :not_a_map
+
+  defp owner_reply_invalid_fields(reply) do
+    [
+      {:body, not is_binary(reply.body)},
+      {:terminal, not clean_binary?(reply.terminal)},
+      {:status, reply.status != 200},
+      {:headers, not owner_response_headers?(reply.headers)},
+      {:response_id, invalid_optional_owner_field?(reply, :response_id, &clean_binary?/1)},
+      {:upstream_websocket_connection,
+       invalid_optional_owner_field?(reply, :upstream_websocket_connection, &is_map/1)},
+      {:websocket_frame_headers,
+       invalid_optional_owner_field?(reply, :websocket_frame_headers, &is_map/1)},
+      {:upstream_error_code,
+       invalid_optional_owner_field?(reply, :upstream_error_code, &nil_or_clean_binary?/1)},
+      {:upstream_error_param,
+       invalid_optional_owner_field?(reply, :upstream_error_param, &nil_or_clean_binary?/1)},
+      {:transport_failure, invalid_optional_owner_field?(reply, :transport_failure, &is_map/1)}
+    ]
+    |> Enum.flat_map(fn
+      {field, true} -> [Atom.to_string(field)]
+      {_field, false} -> []
+    end)
+  end
+
+  defp invalid_optional_owner_field?(reply, field, valid?) do
+    case Map.fetch(reply, field) do
+      {:ok, value} -> not valid?.(value)
+      :error -> false
+    end
+  end
+
+  defp owner_response_headers?(headers) when is_list(headers) do
+    Enum.all?(headers, fn
+      {name, value} -> is_binary(name) and is_binary(value)
+      _header -> false
+    end)
+  end
+
+  defp owner_response_headers?(_headers), do: false
+
+  defp nil_or_clean_binary?(nil), do: true
+  defp nil_or_clean_binary?(value), do: clean_binary?(value)
 
   # `reply_shape` is the classification both containment boundaries emit, so one
-  # query finds them; `missing` carries the detail only this boundary has.
-  defp owner_reply_shape(["not_a_map"]), do: "not_a_map"
-  defp owner_reply_shape(_missing), do: "map_missing_fields"
+  # query finds them; field names carry safe detail without exposing values.
+  defp owner_reply_log_detail(:not_a_map), do: {"not_a_map", "missing=not_a_map"}
+
+  defp owner_reply_log_detail({:missing, fields}),
+    do: {"map_missing_fields", "missing=#{Enum.join(fields, ",")}"}
+
+  defp owner_reply_log_detail({:invalid, fields}),
+    do: {"map_invalid_fields", "invalid=#{Enum.join(fields, ",")}"}
 
   # The correlator is the upgrade request id the websocket lifecycle and owner
   # diagnostics emit under this key, so the containment warning joins those

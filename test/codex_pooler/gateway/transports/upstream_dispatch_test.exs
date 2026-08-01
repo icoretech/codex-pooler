@@ -543,25 +543,34 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       )
 
     malformed_replies = [
-      {:ok, :banana},
-      {:ok, %{body: "", status: 200, headers: [], response_id: "resp_owner_no_terminal"}},
-      {:ok, %{terminal: "response.completed", status: 200, headers: []}},
-      {:ok, %{terminal: "response.completed", body: ""}},
-      {:ok, %{}}
+      {{:ok, :banana}, "not_a_map", "missing", "not_a_map"},
+      {{:ok, %{body: "", status: 200, headers: [], response_id: "resp_owner_no_terminal"}},
+       "map_missing_fields", "missing", "terminal"},
+      {{:ok, %{terminal: "response.completed", status: 200, headers: []}}, "map_missing_fields",
+       "missing", "body"},
+      {{:ok, %{terminal: "response.completed", body: ""}}, "map_missing_fields", "missing",
+       "status,headers"},
+      {{:ok, %{}}, "map_missing_fields", "missing", "body,terminal,status,headers"},
+      {{:ok, %{body: %{}, terminal: "response.completed", status: 200, headers: []}},
+       "map_invalid_fields", "invalid", "body"},
+      {{:ok, %{body: "", terminal: nil, status: 200, headers: []}}, "map_invalid_fields",
+       "invalid", "terminal"},
+      {{:ok, %{body: "", terminal: "response.failed", status: 502, headers: []}},
+       "map_invalid_fields", "invalid", "status"},
+      {{:ok, %{body: "", terminal: "response.failed", status: 200, headers: %{}}},
+       "map_invalid_fields", "invalid", "headers"},
+      {{:ok,
+        %{
+          body: "",
+          terminal: "response.completed",
+          status: 200,
+          headers: [],
+          websocket_frame_headers: []
+        }}, "map_invalid_fields", "invalid", "websocket_frame_headers"}
     ]
 
-    expected_missing = [
-      "not_a_map",
-      "terminal",
-      "body",
-      "status,headers",
-      "body,terminal,status,headers"
-    ]
-
-    assert length(malformed_replies) == length(expected_missing)
-
-    for {{malformed_reply, expected_missing_fields}, index} <-
-          Enum.with_index(Enum.zip(malformed_replies, expected_missing), 1) do
+    for {{malformed_reply, expected_shape, detail_key, expected_fields}, index} <-
+          Enum.with_index(malformed_replies, 1) do
       forwarder_opts =
         WebsocketOwnerNodeHarness.node_client_opts([remote_node],
           calls: %{remote_node => {:return, malformed_reply}}
@@ -591,12 +600,9 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
                    {:error, %{body: "", reason: :owner_crashed, headers: [], started: false}}
         end)
 
-      expected_shape =
-        if expected_missing_fields == "not_a_map", do: "not_a_map", else: "map_missing_fields"
-
       assert logs =~ "websocket owner reply malformed boundary=submit"
       assert logs =~ "reply_shape=#{expected_shape} "
-      assert logs =~ "missing=#{expected_missing_fields} "
+      assert logs =~ "#{detail_key}=#{expected_fields} "
       assert logs =~ "canonical_error=owner_crashed"
       refute logs =~ "banana"
       refute logs =~ "resp_owner_no_terminal"

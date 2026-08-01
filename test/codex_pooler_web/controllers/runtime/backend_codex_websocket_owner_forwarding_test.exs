@@ -1934,10 +1934,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     {:ok, state} = owner_socket(auth, "ws-owner-malformed-reply", "owner-malformed-reply")
     remote_node = :"codex_pooler@malformed-reply-owner.example"
+    private_owner_body = "private owner reply body"
+
+    malformed_reply =
+      {:ok,
+       %{
+         body: private_owner_body,
+         terminal: "response.failed",
+         status: 502,
+         headers: %{}
+       }}
 
     node_opts =
       WebsocketOwnerNodeHarness.node_client_opts([remote_node],
-        calls: %{remote_node => {:return, {:ok, :banana}}}
+        calls: %{remote_node => {:return, malformed_reply}}
       )
 
     remote_state = remote_owner_state(state, remote_node, node_opts)
@@ -1968,7 +1978,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         end
       end)
 
-    refute logs =~ "banana"
+    refute logs =~ private_owner_body
     refute logs =~ "websocket response task failed"
 
     # Both containment boundaries announce themselves under the same classifying
@@ -1976,7 +1986,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     # finds both.
     assert logs =~
              "websocket owner reply malformed boundary=submit " <>
-               "reply_shape=not_a_map missing=not_a_map"
+               "reply_shape=map_invalid_fields invalid=status,headers"
 
     assert logs =~
              "websocket owner reply malformed boundary=detach " <>
