@@ -334,7 +334,30 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
           merge_attrs_by_decision(existing, attrs, evidence, timestamp)
       end
 
-    put_accepted_positive_weekly_barrier(merged_attrs, evidence, existing, timestamp)
+    merged_attrs
+    |> maybe_replace_corroborated_exhausted_capacity(attrs, evidence, existing, timestamp)
+    |> put_accepted_positive_weekly_barrier(evidence, existing, timestamp)
+  end
+
+  defp maybe_replace_corroborated_exhausted_capacity(
+         merged_attrs,
+         attrs,
+         evidence,
+         existing,
+         timestamp
+       ) do
+    if evidence.source == "codex_usage_api" and account_weekly_evidence?(evidence) and
+         same_evidence_identity?(evidence, existing) and zero_percent?(evidence.used_percent) and
+         newer_observation?(evidence.observed_at, existing.observed_at) and
+         exhausted_by_used_percent?(existing) and
+         runtime_weekly_restart_corroborated?(evidence, existing, timestamp) do
+      merged_attrs
+      |> Map.put(:used_percent, evidence.used_percent)
+      |> Map.put(:active_limit, Map.get(attrs, :active_limit))
+      |> Map.put(:credits, Map.get(attrs, :credits))
+    else
+      merged_attrs
+    end
   end
 
   defp put_accepted_positive_weekly_barrier(attrs, evidence, existing, timestamp) do
@@ -674,6 +697,13 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
         accepted_attrs =
           existing
           |> accepted_snapshot_attrs(attrs, timestamp)
+          |> maybe_replace_same_anchor_exhausted_capacity(
+            attrs,
+            evidence,
+            existing,
+            metadata,
+            timestamp
+          )
           |> RelativeLiveness.put_canonical_metadata(evidence, existing, timestamp)
 
         if fixed_forward_anchor_confirmed?(metadata, evidence, existing, timestamp) do
@@ -741,16 +771,77 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       RelativeLiveness.candidate_advances?(metadata, evidence, timestamp)
   end
 
-  # The three restart proofs, each evidence-driven and cache-safe: a live
-  # floating reset slides with observation time, an expired canonical declared
-  # its own cycle over, and a forward anchor can only be minted by the provider
-  # after the new cycle genuinely began.
+  # The restart proofs are evidence-driven and cache-safe: a live floating reset
+  # slides with observation time, an expired canonical declared its own cycle
+  # over, a forward anchor can only be minted after the new cycle began, and an
+  # exhausted account-weekly row can accept repeatedly advancing provider zeroes
+  # that hold its own fixed anchor.
   defp restart_candidate_progressing?(candidate, evidence, existing, metadata, timestamp) do
     RelativeLiveness.candidate_pair_valid?(metadata, evidence, timestamp) and
       (consistent_sliding_candidate?(candidate, evidence, metadata, timestamp) or
          expired_cycle_zero_candidate?(candidate, existing, timestamp) or
          forward_anchor_zero_candidate?(candidate, evidence, existing, timestamp) or
-         fixed_forward_anchor_candidate?(candidate, evidence, existing, metadata, timestamp))
+         fixed_forward_anchor_candidate?(candidate, evidence, existing, metadata, timestamp) or
+         same_anchor_exhausted_weekly_zero_candidate?(
+           candidate,
+           evidence,
+           existing,
+           metadata,
+           timestamp
+         ))
+  end
+
+  defp same_anchor_exhausted_weekly_zero_candidate?(
+         candidate,
+         %Evidence{source: "codex_usage_api", quota_scope: "account"} = evidence,
+         existing,
+         metadata,
+         timestamp
+       ) do
+    candidate_valid?(candidate, timestamp) and
+      zero_candidate?(candidate) and
+      candidate_equivalent?(candidate, evidence) and
+      RelativeLiveness.candidate_advances?(metadata, evidence, timestamp) and
+      exhausted_by_used_percent?(existing) and
+      reset_times_equivalent?(candidate.reset_at, existing.reset_at)
+  end
+
+  defp same_anchor_exhausted_weekly_zero_candidate?(
+         _candidate,
+         _evidence,
+         _existing,
+         _metadata,
+         _timestamp
+       ),
+       do: false
+
+  defp maybe_replace_same_anchor_exhausted_capacity(
+         accepted_attrs,
+         attrs,
+         evidence,
+         existing,
+         metadata,
+         timestamp
+       ) do
+    case parse_candidate(metadata) do
+      {:ok, candidate} ->
+        if same_anchor_exhausted_weekly_zero_candidate?(
+             candidate,
+             evidence,
+             existing,
+             metadata,
+             timestamp
+           ) do
+          accepted_attrs
+          |> Map.put(:active_limit, Map.get(attrs, :active_limit))
+          |> Map.put(:credits, Map.get(attrs, :credits))
+        else
+          accepted_attrs
+        end
+
+      :none ->
+        accepted_attrs
+    end
   end
 
   defp fixed_forward_anchor_confirmed?(metadata, evidence, existing, timestamp) do

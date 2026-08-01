@@ -191,6 +191,161 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreWeeklyRestartTest do
     assert Decimal.compare(row.used_percent, Decimal.new("100")) == :eq
   end
 
+  test "repeated live same-anchor zeros replace an exhausted weekly account" do
+    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    reset_at = DateTime.add(t0, @window_seconds, :second)
+    assert {:ok, _row} = exhausted_row!(identity, t0, reset_at: reset_at)
+
+    t1 = DateTime.add(t0, 300, :second)
+
+    assert {:ok, _row} =
+             Windows.record_evidence(
+               identity,
+               floating_zero(t1, reset_at: reset_at, reset_after_seconds: @window_seconds - 300),
+               t1
+             )
+
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("100")) == :eq
+    assert {:ok, _candidate} = EvidenceStore.parse_candidate(row.metadata)
+
+    t2 = DateTime.add(t1, 240, :second)
+
+    assert {:ok, _row} =
+             Windows.record_evidence(
+               identity,
+               floating_zero(t2, reset_at: reset_at, reset_after_seconds: @window_seconds - 540),
+               t2
+             )
+
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("0")) == :eq
+    assert DateTime.compare(row.observed_at, t2) == :eq
+    assert :none = EvidenceStore.parse_candidate(row.metadata)
+  end
+
+  test "fresh runtime corroboration clears stale exhausted credit capacity" do
+    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    reset_at = DateTime.add(t0, @window_seconds, :second)
+    assert {:ok, row} = exhausted_row!(identity, t0, reset_at: reset_at)
+
+    row
+    |> AccountQuotaWindow.changeset(%{active_limit: 243, credits: 0})
+    |> Repo.update!()
+
+    observed_at = DateTime.add(t0, 5, :minute)
+
+    runtime_zero =
+      observed_at
+      |> floating_zero(reset_at: reset_at, reset_after_seconds: @window_seconds - 300)
+      |> Map.put(:source, "codex_rate_limit_event")
+
+    assert {:ok, _row} = Windows.record_evidence(identity, runtime_zero, observed_at)
+
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("100")) == :eq
+    assert row.active_limit == 243
+    assert row.credits == 0
+
+    usage_observed_at = DateTime.add(observed_at, 1, :second)
+
+    usage_zero =
+      usage_observed_at
+      |> floating_zero(
+        reset_at: reset_at,
+        reset_after_seconds: @window_seconds - 301
+      )
+      |> Map.merge(%{active_limit: 0, credits: 0})
+
+    assert {:ok, _row} =
+             Windows.record_evidence(identity, usage_zero, usage_observed_at)
+
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("0")) == :eq
+    assert row.active_limit == 0
+    assert row.credits == 0
+  end
+
+  test "confirmed same-anchor zero does not revive stale exhausted credit capacity" do
+    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    reset_at = DateTime.add(t0, @window_seconds, :second)
+    assert {:ok, row} = exhausted_row!(identity, t0, reset_at: reset_at)
+
+    row
+    |> AccountQuotaWindow.changeset(%{active_limit: 243, credits: 0})
+    |> Repo.update!()
+
+    zero_with_empty_balance = fn observed_at, reset_after_seconds ->
+      observed_at
+      |> floating_zero(reset_at: reset_at, reset_after_seconds: reset_after_seconds)
+      |> Map.merge(%{active_limit: 0, credits: 0})
+    end
+
+    t1 = DateTime.add(t0, 300, :second)
+
+    assert {:ok, _row} =
+             Windows.record_evidence(
+               identity,
+               zero_with_empty_balance.(t1, @window_seconds - 300),
+               t1
+             )
+
+    t2 = DateTime.add(t1, 240, :second)
+
+    assert {:ok, _row} =
+             Windows.record_evidence(
+               identity,
+               zero_with_empty_balance.(t2, @window_seconds - 540),
+               t2
+             )
+
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("0")) == :eq
+
+    t3 = DateTime.add(t2, 60, :second)
+
+    assert {:ok, _row} =
+             Windows.record_evidence(
+               identity,
+               zero_with_empty_balance.(t3, @window_seconds - 600),
+               t3
+             )
+
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("0")) == :eq
+  end
+
+  test "a replayed full-week same-anchor zero cannot confirm an exhausted weekly account restart" do
+    t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+    identity = identity!()
+    candidate_at = DateTime.add(t0, 5, :minute)
+    same_anchor = DateTime.add(candidate_at, @window_seconds, :second)
+    assert {:ok, _row} = exhausted_row!(identity, t0, reset_at: same_anchor)
+
+    # This is a live, coherent full-week countdown: its implied provider instant
+    # matches the first observation, and it can open the same-anchor proof lane.
+    live_payload =
+      floating_zero(candidate_at, reset_at: same_anchor, reset_after_seconds: @window_seconds)
+
+    assert {:ok, _row} = Windows.record_evidence(identity, live_payload, candidate_at)
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("100")) == :eq
+    assert {:ok, _candidate} = EvidenceStore.parse_candidate(row.metadata)
+
+    # The second poll is a replay of that response: its countdown still implies
+    # candidate_at rather than the later local observation, so it cannot supply
+    # the advancing provider observation required to confirm the reset.
+    replayed_at = DateTime.add(candidate_at, 240, :second)
+    assert {:ok, _row} = Windows.record_evidence(identity, live_payload, replayed_at)
+
+    row = account_row(identity)
+    assert Decimal.compare(row.used_percent, Decimal.new("100")) == :eq
+    assert DateTime.compare(row.observed_at, t0) == :eq
+  end
+
   test "a zero inside the confirmation span keeps waiting without resetting the clock" do
     t0 = DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
     identity = identity!()
