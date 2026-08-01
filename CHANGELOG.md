@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.5.12](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.11...codex-pooler-v0.5.12) (2026-08-01)
+
+
+### Features
+
+* **telemetry:** expose gateway outcome and saturation metrics ([ad8b3ba](https://github.com/icoretech/codex-pooler/commit/ad8b3ba3e8f0be869c9369cd10ee0e46992b22a0))
+
+
+### Bug Fixes
+
+* **jobs:** preserve per-minute reconciliation cadence ([87bdcc7](https://github.com/icoretech/codex-pooler/commit/87bdcc72f38aa5d3104e39af374a82fb97480da9))
+* **quota:** confirm fixed-anchor weekly resets ([222ea29](https://github.com/icoretech/codex-pooler/commit/222ea2902e06101042fde81abebd23fd08b84e90))
+* **routing:** keep OpenAI capacity across catalog partitions ([c328494](https://github.com/icoretech/codex-pooler/commit/c32849409fb4e5d34dead1f9dcf2a46938ad7070))
+* **test:** supervise fake upstream websocket lifecycle ([1d9702e](https://github.com/icoretech/codex-pooler/commit/1d9702ec7ef0c669db02a6defbbeb956466861b4))
+* **upstreams:** align usage probe headers with Codex ([c0ca0d0](https://github.com/icoretech/codex-pooler/commit/c0ca0d04536bdaaae2aec2d7152f54dc613c4f5b))
+* **upstreams:** refresh catalog after account lifecycle changes ([495998b](https://github.com/icoretech/codex-pooler/commit/495998b0d73d09dbe57508359f62cdab5e301fc5))
+
 ## [0.5.11](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.10...codex-pooler-v0.5.11) (2026-08-01)
 
 
