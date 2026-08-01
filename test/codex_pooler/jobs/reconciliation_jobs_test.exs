@@ -12,8 +12,13 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
   alias CodexPooler.Jobs
-  alias CodexPooler.Jobs.AccountReconciliationEnqueueWorker
-  alias CodexPooler.Jobs.AccountReconciliationWorker
+
+  alias CodexPooler.Jobs.{
+    AccountReconciliationEnqueueWorker,
+    AccountReconciliationWorker,
+    CatalogSyncWorker
+  }
+
   alias CodexPooler.Jobs.SavedResetRedemptionWorker
   alias CodexPooler.Jobs.TokenRefreshWorker
   alias CodexPooler.Jobs.UpstreamEnqueue
@@ -5303,7 +5308,9 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
                  }
                )
 
-      assert %{success: 1, discard: 0} = Oban.drain_queue(queue: :jobs)
+      assert [catalog_job] = all_enqueued(worker: CatalogSyncWorker)
+      assert catalog_job.args == %{"pool_id" => pool.id, "trigger_kind" => "manual"}
+      assert %{success: 2, discard: 0} = Oban.drain_queue(queue: :jobs)
 
       completed_job = Repo.get!(Oban.Job, job.id)
       assert completed_job.state == "completed"

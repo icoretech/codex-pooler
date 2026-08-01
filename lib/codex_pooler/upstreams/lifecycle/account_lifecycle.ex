@@ -2,9 +2,11 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
   @moduledoc false
 
   import Ecto.Query
+  require Logger
 
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Events
+  alias CodexPooler.Jobs
   alias CodexPooler.Pools
   alias CodexPooler.Repo
 
@@ -124,9 +126,10 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
   def pause_account_for_scope(%Scope{} = scope, identity_or_id, attrs) when is_map(attrs) do
     with {:ok, identity} <- authorize(scope, identity_or_id) do
       pause_account(identity, attrs)
-      |> AccountAudit.record_change(scope, "upstream_account.pause",
+      |> AccountAudit.record_change_strict(scope, "upstream_account.pause",
         previous_status: identity.status
       )
+      |> enqueue_lifecycle_catalog_sync()
     end
   end
 
@@ -209,9 +212,10 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
   def reactivate_account_for_scope(%Scope{} = scope, identity_or_id, attrs) when is_map(attrs) do
     with {:ok, identity} <- authorize(scope, identity_or_id) do
       reactivate_account(identity, attrs)
-      |> AccountAudit.record_change(scope, "upstream_account.reactivate",
+      |> AccountAudit.record_change_strict(scope, "upstream_account.reactivate",
         previous_status: identity.status
       )
+      |> enqueue_lifecycle_catalog_sync()
     end
   end
 
@@ -324,6 +328,47 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountLifecycle do
     case pool_ids do
       [] -> {:error, lifecycle_error(:pool_assignment_not_found, "pool assignment was not found")}
       pool_ids -> {:ok, pool_ids}
+    end
+  end
+
+  defp enqueue_lifecycle_catalog_sync({:ok, %{status: status, assignments: assignments}} = result)
+       when status in [:paused, :active] and is_list(assignments) do
+    assignment_status =
+      case status do
+        :paused -> @assignment_paused
+        :active -> @assignment_active
+      end
+
+    affected_pool_ids =
+      assignments
+      |> Enum.filter(&match?(%PoolUpstreamAssignment{status: ^assignment_status}, &1))
+      |> MapSet.new(& &1.pool_id)
+
+    Pools.list_active_pools()
+    |> Enum.filter(&MapSet.member?(affected_pool_ids, &1.id))
+    |> Enum.each(fn pool ->
+      case Jobs.enqueue_catalog_sync(pool, trigger_kind: "manual") do
+        {:ok, _job} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "upstream lifecycle catalog sync enqueue failed pool_id=#{pool.id} " <>
+              "trigger_kind=manual reason=#{catalog_sync_failure_code(reason)}"
+          )
+      end
+    end)
+
+    result
+  end
+
+  defp enqueue_lifecycle_catalog_sync(result), do: result
+
+  defp catalog_sync_failure_code(reason) do
+    cond do
+      match?(%Ecto.Changeset{}, reason) -> "invalid_job"
+      is_atom(reason) -> Atom.to_string(reason)
+      true -> "unknown"
     end
   end
 

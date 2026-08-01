@@ -42,24 +42,60 @@ defmodule CodexPooler.Upstreams.Lifecycle.AccountAudit do
 
   def record_change(result, _scope, _action, _opts), do: result
 
+  @spec record_change_strict(term(), term(), String.t(), keyword()) :: term()
+  def record_change_strict(result, scope, action, opts \\ [])
+
+  def record_change_strict(
+        {:ok, %{identity: %UpstreamIdentity{} = identity} = result} = ok,
+        %Scope{user: %User{} = user},
+        action,
+        opts
+      ) do
+    with :ok <-
+           record_events_strict(
+             result,
+             user,
+             action,
+             Keyword.put_new(opts, :previous_status, identity.status),
+             []
+           ) do
+      ok
+    end
+  end
+
+  def record_change_strict(result, _scope, _action, _opts), do: result
+
   defp record_events(result, user, action, opts, fallback_pool_ids) do
     Enum.each(pool_ids(result, fallback_pool_ids), fn pool_id ->
-      details =
-        result
-        |> details(opts)
-        |> Map.put(:pool_id, pool_id)
-        |> Map.put(:pool_assignment_ids, assignment_ids(result, pool_id))
-        |> maybe_put_detail(:trigger_kind, Keyword.get(opts, :trigger_kind))
-        |> maybe_put_detail(:job_conflict, Keyword.get(opts, :job_conflict?))
-
-      Audit.record_user_event(user, %{
-        pool_id: pool_id,
-        action: action,
-        target_type: "upstream_identity",
-        target_id: result.identity.id,
-        details: details
-      })
+      Audit.record_user_event(user, event_attrs(result, action, opts, pool_id))
     end)
+  end
+
+  defp record_events_strict(result, user, action, opts, fallback_pool_ids) do
+    Enum.reduce_while(pool_ids(result, fallback_pool_ids), :ok, fn pool_id, :ok ->
+      case Audit.record_user_event(user, event_attrs(result, action, opts, pool_id)) do
+        {:ok, _event} -> {:cont, :ok}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp event_attrs(result, action, opts, pool_id) do
+    details =
+      result
+      |> details(opts)
+      |> Map.put(:pool_id, pool_id)
+      |> Map.put(:pool_assignment_ids, assignment_ids(result, pool_id))
+      |> maybe_put_detail(:trigger_kind, Keyword.get(opts, :trigger_kind))
+      |> maybe_put_detail(:job_conflict, Keyword.get(opts, :job_conflict?))
+
+    %{
+      pool_id: pool_id,
+      action: action,
+      target_type: "upstream_identity",
+      target_id: result.identity.id,
+      details: details
+    }
   end
 
   defp maybe_put_detail(details, _key, nil), do: details
