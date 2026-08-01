@@ -8,9 +8,9 @@ defmodule CodexPooler.FakeUpstream do
 
   @max_body_bytes 30 * 1024 * 1024
 
-  defstruct [:pid, :server, :url]
+  defstruct [:pid, :server, :supervisor, :url]
 
-  @type t :: %__MODULE__{pid: pid(), server: pid(), url: String.t()}
+  @type t :: %__MODULE__{pid: pid(), server: pid(), supervisor: pid(), url: String.t()}
 
   @type mode ::
           {:json, non_neg_integer(), map()}
@@ -34,6 +34,7 @@ defmodule CodexPooler.FakeUpstream do
              pid(), reference()}
           | {:websocket_close_without_terminal_barrier, non_neg_integer(), String.t(), pid(),
              reference()}
+          | {:websocket_init_barrier, mode(), pid(), reference()}
           | {:sequence, [mode()]}
           | {:barrier_sse, [String.t()], non_neg_integer(), pid(), reference()}
           | {:malformed_json, non_neg_integer(), String.t()}
@@ -48,19 +49,13 @@ defmodule CodexPooler.FakeUpstream do
 
   @doc "Starts a local fake upstream server for the given response mode."
   def start_link(mode, opts \\ []) do
+    {:ok, supervisor} = CodexPooler.FakeUpstream.Supervisor.start_link()
+
     {:ok, pid} =
-      Agent.start_link(fn ->
-        %{
-          mode: mode,
-          requests: [],
-          route_counts: %{},
-          websocket_connection_count: 0,
-          websocket_connection_ids: [],
-          websocket_pids: MapSet.new(),
-          websocket_control_notify: nil,
-          websocket_control_frames: []
-        }
-      end)
+      Supervisor.start_child(
+        supervisor,
+        Supervisor.child_spec({Agent, fn -> initial_state(mode) end}, restart: :temporary)
+      )
 
     bandit_options = [
       plug: {CodexPooler.FakeUpstream.Plug, pid},
@@ -69,16 +64,27 @@ defmodule CodexPooler.FakeUpstream do
       startup_log: false
     ]
 
-    {:ok, server} = Bandit.start_link(Keyword.merge(bandit_options, opts))
+    {:ok, server} =
+      Supervisor.start_child(
+        supervisor,
+        Bandit.child_spec(Keyword.merge(bandit_options, opts))
+        |> Supervisor.child_spec(restart: :temporary, significant: true)
+      )
+
     {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
 
-    {:ok, %__MODULE__{pid: pid, server: server, url: "http://127.0.0.1:#{port}"}}
+    {:ok,
+     %__MODULE__{
+       pid: pid,
+       server: server,
+       supervisor: supervisor,
+       url: "http://127.0.0.1:#{port}"
+     }}
   end
 
   @doc "Stops the fake upstream server."
-  def stop(%__MODULE__{server: server, pid: pid}) do
-    safe_stop(fn -> ThousandIsland.stop(server) end)
-    safe_stop(fn -> Agent.stop(pid) end)
+  def stop(%__MODULE__{supervisor: supervisor}) do
+    safe_stop(fn -> Supervisor.stop(supervisor) end)
     :ok
   end
 
@@ -311,6 +317,11 @@ defmodule CodexPooler.FakeUpstream do
     )
   end
 
+  def websocket_init_barrier(mode, opts) when is_list(opts) do
+    {:websocket_init_barrier, mode, Keyword.fetch!(opts, :notify),
+     Keyword.fetch!(opts, :release_ref)}
+  end
+
   def malformed_json(body \\ "{not-json", status \\ 200), do: {:malformed_json, status, body}
 
   def http_500_json_error(payload \\ %{"error" => %{"code" => "server_error"}}) do
@@ -342,6 +353,19 @@ defmodule CodexPooler.FakeUpstream do
   def websocket_upgrade_error(payload, opts \\ []) when is_map(payload) and is_list(opts) do
     {:websocket_upgrade_error, Keyword.get(opts, :status, 401), payload,
      Keyword.get(opts, :headers, []), Keyword.get(opts, :notify), Keyword.get(opts, :release_ref)}
+  end
+
+  defp initial_state(mode) do
+    %{
+      mode: mode,
+      requests: [],
+      route_counts: %{},
+      websocket_connection_count: 0,
+      websocket_connection_ids: [],
+      websocket_pids: MapSet.new(),
+      websocket_control_notify: nil,
+      websocket_control_frames: []
+    }
   end
 
   def handle(pid, conn) do
@@ -913,13 +937,37 @@ defmodule CodexPooler.FakeUpstream do
     :exit, _ -> :ok
   end
 
+  defmodule Supervisor do
+    @moduledoc false
+
+    use Elixir.Supervisor
+
+    def start_link do
+      Elixir.Supervisor.start_link(__MODULE__, :ok)
+    end
+
+    @impl Elixir.Supervisor
+    def init(:ok) do
+      Elixir.Supervisor.init([], strategy: :one_for_one, auto_shutdown: :any_significant)
+    end
+  end
+
   defmodule Websocket do
     @moduledoc false
 
     @behaviour WebSock
 
     @impl WebSock
-    def init(%{pid: pid} = state) do
+    def init(%{mode: {:websocket_init_barrier, mode, notify, release_ref}} = state) do
+      await_websocket_barrier(:before_init, notify, release_ref)
+      init_websocket(%{state | mode: mode}, notify, release_ref)
+    end
+
+    def init(state) do
+      init_websocket(state, nil, nil)
+    end
+
+    defp init_websocket(%{pid: pid} = state, notify, release_ref) do
       websocket_pid = self()
 
       {connection_id, _opaque_connection_id} =
@@ -939,6 +987,10 @@ defmodule CodexPooler.FakeUpstream do
 
           {{connection_count, opaque_connection_id}, agent_state}
         end)
+
+      if is_pid(notify) do
+        send(notify, {:fake_upstream_websocket_initialized, websocket_pid, release_ref})
+      end
 
       {:ok, Map.put(state, :connection_id, connection_id)}
     end

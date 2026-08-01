@@ -2019,6 +2019,100 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert FakeUpstream.websocket_connection_count(upstream) == 1
   end
 
+  @tag :fake_upstream_lifecycle_regression
+  test "owner shutdown keeps FakeUpstream state alive through websocket initialization" do
+    parent = self()
+    release_ref = make_ref()
+
+    {owner, owner_monitor} =
+      spawn_monitor(fn ->
+        {:ok, upstream} =
+          FakeUpstream.start_link(
+            FakeUpstream.websocket_init_barrier(websocket_success_without_id(),
+              notify: parent,
+              release_ref: release_ref
+            )
+          )
+
+        send(parent, {:fake_upstream_started, self(), upstream})
+
+        receive do
+          :stop_fake_upstream_owner -> exit(:shutdown)
+        end
+      end)
+
+    assert_receive {:fake_upstream_started, ^owner, upstream}, 1_000
+    supervisor_monitor = Process.monitor(upstream.supervisor)
+
+    request_task =
+      Task.async(fn ->
+        request = %{
+          websocket_request(FakeUpstream.url(upstream))
+          | connection_bound_continuation?: true
+        }
+
+        UpstreamWebsocketSession.request_once(request)
+      end)
+
+    assert_receive {:fake_upstream_websocket_barrier, :before_init, websocket_pid, ^release_ref},
+                   1_000
+
+    send(owner, :stop_fake_upstream_owner)
+    assert_receive {:DOWN, ^owner_monitor, :process, ^owner, :shutdown}, 1_000
+    assert Process.alive?(upstream.pid)
+    send(websocket_pid, {:fake_upstream_release_websocket, release_ref})
+
+    assert_receive {:fake_upstream_websocket_initialized, ^websocket_pid, ^release_ref}, 1_000
+    assert_receive {:DOWN, ^supervisor_monitor, :process, _, :shutdown}, 5_000
+
+    terminal = native_retry_terminal()
+
+    assert {:ok,
+            %{
+              body: "data: " <> ^terminal <> "\n\n",
+              terminal: "error",
+              status: 200,
+              upstream_error_code: "previous_response_not_found",
+              upstream_error_param: "previous_response_id"
+            }} = Task.await(request_task, 1_000)
+  end
+
+  @tag :fake_upstream_lifecycle_regression
+  test "top-level FakeUpstream server failure terminates its lifecycle without replacement" do
+    parent = self()
+
+    {owner, owner_monitor} =
+      spawn_monitor(fn ->
+        {:ok, upstream} = FakeUpstream.start_link(websocket_success_without_id())
+        send(parent, {:fake_upstream_started, self(), upstream})
+
+        receive do
+          :stop_fake_upstream_owner -> FakeUpstream.stop(upstream)
+        end
+      end)
+
+    on_exit(fn ->
+      if Process.alive?(owner), do: send(owner, :stop_fake_upstream_owner)
+    end)
+
+    assert_receive {:fake_upstream_started, ^owner, upstream}, 1_000
+    server_monitor = Process.monitor(upstream.server)
+    supervisor_monitor = Process.monitor(upstream.supervisor)
+    state_monitor = Process.monitor(upstream.pid)
+
+    capture_log(fn ->
+      Supervisor.stop(upstream.server, :synthetic_failure)
+
+      assert_receive {:DOWN, ^server_monitor, :process, _, :synthetic_failure}, 1_000
+      assert_receive {:DOWN, ^supervisor_monitor, :process, _, :shutdown}, 1_000
+      assert_receive {:DOWN, ^state_monitor, :process, _, :shutdown}, 1_000
+      assert_receive {:DOWN, ^owner_monitor, :process, ^owner, :shutdown}, 1_000
+    end)
+
+    assert {:error, %{body: "", reason: %Mint.TransportError{reason: :econnrefused}}} =
+             UpstreamWebsocketSession.request_once(websocket_request(FakeUpstream.url(upstream)))
+  end
+
   defp assert_guard_terminal(session, request, label, connection_use) do
     parent = self()
     request = %{request | writer: fn frame -> send(parent, {:guard_frame, label, frame}) end}
