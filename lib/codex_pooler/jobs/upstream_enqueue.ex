@@ -35,6 +35,12 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
     states: :successful,
     period: 60
   ]
+  @scheduled_reconciliation_unique [
+    fields: [:args, :queue, :worker],
+    keys: [:upstream_identity_id],
+    states: :successful,
+    period: 55
+  ]
   @scheduled_saved_reset_unique [
     fields: [:args, :queue, :worker],
     keys: [:upstream_identity_id],
@@ -223,10 +229,12 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
 
   # Scheduled and gateway triggers share one automatic dedup boundary per
   # upstream identity: an incomplete job of either shape blocks a new insert
-  # regardless of age, a completed job imposes the 60-second inserted-at
-  # cooldown from the Oban unique config, and cancelled/discarded jobs are
-  # replaceable immediately. The check-then-insert pair is deliberately not
-  # serialized here: a racing enqueue falls through to Oban's advisory-locked
+  # regardless of age, and cancelled/discarded jobs are replaceable immediately.
+  # Gateway enqueue attempts retain a 60-second inserted-at cooldown. Scheduled
+  # fanout uses 55 seconds so small cron/queue timing differences do not suppress
+  # the next minute; the untimed incomplete guard still prevents overlap when
+  # reconciliation itself runs longer. The check-then-insert pair is deliberately
+  # not serialized here: a racing enqueue falls through to Oban's advisory-locked
   # unique insert and resolves as conflict?: true.
   defp enqueue_automatic_identity_account_reconciliation(pool_id, assignment, opts) do
     args =
@@ -280,9 +288,16 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
   end
 
   defp automatic_reconciliation_job_options(opts) do
+    unique =
+      if Keyword.get(opts, :trigger_kind) == "scheduled" do
+        @scheduled_reconciliation_unique
+      else
+        @automatic_reconciliation_unique
+      end
+
     opts
     |> Keyword.take([:scheduled_at, :schedule_in])
-    |> Keyword.put(:unique, @automatic_reconciliation_unique)
+    |> Keyword.put(:unique, unique)
   end
 
   defp tap_job_status_event(

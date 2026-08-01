@@ -5078,6 +5078,58 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
       assert later_job.args["pool_upstream_assignment_id"] == assignment.id
     end
 
+    test "scheduled reconciliation tolerates minute-boundary insertion jitter after completion" do
+      {_pool, assignment} = active_assignment_fixture(%{})
+
+      assert :ok = perform_job(AccountReconciliationEnqueueWorker, %{})
+      assert [first_job] = all_enqueued(worker: AccountReconciliationWorker)
+
+      jittered_inserted_at =
+        DateTime.utc_now()
+        |> DateTime.add(-56, :second)
+        |> DateTime.truncate(:microsecond)
+
+      {1, _rows} =
+        from(job in Oban.Job, where: job.id == ^first_job.id)
+        |> Repo.update_all(
+          set: [
+            state: "completed",
+            attempt: 1,
+            inserted_at: jittered_inserted_at,
+            attempted_at: DateTime.utc_now() |> DateTime.truncate(:microsecond),
+            completed_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+          ]
+        )
+
+      assert :ok = perform_job(AccountReconciliationEnqueueWorker, %{})
+      assert [later_job] = all_enqueued(worker: AccountReconciliationWorker)
+
+      assert later_job.id != first_job.id
+      assert later_job.args["upstream_identity_id"] == assignment.upstream_identity_id
+    end
+
+    test "scheduled reconciliation keeps a cooldown inside the cron jitter margin" do
+      {_pool, _assignment} = active_assignment_fixture(%{})
+
+      assert {:ok, %{inserted: [first_job], conflicts: [], errors: []}} =
+               Jobs.enqueue_account_reconciliation_for_active_pools(trigger_kind: "scheduled")
+
+      recent_inserted_at =
+        DateTime.utc_now()
+        |> DateTime.add(-54, :second)
+        |> DateTime.truncate(:microsecond)
+
+      {1, _rows} =
+        from(job in Oban.Job, where: job.id == ^first_job.id)
+        |> Repo.update_all(set: [state: "completed", inserted_at: recent_inserted_at])
+
+      assert {:ok, %{inserted: [], conflicts: [conflict_job], errors: []}} =
+               Jobs.enqueue_account_reconciliation_for_active_pools(trigger_kind: "scheduled")
+
+      assert conflict_job.conflict?
+      assert conflict_job.id == first_job.id
+    end
+
     test "malformed active-pool trigger kind falls back to manual assignment fanout" do
       {pool, assignment} = active_assignment_fixture(%{})
       identity = Upstreams.get_upstream_identity(assignment.upstream_identity_id)
@@ -5537,6 +5589,21 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
       {pool, assignment} = active_assignment_fixture(%{})
 
       assert {:ok, first_job} = Jobs.enqueue_gateway_account_reconciliation(pool, assignment)
+
+      inside_cooldown_inserted_at =
+        DateTime.utc_now()
+        |> DateTime.add(-56, :second)
+        |> DateTime.truncate(:microsecond)
+
+      {1, _rows} =
+        from(job in Oban.Job, where: job.id == ^first_job.id)
+        |> Repo.update_all(set: [state: "completed", inserted_at: inside_cooldown_inserted_at])
+
+      assert {:ok, conflict_job} =
+               Jobs.enqueue_gateway_account_reconciliation(pool, assignment)
+
+      assert conflict_job.conflict?
+      assert conflict_job.id == first_job.id
 
       expired_inserted_at =
         DateTime.utc_now()
