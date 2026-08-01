@@ -4,6 +4,26 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
   alias CodexPooler.Catalog.OpenAIPricingPreflight
 
   @fixture Path.expand("../../fixtures/pricing/openai/2026-07-28.json", __DIR__)
+  @target Path.expand("../../../priv/pricing/openai/pricing.json", __DIR__)
+  @target_sha256 "6f60a5009b16b872429682b2c74548b152abbe7ab6b3664bad4900ed308c18ca"
+
+  @skipped_pricing_type_paths [
+    "models.gpt-4o-mini-transcribe.pricing_type",
+    "models.gpt-4o-transcribe-diarize.pricing_type",
+    "models.gpt-4o-transcribe.pricing_type",
+    "models.gpt-live-transcribe.pricing_type",
+    "models.gpt-transcribe.pricing_type",
+    "models.sora-2-pro.pricing_type",
+    "models.sora-2.pricing_type",
+    "models.whisper.pricing_type"
+  ]
+
+  @incomplete_bucket_paths [
+    "models.omni-moderation-latest.prices.standard.default",
+    "models.text-embedding-3-large.prices.standard.default",
+    "models.text-embedding-3-small.prices.standard.default",
+    "models.text-embedding-ada-002.prices.standard.default"
+  ]
 
   test "classifies the immutable July 28 fixture with exact reviewed coverage" do
     result = OpenAIPricingPreflight.validate_file(@fixture)
@@ -35,6 +55,44 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
              "models.text-embedding-3-small.prices.standard.default",
              "models.text-embedding-ada-002.prices.standard.default"
            ]
+  end
+
+  test "classifies the reviewed July 31 target with exact artifact and warning coverage" do
+    raw = File.read!(@target)
+    payload = Jason.decode!(raw)
+    result = OpenAIPricingPreflight.validate_file(@target)
+
+    assert byte_size(raw) == 62_279
+    assert Base.encode16(:crypto.hash(:sha256, raw), case: :lower) == @target_sha256
+    assert payload["generated_at"] == "2026-07-31T05:10:03.599675Z"
+    assert payload["models_count"] == 79
+    assert map_size(payload["models"]) == 79
+    assert payload["tools_count"] == 4
+    assert map_size(payload["tools"]) == 4
+
+    assert result.compatible?
+    assert result.errors == []
+    assert length(result.warnings) == 82
+
+    assert result.summary == %{
+             importable_rows: 171,
+             priced_rows: 162,
+             unavailable_rows: 9,
+             skipped_models: 8,
+             skipped_price_buckets: 74
+           }
+
+    assert Enum.frequencies_by(result.warnings, & &1.code) == %{
+             incomplete_price_bucket: 4,
+             unsupported_price_bucket: 70,
+             unsupported_pricing_type: 8
+           }
+
+    warning_paths = Enum.group_by(result.warnings, & &1.code, & &1.path)
+    assert warning_paths.incomplete_price_bucket == @incomplete_bucket_paths
+    assert warning_paths.unsupported_pricing_type == @skipped_pricing_type_paths
+    assert length(Enum.uniq(warning_paths.unsupported_price_bucket)) == 70
+    assert result.warnings == Enum.sort_by(result.warnings, &{&1.path, &1.code, &1.message})
   end
 
   test "strict root, model, and tool objects reject missing, extra, and wrong typed values" do
