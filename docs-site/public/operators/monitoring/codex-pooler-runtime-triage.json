@@ -1144,12 +1144,12 @@
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
-      "title": "HTTP Status Class Rate",
+      "title": "HTTP Route Rate",
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Low-cardinality request outcome rate. Use this to separate traffic growth from error storms.",
+      "description": "Low-cardinality request rate by route, method, and status class. Use this to separate route-specific traffic growth from error storms.",
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
@@ -1177,9 +1177,9 @@
       },
       "targets": [
         {
-          "expr": "sum by (method, status_class) (rate(codex_pooler_http_request_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "expr": "sum by (route, method, status_class) (rate(codex_pooler_http_route_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
           "refId": "",
-          "legendFormat": "{{method}} {{status_class}}",
+          "legendFormat": "{{route}} {{method}} {{status_class}}",
           "range": true,
           "instant": false,
           "editorMode": "code"
