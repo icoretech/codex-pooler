@@ -30,11 +30,18 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   @account_snapshot_reset_tolerance_seconds 5
   @candidate_metadata_key "__quota_confirmed_candidate_v1"
   @candidate_version 1
+  @candidate_provider_status_metadata_key "__quota_candidate_provider_status_v1"
+  @candidate_provider_status_version 1
 
   @type identity_ref :: UpstreamIdentity.t() | Ecto.UUID.t()
   @type candidate :: %{
           required(:used_percent) => Decimal.t(),
           required(:reset_at) => DateTime.t(),
+          required(:observed_at) => DateTime.t()
+        }
+  @type candidate_provider_status :: %{
+          required(:allowed) => boolean(),
+          required(:limit_reached) => boolean(),
           required(:observed_at) => DateTime.t()
         }
 
@@ -146,16 +153,19 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   def put_candidate(metadata, %Evidence{
         used_percent: %Decimal{} = used_percent,
         reset_at: %DateTime{} = reset_at,
-        observed_at: %DateTime{} = observed_at
+        observed_at: %DateTime{} = observed_at,
+        metadata: evidence_metadata
       })
       when is_map(metadata) do
-    Map.put(metadata, @candidate_metadata_key, %{
+    metadata
+    |> Map.put(@candidate_metadata_key, %{
       "version" => @candidate_version,
       "used_percent" => canonical_decimal_string(used_percent),
       "reset_at" => DateTime.to_iso8601(reset_at),
       "observed_at" => DateTime.to_iso8601(observed_at),
       "count" => 1
     })
+    |> put_candidate_provider_status_from_metadata(evidence_metadata, observed_at)
   end
 
   @spec parse_candidate(map()) :: {:ok, candidate()} | :none
@@ -175,6 +185,36 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     else
       _invalid -> :none
     end
+  end
+
+  @spec parse_candidate_provider_status(map()) :: {:ok, candidate_provider_status()} | :none
+  def parse_candidate_provider_status(metadata) when is_map(metadata) do
+    with {:ok, %{observed_at: candidate_observed_at}} <- parse_candidate(metadata),
+         %{
+           "version" => @candidate_provider_status_version,
+           "allowed" => allowed,
+           "limit_reached" => limit_reached,
+           "observed_at" => observed_at
+         } = encoded <- Map.get(metadata, @candidate_provider_status_metadata_key),
+         true <- map_size(encoded) == 4,
+         true <- is_boolean(allowed) and is_boolean(limit_reached),
+         false <- allowed and limit_reached,
+         {:ok, parsed_observed_at} <- parse_datetime(observed_at),
+         :eq <- DateTime.compare(parsed_observed_at, candidate_observed_at) do
+      {:ok, %{allowed: allowed, limit_reached: limit_reached, observed_at: parsed_observed_at}}
+    else
+      _invalid -> :none
+    end
+  end
+
+  def parse_candidate_provider_status(_metadata), do: :none
+
+  @spec candidate_provider_status_safe?(map()) :: boolean()
+  def candidate_provider_status_safe?(metadata) do
+    match?(
+      {:ok, %{allowed: true, limit_reached: false}},
+      parse_candidate_provider_status(metadata)
+    )
   end
 
   @spec candidate_equivalent?(candidate(), Evidence.t()) :: boolean()
@@ -210,6 +250,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   def clear_candidate(metadata) when is_map(metadata) do
     metadata
     |> Map.delete(@candidate_metadata_key)
+    |> Map.delete(@candidate_provider_status_metadata_key)
     |> RelativeLiveness.clear_candidate_metadata()
   end
 
@@ -323,6 +364,9 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
         equivalent_account_anchor_maintenance?(evidence, existing, timestamp) ->
           equivalent_account_anchor_attrs(existing, attrs, evidence, timestamp)
+
+        runtime_corroborated_weekly_restart?(evidence, existing, timestamp) ->
+          runtime_corroborated_weekly_restart_attrs(existing, attrs, evidence, timestamp)
 
         unconfirmed_weekly_zero_observation?(evidence, existing, timestamp) ->
           sliding_restart_attrs(existing, attrs, evidence, timestamp)
@@ -667,16 +711,16 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   defp sliding_restart_attrs(existing, attrs, evidence, timestamp) do
     metadata = existing.metadata || %{}
     decision = restart_candidate_decision(metadata, existing, evidence, timestamp)
-    log_restart_decision(decision, existing, evidence, metadata)
+    log_restart_decision(decision, existing, evidence, metadata, timestamp)
 
     case decision do
       :accept ->
         accepted_attrs =
           existing
-          |> accepted_snapshot_attrs(attrs, timestamp)
+          |> accepted_restart_snapshot_attrs(attrs, timestamp)
           |> RelativeLiveness.put_canonical_metadata(evidence, existing, timestamp)
 
-        if fixed_forward_anchor_confirmed?(metadata, evidence, existing, timestamp) do
+        if anchored_restart_confirmed?(metadata, evidence, existing, timestamp) do
           CycleConfirmation.confirm(accepted_attrs, evidence, timestamp)
         else
           accepted_attrs
@@ -750,13 +794,21 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       (consistent_sliding_candidate?(candidate, evidence, metadata, timestamp) or
          expired_cycle_zero_candidate?(candidate, existing, timestamp) or
          forward_anchor_zero_candidate?(candidate, evidence, existing, timestamp) or
-         fixed_forward_anchor_candidate?(candidate, evidence, existing, metadata, timestamp))
+         fixed_forward_anchor_candidate?(candidate, evidence, existing, metadata, timestamp) or
+         exhausted_same_anchor_candidate?(candidate, evidence, existing, metadata, timestamp))
   end
 
-  defp fixed_forward_anchor_confirmed?(metadata, evidence, existing, timestamp) do
+  defp anchored_restart_confirmed?(metadata, evidence, existing, timestamp) do
     case parse_candidate(metadata) do
       {:ok, candidate} ->
-        fixed_forward_anchor_candidate?(candidate, evidence, existing, metadata, timestamp) and
+        (fixed_forward_anchor_candidate?(candidate, evidence, existing, metadata, timestamp) or
+           exhausted_same_anchor_candidate?(
+             candidate,
+             evidence,
+             existing,
+             metadata,
+             timestamp
+           )) and
           confirmation_span_reached?(candidate, evidence)
 
       :none ->
@@ -771,21 +823,151 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       forward_of_existing_cycle?(evidence, existing)
   end
 
+  defp exhausted_same_anchor_candidate?(
+         candidate,
+         %Evidence{
+           source: "codex_usage_api",
+           quota_key: "account",
+           quota_scope: "account",
+           quota_family: "account",
+           window_kind: "secondary",
+           window_minutes: 10_080,
+           model: nil,
+           upstream_model: nil,
+           used_percent: %Decimal{},
+           reset_at: %DateTime{},
+           observed_at: %DateTime{},
+           metadata: evidence_metadata
+         } = evidence,
+         %Quota.AccountQuotaWindow{
+           source: "codex_usage_api",
+           quota_key: "account",
+           quota_scope: "account",
+           quota_family: "account",
+           window_kind: "secondary",
+           window_minutes: 10_080,
+           model: nil,
+           upstream_model: nil,
+           reset_at: %DateTime{} = existing_reset,
+           observed_at: %DateTime{}
+         } = existing,
+         metadata,
+         timestamp
+       ) do
+    exhausted_same_anchor_state_valid?(candidate, existing, metadata, timestamp) and
+      exhausted_same_anchor_observation_valid?(
+        candidate,
+        evidence,
+        existing,
+        existing_reset,
+        evidence_metadata
+      ) and
+      exhausted_same_anchor_liveness_valid?(candidate, evidence, metadata, timestamp)
+  end
+
+  defp exhausted_same_anchor_candidate?(
+         _candidate,
+         _evidence,
+         _existing,
+         _metadata,
+         _timestamp
+       ),
+       do: false
+
+  defp exhausted_same_anchor_state_valid?(candidate, existing, metadata, timestamp) do
+    exhausted_by_used_percent?(existing) and candidate_valid?(candidate, timestamp) and
+      zero_candidate?(candidate) and candidate_provider_status_safe?(metadata)
+  end
+
+  defp exhausted_same_anchor_observation_valid?(
+         candidate,
+         evidence,
+         existing,
+         existing_reset,
+         evidence_metadata
+       ) do
+    zero_percent?(evidence.used_percent) and candidate_equivalent?(candidate, evidence) and
+      reset_times_equivalent?(candidate.reset_at, existing_reset) and
+      reset_times_equivalent?(evidence.reset_at, existing_reset) and
+      provider_status_safe?(evidence_metadata) and same_evidence_identity?(evidence, existing)
+  end
+
+  defp exhausted_same_anchor_liveness_valid?(candidate, evidence, metadata, timestamp) do
+    newer_observation?(evidence.observed_at, candidate.observed_at) and
+      DateTime.compare(evidence.observed_at, timestamp) != :gt and
+      Evidence.current_freshness_state(evidence, timestamp) == "fresh" and
+      RelativeLiveness.candidate_advances?(metadata, evidence, timestamp)
+  end
+
+  defp provider_status_safe?(%{
+         "rate_limit_allowed" => true,
+         "rate_limit_reached" => false
+       }),
+       do: true
+
+  defp provider_status_safe?(_metadata), do: false
+
   defp put_relative_candidate(metadata, evidence, timestamp) do
     metadata
     |> put_candidate(evidence)
     |> RelativeLiveness.put_candidate_metadata(evidence, timestamp)
   end
 
-  defp log_restart_decision(decision, existing, evidence, metadata) do
+  defp put_candidate_provider_status_from_metadata(metadata, evidence_metadata, observed_at) do
+    case candidate_provider_status_from_metadata(evidence_metadata, observed_at) do
+      {:ok, status} -> Map.put(metadata, @candidate_provider_status_metadata_key, status)
+      :none -> Map.delete(metadata, @candidate_provider_status_metadata_key)
+    end
+  end
+
+  defp candidate_provider_status_from_metadata(metadata, %DateTime{} = observed_at)
+       when is_map(metadata) do
+    with allowed when is_boolean(allowed) <- Map.get(metadata, "rate_limit_allowed"),
+         limit_reached when is_boolean(limit_reached) <- Map.get(metadata, "rate_limit_reached"),
+         false <- allowed and limit_reached do
+      {:ok,
+       %{
+         "version" => @candidate_provider_status_version,
+         "allowed" => allowed,
+         "limit_reached" => limit_reached,
+         "observed_at" => DateTime.to_iso8601(observed_at)
+       }}
+    else
+      _invalid -> :none
+    end
+  end
+
+  defp candidate_provider_status_from_metadata(_metadata, _observed_at), do: :none
+
+  defp log_restart_decision(decision, existing, evidence, metadata, timestamp) do
     {cycle_decision, reason} =
       case decision do
-        :accept -> {:anchored_confirmed, "confirmation"}
-        :keep -> {:rejected, "candidate_not_ready"}
-        :restart -> {:candidate, "candidate_restarted"}
+        :accept ->
+          if exhausted_same_anchor_confirmed?(metadata, evidence, existing, timestamp) do
+            {:anchored_confirmed, "same_anchor_allowed_confirmation"}
+          else
+            {:anchored_confirmed, "confirmation"}
+          end
+
+        :keep ->
+          {:rejected, "candidate_not_ready"}
+
+        :restart ->
+          {:candidate, "candidate_restarted"}
       end
 
     log_cycle_decision(cycle_decision, reason, existing, evidence, metadata)
+  end
+
+  defp exhausted_same_anchor_confirmed?(metadata, evidence, existing, timestamp) do
+    case parse_candidate(metadata) do
+      {:ok, candidate} ->
+        exhausted_same_anchor_candidate?(candidate, evidence, existing, metadata, timestamp) and
+          confirmation_span_reached?(candidate, evidence)
+
+      :none ->
+        false
+    end
   end
 
   defp log_cycle_decision(decision, reason, _existing, evidence, metadata) do
@@ -1404,6 +1586,34 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
   defp runtime_weekly_restart_corroborated?(_evidence, _existing, _timestamp), do: false
 
+  defp runtime_corroborated_weekly_restart?(
+         %Evidence{used_percent: %Decimal{}, metadata: metadata} = evidence,
+         %Quota.AccountQuotaWindow{used_percent: %Decimal{}} = existing,
+         timestamp
+       ) do
+    runtime_restart_evidence_valid?(evidence, existing, metadata, timestamp) and
+      runtime_weekly_restart_corroborated?(evidence, existing, timestamp)
+  end
+
+  defp runtime_corroborated_weekly_restart?(_evidence, _existing, _timestamp), do: false
+
+  defp runtime_restart_evidence_valid?(evidence, existing, metadata, timestamp) do
+    account_weekly_evidence?(evidence) and exhausted_by_used_percent?(existing) and
+      zero_percent?(evidence.used_percent) and provider_status_safe?(metadata) and
+      same_evidence_identity?(evidence, existing) and
+      reset_times_equivalent?(evidence.reset_at, existing.reset_at) and
+      newer_observation?(evidence.observed_at, existing.observed_at) and
+      Evidence.current_freshness_state(evidence, timestamp) == "fresh" and
+      RelativeLiveness.advances?(evidence, existing, timestamp)
+  end
+
+  defp runtime_corroborated_weekly_restart_attrs(existing, attrs, evidence, timestamp) do
+    existing
+    |> accepted_restart_snapshot_attrs(attrs, timestamp)
+    |> RelativeLiveness.put_canonical_metadata(evidence, existing, timestamp)
+    |> CycleConfirmation.confirm(evidence, timestamp)
+  end
+
   defp stale_same_cycle_exhausted_snapshot?(evidence, existing, timestamp) do
     Evidence.current_freshness_state(existing, timestamp) != "fresh" and
       not exhausted_by_used_percent?(existing) and exhausted_by_used_percent?(evidence)
@@ -1454,6 +1664,22 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     |> Map.put_new(:created_at, existing.created_at || timestamp)
     |> Map.put(:updated_at, timestamp)
   end
+
+  defp accepted_restart_snapshot_attrs(existing, attrs, timestamp) do
+    {active_limit, credits} = restart_capacity(attrs)
+
+    existing
+    |> accepted_snapshot_attrs(attrs, timestamp)
+    |> Map.put(:active_limit, active_limit)
+    |> Map.put(:credits, credits)
+  end
+
+  defp restart_capacity(%{active_limit: active_limit, credits: credits})
+       when is_integer(active_limit) and active_limit > 0 and is_integer(credits) and credits >= 0 and
+              credits <= active_limit,
+       do: {active_limit, credits}
+
+  defp restart_capacity(_attrs), do: {nil, nil}
 
   defp clear_inherited_reset_state(metadata, attrs) do
     incoming_metadata = Map.get(attrs, :metadata, %{})

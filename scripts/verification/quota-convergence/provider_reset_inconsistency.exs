@@ -3,6 +3,7 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
 
   import Ecto.Query
 
+  alias CodexPooler.Accounting.UsageResponses
   alias CodexPooler.Admin.UpstreamQuotaReadiness
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Quotas.{Evidence, ModelWeeklyResetSemantics}
@@ -19,6 +20,19 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
 
   @receipt_schema_version 1
   @assert_failure_injection_env "CODEX_POOLER_QUOTA_HELPER_ASSERT_FAILURE"
+  @forbidden_receipt_identifier_fields MapSet.new([
+                                         "candidate_order",
+                                         "card_selector",
+                                         "chosen_id",
+                                         "chosen_ids",
+                                         "expected_id",
+                                         "expected_winner_id",
+                                         "floating_competitor_id",
+                                         "identity_uuid",
+                                         "post_snapshot_id",
+                                         "reset_selector"
+                                       ])
+  @uuid_pattern ~r/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i
   @pool_slug "provider-reset-proof"
   @historical_as_of ~U[2026-07-25 12:00:00.000000Z]
   @old_reset ~U[2026-07-25 03:24:36.000000Z]
@@ -34,6 +48,7 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
     floating: "floating",
     unknown: "unknown",
     qf: "qf",
+    issue_234: "issue_234",
     pressure_positive: "pressure_positive",
     pressure_exhausted: "pressure_exhausted"
   }
@@ -45,6 +60,7 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
     :floating,
     :unknown,
     :qf,
+    :issue_234,
     :pressure_positive,
     :pressure_exhausted
   ]
@@ -57,6 +73,7 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
     "provider-reset-proof-spark-floating",
     "provider-reset-proof-spark-unknown",
     "provider-reset-proof-spark-qf",
+    "provider-reset-proof-issue-234-same-anchor",
     "provider-reset-proof-spark-pressure-positive",
     "provider-reset-proof-spark-pressure-exhausted"
   ]
@@ -78,9 +95,9 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
   }
   @expected_fixture_counts %{
     "pools" => 1,
-    "identities" => 9,
-    "pool_assignments" => 9,
-    "quota_windows" => 17
+    "identities" => 10,
+    "pool_assignments" => 10,
+    "quota_windows" => 18
   }
 
   @spec run([String.t()]) :: :ok
@@ -103,7 +120,7 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
       :ok
     rescue
       error ->
-        retained_fixture_counts!("seed_retained")
+        retained_fixture_counts!("seed_retained", failure_class(error))
         reraise error, __STACKTRACE__
     end
   end
@@ -115,7 +132,7 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
       :ok
     rescue
       error ->
-        retained_fixture_counts!("assert_retained")
+        retained_fixture_counts!("assert_retained", failure_class(error))
         reraise error, __STACKTRACE__
     end
   end
@@ -143,6 +160,7 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
     seed_forward_transition!(identities.forward)
     seed_equivalent_transition!(identities.equivalent)
     seed_legacy_transition!(identities.legacy)
+    seed_issue_234_same_anchor_transition!(identities.issue_234)
     seed_historical_qf!(identities.qf)
     seed_browser_fixtures!(identities, browser_now)
   end
@@ -216,6 +234,44 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
 
     insert_window!(identity, "primary", "codex_response_headers", legacy_at, @old_reset, "2")
     insert_window!(identity, "secondary", "codex_usage_api", current_at, @new_reset, "0")
+  end
+
+  defp seed_issue_234_same_anchor_transition!(identity) do
+    canonical_at = ~U[2026-07-21 17:00:00.000000Z]
+    candidate_at = ~U[2026-07-21 17:05:00.000000Z]
+    confirmed_at = ~U[2026-07-21 17:08:00.000000Z]
+    fixed_anchor = ~U[2026-07-26 17:00:00.000000Z]
+
+    {:ok, canonical} =
+      EvidenceStore.record_evidence(
+        identity,
+        weekly_attrs("codex_usage_api", canonical_at, "100", fixed_anchor)
+        |> Map.merge(%{active_limit: 243, credits: 0}),
+        canonical_at,
+        canonical_at
+      )
+
+    record_safe_fixed_zero!(identity, candidate_at, fixed_anchor)
+    pending = Repo.get!(AccountQuotaWindow, canonical.id)
+    assert_issue_234_pending!(identity, pending, candidate_at, fixed_anchor)
+
+    record_safe_fixed_zero!(identity, confirmed_at, fixed_anchor)
+    confirmed = Repo.get!(AccountQuotaWindow, canonical.id)
+    assert_issue_234_confirmed!(identity, confirmed, confirmed_at, fixed_anchor)
+
+    emit_receipt!("issue_234_same_anchor", %{
+      "candidate_span_seconds" => DateTime.diff(confirmed_at, candidate_at, :second),
+      "canonical_percent" => 100,
+      "pending_percent" => 100,
+      "pending_capacity_preserved" => true,
+      "pending_routing_eligible" => false,
+      "confirmed_percent" => 0,
+      "confirmed_capacity_state" => "absent",
+      "confirmed_cycle_state" => "anchored",
+      "confirmed_routing_state" => "weekly_only_probe",
+      "compatibility_allowed" => true,
+      "compatibility_limit_reached" => false
+    })
   end
 
   defp seed_historical_qf!(identity) do
@@ -363,12 +419,21 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
     floating = identity!(account_id!(:floating))
     unknown = identity!(account_id!(:unknown))
     qf = identity!(account_id!(:qf))
+    issue_234 = identity!(account_id!(:issue_234))
     pressure_positive = identity!(account_id!(:pressure_positive))
     pressure_exhausted = identity!(account_id!(:pressure_exhausted))
 
     assert_forward_transition!(forward)
     assert_equivalent_transition!(equivalent)
     assert_legacy_transition!(legacy)
+
+    assert_issue_234_confirmed!(
+      issue_234,
+      provider_row!(issue_234),
+      ~U[2026-07-21 17:08:00.000000Z],
+      ~U[2026-07-26 17:00:00.000000Z]
+    )
+
     assert_historical_qf!(qf)
 
     browser_now = browser_now!(anchored)
@@ -441,6 +506,137 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
     expect!(routing.eligible?, "legacy routing not ready")
   end
 
+  defp assert_issue_234_pending!(identity, pending, candidate_at, fixed_anchor) do
+    expect!(
+      Decimal.equal?(pending.used_percent, Decimal.new("100")),
+      "issue 234 pressure changed"
+    )
+
+    expect!(pending.active_limit == 243, "issue 234 stale active limit changed")
+    expect!(pending.credits == 0, "issue 234 stale credits changed")
+
+    {:ok, candidate} = EvidenceStore.parse_candidate(pending.metadata)
+
+    expect!(
+      Decimal.equal?(candidate.used_percent, Decimal.new("0")),
+      "issue 234 candidate percent mismatch"
+    )
+
+    expect!(
+      DateTime.compare(candidate.reset_at, fixed_anchor) == :eq,
+      "issue 234 candidate anchor mismatch"
+    )
+
+    expect!(
+      DateTime.compare(candidate.observed_at, candidate_at) == :eq,
+      "issue 234 candidate time mismatch"
+    )
+
+    expect!(
+      match?(
+        {:ok, %{allowed: true, limit_reached: false, observed_at: ^candidate_at}},
+        EvidenceStore.parse_candidate_provider_status(pending.metadata)
+      ),
+      "issue 234 candidate status missing"
+    )
+
+    routing = Windows.routing_quota_eligibility(identity, at: candidate_at)
+    compatibility = codex_rate_limit(identity, candidate_at)
+
+    expect!(
+      not routing.eligible? and routing.routing_state == :blocked,
+      "issue 234 quarantine routed"
+    )
+
+    expect!(routing.selection.secondary.id == pending.id, "issue 234 quarantine row not selected")
+    expect!(compatibility.allowed == false, "issue 234 quarantine compatibility allowed")
+    expect!(compatibility.limit_reached == true, "issue 234 quarantine limit not reached")
+
+    expect!(
+      compatibility.secondary_window.used_percent == 100,
+      "issue 234 quarantine percent changed"
+    )
+  end
+
+  defp assert_issue_234_confirmed!(identity, confirmed, confirmed_at, fixed_anchor) do
+    marker = confirmed.metadata[@confirmation_key]
+
+    expect!(Decimal.equal?(confirmed.used_percent, Decimal.new("0")), "issue 234 did not reset")
+    expect!(is_nil(confirmed.active_limit), "issue 234 retained stale active limit")
+    expect!(is_nil(confirmed.credits), "issue 234 retained stale credits")
+    expect!(DateTime.compare(confirmed.reset_at, fixed_anchor) == :eq, "issue 234 anchor changed")
+
+    expect!(
+      DateTime.compare(confirmed.observed_at, confirmed_at) == :eq,
+      "issue 234 observation stale"
+    )
+
+    expect!(
+      confirmed.metadata["__quota_relative_liveness_v1"] == DateTime.to_iso8601(confirmed_at),
+      "issue 234 watermark did not advance"
+    )
+
+    expect!(confirmed.metadata["reset_state"] == "anchored", "issue 234 row not anchored")
+    expect!(is_map(marker), "issue 234 cycle marker missing")
+    expect!(marker["scope"] == "account", "issue 234 marker scope mismatch")
+    expect!(marker["family"] == "account", "issue 234 marker family mismatch")
+    expect!(marker["key"] == "account", "issue 234 marker key mismatch")
+    expect!(marker["kind"] == "secondary", "issue 234 marker kind mismatch")
+    expect!(marker["minutes"] == 10_080, "issue 234 marker duration mismatch")
+    expect!(is_nil(marker["model"]), "issue 234 marker model mismatch")
+    expect!(is_nil(marker["upstream_model"]), "issue 234 marker upstream model mismatch")
+
+    expect!(
+      marker["reset_at"] == DateTime.to_iso8601(fixed_anchor),
+      "issue 234 marker reset mismatch"
+    )
+
+    expect!(
+      marker["provider_observed_at"] == DateTime.to_iso8601(confirmed_at),
+      "issue 234 marker watermark mismatch"
+    )
+
+    expect!(
+      marker["confirmed_at"] == DateTime.to_iso8601(confirmed_at),
+      "issue 234 confirmation time mismatch"
+    )
+
+    expect!(marker["source_class"] == "provider_usage", "issue 234 marker source mismatch")
+
+    expect!(
+      not Map.has_key?(confirmed.metadata, "__quota_confirmed_candidate_v1"),
+      "issue 234 candidate survived"
+    )
+
+    expect!(
+      not Map.has_key?(confirmed.metadata, "__quota_candidate_provider_status_v1"),
+      "issue 234 candidate status survived"
+    )
+
+    routing = Windows.routing_quota_eligibility(identity, at: confirmed_at)
+    compatibility = codex_rate_limit(identity, confirmed_at)
+
+    expect!(routing.eligible?, "issue 234 routing remained blocked")
+    expect!(routing.routing_state == :weekly_only_probe, "issue 234 routing state mismatch")
+
+    expect!(
+      routing.selection.secondary.id == confirmed.id,
+      "issue 234 confirmed row not selected"
+    )
+
+    expect!(compatibility.allowed == true, "issue 234 compatibility remained blocked")
+
+    expect!(
+      compatibility.limit_reached == false,
+      "issue 234 compatibility limit remained reached"
+    )
+
+    expect!(
+      compatibility.secondary_window.used_percent == 0,
+      "issue 234 compatibility percent stale"
+    )
+  end
+
   defp assert_historical_qf!(identity) do
     historical_rows = Windows.list_quota_windows(identity, @historical_as_of)
     persisted_rows = historical_qf_rows(identity)
@@ -477,18 +673,20 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
     )
 
     emit_receipt!("qf_ordering", %{
-      "candidate_order" => [floating.id, markerless.id],
-      "chosen_id" => floating_first_winner.id,
-      "expected_id" => @qf_historical_ids.floating,
-      "post_snapshot_id" => post_snapshot.id,
+      "input_order" => "floating_first",
+      "candidate_count" => 2,
+      "chosen_role" => "floating",
+      "expected_role" => "floating",
+      "ordering_passed" => true,
       "post_snapshot_excluded" => true
     })
 
     emit_receipt!("qf_ordering", %{
-      "candidate_order" => [markerless.id, floating.id],
-      "chosen_id" => markerless_first_winner.id,
-      "expected_id" => @qf_historical_ids.floating,
-      "post_snapshot_id" => post_snapshot.id,
+      "input_order" => "markerless_first",
+      "candidate_count" => 2,
+      "chosen_role" => "floating",
+      "expected_role" => "floating",
+      "ordering_passed" => true,
       "post_snapshot_excluded" => true
     })
   end
@@ -557,9 +755,10 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
 
     emit_receipt!("pressure_ordering", %{
       "contest" => Atom.to_string(contest),
-      "expected_winner_id" => expected_winner_id,
-      "floating_competitor_id" => floating_competitor_id,
-      "chosen_ids" => [pressure_first_winner.id, floating_first_winner.id],
+      "candidate_count" => 2,
+      "expected_winner_role" => "pressure",
+      "competitor_role" => "floating",
+      "both_input_orders_passed" => true,
       "winner_semantics" => Atom.to_string(winner_semantics),
       "competitor_semantics" => Atom.to_string(competitor_semantics),
       "measurement_rank_tied" => true,
@@ -570,9 +769,6 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
 
   defp assert_selector_contract!(identity, at, role, expected) do
     limit = spark_limit!(identity, at)
-    identity_uuid = identity_uuid!(identity)
-    card_selector = "#upstream-account-#{identity_uuid}"
-    reset_selector = "#{card_selector}-limit-#{@spark_limit_key}-reset"
 
     case expected do
       :running ->
@@ -583,9 +779,8 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
 
         emit_receipt!("selector", %{
           "role" => role,
-          "identity_uuid" => identity_uuid,
-          "card_selector" => card_selector,
-          "reset_selector" => reset_selector,
+          "card_contract_checked" => true,
+          "reset_contract_checked" => true,
           "reset_present" => true,
           "countdown_state" => "running",
           "countdown_hook" => "RelativeCountdown",
@@ -599,9 +794,8 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
 
         emit_receipt!("selector", %{
           "role" => role,
-          "identity_uuid" => identity_uuid,
-          "card_selector" => card_selector,
-          "reset_selector" => reset_selector,
+          "card_contract_checked" => true,
+          "reset_contract_checked" => true,
           "reset_present" => true,
           "countdown_state" => "waiting",
           "countdown_hook" => nil,
@@ -616,9 +810,8 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
 
         emit_receipt!("selector", %{
           "role" => role,
-          "identity_uuid" => identity_uuid,
-          "card_selector" => card_selector,
-          "reset_selector" => reset_selector,
+          "card_contract_checked" => true,
+          "reset_contract_checked" => true,
           "reset_present" => false,
           "countdown_state" => "unknown",
           "countdown_hook" => nil,
@@ -713,6 +906,23 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
       EvidenceStore.record_evidence(
         identity,
         weekly_attrs("codex_rate_limit_event", observed_at, percent, reset_at),
+        observed_at,
+        observed_at
+      )
+
+    row
+  end
+
+  defp record_safe_fixed_zero!(identity, observed_at, fixed_anchor) do
+    {:ok, row} =
+      EvidenceStore.record_evidence(
+        identity,
+        weekly_attrs("codex_usage_api", observed_at, "0", fixed_anchor)
+        |> Map.put(:metadata, %{
+          "rate_limit_allowed" => true,
+          "rate_limit_reached" => false,
+          "reset_after_seconds" => DateTime.diff(fixed_anchor, observed_at, :second)
+        }),
         observed_at,
         observed_at
       )
@@ -822,6 +1032,13 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
     end
   end
 
+  defp codex_rate_limit(identity, at) do
+    identity
+    |> Windows.list_quota_windows(at)
+    |> UsageResponses.account_usage_windows(at)
+    |> then(fn {primary, secondary} -> UsageResponses.codex_rate_limit(primary, secondary) end)
+  end
+
   defp browser_now!(identity) do
     Repo.one!(
       from window in AccountQuotaWindow,
@@ -903,9 +1120,32 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
     Enum.all?(deleted, fn {key, count} -> count >= 0 and count <= Map.fetch!(before, key) end)
   end
 
-  defp retained_fixture_counts!(phase) when phase in ["seed_retained", "assert_retained"] do
-    emit_receipt!(phase, %{"fixture_counts" => fixture_counts()})
+  defp retained_fixture_counts!(phase, failure_class)
+       when phase in ["seed_retained", "assert_retained"] and is_binary(failure_class) do
+    emit_receipt!(phase, %{
+      "failure_class" => failure_class,
+      "fixture_counts" => fixture_counts()
+    })
   end
+
+  defp failure_class(%RuntimeError{message: "test-only assert failure injection"}),
+    do: "injected_assertion"
+
+  defp failure_class(%RuntimeError{message: message}) do
+    cond do
+      String.starts_with?(message, "issue 234") -> "issue_234_same_anchor"
+      String.starts_with?(message, "QF") -> "qf_ordering"
+      String.starts_with?(message, "pressure") -> "pressure_ordering"
+      String.contains?(message, "semantics mismatch") -> "selector_contract"
+      String.contains?(message, "reset label") -> "selector_contract"
+      String.contains?(message, "reset title") -> "selector_contract"
+      String.contains?(message, "reset timestamp") -> "selector_contract"
+      String.starts_with?(message, "receipt ") -> "receipt_contract"
+      true -> "convergence_assertion"
+    end
+  end
+
+  defp failure_class(_error), do: "helper_internal"
 
   defp maybe_inject_assert_failure! do
     if Mix.env() == :test and System.get_env(@assert_failure_injection_env) == "1" do
@@ -922,19 +1162,13 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
       :floating -> "provider-reset-proof-spark-floating"
       :unknown -> "provider-reset-proof-spark-unknown"
       :qf -> "provider-reset-proof-spark-qf"
+      :issue_234 -> "provider-reset-proof-issue-234-same-anchor"
       :pressure_positive -> "provider-reset-proof-spark-pressure-positive"
       :pressure_exhausted -> "provider-reset-proof-spark-pressure-exhausted"
     end
   end
 
   defp identity!(account_id), do: Repo.get_by!(UpstreamIdentity, chatgpt_account_id: account_id)
-
-  defp identity_uuid!(identity) do
-    case Ecto.UUID.cast(identity.id) do
-      {:ok, uuid} -> uuid
-      :error -> raise("identity UUID missing")
-    end
-  end
 
   defp provider_row!(identity) do
     Repo.one!(
@@ -956,8 +1190,29 @@ defmodule CodexPooler.Verification.ProviderResetInconsistency do
         fields
       )
 
+    ensure_identifier_free_receipt!(payload)
     IO.puts("quota-helper\t" <> Jason.encode!(payload))
   end
+
+  defp ensure_identifier_free_receipt!(value) when is_map(value) do
+    Enum.each(value, fn {key, nested_value} ->
+      expect!(
+        not MapSet.member?(@forbidden_receipt_identifier_fields, key),
+        "receipt identifier field forbidden"
+      )
+
+      ensure_identifier_free_receipt!(nested_value)
+    end)
+  end
+
+  defp ensure_identifier_free_receipt!(values) when is_list(values),
+    do: Enum.each(values, &ensure_identifier_free_receipt!/1)
+
+  defp ensure_identifier_free_receipt!(value) when is_binary(value) do
+    expect!(not Regex.match?(@uuid_pattern, value), "receipt UUID forbidden")
+  end
+
+  defp ensure_identifier_free_receipt!(_value), do: :ok
 
   defp expect!(true, _message), do: :ok
   defp expect!(false, message), do: raise(message)

@@ -4028,6 +4028,124 @@ defmodule CodexPooler.UpstreamsTest do
              ) == [{"account", "primary", 43_200}]
     end
 
+    test "keeps usage window metadata bounded to timing fields without provider status" do
+      synced_at = ~U[2026-04-27 10:00:00Z]
+
+      assert {:ok, [account_primary]} =
+               QuotaWindows.codex_usage_quota_windows_from_payload(
+                 reset_bearing_account_primary_payload(),
+                 synced_at
+               )
+
+      assert account_primary.metadata == %{
+               "limit_window_seconds" => 18_000,
+               "reset_after_seconds" => 900
+             }
+    end
+
+    test "preserves exact provider allow status on account windows only" do
+      synced_at = ~U[2026-04-27 10:00:00Z]
+
+      assert {:ok, windows} =
+               QuotaWindows.codex_usage_quota_windows_from_payload(
+                 %{
+                   "rate_limit" => %{
+                     "allowed" => true,
+                     "limit_reached" => false,
+                     "primary_window" => %{
+                       "used_percent" => 12,
+                       "limit_window_seconds" => 18_000,
+                       "reset_after_seconds" => 900
+                     },
+                     "secondary_window" => %{
+                       "used_percent" => 21,
+                       "limit_window_seconds" => 604_800,
+                       "reset_at" => "2026-05-04T10:00:00Z"
+                     }
+                   },
+                   "additional_rate_limits" => [
+                     %{
+                       "limit_name" => "Provider model quota",
+                       "rate_limit" => %{
+                         "allowed" => false,
+                         "limit_reached" => true,
+                         "primary_window" => %{
+                           "used_percent" => 44,
+                           "limit_window_seconds" => 18_000
+                         }
+                       }
+                     }
+                   ]
+                 },
+                 synced_at
+               )
+
+      account_windows = Enum.filter(windows, &(&1.quota_scope == "account"))
+      assert Enum.map(account_windows, & &1.window_kind) == ["primary", "secondary"]
+
+      assert Enum.all?(account_windows, fn window ->
+               window.metadata["rate_limit_allowed"] == true and
+                 window.metadata["rate_limit_reached"] == false
+             end)
+
+      assert [model_window] = Enum.filter(windows, &(&1.quota_scope == "model"))
+
+      refute Map.has_key?(model_window.metadata, "rate_limit_allowed")
+      refute Map.has_key?(model_window.metadata, "rate_limit_reached")
+    end
+
+    test "preserves rejected provider status on weekly primary normalized as account secondary" do
+      identity = active_identity_fixture()
+      observed_at = ~U[2026-04-27 13:00:00Z]
+
+      assert {:ok, [weekly]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 weekly_only_payload(%{
+                   "rate_limit" => %{
+                     "allowed" => false,
+                     "limit_reached" => true,
+                     "primary_window" => %{
+                       "used_percent" => 100,
+                       "limit_window_seconds" => 604_800,
+                       "reset_at" => "2026-05-04T13:00:00Z"
+                     }
+                   }
+                 }),
+                 observed_at
+               )
+
+      assert weekly.quota_scope == "account"
+      assert weekly.window_kind == "secondary"
+      assert weekly.metadata["rate_limit_allowed"] == false
+      assert weekly.metadata["rate_limit_reached"] == true
+    end
+
+    test "omits unusable provider allow status from account usage evidence" do
+      synced_at = ~U[2026-04-27 10:00:00Z]
+
+      for rate_limit_status <- [
+            %{},
+            %{"allowed" => nil, "limit_reached" => nil},
+            %{"allowed" => "true", "limit_reached" => "false"},
+            %{"allowed" => 1, "limit_reached" => 0},
+            %{"allowed" => true, "limit_reached" => true},
+            %{"allowed" => false, "limit_reached" => false},
+            %{"allowed" => true},
+            %{"limit_reached" => false}
+          ] do
+        payload =
+          reset_bearing_account_primary_payload()
+          |> update_in(["rate_limit"], &Map.merge(&1, rate_limit_status))
+
+        assert {:ok, [account_primary]} =
+                 QuotaWindows.codex_usage_quota_windows_from_payload(payload, synced_at)
+
+        refute Map.has_key?(account_primary.metadata, "rate_limit_allowed")
+        refute Map.has_key?(account_primary.metadata, "rate_limit_reached")
+      end
+    end
+
     test "preserves unknown long primary usage windows without remapping them" do
       identity = active_identity_fixture()
       observed_at = ~U[2026-04-27 13:00:00Z]

@@ -11,8 +11,11 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
 
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.Request
+  alias CodexPooler.Accounting.UsageResponses
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
+  alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+  alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
 
   @removed_reset_credit_paths [
     "/api/codex/rate-limit-reset-credits/consume",
@@ -221,6 +224,125 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
     assert rate_limit["allowed"] == false
     assert rate_limit["limit_reached"] == true
     assert %{"used_percent" => 100} = rate_limit["secondary_window"]
+  end
+
+  test "GET /api/codex/usage follows a confirmed fixed-anchor weekly reset", %{conn: conn} do
+    setup = usage_reset_identity_fixture()
+    %{identity: identity, observed_at: observed_at, reset_at: reset_at} = setup
+
+    assert {:ok, canonical} =
+             EvidenceStore.record_evidence(
+               identity,
+               weekly_quota_evidence(observed_at, reset_at, "100", %{},
+                 active_limit: 243,
+                 credits: 0
+               ),
+               observed_at,
+               observed_at
+             )
+
+    candidate_at = DateTime.add(observed_at, 5, :minute)
+
+    assert {:ok, _pending} =
+             EvidenceStore.record_evidence(
+               identity,
+               safe_weekly_zero(candidate_at, reset_at),
+               candidate_at,
+               candidate_at
+             )
+
+    pending = Repo.get!(AccountQuotaWindow, canonical.id)
+    assert Decimal.equal?(pending.used_percent, Decimal.new("100"))
+    assert_exhausted_routing(identity, pending, candidate_at)
+    assert_exhausted_usage_response(conn, setup)
+
+    confirmed_at = DateTime.add(candidate_at, 180, :second)
+
+    assert {:ok, _confirmed} =
+             EvidenceStore.record_evidence(
+               identity,
+               safe_weekly_zero(confirmed_at, reset_at),
+               confirmed_at,
+               confirmed_at
+             )
+
+    confirmed = Repo.get!(AccountQuotaWindow, canonical.id)
+    assert Decimal.equal?(confirmed.used_percent, Decimal.new("0"))
+    assert confirmed.active_limit == nil
+    assert confirmed.credits == nil
+
+    assert %{
+             eligible?: true,
+             routing_state: :weekly_only_probe,
+             selection: %{secondary: %AccountQuotaWindow{id: confirmed_id}, blocked_windows: []}
+           } = QuotaWindows.routing_quota_eligibility(identity, at: confirmed_at)
+
+    assert confirmed_id == confirmed.id
+
+    assert %{
+             "rate_limit" => %{
+               "allowed" => true,
+               "limit_reached" => false,
+               "secondary_window" => %{"used_percent" => 0}
+             }
+           } = usage_response(recycle(conn), setup)
+  end
+
+  test "GET /api/codex/usage keeps contradictory and replayed weekly resets exhausted", %{
+    conn: conn
+  } do
+    cases = [
+      {:contradictory,
+       fn candidate_at, confirmed_at, reset_at ->
+         {
+           weekly_quota_evidence(candidate_at, reset_at, "0", safe_status()),
+           weekly_quota_evidence(confirmed_at, reset_at, "0", %{
+             "rate_limit_allowed" => true,
+             "rate_limit_reached" => true
+           })
+         }
+       end},
+      {:replayed,
+       fn candidate_at, confirmed_at, reset_at ->
+         {
+           safe_weekly_zero(candidate_at, reset_at),
+           safe_weekly_zero(confirmed_at, reset_at, provider_at: candidate_at)
+         }
+       end}
+    ]
+
+    Enum.reduce(cases, conn, fn {_name, observations_for}, current_conn ->
+      setup = usage_reset_identity_fixture()
+      %{identity: identity, observed_at: observed_at, reset_at: reset_at} = setup
+
+      assert {:ok, canonical} =
+               EvidenceStore.record_evidence(
+                 identity,
+                 weekly_quota_evidence(observed_at, reset_at, "100", %{},
+                   active_limit: 243,
+                   credits: 0
+                 ),
+                 observed_at,
+                 observed_at
+               )
+
+      candidate_at = DateTime.add(observed_at, 5, :minute)
+      confirmed_at = DateTime.add(candidate_at, 180, :second)
+      {candidate, confirmation} = observations_for.(candidate_at, confirmed_at, reset_at)
+
+      for {evidence, at} <- [{candidate, candidate_at}, {confirmation, confirmed_at}] do
+        assert {:ok, _row} = EvidenceStore.record_evidence(identity, evidence, at, at)
+      end
+
+      persisted = Repo.get!(AccountQuotaWindow, canonical.id)
+      assert Decimal.equal?(persisted.used_percent, Decimal.new("100"))
+      assert persisted.active_limit == 243
+      assert persisted.credits == 0
+      assert_exhausted_routing(identity, persisted, confirmed_at)
+      assert_exhausted_usage_response(recycle(current_conn), setup)
+
+      recycle(current_conn)
+    end)
   end
 
   test "GET /api/codex/usage supports ChatGPT account usage branch", %{conn: conn} do
@@ -587,5 +709,107 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
       )
 
     on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
+
+  defp usage_reset_identity_fixture do
+    pool = pool_fixture()
+    unique = System.unique_integer([:positive])
+    account_id = "weekly-reset-account-#{unique}"
+    token = "weekly-reset-token-#{unique}"
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        chatgpt_account_id: account_id,
+        plan_family: "pro"
+      })
+
+    assert {:ok, _secret} =
+             Upstreams.store_encrypted_secret(identity, %{
+               secret_kind: "access_token",
+               plaintext: token
+             })
+
+    observed_at =
+      DateTime.utc_now() |> DateTime.add(-10, :minute) |> DateTime.truncate(:microsecond)
+
+    %{
+      identity: identity,
+      account_id: account_id,
+      authorization: "Bearer #{token}",
+      observed_at: observed_at,
+      reset_at: DateTime.add(observed_at, 5, :day)
+    }
+  end
+
+  defp weekly_quota_evidence(observed_at, reset_at, used_percent, status, opts \\ []) do
+    provider_at = Keyword.get(opts, :provider_at, observed_at)
+
+    %{
+      quota_key: "account",
+      window_kind: "secondary",
+      window_minutes: 10_080,
+      used_percent: Decimal.new(used_percent),
+      reset_at: reset_at,
+      observed_at: observed_at,
+      last_sync_at: observed_at,
+      source: "codex_usage_api",
+      source_precision: "observed",
+      quota_scope: "account",
+      quota_family: "account",
+      active_limit: Keyword.get(opts, :active_limit),
+      credits: Keyword.get(opts, :credits),
+      freshness_state: "fresh",
+      metadata:
+        Map.put(status, "reset_after_seconds", DateTime.diff(reset_at, provider_at, :second))
+    }
+  end
+
+  defp safe_weekly_zero(observed_at, reset_at, opts \\ []) do
+    weekly_quota_evidence(observed_at, reset_at, "0", safe_status(), opts)
+  end
+
+  defp safe_status do
+    %{"rate_limit_allowed" => true, "rate_limit_reached" => false}
+  end
+
+  defp assert_exhausted_routing(identity, persisted, as_of) do
+    assert %{
+             eligible?: false,
+             routing_state: :blocked,
+             exclusions: [%{code: "quota_weekly_exhausted", reason_codes: ["exhausted"]}],
+             selection: %{
+               secondary: %AccountQuotaWindow{id: persisted_id},
+               blocked_windows: [%AccountQuotaWindow{id: blocked_id}]
+             }
+           } = QuotaWindows.routing_quota_eligibility(identity, at: as_of)
+
+    assert persisted_id == persisted.id
+    assert blocked_id == persisted.id
+
+    {primary, secondary} =
+      identity
+      |> QuotaWindows.list_quota_windows(as_of)
+      |> UsageResponses.account_usage_windows(as_of)
+
+    assert %{allowed: false, limit_reached: true, secondary_window: %{used_percent: 100}} =
+             UsageResponses.codex_rate_limit(primary, secondary)
+  end
+
+  defp assert_exhausted_usage_response(conn, setup) do
+    assert %{
+             "rate_limit" => %{
+               "allowed" => false,
+               "limit_reached" => true,
+               "secondary_window" => %{"used_percent" => 100}
+             }
+           } = usage_response(conn, setup)
+  end
+
+  defp usage_response(conn, setup) do
+    conn
+    |> put_req_header("authorization", setup.authorization)
+    |> put_req_header("chatgpt-account-id", setup.account_id)
+    |> get("/api/codex/usage")
+    |> json_response(200)
   end
 end

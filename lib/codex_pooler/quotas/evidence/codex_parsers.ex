@@ -108,6 +108,7 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
     primary_window = rate_limit["primary_window"] || rate_limit["primary"]
     secondary_window = rate_limit["secondary_window"] || rate_limit["secondary"]
     descriptor = Descriptors.account_descriptor()
+    provider_status = provider_status_metadata(rate_limit)
 
     if weekly_window?(primary_window) do
       [usage_window_attrs("secondary", primary_window, credits, observed_at, descriptor)]
@@ -118,6 +119,7 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
       ]
     end
     |> Enum.reject(&is_nil/1)
+    |> Enum.map(&put_provider_status(&1, provider_status))
   end
 
   defp account_usage_evidence(_payload, _credits, _observed_at), do: []
@@ -303,6 +305,20 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
 
   defp infer_active_limit(credits, used_percent) do
     max(round(credits / (1.0 - used_percent / 100.0)), credits)
+  end
+
+  defp provider_status_metadata(%{"allowed" => allowed, "limit_reached" => limit_reached})
+       when is_boolean(allowed) and is_boolean(limit_reached) and allowed == not limit_reached do
+    %{
+      "rate_limit_allowed" => allowed,
+      "rate_limit_reached" => limit_reached
+    }
+  end
+
+  defp provider_status_metadata(_rate_limit), do: %{}
+
+  defp put_provider_status(attrs, provider_status) do
+    Map.update!(attrs, :metadata, &Map.merge(&1, provider_status))
   end
 
   defp quota_used_percent(%{used_percent: %Decimal{} = percent}), do: Decimal.to_float(percent)

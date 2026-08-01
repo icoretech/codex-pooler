@@ -30,7 +30,11 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ProviderCycleConfirmationTest do
     candidate_at = ~U[2026-07-21 17:04:00Z]
     confirmed_at = ~U[2026-07-21 17:08:00Z]
 
-    provider_row!(identity, canonical_at, "54", @old_reset)
+    provider_row!(identity, canonical_at, "54", @old_reset,
+      active_limit: 243,
+      credits: 0
+    )
+
     runtime_row!(identity, canonical_at, "54", @old_reset)
 
     assert {:ok, _row} =
@@ -49,6 +53,8 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ProviderCycleConfirmationTest do
     confirmed = provider_row(identity)
     marker = confirmed.metadata[@confirmation_key]
 
+    assert confirmed.active_limit == nil
+    assert confirmed.credits == nil
     assert confirmed.metadata["reset_state"] == "anchored"
     assert marker["version"] == 1
     assert marker["scope"] == "account"
@@ -566,7 +572,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ProviderCycleConfirmationTest do
 
     EvidenceStore.record_evidence(
       identity,
-      weekly_attrs("codex_usage_api", observed_at, percent, reset_at)
+      weekly_attrs("codex_usage_api", observed_at, percent, reset_at, opts)
       |> put_in([:metadata, "reset_after_seconds"], DateTime.diff(reset_at, provider_at, :second)),
       observed_at,
       observed_at
@@ -596,7 +602,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ProviderCycleConfirmationTest do
     )
   end
 
-  defp weekly_attrs(source, observed_at, percent, reset_at) do
+  defp weekly_attrs(source, observed_at, percent, reset_at, opts \\ []) do
     %{
       quota_key: "account",
       window_kind: "secondary",
@@ -609,6 +615,8 @@ defmodule CodexPooler.Upstreams.Quota.Windows.ProviderCycleConfirmationTest do
       source_precision: "observed",
       quota_scope: "account",
       quota_family: "account",
+      active_limit: Keyword.get(opts, :active_limit),
+      credits: Keyword.get(opts, :credits),
       freshness_state: "fresh",
       metadata: %{}
     }
