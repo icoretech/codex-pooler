@@ -1,0 +1,16 @@
+# Graphify also honors .gitignore. Keep only graph-specific exclusions here.
+
+# Match the repository scope already used by .codegraphignore.
+/docs-site/
+/priv/gettext/
+/priv/pricing/
+/priv/static/
+/priv/tokenizers/
+/scripts/
+
+# Data and configuration inputs that do not produce AST nodes.
+/.release-please-manifest.json
+/assets/tsconfig.json
+/test/contract_probes/ai_sdk_openai/opencode_adapter_provenance.json
+/test/fixtures/openai_compatibility/sdk_shapes/
+/test/fixtures/pricing/
