@@ -1373,6 +1373,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
       expected_routes = [
         %{method: :post, path: "/v1/images/variations"},
+        %{method: :post, path: "/v1/content_provenance_checks"},
         %{method: :post, path: "/v1/embeddings"},
         %{method: :post, path: "/v1/batches"},
         %{method: :post, path: "/v1/moderations"},
@@ -1395,6 +1396,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
       assert fixture.routes == [
                %{method: :post, path: "/v1/images/variations"},
+               %{method: :post, path: "/v1/content_provenance_checks"},
                %{method: :post, path: "/v1/embeddings"},
                %{method: :post, path: "/v1/batches"},
                %{method: :post, path: "/v1/moderations"},

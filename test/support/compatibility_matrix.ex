@@ -578,6 +578,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       categories: [:route, :auth, :error],
       routes: [
         %{method: :post, path: "/v1/images/variations"},
+        %{method: :post, path: "/v1/content_provenance_checks"},
         %{method: :post, path: "/v1/embeddings"},
         %{method: :post, path: "/v1/batches"},
         %{method: :post, path: "/v1/moderations"},
@@ -1875,6 +1876,7 @@ defmodule CodexPooler.CompatibilityMatrix do
     v1_unsupported_public_surface: %{
       routes: [
         %{method: :post, path: "/v1/images/variations"},
+        %{method: :post, path: "/v1/content_provenance_checks"},
         %{method: :post, path: "/v1/embeddings"},
         %{method: :post, path: "/v1/batches"},
         %{method: :post, path: "/v1/moderations"},

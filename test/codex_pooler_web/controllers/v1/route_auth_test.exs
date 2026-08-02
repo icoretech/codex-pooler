@@ -216,6 +216,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
     test "unsupported route registry lists the SDK-probed endpoint shapes exactly" do
       assert @unsupported_routes == [
                {:post, "/v1/images/variations"},
+               {:post, "/v1/content_provenance_checks"},
                {:post, "/v1/embeddings"},
                {:post, "/v1/batches"},
                {:post, "/v1/moderations"},
@@ -312,6 +313,83 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
       assert_no_gateway_side_effects()
     end
 
+    test "content provenance checks reject malformed multipart before parsing or dispatch", %{
+      conn: conn
+    } do
+      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
+      setup = gateway_setup(upstream)
+
+      with_isolated_plug_tmpdir(fn tmp_root ->
+        conn = conn |> auth(setup) |> post_malformed_content_provenance()
+
+        assert json_response(conn, 404) == %{
+                 "error" => %{
+                   "message" => "Unsupported OpenAI /v1 endpoint",
+                   "type" => "invalid_request_error",
+                   "code" => "unsupported_endpoint",
+                   "param" => nil
+                 }
+               }
+
+        assert [content_type] = get_resp_header(conn, "content-type")
+        assert content_type =~ "application/json"
+        assert FakeUpstream.requests(upstream) == []
+        assert_no_gateway_side_effects()
+        assert Repo.aggregate(LedgerEntry, :count) == 0
+        assert tmpdir_paths(tmp_root) == []
+      end)
+    end
+
+    test "content provenance checks preserve auth and pool gates before multipart parsing", %{
+      conn: conn
+    } do
+      disabled_pool_setup = active_api_key_fixture()
+
+      disabled_pool_setup.pool
+      |> Ecto.Changeset.change(%{status: "disabled"})
+      |> Repo.update!()
+
+      compatibility_disabled_setup = active_api_key_fixture()
+
+      compatibility_disabled_setup.pool
+      |> Pools.ensure_routing_settings()
+      |> Ecto.Changeset.change(%{v1_compatibility_enabled: false})
+      |> Repo.update!()
+
+      with_isolated_plug_tmpdir(fn tmp_root ->
+        unauthenticated = post_malformed_content_provenance(conn)
+
+        assert_openai_error(unauthenticated, 401,
+          code: "api_key_missing",
+          message: "api key is required"
+        )
+
+        disabled_pool =
+          build_conn()
+          |> auth(disabled_pool_setup)
+          |> post_malformed_content_provenance()
+
+        assert_openai_error(disabled_pool, 401,
+          code: "api_key_missing",
+          message: "api key is required"
+        )
+
+        compatibility_disabled =
+          build_conn()
+          |> auth(compatibility_disabled_setup)
+          |> post_malformed_content_provenance()
+
+        assert_openai_error(compatibility_disabled, 403,
+          code: "v1_compatibility_disabled",
+          message: "OpenAI /v1 compatibility is disabled for this pool"
+        )
+
+        assert_no_gateway_side_effects()
+        assert Repo.aggregate(LedgerEntry, :count) == 0
+        assert tmpdir_paths(tmp_root) == []
+      end)
+    end
+
     test "unsupported multipart routes return deterministic errors before multipart parsing", %{
       conn: conn
     } do
@@ -382,6 +460,12 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
   defp assert_no_gateway_side_effects do
     assert Repo.aggregate(Request, :count) == 0
     assert Repo.aggregate(Attempt, :count) == 0
+  end
+
+  defp post_malformed_content_provenance(conn) do
+    conn
+    |> put_req_header("content-type", "multipart/form-data; boundary=missing-boundary")
+    |> post("/v1/content_provenance_checks", "not a valid multipart body")
   end
 
   defp transcription_boundary, do: "v1-auth-transcription-boundary"

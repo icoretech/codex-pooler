@@ -3,7 +3,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
   import CodexPooler.PoolerFixtures
 
-  alias CodexPooler.Accounting.Request
+  alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Catalog.PricingSnapshot
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
@@ -166,6 +166,24 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       assert error["code"] == "access_denied"
       assert error["type"] == "invalid_request_error"
       refute inspect(error) =~ "198.51.100.20"
+    end
+
+    test "denies content provenance checks before authentication", %{conn: conn} do
+      setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
+
+      conn =
+        conn
+        |> remote_ip({198, 51, 100, 20})
+        |> compressed_post("/v1/content_provenance_checks", "gzip", "not a gzip body")
+
+      assert %{
+               "error" => %{
+                 "code" => "access_denied",
+                 "message" => "client IP is not allowed",
+                 "param" => nil,
+                 "type" => "invalid_request_error"
+               }
+             } = json_response(conn, 403)
     end
 
     test "applies firewall to every runtime API route family", %{conn: conn} do
@@ -670,6 +688,30 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       assert json_response(conn, 401)["error"]["code"] == "api_key_missing"
     end
 
+    test "rejects unsupported content provenance checks before gzip decompression", %{conn: conn} do
+      setup_runtime_ingress(%OperationalSettings{})
+      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+      setup = upstream |> gateway_setup() |> disabled_image_generation_setup()
+
+      conn =
+        conn
+        |> auth(setup)
+        |> compressed_post("/v1/content_provenance_checks", "gzip", "not a gzip body")
+
+      assert %{
+               "error" => %{
+                 "code" => "unsupported_endpoint",
+                 "message" => "Unsupported OpenAI /v1 endpoint",
+                 "param" => nil,
+                 "type" => "invalid_request_error"
+               }
+             } = json_response(conn, 404)
+
+      assert FakeUpstream.requests(upstream) == []
+      assert Repo.aggregate(Request, :count) == 0
+      assert Repo.aggregate(Attempt, :count) == 0
+    end
+
     test "rejects compressed bodies above the compressed-size limit", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{max_compressed_body_bytes: 1})
       setup = active_api_key_fixture()
@@ -1026,9 +1068,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
     Map.merge(key, %{identity: upstream.identity, assignment: upstream.assignment, model: model})
   end
 
-  defp disabled_image_generation_setup do
-    setup = active_api_key_fixture()
-
+  defp disabled_image_generation_setup(setup \\ active_api_key_fixture()) do
     setup.pool
     |> Pools.ensure_routing_settings()
     |> Ecto.Changeset.change(allow_image_generation: false)

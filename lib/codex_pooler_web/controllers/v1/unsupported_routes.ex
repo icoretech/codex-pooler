@@ -13,6 +13,14 @@ defmodule CodexPoolerWeb.V1.UnsupportedRoutes do
     %{
       method: "POST",
       router_method: :post,
+      router_path: "/content_provenance_checks",
+      action: :unsupported_post,
+      path_info: ["v1", "content_provenance_checks"],
+      sample_path: "/v1/content_provenance_checks"
+    },
+    %{
+      method: "POST",
+      router_method: :post,
       router_path: "/embeddings",
       action: :unsupported_post,
       path_info: ["v1", "embeddings"],

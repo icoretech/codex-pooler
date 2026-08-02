@@ -80,6 +80,7 @@ defmodule CodexPoolerWeb.RouteSurfaceTest do
                {:post, "/v1/audio/transcriptions"},
                {:post, "/v1/batches"},
                {:post, "/v1/chat/completions"},
+               {:post, "/v1/content_provenance_checks"},
                {:post, "/v1/embeddings"},
                {:post, "/v1/files"},
                {:post, "/v1/fine_tuning/jobs"},
@@ -207,6 +208,7 @@ defmodule CodexPoolerWeb.RouteSurfaceTest do
 
     unsupported_routes = [
       {:post, "/v1/images/variations"},
+      {:post, "/v1/content_provenance_checks"},
       {:post, "/v1/embeddings"},
       {:post, "/v1/batches"},
       {:post, "/v1/moderations"},
@@ -229,6 +231,11 @@ defmodule CodexPoolerWeb.RouteSurfaceTest do
 
     refute MapSet.member?(route_set, {:get, "/v1/realtime"})
     refute MapSet.member?(route_set, {:post, "/v1/realtime"})
+    refute MapSet.member?(route_set, {:get, "/v1/content_provenance_checks"})
+
+    refute Enum.any?(route_set, fn {_method, path} ->
+             path == "/backend-api/codex/content_provenance_checks"
+           end)
   end
 
   test "GET /status falls through to the standard 404 response for authenticated users" do

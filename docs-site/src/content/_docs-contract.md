@@ -88,6 +88,7 @@ Routed public `/v1` endpoints that must be described as deterministic unsupporte
 Unsupported public `/v1` routes that may be named as unsupported:
 
 - `POST /v1/images/variations`
+- `POST /v1/content_provenance_checks`, deliberately routed to deterministic OpenAI-shaped `unsupported_endpoint`
 - `POST /v1/embeddings`
 - `POST /v1/batches`
 - `POST /v1/moderations`

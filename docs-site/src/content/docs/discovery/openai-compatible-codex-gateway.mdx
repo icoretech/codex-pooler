@@ -67,7 +67,7 @@ Authorization: Bearer <pool-api-key>
 
 Codex Pooler does not support `/v1/realtime` or OpenAI Realtime SDK websocket or session routes. `GET /v1/responses` is narrow Responses websocket compatibility only.
 
-Unsupported `/v1` routes may return deterministic OpenAI-shaped unsupported endpoint errors when explicitly routed. Examples include embeddings, batches, moderations, fine-tuning jobs, image variations, response retrieve, response cancel, response delete, and `/v1/responses/compact`.
+Unsupported `/v1` routes may return deterministic OpenAI-shaped unsupported endpoint errors when explicitly routed. Examples include `POST /v1/content_provenance_checks`, embeddings, batches, moderations, fine-tuning jobs, image variations, response retrieve, response cancel, response delete, and `/v1/responses/compact`.
 
 ## Canonical Setup Pages
 
