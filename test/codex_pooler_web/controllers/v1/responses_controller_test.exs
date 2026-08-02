@@ -2242,6 +2242,97 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              lowered_tool_schema()
   end
 
+  test "POST /v1/responses forwards custom tool definitions verbatim", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_v1_custom_tool_definition",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 2, "output_tokens" => 3, "total_tokens" => 5}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    custom_tool = %{
+      "type" => "custom",
+      "name" => "edit",
+      "description" => "Apply a synthetic edit",
+      "format" => %{
+        "type" => "grammar",
+        "syntax" => "lark",
+        "definition" => "start: /.+/"
+      }
+    }
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic custom tool request",
+        "tools" => [custom_tool],
+        "tool_choice" => %{"type" => "custom", "name" => "edit"}
+      })
+
+    assert %{"id" => "resp_v1_custom_tool_definition", "object" => "response"} =
+             json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["tools"] == [custom_tool]
+    assert captured.json["tool_choice"] == %{"type" => "custom", "name" => "edit"}
+  end
+
+  test "POST /v1/responses repairs strict schema types without loosening constraints", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_v1_repaired_strict_tool_schema",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 2, "output_tokens" => 3, "total_tokens" => 5}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    nested_schema = %{
+      "type" => "",
+      "additionalProperties" => false,
+      "properties" => %{"title" => %{"type" => "string"}},
+      "required" => ["title"]
+    }
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic strict schema request",
+        "tools" => [
+          %{
+            "type" => "function",
+            "name" => "goal",
+            "strict" => true,
+            "parameters" => %{
+              "type" => "object",
+              "additionalProperties" => false,
+              "properties" => %{"goal" => nested_schema},
+              "required" => ["goal"]
+            }
+          }
+        ]
+      })
+
+    assert %{"id" => "resp_v1_repaired_strict_tool_schema"} = json_response(conn, 200)
+    assert [captured] = FakeUpstream.requests(upstream)
+
+    repaired = captured.json["tools"] |> hd() |> get_in(["parameters", "properties", "goal"])
+    assert repaired == Map.put(nested_schema, "type", "object")
+  end
+
   test "POST /v1/responses preserves output-only translated tool output before dispatch",
        %{conn: conn} do
     upstream =

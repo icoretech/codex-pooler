@@ -404,6 +404,15 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
 
   defp validate_tool(%{"type" => "function"} = tool), do: validate_function_tool(tool)
 
+  defp validate_tool(%{"type" => "custom"} = tool) do
+    with :ok <- validate_exact_tool_keys(tool, ["type", "name", "description", "format"]),
+         :ok <-
+           validate_nonblank_tool_field(tool, "name", "custom tool requires a non-empty name"),
+         :ok <- validate_optional_string_tool_field(tool, "description") do
+      validate_custom_tool_format(tool)
+    end
+  end
+
   defp validate_tool(%{"type" => "programmatic_tool_calling"} = tool),
     do: validate_exact_builtin_tool(tool, ["type"])
 
@@ -507,6 +516,35 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
     end
   end
 
+  defp validate_optional_string_tool_field(tool, field) do
+    case Map.fetch(tool, field) do
+      {:ok, value} when is_binary(value) -> :ok
+      {:ok, _value} -> {:error, Error.invalid_request("tool shape is not translatable", "tools")}
+      :error -> :ok
+    end
+  end
+
+  defp validate_custom_tool_format(tool) when not is_map_key(tool, "format"), do: :ok
+
+  defp validate_custom_tool_format(%{"format" => %{"type" => "text"} = format}) do
+    validate_exact_tool_keys(format, ["type"])
+  end
+
+  defp validate_custom_tool_format(%{
+         "format" =>
+           %{"type" => "grammar", "syntax" => syntax, "definition" => definition} = format
+       })
+       when syntax in ["lark", "regex"] and is_binary(definition) do
+    with :ok <- validate_exact_tool_keys(format, ["type", "syntax", "definition"]) do
+      if String.trim(definition) == "",
+        do: {:error, Error.invalid_request("tool shape is not translatable", "tools")},
+        else: :ok
+    end
+  end
+
+  defp validate_custom_tool_format(_tool),
+    do: {:error, Error.invalid_request("tool shape is not translatable", "tools")}
+
   defp validate_optional_boolean_tool_field(tool, field) do
     case Map.fetch(tool, field) do
       {:ok, value} when is_boolean(value) -> :ok
@@ -579,6 +617,13 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
     end
   end
 
+  defp validate_tool_choice(%{"tool_choice" => %{"type" => "custom", "name" => name}} = payload)
+       when is_binary(name) do
+    with :ok <- validate_exact_tool_choice_keys(Map.get(payload, "tool_choice"), ["type", "name"]) do
+      validate_named_tool_choice(payload, name, "custom")
+    end
+  end
+
   defp validate_tool_choice(%{"tool_choice" => %{"type" => "image_generation"} = choice}),
     do: validate_exact_tool_choice_keys(choice, ["type"])
 
@@ -591,6 +636,11 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
     do:
       {:error,
        Error.invalid_request("tool_choice function requires a non-empty name", "tool_choice")}
+
+  defp validate_tool_choice(%{"tool_choice" => %{"type" => "custom"}}),
+    do:
+      {:error,
+       Error.invalid_request("tool_choice custom requires a non-empty name", "tool_choice")}
 
   defp validate_tool_choice(%{"tool_choice" => _choice}),
     do: {:error, Error.invalid_request("tool_choice shape is not translatable", "tool_choice")}
@@ -607,20 +657,33 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
     end
   end
 
-  defp validate_named_tool_choice(payload, name) do
+  defp validate_named_tool_choice(payload, name),
+    do: validate_named_tool_choice(payload, name, "function")
+
+  defp validate_named_tool_choice(payload, name, type) do
     cond do
       String.trim(name) == "" ->
         {:error,
-         Error.invalid_request("tool_choice function requires a non-empty name", "tool_choice")}
+         Error.invalid_request("tool_choice #{type} requires a non-empty name", "tool_choice")}
 
-      name in function_tool_names(payload) ->
+      name in named_tool_names(payload, type) ->
         :ok
 
       true ->
         {:error,
-         Error.invalid_request("tool_choice references unknown function tool", "tool_choice")}
+         Error.invalid_request("tool_choice references unknown #{type} tool", "tool_choice")}
     end
   end
+
+  defp named_tool_names(%{"tools" => tools}, "custom") when is_list(tools) do
+    Enum.flat_map(tools, fn
+      %{"type" => "custom", "name" => name} when is_binary(name) -> [name]
+      _tool -> []
+    end)
+  end
+
+  defp named_tool_names(payload, "function"), do: function_tool_names(payload)
+  defp named_tool_names(_payload, _type), do: []
 
   defp function_tool_names(%{"tools" => tools}) when is_list(tools) do
     Enum.flat_map(tools, fn

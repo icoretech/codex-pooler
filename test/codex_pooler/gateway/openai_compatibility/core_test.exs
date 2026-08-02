@@ -2519,17 +2519,59 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   @tag :responses_coercion
-  test "Responses keeps strict function tool schemas on the strict validation path" do
+  test "Responses repairs strict function tool schema types without loosening constraints" do
+    parameters = %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{
+        "goal" => %{
+          "type" => "",
+          "additionalProperties" => false,
+          "properties" => %{"title" => %{"type" => "string"}},
+          "required" => ["title"]
+        }
+      },
+      "required" => ["goal"]
+    }
+
     payload = %{
       "model" => "gpt-fixture-text",
       "input" => "synthetic input",
-      "tools" => [
-        flat_function_tool("lookup_fixture", non_strict_tool_schema(), true)
-      ]
+      "tools" => [flat_function_tool("goal", parameters, true)]
     }
 
-    assert {:error, %{code: "invalid_function_parameters", param: "tools.0.parameters.type"}} =
-             Responses.coerce(payload)
+    assert {:ok, result} = Responses.coerce(payload)
+    repaired = get_in(result.payload, ["tools", Access.at(0), "parameters"])
+
+    assert get_in(repaired, ["properties", "goal", "type"]) == "object"
+    assert get_in(repaired, ["properties", "goal", "additionalProperties"]) == false
+    assert get_in(repaired, ["properties", "goal", "required"]) == ["title"]
+    assert repaired["additionalProperties"] == false
+    assert repaired["required"] == ["goal"]
+  end
+
+  @tag :responses_coercion
+  test "Responses preserves strict type errors that cannot be repaired" do
+    parameters = %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{"goal" => %{"description" => "Opaque goal value"}},
+      "required" => ["goal"]
+    }
+
+    payload = %{
+      "model" => "gpt-fixture-text",
+      "input" => "synthetic input",
+      "tools" => [flat_function_tool("goal", parameters, true)]
+    }
+
+    assert {:error,
+            %{
+              code: "invalid_function_parameters",
+              message:
+                "Invalid schema for function 'goal': strict json_schema type must be a string or a non-empty array of strings",
+              param: "tools.0.parameters.properties.goal.type"
+            }} = Responses.coerce(payload)
   end
 
   describe "Task 5 Responses and Chat tool shape compatibility" do
@@ -2577,6 +2619,73 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
       assert {:ok, result} = Responses.coerce(payload)
       assert result.payload["tools"] == payload["tools"]
+    end
+
+    test "Responses accepts custom tools and preserves their definitions" do
+      tools = [
+        %{"type" => "custom", "name" => "plain_fixture"},
+        %{
+          "type" => "custom",
+          "name" => "text_fixture",
+          "description" => "Synthetic text tool",
+          "format" => %{"type" => "text"}
+        },
+        %{
+          "type" => "custom",
+          "name" => "lark_fixture",
+          "format" => %{
+            "type" => "grammar",
+            "syntax" => "lark",
+            "definition" => "start: /.+/"
+          }
+        },
+        %{
+          "type" => "custom",
+          "name" => "regex_fixture",
+          "format" => %{
+            "type" => "grammar",
+            "syntax" => "regex",
+            "definition" => ".+"
+          }
+        }
+      ]
+
+      payload = %{
+        "model" => "gpt-fixture-text",
+        "input" => "synthetic input",
+        "tools" => tools
+      }
+
+      assert {:ok, result} = Responses.coerce(payload)
+      assert result.payload["tools"] == tools
+    end
+
+    test "Responses rejects malformed custom tools" do
+      invalid_tools = [
+        %{"type" => "custom", "name" => ""},
+        %{"type" => "custom", "name" => "   "},
+        %{"type" => "custom", "name" => "fixture", "description" => 7},
+        %{"type" => "custom", "name" => "fixture", "format" => %{"type" => "json"}},
+        %{
+          "type" => "custom",
+          "name" => "fixture",
+          "format" => %{"type" => "grammar", "syntax" => "peg", "definition" => "start"}
+        },
+        %{
+          "type" => "custom",
+          "name" => "fixture",
+          "format" => %{"type" => "grammar", "syntax" => "lark", "definition" => 7}
+        }
+      ]
+
+      Enum.each(invalid_tools, fn tool ->
+        assert {:error, %{status: 400, code: "invalid_request", param: "tools"}} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => "synthetic input",
+                   "tools" => [tool]
+                 })
+      end)
     end
 
     test "Responses accepts namespace tools with nested function tools" do
@@ -2747,6 +2856,19 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
       assert {:ok, result} = Responses.coerce(image_payload)
       assert result.payload["tool_choice"] == %{"type" => "image_generation"}
+
+      custom_tool = %{"type" => "custom", "name" => "edit_fixture"}
+      custom_choice = %{"type" => "custom", "name" => "edit_fixture"}
+
+      custom_payload = %{
+        "model" => "gpt-fixture-text",
+        "input" => "synthetic input",
+        "tools" => [custom_tool],
+        "tool_choice" => custom_choice
+      }
+
+      assert {:ok, result} = Responses.coerce(custom_payload)
+      assert result.payload["tool_choice"] == custom_choice
     end
 
     test "tool_choice rejects missing, blank, malformed, and unknown named function choices" do
@@ -2763,7 +2885,10 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
         %{"type" => "function", "name" => ""},
         %{"type" => "function", "name" => "missing_fixture"},
         %{"type" => "function", "function" => %{"name" => "lookup_fixture"}},
-        %{"type" => "unsupported_tool"}
+        %{"type" => "unsupported_tool"},
+        %{"type" => "custom"},
+        %{"type" => "custom", "name" => ""},
+        %{"type" => "custom", "name" => "missing_fixture"}
       ]
 
       Enum.each(invalid_choices, fn choice ->
@@ -2932,7 +3057,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       end
     end
 
-    test "namespace strict function options retain the nested parameter error path" do
+    test "namespace strict function options retain the nested parameter error path after repair" do
       payload = %{
         "model" => "gpt-fixture-text",
         "input" => "synthetic input",
@@ -2955,7 +3080,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       assert {:error,
               %{
                 code: "invalid_function_parameters",
-                param: "tools.0.tools.0.parameters.type"
+                message:
+                  "Invalid schema for function 'lookup_namespaced_fixture': strict json_schema object schemas must set additionalProperties to false",
+                param: "tools.0.tools.0.parameters"
               }} = Responses.coerce(payload)
     end
 

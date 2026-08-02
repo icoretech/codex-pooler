@@ -119,7 +119,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
              )
     end
 
-    test "lowers backend Codex non-strict function tool schemas for HTTP and websocket upstream JSON" do
+    test "lowers non-strict and repairs strict backend Codex function tool schemas for HTTP and websocket upstream JSON" do
       payload = non_strict_tool_schema_payload()
       model = %Model{upstream_model_id: "provider-model"}
 
@@ -143,8 +143,16 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         assert get_in(upstream, ["tools", Access.at(1), "function", "parameters"]) ==
                  lowered_tool_schema()
 
+        repaired_strict_schema =
+          non_strict_tool_schema()
+          |> Map.put("type", "object")
+          |> put_in(["properties", "tags", "type"], "array")
+          |> put_in(["properties", "nested", "type"], "object")
+          |> put_in(["$defs", "Ref", "type"], "object")
+          |> put_in(["definitions", "Legacy", "type"], "array")
+
         assert get_in(upstream, ["tools", Access.at(2), "parameters"]) ==
-                 non_strict_tool_schema()
+                 repaired_strict_schema
       end
     end
 

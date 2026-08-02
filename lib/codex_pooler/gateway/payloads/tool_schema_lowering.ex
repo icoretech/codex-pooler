@@ -23,15 +23,22 @@ defmodule CodexPooler.Gateway.Payloads.ToolSchemaLowering do
   defp lower_backend_tool(tool), do: lower_tool(tool)
 
   defp lower_tool(%{"type" => "function", "function" => %{} = function} = tool) do
-    if strict_function_tool?(function, tool) do
-      tool
-    else
-      Map.put(tool, "function", lower_function_parameters(function))
-    end
+    function =
+      if strict_function_tool?(function, tool) do
+        repair_strict_function_parameters(function)
+      else
+        lower_function_parameters(function)
+      end
+
+    Map.put(tool, "function", function)
   end
 
   defp lower_tool(%{"type" => "function"} = tool) do
-    if strict_function_tool?(tool, tool), do: tool, else: lower_function_parameters(tool)
+    if strict_function_tool?(tool, tool) do
+      repair_strict_function_parameters(tool)
+    else
+      lower_function_parameters(tool)
+    end
   end
 
   defp lower_tool(%{"type" => "namespace", "tools" => tools} = tool) when is_list(tools) do
@@ -50,6 +57,70 @@ defmodule CodexPooler.Gateway.Payloads.ToolSchemaLowering do
   end
 
   defp lower_function_parameters(function), do: function
+
+  defp repair_strict_function_parameters(%{"parameters" => parameters} = function)
+       when is_map(parameters) do
+    Map.put(function, "parameters", repair_strict_schema_types(parameters))
+  end
+
+  defp repair_strict_function_parameters(function), do: function
+
+  defp repair_strict_schema_types(%{} = schema) do
+    schema
+    |> update_existing("properties", &repair_strict_named_schemas/1)
+    |> update_existing("items", &repair_strict_schema_value/1)
+    |> update_existing("additionalProperties", &repair_strict_schema_value/1)
+    |> repair_strict_schema_lists()
+    |> update_existing("$defs", &repair_strict_named_schemas/1)
+    |> update_existing("definitions", &repair_strict_named_schemas/1)
+    |> infer_repairable_schema_type()
+  end
+
+  defp repair_strict_schema_types(schema), do: schema
+
+  defp repair_strict_named_schemas(schemas) when is_map(schemas) do
+    Map.new(schemas, fn {name, schema} -> {name, repair_strict_schema_types(schema)} end)
+  end
+
+  defp repair_strict_named_schemas(schemas), do: schemas
+
+  defp repair_strict_schema_value(schema) when is_map(schema),
+    do: repair_strict_schema_types(schema)
+
+  defp repair_strict_schema_value(schemas) when is_list(schemas),
+    do: Enum.map(schemas, &repair_strict_schema_types/1)
+
+  defp repair_strict_schema_value(schema), do: schema
+
+  defp update_existing(schema, key, fun) do
+    if Map.has_key?(schema, key), do: Map.update!(schema, key, fun), else: schema
+  end
+
+  defp repair_strict_schema_lists(schema) do
+    Enum.reduce(@schema_list_keys, schema, fn key, acc ->
+      update_existing(acc, key, &repair_strict_schema_value/1)
+    end)
+  end
+
+  defp infer_repairable_schema_type(%{"$ref" => _ref} = schema), do: schema
+
+  defp infer_repairable_schema_type(%{} = schema) do
+    if valid_type?(Map.get(schema, "type")) do
+      schema
+    else
+      cond do
+        Map.has_key?(schema, "properties") or Map.has_key?(schema, "required") or
+            Map.has_key?(schema, "additionalProperties") ->
+          Map.put(schema, "type", "object")
+
+        Map.has_key?(schema, "items") ->
+          Map.put(schema, "type", "array")
+
+        true ->
+          schema
+      end
+    end
+  end
 
   defp lower_function_parameters_schema(schema) do
     schema
