@@ -2983,6 +2983,128 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   describe "Task 9 advanced Responses built-in tool classification" do
+    test "Responses retains web search access flag validation" do
+      accepted_tools = [
+        %{"type" => "web_search", "external_web_access" => false},
+        %{
+          "type" => "web_search",
+          "external_web_access" => true,
+          "index_gated_web_access" => true
+        }
+      ]
+
+      Enum.each(accepted_tools, fn tool ->
+        assert {:ok, result} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => "synthetic input",
+                   "tools" => [tool]
+                 })
+
+        assert result.payload["tools"] == [tool]
+      end)
+
+      for tool <- [
+            %{"type" => "web_search", "external_web_access" => "true"},
+            %{
+              "type" => "web_search",
+              "external_web_access" => true,
+              "index_gated_web_access" => false
+            },
+            %{
+              "type" => "web_search",
+              "external_web_access" => false,
+              "index_gated_web_access" => true
+            },
+            %{"type" => "web_search", "index_gated_web_access" => true}
+          ] do
+        assert {:error, %{status: 400, code: "invalid_request", param: "tools"}} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => "synthetic input",
+                   "tools" => [tool]
+                 })
+      end
+    end
+
+    test "Responses accepts bounded web search domain filters without rewriting values" do
+      original_allowed_domains = [" Example.COM ", "example.com", "Example.COM"]
+      original_blocked_domains = [" blocked.example ", "blocked.example", "blocked.example"]
+
+      accepted_tools = [
+        %{"type" => "web_search"},
+        %{
+          "type" => "web_search",
+          "filters" => %{"allowed_domains" => original_allowed_domains}
+        },
+        %{
+          "type" => "web_search",
+          "filters" => %{"blocked_domains" => original_blocked_domains}
+        },
+        %{
+          "type" => "web_search",
+          "external_web_access" => true,
+          "filters" => %{
+            "allowed_domains" => original_allowed_domains,
+            "blocked_domains" => original_blocked_domains
+          }
+        },
+        %{
+          "type" => "web_search",
+          "filters" => %{
+            "allowed_domains" => Enum.map(1..100, &"allowed-#{&1}.example"),
+            "blocked_domains" => Enum.map(1..100, &"blocked-#{&1}.example")
+          }
+        }
+      ]
+
+      Enum.each(accepted_tools, fn tool ->
+        assert {:ok, result} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => "synthetic input",
+                   "tools" => [tool]
+                 })
+
+        assert result.payload["tools"] == [tool]
+      end)
+    end
+
+    test "Responses rejects malformed web search domain filters" do
+      invalid_filters = [
+        nil,
+        [],
+        "example.com",
+        %{},
+        %{"unknown" => ["example.com"]},
+        %{"allowed_domains" => []},
+        %{"blocked_domains" => []},
+        %{"allowed_domains" => ["example.com"], "blocked_domains" => []},
+        %{"allowed_domains" => [], "blocked_domains" => ["example.com"]},
+        %{"allowed_domains" => "example.com"},
+        %{"blocked_domains" => "example.com"},
+        %{"allowed_domains" => [123]},
+        %{"blocked_domains" => [nil]},
+        %{"allowed_domains" => [""]},
+        %{"blocked_domains" => [" \t\n"]},
+        %{"allowed_domains" => ["http://example.com"]},
+        %{"allowed_domains" => [" HTTP://example.com"]},
+        %{"blocked_domains" => ["https://example.com"]},
+        %{"blocked_domains" => ["\tHtTpS://example.com"]},
+        %{"allowed_domains" => Enum.map(1..101, &"allowed-#{&1}.example")},
+        %{"blocked_domains" => Enum.map(1..101, &"blocked-#{&1}.example")}
+      ]
+
+      Enum.each(invalid_filters, fn filters ->
+        assert {:error, %{status: 400, code: "invalid_request", param: "tools"}} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => "synthetic input",
+                   "tools" => [%{"type" => "web_search", "filters" => filters}]
+                 })
+      end)
+    end
+
     test "Responses allows only exact safe passthrough built-in tool shapes" do
       for tool <- [
             %{"type" => "web_search_preview"},

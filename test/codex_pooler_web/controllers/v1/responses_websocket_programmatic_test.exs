@@ -177,6 +177,82 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
+  test "GET /v1/responses websocket forwards exact web search domain filters without external access" do
+    tool = %{
+      "type" => "web_search",
+      "filters" => %{
+        "allowed_domains" => [" Example.COM ", "example.com", "Example.COM"],
+        "blocked_domains" => [" blocked.example ", "blocked.example", "blocked.example"]
+      }
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"response.completed",
+             %{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => "resp_v1_websocket_web_search_domain_filters",
+                 "status" => "completed",
+                 "output" => [],
+                 "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+               }
+             }}
+          ],
+          done: false
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "web-search-filters-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        public_websocket_send_text!(
+          conn,
+          websocket,
+          ref,
+          Jason.encode!(%{
+            "type" => "response.create",
+            "model" => setup.model.exposed_model_id,
+            "input" => "synthetic websocket filtered web search request",
+            "stream" => false,
+            "store" => true,
+            "generate" => true,
+            "tools" => [tool]
+          })
+        )
+
+      {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{
+               "type" => "response.completed",
+               "response" => %{"id" => "resp_v1_websocket_web_search_domain_filters"}
+             } = Jason.decode!(frame)
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.method == "WEBSOCKET"
+      assert captured.path == "/backend-api/codex/responses"
+      assert captured.json["tools"] == [tool]
+      assert captured.json["stream"] == true
+      assert captured.json["store"] == false
+      refute Map.has_key?(hd(captured.json["tools"]), "external_web_access")
+
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   test "GET /v1/responses websocket rejects malformed caller, tool, and program output before dispatch" do
     upstream =
       start_upstream(FakeUpstream.sse_stream(programmatic_response_events(), done: false))

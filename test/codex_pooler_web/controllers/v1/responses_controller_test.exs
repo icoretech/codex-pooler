@@ -3675,6 +3675,98 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert captured.json["store"] == false
   end
 
+  test "POST /v1/responses forwards exact web search domain filters without external access", %{
+    conn: conn
+  } do
+    tool = %{
+      "type" => "web_search",
+      "filters" => %{
+        "allowed_domains" => [" Example.COM ", "example.com", "Example.COM"],
+        "blocked_domains" => [" blocked.example ", "blocked.example", "blocked.example"]
+      }
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_v1_web_search_domain_filters",
+               "status" => "completed",
+               "output" => [],
+               "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic filtered web search request",
+        "stream" => false,
+        "store" => true,
+        "tools" => [tool]
+      })
+
+    assert %{"id" => "resp_v1_web_search_domain_filters"} = json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.method == "POST"
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["tools"] == [tool]
+    assert captured.json["stream"] == true
+    assert captured.json["store"] == false
+    refute Map.has_key?(hd(captured.json["tools"]), "external_web_access")
+  end
+
+  test "POST /v1/responses rejects an unsupported web search filter before dispatch", %{
+    conn: conn
+  } do
+    rejected_field = "unsupported"
+    rejected_value = "other.example"
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic invalid filtered web search request",
+        "tools" => [
+          %{
+            "type" => "web_search",
+            "filters" => %{
+              "allowed_domains" => ["example.com"],
+              rejected_field => [rejected_value]
+            }
+          }
+        ]
+      })
+
+    public_error = json_response(conn, 400)
+
+    assert %{
+             "error" => %{
+               "code" => "invalid_request",
+               "param" => "tools"
+             }
+           } = public_error
+
+    public_error_text = Jason.encode!(public_error)
+    refute public_error_text =~ rejected_field
+    refute public_error_text =~ rejected_value
+
+    assert FakeUpstream.requests(upstream) == []
+  end
+
   test "POST /v1/responses keeps opencode continuity headers local without forwarding", %{
     conn: conn
   } do

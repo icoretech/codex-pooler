@@ -415,10 +415,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
            validate_exact_builtin_tool(tool, [
              "type",
              "external_web_access",
-             "index_gated_web_access"
+             "index_gated_web_access",
+             "filters"
            ]),
-         :ok <- validate_required_boolean_tool_field(tool, "external_web_access"),
-         :ok <- validate_optional_boolean_tool_field(tool, "index_gated_web_access") do
+         :ok <- validate_optional_boolean_tool_field(tool, "external_web_access"),
+         :ok <- validate_optional_boolean_tool_field(tool, "index_gated_web_access"),
+         :ok <- validate_optional_web_search_filters(tool) do
       validate_index_gated_web_access(tool)
     end
   end
@@ -515,13 +517,43 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
     end
   end
 
-  defp validate_required_boolean_tool_field(tool, field) do
-    case Map.fetch(tool, field) do
-      {:ok, value} when is_boolean(value) -> :ok
-      {:ok, _value} -> {:error, Error.invalid_request("tool shape is not translatable", "tools")}
-      :error -> {:error, Error.invalid_request("tool shape is not translatable", "tools")}
+  defp validate_optional_web_search_filters(%{"filters" => filters})
+       when is_map(filters) and map_size(filters) > 0 do
+    with :ok <- validate_exact_tool_keys(filters, ["allowed_domains", "blocked_domains"]),
+         :ok <- validate_optional_web_search_domain_list(filters, "allowed_domains") do
+      validate_optional_web_search_domain_list(filters, "blocked_domains")
     end
   end
+
+  defp validate_optional_web_search_filters(%{"filters" => _filters}),
+    do: {:error, Error.invalid_request("tool shape is not translatable", "tools")}
+
+  defp validate_optional_web_search_filters(_tool), do: :ok
+
+  defp validate_optional_web_search_domain_list(filters, field) do
+    case Map.fetch(filters, field) do
+      {:ok, domains} when is_list(domains) and domains != [] and length(domains) <= 100 ->
+        if Enum.all?(domains, &valid_web_search_domain?/1),
+          do: :ok,
+          else: {:error, Error.invalid_request("tool shape is not translatable", "tools")}
+
+      {:ok, _domains} ->
+        {:error, Error.invalid_request("tool shape is not translatable", "tools")}
+
+      :error ->
+        :ok
+    end
+  end
+
+  defp valid_web_search_domain?(domain) when is_binary(domain) do
+    trimmed_domain = String.trim(domain)
+    downcased_domain = String.downcase(trimmed_domain)
+
+    trimmed_domain != "" and not String.starts_with?(downcased_domain, "http://") and
+      not String.starts_with?(downcased_domain, "https://")
+  end
+
+  defp valid_web_search_domain?(_domain), do: false
 
   defp validate_optional_allowed_callers(%{"allowed_callers" => allowed_callers})
        when is_list(allowed_callers) do
@@ -553,6 +585,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
          "index_gated_web_access" => true
        }) do
     {:error, Error.invalid_request("tool shape is not translatable", "tools")}
+  end
+
+  defp validate_index_gated_web_access(%{"index_gated_web_access" => true} = tool) do
+    if Map.has_key?(tool, "external_web_access"),
+      do: :ok,
+      else: {:error, Error.invalid_request("tool shape is not translatable", "tools")}
   end
 
   defp validate_index_gated_web_access(_tool), do: :ok
