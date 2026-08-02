@@ -90,7 +90,7 @@ defmodule CodexPoolerWeb.ObservatoryReconnectTest do
   defp assert_one_reader_started(view, window) do
     assert_receive {:observatory_read_started, task, ^window}
     assert task != view.pid
-    render_async(view)
+    ObservatoryControllerTestHelpers.await_async(view)
     refute_reader_started()
   end
 

@@ -1,6 +1,6 @@
 defmodule CodexPoolerWeb.ObservatoryControllerTestHelpers do
   @moduledoc """
-  Shared request helpers for the Observatory controller tests.
+  Shared request and LiveView helpers for the Observatory tests.
   """
 
   import ExUnit.Assertions
@@ -11,6 +11,11 @@ defmodule CodexPoolerWeb.ObservatoryControllerTestHelpers do
   @login_path "/observatory/login"
   @logout_path "/observatory/logout"
   @cookie_name "_codex_pooler_observatory_token"
+  @async_timeout_ms 2_000
+
+  def await_async(view_or_element) do
+    Phoenix.LiveViewTest.render_async(view_or_element, @async_timeout_ms)
+  end
 
   def post_login(conn, endpoint, body) do
     conn = Phoenix.ConnTest.dispatch(conn, endpoint, :get, @login_path)

@@ -278,7 +278,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
 
       owner = sole_owner_pid!()
       active_turn = :sys.get_state(owner).active_turn
-      task_monitor = Process.monitor(active_turn.task_pid)
+      task_pid = active_turn.task_pid
+      task_monitor = Process.monitor(task_pid)
 
       assert :erlang.suspend_process(owner)
 
@@ -294,7 +295,10 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
                       ^release_ref},
                      1_000
 
-      assert_receive {:DOWN, ^task_monitor, :process, _task_pid, :normal}, 1_000
+      # If the task exits before this external monitor is fully registered,
+      # Erlang reports :noproc instead of preserving its :normal exit reason.
+      assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, task_exit_reason}, 1_000
+      assert task_exit_reason in [:normal, :noproc]
       assert Process.info(owner, :status) == {:status, :suspended}
       close_monitor = Process.monitor(close_barrier_pid)
       send(close_barrier_pid, {:fake_upstream_release_websocket, release_ref})

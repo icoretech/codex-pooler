@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.ObservatoryDashboardLiveTest do
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting.Usage.Observatory
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.ObservatoryControllerTestHelpers
   alias CodexPoolerWeb.ObservatoryLive
 
   @login_path "/observatory/login"
@@ -145,7 +146,7 @@ defmodule CodexPoolerWeb.ObservatoryDashboardLiveTest do
 
     for window <- ~w(1h 5h 24h 7d) do
       render_click(view, "select-window", %{"window" => window})
-      render_async(view)
+      ObservatoryControllerTestHelpers.await_async(view)
       assert has_element?(view, "#observatory-window-#{window}[aria-pressed='true']")
     end
 
@@ -157,7 +158,7 @@ defmodule CodexPoolerWeb.ObservatoryDashboardLiveTest do
     assert has_element?(view, "#observatory-resume[aria-label='Resume auto-refresh']")
 
     render_click(view, "resume-refresh")
-    render_async(view)
+    ObservatoryControllerTestHelpers.await_async(view)
     assert has_element?(view, "#observatory-widgets")
     refute has_element?(view, "#observatory-state-stale")
     assert has_element?(view, "#observatory-pause[aria-label='Pause auto-refresh']")
@@ -196,7 +197,7 @@ defmodule CodexPoolerWeb.ObservatoryDashboardLiveTest do
 
   defp activate_initial_refresh(view) do
     render_hook(view, "observatory-refresh", %{"reason" => "initial"})
-    render_async(view)
+    ObservatoryControllerTestHelpers.await_async(view)
   end
 
   defp authenticated_conn(conn, pool \\ nil) do

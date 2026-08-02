@@ -26,7 +26,7 @@ defmodule CodexPoolerWeb.ObservatoryRefreshGenerationTest do
   test "renders the scheduler lifecycle contract", %{conn: conn} do
     view = authenticated_view(conn)
     render_hook(view, "observatory-refresh", %{"reason" => "initial"})
-    render_async(view)
+    ObservatoryControllerTestHelpers.await_async(view)
 
     assert has_element?(
              view,
@@ -109,7 +109,7 @@ defmodule CodexPoolerWeb.ObservatoryRefreshGenerationTest do
       })
 
     {:ok, view, _html} = live(conn, @observatory_path)
-    render_async(view)
+    ObservatoryControllerTestHelpers.await_async(view)
     view
   end
 

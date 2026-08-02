@@ -61,7 +61,7 @@ defmodule CodexPoolerWeb.ObservatoryRefreshAuthTest do
       })
 
     {:ok, view, _html} = live(conn, @observatory_path)
-    render_async(view)
+    ObservatoryControllerTestHelpers.await_async(view)
     %{api_key: api_key, view: view}
   end
 
