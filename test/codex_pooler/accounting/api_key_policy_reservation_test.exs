@@ -395,9 +395,9 @@ defmodule CodexPooler.Accounting.APIKeyPolicyReservationTest do
       assert length(ledger_usage_queries) == 1
     end
 
-    test "reservation window enforcement aggregates ledger usage in the database" do
+    test "reservation window enforcement reads buckets and bounds raw ledger work to edge minutes" do
       setup = accounting_setup()
-      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      now = ~U[2026-08-02 00:00:30.000000Z]
 
       update_default_policy!(setup.api_key, %{
         max_requests_per_minute: 60,
@@ -425,20 +425,28 @@ defmodule CodexPooler.Accounting.APIKeyPolicyReservationTest do
             setup.auth,
             setup.model,
             %{"model" => setup.model.exposed_model_id, "max_output_tokens" => 1},
-            %{correlation_id: "corr-aggregate-window-reservation"}
+            %{correlation_id: "corr-aggregate-window-reservation", now: now}
           )
         end)
 
+      bucket_usage_queries = table_commands(queries, "api_key_usage_buckets", "SELECT")
+
       ledger_usage_queries =
         queries
-        |> Enum.filter(fn query ->
-          query.command == "SELECT" and String.contains?(query.query, "ledger_entries") and
-            String.contains?(query.query, "amount_status")
-        end)
+        |> table_commands("ledger_entries", "SELECT")
+        |> Enum.filter(&String.contains?(&1.query, "api_key_usage_buckets"))
 
+      assert bucket_usage_queries != []
       assert ledger_usage_queries != []
-      assert Enum.all?(ledger_usage_queries, &(String.downcase(&1.query) =~ "sum("))
-      refute Enum.any?(ledger_usage_queries, &String.contains?(&1.query, ~s(l0."id")))
+
+      assert Enum.all?(ledger_usage_queries, fn query ->
+               String.contains?(query.query, "amount_status") and
+                 String.contains?(query.query, "occurred_at") and
+                 String.contains?(query.query, ">=") and
+                 String.contains?(query.query, "<")
+             end)
+
+      assert length(ledger_usage_queries) <= 2
     end
 
     test "reservation snapshot inputs do not read policy bindings before reservation" do

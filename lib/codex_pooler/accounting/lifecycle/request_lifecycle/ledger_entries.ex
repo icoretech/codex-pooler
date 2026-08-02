@@ -1,12 +1,11 @@
 defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
   @moduledoc false
 
-  import Ecto.Query
-
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Accounting.PricingResolution
   alias CodexPooler.Accounting.RequestLifecycle.ReferenceLocks
+  alias CodexPooler.Accounting.RequestLifecycle.WindowUsage
   alias CodexPooler.Repo
 
   @entry_reservation "reservation"
@@ -15,7 +14,6 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
   @amount_recorded "recorded"
   @amount_voided "voided"
   @usage_pending "usage_pending"
-  @usage_known "usage_known"
   @source_event_conflict_target {:unsafe_fragment,
                                  "(source_event_id) WHERE source_event_id IS NOT NULL"}
 
@@ -77,12 +75,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
           required(:timestamp) => DateTime.t()
         }
   @type create_status :: :inserted | :existing
-  @type usage_window :: atom()
-  @type window_usage :: %{
-          required(:effective_request_count) => integer(),
-          required(:effective_total_tokens) => integer(),
-          required(:effective_cost_micros) => Decimal.t()
-        }
+  @type usage_window :: WindowUsage.usage_window()
+  @type window_usage :: WindowUsage.window_usage()
 
   @spec create_or_get!(map()) :: LedgerEntry.t()
   def create_or_get!(attrs) do
@@ -136,92 +130,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
           %{
             usage_window() => window_usage()
           }
-  def window_usages(api_key_id, windows) do
-    windows = normalize_windows(windows)
-
-    windows
-    |> Enum.reject(fn {_window, since} -> is_nil(since) end)
-    |> Map.new(fn {window, since} -> {window, window_usage(api_key_id, since)} end)
-  end
-
-  defp window_usage(api_key_id, since) do
-    Repo.one(
-      from e in LedgerEntry,
-        where:
-          e.api_key_id == ^api_key_id and e.amount_status == @amount_recorded and
-            e.occurred_at >= ^since,
-        select: %{
-          effective_request_count:
-            type(
-              fragment(
-                "COALESCE(SUM(CASE WHEN ? = ? THEN -COALESCE(?, 0) ELSE COALESCE(?, 0) END), 0)::bigint",
-                e.entry_kind,
-                ^@entry_release,
-                e.request_count,
-                e.request_count
-              ),
-              :integer
-            ),
-          effective_total_tokens:
-            type(
-              fragment(
-                """
-                COALESCE(
-                  SUM(
-                    CASE
-                      WHEN ? = ? THEN -COALESCE(?, 0)
-                      WHEN ? = ? AND ? = ? THEN COALESCE(?, 0)
-                      WHEN ? = ? THEN 0
-                      ELSE COALESCE(?, 0)
-                    END
-                  ),
-                  0
-                )::bigint
-                """,
-                e.entry_kind,
-                ^@entry_release,
-                e.total_tokens,
-                e.entry_kind,
-                ^@entry_settlement,
-                e.usage_status,
-                ^@usage_known,
-                e.total_tokens,
-                e.entry_kind,
-                ^@entry_settlement,
-                e.total_tokens
-              ),
-              :integer
-            ),
-          effective_cost_micros:
-            fragment(
-              """
-              COALESCE(
-                SUM(
-                  CASE
-                    WHEN ? = ? THEN -COALESCE(?, 0)
-                    WHEN ? = ? AND ? = ? THEN COALESCE(?, 0)
-                    WHEN ? = ? THEN 0
-                    ELSE COALESCE(?, 0)
-                  END
-                ),
-                0
-              )
-              """,
-              e.entry_kind,
-              ^@entry_release,
-              e.estimated_cost_micros,
-              e.entry_kind,
-              ^@entry_settlement,
-              e.usage_status,
-              ^@usage_known,
-              e.settled_cost_micros,
-              e.entry_kind,
-              ^@entry_settlement,
-              e.estimated_cost_micros
-            )
-        }
-    ) || empty_window_usage()
-  end
+  defdelegate window_usages(api_key_id, windows), to: WindowUsage
 
   @spec reservation_attrs(
           Request.t(),
@@ -483,15 +392,4 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
     do: Map.get(config, "importer_format_revision")
 
   defp pricing_importer_revision(_pricing), do: nil
-
-  defp normalize_windows(windows) when is_list(windows), do: Map.new(windows)
-  defp normalize_windows(windows) when is_map(windows), do: windows
-
-  defp empty_window_usage do
-    %{
-      effective_request_count: 0,
-      effective_total_tokens: 0,
-      effective_cost_micros: Decimal.new(0)
-    }
-  end
 end
