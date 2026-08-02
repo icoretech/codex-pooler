@@ -38,6 +38,30 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   @type opts :: RequestOptions.t()
   @type gateway_error :: Contracts.gateway_error()
   @type gateway_result :: Contracts.gateway_result()
+  @typedoc false
+  @type session_routable_context :: %{
+          required(:auth) => auth(),
+          required(:endpoint) => String.t(),
+          required(:payload) => payload(),
+          required(:request_options) => opts(),
+          required(:model) => Model.t(),
+          required(:candidates) => list(),
+          required(:route_state) => RouteState.t(),
+          required(:turn_claim) => CodexPooler.Accounting.Request.t() | nil
+        }
+  @typep session_routable_result ::
+           {:ok, map(), list(), opts(), RouteState.t()} | {:error, term()}
+  @typedoc false
+  @type reserve_and_start_turn_fun ::
+          (auth(),
+           Model.t(),
+           payload(),
+           String.t(),
+           opts(),
+           RouteState.t(),
+           CodexPooler.Accounting.Request.t()
+           | nil ->
+             {:ok, map()} | {:error, term()})
 
   @spec backend_transcription_model() :: String.t()
   def backend_transcription_model, do: @backend_transcription_model
@@ -229,46 +253,126 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          %RouteState{} = route_state,
          turn_claim
        ) do
+    %{
+      auth: auth,
+      endpoint: endpoint,
+      payload: payload,
+      request_options: request_options,
+      model: model,
+      candidates: candidates,
+      route_state: route_state,
+      turn_claim: turn_claim
+    }
+    |> execute_session_routable_model(&reserve_and_start_turn/7)
+  end
+
+  @doc false
+  @spec execute_session_routable_model(
+          session_routable_context(),
+          reserve_and_start_turn_fun()
+        ) :: {:ok, gateway_result()} | {:error, gateway_error()}
+  def execute_session_routable_model(
+        %{
+          auth: _auth,
+          endpoint: _endpoint,
+          payload: _payload,
+          request_options: %RequestOptions{},
+          model: %Model{},
+          candidates: candidates,
+          route_state: %RouteState{},
+          turn_claim: _turn_claim
+        } = context,
+        reserve_and_start_turn
+      )
+      when is_list(candidates) and is_function(reserve_and_start_turn, 7) do
+    do_execute_session_routable_model(context, reserve_and_start_turn)
+  end
+
+  defp do_execute_session_routable_model(
+         %{
+           auth: auth,
+           endpoint: endpoint,
+           payload: payload,
+           request_options: %RequestOptions{} = request_options,
+           model: %Model{} = model,
+           candidates: candidates,
+           route_state: %RouteState{} = route_state,
+           turn_claim: turn_claim
+         },
+         reserve_and_start_turn
+       )
+       when is_list(candidates) and is_function(reserve_and_start_turn, 7) do
     request_options =
       RequestOptions.put_routing(request_options, reset_probe: ResetProbe.new())
 
-    with {:ok, candidates, request_options, route_state} <-
-           route_filter_input(
-             auth,
-             model,
-             endpoint,
-             payload,
-             request_options,
-             candidates
-           )
-           |> RouteFiltering.filter_candidates_with_route_state(route_state),
-         :ok <-
-           AccountingReservation.validate_reset_probe_scope(
-             candidates,
-             request_options,
-             route_state
-           ),
-         {:ok, reserved} <-
-           reserve_and_start_turn(
-             auth,
-             model,
-             payload,
-             endpoint,
-             request_options,
-             route_state,
-             turn_claim
-           ) do
-      dispatch_candidates(
-        auth,
-        endpoint,
-        payload,
-        model,
-        reserved,
-        candidates,
-        request_options,
-        route_state
-      )
-    else
+    result =
+      with {:ok, candidates, request_options, route_state} <-
+             route_filter_input(
+               auth,
+               model,
+               endpoint,
+               payload,
+               request_options,
+               candidates
+             )
+             |> RouteFiltering.filter_candidates_with_route_state(route_state),
+           :ok <-
+             AccountingReservation.validate_reset_probe_scope(
+               candidates,
+               request_options,
+               route_state
+             ),
+           {:ok, reserved} <-
+             reserve_and_start_turn.(
+               auth,
+               model,
+               payload,
+               endpoint,
+               request_options,
+               route_state,
+               turn_claim
+             ) do
+        {:ok, reserved, candidates, request_options, route_state}
+      end
+
+    handle_session_routable_result(result, %{
+      auth: auth,
+      endpoint: endpoint,
+      payload: payload,
+      request_options: request_options,
+      model: model,
+      candidates: candidates,
+      route_state: route_state,
+      turn_claim: turn_claim
+    })
+  end
+
+  @spec handle_session_routable_result(session_routable_result(), session_routable_context()) ::
+          {:ok, gateway_result()} | {:error, gateway_error()}
+  defp handle_session_routable_result(
+         result,
+         %{
+           auth: auth,
+           endpoint: endpoint,
+           payload: payload,
+           request_options: request_options,
+           model: model,
+           turn_claim: turn_claim
+         }
+       ) do
+    case result do
+      {:ok, reserved, candidates, request_options, route_state} ->
+        dispatch_candidates(
+          auth,
+          endpoint,
+          payload,
+          model,
+          reserved,
+          candidates,
+          request_options,
+          route_state
+        )
+
       {:error, %{code: "duplicate_turn"} = reason} ->
         {:error, reason}
 
@@ -286,6 +390,19 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       {:error, %{code: _code} = reason} ->
         Denials.log_gateway(
           denial_context(auth, model, reason, endpoint, payload, request_options),
+          turn_claim
+        )
+
+      {:error, reason} ->
+        reason = AccountingReservation.pre_attempt_failure(reason, request_options)
+
+        reject_claimed_turn(
+          auth,
+          model,
+          reason,
+          endpoint,
+          payload,
+          request_options,
           turn_claim
         )
     end

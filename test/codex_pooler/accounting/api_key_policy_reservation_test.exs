@@ -347,6 +347,54 @@ defmodule CodexPooler.Accounting.APIKeyPolicyReservationTest do
       assert reserved.reservation.output_tokens == 768
     end
 
+    test "disabled window limits skip ledger usage queries" do
+      setup = accounting_setup()
+
+      update_default_policy!(setup.api_key, %{
+        max_requests_per_minute: nil,
+        max_tokens_per_day: nil,
+        max_tokens_per_week: nil
+      })
+
+      {{:ok, _reserved}, queries} =
+        capture_repo_queries(fn ->
+          Accounting.reserve(
+            setup.auth,
+            setup.model,
+            %{"model" => setup.model.exposed_model_id, "max_output_tokens" => 1},
+            %{correlation_id: "corr-disabled-window-limits"}
+          )
+        end)
+
+      ledger_usage_queries = table_commands(queries, "ledger_entries", "SELECT")
+
+      assert ledger_usage_queries == []
+    end
+
+    test "reservation queries only configured ledger usage windows" do
+      setup = accounting_setup()
+
+      update_default_policy!(setup.api_key, %{
+        max_requests_per_minute: nil,
+        max_tokens_per_day: nil,
+        max_tokens_per_week: 500_000
+      })
+
+      {{:ok, _reserved}, queries} =
+        capture_repo_queries(fn ->
+          Accounting.reserve(
+            setup.auth,
+            setup.model,
+            %{"model" => setup.model.exposed_model_id, "max_output_tokens" => 1},
+            %{correlation_id: "corr-one-configured-window"}
+          )
+        end)
+
+      ledger_usage_queries = table_commands(queries, "ledger_entries", "SELECT")
+
+      assert length(ledger_usage_queries) == 1
+    end
+
     test "reservation window enforcement aggregates ledger usage in the database" do
       setup = accounting_setup()
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)

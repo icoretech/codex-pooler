@@ -73,30 +73,39 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
   defp effective_binding?(_binding, _requested_model), do: false
 
   defp enforce_window_reservation_limits(api_key, policy, estimate, timestamp) do
+    limits =
+      [
+        {:max_requests_per_minute, policy.max_requests_per_minute, :minute,
+         DateTime.add(timestamp, -60, :second), :effective_request_count, 1, "request_count",
+         "minute"},
+        {:max_tokens_per_day, policy.max_tokens_per_day, :daily, beginning_of_day(timestamp),
+         :effective_total_tokens, estimate.total_tokens, "total_tokens", "daily"},
+        {:max_tokens_per_week, policy.max_tokens_per_week, :weekly,
+         DateTime.add(timestamp, -7, :day), :effective_total_tokens, estimate.total_tokens,
+         "total_tokens", "weekly"}
+      ]
+      |> Enum.reject(fn {_field, max_value, _window, _since, _usage_field, _delta, _metric,
+                         _label} ->
+        is_nil(max_value)
+      end)
+
     window_usages =
-      LedgerEntries.window_usages(api_key.id,
-        minute: DateTime.add(timestamp, -60, :second),
-        daily: beginning_of_day(timestamp),
-        weekly: DateTime.add(timestamp, -7, :day)
-      )
+      limits
+      |> Map.new(fn {_field, _max_value, window, since, _usage_field, _delta, _metric, _label} ->
+        {window, since}
+      end)
+      |> then(&LedgerEntries.window_usages(api_key.id, &1))
 
-    minute_usage = window_usages.minute
-    daily_usage = window_usages.daily
-    weekly_usage = window_usages.weekly
+    Enum.reduce_while(limits, :ok, fn
+      {field, max_value, window, _since, usage_field, delta, metric, label}, :ok ->
+        current = window_usages |> Map.fetch!(window) |> Map.fetch!(usage_field)
 
-    [
-      {:max_requests_per_minute, policy.max_requests_per_minute,
-       minute_usage.effective_request_count, 1, "request_count", "minute"},
-      {:max_tokens_per_day, policy.max_tokens_per_day, daily_usage.effective_total_tokens,
-       estimate.total_tokens, "total_tokens", "daily"},
-      {:max_tokens_per_week, policy.max_tokens_per_week, weekly_usage.effective_total_tokens,
-       estimate.total_tokens, "total_tokens", "weekly"}
-    ]
-    |> Enum.reduce_while(:ok, fn limit, :ok ->
-      case enforce_window_limit(limit) do
-        :ok -> {:cont, :ok}
-        {:error, error} -> {:halt, {:error, error}}
-      end
+        limit = {field, max_value, current, delta, metric, label}
+
+        case enforce_window_limit(limit) do
+          :ok -> {:cont, :ok}
+          {:error, error} -> {:halt, {:error, error}}
+        end
     end)
   end
 
@@ -126,8 +135,6 @@ defmodule CodexPooler.Accounting.ReservationPolicy do
         :ok
     end
   end
-
-  defp enforce_window_limit({_field, nil, _current, _delta, _metric, _window}), do: :ok
 
   defp enforce_window_limit({field, max_value, current, delta, metric, window}) do
     current = decimal_to_integer(current)

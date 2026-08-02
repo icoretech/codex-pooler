@@ -1,9 +1,13 @@
 defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
   @moduledoc false
 
+  require Logger
+
   alias CodexPooler.Access
+  alias CodexPooler.Accounting.FailureResponse
   alias CodexPooler.Accounting.PricingResolution
   alias CodexPooler.Catalog.Model
+  alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Denials
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
@@ -11,6 +15,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
+  alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
   alias CodexPooler.RouteClass
 
   @type auth :: Access.auth_context()
@@ -41,6 +46,38 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
       _mismatch ->
         reset_probe_scope_error()
     end
+  end
+
+  @doc false
+  @spec pre_attempt_failure(term(), RequestOptions.t()) :: Contracts.gateway_error()
+  def pre_attempt_failure(:rollback, %RequestOptions{} = request_options) do
+    pre_attempt_failure_response(:rollback, request_options, 503, true)
+  end
+
+  def pre_attempt_failure(reason, %RequestOptions{} = request_options) do
+    pre_attempt_failure_response(reason, request_options, 500, false)
+  end
+
+  defp pre_attempt_failure_response(reason, request_options, status, retryable) do
+    failure_reason = FailureResponse.safe_failure_reason(reason)
+
+    Logger.error([
+      "gateway pre-attempt reservation failed",
+      " phase=pre_attempt",
+      " operation=reserve_and_start_turn",
+      " failure_code=gateway_reservation_failed",
+      " status=#{status}",
+      " request_id=#{DiagnosticTaxonomy.safe_correlator(request_options.request_metadata.request_id)}",
+      " failure_reason=#{failure_reason}",
+      " retryable=#{retryable}"
+    ])
+
+    %{
+      status: status,
+      code: "gateway_reservation_failed",
+      message: "gateway request reservation failed",
+      retryable: retryable
+    }
   end
 
   @spec attrs(auth(), map(), String.t(), RequestOptions.t()) :: map()
