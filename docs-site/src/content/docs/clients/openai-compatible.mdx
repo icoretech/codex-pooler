@@ -276,6 +276,19 @@ Ordinary OpenAI Responses incomplete terminals are preserved. If an upstream ret
 
 Accepted `POST /v1/responses` tool definitions are narrow. OpenAI Responses remote MCP tool definitions are rejected before dispatch.
 
+### Web search domain filters
+
+`web_search.filters` accepts only `allowed_domains` and `blocked_domains`. Each
+supplied field is a list of 1 through 100 nonblank strings without leading-
+whitespace, case-insensitive HTTP(S) schemes. Both fields can appear together.
+Codex Pooler forwards accepted values unchanged, including their order, case,
+duplicates, and bytes.
+
+`external_web_access` is optional. Codex Pooler guarantees local validation and
+forwarding of this accepted shape only. Web search availability and any
+allow-list or block-list enforcement can vary by selected upstream model and
+account.
+
 ## Request compression behavior
 
 Per-Pool request compression can apply to `POST /v1/responses`, `POST /v1/chat/completions`, and narrow Responses websocket `response.create` traffic. It is transparent to SDK clients and does not require a client flag. Operators enable it with the Pool setting `request_compression_enabled`.
