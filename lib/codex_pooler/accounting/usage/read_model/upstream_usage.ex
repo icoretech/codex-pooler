@@ -118,7 +118,7 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
 
     {:ok,
      %{
-       plan_type: identity.plan_label || identity.plan_family || "unknown",
+       plan_type: public_plan_type(identity),
        rate_limit: UsageResponses.codex_rate_limit(primary, secondary),
        credits: UsageResponses.codex_credits(primary, secondary),
        additional_rate_limits: additional_rate_limits
@@ -257,6 +257,13 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
   defp id_for(id) when is_binary(id), do: id
   defp id_for(_), do: nil
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+  defp public_plan_type(%UpstreamIdentity{plan_family: plan_family, plan_label: plan_label})
+       when is_binary(plan_family),
+       do: plan_label || plan_family
+
+  defp public_plan_type(%UpstreamIdentity{}), do: "unknown"
+
   defp plan_label(nil), do: "unknown"
   defp plan_label(label), do: label |> String.downcase() |> String.replace(" ", "_")
   defp accounting_error(code, message), do: %{code: code, message: message}
