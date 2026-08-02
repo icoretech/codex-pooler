@@ -568,7 +568,8 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :v1_supported_surface,
       contract:
-        "OpenAI-compatible /v1 routes are default-on for pools, require bearer API-key auth, return OpenAI-shaped errors without anonymous local or CIDR bypasses, include narrow GET /v1/responses Responses websocket compatibility only, exclude broad /v1/realtime routes, keep POST /v1/responses/compact routed only to deterministic unsupported_endpoint with no upstream compact dispatch, reject OpenAI Responses remote MCP tool definitions before upstream dispatch in both top-level tools and nested additional_tools.tools locations with OpenAI-shaped invalid_request errors, consume continuity headers using the documented local precedence without forwarding session-id, x-session-id, or x-session-affinity upstream, fail closed for pinned /v1/responses continuations whose upstream account needs revoked-refresh-token reauthentication with the shared restart_with_full_context recovery guidance, allow prompt-cache routing locality only on POST responses and chat completions, accept Codex-native Responses web_search hosted tool shapes with boolean access flags while keeping web_search_preview type-only, accept Responses truncation auto and disabled locally without forwarding it upstream, lift Responses system/developer input-message text into top-level instructions, treat absent, blank, and whitespace-only public SSE event labels identically before event/data type precedence while rejecting nonblank mismatches, emit early public streaming terminal errors without synthetic success prefixes, emit a sanitized type:error terminal with wire code server_error while accounting records upstream_stream_error when POST /v1/responses SSE has already exposed public Responses data and an ordinary upstream interruption occurs before a Responses terminal event, cap ordinary incomplete public Responses SSE blocks at 8 MiB so single large provider events such as reasoning items with encrypted content can finish decoding while allowing structurally recognizable terminal candidates up to 64 MiB so split large terminals can finish decoding, and emit that same bounded local terminal immediately when the applicable cap is crossed while dropping the source block and later frames, accounting records owner_drained while the emitted wire frame is byte-identical to the ordinary synthetic terminal only when a committed websocket-bridge turn is aborted by rollout drain after its drain budget, keep precommit drain admission on its existing fallback or refusal path, keep client disconnect and non-drain interruption mappings unchanged, limit synthetic SSE terminals to OpenAI-compatible HTTP SSE surfaces, drop malformed and JSON non-object provider frames on direct and accepted owner-forwarded GET /v1/responses without advancing public websocket state, emit the existing websocket type:error envelope with status 502 and wire code server_error when an owner-forwarded GET /v1/responses per-call turn is interrupted after committed public output while accounting records upstream_stream_error, never synthesize that interruption for pre-visible owner-forwarded turns, preserve native backend raw Responses streams and all other websocket behavior, and preserve bridge complete-block behavior, redact server-class/internal/upstream public /v1 errors while preserving invalid_request_error validation details, preserve safe machine-readable codes for redacted public OpenAI-compatible Responses terminal failures in nested response.error through low-level public SSE normalization and the runtime streaming relay, keep top-level error code-aligned when Pooler emits one, map Responses content_filter/content-filter incomplete reasons to chat finish_reason content_filter while other incomplete reasons remain length, forward structured tool-result/function_call_output payloads unchanged, translate chat-style role=tool continuation messages and Hermes assistant tool-call replays into Responses function_call/function_call_output input items before validation, accept safe Hermes assistant replay status values, drop known OMP function_call replay status fields before validation, translate OpenClaw assistant thinking replays before validation, accept narrow Codex custom tool replay with custom_tool_call.namespace preservation and matching custom_tool_call_output while executable custom tool definitions remain unsupported, and keep chat input fallback, Responses additional_tools support narrow and non-executable, and Responses namespace-tool support narrow. For genuine upstream Responses terminal failures, the public `/v1` surface constructs a named-field `response.failed` projection, excludes unknown event, response, error, and usage siblings, validates the response id, projects bounded usage counters, and empties or nulls content-bearing response fields. It preserves a trimmed upstream error code only when it is at most 80 bytes and matches `^[A-Za-z0-9_.-]+$`, redacts every other code value to `upstream_error`, replaces upstream message text with `upstream request failed`, and upstream type text — including clean values — is replaced with `server_error`. Top-level and nested errors are sanitized independently without copying either location to the other, and clients must treat `error.code` as an open string."
+        "Audio transcription accepts gpt-transcribe only as a caller alias for canonical gpt-4o-transcribe, accepts decoded keywords and languages as ordered non-empty string lists with duplicates preserved, omits empty lists, forwards exact repeated keywords[] and languages[] names, rejects malformed lists by field, removes detected languages from public output, stores no raw audio or decoded list values after auth-before-multipart, and makes no alias catalog, model-discovery, detected-language-output, or full OpenAI Audio parity claim; " <>
+          "OpenAI-compatible /v1 routes are default-on for pools, require bearer API-key auth, return OpenAI-shaped errors without anonymous local or CIDR bypasses, include narrow GET /v1/responses Responses websocket compatibility only, exclude broad /v1/realtime routes, keep POST /v1/responses/compact routed only to deterministic unsupported_endpoint with no upstream compact dispatch, reject OpenAI Responses remote MCP tool definitions before upstream dispatch in both top-level tools and nested additional_tools.tools locations with OpenAI-shaped invalid_request errors, consume continuity headers using the documented local precedence without forwarding session-id, x-session-id, or x-session-affinity upstream, fail closed for pinned /v1/responses continuations whose upstream account needs revoked-refresh-token reauthentication with the shared restart_with_full_context recovery guidance, allow prompt-cache routing locality only on POST responses and chat completions, accept Codex-native Responses web_search hosted tool shapes with boolean access flags while keeping web_search_preview type-only, accept Responses truncation auto and disabled locally without forwarding it upstream, lift Responses system/developer input-message text into top-level instructions, treat absent, blank, and whitespace-only public SSE event labels identically before event/data type precedence while rejecting nonblank mismatches, emit early public streaming terminal errors without synthetic success prefixes, emit a sanitized type:error terminal with wire code server_error while accounting records upstream_stream_error when POST /v1/responses SSE has already exposed public Responses data and an ordinary upstream interruption occurs before a Responses terminal event, cap ordinary incomplete public Responses SSE blocks at 8 MiB so single large provider events such as reasoning items with encrypted content can finish decoding while allowing structurally recognizable terminal candidates up to 64 MiB so split large terminals can finish decoding, and emit that same bounded local terminal immediately when the applicable cap is crossed while dropping the source block and later frames, accounting records owner_drained while the emitted wire frame is byte-identical to the ordinary synthetic terminal only when a committed websocket-bridge turn is aborted by rollout drain after its drain budget, keep precommit drain admission on its existing fallback or refusal path, keep client disconnect and non-drain interruption mappings unchanged, limit synthetic SSE terminals to OpenAI-compatible HTTP SSE surfaces, drop malformed and JSON non-object provider frames on direct and accepted owner-forwarded GET /v1/responses without advancing public websocket state, emit the existing websocket type:error envelope with status 502 and wire code server_error when an owner-forwarded GET /v1/responses per-call turn is interrupted after committed public output while accounting records upstream_stream_error, never synthesize that interruption for pre-visible owner-forwarded turns, preserve native backend raw Responses streams and all other websocket behavior, and preserve bridge complete-block behavior, redact server-class/internal/upstream public /v1 errors while preserving invalid_request_error validation details, preserve safe machine-readable codes for redacted public OpenAI-compatible Responses terminal failures in nested response.error through low-level public SSE normalization and the runtime streaming relay, keep top-level error code-aligned when Pooler emits one, map Responses content_filter/content-filter incomplete reasons to chat finish_reason content_filter while other incomplete reasons remain length, forward structured tool-result/function_call_output payloads unchanged, translate chat-style role=tool continuation messages and Hermes assistant tool-call replays into Responses function_call/function_call_output input items before validation, accept safe Hermes assistant replay status values, drop known OMP function_call replay status fields before validation, translate OpenClaw assistant thinking replays before validation, accept narrow Codex custom tool replay with custom_tool_call.namespace preservation and matching custom_tool_call_output while executable custom tool definitions remain unsupported, and keep chat input fallback, Responses additional_tools support narrow and non-executable, and Responses namespace-tool support narrow. For genuine upstream Responses terminal failures, the public `/v1` surface constructs a named-field `response.failed` projection, excludes unknown event, response, error, and usage siblings, validates the response id, projects bounded usage counters, and empties or nulls content-bearing response fields. It preserves a trimmed upstream error code only when it is at most 80 bytes and matches `^[A-Za-z0-9_.-]+$`, redacts every other code value to `upstream_error`, replaces upstream message text with `upstream request failed`, and upstream type text — including clean values — is replaced with `server_error`. Top-level and nested errors are sanitized independently without copying either location to the other, and clients must treat `error.code` as an open string."
     },
     %{
       slug: :v1_unsupported_public_surface,
@@ -1339,6 +1340,56 @@ defmodule CodexPooler.CompatibilityMatrix do
     v1_supported_surface: %{
       auth: "required_bearer_api_key",
       default_enabled: true,
+      audio_transcription: %{
+        path: "/v1/audio/transcriptions",
+        caller_models: ["gpt-4o-transcribe", "gpt-transcribe"],
+        caller_aliases: %{"gpt-transcribe" => "gpt-4o-transcribe"},
+        alias_scope: "caller_input_only",
+        canonical_model: "gpt-4o-transcribe",
+        decoded_list_fields: %{
+          "keywords" => %{
+            upstream_name: "keywords[]",
+            item_shape: "non_empty_string",
+            empty: "omitted",
+            order: "preserved",
+            duplicates: "preserved",
+            malformed: "invalid_request_with_field_param",
+            rejected_shapes: [
+              "non_list",
+              "null",
+              "non_string_item",
+              "empty_string_item",
+              "whitespace_only_string_item"
+            ]
+          },
+          "languages" => %{
+            upstream_name: "languages[]",
+            item_shape: "non_empty_string",
+            empty: "omitted",
+            order: "preserved",
+            duplicates: "preserved",
+            malformed: "invalid_request_with_field_param",
+            rejected_shapes: [
+              "non_list",
+              "null",
+              "non_string_item",
+              "empty_string_item",
+              "whitespace_only_string_item"
+            ]
+          }
+        },
+        response_omissions: ["languages"],
+        auth: "required_bearer_api_key_before_multipart_parsing",
+        persistence: "metadata_only_without_audio_or_decoded_list_values",
+        exclusions: %{
+          detected_language_output: false,
+          caller_alias_in_model_discovery: false,
+          caller_alias_in_catalog: false,
+          model_discovery_claim: false,
+          catalog_claim: false,
+          full_openai_audio_parity: false
+        }
+      },
       prompt_cache_routing_allowed_routes: [
         "/v1/responses",
         "/v1/chat/completions"

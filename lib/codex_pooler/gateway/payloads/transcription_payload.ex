@@ -23,7 +23,7 @@ defmodule CodexPooler.Gateway.Payloads.TranscriptionPayload do
       model =
         request_options.payload_context.forced_transcription_model || Map.get(payload, "model")
 
-      safe_payload = safe_payload(payload, model, size)
+      safe_payload = safe_payload(payload, model, size, request_options)
       media_opts = media_request_options(request_options, upload, size)
 
       {:ok, safe_payload, media_opts}
@@ -40,11 +40,40 @@ defmodule CodexPooler.Gateway.Payloads.TranscriptionPayload do
   defp required_upload(_payload),
     do: {:error, error(400, "invalid_request", "file is required", "file")}
 
-  defp safe_payload(payload, model, size) do
+  defp safe_payload(payload, model, size, request_options) do
     payload
-    |> Map.take(["model", "language", "prompt", "response_format", "temperature"])
+    |> Map.take([
+      "model",
+      "language",
+      "prompt",
+      "response_format",
+      "temperature"
+    ])
+    |> retain_validated_arrays(payload, request_options)
     |> Map.put("model", model)
     |> Map.put("file", %{"kind" => "upload", "bytes" => size})
+  end
+
+  defp retain_validated_arrays(safe_payload, payload, %RequestOptions{
+         openai_compatibility: %{source_endpoint: "/v1/audio/transcriptions"}
+       }) do
+    Enum.reduce(["keywords", "languages"], safe_payload, fn field, safe_payload ->
+      retain_validated_array(safe_payload, payload, field)
+    end)
+  end
+
+  defp retain_validated_arrays(safe_payload, _payload, _request_options), do: safe_payload
+
+  defp retain_validated_array(safe_payload, payload, field) do
+    case Map.get(payload, field) do
+      values when is_list(values) and values != [] ->
+        if Enum.all?(values, &is_binary/1),
+          do: Map.put(safe_payload, field, values),
+          else: safe_payload
+
+      _other ->
+        safe_payload
+    end
   end
 
   defp media_request_options(%RequestOptions{} = request_options, upload, size) do

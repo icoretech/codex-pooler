@@ -111,21 +111,59 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   defp multipart_payload(payload, _model, %RequestOptions{} = request_options) do
     upload = request_options.payload_context.media_upload
 
-    fields =
-      [
-        {:prompt, Map.get(payload, "prompt")}
-      ]
-      |> Enum.reject(fn {_key, value} -> blank?(value) end)
-      |> Enum.map(fn {key, value} -> {key, to_string(value)} end)
+    with {:ok, array_fields} <- transcription_array_fields(payload, request_options),
+         {:ok, stream} <- upload_stream(upload) do
+      prompt_fields =
+        [{:prompt, Map.get(payload, "prompt")}]
+        |> Enum.reject(fn {_key, value} -> blank?(value) end)
+        |> Enum.map(fn {key, value} -> {key, to_string(value)} end)
 
-    with {:ok, stream} <- upload_stream(upload) do
       file_part =
         {:file,
          {stream,
           filename: upload.redacted_filename, content_type: upload.content_type, size: upload.size}}
 
-      {:ok, {:multipart, [file_part | fields]}, request_options}
+      {:ok, {:multipart, [file_part | prompt_fields ++ array_fields]}, request_options}
     end
+  end
+
+  defp transcription_array_fields(
+         payload,
+         %RequestOptions{
+           openai_compatibility: %{source_endpoint: "/v1/audio/transcriptions"}
+         }
+       ) do
+    Enum.reduce_while(
+      [{"keywords", "keywords[]"}, {"languages", "languages[]"}],
+      {:ok, []},
+      fn {field, part_name}, {:ok, parts} ->
+        case append_transcription_array(payload, parts, field, part_name) do
+          {:ok, parts} -> {:cont, {:ok, parts}}
+          {:error, _reason} = error -> {:halt, error}
+        end
+      end
+    )
+  end
+
+  defp transcription_array_fields(_payload, %RequestOptions{}), do: {:ok, []}
+
+  defp append_transcription_array(payload, parts, field, part_name) do
+    case Map.fetch(payload, field) do
+      :error ->
+        {:ok, parts}
+
+      {:ok, values} when is_list(values) ->
+        if Enum.all?(values, &is_binary/1),
+          do: {:ok, parts ++ Enum.map(values, &{part_name, &1})},
+          else: invalid_transcription_array(field)
+
+      {:ok, _value} ->
+        invalid_transcription_array(field)
+    end
+  end
+
+  defp invalid_transcription_array(field) do
+    {:error, Error.reason(400, "invalid_request", "#{field} must be a list of strings", field)}
   end
 
   defp upstream_model_id(

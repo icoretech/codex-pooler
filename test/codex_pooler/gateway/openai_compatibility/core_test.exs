@@ -30,6 +30,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     assert "instructions" in Matrix.supported_fields(:chat)
     assert "purpose" in Matrix.supported_fields(:files)
     assert "file" in Matrix.supported_fields(:audio)
+    assert "keywords" in Matrix.supported_fields(:audio)
+    assert "languages" in Matrix.supported_fields(:audio)
     assert "input_fidelity" in Matrix.supported_fields(:images)
   end
 
@@ -868,29 +870,121 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   @tag :responses_coercion
-  test "Audio transcription builds a backend multipart dispatch envelope" do
-    upload = audio_upload_fixture("synthetic audio bytes")
+  test "Audio transcription canonicalizes accepted caller models in the dispatch envelope" do
+    for caller_model <- ["gpt-4o-transcribe", "gpt-transcribe"] do
+      upload = audio_upload_fixture("synthetic audio bytes")
 
+      payload = %{
+        "model" => caller_model,
+        "file" => upload,
+        "prompt" => "synthetic glossary",
+        "response_format" => "json"
+      }
+
+      assert {:ok, result} =
+               Audio.coerce_transcription(payload,
+                 request_id: "req_fixture",
+                 requested_model: caller_model,
+                 effective_model: caller_model
+               )
+
+      assert result.endpoint == "/backend-api/transcribe"
+      assert result.payload["model"] == "gpt-4o-transcribe"
+      assert %Plug.Upload{} = result.payload["file"]
+      assert result.audio_payload["model"] == "gpt-4o-transcribe"
+      assert result.audio_payload["file"]["content_type"] == "audio/wav"
+      assert result.audio_payload["file"]["bytes"] == byte_size("synthetic audio bytes")
+      assert result.request_options.transport.route_class == "audio_transcription"
+      assert result.request_options.transport.upstream_endpoint == "/backend-api/transcribe"
+      assert result.request_options.routing.requested_model == "gpt-4o-transcribe"
+      assert result.request_options.routing.effective_model == "gpt-4o-transcribe"
+
+      assert result.request_options.payload_context.forced_transcription_model ==
+               "gpt-4o-transcribe"
+
+      assert result.request_options.request_metadata.request_id == "req_fixture"
+    end
+  end
+
+  @tag :responses_coercion
+  test "Audio transcription preserves non-empty decoded keyword and language lists" do
     payload = %{
-      "model" => "gpt-4o-transcribe",
-      "file" => upload,
-      "prompt" => "synthetic glossary",
-      "response_format" => "json"
+      "model" => "gpt-transcribe",
+      "file" => upload_metadata(),
+      "keywords" => ["alpha", " beta ", "alpha"],
+      "languages" => ["it", "en", "it"]
     }
 
-    assert {:ok, result} = Audio.coerce_transcription(payload, request_id: "req_fixture")
-    assert result.endpoint == "/backend-api/transcribe"
-    assert result.payload == payload
-    assert %Plug.Upload{} = result.payload["file"]
-    assert result.audio_payload["file"]["content_type"] == "audio/wav"
-    assert result.audio_payload["file"]["bytes"] == byte_size("synthetic audio bytes")
-    assert result.request_options.transport.route_class == "audio_transcription"
-    assert result.request_options.transport.upstream_endpoint == "/backend-api/transcribe"
+    assert {:ok, result} = Audio.coerce_transcription(payload)
+    assert result.payload["keywords"] == ["alpha", " beta ", "alpha"]
+    assert result.payload["languages"] == ["it", "en", "it"]
+    assert result.audio_payload["keywords"] == ["alpha", " beta ", "alpha"]
+    assert result.audio_payload["languages"] == ["it", "en", "it"]
+  end
 
-    assert result.request_options.payload_context.forced_transcription_model ==
-             "gpt-4o-transcribe"
+  @tag :responses_coercion
+  test "Audio transcription omits absent and empty decoded keyword and language lists" do
+    for optional_fields <- [
+          %{},
+          %{"keywords" => []},
+          %{"languages" => []},
+          %{"keywords" => [], "languages" => []}
+        ] do
+      payload =
+        Map.merge(
+          %{"model" => "gpt-4o-transcribe", "file" => upload_metadata()},
+          optional_fields
+        )
 
-    assert result.request_options.request_metadata.request_id == "req_fixture"
+      assert {:ok, result} = Audio.coerce_transcription(payload)
+      refute Map.has_key?(result.payload, "keywords")
+      refute Map.has_key?(result.payload, "languages")
+      refute Map.has_key?(result.audio_payload, "keywords")
+      refute Map.has_key?(result.audio_payload, "languages")
+    end
+  end
+
+  @tag :responses_validation
+  test "Audio transcription rejects malformed decoded keyword and language lists" do
+    malformed_values = ["scalar", nil, %{"item" => "value"}, [1], [nil], [%{}], [""], [" "]]
+
+    for field <- ["keywords", "languages"], malformed_value <- malformed_values do
+      payload = %{
+        "model" => "gpt-4o-transcribe",
+        "file" => upload_metadata(),
+        field => malformed_value
+      }
+
+      assert {:error, %{status: 400, code: "invalid_request", param: ^field, message: message}} =
+               Audio.coerce_transcription(payload)
+
+      assert message == "#{field} must be an array of non-empty strings"
+      refute message =~ "scalar"
+    end
+  end
+
+  @tag :unsupported_fields
+  test "Audio transcription retains unsupported parameter errors for unknown fields" do
+    assert {:error, %{status: 400, code: "unsupported_parameter", param: "unknown_audio_field"}} =
+             Audio.coerce_transcription(%{
+               "model" => "gpt-4o-transcribe",
+               "file" => upload_metadata(),
+               "unknown_audio_field" => "value"
+             })
+  end
+
+  @tag :responses_coercion
+  test "Audio response normalization removes only top-level languages" do
+    response = %{
+      "text" => "synthetic transcript",
+      "languages" => ["it", "en"],
+      "metadata" => %{"languages" => ["nested-value"]}
+    }
+
+    assert Audio.normalize_response(response) == %{
+             "text" => "synthetic transcript",
+             "metadata" => %{"languages" => ["nested-value"]}
+           }
   end
 
   @tag :responses_validation

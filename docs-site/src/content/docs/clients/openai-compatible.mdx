@@ -188,6 +188,57 @@ The OpenAI-compatible `/v1` surface supports or translates selected routes only:
 
 The `/v1` surface is compatibility over Codex routing, not a separate OpenAI engine. Supported requests still require a Pool API key and a Pool with eligible upstream capacity for the requested model.
 
+### Audio transcriptions
+
+`POST /v1/audio/transcriptions` accepts `gpt-transcribe` as a caller alias. The
+gateway uses the fixed canonical backend identity `gpt-4o-transcribe`. The alias
+is not a model-list entry or a model-discovery guarantee.
+
+```js
+import fs from "node:fs";
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  apiKey: process.env.CODEX_POOLER_API_KEY,
+  baseURL: "http://localhost:4000/v1",
+});
+
+const transcription = await client.audio.transcriptions.create({
+  file: fs.createReadStream("audio.mp3"),
+  model: "gpt-transcribe",
+  keywords: ["example", "example"],
+  languages: ["en", "it"],
+});
+
+console.log(transcription.text);
+```
+
+```python
+import os
+
+from openai import OpenAI
+
+client = OpenAI(
+    api_key=os.environ["CODEX_POOLER_API_KEY"],
+    base_url="http://localhost:4000/v1",
+)
+
+with open("audio.mp3", "rb") as audio_file:
+    transcription = client.audio.transcriptions.create(
+        file=audio_file,
+        model="gpt-transcribe",
+        keywords=["example", "example"],
+        languages=["en", "it"],
+    )
+
+print(transcription.text)
+```
+
+`keywords` and `languages` are optional nonempty string lists. Empty lists are
+omitted. Nonempty lists retain caller order and duplicate entries. Responses omit
+language-detection fields. This documents the accepted request shape only, not
+transcription quality, model discovery, or general Audio API coverage.
+
 `POST /v1/responses` lifts system and developer input-message text into top-level `instructions` before dispatching to Codex-compatible work. Streaming `/v1/responses` and `/v1/chat/completions` return early upstream terminal errors as the first public SSE event or data chunk, without synthetic assistant/success prefixes. Non-streaming failures remain OpenAI-shaped JSON errors.
 
 Streaming `/v1/responses` clients must also handle a terminal `type: "error"` SSE event whose flat fields and nested `error` object both carry the sanitized `server_error` code.

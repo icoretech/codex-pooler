@@ -245,7 +245,7 @@ These routes live under `/backend-api` or legacy usage paths. They are still Poo
     <tr>
       <td><code>POST /backend-api/transcribe</code></td>
       <td><code>/backend-api/transcribe</code></td>
-      <td>No public <code>/v1</code> audio translation</td>
+      <td>Separate public <code>/v1</code> audio transcription translation</td>
       <td>Supported</td>
       <td>Backend multipart transcription route. It forces the backend transcription model and preserves safe multipart fields.</td>
     </tr>
@@ -373,7 +373,7 @@ Supported work is translated into Codex-compatible requests and then routed thro
       <td><code>/backend-api/transcribe</code></td>
       <td>Yes</td>
       <td>Translated</td>
-      <td>OpenAI-style multipart transcription request dispatched through the backend transcription path.</td>
+      <td>OpenAI-style multipart transcription request dispatched through the backend transcription path. <code>gpt-transcribe</code> is a caller alias for canonical <code>gpt-4o-transcribe</code>. Nonempty <code>keywords</code> and <code>languages</code> lists retain order and duplicates, while empty lists are omitted. Responses omit language-detection fields. This is request-shape compatibility, not a transcription-quality, model-discovery, or general Audio API coverage claim.</td>
     </tr>
     <tr>
       <td><code>POST /v1/images/generations</code></td>

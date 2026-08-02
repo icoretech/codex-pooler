@@ -735,6 +735,152 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                 }}
     end
 
+    test "emits file-first repeated transcription array parts in exact order" do
+      upload_path = transcription_upload_fixture()
+
+      request_options =
+        RequestOptions.build(
+          %{
+            media_upload: %{
+              path: upload_path,
+              redacted_filename: "audio.wav",
+              content_type: "audio/wav",
+              size: 15
+            }
+          },
+          "/backend-api/transcribe",
+          %{}
+        )
+        |> RequestOptions.mark_openai_compatibility_origin(
+          "/v1/audio/transcriptions",
+          "/backend-api/transcribe"
+        )
+
+      payload = %{
+        "model" => "gpt-4o-transcribe",
+        "prompt" => "Keep this prompt",
+        "keywords" => ["first", "repeat", "repeat"],
+        "languages" => ["it", "en", "it"],
+        "language" => "ignored",
+        "response_format" => "ignored",
+        "temperature" => "ignored"
+      }
+
+      model = %Model{upstream_model_id: "provider-transcribe"}
+
+      assert {:ok, {:multipart, [file_part | fields]}, normalized_options} =
+               PayloadNormalizer.prepare_upstream_payload(
+                 payload,
+                 model,
+                 "/backend-api/transcribe",
+                 request_options
+               )
+
+      assert {:file,
+              {%File.Stream{}, [filename: "audio.wav", content_type: "audio/wav", size: 15]}} =
+               file_part
+
+      assert fields == [
+               {:prompt, "Keep this prompt"},
+               {"keywords[]", "first"},
+               {"keywords[]", "repeat"},
+               {"keywords[]", "repeat"},
+               {"languages[]", "it"},
+               {"languages[]", "en"},
+               {"languages[]", "it"}
+             ]
+
+      refute Enum.any?([file_part | fields], fn {name, _value} ->
+               to_string(name) in ["model", "language", "response_format", "temperature"]
+             end)
+
+      assert normalized_options == request_options
+      refute Map.has_key?(normalized_options.request_metadata, :keywords)
+      refute Map.has_key?(normalized_options.request_metadata, :languages)
+      assert normalized_options.runtime.gateway_debug_payload == nil
+    end
+
+    test "emits no transcription array parts for empty lists and keeps nonblank prompt behavior" do
+      upload_path = transcription_upload_fixture()
+
+      request_options =
+        RequestOptions.build(
+          %{
+            media_upload: %{
+              path: upload_path,
+              redacted_filename: "audio.wav",
+              content_type: "audio/wav",
+              size: 15
+            }
+          },
+          "/backend-api/transcribe",
+          %{}
+        )
+        |> RequestOptions.mark_openai_compatibility_origin(
+          "/v1/audio/transcriptions",
+          "/backend-api/transcribe"
+        )
+
+      model = %Model{upstream_model_id: "provider-transcribe"}
+
+      for prompt <- [nil, "", "   "] do
+        assert {:ok, {:multipart, [{:file, _file}]}} =
+                 PayloadNormalizer.upstream_payload(
+                   %{
+                     "model" => "gpt-4o-transcribe",
+                     "prompt" => prompt,
+                     "keywords" => [],
+                     "languages" => []
+                   },
+                   model,
+                   "/backend-api/transcribe",
+                   request_options
+                 )
+      end
+    end
+
+    test "rejects malformed prevalidated transcription arrays without a partial multipart result" do
+      upload_path = transcription_upload_fixture()
+
+      request_options =
+        RequestOptions.build(
+          %{
+            media_upload: %{
+              path: upload_path,
+              redacted_filename: "audio.wav",
+              content_type: "audio/wav",
+              size: 15
+            }
+          },
+          "/backend-api/transcribe",
+          %{}
+        )
+        |> RequestOptions.mark_openai_compatibility_origin(
+          "/v1/audio/transcriptions",
+          "/backend-api/transcribe"
+        )
+
+      model = %Model{upstream_model_id: "provider-transcribe"}
+
+      for {field, value} <- [{"keywords", "not-a-list"}, {"languages", ["en", 42]}] do
+        expected_message = "#{field} must be a list of strings"
+
+        assert {:error,
+                %{
+                  status: 400,
+                  code: "invalid_request",
+                  message: ^expected_message,
+                  param: ^field
+                }} =
+                 PayloadNormalizer.upstream_payload(
+                   %{"model" => "gpt-4o-transcribe", field => value},
+                   model,
+                   "/backend-api/transcribe",
+                   request_options
+                 )
+      end
+    end
+
     test "normalizes max and ultra thinking aliases to backend reasoning effort" do
       model = %Model{upstream_model_id: "provider-model"}
 
@@ -2134,6 +2280,18 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
     do: Map.delete(content, "detail")
 
   defp strip_input_image_detail(content), do: content
+
+  defp transcription_upload_fixture do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "codex-pooler-normalizer-transcription-#{System.unique_integer([:positive])}.wav"
+      )
+
+    File.write!(path, "synthetic audio")
+    on_exit(fn -> File.rm(path) end)
+    path
+  end
 
   defp content_shape(nil), do: nil
   defp content_shape(value) when is_binary(value), do: :binary

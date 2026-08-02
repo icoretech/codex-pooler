@@ -54,6 +54,75 @@ defmodule CodexPooler.Gateway.Payloads.TranscriptionPayloadTest do
              }
     end
 
+    test "retains validated transcription arrays exactly without adding metadata" do
+      upload = upload_fixture("synthetic audio")
+
+      opts =
+        %{}
+        |> RequestOptions.build(@endpoint, %{})
+        |> RequestOptions.put_payload_context(forced_transcription_model: "gpt-4o-transcribe")
+        |> RequestOptions.mark_openai_compatibility_origin(
+          "/v1/audio/transcriptions",
+          @endpoint
+        )
+
+      assert {:ok, safe_payload, media_opts} =
+               TranscriptionPayload.normalize(
+                 %{
+                   "file" => upload,
+                   "model" => "client-model",
+                   "prompt" => "Keep this prompt",
+                   "keywords" => ["first", "repeat", "repeat"],
+                   "languages" => ["it", "en", "it"]
+                 },
+                 opts
+               )
+
+      assert safe_payload == %{
+               "file" => %{"kind" => "upload", "bytes" => 15},
+               "keywords" => ["first", "repeat", "repeat"],
+               "languages" => ["it", "en", "it"],
+               "model" => "gpt-4o-transcribe",
+               "prompt" => "Keep this prompt"
+             }
+
+      assert Map.take(media_opts.request_metadata, [
+               :request_content_type,
+               :upload_bytes,
+               :request_bytes
+             ]) == %{
+               request_content_type: "multipart/form-data",
+               upload_bytes: 15,
+               request_bytes: 15
+             }
+
+      refute Map.has_key?(media_opts.request_metadata, :keywords)
+      refute Map.has_key?(media_opts.request_metadata, :languages)
+    end
+
+    test "omits transcription arrays outside the public compatibility origin" do
+      upload = upload_fixture("synthetic audio")
+
+      opts =
+        %{}
+        |> RequestOptions.build(@endpoint, %{})
+        |> RequestOptions.put_payload_context(forced_transcription_model: "gpt-4o-transcribe")
+
+      assert {:ok, safe_payload, _media_opts} =
+               TranscriptionPayload.normalize(
+                 %{
+                   "file" => upload,
+                   "model" => "client-model",
+                   "keywords" => ["first", "repeat"],
+                   "languages" => ["it", "en"]
+                 },
+                 opts
+               )
+
+      refute Map.has_key?(safe_payload, "keywords")
+      refute Map.has_key?(safe_payload, "languages")
+    end
+
     test "rejects raw map options because Service owns legacy option conversion" do
       upload = upload_fixture("synthetic audio")
 

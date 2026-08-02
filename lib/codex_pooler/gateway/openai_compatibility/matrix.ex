@@ -7,7 +7,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Matrix do
     chat:
       ~w(audio frequency_penalty function_call functions input instructions logit_bias logprobs max_completion_tokens max_tokens messages metadata modalities model moderation n parallel_tool_calls prediction presence_penalty prompt_cache_key prompt_cache_options prompt_cache_retention reasoning_effort response_format safety_identifier seed service_tier stop store stream stream_options temperature tool_choice tools top_logprobs top_p user verbosity web_search_options),
     files: ~w(file purpose),
-    audio: ~w(file model language prompt response_format temperature),
+    audio: ~w(file model language prompt response_format temperature keywords languages),
     images:
       ~w(model prompt size quality background input_fidelity n image image[] mask response_format user)
   }

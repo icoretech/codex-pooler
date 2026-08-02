@@ -1033,6 +1033,57 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                upstream_dispatch: false
              }
 
+      assert fixture.audio_transcription == %{
+               path: "/v1/audio/transcriptions",
+               caller_models: ["gpt-4o-transcribe", "gpt-transcribe"],
+               caller_aliases: %{"gpt-transcribe" => "gpt-4o-transcribe"},
+               alias_scope: "caller_input_only",
+               canonical_model: "gpt-4o-transcribe",
+               decoded_list_fields: %{
+                 "keywords" => %{
+                   upstream_name: "keywords[]",
+                   item_shape: "non_empty_string",
+                   empty: "omitted",
+                   order: "preserved",
+                   duplicates: "preserved",
+                   malformed: "invalid_request_with_field_param",
+                   rejected_shapes: [
+                     "non_list",
+                     "null",
+                     "non_string_item",
+                     "empty_string_item",
+                     "whitespace_only_string_item"
+                   ]
+                 },
+                 "languages" => %{
+                   upstream_name: "languages[]",
+                   item_shape: "non_empty_string",
+                   empty: "omitted",
+                   order: "preserved",
+                   duplicates: "preserved",
+                   malformed: "invalid_request_with_field_param",
+                   rejected_shapes: [
+                     "non_list",
+                     "null",
+                     "non_string_item",
+                     "empty_string_item",
+                     "whitespace_only_string_item"
+                   ]
+                 }
+               },
+               response_omissions: ["languages"],
+               auth: "required_bearer_api_key_before_multipart_parsing",
+               persistence: "metadata_only_without_audio_or_decoded_list_values",
+               exclusions: %{
+                 detected_language_output: false,
+                 caller_alias_in_model_discovery: false,
+                 caller_alias_in_catalog: false,
+                 model_discovery_claim: false,
+                 catalog_claim: false,
+                 full_openai_audio_parity: false
+               }
+             }
+
       assert fixture.continuity_precedence == [
                "x-codex-window-id",
                "x-codex-session-id",
@@ -1161,6 +1212,15 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                "/v1/responses/compact",
                "/v1/usage"
              ]
+    end
+
+    test "keeps backend transcription fixture independent from v1 Audio compatibility" do
+      assert CompatibilityMatrix.fixture!(:backend_transcription) == %{
+               fields: %{"prompt" => "synthetic backend glossary"},
+               filename: "fixture-backend-audio.wav",
+               content_type: "audio/wav",
+               bytes: "synthetic backend wav bytes"
+             }
     end
 
     test "keeps broad public realtime routes outside the router surface" do

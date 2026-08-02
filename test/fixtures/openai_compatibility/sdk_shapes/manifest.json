@@ -75,7 +75,9 @@
   },
   "fixture_files": [
     "openai-node-responses-basic.json",
+    "openai-node-audio-transcription.json",
     "openai-python-chat-basic.json",
+    "openai-python-audio-transcription.json",
     "opencode-responses-replay-continuation.json",
     "omp-responses-gpt56-clean-first-turn.json",
     "hermes-responses-completed-assistant-replay.json",

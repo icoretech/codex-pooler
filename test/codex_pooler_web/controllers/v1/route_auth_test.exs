@@ -2,8 +2,13 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import CodexPooler.PoolerFixtures
+  import ExUnit.CaptureLog
 
-  alias CodexPooler.Accounting.{Attempt, Request}
+  import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
+    only: [gateway_setup: 1, start_upstream: 1]
+
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
+  alias CodexPooler.FakeUpstream
   alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias CodexPoolerWeb.V1.UnsupportedRoutes
@@ -42,6 +47,44 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
       end
 
       assert_no_gateway_side_effects()
+    end
+
+    test "unauthenticated transcription alias and lists fail before multipart parsing", %{
+      conn: _conn
+    } do
+      upstream = start_upstream(FakeUpstream.json_response(%{"text" => "must not dispatch"}))
+      _setup = gateway_setup(upstream)
+
+      with_isolated_plug_tmpdir(fn tmp_root ->
+        {conn, log} =
+          with_log(fn ->
+            Plug.Test.conn(
+              "POST",
+              "/v1/audio/transcriptions",
+              transcription_multipart_body()
+            )
+            |> put_req_header(
+              "content-type",
+              "multipart/form-data; boundary=#{transcription_boundary()}"
+            )
+            |> @endpoint.call(@endpoint.init([]))
+          end)
+
+        assert_openai_error(conn, 401,
+          code: "api_key_missing",
+          message: "api key is required"
+        )
+
+        assert FakeUpstream.count(upstream) == 0
+        assert_no_gateway_side_effects()
+        assert Repo.aggregate(LedgerEntry, :count) == 0
+        assert tmpdir_paths(tmp_root) == []
+
+        for sentinel <- unauthenticated_transcription_sentinels() do
+          refute log =~ sentinel
+          refute conn.resp_body =~ sentinel
+        end
+      end)
     end
 
     test "invalid bearer keys return OpenAI-shaped 401", %{conn: conn} do
@@ -339,5 +382,71 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
   defp assert_no_gateway_side_effects do
     assert Repo.aggregate(Request, :count) == 0
     assert Repo.aggregate(Attempt, :count) == 0
+  end
+
+  defp transcription_boundary, do: "v1-auth-transcription-boundary"
+
+  defp unauthenticated_transcription_sentinels do
+    [
+      "gpt-transcribe",
+      "auth keyword sentinel",
+      "auth language sentinel",
+      "auth-audio.wav",
+      "auth audio sentinel"
+    ]
+  end
+
+  defp transcription_multipart_body do
+    boundary = transcription_boundary()
+
+    [
+      "--#{boundary}\r\n",
+      "content-disposition: form-data; name=\"model\"\r\n\r\n",
+      "gpt-transcribe\r\n",
+      "--#{boundary}\r\n",
+      "content-disposition: form-data; name=\"keywords[]\"\r\n\r\n",
+      "auth keyword sentinel\r\n",
+      "--#{boundary}\r\n",
+      "content-disposition: form-data; name=\"languages[]\"\r\n\r\n",
+      "auth language sentinel\r\n",
+      "--#{boundary}\r\n",
+      "content-disposition: form-data; name=\"file\"; filename=\"auth-audio.wav\"\r\n",
+      "content-type: audio/wav\r\n\r\n",
+      "auth audio sentinel\r\n",
+      "--#{boundary}--\r\n"
+    ]
+    |> IO.iodata_to_binary()
+  end
+
+  defp with_isolated_plug_tmpdir(fun) do
+    tmp_root =
+      Path.join(
+        System.tmp_dir!(),
+        "codex-pooler-v1-auth-tmp-#{System.unique_integer([:positive])}"
+      )
+
+    File.rm_rf!(tmp_root)
+    File.mkdir_p!(tmp_root)
+
+    previous_upload_term = :persistent_term.get(Plug.Upload)
+    :persistent_term.put(Plug.Upload, {[tmp_root], "test-upload-suffix"})
+    :ets.delete(Plug.Upload.Dir, self())
+    :ets.delete(Plug.Upload.Path, self())
+
+    try do
+      fun.(tmp_root)
+    after
+      :ets.delete(Plug.Upload.Dir, self())
+      :ets.delete(Plug.Upload.Path, self())
+      :persistent_term.put(Plug.Upload, previous_upload_term)
+      File.rm_rf!(tmp_root)
+    end
+  end
+
+  defp tmpdir_paths(tmp_root) do
+    case File.ls(tmp_root) do
+      {:ok, entries} -> Enum.sort(entries)
+      {:error, :enoent} -> []
+    end
   end
 end

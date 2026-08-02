@@ -86,6 +86,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
           "model" => requested_model,
           "file" => upload,
           "prompt" => prompt,
+          "keywords" => ["backend-keyword"],
+          "languages" => ["en"],
           "response_format" => "json"
         })
 
@@ -97,6 +99,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
       refute captured.body =~ Gateway.backend_transcription_model()
       refute captured.body =~ requested_model
       assert captured.body =~ prompt
+      refute captured.body =~ "backend-keyword"
+      refute captured.body =~ "keywords[]"
+      refute captured.body =~ "languages[]"
       refute captured.body =~ filename
       assert captured.body =~ ~s(filename="audio.wav")
       refute captured.body =~ "language"
