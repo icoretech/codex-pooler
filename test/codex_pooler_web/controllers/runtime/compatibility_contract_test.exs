@@ -550,14 +550,44 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       expected_responses_builtin_tools = %{
         web_search_preview: %{accepted_shape: "type_only"},
         web_search: %{
-          accepted_required: ["type", "external_web_access"],
-          accepted_optional: ["index_gated_web_access"],
+          accepted_required: ["type"],
+          accepted_optional: ["external_web_access", "index_gated_web_access", "filters"],
           valid_combinations: [
+            "type_only",
             "external_web_access=false",
             "external_web_access=true",
             "external_web_access=true,index_gated_web_access=true"
           ],
-          rejected_options: ["filters", "search_context_size", "user_location"]
+          filters: %{
+            shape: "nonempty_object",
+            allowed_keys: ["allowed_domains", "blocked_domains"],
+            lists: %{
+              allowed_domains: %{
+                minimum_items: 1,
+                maximum_items: 100,
+                item_shape: "nonblank_string_without_http_scheme",
+                forwarding: "unchanged"
+              },
+              blocked_domains: %{
+                minimum_items: 1,
+                maximum_items: 100,
+                item_shape: "nonblank_string_without_http_scheme",
+                forwarding: "unchanged"
+              }
+            },
+            valid_combinations: [
+              "allowed_domains",
+              "blocked_domains",
+              "allowed_domains,blocked_domains"
+            ]
+          },
+          rejected_options: ["search_context_size", "user_location"],
+          upstream_confidence: %{
+            pooler_contract: "validation_and_unchanged_forwarding",
+            availability_and_enforcement: "selected_model_and_account_dependent",
+            blocked_domains: "hosted_codex_enforcement_not_locally_proven",
+            broad_parity_claim: false
+          }
         },
         image_generation: %{accepted_shape: "type_only_or_exact_known_image_options"}
       }
@@ -997,6 +1027,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                :web_search,
                :valid_combinations
              ]) == [
+               "type_only",
                "external_web_access=false",
                "external_web_access=true",
                "external_web_access=true,index_gated_web_access=true"
