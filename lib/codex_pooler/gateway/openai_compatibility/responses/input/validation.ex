@@ -14,7 +14,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
 
   def validate_input(%{"input" => input} = payload, has_tool_result?)
       when is_list(input) and input != [] do
-    validate_each(input, &validate_input_item(&1, payload, has_tool_result?))
+    validate_each(input, &validate_input_item_with_reservations(&1, payload, has_tool_result?))
   end
 
   def validate_input(%{"input" => input}, _has_tool_result?) when is_list(input),
@@ -24,6 +24,23 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
     do: {:error, Error.invalid_request("input must be a string or array", "input")}
 
   def validate_input(_payload, _has_tool_result?), do: :ok
+
+  defp validate_input_item_with_reservations(item, payload, has_tool_result?) do
+    with :ok <- validate_reserved_metadata(item) do
+      validate_input_item(item, payload, has_tool_result?)
+    end
+  end
+
+  defp validate_reserved_metadata(%{@metadata_passthrough_key => metadata})
+       when is_map(metadata) do
+    if Map.has_key?(metadata, "executed_tool_calls") do
+      {:error, Error.invalid_request("executed_tool_calls is reserved", "input")}
+    else
+      :ok
+    end
+  end
+
+  defp validate_reserved_metadata(_item), do: :ok
 
   defp validate_input_item(%{"type" => "item_reference"} = item, payload, has_tool_result?),
     do: validate_item_reference(item, payload, has_tool_result?)

@@ -2813,7 +2813,10 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
             "input" => "{}",
             "status" => "completed",
             "metadata" => %{"turn_id" => "turn_v1_custom_call_legacy"},
-            "internal_chat_message_metadata_passthrough" => %{"turn_id" => "turn_v1_custom_call"}
+            "internal_chat_message_metadata_passthrough" => %{
+              "turn_id" => "turn_v1_custom_call",
+              "replay_context" => "custom-call-context"
+            }
           },
           %{
             "type" => "custom_tool_call_output",
@@ -2832,6 +2835,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert %{"id" => "resp_v1_custom_tool_replay", "object" => "response"} =
              json_response(conn, 200)
 
+    assert FakeUpstream.count(upstream) == 1
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
     assert captured.json["previous_response_id"] == "resp_v1_custom_tool_previous"
@@ -2843,12 +2847,22 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert custom_call["namespace"] == "browser.search"
     assert custom_call["name"] == "lookup"
     assert custom_call["input"] == "{}"
+
+    assert custom_call["internal_chat_message_metadata_passthrough"] == %{
+             "turn_id" => "turn_v1_custom_call",
+             "replay_context" => "custom-call-context"
+           }
+
     refute Map.has_key?(custom_call, "status")
 
     assert custom_output["type"] == "custom_tool_call_output"
     assert custom_output["call_id"] == "call_v1_custom_namespaced"
     assert custom_output["name"] == "lookup"
     assert custom_output["output"] == "synthetic custom output"
+
+    assert custom_output["internal_chat_message_metadata_passthrough"] == %{
+             "turn_id" => "turn_v1_custom_output"
+           }
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses"
@@ -2863,9 +2877,56 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute persistence_text =~ "call_v1_custom_namespaced"
     refute persistence_text =~ "turn_v1_custom_call"
     refute persistence_text =~ "turn_v1_custom_output"
+    refute persistence_text =~ "custom-call-context"
     refute persistence_text =~ setup.authorization
     refute persistence_text =~ setup.raw_key
     refute persistence_text =~ "raw_request"
+  end
+
+  @tag :custom_tool_replay
+  @tag :invalid_request_error
+  test "POST /v1/responses rejects reserved tool-call metadata before dispatch or accounting", %{
+    conn: conn
+  } do
+    reserved_key = "executed_tool_calls"
+    reserved_sentinel = "reserved-executed-tool-calls-http-sentinel"
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => [
+          %{
+            "type" => "custom_tool_call_output",
+            "call_id" => "call_reserved_metadata_http",
+            "name" => "lookup",
+            "output" => "synthetic custom output",
+            "internal_chat_message_metadata_passthrough" => %{
+              "turn_id" => "turn_reserved_metadata_http",
+              reserved_key => reserved_sentinel
+            }
+          }
+        ]
+      })
+
+    assert %{"error" => error} = json_response(response, 400)
+    assert error["type"] == "invalid_request_error"
+    assert error["code"] == "invalid_request"
+    assert error["param"] == "input"
+    refute response.resp_body =~ "internal_chat_message_metadata_passthrough"
+    refute response.resp_body =~ reserved_sentinel
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
+    refute_received {Events, %{reason: "request_finalized"}}
+
+    persistence_text = inspect(RequestLogs.list(setup.pool))
+    refute persistence_text =~ reserved_key
+    refute persistence_text =~ reserved_sentinel
   end
 
   @tag :custom_tool_replay

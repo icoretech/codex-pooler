@@ -3155,6 +3155,162 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
            ]
   end
 
+  test "Responses preserves allowed direct passthrough siblings and nested executed tool calls" do
+    passthrough_key = "internal_chat_message_metadata_passthrough"
+
+    passthrough = %{
+      "turn_id" => "turn_reservation_fixture",
+      "synthetic_sibling" => "sibling_reservation_fixture",
+      "nested" => %{"executed_tool_calls" => %{"synthetic" => true}}
+    }
+
+    inputs = [
+      %{
+        "type" => "function_call_output",
+        "call_id" => "call_native_reservation_fixture",
+        "output" => "synthetic native output",
+        passthrough_key => passthrough
+      },
+      %{
+        "role" => "assistant",
+        passthrough_key => passthrough,
+        "tool_calls" => [
+          %{
+            "id" => "call_translated_assistant_reservation_fixture",
+            "type" => "function",
+            "function" => %{"name" => "lookup_fixture", "arguments" => "{}"}
+          }
+        ]
+      },
+      %{
+        "role" => "tool",
+        "tool_call_id" => "call_translated_tool_reservation_fixture",
+        "content" => "synthetic translated output",
+        passthrough_key => passthrough
+      },
+      %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "input_text", "text" => "synthetic message"}],
+        passthrough_key => passthrough
+      },
+      %{
+        "type" => "input_file",
+        "file_id" => "file_reservation_fixture",
+        passthrough_key => passthrough
+      },
+      %{
+        "call_id" => "call_generic_reservation_fixture",
+        "result" => %{"ok" => true},
+        passthrough_key => passthrough
+      }
+    ]
+
+    assert {:ok, result} = Responses.coerce(responses_payload(inputs))
+
+    assert Enum.map(result.payload["input"], &Map.fetch!(&1, passthrough_key)) ==
+             List.duplicate(passthrough, 6)
+  end
+
+  test "Responses rejects reserved executed tool calls on native function call outputs" do
+    passthrough_key = "internal_chat_message_metadata_passthrough"
+
+    for executed_tool_calls <- [nil, %{"synthetic" => true}] do
+      input = %{
+        "type" => "function_call_output",
+        "call_id" => "call_native_reserved_fixture",
+        "output" => "synthetic native output",
+        passthrough_key => %{"executed_tool_calls" => executed_tool_calls}
+      }
+
+      assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+               Responses.coerce(responses_payload([input]))
+    end
+  end
+
+  test "Responses rejects reserved executed tool calls on translated assistant tool calls" do
+    passthrough_key = "internal_chat_message_metadata_passthrough"
+
+    for executed_tool_calls <- [nil, %{"synthetic" => true}] do
+      input = %{
+        "role" => "assistant",
+        passthrough_key => %{"executed_tool_calls" => executed_tool_calls},
+        "tool_calls" => [
+          %{
+            "id" => "call_translated_assistant_reserved_fixture",
+            "type" => "function",
+            "function" => %{"name" => "lookup_fixture", "arguments" => "{}"}
+          }
+        ]
+      }
+
+      assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+               Responses.coerce(responses_payload([input]))
+    end
+  end
+
+  test "Responses rejects reserved executed tool calls on translated tool outputs" do
+    passthrough_key = "internal_chat_message_metadata_passthrough"
+
+    for executed_tool_calls <- [nil, %{"synthetic" => true}] do
+      input = %{
+        "role" => "tool",
+        "tool_call_id" => "call_translated_tool_reserved_fixture",
+        "content" => "synthetic translated output",
+        passthrough_key => %{"executed_tool_calls" => executed_tool_calls}
+      }
+
+      assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+               Responses.coerce(responses_payload([input]))
+    end
+  end
+
+  test "Responses rejects reserved executed tool calls on ordinary messages" do
+    passthrough_key = "internal_chat_message_metadata_passthrough"
+
+    for executed_tool_calls <- [nil, %{"synthetic" => true}] do
+      input = %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "input_text", "text" => "synthetic message"}],
+        passthrough_key => %{"executed_tool_calls" => executed_tool_calls}
+      }
+
+      assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+               Responses.coerce(responses_payload([input]))
+    end
+  end
+
+  test "Responses rejects reserved executed tool calls on top-level input files" do
+    passthrough_key = "internal_chat_message_metadata_passthrough"
+
+    for executed_tool_calls <- [nil, %{"synthetic" => true}] do
+      input = %{
+        "type" => "input_file",
+        "file_id" => "file_reserved_fixture",
+        passthrough_key => %{"executed_tool_calls" => executed_tool_calls}
+      }
+
+      assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+               Responses.coerce(responses_payload([input]))
+    end
+  end
+
+  test "Responses rejects reserved executed tool calls on generic tool result shapes" do
+    passthrough_key = "internal_chat_message_metadata_passthrough"
+
+    for executed_tool_calls <- [nil, %{"synthetic" => true}] do
+      input = %{
+        "call_id" => "call_generic_reserved_fixture",
+        "result" => %{"ok" => true},
+        passthrough_key => %{"executed_tool_calls" => executed_tool_calls}
+      }
+
+      assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+               Responses.coerce(responses_payload([input]))
+    end
+  end
+
   test "Responses rejects malformed Codex internal turn metadata on translated replay items" do
     passthrough_key = "internal_chat_message_metadata_passthrough"
 

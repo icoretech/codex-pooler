@@ -218,6 +218,70 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
+  test "GET /v1/responses websocket rejects reserved metadata before dispatch" do
+    upstream =
+      start_upstream(FakeUpstream.sse_stream(programmatic_response_events(), done: false))
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "task-14-reserved-metadata-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        public_websocket_send_text!(
+          conn,
+          websocket,
+          ref,
+          Jason.encode!(%{
+            "type" => "response.create",
+            "model" => setup.model.exposed_model_id,
+            "input" => [
+              %{
+                "type" => "function_call_output",
+                "call_id" => "call_task_14_reserved_metadata",
+                "output" => "synthetic task 14 output",
+                "internal_chat_message_metadata_passthrough" => %{
+                  "executed_tool_calls" => "TASK14_RESERVED_METADATA_SENTINEL"
+                }
+              }
+            ],
+            "stream" => true
+          })
+        )
+
+      {conn, websocket, error_frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{
+               "type" => "error",
+               "status" => 400,
+               "error" => %{"code" => "invalid_request", "param" => "input"}
+             } = Jason.decode!(error_frame)
+
+      assert FakeUpstream.count(upstream) == 0
+      assert Repo.aggregate(Request, :count) == 0
+      assert Repo.aggregate(Attempt, :count) == 0
+      refute_received {Events, %{reason: "request_finalized"}}
+
+      persistence_text = inspect(RequestLogs.list(setup.pool))
+
+      refute error_frame =~ "internal_chat_message_metadata_passthrough"
+      refute error_frame =~ "TASK14_RESERVED_METADATA_SENTINEL"
+      refute persistence_text =~ "internal_chat_message_metadata_passthrough"
+      refute persistence_text =~ "TASK14_RESERVED_METADATA_SENTINEL"
+
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   test "direct GET /v1/responses drops malformed and non-object provider frames" do
     assert_invalid_provider_frames_dropped(false)
   end
