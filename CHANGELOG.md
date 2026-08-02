@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.5.13](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.12...codex-pooler-v0.5.13) (2026-08-02)
+
+
+### Features
+
+* **gateway:** compress embedded JSON tool outputs ([992d2a3](https://github.com/icoretech/codex-pooler/commit/992d2a3addea49e26b9fad81d1965f8d3b7d5920))
+
+
+### Bug Fixes
+
+* **accounting:** avoid unused quota scans and handle rollbacks ([069758d](https://github.com/icoretech/codex-pooler/commit/069758dd27f381461fc5c58ae8a2a68474ca161d))
+* **accounting:** precompute api key usage windows ([2e941f0](https://github.com/icoretech/codex-pooler/commit/2e941f0b5e12f3faed72105152fc14ac46eb5402))
+* **deps:** update dependency @astrojs/starlight to v0.41.6 ([#238](https://github.com/icoretech/codex-pooler/issues/238)) ([3b7aafd](https://github.com/icoretech/codex-pooler/commit/3b7aafd541763c6a1cc4f015ff8914ac7bf165cc))
+* **docs:** sync runtime route rate dashboard ([af830dc](https://github.com/icoretech/codex-pooler/commit/af830dcddc2c4c357db4e590328ca497cbc9a0dd))
+* **usage:** ignore unclassified plan labels ([adfaae9](https://github.com/icoretech/codex-pooler/commit/adfaae9274b5dabfbc190a90a996a30edbc569ec))
+* **usage:** preserve canonical enterprise automation plan token ([3a50563](https://github.com/icoretech/codex-pooler/commit/3a505631b25504458f1e2420bd7669ae4e07cb2c))
+
 ## [0.5.12](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.11...codex-pooler-v0.5.12) (2026-08-01)
 
 
