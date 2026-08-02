@@ -102,6 +102,60 @@ defmodule CodexPooler.Upstreams.OAuthBrowserLinkingTest do
     ])
   end
 
+  test "browser callback preserves the canonical enterprise automation plan label" do
+    scope = fixture_owner_scope()
+    pool = pool_fixture()
+    id_token = browser_id_token("acct_browser_enterprise_automation", "enterprise_cbp_automation")
+
+    start_provider!(%{
+      "/oauth/token" =>
+        {200,
+         FakeOpenAIAuthProvider.token_response(
+           access_token: "browser-enterprise-automation-access-token",
+           refresh_token: "browser-enterprise-automation-refresh-token",
+           id_token: id_token
+         )}
+    })
+
+    assert {:ok, %{flow: flow, authorization_url: authorization_url}} =
+             Upstreams.start_browser_oauth(scope, pool)
+
+    assert {:ok,
+            %{
+              status: :completed,
+              link_status: :created,
+              flow: completed_flow,
+              identity: identity,
+              assignment: assignment,
+              secret_status: :present
+            }} =
+             Upstreams.complete_browser_oauth(
+               scope,
+               flow.id,
+               callback_url(
+                 authorization_state(authorization_url),
+                 "browser-code-enterprise-automation"
+               )
+             )
+
+    assert completed_flow.status == "completed"
+    assert completed_flow.result_upstream_identity_id == identity.id
+
+    persisted_identity = Repo.get!(UpstreamIdentity, identity.id)
+    assert persisted_identity.plan_label == "enterprise_cbp_automation"
+    assert persisted_identity.plan_family == "enterprise-cbp-automation"
+    assert assignment.pool_id == pool.id
+    assert assignment.upstream_identity_id == identity.id
+    assert assignment.status == "active"
+    assert active_secret_count("access_token") == 1
+    assert active_secret_count("refresh_token") == 1
+
+    jobs = all_enqueued(worker: AccountReconciliationWorker)
+    assert job = Enum.find(jobs, &(&1.args["pool_upstream_assignment_id"] == assignment.id))
+    assert job.args["pool_id"] == pool.id
+    assert job.args["trigger_kind"] == "account_link"
+  end
+
   test "duplicate browser callback completion returns completed success without re-exchanging tokens" do
     scope = fixture_owner_scope()
     pool = pool_fixture()
@@ -303,13 +357,13 @@ defmodule CodexPooler.Upstreams.OAuthBrowserLinkingTest do
     provider
   end
 
-  defp browser_id_token(account_id) do
+  defp browser_id_token(account_id, plan_type \\ "team") do
     FakeOpenAIAuthProvider.id_token(%{
       "email" => "browser-#{account_id}@example.com",
       "https://api.openai.com/auth" => %{
         "chatgpt_account_id" => account_id,
         "chatgpt_user_id" => "user_#{account_id}",
-        "chatgpt_plan_type" => "team",
+        "chatgpt_plan_type" => plan_type,
         "workspace_id" => "workspace-browser",
         "workspace_label" => "Browser Workspace",
         "seat_type" => "team-seat"

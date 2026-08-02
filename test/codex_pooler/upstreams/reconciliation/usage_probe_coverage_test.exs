@@ -28,7 +28,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeCoverageTest do
       })
 
     %{
-      "plan_type" => "pro",
+      "plan_type" => Keyword.get(opts, :plan_type, "pro"),
       "rate_limit" => %{
         "primary_window" => account_window,
         "secondary_window" => nil
@@ -127,6 +127,22 @@ defmodule CodexPooler.Upstreams.Reconciliation.UsageProbeCoverageTest do
     # The vanished 5h primary is gone; only the weekly secondary remains.
     refute Enum.any?(rows, &(&1.window_kind == "primary" and &1.window_minutes == 300))
     assert Enum.any?(rows, &(&1.window_kind == "secondary" and &1.window_minutes == 10_080))
+  end
+
+  test "a canonical provider plan label is persisted with its normalized family" do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    {:ok, fake} =
+      fake_with_payload(new_shape_payload(observed_at, plan_type: "enterprise_cbp_automation"))
+
+    %{identity: identity, assignment: assignment} = assignment_with_fake(fake)
+
+    assert {:ok, refreshed_identity} =
+             PoolReconciliation.refresh_quota_from_usage(identity, assignment)
+
+    reloaded_identity = Repo.reload!(refreshed_identity)
+    assert reloaded_identity.plan_label == "enterprise_cbp_automation"
+    assert reloaded_identity.plan_family == "enterprise-cbp-automation"
   end
 
   test "a malformed account window still covers nothing and preserves stale rows" do
