@@ -2574,6 +2574,50 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
             }} = Responses.coerce(payload)
   end
 
+  @tag :responses_coercion
+  test "Responses rejects invalid strict type unions and ambiguous structural evidence" do
+    invalid_schemas = [
+      %{
+        "type" => ["object", 1],
+        "additionalProperties" => false,
+        "properties" => %{"title" => %{"type" => "string"}},
+        "required" => ["title"]
+      },
+      %{
+        "additionalProperties" => false,
+        "properties" => %{"title" => %{"type" => "string"}},
+        "required" => ["title"],
+        "items" => %{"type" => "string"}
+      }
+    ]
+
+    Enum.each(invalid_schemas, fn schema ->
+      payload = %{
+        "model" => "gpt-fixture-text",
+        "input" => "synthetic input",
+        "tools" => [
+          flat_function_tool(
+            "goal",
+            %{
+              "type" => "object",
+              "additionalProperties" => false,
+              "properties" => %{"goal" => schema},
+              "required" => ["goal"]
+            },
+            true
+          )
+        ]
+      }
+
+      assert {:error,
+              %{
+                code: "invalid_function_parameters",
+                param: "tools.0.parameters.properties.goal.type"
+              }} =
+               Responses.coerce(payload)
+    end)
+  end
+
   describe "Task 5 Responses and Chat tool shape compatibility" do
     test "documents the tool shape divergence between Responses and Chat" do
       divergence = [

@@ -411,6 +411,13 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert "$ref" in fixture.supported_schema_keywords_preserved
       assert "const_to_single_value_enum" in fixture.schema_repairs
 
+      assert "infer_missing_or_invalid_scalar_object_type_from_unambiguous_structure" in fixture.schema_repairs
+
+      assert "preserve_invalid_or_ambiguous_type_arrays_for_rejection" in fixture.schema_repairs
+      assert "reject_mixed_object_array_structural_evidence" in fixture.schema_repairs
+      assert feature.contract =~ "invalid or ambiguous type arrays"
+      assert feature.contract =~ "both object and array structural evidence"
+
       assert fixture.routes == [
                "/backend-api/codex/responses",
                "/backend-api/codex/v1/responses",
@@ -919,6 +926,21 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "accept Responses truncation auto and disabled locally"
       assert feature.contract =~ "accept Codex-native Responses web_search hosted tool shapes"
       assert feature.contract =~ "keeping web_search_preview type-only"
+
+      assert feature.contract =~
+               "accept executable Responses custom tool definitions and named custom tool_choice"
+
+      assert feature.contract =~
+               "keeping Chat custom tools unsupported and additional_tools non-executable"
+
+      assert fixture.responses_custom_tools == %{
+               executable: true,
+               accepted_definition: ["type", "name", "description", "format"],
+               named_tool_choice: %{type: "custom", required: ["name"]}
+             }
+
+      assert fixture.chat_custom_tools == %{executable: false, supported: false}
+      assert fixture.additional_tools_input_item.executable == false
 
       assert feature.contract =~
                "emit a sanitized type:error terminal with wire code server_error while accounting records upstream_stream_error"

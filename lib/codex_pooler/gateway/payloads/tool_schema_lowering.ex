@@ -105,20 +105,32 @@ defmodule CodexPooler.Gateway.Payloads.ToolSchemaLowering do
   defp infer_repairable_schema_type(%{"$ref" => _ref} = schema), do: schema
 
   defp infer_repairable_schema_type(%{} = schema) do
-    if valid_type?(Map.get(schema, "type")) do
+    type = Map.get(schema, "type")
+
+    if is_list(type) or (is_binary(type) and String.trim(type) != "") do
       schema
     else
-      cond do
-        Map.has_key?(schema, "properties") or Map.has_key?(schema, "required") or
-            Map.has_key?(schema, "additionalProperties") ->
-          Map.put(schema, "type", "object")
-
-        Map.has_key?(schema, "items") ->
-          Map.put(schema, "type", "array")
-
-        true ->
-          schema
+      case schema_structure_type(schema) do
+        :object -> Map.put(schema, "type", "object")
+        :array -> Map.put(schema, "type", "array")
+        :ambiguous -> schema
+        :unknown -> schema
       end
+    end
+  end
+
+  defp schema_structure_type(schema) do
+    object? =
+      Map.has_key?(schema, "properties") or Map.has_key?(schema, "required") or
+        Map.has_key?(schema, "additionalProperties")
+
+    array? = Map.has_key?(schema, "items")
+
+    case {object?, array?} do
+      {true, false} -> :object
+      {false, true} -> :array
+      {true, true} -> :ambiguous
+      {false, false} -> :unknown
     end
   end
 
