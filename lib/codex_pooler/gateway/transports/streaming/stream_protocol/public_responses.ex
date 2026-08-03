@@ -620,10 +620,27 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   defp maybe_put_source_nested_error(classification, _error), do: classification
 
+  # The upstream includes `"error": null` on every successful terminal event.
+  # A key-presence match treated that null as an error to normalize, and the
+  # non-map fallback below fabricated a redacted `upstream_error`/`server_error`
+  # object onto every successful streamed terminal. Null means success: preserve
+  # it, and only rewrite genuinely present error objects.
+  defp normalize_top_level_error(%{"error" => nil} = decoded), do: decoded
+
   defp normalize_top_level_error(%{"error" => error} = decoded),
     do: Map.put(decoded, "error", normalize_terminal_error(error))
 
   defp normalize_top_level_error(decoded), do: decoded
+
+  # A real top-level error alongside a null nested error keeps the existing
+  # copy-into-response behavior instead of fabricating from the null.
+  defp normalize_response_error(
+         %{"error" => %{} = public_error, "response" => %{"error" => nil} = response} = decoded
+       ) do
+    Map.put(decoded, "response", Map.put(response, "error", public_error))
+  end
+
+  defp normalize_response_error(%{"response" => %{"error" => nil}} = decoded), do: decoded
 
   defp normalize_response_error(%{"response" => %{"error" => error} = response} = decoded) do
     Map.put(

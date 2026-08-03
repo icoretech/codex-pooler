@@ -209,6 +209,65 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
     end
   end
 
+  # The real upstream includes `"error": null` on every successful terminal
+  # (wire-verified 2026-08-03: six decrypted `response.completed` events, all
+  # `"error": null`). Key-presence matching used to treat that null as an error
+  # and fabricate the redacted `upstream_error` fallback onto every successful
+  # streamed terminal. No fixture modeled the null-error key, so the suite never
+  # saw it.
+  test "successful completed terminals preserve a null nested error at both transports" do
+    terminal = %{
+      "type" => "response.completed",
+      "response" => %{
+        "id" => "resp_null_error_completed",
+        "status" => "completed",
+        "error" => nil,
+        "output" => []
+      }
+    }
+
+    for transport <- [:sse, :websocket] do
+      {_wire, decoded} = normalize_completed_public_wire(transport, terminal)
+
+      assert decoded["type"] == "response.completed", "#{transport} kept the terminal type"
+
+      assert Map.fetch(decoded["response"], "error") == {:ok, nil},
+             "#{transport} preserved the null nested error instead of fabricating one"
+
+      refute match?(%{"error" => %{}}, decoded),
+             "#{transport} did not synthesize a top-level error"
+    end
+  end
+
+  test "a real top-level error still overrides a null nested error on completed terminals" do
+    # Deliberately NOT the generic upstream_error/server_error pair: that is
+    # byte-identical to what the removed fabricate-from-nil path produced, so a
+    # regression reintroducing fabrication would satisfy this assertion. A code
+    # that survives redaction makes copy and fabrication distinguishable.
+    public_error = %{
+      "code" => "insufficient_quota",
+      "message" => "upstream request failed",
+      "type" => "insufficient_quota"
+    }
+
+    terminal = %{
+      "type" => "response.completed",
+      "error" => public_error,
+      "response" => %{
+        "id" => "resp_null_error_with_top_level",
+        "status" => "completed",
+        "error" => nil
+      }
+    }
+
+    for transport <- [:sse, :websocket] do
+      {_wire, decoded} = normalize_completed_public_wire(transport, terminal)
+
+      assert decoded["response"]["error"]["code"] == "insufficient_quota",
+             "#{transport} copied the real top-level error instead of fabricating one from nil"
+    end
+  end
+
   test "public POST overflow telemetry records the applicable incomplete buffer limit" do
     handler_id = {__MODULE__, self(), System.unique_integer([:positive])}
     test_pid = self()
@@ -1082,6 +1141,20 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
       )
 
     {wire, Jason.decode!(wire)}
+  end
+
+  defp normalize_completed_public_wire(:sse, terminal) do
+    {wire, _state} = normalize_sse(sse_event("response.completed", terminal))
+
+    # The protocol synthesizes a leading response.created before a bare
+    # terminal, so select the completed event rather than matching the list.
+    %{data: decoded} = Enum.find(public_events(wire), &(&1.event == "response.completed"))
+
+    {wire, decoded}
+  end
+
+  defp normalize_completed_public_wire(:websocket, terminal) do
+    normalize_public_wire(:websocket, terminal)
   end
 
   defp expected_failed_response(overrides \\ []) do

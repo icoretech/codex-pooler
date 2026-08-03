@@ -4690,6 +4690,68 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute inspect(error) =~ "provider_stack"
   end
 
+  # The real Codex backend sends `"output": []` in every terminal
+  # response.completed — wire-verified 2026-08-03 across six decrypted turns,
+  # including ones where the model demonstrably called a tool. Tool calls travel
+  # in the streamed response.output_item.done events, so SSE collection must
+  # backfill from them. Asserting on the bare terminal array is asserting on a
+  # field this provider never populates.
+  @tag :issue_241
+  test "POST /v1/responses SSE collection backfills tool calls from a real empty terminal" do
+    call = %{
+      "type" => "custom_tool_call",
+      "name" => "issue241_probe",
+      "call_id" => "call_issue241",
+      "input" => "issue241"
+    }
+
+    body =
+      "event: response.output_item.done\n" <>
+        "data: " <>
+        Jason.encode!(%{"type" => "response.output_item.done", "item" => call}) <>
+        "\n\n" <>
+        "event: response.completed\n" <>
+        "data: " <>
+        Jason.encode!(%{
+          "type" => "response.completed",
+          "response" => %{
+            "id" => "resp_issue241_empty_terminal",
+            "status" => "completed",
+            "error" => nil,
+            "output" => []
+          }
+        }) <> "\n\n"
+
+    assert {:ok, response} = Responses.response_from_sse(body)
+    assert [^call] = response["output"]
+    assert response["status"] == "completed"
+  end
+
+  @tag :issue_241
+  test "POST /v1/responses SSE collection prefers a populated terminal over streamed items" do
+    streamed = %{"type" => "function_call", "name" => "streamed", "arguments" => "{}"}
+    authoritative = %{"type" => "function_call", "name" => "terminal", "arguments" => "{}"}
+
+    body =
+      "event: response.output_item.done\n" <>
+        "data: " <>
+        Jason.encode!(%{"type" => "response.output_item.done", "item" => streamed}) <>
+        "\n\n" <>
+        "event: response.completed\n" <>
+        "data: " <>
+        Jason.encode!(%{
+          "type" => "response.completed",
+          "response" => %{
+            "id" => "resp_issue241_populated_terminal",
+            "status" => "completed",
+            "output" => [authoritative]
+          }
+        }) <> "\n\n"
+
+    assert {:ok, response} = Responses.response_from_sse(body)
+    assert [^authoritative] = response["output"]
+  end
+
   @tag :server_error_redaction
   test "POST /v1/responses SSE collection redacts top-level-only terminal errors" do
     provider_message =
