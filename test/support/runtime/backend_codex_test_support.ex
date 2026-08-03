@@ -950,6 +950,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   def auth(conn, setup), do: put_req_header(conn, "authorization", setup.authorization)
 
   def start_public_endpoint! do
+    {_server, port} = start_public_endpoint_with_server!()
+    port
+  end
+
+  def start_public_endpoint_with_server! do
     {:ok, server} =
       Bandit.start_link(
         plug: CodexPoolerWeb.Endpoint,
@@ -967,7 +972,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     end)
 
     {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
-    port
+    {server, port}
   end
 
   def public_websocket_connect!(port, setup, turn_state, path \\ "/backend-api/codex/responses") do

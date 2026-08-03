@@ -1184,6 +1184,62 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert Repo.all(Request) == []
   end
 
+  test "prepare remains validation-only for repairable strict function tools" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    payload = %{
+      "model" => setup.model.exposed_model_id,
+      "input" => "prepare this route",
+      "tools" => [
+        %{
+          "type" => "function",
+          "function" => %{
+            "name" => "native_no_repair_fixture",
+            "strict" => true,
+            "parameters" => %{
+              "type" => "object",
+              "additionalProperties" => false,
+              "properties" => %{
+                "nested" => %{
+                  "additionalProperties" => false,
+                  "properties" => %{},
+                  "required" => []
+                }
+              },
+              "required" => ["nested"]
+            }
+          }
+        }
+      ]
+    }
+
+    request_options =
+      request_options(auth, payload,
+        request_id: "pre-dispatch-no-repair-#{System.unique_integer([:positive])}",
+        requested_model: setup.model.exposed_model_id,
+        effective_model: setup.model.exposed_model_id
+      )
+
+    assert {:error,
+            %{
+              code: "invalid_function_parameters",
+              param: "tools.0.function.parameters.properties.nested.type"
+            }} = PreDispatch.prepare(auth, @endpoint_path, payload, request_options, setup.model)
+
+    refute get_in(payload, [
+             "tools",
+             Elixir.Access.at(0),
+             "function",
+             "parameters",
+             "properties",
+             "nested"
+           ])
+           |> Map.has_key?("type")
+
+    assert Repo.all(Request) == []
+  end
+
   test "prepare authorizes model policy from request options" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)

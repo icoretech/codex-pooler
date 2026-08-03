@@ -148,6 +148,49 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       end
     end
 
+    test "preserves backend Codex strict function schema terms for HTTP and websocket upstream JSON" do
+      strict_tool = %{
+        "type" => "function",
+        "name" => "strict_lookup",
+        "strict" => true,
+        "parameters" => %{
+          "type" => "object",
+          "additionalProperties" => false,
+          "properties" => %{
+            "config" => %{
+              "type" => "future-native-token",
+              "unknown_schema_key" => %{"preserve" => [1, nil, false]}
+            }
+          },
+          "required" => ["config"],
+          "unknown_root_key" => true
+        },
+        "unknown_tool_key" => %{"preserve" => true}
+      }
+
+      payload = %{
+        "model" => "gpt-5.5",
+        "input" => [%{"role" => "user", "content" => "hello"}],
+        "tools" => [strict_tool]
+      }
+
+      model = %Model{upstream_model_id: "provider-model"}
+      http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+      websocket_options = RequestOptions.for_websocket(http_options, payload)
+
+      for request_options <- [http_options, websocket_options] do
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(
+                   payload,
+                   model,
+                   "/backend-api/codex/responses",
+                   request_options
+                 )
+
+        assert Jason.decode!(encoded)["tools"] == [strict_tool]
+      end
+    end
+
     test "preserves backend Codex namespace subtrees while lowering ordinary function tools" do
       namespace_tool = backend_namespace_tool()
       payload = backend_mixed_tool_payload(namespace_tool)

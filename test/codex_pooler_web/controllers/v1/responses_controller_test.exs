@@ -36,12 +36,14 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       register_unboxed_pool_cleanup!: 1,
       assert_pre_first_stream_idle_timeout!: 1,
       start_public_endpoint!: 0,
+      start_public_endpoint_with_server!: 0,
       start_upstream: 1,
       unboxed_run: 1,
       use_routing_strategy!: 3
     ]
 
   alias CodexPooler.Access
+
   alias CodexPooler.Accounting.{
     Attempt,
     DailyRollup,
@@ -2291,6 +2293,175 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert captured.json["tools"] == [custom_tool]
     assert captured.json["tool_choice"] == tool_choice
     assert_issue_241_success_lifecycle!(setup)
+  end
+
+  @tag :issue_241
+  test "POST /v1/responses forwards only direct nested strict schema type repairs", %{conn: conn} do
+    upstream = start_upstream(issue_241_completed_response("resp_v1_repaired_schema"))
+    setup = gateway_setup(upstream)
+    parameters = issue_241_repairable_parameters()
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic strict schema repair request",
+        "tools" => [
+          %{
+            "type" => "function",
+            "name" => "repair_schema_fixture",
+            "strict" => true,
+            "parameters" => parameters
+          }
+        ]
+      })
+
+    assert %{"id" => "resp_v1_repaired_schema", "object" => "response"} =
+             json_response(response, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.method == "POST"
+    assert captured.path == "/backend-api/codex/responses"
+
+    assert [captured_tool] = captured.json["tools"]
+
+    expected_parameters =
+      parameters
+      |> put_in(["properties", "config", "type"], "object")
+      |> put_in(["properties", "config", "properties", "entries", "type"], "array")
+      |> put_in(
+        ["properties", "config", "properties", "entries", "items", "type"],
+        "object"
+      )
+
+    assert captured_tool == %{
+             "type" => "function",
+             "name" => "repair_schema_fixture",
+             "strict" => true,
+             "parameters" => expected_parameters
+           }
+
+    refute get_in(parameters, ["properties", "config"]) |> Map.has_key?("type")
+    assert_issue_241_success_lifecycle!(setup)
+  end
+
+  @tag :issue_241
+  test "POST /v1/responses tool validation failures have no dispatch or accounting effects", %{
+    conn: conn
+  } do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    base_payload = %{
+      "model" => setup.model.exposed_model_id,
+      "input" => "synthetic rejected tool request"
+    }
+
+    invalid_cases = [
+      {"malformed custom", "invalid_request", "tools",
+       %{
+         "tools" => [
+           %{
+             "type" => "custom",
+             "name" => "malformed_custom_fixture",
+             "format" => %{"type" => "grammar", "syntax" => "lark"}
+           }
+         ]
+       }},
+      {"unknown custom choice", "invalid_request", "tool_choice",
+       %{
+         "tools" => [%{"type" => "custom", "name" => "known_custom_fixture"}],
+         "tool_choice" => %{"type" => "custom", "name" => "missing_custom_fixture"}
+       }},
+      {"executable name collision", "invalid_request", "tools",
+       %{
+         "tools" => [
+           %{
+             "type" => "function",
+             "name" => "shared_fixture",
+             "parameters" => %{"type" => "object", "properties" => %{}}
+           },
+           %{"type" => "custom", "name" => "shared_fixture"}
+         ]
+       }},
+      {"explicit invalid public type", "invalid_function_parameters",
+       "tools.0.parameters.properties.candidate.type",
+       %{
+         "tools" => [
+           issue_241_strict_function_tool(%{
+             "type" => "object",
+             "additionalProperties" => false,
+             "properties" => %{"candidate" => %{"type" => "future-type"}},
+             "required" => ["candidate"]
+           })
+         ]
+       }},
+      {"ambiguous repair evidence", "invalid_function_parameters",
+       "tools.0.parameters.properties.candidate.type",
+       %{
+         "tools" => [
+           issue_241_strict_function_tool(%{
+             "type" => "object",
+             "additionalProperties" => false,
+             "properties" => %{
+               "candidate" => %{
+                 "additionalProperties" => false,
+                 "properties" => %{"value" => %{"type" => "string"}},
+                 "required" => ["value"],
+                 "items" => %{"type" => "string"}
+               }
+             },
+             "required" => ["candidate"]
+           })
+         ]
+       }},
+      {"opaque combinator subtree", "invalid_function_parameters",
+       "tools.0.parameters.properties.candidate.allOf.0.type",
+       %{
+         "tools" => [
+           issue_241_strict_function_tool(%{
+             "type" => "object",
+             "additionalProperties" => false,
+             "properties" => %{
+               "candidate" => %{
+                 "type" => "string",
+                 "allOf" => [
+                   %{
+                     "additionalProperties" => false,
+                     "properties" => %{"value" => %{"type" => "string"}},
+                     "required" => ["value"]
+                   }
+                 ]
+               }
+             },
+             "required" => ["candidate"]
+           })
+         ]
+       }}
+    ]
+
+    counts = durable_accounting_counts()
+
+    Enum.each(invalid_cases, fn {label, expected_code, expected_param, payload} ->
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/responses", Map.merge(base_payload, payload))
+
+      assert %{
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => ^expected_code,
+                 "param" => ^expected_param
+               }
+             } = json_response(response, 400),
+             label
+
+      assert FakeUpstream.requests(upstream) == [], label
+      assert durable_accounting_counts() == counts, label
+    end)
   end
 
   test "POST /v1/responses preserves output-only translated tool output before dispatch",
@@ -6756,7 +6927,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "unused_v1_oversized_frame"}))
     setup = gateway_setup(upstream)
-    port = start_public_endpoint!()
+    {server, port} = start_public_endpoint_with_server!()
     turn_state = "v1-ws-oversized-frame-#{System.unique_integer([:positive])}"
 
     {conn, websocket, ref, _response_headers} =
@@ -6765,16 +6936,23 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       ])
 
     try do
-      {{conn, _websocket, code, reason}, _logs} =
+      assert {:ok, [connection_pid]} = ThousandIsland.connection_pids(server)
+      monitor_ref = Process.monitor(connection_pid)
+
+      {{conn, _websocket, code, reason}, logs} =
         with_log(fn ->
           {conn, websocket} =
             public_websocket_send_text!(conn, websocket, ref, String.duplicate("x", 1_000))
 
-          public_websocket_receive_close!(conn, websocket, ref)
+          result = public_websocket_receive_close!(conn, websocket, ref)
+          assert_receive {:DOWN, ^monitor_ref, :process, ^connection_pid, _reason}
+          Logger.flush()
+          result
         end)
 
       assert code == 1009
       assert reason == ""
+      assert logs =~ "max_frame_size_exceeded"
       assert FakeUpstream.requests(upstream) == []
       assert Repo.aggregate(Request, :count) == 0
 
@@ -8223,6 +8401,38 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     ])
   end
 
+  defp issue_241_repairable_parameters do
+    %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{
+        "config" => %{
+          "additionalProperties" => false,
+          "properties" => %{
+            "entries" => %{
+              "items" => %{
+                "additionalProperties" => false,
+                "properties" => %{"value" => %{"type" => "string"}},
+                "required" => ["value"]
+              }
+            }
+          },
+          "required" => ["entries"]
+        }
+      },
+      "required" => ["config"]
+    }
+  end
+
+  defp issue_241_strict_function_tool(parameters) do
+    %{
+      "type" => "function",
+      "name" => "invalid_schema_fixture",
+      "strict" => true,
+      "parameters" => parameters
+    }
+  end
+
   defp assert_issue_241_success_lifecycle!(setup) do
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "succeeded"
@@ -8261,10 +8471,21 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   defp durable_accounting_counts do
+    ledger_counts =
+      LedgerEntry
+      |> group_by([entry], entry.entry_kind)
+      |> select([entry], {entry.entry_kind, count(entry.id)})
+      |> Repo.all()
+      |> Map.new()
+
     %{
       requests: Repo.aggregate(Request, :count),
       attempts: Repo.aggregate(Attempt, :count),
-      ledger_entries: Repo.aggregate(LedgerEntry, :count)
+      ledger_entries: Repo.aggregate(LedgerEntry, :count),
+      request_log_facts: Repo.aggregate(RequestLogFact, :count),
+      reservations: Map.get(ledger_counts, "reservation", 0),
+      releases: Map.get(ledger_counts, "release", 0),
+      settlements: Map.get(ledger_counts, "settlement", 0)
     }
   end
 

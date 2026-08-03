@@ -18,6 +18,15 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestLogs}
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
+
+  alias CodexPooler.Gateway.Persistence.{
+    BridgeOwnerLease,
+    BridgeSessionAlias,
+    CodexSession,
+    CodexTurn,
+    IdempotencyKey
+  }
+
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Repo
   alias CodexPoolerWeb.Runtime.BackendCodexTestSupport
@@ -305,11 +314,142 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
+  test "GET /v1/responses websocket forwards repaired nested object and array schema nodes" do
+    upstream = start_upstream(completed_websocket_response("resp_ws_nested_repair"))
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    parameters = repairable_nested_parameters()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "nested-repair-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic nested repair websocket input",
+          "tools" => [
+            %{
+              "type" => "function",
+              "name" => "repair_nested_fixture",
+              "parameters" => parameters,
+              "strict" => true
+            }
+          ]
+        })
+
+      {conn, websocket, frames} = receive_websocket_until_terminal!(conn, websocket, ref, [])
+      assert Enum.map(frames, & &1["type"]) == ["response.completed"]
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert [captured_tool] = captured.json["tools"]
+      repaired = captured_tool["parameters"]
+
+      assert get_in(repaired, ["properties", "config", "type"]) == "object"
+
+      assert get_in(repaired, ["properties", "config", "properties", "entries", "type"]) ==
+               "array"
+
+      assert get_in(repaired, [
+               "properties",
+               "config",
+               "properties",
+               "entries",
+               "items",
+               "type"
+             ]) == "object"
+
+      assert repaired == repaired_nested_parameters()
+      refute Map.has_key?(get_in(parameters, ["properties", "config"]), "type")
+
+      assert_successful_websocket_lifecycle!(setup)
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "GET /v1/responses websocket rejects a malformed post-upgrade frame and recovers once" do
+    upstream = start_upstream(completed_websocket_response("resp_ws_recovery_valid"))
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "malformed-recovery-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      post_upgrade_baseline = lifecycle_counts(upstream)
+
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic malformed websocket input",
+          "tools" => [
+            %{
+              "type" => "custom",
+              "name" => "invalid_custom_fixture",
+              "format" => %{"type" => "text", "unexpected" => true}
+            }
+          ]
+        })
+
+      {conn, websocket, error_frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{
+               "type" => "error",
+               "status" => 400,
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_request",
+                 "param" => "tools"
+               }
+             } = Jason.decode!(error_frame)
+
+      assert lifecycle_counts(upstream) == post_upgrade_baseline
+      refute_received {Events, %{reason: "request_finalized"}}
+
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic valid recovery websocket input"
+        })
+
+      {conn, websocket, frames} = receive_websocket_until_terminal!(conn, websocket, ref, [])
+      assert Enum.map(frames, & &1["type"]) == ["response.completed"]
+
+      assert_successful_websocket_lifecycle!(setup)
+
+      assert_lifecycle_delta!(post_upgrade_baseline, lifecycle_counts(upstream), %{
+        upstream_requests: 1,
+        requests: 1,
+        attempts: 1,
+        ledger_entries: 3,
+        turns: 1,
+        reservations: 1,
+        settlements: 1,
+        idempotency_keys: 0
+      })
+
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   test "GET /v1/responses websocket rejects malformed caller, tool, and program output before dispatch" do
     upstream =
       start_upstream(FakeUpstream.sse_stream(programmatic_response_events(), done: false))
 
     setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
     port = start_public_endpoint!()
 
     {conn, websocket, ref} =
@@ -324,6 +464,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
         Enum.reduce(malformed_programmatic_payloads(setup), {conn, websocket}, fn payload,
                                                                                   {conn,
                                                                                    websocket} ->
+          post_upgrade_baseline = lifecycle_counts(upstream)
+
           {conn, websocket} =
             public_websocket_send_text!(conn, websocket, ref, Jason.encode!(payload))
 
@@ -332,13 +474,10 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
           assert %{"type" => "error", "status" => 400, "error" => error} = Jason.decode!(frame)
           assert error["code"] == "invalid_request"
           assert error["param"] in ["input", "tools"]
+          assert lifecycle_counts(upstream) == post_upgrade_baseline
+          refute_received {Events, %{reason: "request_finalized"}}
           {conn, websocket}
         end)
-
-      assert FakeUpstream.count(upstream) == 0
-      assert Repo.aggregate(Request, :count) == 0
-      assert Repo.aggregate(Attempt, :count) == 0
-      refute_received {Events, %{reason: "request_finalized"}}
 
       {conn, websocket}
     after
@@ -362,6 +501,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       )
 
     try do
+      post_upgrade_baseline = lifecycle_counts(upstream)
+
       {conn, websocket} =
         public_websocket_send_text!(
           conn,
@@ -392,9 +533,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
                "error" => %{"code" => "invalid_request", "param" => "input"}
              } = Jason.decode!(error_frame)
 
-      assert FakeUpstream.count(upstream) == 0
-      assert Repo.aggregate(Request, :count) == 0
-      assert Repo.aggregate(Attempt, :count) == 0
+      assert lifecycle_counts(upstream) == post_upgrade_baseline
       refute_received {Events, %{reason: "request_finalized"}}
 
       persistence_text = inspect(RequestLogs.list(setup.pool))
@@ -585,6 +724,43 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
              ),
              :count
            ) == 1
+  end
+
+  defp lifecycle_counts(upstream) do
+    %{
+      upstream_requests: FakeUpstream.count(upstream),
+      requests: Repo.aggregate(Request, :count),
+      attempts: Repo.aggregate(Attempt, :count),
+      ledger_entries: Repo.aggregate(LedgerEntry, :count),
+      turns: Repo.aggregate(CodexTurn, :count),
+      reservations: ledger_entry_count("reservation"),
+      settlements: ledger_entry_count("settlement"),
+      idempotency_keys: Repo.aggregate(IdempotencyKey, :count),
+      sessions: Repo.aggregate(CodexSession, :count),
+      owner_leases: Repo.aggregate(BridgeOwnerLease, :count),
+      session_aliases: Repo.aggregate(BridgeSessionAlias, :count)
+    }
+  end
+
+  defp ledger_entry_count(entry_kind) do
+    Repo.aggregate(from(entry in LedgerEntry, where: entry.entry_kind == ^entry_kind), :count)
+  end
+
+  defp lifecycle_delta(before_counts, after_counts) do
+    Map.new(after_counts, fn {key, after_count} ->
+      {key, after_count - Map.fetch!(before_counts, key)}
+    end)
+  end
+
+  defp assert_lifecycle_delta!(before_counts, after_counts, expected_delta) do
+    actual_delta = lifecycle_delta(before_counts, after_counts)
+
+    Enum.each(expected_delta, fn {key, expected_count} ->
+      actual_count = Map.fetch!(actual_delta, key)
+
+      assert actual_count == expected_count,
+             "unexpected lifecycle delta for #{key}: expected #{expected_count}, got #{actual_count}"
+    end)
   end
 
   defp assert_invalid_provider_frames_dropped(owner_forwarding?) do
@@ -807,6 +983,39 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       TASK6_CALLER_ID_SENTINEL
       TASK6_FRAME_SENTINEL
       TASK6_RESPONSE_ID_SENTINEL
+    )
+  end
+
+  defp repairable_nested_parameters do
+    %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{
+        "config" => %{
+          "additionalProperties" => false,
+          "properties" => %{
+            "entries" => %{
+              "items" => %{
+                "additionalProperties" => false,
+                "properties" => %{"value" => %{"type" => "string"}},
+                "required" => ["value"]
+              }
+            }
+          },
+          "required" => ["entries"]
+        }
+      },
+      "required" => ["config"]
+    }
+  end
+
+  defp repaired_nested_parameters do
+    repairable_nested_parameters()
+    |> put_in(["properties", "config", "type"], "object")
+    |> put_in(["properties", "config", "properties", "entries", "type"], "array")
+    |> put_in(
+      ["properties", "config", "properties", "entries", "items", "type"],
+      "object"
     )
   end
 end

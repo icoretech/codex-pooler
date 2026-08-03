@@ -23,7 +23,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   @endpoint "/backend-api/codex/responses"
 
   @spec validate(term()) :: {:ok, map()} | {:error, Error.reason()}
-  def validate(payload) do
+  def validate(payload), do: validate(payload, [])
+
+  @spec validate(term(), map() | keyword()) :: {:ok, map()} | {:error, Error.reason()}
+  def validate(payload, opts) do
+    surface = surface(opts)
+
     with {:ok, payload} <- Validation.normalize_payload(payload),
          :ok <- Validation.reject_high_impact_fields(payload),
          :ok <- Validation.reject_unsupported_fields(payload, :responses),
@@ -37,6 +42,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
          :ok <- Input.validate_input(payload, has_tool_result?),
          :ok <- Input.validate_previous_response_continuation(payload, has_tool_result?),
          :ok <- validate_tools(payload),
+         :ok <- StrictSchema.validate_public_type_vocabulary(payload),
+         {:ok, payload} <- maybe_repair_direct_responses_function_tools(payload, surface),
          :ok <- validate_tool_choice(payload),
          :ok <- validate_max_output_tokens(payload),
          :ok <- validate_reasoning(payload),
@@ -54,7 +61,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
           {:ok, %{endpoint: String.t(), payload: map(), request_options: RequestOptions.t()}}
           | {:error, Error.reason()}
   def coerce(payload, opts \\ %{}) do
-    with {:ok, payload} <- validate(payload),
+    with {:ok, payload} <- validate(payload, opts),
          {:ok, payload} <-
            payload
            |> Map.take(Matrix.forwarded_fields(:responses))
@@ -63,10 +70,23 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
       payload =
         maybe_force_backend_streaming(payload, opts)
 
-      request_options = RequestOptions.build(opts, @endpoint, payload)
+      request_options = RequestOptions.build(drop_surface(opts), @endpoint, payload)
       {:ok, %{endpoint: @endpoint, payload: payload, request_options: request_options}}
     end
   end
+
+  defp surface(opts) when is_list(opts), do: Keyword.get(opts, :surface, :responses)
+  defp surface(%RequestOptions{}), do: :responses
+  defp surface(opts) when is_map(opts), do: Map.get(opts, :surface, :responses)
+
+  defp maybe_repair_direct_responses_function_tools(payload, :responses),
+    do: StrictSchema.repair_direct_responses_function_tools(payload)
+
+  defp maybe_repair_direct_responses_function_tools(payload, :chat), do: {:ok, payload}
+
+  defp drop_surface(opts) when is_list(opts), do: Keyword.delete(opts, :surface)
+  defp drop_surface(%RequestOptions{} = opts), do: opts
+  defp drop_surface(opts) when is_map(opts), do: Map.delete(opts, :surface)
 
   @spec response_from_sse(binary()) :: {:ok, map()} | {:error, Error.reason()}
   def response_from_sse(body) when is_binary(body), do: SSE.response_from_sse(body)
@@ -99,8 +119,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
 
   defp backend_streaming_required?(opts) when is_list(opts),
     do: backend_streaming_required?(Map.new(opts))
-
-  defp backend_streaming_required?(_opts), do: false
 
   defp validate_prompt_cache_options(%{"prompt_cache_options" => options})
        when is_map(options) do

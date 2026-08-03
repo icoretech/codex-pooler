@@ -13,7 +13,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
   def validate(payload) do
     with {:ok, %{chat_payload: chat_payload, response_payload: response_payload}} <-
            prepare_response_payload(payload),
-         {:ok, _response_payload} <- Responses.validate(response_payload) do
+         {:ok, _response_payload} <- Responses.validate(response_payload, surface: :chat) do
       {:ok, chat_payload}
     end
   end
@@ -30,10 +30,13 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
   def coerce(payload, opts \\ %{}) do
     with {:ok, %{chat_payload: chat_payload, response_payload: response_payload}} <-
            prepare_response_payload(payload),
-         {:ok, response} <- Responses.coerce(response_payload, opts) do
+         {:ok, response} <- Responses.coerce(response_payload, put_surface(opts, :chat)) do
       {:ok, Map.put(response, :chat_payload, chat_payload)}
     end
   end
+
+  defp put_surface(opts, surface) when is_list(opts), do: Keyword.put(opts, :surface, surface)
+  defp put_surface(opts, surface) when is_map(opts), do: Map.put(opts, :surface, surface)
 
   defp prepare_response_payload(payload) do
     with {:ok, payload} <- Validation.normalize_payload(payload),

@@ -2508,6 +2508,197 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   @tag :responses_coercion
+  test "public adapters reject explicit types outside the public vocabulary" do
+    response_payload = %{
+      "model" => "gpt-fixture-text",
+      "input" => "synthetic input",
+      "tools" => [flat_function_tool("future_type_fixture", %{"type" => "future-type"})]
+    }
+
+    assert {:error,
+            %{
+              code: "invalid_function_parameters",
+              param: "tools.0.parameters.type"
+            }} = Responses.coerce(response_payload)
+
+    chat_payload = %{
+      "model" => "gpt-fixture-text",
+      "messages" => [%{"role" => "user", "content" => "synthetic input"}],
+      "tools" => [function_tool("future_chat_type_fixture", %{"type" => "future-type"})]
+    }
+
+    assert {:error,
+            %{
+              code: "invalid_function_parameters",
+              param: "tools.0.parameters.type"
+            }} = Chat.coerce(chat_payload)
+  end
+
+  @tag :responses_coercion
+  test "direct Responses threads repaired nested strict schemas through validation and coercion" do
+    payload = %{
+      "model" => "gpt-fixture-text",
+      "input" => "synthetic input",
+      "tools" => [flat_function_tool("repair_fixture", repairable_nested_parameters())]
+    }
+
+    assert {:ok, validated} = Responses.validate(payload)
+    assert {:ok, result} = Responses.coerce(payload)
+
+    for repaired <- [validated, result.payload] do
+      assert get_in(repaired, [
+               "tools",
+               Access.at(0),
+               "parameters",
+               "properties",
+               "config",
+               "type"
+             ]) ==
+               "object"
+
+      assert get_in(repaired, [
+               "tools",
+               Access.at(0),
+               "parameters",
+               "properties",
+               "config",
+               "properties",
+               "entries",
+               "type"
+             ]) == "array"
+
+      assert get_in(repaired, [
+               "tools",
+               Access.at(0),
+               "parameters",
+               "properties",
+               "config",
+               "properties",
+               "entries",
+               "items",
+               "type"
+             ]) == "object"
+    end
+
+    refute get_in(payload, ["tools", Access.at(0), "parameters", "properties", "config"])
+           |> Map.has_key?("type")
+  end
+
+  @tag :responses_coercion
+  test "Chat validates repairable strict schemas without repairing them" do
+    payload = %{
+      "model" => "gpt-fixture-text",
+      "messages" => [%{"role" => "user", "content" => "synthetic input"}],
+      "tools" => [function_tool("chat_no_repair_fixture", repairable_nested_parameters())]
+    }
+
+    assert {:error,
+            %{
+              code: "invalid_function_parameters",
+              param: "tools.0.parameters.properties.config.type"
+            }} = Chat.validate(payload)
+
+    assert {:error,
+            %{
+              code: "invalid_function_parameters",
+              param: "tools.0.parameters.properties.config.type"
+            }} = Chat.coerce(payload)
+
+    refute get_in(payload, [
+             "tools",
+             Access.at(0),
+             "function",
+             "parameters",
+             "properties",
+             "config"
+           ])
+           |> Map.has_key?("type")
+  end
+
+  @tag :responses_coercion
+  test "Responses and Chat do not repair strict structured output schemas" do
+    missing_type_schema = repairable_nested_parameters()
+
+    responses_payload = %{
+      "model" => "gpt-fixture-text",
+      "input" => "synthetic input",
+      "text" => %{"format" => strict_text_format(missing_type_schema)}
+    }
+
+    chat_payload = %{
+      "model" => "gpt-fixture-text",
+      "messages" => [%{"role" => "user", "content" => "synthetic input"}],
+      "response_format" => %{
+        "type" => "json_schema",
+        "json_schema" => %{
+          "name" => "fixture_schema",
+          "strict" => true,
+          "schema" => missing_type_schema
+        }
+      }
+    }
+
+    assert {:error,
+            %{
+              code: "invalid_json_schema",
+              param: "text.format.schema.properties.config.type"
+            }} = Responses.coerce(responses_payload)
+
+    assert {:error,
+            %{
+              code: "invalid_json_schema",
+              param: "text.format.schema.properties.config.type"
+            }} = Chat.coerce(chat_payload)
+
+    refute get_in(missing_type_schema, ["properties", "config"]) |> Map.has_key?("type")
+  end
+
+  @tag :responses_coercion
+  test "Responses and Chat reject invalid explicit structured output types" do
+    invalid_schema =
+      repairable_nested_parameters()
+      |> put_in(["properties", "config", "type"], "future-type")
+
+    responses_payload = %{
+      "model" => "gpt-fixture-text",
+      "input" => "synthetic input",
+      "text" => %{"format" => strict_text_format(invalid_schema)}
+    }
+
+    chat_payload = %{
+      "model" => "gpt-fixture-text",
+      "messages" => [%{"role" => "user", "content" => "synthetic input"}],
+      "response_format" => %{
+        "type" => "json_schema",
+        "json_schema" => %{
+          "name" => "fixture_schema",
+          "strict" => true,
+          "schema" => invalid_schema
+        }
+      }
+    }
+
+    for result <- [Responses.coerce(responses_payload), Chat.coerce(chat_payload)] do
+      assert {:error,
+              %{
+                code: "invalid_json_schema",
+                param: "text.format.schema.properties.config.type"
+              }} = result
+    end
+  end
+
+  @tag :responses_coercion
+  test "Chat surface policy does not leak into request options" do
+    assert {:ok, result} =
+             Chat.coerce(%{
+               "model" => "gpt-fixture-text",
+               "messages" => [%{"role" => "user", "content" => "synthetic input"}]
+             })
+
+    refute Map.has_key?(result.request_options.extra, :surface)
+  end
+
+  @tag :responses_coercion
   test "Responses accepts flat function tools emitted by released OpenAI SDK" do
     payload = %{
       "model" => "gpt-fixture-text",
@@ -3150,7 +3341,15 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
         "model" => "gpt-fixture-text",
         "input" => "synthetic input",
         "tools" => [
-          flat_function_tool("lookup_fixture", %{"type" => "object", "properties" => %{}})
+          flat_function_tool(
+            "lookup_fixture",
+            %{
+              "type" => "object",
+              "additionalProperties" => false,
+              "properties" => %{},
+              "required" => []
+            }
+          )
         ]
       }
 
@@ -3351,7 +3550,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       assert {:error,
               %{
                 code: "invalid_function_parameters",
-                param: "tools.0.tools.0.parameters.type"
+                param: "tools.0.tools.0.parameters.properties.nested.properties.ok"
               }} = Responses.coerce(payload)
     end
 
@@ -4835,6 +5034,29 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   defp translated_chat_tools(tools), do: Enum.map(tools, &translated_chat_tool/1)
+
+  defp repairable_nested_parameters do
+    %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{
+        "config" => %{
+          "additionalProperties" => false,
+          "properties" => %{
+            "entries" => %{
+              "items" => %{
+                "additionalProperties" => false,
+                "properties" => %{"value" => %{"type" => "string"}},
+                "required" => ["value"]
+              }
+            }
+          },
+          "required" => ["entries"]
+        }
+      },
+      "required" => ["config"]
+    }
+  end
 
   defp non_strict_tool_schema do
     %{

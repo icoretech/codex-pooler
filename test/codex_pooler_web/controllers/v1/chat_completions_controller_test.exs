@@ -1959,6 +1959,53 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert Repo.aggregate(Attempt, :count) == 0
   end
 
+  test "POST /v1/chat/completions does not repair missing strict function schema types",
+       %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    payload =
+      Map.put(chat_payload(setup), "tools", [
+        strict_function_tool("missing_type_fixture", strict_schema_with_nested_type(nil))
+      ])
+
+    response = conn |> auth(setup) |> post("/v1/chat/completions", payload)
+
+    assert %{
+             "error" => %{
+               "code" => "invalid_function_parameters",
+               "param" => "tools.0.parameters.properties.config.type"
+             }
+           } = json_response(response, 400)
+
+    assert_no_chat_dispatch!(upstream)
+  end
+
+  test "POST /v1/chat/completions rejects public schema types outside the vocabulary",
+       %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    payload =
+      Map.put(chat_payload(setup), "tools", [
+        strict_function_tool(
+          "invalid_type_fixture",
+          strict_schema_with_nested_type("future-type")
+        )
+      ])
+
+    response = conn |> auth(setup) |> post("/v1/chat/completions", payload)
+
+    assert %{
+             "error" => %{
+               "code" => "invalid_function_parameters",
+               "param" => "tools.0.parameters.properties.config.type"
+             }
+           } = json_response(response, 400)
+
+    assert_no_chat_dispatch!(upstream)
+  end
+
   test "POST /v1/chat/completions rejects custom definitions and choices before dispatch",
        %{conn: conn} do
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
@@ -1985,6 +2032,44 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
       response = conn |> recycle() |> auth(setup) |> post("/v1/chat/completions", payload)
       assert %{"error" => error} = json_response(response, 400)
       assert Map.take(error, Map.keys(expected_error)) == expected_error
+    end)
+
+    assert_no_chat_dispatch!(upstream)
+  end
+
+  test "POST /v1/chat/completions does not repair strict structured output schemas",
+       %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    cases = [
+      {nil, "invalid_json_schema"},
+      {"future-type", "invalid_json_schema"}
+    ]
+
+    Enum.each(cases, fn {nested_type, expected_code} ->
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post(
+          "/v1/chat/completions",
+          Map.put(chat_payload(setup), "response_format", %{
+            "type" => "json_schema",
+            "json_schema" => %{
+              "name" => "fixture_schema",
+              "strict" => true,
+              "schema" => strict_schema_with_nested_type(nested_type)
+            }
+          })
+        )
+
+      assert %{
+               "error" => %{
+                 "code" => ^expected_code,
+                 "param" => "text.format.schema.properties.config.type"
+               }
+             } = json_response(response, 400)
     end)
 
     assert_no_chat_dispatch!(upstream)
@@ -2445,6 +2530,34 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
           "properties" => %{"query" => %{"type" => "string"}}
         }
       }
+    }
+  end
+
+  defp strict_function_tool(name, parameters) do
+    %{
+      "type" => "function",
+      "function" => %{
+        "name" => name,
+        "strict" => true,
+        "parameters" => parameters
+      }
+    }
+  end
+
+  defp strict_schema_with_nested_type(type) do
+    nested = %{
+      "additionalProperties" => false,
+      "properties" => %{"value" => %{"type" => "string"}},
+      "required" => ["value"]
+    }
+
+    nested = if is_nil(type), do: nested, else: Map.put(nested, "type", type)
+
+    %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{"config" => nested},
+      "required" => ["config"]
     }
   end
 
