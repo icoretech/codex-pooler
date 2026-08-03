@@ -1133,6 +1133,21 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     assert [attempt] = Repo.all(Attempt)
     assert attempt.pool_upstream_assignment_id in starved.healthy_assignment_ids
+
+    # The successful turn persists the same top-level canonical_partition
+    # evidence the denial path records, so one request-log query covers both
+    # outcomes.
+    assert [request] = Repo.all(Request)
+
+    assert %{
+             "partition_count" => 2,
+             "selected_count" => 6,
+             "filtered_count" => 2,
+             "routable_selection" => true,
+             "digest_prefix" => digest_prefix
+           } = request.request_metadata["canonical_partition"]
+
+    assert is_binary(digest_prefix) and byte_size(digest_prefix) == 12
   end
 
   @tag :external_issues_229_231

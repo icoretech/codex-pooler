@@ -59,9 +59,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.Context do
         route_state: input.route_state
       })
 
-    case Accounting.accumulate_request_metadata(input.reserved.request, %{
-           "routing" => route_plan.request_metadata
-         }) do
+    case Accounting.accumulate_request_metadata(
+           input.reserved.request,
+           dispatch_request_metadata(route_plan, request_options)
+         ) do
       {:ok, request} ->
         {:ok,
          %__MODULE__{
@@ -84,6 +85,19 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.Context do
           nil,
           reason
         )
+    end
+  end
+
+  # Successful turns persist the same top-level canonical_partition evidence the
+  # denial path records, so one request-log query covers both outcomes. The
+  # summary is present only on surfaces the partition cap applies to and only
+  # when the pool actually has more than one partition; PreDispatch gates both.
+  defp dispatch_request_metadata(route_plan, %RequestOptions{} = request_options) do
+    metadata = %{"routing" => route_plan.request_metadata}
+
+    case request_options.routing.canonical_partition do
+      %{} = summary -> Map.put(metadata, "canonical_partition", summary)
+      _absent -> metadata
     end
   end
 end
