@@ -36,9 +36,10 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSource do
                           default_reasoning_level
                           default_service_tier
                           description
-                          shell_type
                           visibility
                         ]
+
+  @shell_command_types ~w(default local shell_command unified_exec)
 
   @type pricing_buckets :: ModelMetadata.pricing_buckets()
   @type context_window_overrides :: ModelMetadata.context_window_overrides()
@@ -50,7 +51,12 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSource do
   def canonical_source(source) when is_map(source) do
     with {:ok, source} <- canonical_json_map(source) do
       source = Map.drop(source, @forbidden_keys)
-      digest = canonical_digest(Map.drop(source, @digest_excluded_keys))
+
+      digest =
+        source
+        |> Map.drop(@digest_excluded_keys)
+        |> normalize_digest_shell_type()
+        |> canonical_digest()
 
       {:ok, %{digest: digest, source: source}}
     end
@@ -103,6 +109,12 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSource do
 
   defp stringify_keys(value) when is_list(value), do: Enum.map(value, &stringify_keys/1)
   defp stringify_keys(value), do: value
+
+  defp normalize_digest_shell_type(%{"shell_type" => shell_type} = source)
+       when shell_type in @shell_command_types,
+       do: Map.put(source, "shell_type", "shell_command")
+
+  defp normalize_digest_shell_type(source), do: source
 
   defp canonical_digest(source) do
     source

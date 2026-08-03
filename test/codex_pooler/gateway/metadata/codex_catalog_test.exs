@@ -377,8 +377,8 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
     test "keeps the oldest partition when it still has a routable member", context do
       assert [partition] =
                CodexCatalog.select_canonical_sources([context.model], context.candidates,
-                 routable_assignment_ids: fn ->
-                   MapSet.new([context.sibling_id, context.alternate_id])
+                 routable_assignment_ids_by_model_id: fn ->
+                   %{context.model.id => MapSet.new([context.sibling_id, context.alternate_id])}
                  end
                )
 
@@ -390,7 +390,9 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
     test "moves to the next-oldest partition when the oldest has none", context do
       assert [partition] =
                CodexCatalog.select_canonical_sources([context.model], context.candidates,
-                 routable_assignment_ids: fn -> MapSet.new([context.alternate_id]) end
+                 routable_assignment_ids_by_model_id: fn ->
+                   %{context.model.id => MapSet.new([context.alternate_id])}
+                 end
                )
 
       assert partition.assignment_ids == [context.alternate_id]
@@ -402,7 +404,9 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
     test "keeps the oldest partition when nothing is routable anywhere", context do
       assert [partition] =
                CodexCatalog.select_canonical_sources([context.model], context.candidates,
-                 routable_assignment_ids: fn -> MapSet.new() end
+                 routable_assignment_ids_by_model_id: fn ->
+                   %{context.model.id => MapSet.new()}
+                 end
                )
 
       assert partition.assignment_ids == Enum.sort([context.anchor_id, context.sibling_id])
@@ -424,7 +428,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
 
       assert [partition] =
                CodexCatalog.select_canonical_sources([single], context.candidates,
-                 routable_assignment_ids: fn ->
+                 routable_assignment_ids_by_model_id: fn ->
                    flunk("routability must not be resolved for a single partition")
                  end
                )
@@ -436,6 +440,55 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
     end
   end
 
+  test "catalog resolver selects per-model partitions from one lazy map" do
+    {primary_id, alternate_id, _unused_id} = assignment_ids()
+    timestamp = ~U[2026-07-30 08:00:00.000000Z]
+
+    model_a =
+      "gpt-model-a"
+      |> model(%{"source_assignment_models" => %{}})
+      |> put_source_models(%{
+        primary_id => pristine_source("gpt-model-a"),
+        alternate_id => pristine_source("gpt-model-a") |> Map.put("context_window", 111_111)
+      })
+
+    model_b =
+      "gpt-model-b"
+      |> model(%{"source_assignment_models" => %{}})
+      |> put_source_models(%{
+        primary_id => pristine_source("gpt-model-b"),
+        alternate_id => pristine_source("gpt-model-b") |> Map.put("context_window", 222_222)
+      })
+
+    candidates = %{
+      model_a.id => [
+        candidate(primary_id, timestamp),
+        candidate(alternate_id, DateTime.add(timestamp, 1, :second))
+      ],
+      model_b.id => [
+        candidate(primary_id, timestamp),
+        candidate(alternate_id, DateTime.add(timestamp, 1, :second))
+      ]
+    }
+
+    assert [partition_a, partition_b] =
+             CodexCatalog.select_canonical_sources([model_a, model_b], candidates,
+               routable_assignment_ids_by_model_id: fn ->
+                 send(self(), :resolved_routability)
+
+                 %{
+                   model_a.id => MapSet.new([alternate_id]),
+                   model_b.id => MapSet.new([primary_id])
+                 }
+               end
+             )
+
+    assert_received :resolved_routability
+    refute_received :resolved_routability
+    assert partition_a.assignment_ids == [alternate_id]
+    assert partition_b.assignment_ids == [primary_id]
+  end
+
   test "cosmetic source drift joins one partition without moving the served anchor body" do
     anchor_source = pristine_source("gpt-cosmetic")
 
@@ -444,7 +497,6 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
         "default_reasoning_level" => "low",
         "default_service_tier" => "flex",
         "description" => "per-account copy",
-        "shell_type" => "local",
         "visibility" => "internal"
       })
 
@@ -488,6 +540,55 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
 
     assert get_in(drifted_result.body, ["models", Access.at(0), "description"]) ==
              anchor_source["description"]
+  end
+
+  test "shell capability partitions preserve raw payload while isolating disabled" do
+    source = pristine_source("gpt-shell-capability")
+
+    shell_sources = [
+      {"00000000-0000-4000-8000-000000000001", "default"},
+      {"00000000-0000-4000-8000-000000000002", "local"},
+      {"00000000-0000-4000-8000-000000000003", "shell_command"},
+      {"00000000-0000-4000-8000-000000000004", "unified_exec"},
+      {"00000000-0000-4000-8000-000000000005", "disabled"}
+    ]
+
+    model =
+      "gpt-shell-capability"
+      |> model(%{"source_assignment_models" => %{}})
+      |> put_source_models(
+        Map.new(shell_sources, fn {assignment_id, shell_type} ->
+          {assignment_id, Map.put(source, "shell_type", shell_type)}
+        end)
+      )
+
+    assignment_ids = Enum.map(shell_sources, &elem(&1, 0))
+    shell_capable_ids = Enum.take(assignment_ids, 4)
+    disabled_id = List.last(assignment_ids)
+    candidates = partition_candidates(model, assignment_ids)
+    shell_capable_source = Map.put(source, "shell_type", "default")
+    disabled_source = Map.put(source, "shell_type", "disabled")
+
+    assert [
+             %{
+               assignment_ids: ^shell_capable_ids,
+               partition_count: 2,
+               source: ^shell_capable_source
+             }
+           ] = CodexCatalog.select_canonical_sources([model], candidates)
+
+    assert [
+             %{
+               assignment_ids: [^disabled_id],
+               partition_count: 2,
+               source: ^disabled_source
+             }
+           ] =
+             CodexCatalog.select_canonical_sources([model], candidates,
+               routable_assignment_ids_by_model_id: fn ->
+                 %{model.id => MapSet.new([disabled_id])}
+               end
+             )
   end
 
   test "keeps body and ETag stable across matching anchor replacement and non-selected divergence" do

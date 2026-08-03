@@ -5,9 +5,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [
+      auth: 2,
       gateway_setup: 1,
       gateway_setup: 2,
       gateway_upstream: 4,
+      model_quota_window_attrs: 3,
       prime_routing_quota!: 1,
       prime_weekly_exhausted_quota!: 1,
       put_model_source_assignments!: 2,
@@ -413,6 +415,203 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
       )
 
     assert RouteState.codex_models_etag(prepared.route_state) == expected_catalog.etag
+  end
+
+  test "pre-dispatch ETag matches restricted GET for shared assignments", %{conn: conn} do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+
+    alternate =
+      active_upstream_assignment_fixture(setup.pool, %{
+        account_label: "Requested model alternate partition"
+      })
+
+    prime_routing_quota!(alternate.identity)
+
+    requested_source =
+      get_in(setup.model.metadata, ["source_assignment_models", setup.assignment.id])
+
+    requested_model =
+      setup.model
+      |> Ecto.Changeset.change(%{
+        source_assignment_count: 2,
+        metadata: %{
+          setup.model.metadata
+          | "source_assignment_ids" => [setup.assignment.id, alternate.assignment.id],
+            "source_assignment_models" => %{
+              setup.assignment.id => requested_source,
+              alternate.assignment.id => Map.put(requested_source, "context_window", 111_111)
+            }
+        }
+      })
+      |> Repo.update!()
+
+    shared_model_id = "gpt-pre-dispatch-shared-assignment"
+
+    shared_source =
+      requested_source
+      |> Map.put("slug", shared_model_id)
+      |> Map.put("display_name", "Pre-dispatch Shared Assignment")
+      |> Map.put("description", "Pre-dispatch Shared Assignment")
+      |> Map.put("upstream_model_id", "provider-gpt-pre-dispatch-shared-assignment")
+
+    _shared_model =
+      CodexPooler.PoolerFixtures.model_fixture(setup.pool, %{
+        exposed_model_id: shared_model_id,
+        upstream_model_id: "provider-gpt-pre-dispatch-shared-assignment",
+        display_name: "Pre-dispatch Shared Assignment",
+        metadata: %{
+          "source_assignment_ids" => [setup.assignment.id],
+          "source_assignment_models" => %{setup.assignment.id => shared_source}
+        }
+      })
+
+    assert {:ok, [_window]} =
+             QuotaWindows.upsert_quota_windows(setup.identity, [
+               model_quota_window_attrs(requested_model, "primary", %{
+                 used_percent: Decimal.new("100")
+               })
+             ])
+
+    api_key =
+      setup.api_key
+      |> Ecto.Changeset.change(allowed_model_identifiers: [requested_model.exposed_model_id])
+      |> Repo.update!()
+
+    setup = %{setup | api_key: api_key, model: requested_model}
+    {:ok, auth_context} = Access.authenticate_authorization_header(setup.authorization)
+    payload = %{"model" => requested_model.exposed_model_id, "input" => "shared assignment"}
+    options = request_options(auth_context, payload, [])
+
+    context =
+      CandidateEligibility.visible_model_context(
+        setup.pool,
+        requested_model.exposed_model_id
+      )
+
+    {result, queries} =
+      count_repo_sources(fn ->
+        PreDispatch.prepare(
+          auth_context,
+          @endpoint_path,
+          payload,
+          options,
+          requested_model,
+          context
+        )
+      end)
+
+    assert {:ok, prepared} = result
+    assert Map.get(queries, "account_quota_windows", 0) == 1
+
+    models_conn = conn |> auth(setup) |> get("/backend-api/codex/models")
+    assert %{"models" => [%{"slug" => slug}]} = json_response(models_conn, 200)
+    assert slug == requested_model.exposed_model_id
+
+    dispatch_etag = RouteState.codex_models_etag(prepared.route_state)
+    assert [restricted_get_etag] = get_resp_header(models_conn, "etag")
+    assert is_binary(dispatch_etag) and dispatch_etag != ""
+    assert is_binary(restricted_get_etag) and restricted_get_etag != ""
+
+    assert {dispatch_etag,
+            prepared.route_state.visible_model_context.selected_partition_assignment_ids} ==
+             {restricted_get_etag, [alternate.assignment.id]}
+  end
+
+  test "route-scoped quota snapshots cover every downstream requested-model lane" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+
+    policy_visible =
+      active_upstream_assignment_fixture(setup.pool, %{
+        account_label: "Policy-visible ETag assignment"
+      })
+
+    policy_denied =
+      active_upstream_assignment_fixture(setup.pool, %{
+        account_label: "Policy-denied ETag assignment"
+      })
+
+    prime_routing_quota!(policy_visible.identity)
+    prime_routing_quota!(policy_denied.identity)
+
+    for {assignment, exposed_model_id} <- [
+          {policy_visible.assignment, "gpt-policy-visible-etag"},
+          {policy_denied.assignment, "gpt-policy-denied-etag"}
+        ] do
+      CodexPooler.PoolerFixtures.model_fixture(setup.pool, %{
+        exposed_model_id: exposed_model_id,
+        upstream_model_id: "provider-#{exposed_model_id}",
+        display_name: exposed_model_id,
+        metadata: %{"source_assignment_ids" => [assignment.id]}
+      })
+    end
+
+    api_key =
+      setup.api_key
+      |> Ecto.Changeset.change(
+        allowed_model_identifiers: [setup.model.exposed_model_id, "gpt-policy-visible-etag"]
+      )
+      |> Repo.update!()
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    auth = %{auth | api_key: api_key}
+    payload = %{"model" => setup.model.exposed_model_id, "input" => "route snapshot scope"}
+    base_options = request_options(auth, payload, [])
+
+    cases = [
+      {"websocket", RequestOptions.for_websocket(base_options, payload), [setup.identity.id],
+       false},
+      {"/v1/responses",
+       RequestOptions.mark_openai_compatibility_origin(
+         base_options,
+         "/v1/responses",
+         @endpoint_path
+       ), [setup.identity.id], false},
+      {"/v1/chat/completions",
+       RequestOptions.mark_openai_compatibility_origin(
+         base_options,
+         "/v1/chat/completions",
+         @endpoint_path
+       ), [setup.identity.id], false},
+      {"native HTTP JSON", base_options, [setup.identity.id, policy_visible.identity.id], true},
+      {"native HTTP SSE",
+       RequestOptions.put_transport(base_options,
+         transport: "http_sse",
+         route_class: "proxy_stream"
+       ), [setup.identity.id, policy_visible.identity.id], true}
+    ]
+
+    for {lane, options, expected_identity_ids, expects_etag?} <- cases do
+      context =
+        CandidateEligibility.visible_model_context(
+          setup.pool,
+          setup.model.exposed_model_id
+        )
+
+      assert {:ok, prepared} =
+               PreDispatch.prepare(
+                 auth,
+                 @endpoint_path,
+                 payload,
+                 options,
+                 setup.model,
+                 context
+               ),
+             lane
+
+      snapshot_identity_ids =
+        prepared.route_state.quota_window_snapshots
+        |> Map.keys()
+        |> Enum.sort()
+
+      assert snapshot_identity_ids == Enum.sort(expected_identity_ids), lane
+      refute policy_denied.identity.id in snapshot_identity_ids, lane
+
+      if expects_etag? do
+        assert is_binary(RouteState.codex_models_etag(prepared.route_state)), lane
+      else
+        assert RouteState.codex_models_etag(prepared.route_state) == nil, lane
+      end
+    end
   end
 
   test "prepare finds a canonical override for a case-preserving catalog model id" do
@@ -1096,8 +1295,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
         pricing,
         %{},
         prepared.route_state.effective_model_serving_modes,
-        routable_assignment_ids: fn ->
-          PartitionRoutability.routable_assignment_ids(
+        routable_assignment_ids_by_model_id: fn ->
+          PartitionRoutability.routable_assignment_ids_by_model_id(
             context.visible_models,
             context.candidates_by_model_id
           )

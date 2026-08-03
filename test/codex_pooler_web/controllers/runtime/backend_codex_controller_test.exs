@@ -1603,6 +1603,51 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert FakeUpstream.count(upstream) == 0
   end
 
+  test "metadata catalog scopes routability to policy-visible models" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+
+    %{assignment: hidden_assignment} =
+      active_upstream_assignment_fixture(setup.pool, %{
+        account_label: "Policy-hidden multi-partition upstream"
+      })
+
+    source =
+      get_in(setup.model.metadata, ["source_assignment_models", setup.assignment.id])
+      |> Map.put("slug", "gpt-policy-hidden-multi-partition")
+
+    _hidden_model =
+      model_fixture(setup.pool, %{
+        exposed_model_id: "gpt-policy-hidden-multi-partition",
+        upstream_model_id: "provider-gpt-policy-hidden-multi-partition",
+        display_name: "Policy Hidden Multi Partition",
+        source_assignment_count: 2,
+        metadata: %{
+          "source_assignment_ids" => [setup.assignment.id, hidden_assignment.id],
+          "source_assignment_models" => %{
+            setup.assignment.id => source,
+            hidden_assignment.id => Map.put(source, "context_window", 111_111)
+          }
+        }
+      })
+
+    setup.api_key
+    |> Ecto.Changeset.change(allowed_model_identifiers: [setup.model.exposed_model_id])
+    |> Repo.update!()
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    request_options = RequestOptions.build(%{}, "/backend-api/codex/models", %{})
+
+    {result, query_sources} =
+      count_repo_sources(fn ->
+        Metadata.codex_catalog_snapshot(auth, "/backend-api/codex/models", request_options)
+      end)
+
+    assert {:ok, snapshot} = result
+    assert Enum.map(snapshot.body["models"], & &1["slug"]) == [setup.model.exposed_model_id]
+    assert Map.get(query_sources, "account_quota_windows", 0) == 0
+  end
+
   test "GET /backend-api/codex/models logs the highest-plan model source account", %{conn: conn} do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
     setup = gateway_setup(upstream)
@@ -12471,6 +12516,38 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> Repo.update!()
 
     %{setup | model: model}
+  end
+
+  defp count_repo_sources(fun) do
+    parent = self()
+    handler_id = {__MODULE__, System.unique_integer([:positive])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and is_binary(metadata[:source]) do
+            send(parent, {handler_id, metadata.source})
+          end
+        end,
+        nil
+      )
+
+    try do
+      {fun.(), drain_repo_sources(handler_id, %{})}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_repo_sources(handler_id, sources) do
+    receive do
+      {^handler_id, source} ->
+        drain_repo_sources(handler_id, Map.update(sources, source, 1, &(&1 + 1)))
+    after
+      0 -> sources
+    end
   end
 
   defp pristine_catalog_source(slug, marker) do

@@ -16,19 +16,25 @@ defmodule CodexPooler.Gateway.Routing.PartitionRoutability do
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
 
+  @type model_id :: Ecto.UUID.t()
+  @type assignment_id :: Ecto.UUID.t()
   @type candidate :: CandidateEligibility.candidate()
-  @type candidates_by_model_id :: %{optional(Ecto.UUID.t()) => [candidate()]}
+  @type candidates_by_model_id :: %{optional(model_id()) => [candidate()]}
   @type quota_window_snapshots :: %{optional(Ecto.UUID.t()) => [AccountQuotaWindow.t()]}
+  @type routable_assignment_ids_by_model_id :: %{
+          required(model_id()) => MapSet.t(assignment_id())
+        }
 
   @doc """
-  Reads a quota snapshot for every candidate identity, then classifies.
+  Reads one quota snapshot for every unique candidate identity, then classifies
+  each model independently.
 
   Callers that already hold a snapshot covering the same candidates should use
-  `routable_assignment_ids/4` instead of paying for a second read.
+  `routable_assignment_ids_by_model_id/4` instead of paying for a second read.
   """
-  @spec routable_assignment_ids([Model.t()], candidates_by_model_id()) ::
-          MapSet.t(Ecto.UUID.t())
-  def routable_assignment_ids(models, candidates_by_model_id)
+  @spec routable_assignment_ids_by_model_id([Model.t()], candidates_by_model_id()) ::
+          routable_assignment_ids_by_model_id()
+  def routable_assignment_ids_by_model_id(models, candidates_by_model_id)
       when is_list(models) and is_map(candidates_by_model_id) do
     at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
@@ -38,7 +44,7 @@ defmodule CodexPooler.Gateway.Routing.PartitionRoutability do
       |> Enum.map(fn {_assignment, identity} -> identity.id end)
       |> Enum.uniq()
 
-    routable_assignment_ids(
+    routable_assignment_ids_by_model_id(
       models,
       candidates_by_model_id,
       QuotaWindows.list_quota_windows_by_identity_ids(identity_ids, at),
@@ -46,29 +52,34 @@ defmodule CodexPooler.Gateway.Routing.PartitionRoutability do
     )
   end
 
-  @spec routable_assignment_ids(
+  @spec routable_assignment_ids_by_model_id(
           [Model.t()],
           candidates_by_model_id(),
           quota_window_snapshots(),
           DateTime.t()
-        ) :: MapSet.t(Ecto.UUID.t())
-  def routable_assignment_ids(
+        ) :: routable_assignment_ids_by_model_id()
+  def routable_assignment_ids_by_model_id(
         models,
         candidates_by_model_id,
         quota_window_snapshots,
         %DateTime{} = at
       )
       when is_list(models) and is_map(candidates_by_model_id) and is_map(quota_window_snapshots) do
-    for %Model{} = model <- models,
-        {assignment, identity} = candidate <- Map.get(candidates_by_model_id, model.id, []),
-        Quota.quota_routable?(
-          model,
-          candidate,
-          Map.get(quota_window_snapshots, identity.id, []),
-          at
-        ),
-        into: MapSet.new(),
-        do: assignment.id
+    Map.new(models, fn %Model{} = model ->
+      assignment_ids =
+        for {assignment, identity} = candidate <-
+              Map.get(candidates_by_model_id, model.id, []),
+            Quota.quota_routable?(
+              model,
+              candidate,
+              Map.get(quota_window_snapshots, identity.id, []),
+              at
+            ),
+            into: MapSet.new(),
+            do: assignment.id
+
+      {model.id, assignment_ids}
+    end)
   end
 
   defp model_candidates(models, candidates_by_model_id) do

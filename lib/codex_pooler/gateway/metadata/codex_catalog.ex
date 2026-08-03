@@ -30,8 +30,13 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
           required(:routable_selection?) => boolean(),
           required(:source) => map()
         }
-  @type routable_assignment_ids_resolver :: (-> MapSet.t(Ecto.UUID.t()))
-  @type selection_opts :: [routable_assignment_ids: routable_assignment_ids_resolver()]
+  @type routable_assignment_ids_by_model_id :: %{
+          optional(Ecto.UUID.t()) => MapSet.t(Ecto.UUID.t())
+        }
+  @type routable_assignment_ids_by_model_id_resolver :: (-> routable_assignment_ids_by_model_id())
+  @type selection_opts :: [
+          routable_assignment_ids_by_model_id: routable_assignment_ids_by_model_id_resolver()
+        ]
 
   @spec build([Model.t()], normalized_policy()) :: result()
   def build(routable_models, normalized_policy)
@@ -147,10 +152,15 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
           []
       end)
 
-    routable_assignment_ids = resolve_routable_assignment_ids(pairs_by_model, opts)
+    routable_assignment_ids_by_model_id =
+      resolve_routable_assignment_ids_by_model_id(pairs_by_model, opts)
 
     Enum.map(pairs_by_model, fn {model, pairs} ->
-      select_anchored_partition(pairs, model, routable_assignment_ids)
+      select_anchored_partition(
+        pairs,
+        model,
+        Map.get(routable_assignment_ids_by_model_id, model.id)
+      )
     end)
   end
 
@@ -264,11 +274,17 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   # actually has more than one partition. A pool whose accounts all advertise
   # the same source — the overwhelmingly common shape — stays read-free and
   # keeps byte-identical behavior.
-  defp resolve_routable_assignment_ids(pairs_by_model, opts) do
-    resolver = Keyword.get(opts, :routable_assignment_ids)
+  defp resolve_routable_assignment_ids_by_model_id(pairs_by_model, opts) do
+    if Enum.any?(pairs_by_model, &multi_partition?/1) do
+      case Keyword.get(opts, :routable_assignment_ids_by_model_id) do
+        resolver when is_function(resolver, 0) ->
+          resolver.()
 
-    if is_function(resolver, 0) and Enum.any?(pairs_by_model, &multi_partition?/1) do
-      resolver.()
+        _missing_model_keyed_resolver ->
+          %{}
+      end
+    else
+      %{}
     end
   end
 

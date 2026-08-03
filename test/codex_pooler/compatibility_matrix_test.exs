@@ -47,6 +47,24 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                translated_openai_responses: "all_valid_canonical_assignments"
              }
 
+      assert feature.canonical_partition.shell_type == %{
+               equivalent_known_values: ["default", "local", "shell_command", "unified_exec"],
+               digest_value: "shell_command",
+               disabled: "separate_partition",
+               non_collapsing_values: ["unknown", "missing", "malformed"]
+             }
+
+      assert feature.canonical_partition.quota_routing == %{
+               snapshot: "one_shared_candidate_identity_snapshot",
+               classification: "independent_per_model",
+               input: "quota_evidence_only"
+             }
+
+      assert feature.canonical_partition.pinned_continuation == %{
+               valid_canonical_hard_pin: "may_cross_partition",
+               malformed_or_retired_source: "unavailable"
+             }
+
       assert feature.contract =~
                "same policy-visible effective catalog body and deterministic weak ETag"
 
@@ -55,6 +73,9 @@ defmodule CodexPooler.CompatibilityMatrixTest do
 
       assert feature.contract =~
                "translated OpenAI Responses capacity includes all valid canonical assignments"
+
+      assert feature.contract =~ "unknown, missing, or malformed values do not silently collapse"
+      assert feature.contract =~ "classifies it independently per model"
     end
 
     test "pins exact backend Responses catalog header equality and exclusions" do

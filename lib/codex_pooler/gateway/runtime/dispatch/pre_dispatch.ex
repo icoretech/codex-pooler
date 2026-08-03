@@ -101,7 +101,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
            CandidateEligibility.routable_candidates(visible_model_context, model),
          {quota_window_snapshots, quota_snapshot_at} =
            RouteState.load_quota_window_snapshots(
-             quota_snapshot_candidates(visible_model_context, candidate_snapshots)
+             quota_snapshot_candidates(
+               visible_model_context,
+               candidate_snapshots,
+               endpoint,
+               request_options
+             )
            ),
          visible_model_context =
            put_selected_partition_assignment_ids(
@@ -191,19 +196,41 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
     )
   end
 
-  # The dispatch quota snapshot backs three consumers on one read: the
-  # requested model's quota filtering, canonical partition selection for the
-  # routing cap, and — on ETag-eligible endpoints — partition selection inside
-  # the models ETag build, which spans every visible model. Loading the union
-  # keeps all of them on the same observation, so the routing cap and the
-  # served ETag cannot disagree within one dispatch.
-  defp quota_snapshot_candidates(visible_model_context, candidate_snapshots) do
-    visible_model_context
-    |> Map.get(:candidates_by_model_id, %{})
-    |> Map.values()
-    |> List.insert_at(0, candidate_snapshots)
-    |> List.flatten()
+  # Every route snapshots the requested-model candidates consumed by filtering,
+  # refresh, saved-reset, bridge ordering, and dispatch. Native backend HTTP
+  # Responses additionally emits the models ETag, so those lanes extend the
+  # same read to every policy-visible model used to build that ETag.
+  defp quota_snapshot_candidates(
+         visible_model_context,
+         candidate_snapshots,
+         endpoint,
+         %RequestOptions{} = request_options
+       ) do
+    etag_candidates =
+      if codex_models_etag_eligible?(endpoint, request_options) do
+        visible_model_context
+        |> context_policy_visible_models(request_options.routing.api_key_policy)
+        |> Enum.flat_map(fn model ->
+          visible_model_context
+          |> Map.get(:candidates_by_model_id, %{})
+          |> Map.get(model.id, [])
+        end)
+      else
+        []
+      end
+
+    (candidate_snapshots ++ etag_candidates)
+    |> Enum.uniq_by(fn {assignment, identity} -> {assignment.id, identity.id} end)
   end
+
+  defp context_policy_visible_models(visible_model_context, %{} = policy) do
+    visible_model_context
+    |> Map.get(:visible_models, [])
+    |> CandidateEligibility.policy_visible_models(policy)
+  end
+
+  defp context_policy_visible_models(visible_model_context, nil),
+    do: Map.get(visible_model_context, :visible_models, [])
 
   # Runs after policy, payload validation, and candidate hydration so the quota
   # snapshot that feeds partition selection is read once, only for requests that
@@ -219,8 +246,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
     partition =
       [model]
       |> CodexCatalog.select_canonical_sources(candidates_by_model_id,
-        routable_assignment_ids: fn ->
-          PartitionRoutability.routable_assignment_ids(
+        routable_assignment_ids_by_model_id: fn ->
+          PartitionRoutability.routable_assignment_ids_by_model_id(
             [model],
             candidates_by_model_id,
             quota_window_snapshots,
@@ -410,15 +437,15 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
 
       %{etag: etag} =
         CodexCatalog.build_canonical(
-          route_state.visible_models,
+          visible_models,
           candidates_by_model_id,
           policy,
           pricing_buckets,
           context_window_overrides,
           route_state.effective_model_serving_modes,
-          routable_assignment_ids: fn ->
-            PartitionRoutability.routable_assignment_ids(
-              route_state.visible_models,
+          routable_assignment_ids_by_model_id: fn ->
+            PartitionRoutability.routable_assignment_ids_by_model_id(
+              visible_models,
               candidates_by_model_id,
               route_state.quota_window_snapshots,
               route_state.quota_snapshot_at

@@ -85,7 +85,6 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSourceTest do
         "default_reasoning_level" => "low",
         "default_service_tier" => "flex",
         "description" => "Drifted synthetic copy",
-        "shell_type" => "local",
         "visibility" => "internal"
       })
 
@@ -99,9 +98,50 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSourceTest do
     assert canonical_drifted.source["default_reasoning_level"] == "low"
     assert canonical_drifted.source["default_service_tier"] == "flex"
     assert canonical_drifted.source["description"] == "Drifted synthetic copy"
-    assert canonical_drifted.source["shell_type"] == "local"
     assert canonical_drifted.source["visibility"] == "internal"
     refute canonical_drifted.source == canonical_base.source
+  end
+
+  test "canonical shell digest groups feature-equivalent shell values and isolates disabled" do
+    known_shell_types = ~w(default local shell_command unified_exec)
+    unknown_shell_type = "future_shell"
+    non_string_shell_type = %{"unexpected" => true}
+
+    shell_types =
+      known_shell_types ++ ["disabled", unknown_shell_type, non_string_shell_type, :missing]
+
+    canonical_by_shell_type =
+      Map.new(shell_types, fn shell_type ->
+        source =
+          if shell_type == :missing do
+            source_metadata()
+          else
+            Map.put(source_metadata(), "shell_type", shell_type)
+          end
+
+        assert {:ok, canonical} = CanonicalModelSource.canonical_source(source)
+
+        if shell_type == :missing do
+          refute Map.has_key?(canonical.source, "shell_type")
+        else
+          assert canonical.source["shell_type"] == shell_type
+        end
+
+        {shell_type, canonical}
+      end)
+
+    known_digests =
+      Enum.map(known_shell_types, &canonical_by_shell_type[&1].digest)
+
+    assert Enum.uniq(known_digests) == [canonical_by_shell_type["shell_command"].digest]
+
+    isolated_digests =
+      Enum.map(["disabled", unknown_shell_type, non_string_shell_type, :missing], fn shell_type ->
+        canonical_by_shell_type[shell_type].digest
+      end)
+
+    assert Enum.all?(isolated_digests, &(&1 not in known_digests))
+    assert isolated_digests |> MapSet.new() |> MapSet.size() == 4
   end
 
   test "behavioral drift still splits the canonical digest" do

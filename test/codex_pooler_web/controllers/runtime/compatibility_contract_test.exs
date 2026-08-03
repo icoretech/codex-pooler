@@ -302,11 +302,34 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                translated_openai_responses: "all_valid_canonical_assignments"
              }
 
+      assert models_etag.canonical_partition.shell_type == %{
+               equivalent_known_values: ["default", "local", "shell_command", "unified_exec"],
+               digest_value: "shell_command",
+               disabled: "separate_partition",
+               non_collapsing_values: ["unknown", "missing", "malformed"]
+             }
+
+      assert models_etag.canonical_partition.quota_routing == %{
+               snapshot: "one_shared_candidate_identity_snapshot",
+               classification: "independent_per_model",
+               input: "quota_evidence_only"
+             }
+
+      assert models_etag.canonical_partition.pinned_continuation == %{
+               valid_canonical_hard_pin: "may_cross_partition",
+               malformed_or_retired_source: "unavailable"
+             }
+
       assert models_etag.contract =~
                "backend Codex catalog-driven new turns use the selected partition"
 
       assert models_etag.contract =~
                "translated OpenAI Responses capacity includes all valid canonical assignments"
+
+      assert models_etag.contract =~
+               "unknown, missing, or malformed values do not silently collapse"
+
+      assert models_etag.contract =~ "classifies it independently per model"
 
       assert responses_etag.contract =~ "exact authenticated backend models ETag"
       assert responses_etag.contract =~ "never relayed from upstream"

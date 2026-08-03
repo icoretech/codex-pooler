@@ -74,8 +74,8 @@ defmodule CodexPooler.Gateway.Metadata do
           pricing_buckets,
           context_window_overrides,
           effective_model_serving_modes,
-          routable_assignment_ids: fn ->
-            PartitionRoutability.routable_assignment_ids(
+          routable_assignment_ids_by_model_id: fn ->
+            PartitionRoutability.routable_assignment_ids_by_model_id(
               visible_models,
               hydration.candidates_by_model_id
             )
