@@ -738,7 +738,8 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
         custom_case(
           "candidate_custom_#{suffix}",
           %{"type" => "grammar", "syntax" => "lark", "definition" => ~s(start: "issue241")},
-          "issue241"
+          "issue241",
+          {:exact, "issue241"}
         ),
       "function" =>
         function_case("candidate_function_#{suffix}", strict_object_schema(), %{
@@ -1337,7 +1338,8 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
       custom_case(
         "custom_lark_#{suffix}",
         %{"type" => "grammar", "syntax" => "lark", "definition" => ~s(start: "issue241")},
-        "issue241"
+        "issue241",
+        {:exact, "issue241"}
       ),
       function_case("function_object_#{suffix}", repaired_object_schema(), %{
         "goal" => %{"value" => "issue241"}
@@ -1353,14 +1355,16 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
         custom_case(
           "custom_lark_auto_#{suffix}",
           %{"type" => "grammar", "syntax" => "lark", "definition" => ~s(start: "issue241")},
-          "issue241"
+          "issue241",
+          {:exact, "issue241"}
         )
       ),
-      custom_case("custom_text_#{suffix}", %{"type" => "text"}, "issue241-text"),
+      custom_case("custom_text_#{suffix}", %{"type" => "text"}, "issue241-text", :any_string),
       custom_case(
         "custom_regex_#{suffix}",
         %{"type" => "grammar", "syntax" => "regex", "definition" => "^[a-z]{8}$"},
-        "abcdefgh"
+        "abcdefgh",
+        {:matches, ~r/^[a-z]{8}$/}
       ),
       negative_case("malformed_custom_format", %{
         "input" => "issue241",
@@ -1394,18 +1398,33 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     ]
   end
 
-  defp custom_case(name, format, expected_input) do
+  # `hint` is what the prompt and description ask the model to emit; `expectation`
+  # is what the certification is entitled to assert afterwards. They are separate
+  # because a custom tool's `format` decides how much of the output is actually
+  # constrained:
+  #
+  #   * a lark grammar of `start: "issue241"` admits exactly one string, so exact
+  #     equality is a property of the request and holds deterministically;
+  #   * `^[a-z]{8}$` constrains the shape only — any eight lowercase letters
+  #     satisfy it, and which eight the model picks is its own business;
+  #   * an unconstrained text format guarantees nothing about the content at all.
+  #
+  # Asserting an exact literal on the latter two measures the model's
+  # instruction-following, not tool compatibility, and fails for reasons that
+  # have nothing to do with the gateway. The compatibility claim being certified
+  # is that the definition is accepted, forwarded intact, and answered with a
+  # `custom_tool_call` of the requested name — which every case still asserts
+  # strictly via `output_type` and `name`.
+  defp custom_case(name, format, hint, expectation) do
     %{
       label: name,
       accepted?: true,
       name: name,
       output_type: "custom_tool_call",
       payload: %{
-        # The prompt must state the literal the tool is expected to emit.
-        # "Call the required tool." names no value, so a free-text custom tool
-        # is legitimately called with an empty input and the value assertion
-        # fails for a reason that has nothing to do with tool support.
-        "input" => "Call the required tool and emit exactly: #{expected_input}",
+        # The prompt must name the value. "Call the required tool." names none,
+        # so a free-text tool is legitimately called with an empty input.
+        "input" => "Call the required tool and emit exactly: #{hint}",
         "stream" => true,
         "tools" => [
           %{
@@ -1413,19 +1432,34 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
             "name" => name,
             # Codex always describes its custom tools; an undescribed tool gives
             # the model no reason to prefer it.
-            "description" => "Emits exactly #{expected_input}. FREEFORM: do not wrap in JSON.",
+            "description" => "Emits exactly #{hint}. FREEFORM: do not wrap in JSON.",
             "format" => format
           }
         ],
         "tool_choice" => %{"type" => "custom", "name" => name}
       },
-      validate: fn item ->
-        if item["input"] == expected_input,
-          do: :ok,
-          else: {:error, "custom tool input did not match the certified value"}
-      end
+      validate: fn item -> validate_custom_input(item["input"], expectation) end
     }
   end
+
+  defp validate_custom_input(input, {:exact, expected}) when input == expected, do: :ok
+
+  defp validate_custom_input(_input, {:exact, _expected}),
+    do: {:error, "custom tool input did not match the grammar-constrained value"}
+
+  defp validate_custom_input(input, {:matches, pattern}) when is_binary(input) do
+    if Regex.match?(pattern, input),
+      do: :ok,
+      else: {:error, "custom tool input did not satisfy the certified grammar"}
+  end
+
+  defp validate_custom_input(_input, {:matches, _pattern}),
+    do: {:error, "custom tool input was not a string"}
+
+  defp validate_custom_input(input, :any_string) when is_binary(input), do: :ok
+
+  defp validate_custom_input(_input, :any_string),
+    do: {:error, "custom tool input was not a string"}
 
   defp function_case(name, schema, expected_arguments) do
     %{
