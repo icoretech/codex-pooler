@@ -17,6 +17,13 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
   alias CodexPooler.Catalog
   alias CodexPooler.Catalog.{Model, SyncRun}
   alias CodexPooler.Gateway.OpenAICompatibility.Responses.SSE, as: ResponsesSSE
+
+  alias CodexPooler.Gateway.Persistence.{
+    BridgeOwnerLease,
+    BridgeSessionAlias,
+    CodexSession
+  }
+
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
   alias CodexPooler.Pools
   alias CodexPooler.Pools.{ModelServingMode, ModelServingOverride, Pool}
@@ -1204,8 +1211,26 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     end
   end
 
+  # Websocket settlement is not synchronous with the client-visible terminal.
+  # CodexPooler.Gateway.Runtime.Finalization.Websocket.finalize_completed/2 runs
+  # the accounting write (idempotency lock, attempt/request updates, release +
+  # settlement ledger inserts, rollups) only after the owner/relay layer has
+  # already streamed the "response.completed" frame to the downstream websocket
+  # connection — that decoupling is what keeps client-visible delivery from
+  # blocking on bookkeeping. A single sample taken the instant the terminal
+  # frame is decoded can therefore observe the pre-settlement state by a few
+  # tens of milliseconds even on a request that settles correctly (confirmed
+  # 2026-08-03 on run 20260803T171358Z-1f120dd5515f: the settlement ledger
+  # row landed exactly once, on the assigned identity, ~32ms after this
+  # function's single-shot read). The HTTP/SSE lane has no such gap: the
+  # controller cannot signal completion to the client until it returns, and it
+  # calls the same accounting finalize before returning.
+  #
+  # Poll for the settlement to land instead of sampling once. A genuine defect
+  # (missing, duplicated, or misattributed settlement) still fails once the
+  # deadline elapses; only the harness race is eliminated.
   defp validate_success_lifecycle(fixture, profile, transport, before_counts) do
-    after_counts = lifecycle_counts(fixture.pool.id)
+    after_counts = await_settlement_lifecycle(fixture.pool.id, before_counts)
 
     expected_routing = %{
       "model_serving_mode_configured" => profile,
@@ -1239,6 +1264,29 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
       :ok
     else
       _other -> {:error, "accepted request did not settle exactly once on its assigned identity"}
+    end
+  end
+
+  # Bounded so a genuine missing/duplicated/misattributed settlement still
+  # fails validate_success_lifecycle's delta check after the deadline, rather
+  # than hanging or masking a real defect.
+  @settlement_poll_timeout_ms 2_000
+  @settlement_poll_interval_ms 25
+
+  defp await_settlement_lifecycle(pool_id, before_counts) do
+    deadline = System.monotonic_time(:millisecond) + @settlement_poll_timeout_ms
+    await_settlement_lifecycle(pool_id, before_counts, deadline)
+  end
+
+  defp await_settlement_lifecycle(pool_id, before_counts, deadline) do
+    counts = lifecycle_counts(pool_id)
+
+    if counts.settlements - before_counts.settlements >= 1 or
+         System.monotonic_time(:millisecond) >= deadline do
+      counts
+    else
+      Process.sleep(@settlement_poll_interval_ms)
+      await_settlement_lifecycle(pool_id, before_counts, deadline)
     end
   end
 
@@ -1609,8 +1657,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
                         # object's own output array is empty on this provider,
                         # so the tool call lives in the earlier
                         # response.output_item.done frames.
-                        {:halt,
-                         {:ok, current_conn, next_websocket, {terminal, all_frames}}}
+                        {:halt, {:ok, current_conn, next_websocket, {terminal, all_frames}}}
                     end
 
                   {:error, _websocket, reason} ->
@@ -2013,24 +2060,20 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
 
   defp ownership_error(kind), do: {:error, "journaled #{kind} did not belong to a run Pool"}
 
+  # Recovery must be idempotent. A run that failed after archiving its Pool
+  # leaves the override entry in the journal, and the serving-mode writer refuses
+  # archived Pools with `pool_not_found` — so a second cleanup pass would fail
+  # forever on work that is already done. An archived Pool serves nothing, so the
+  # obligation is only that no override row survives.
   defp cleanup_resource(scope, %{
          "kind" => "serving_override",
          "pool_id" => pool_id,
          "model_id" => model_id
-       }) do
-    with {:ok, snapshot} <- Pools.model_serving_modes_snapshot(scope, pool_id),
-         {:ok, result} <-
-           Pools.update_model_serving_modes(
-             scope,
-             pool_id,
-             [%{exposed_model_id: model_id, mode: "auto"}],
-             snapshot.revision
-           ),
-         false <- Enum.any?(result.overrides, &(&1.exposed_model_id == model_id)) do
-      :ok
-    else
-      true -> {:error, "serving override remained after reset"}
-      {:error, reason} -> {:error, context_error(reason)}
+       })
+       when is_binary(pool_id) do
+    case Pools.get_pool(pool_id) do
+      %Pool{status: "archived"} -> archived_pool_override_cleared(pool_id, model_id)
+      _pool -> reset_serving_override(scope, pool_id, model_id)
     end
   end
 
@@ -2093,16 +2136,87 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
   defp cleanup_resource(scope, %{"kind" => "pool", "id" => id}) do
     case Pools.get_pool(id) do
       %Pool{status: "archived"} ->
-        :ok
+        expire_pool_session_continuity(id)
 
       %Pool{} = pool ->
         case Pools.change_pool_status(scope, pool, "archived") do
-          {:ok, %Pool{status: "archived"}} -> :ok
+          {:ok, %Pool{status: "archived"}} -> expire_pool_session_continuity(id)
           {:error, reason} -> {:error, context_error(reason)}
         end
 
       nil ->
         {:error, "journaled Pool was not found"}
+    end
+  end
+
+  # Any websocket case leaves an owner lease and a session alias behind: the
+  # upgrade establishes them before the frame is even read, and the runtime
+  # clears them lazily, only when a later request arrives on the same session
+  # key (SessionContinuity.ExpiredSessions.close_for_key!/3). A certification run
+  # has no later request, so without this the post-stop projection can never be
+  # satisfied by any run that opens a websocket.
+  #
+  # Exact-ID ownership still holds: this only touches rows belonging to the
+  # run's own archived Pool.
+  defp expire_pool_session_continuity(pool_id) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    session_ids =
+      Repo.all(
+        from session in CodexSession, where: session.pool_id == ^pool_id, select: session.id
+      )
+
+    if session_ids != [] do
+      Repo.update_all(
+        from(lease in BridgeOwnerLease,
+          where: lease.codex_session_id in ^session_ids and lease.status == "active"
+        ),
+        set: [status: "expired", released_at: now, updated_at: now]
+      )
+
+      Repo.update_all(
+        from(alias_record in BridgeSessionAlias,
+          where: alias_record.codex_session_id in ^session_ids and alias_record.status == "active"
+        ),
+        set: [status: "expired", updated_at: now]
+      )
+    end
+
+    :ok
+  end
+
+  # Recovery must be idempotent. A run that failed after archiving its Pool
+  # leaves the override entry in the journal, and the serving-mode writer refuses
+  # archived Pools with `pool_not_found` — so a second cleanup pass would fail
+  # forever on work that is already done. An archived Pool serves nothing, so the
+  # remaining obligation is only that no override row survives.
+  defp archived_pool_override_cleared(pool_id, model_id) do
+    remaining? =
+      Repo.exists?(
+        from(override in ModelServingOverride,
+          where: override.pool_id == ^pool_id and override.exposed_model_id == ^model_id
+        )
+      )
+
+    if remaining?,
+      do: {:error, "serving override remained on an archived Pool"},
+      else: :ok
+  end
+
+  defp reset_serving_override(scope, pool_id, model_id) do
+    with {:ok, snapshot} <- Pools.model_serving_modes_snapshot(scope, pool_id),
+         {:ok, result} <-
+           Pools.update_model_serving_modes(
+             scope,
+             pool_id,
+             [%{exposed_model_id: model_id, mode: "auto"}],
+             snapshot.revision
+           ),
+         false <- Enum.any?(result.overrides, &(&1.exposed_model_id == model_id)) do
+      :ok
+    else
+      true -> {:error, "serving override remained after reset"}
+      {:error, reason} -> {:error, context_error(reason)}
     end
   end
 
