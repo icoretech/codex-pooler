@@ -461,6 +461,164 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmokeTest do
              "failed_unexpected_success"
   end
 
+  test "terminal validation covers exact regex and free-text certification cases" do
+    cases = Smoke.certification_cases("20260803T120000Z-abcdef123456")
+
+    lark_case =
+      Enum.find(cases, fn
+        %{
+          output_type: "custom_tool_call",
+          payload: %{
+            "tools" => [
+              %{"format" => %{"type" => "grammar", "syntax" => "lark"}} | _rest
+            ]
+          }
+        } ->
+          true
+
+        _case ->
+          false
+      end)
+
+    regex_case =
+      Enum.find(cases, fn
+        %{
+          output_type: "custom_tool_call",
+          payload: %{
+            "tools" => [
+              %{"format" => %{"type" => "grammar", "syntax" => "regex"}} | _rest
+            ]
+          }
+        } ->
+          true
+
+        _case ->
+          false
+      end)
+
+    text_case =
+      Enum.find(cases, fn
+        %{
+          output_type: "custom_tool_call",
+          payload: %{"tools" => [%{"format" => %{"type" => "text"}} | _rest]}
+        } ->
+          true
+
+        _case ->
+          false
+      end)
+
+    assert :ok =
+             Smoke.validate_terminal_output(
+               %{
+                 "status" => "completed",
+                 "error" => nil,
+                 "output" => [
+                   %{
+                     "type" => "custom_tool_call",
+                     "name" => lark_case.name,
+                     "input" => "issue241"
+                   }
+                 ]
+               },
+               lark_case
+             )
+
+    assert {:error, "custom tool input did not match the grammar-constrained value"} =
+             Smoke.validate_terminal_output(
+               %{
+                 "status" => "completed",
+                 "error" => nil,
+                 "output" => [
+                   %{"type" => "custom_tool_call", "name" => lark_case.name, "input" => "other"}
+                 ]
+               },
+               lark_case
+             )
+
+    assert :ok =
+             Smoke.validate_terminal_output(
+               %{
+                 "status" => "completed",
+                 "error" => nil,
+                 "output" => [
+                   %{
+                     "type" => "custom_tool_call",
+                     "name" => regex_case.name,
+                     "input" => "toolcall"
+                   }
+                 ]
+               },
+               regex_case
+             )
+
+    assert {:error, "custom tool input did not satisfy the certified grammar"} =
+             Smoke.validate_terminal_output(
+               %{
+                 "status" => "completed",
+                 "error" => nil,
+                 "output" => [
+                   %{
+                     "type" => "custom_tool_call",
+                     "name" => regex_case.name,
+                     "input" => "issue241"
+                   }
+                 ]
+               },
+               regex_case
+             )
+
+    assert {:error, "custom tool input was not a string"} =
+             Smoke.validate_terminal_output(
+               %{
+                 "status" => "completed",
+                 "output" => [
+                   %{"type" => "custom_tool_call", "name" => regex_case.name, "input" => 241}
+                 ]
+               },
+               regex_case
+             )
+
+    assert :ok =
+             Smoke.validate_terminal_output(
+               %{
+                 "status" => "completed",
+                 "error" => nil,
+                 "output" => [
+                   %{
+                     "type" => "custom_tool_call",
+                     "name" => text_case.name,
+                     "input" => "arbitrary free text"
+                   }
+                 ]
+               },
+               text_case
+             )
+
+    assert {:error, "custom tool input was not a string"} =
+             Smoke.validate_terminal_output(
+               %{
+                 "status" => "completed",
+                 "output" => [
+                   %{"type" => "custom_tool_call", "name" => text_case.name, "input" => 241}
+                 ]
+               },
+               text_case
+             )
+
+    for output <- [
+          [%{"type" => "function_call", "name" => lark_case.name, "input" => "issue241"}],
+          [%{"type" => "custom_tool_call", "name" => "wrong-name", "input" => "issue241"}],
+          []
+        ] do
+      assert {:error, "provider did not return the required tool call"} =
+               Smoke.validate_terminal_output(
+                 %{"status" => "completed", "output" => output},
+                 lark_case
+               )
+    end
+  end
+
   test "websocket terminals are backfilled from streamed output item frames" do
     call = %{"type" => "custom_tool_call", "name" => "probe", "input" => "issue241"}
 

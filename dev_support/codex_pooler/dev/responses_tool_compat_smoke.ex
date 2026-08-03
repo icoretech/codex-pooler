@@ -1325,7 +1325,9 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     }
   end
 
-  defp certification_cases(run_id) do
+  @doc false
+  @spec certification_cases(String.t()) :: [map()]
+  def certification_cases(run_id) do
     suffix = String.slice(run_id, -12, 12)
 
     # Deterministic cases first. The run halts on the first failure, so leading
