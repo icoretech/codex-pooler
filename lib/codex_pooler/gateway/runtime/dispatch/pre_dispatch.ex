@@ -76,7 +76,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
           visible_model_context
       )
       when is_list(visible_models) do
-    visible_model_context = put_valid_canonical_assignment_ids(visible_model_context, model)
+    visible_models = visible_models(visible_models)
+
+    visible_model_context =
+      visible_model_context
+      |> Map.put(:visible_models, visible_models)
+      |> put_valid_canonical_assignment_ids(model)
 
     has_input_image? = CandidateEligibility.payload_has_input_image?(payload)
 
@@ -226,11 +231,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   defp context_policy_visible_models(visible_model_context, %{} = policy) do
     visible_model_context
     |> Map.get(:visible_models, [])
-    |> CandidateEligibility.policy_visible_models(policy)
+    |> policy_visible_models(policy)
   end
 
   defp context_policy_visible_models(visible_model_context, nil),
-    do: Map.get(visible_model_context, :visible_models, [])
+    do: visible_model_context |> Map.get(:visible_models, []) |> policy_visible_models(nil)
 
   # Runs after policy, payload validation, and candidate hydration so the quota
   # snapshot that feeds partition selection is read once, only for requests that
@@ -427,7 +432,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
     if codex_models_etag_eligible?(endpoint, request_options) do
       policy = request_options.routing.api_key_policy
 
-      visible_models = policy_visible_models(route_state, policy)
+      visible_models = policy_visible_models(route_state.visible_models, policy)
 
       pricing_buckets = CodexPooler.Catalog.pricing_buckets_by_identifier(visible_models)
       context_window_overrides = OperationalSettings.current().model_context_window_overrides
@@ -472,17 +477,17 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
       ]
   end
 
-  defp visible_models(%RouteState{visible_models: models}) do
+  defp visible_models(models) when is_list(models) do
     Enum.filter(models, &match?(%Model{}, &1))
   end
 
-  defp policy_visible_models(%RouteState{} = route_state, %{} = policy) do
-    route_state
+  defp policy_visible_models(models, %{} = policy) when is_list(models) do
+    models
     |> visible_models()
     |> CandidateEligibility.policy_visible_models(policy)
   end
 
-  defp policy_visible_models(%RouteState{} = route_state, nil), do: visible_models(route_state)
+  defp policy_visible_models(models, nil) when is_list(models), do: visible_models(models)
 
   defp resolve_model_serving_modes(
          auth,
@@ -492,10 +497,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
          %RequestOptions{} = request_options
        ) do
     policy_visible_models =
-      case request_options.routing.api_key_policy do
-        %{} = policy -> CandidateEligibility.policy_visible_models(visible_models, policy)
-        nil -> visible_models
-      end
+      policy_visible_models(visible_models, request_options.routing.api_key_policy)
 
     overrides =
       auth.pool.id

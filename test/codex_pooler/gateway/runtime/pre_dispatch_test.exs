@@ -346,6 +346,47 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert RouteState.codex_models_etag(inherited) == expected.etag
   end
 
+  test "prepare uses one typed policy-visible projection for quota snapshots and ETags" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    payload = %{"model" => setup.model.exposed_model_id, "input" => "typed visible models"}
+    options = request_options(auth, payload, [])
+
+    context =
+      CandidateEligibility.visible_model_context(setup.pool, setup.model.exposed_model_id)
+      |> Map.update!(:visible_models, &(&1 ++ [%{unexpected: "context entry"}]))
+
+    assert {:ok, prepared} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, options, setup.model, context)
+
+    route_state = prepared.route_state
+    policy = prepared.request_options.routing.api_key_policy
+    pricing = CodexPooler.Catalog.pricing_buckets_by_identifier([setup.model])
+
+    expected_catalog =
+      CodexCatalog.build_canonical(
+        [setup.model],
+        route_state.visible_model_context.candidates_by_model_id,
+        policy,
+        pricing,
+        %{},
+        route_state.effective_model_serving_modes,
+        routable_assignment_ids_by_model_id: fn ->
+          PartitionRoutability.routable_assignment_ids_by_model_id(
+            [setup.model],
+            route_state.visible_model_context.candidates_by_model_id,
+            route_state.quota_window_snapshots,
+            route_state.quota_snapshot_at
+          )
+        end
+      )
+
+    assert route_state.visible_models == [setup.model]
+    assert Map.keys(route_state.quota_window_snapshots) == [setup.identity.id]
+    assert RouteState.codex_models_etag(route_state) == expected_catalog.etag
+  end
+
   test "prepare resolves the policy-effective model once and reuses its mode map for the catalog ETag" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
