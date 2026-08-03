@@ -18,6 +18,28 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSource do
                     upstream_model
                   ]
 
+  # Presentation and default-hint fields the upstream advertises per account.
+  # They drift freely between accounts on the same plan (phased rollouts,
+  # per-account experiments, copy edits) without changing how a turn executes,
+  # so they are excluded from the partition digest only. Cosmetic drift used to
+  # split a pool into partitions that routing then treats as mutually
+  # incompatible, which can strand every quota-healthy account outside the
+  # selected partition.
+  #
+  # This narrows grouping, never the payload: every field below is still served
+  # verbatim from the selected anchor source.
+  #
+  # Behavioral fields deliberately stay in the digest: `slug`, the
+  # context-window family, `use_responses_lite`, `service_tiers`,
+  # `supported_reasoning_levels`, `capabilities`, and any field not listed here.
+  @digest_excluded_keys ~w[
+                          default_reasoning_level
+                          default_service_tier
+                          description
+                          shell_type
+                          visibility
+                        ]
+
   @type pricing_buckets :: ModelMetadata.pricing_buckets()
   @type context_window_overrides :: ModelMetadata.context_window_overrides()
   @type effective_model_serving_mode :: ModelMetadata.effective_model_serving_mode()
@@ -28,7 +50,9 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSource do
   def canonical_source(source) when is_map(source) do
     with {:ok, source} <- canonical_json_map(source) do
       source = Map.drop(source, @forbidden_keys)
-      {:ok, %{digest: canonical_digest(source), source: source}}
+      digest = canonical_digest(Map.drop(source, @digest_excluded_keys))
+
+      {:ok, %{digest: digest, source: source}}
     end
   end
 

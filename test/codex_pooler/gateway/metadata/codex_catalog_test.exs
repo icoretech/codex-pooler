@@ -325,6 +325,60 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
     assert result.etag == CodexCatalog.etag(result.body)
   end
 
+  test "cosmetic source drift joins one partition without moving the served anchor body" do
+    anchor_source = pristine_source("gpt-cosmetic")
+
+    drifted =
+      Map.merge(anchor_source, %{
+        "default_reasoning_level" => "low",
+        "default_service_tier" => "flex",
+        "description" => "per-account copy",
+        "shell_type" => "local",
+        "visibility" => "internal"
+      })
+
+    {anchor_id, first_id, second_id} = assignment_ids()
+
+    identical_model =
+      "gpt-cosmetic"
+      |> model(%{"source_assignment_models" => %{}})
+      |> put_source_models(%{
+        anchor_id => anchor_source,
+        first_id => anchor_source,
+        second_id => anchor_source
+      })
+
+    drifted_model =
+      "gpt-cosmetic"
+      |> model(%{"source_assignment_models" => %{}})
+      |> put_source_models(%{
+        anchor_id => anchor_source,
+        first_id => drifted,
+        second_id => Map.put(drifted, "description", "another per-account copy")
+      })
+
+    identical_candidates = partition_candidates(identical_model, [anchor_id, first_id, second_id])
+    drifted_candidates = partition_candidates(drifted_model, [anchor_id, first_id, second_id])
+
+    assert [%{assignment_ids: selected_ids, source: source}] =
+             CodexCatalog.select_canonical_sources([drifted_model], drifted_candidates)
+
+    assert selected_ids == Enum.sort([anchor_id, first_id, second_id])
+
+    # The anchor still decides the served payload, so the advertised catalog is
+    # byte-identical to the no-drift control.
+    assert source == anchor_source
+
+    identical = build_canonical([identical_model], identical_candidates)
+    drifted_result = build_canonical([drifted_model], drifted_candidates)
+
+    assert drifted_result.body == identical.body
+    assert drifted_result.etag == identical.etag
+
+    assert get_in(drifted_result.body, ["models", Access.at(0), "description"]) ==
+             anchor_source["description"]
+  end
+
   test "keeps body and ETag stable across matching anchor replacement and non-selected divergence" do
     model = model("gpt-stable", %{"source_assignment_models" => %{}})
     source = pristine_source("gpt-stable")
@@ -512,6 +566,21 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
 
   defp candidate(id, created_at \\ ~U[2026-07-30 08:00:00.000000Z]) do
     {%PoolUpstreamAssignment{id: id, created_at: created_at}, nil}
+  end
+
+  # Oldest assignment first, then one second apart, so the partition anchor is
+  # the head of `assignment_ids`.
+  defp partition_candidates(model, assignment_ids) do
+    base = ~U[2026-07-30 08:00:00.000000Z]
+
+    candidates =
+      assignment_ids
+      |> Enum.with_index()
+      |> Enum.map(fn {assignment_id, index} ->
+        candidate(assignment_id, DateTime.add(base, index, :second))
+      end)
+
+    %{model.id => candidates}
   end
 
   defp put_source_models(model, source_models) do

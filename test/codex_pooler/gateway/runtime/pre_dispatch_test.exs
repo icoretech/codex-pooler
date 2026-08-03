@@ -4,7 +4,16 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
   import CodexPooler.PoolerFixtures, only: [active_upstream_assignment_fixture: 2]
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
-    only: [gateway_setup: 1, start_upstream: 1, strict_text_format_payload: 1]
+    only: [
+      gateway_setup: 1,
+      gateway_setup: 2,
+      gateway_upstream: 4,
+      prime_routing_quota!: 1,
+      prime_weekly_exhausted_quota!: 1,
+      put_model_source_assignments!: 2,
+      start_upstream: 1,
+      strict_text_format_payload: 1
+    ]
 
   alias CodexPooler.Access
   alias CodexPooler.Accounting.{Attempt, Request}
@@ -929,6 +938,100 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert Repo.all(Request) == []
   end
 
+  @tag :external_issues_229_231
+  @tag :partition_quota_starvation
+  test "presentation-only source drift keeps every seat in one backend partition" do
+    starved = starved_anchor_partition_pool!(:cosmetic)
+    {:ok, auth} = Access.authenticate_authorization_header(starved.setup.authorization)
+
+    payload = %{
+      "model" => starved.model.exposed_model_id,
+      "input" => "cosmetic drift turn"
+    }
+
+    assert {:ok, prepared} =
+             PreDispatch.prepare(
+               auth,
+               @endpoint_path,
+               payload,
+               request_options(auth, payload, []),
+               starved.model
+             )
+
+    context = prepared.route_state.visible_model_context
+
+    every_assignment_id =
+      Enum.sort(starved.exhausted_assignment_ids ++ starved.healthy_assignment_ids)
+
+    assert context.valid_canonical_assignment_ids == every_assignment_id
+
+    # Cosmetic hint drift no longer produces a second partition, so the two
+    # weekly-exhausted seats never hide the six healthy ones.
+    assert context.selected_partition_assignment_ids == every_assignment_id
+    assert Enum.sort(candidate_ids(prepared.candidates)) == every_assignment_id
+
+    # Quota is now read for every identity, healthy ones included.
+    assert Enum.sort(Map.keys(prepared.route_state.quota_window_snapshots)) ==
+             Enum.sort(starved.exhausted_identity_ids ++ starved.healthy_identity_ids)
+  end
+
+  @tag :external_issues_229_231
+  @tag :partition_quota_starvation
+  test "presentation-only source drift dispatches the backend turn to a healthy seat" do
+    starved = starved_anchor_partition_pool!(:cosmetic)
+    {:ok, auth} = Access.authenticate_authorization_header(starved.setup.authorization)
+
+    payload = %{
+      "model" => starved.model.exposed_model_id,
+      "input" => "cosmetic drift dispatch"
+    }
+
+    assert {:ok, response} =
+             Gateway.execute(
+               auth,
+               @endpoint_path,
+               payload,
+               RequestOptions.build(%{}, @endpoint_path, payload)
+             )
+
+    assert response.status == 200
+    assert %{"id" => "resp_healthy_partition"} = Jason.decode!(response.raw_body)
+    assert FakeUpstream.count(starved.healthy_upstream) == 1
+    assert FakeUpstream.count(starved.exhausted_upstream) == 0
+
+    assert [attempt] = Repo.all(Attempt)
+    assert attempt.pool_upstream_assignment_id in starved.healthy_assignment_ids
+  end
+
+  @tag :external_issues_229_231
+  @tag :partition_quota_starvation
+  test "the translated Responses surface still serves a behaviorally split pool" do
+    starved = starved_anchor_partition_pool!(:behavioral)
+    {:ok, auth} = Access.authenticate_authorization_header(starved.setup.authorization)
+
+    payload = %{
+      "model" => starved.model.exposed_model_id,
+      "input" => "translated surface on the split pool"
+    }
+
+    options =
+      RequestOptions.build(%{}, @endpoint_path, payload)
+      |> RequestOptions.mark_openai_compatibility_origin(
+        "/v1/responses",
+        "/backend-api/codex/responses"
+      )
+
+    assert {:ok, response} = Gateway.execute(auth, @endpoint_path, payload, options)
+
+    assert response.status == 200
+    assert %{"id" => "resp_healthy_partition"} = Jason.decode!(response.raw_body)
+    assert FakeUpstream.count(starved.healthy_upstream) == 1
+    assert FakeUpstream.count(starved.exhausted_upstream) == 0
+
+    assert [attempt] = Repo.all(Attempt)
+    assert attempt.pool_upstream_assignment_id in starved.healthy_assignment_ids
+  end
+
   test "malformed source metadata fails closed instead of using aggregate metadata" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
@@ -1538,7 +1641,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
           | "source_assignment_ids" => [setup.assignment.id, divergent.assignment.id],
             "source_assignment_models" => %{
               setup.assignment.id => source,
-              divergent.assignment.id => Map.put(source, "description", "divergent schema")
+              # Behavioral divergence: a context window this account cannot
+              # serve is exactly what a canonical partition must keep apart.
+              # Presentation-only drift no longer splits partitions.
+              divergent.assignment.id => Map.put(source, "context_window", 111_111)
             }
         }
       })
@@ -1546,6 +1652,121 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     {model, divergent}
   end
+
+  # Reproduces the customer pool: eight assignments whose per-assignment source
+  # payloads differ, where the oldest assignment (the age-only partition anchor)
+  # sits in the weekly-exhausted group and every quota-healthy seat carries the
+  # divergent payload.
+  #
+  #   :cosmetic                 - drift on presentation hints only
+  #   :behavioral               - drift on the context window
+  #   :behavioral_all_exhausted - behavioral drift, no routable seat anywhere
+  defp starved_anchor_partition_pool!(divergence)
+       when divergence in [:cosmetic, :behavioral, :behavioral_all_exhausted] do
+    exhausted_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_exhausted_anchor_should_not_run",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    healthy_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_healthy_partition",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(exhausted_upstream, quota?: false)
+    anchor_created_at = setup.assignment.created_at
+
+    exhausted_sibling =
+      setup.pool
+      |> gateway_upstream(exhausted_upstream, "upstream-token-anchor-sibling", compact?: false)
+      |> shift_assignment_created_at!(anchor_created_at, 1)
+
+    healthy =
+      Enum.map(1..6, fn index ->
+        setup.pool
+        |> gateway_upstream(healthy_upstream, "upstream-token-healthy-#{index}", compact?: false)
+        |> shift_assignment_created_at!(anchor_created_at, index + 1)
+      end)
+
+    prime_weekly_exhausted_quota!(setup.identity)
+    prime_weekly_exhausted_quota!(exhausted_sibling.identity)
+
+    case divergence do
+      :behavioral_all_exhausted ->
+        Enum.each(healthy, &prime_weekly_exhausted_quota!(&1.identity))
+
+      _routable_alternate ->
+        Enum.each(healthy, &prime_routing_quota!(&1.identity))
+    end
+
+    exhausted_assignments = [setup.assignment, exhausted_sibling.assignment]
+    healthy_assignments = Enum.map(healthy, & &1.assignment)
+
+    model =
+      setup.model
+      |> put_model_source_assignments!(exhausted_assignments ++ healthy_assignments)
+      |> put_divergent_partition_sources!(healthy_assignments, divergence)
+
+    %{
+      setup: %{setup | model: model},
+      model: model,
+      exhausted_upstream: exhausted_upstream,
+      healthy_upstream: healthy_upstream,
+      exhausted_assignment_ids: Enum.map(exhausted_assignments, & &1.id),
+      healthy_assignment_ids: Enum.map(healthy_assignments, & &1.id),
+      exhausted_identity_ids: [setup.identity.id, exhausted_sibling.identity.id],
+      healthy_identity_ids: Enum.map(healthy, & &1.identity.id)
+    }
+  end
+
+  defp shift_assignment_created_at!(upstream, anchor_created_at, seconds) do
+    assignment =
+      upstream.assignment
+      |> Ecto.Changeset.change(created_at: DateTime.add(anchor_created_at, seconds, :second))
+      |> Repo.update!()
+
+    %{upstream | assignment: assignment}
+  end
+
+  defp put_divergent_partition_sources!(model, assignments, divergence) do
+    source_models = Map.fetch!(model.metadata, "source_assignment_models")
+    drift = partition_source_drift(divergence)
+
+    divergent =
+      Enum.reduce(assignments, source_models, fn assignment, acc ->
+        source = Map.fetch!(acc, assignment.id)
+        Map.put(acc, assignment.id, Map.merge(source, drift))
+      end)
+
+    model
+    |> Ecto.Changeset.change(%{
+      metadata: Map.put(model.metadata, "source_assignment_models", divergent)
+    })
+    |> Repo.update!()
+  end
+
+  # The presentation hints below are exactly what an upstream varies between
+  # accounts on the same plan; the context window is a real capability.
+  defp partition_source_drift(:cosmetic) do
+    %{
+      "default_reasoning_level" => "low",
+      "default_service_tier" => "flex",
+      "description" => "per-account copy",
+      "visibility" => "internal"
+    }
+  end
+
+  defp partition_source_drift(behavioral)
+       when behavioral in [:behavioral, :behavioral_all_exhausted],
+       do: %{"context_window" => 111_111}
 
   defp candidate_ids(candidates),
     do: Enum.map(candidates, fn {assignment, _identity} -> assignment.id end)

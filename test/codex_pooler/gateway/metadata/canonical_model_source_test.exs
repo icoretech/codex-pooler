@@ -77,6 +77,57 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSourceTest do
     assert canonical.digest == clean.digest
   end
 
+  test "cosmetic hint drift keeps one canonical digest while staying in the served source" do
+    base = source_metadata()
+
+    drifted =
+      Map.merge(base, %{
+        "default_reasoning_level" => "low",
+        "default_service_tier" => "flex",
+        "description" => "Drifted synthetic copy",
+        "shell_type" => "local",
+        "visibility" => "internal"
+      })
+
+    assert {:ok, canonical_base} = CanonicalModelSource.canonical_source(base)
+    assert {:ok, canonical_drifted} = CanonicalModelSource.canonical_source(drifted)
+
+    assert canonical_drifted.digest == canonical_base.digest
+
+    # Excluding a field from the digest must not remove it from what the
+    # catalog serves: partitioning narrows, the payload stays pristine.
+    assert canonical_drifted.source["default_reasoning_level"] == "low"
+    assert canonical_drifted.source["default_service_tier"] == "flex"
+    assert canonical_drifted.source["description"] == "Drifted synthetic copy"
+    assert canonical_drifted.source["shell_type"] == "local"
+    assert canonical_drifted.source["visibility"] == "internal"
+    refute canonical_drifted.source == canonical_base.source
+  end
+
+  test "behavioral drift still splits the canonical digest" do
+    base = source_metadata()
+    assert {:ok, canonical_base} = CanonicalModelSource.canonical_source(base)
+
+    behavioral_drift = [
+      {"slug", "gpt-schema-fixture-successor"},
+      {"use_responses_lite", true},
+      {"context_window", 400_000},
+      {"max_context_window", 400_000},
+      {"auto_compact_token_limit", 300_000},
+      {"supported_reasoning_levels", []},
+      {"service_tiers", []},
+      {"multi_agent_version", "v3"},
+      {"capabilities", %{"image_input" => false}}
+    ]
+
+    for {key, value} <- behavioral_drift do
+      assert {:ok, drifted} =
+               CanonicalModelSource.canonical_source(Map.put(base, key, value))
+
+      refute drifted.digest == canonical_base.digest
+    end
+  end
+
   test "canonical source rejects atom and string collisions before provenance removal" do
     source = %{
       :source_assignment_ids => ["atom-value"],

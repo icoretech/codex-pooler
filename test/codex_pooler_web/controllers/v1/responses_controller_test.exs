@@ -8733,9 +8733,13 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     alternate_source =
       if Keyword.fetch!(opts, :divergent?) do
+        # The reported pool diverged on presentation hints, which no longer
+        # split a canonical partition. Keep them here as the realistic shape,
+        # and add the behavioral field that does still split.
         selected_source
         |> Map.put("default_reasoning_level", "high")
         |> Map.put("default_service_tier", "priority")
+        |> Map.put("context_window", 111_111)
       else
         selected_source
       end

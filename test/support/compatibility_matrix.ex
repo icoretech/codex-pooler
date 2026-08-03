@@ -70,7 +70,14 @@ defmodule CodexPooler.CompatibilityMatrix do
       fixture: :backend_models_etag,
       canonical_partition: %{
         source: "assignment_scoped_pristine_source_metadata",
-        identity: "canonical_source_digest_after_provenance_removal",
+        identity: "canonical_source_digest_after_provenance_and_presentation_hint_removal",
+        digest_excluded_hints: [
+          "default_reasoning_level",
+          "default_service_tier",
+          "description",
+          "shell_type",
+          "visibility"
+        ],
         anchor_order: ["created_at", "assignment_id"],
         selection: "partition_containing_minimum_anchor",
         api_key_policy_stage: "post_selection_admission_and_projection",
@@ -90,7 +97,7 @@ defmodule CodexPooler.CompatibilityMatrix do
         }
       },
       contract:
-        "backend model aliases return the same policy-visible effective catalog body and deterministic weak ETag from the canonical pristine-source partition whose anchor is the minimum created_at plus assignment id; API-key policy decides admission and projection only after canonical selection and never chooses or rewrites the partition; backend Codex catalog-driven new turns use the selected partition, while translated OpenAI Responses capacity includes all valid canonical assignments after concrete request compatibility; valid canonical hard pins may continue on their pinned partition; selected-partition exhaustion and malformed-source hard pins fail before accounting or upstream work; cache coherence across processes or replicas is eventual after a successful Responses token is observed"
+        "backend model aliases return the same policy-visible effective catalog body and deterministic weak ETag from the canonical pristine-source partition whose anchor is the minimum created_at plus assignment id; presentation hints (default_reasoning_level, default_service_tier, description, shell_type, visibility) are excluded from the partition digest but still served verbatim from the selected anchor source; API-key policy decides admission and projection only after canonical selection and never chooses or rewrites the partition; backend Codex catalog-driven new turns use the selected partition, while translated OpenAI Responses capacity includes all valid canonical assignments after concrete request compatibility; valid canonical hard pins may continue on their pinned partition; selected-partition exhaustion and malformed-source hard pins fail before accounting or upstream work; cache coherence across processes or replicas is eventual after a successful Responses token is observed"
     },
     %{
       slug: :backend_responses_etag,
