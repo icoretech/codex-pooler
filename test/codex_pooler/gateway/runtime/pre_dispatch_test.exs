@@ -24,6 +24,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Routing.CandidateEligibility
+  alias CodexPooler.Gateway.Routing.PartitionRoutability
   alias CodexPooler.Gateway.Runtime.Dispatch.PreDispatch
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Pools
@@ -1045,6 +1046,65 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
              "filtered_count" => 2,
              "routable_selection" => true
            } = prepared.request_options.routing.canonical_partition
+  end
+
+  @tag :partition_quota_starvation
+  test "multi-partition backend turns read quota once for the cap and the models etag" do
+    starved = starved_anchor_partition_pool!(:behavioral)
+    {:ok, auth} = Access.authenticate_authorization_header(starved.setup.authorization)
+
+    payload = %{
+      "model" => starved.model.exposed_model_id,
+      "input" => "single snapshot etag turn"
+    }
+
+    context =
+      CandidateEligibility.visible_model_context(
+        starved.setup.pool,
+        starved.model.exposed_model_id
+      )
+
+    {result, queries} =
+      count_repo_sources(fn ->
+        PreDispatch.prepare(
+          auth,
+          @endpoint_path,
+          payload,
+          request_options(auth, payload, []),
+          starved.model,
+          context
+        )
+      end)
+
+    assert {:ok, prepared} = result
+
+    assert prepared.route_state.visible_model_context.selected_partition_assignment_ids ==
+             Enum.sort(starved.healthy_assignment_ids)
+
+    # One quota read backs the routing cap and the models ETag build; the two
+    # selections resolve from the same observation by construction.
+    assert Map.get(queries, "account_quota_windows", 0) == 1
+
+    policy = prepared.request_options.routing.api_key_policy
+    pricing = CodexPooler.Catalog.pricing_buckets_by_identifier(context.visible_models)
+
+    expected_catalog =
+      CodexCatalog.build_canonical(
+        context.visible_models,
+        context.candidates_by_model_id,
+        policy,
+        pricing,
+        %{},
+        prepared.route_state.effective_model_serving_modes,
+        routable_assignment_ids: fn ->
+          PartitionRoutability.routable_assignment_ids(
+            context.visible_models,
+            context.candidates_by_model_id
+          )
+        end
+      )
+
+    assert RouteState.codex_models_etag(prepared.route_state) == expected_catalog.etag
   end
 
   @tag :external_issues_229_231

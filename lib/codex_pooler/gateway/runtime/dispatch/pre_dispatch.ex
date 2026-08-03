@@ -100,7 +100,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
          {:ok, candidate_snapshots} <-
            CandidateEligibility.routable_candidates(visible_model_context, model),
          {quota_window_snapshots, quota_snapshot_at} =
-           RouteState.load_quota_window_snapshots(candidate_snapshots),
+           RouteState.load_quota_window_snapshots(
+             quota_snapshot_candidates(visible_model_context, candidate_snapshots)
+           ),
          visible_model_context =
            put_selected_partition_assignment_ids(
              visible_model_context,
@@ -187,6 +189,20 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
       :valid_canonical_assignment_ids,
       CodexCatalog.valid_canonical_assignment_ids(model, candidates)
     )
+  end
+
+  # The dispatch quota snapshot backs three consumers on one read: the
+  # requested model's quota filtering, canonical partition selection for the
+  # routing cap, and — on ETag-eligible endpoints — partition selection inside
+  # the models ETag build, which spans every visible model. Loading the union
+  # keeps all of them on the same observation, so the routing cap and the
+  # served ETag cannot disagree within one dispatch.
+  defp quota_snapshot_candidates(visible_model_context, candidate_snapshots) do
+    visible_model_context
+    |> Map.get(:candidates_by_model_id, %{})
+    |> Map.values()
+    |> List.insert_at(0, candidate_snapshots)
+    |> List.flatten()
   end
 
   # Runs after policy, payload validation, and candidate hydration so the quota
@@ -403,7 +419,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
           routable_assignment_ids: fn ->
             PartitionRoutability.routable_assignment_ids(
               route_state.visible_models,
-              candidates_by_model_id
+              candidates_by_model_id,
+              route_state.quota_window_snapshots,
+              route_state.quota_snapshot_at
             )
           end
         )
