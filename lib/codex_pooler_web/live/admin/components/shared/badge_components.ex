@@ -4,6 +4,9 @@ defmodule CodexPoolerWeb.Admin.BadgeComponents do
   """
   use CodexPoolerWeb, :html
 
+  # Keys cover both the raw `chatgpt_plan_type` claim values (underscored, kept
+  # in plan_label) and their slugified plan_family forms (dashed). The raw
+  # value set tracks the Codex reference `KnownPlan` enum.
   @canonical_plan_labels %{
     "business" => "Business",
     "chatgpt plus" => "ChatGPT Plus",
@@ -11,11 +14,23 @@ defmodule CodexPoolerWeb.Admin.BadgeComponents do
     "chatgpt team" => "ChatGPT Team",
     "edu" => "Edu",
     "education" => "Education",
+    "ent26" => "Enterprise",
     "enterprise" => "Enterprise",
+    "enterprise-cbp-automation" => "Enterprise (Automation)",
+    "enterprise_cbp_automation" => "Enterprise (Automation)",
+    "enterprise-cbp-usage-based" => "Enterprise CBP Usage Based",
+    "enterprise_cbp_usage_based" => "Enterprise CBP Usage Based",
     "free" => "Free",
     "free plan" => "Free",
+    "go" => "Go",
+    "hc" => "Enterprise",
     "plus" => "Plus",
     "pro" => "Pro",
+    "prolite" => "Pro Lite",
+    "self-serve-business-prolite" => "Self Serve Business ProLite",
+    "self_serve_business_prolite" => "Self Serve Business ProLite",
+    "self-serve-business-usage-based" => "Self Serve Business Usage Based",
+    "self_serve_business_usage_based" => "Self Serve Business Usage Based",
     "team" => "Team"
   }
 
@@ -211,12 +226,41 @@ defmodule CodexPoolerWeb.Admin.BadgeComponents do
     normalized = plan_label |> String.downcase() |> String.trim()
 
     cond do
-      normalized in ["free", "free plan"] -> :free
-      normalized in ["pro", "plus", "chatgpt pro", "chatgpt plus"] -> :pro
-      normalized in ["team", "business", "chatgpt team"] -> :team
-      normalized in ["enterprise", "edu", "education"] -> :enterprise
-      normalized == "" -> :unknown
-      true -> {:generated, normalized}
+      normalized in ["free", "free plan"] ->
+        :free
+
+      normalized in ["go", "pro", "plus", "prolite", "pro lite", "chatgpt pro", "chatgpt plus"] ->
+        :pro
+
+      normalized in [
+        "team",
+        "business",
+        "chatgpt team",
+        "self-serve-business-prolite",
+        "self_serve_business_prolite",
+        "self-serve-business-usage-based",
+        "self_serve_business_usage_based"
+      ] ->
+        :team
+
+      normalized in [
+        "enterprise",
+        "edu",
+        "education",
+        "ent26",
+        "hc",
+        "enterprise-cbp-automation",
+        "enterprise_cbp_automation",
+        "enterprise-cbp-usage-based",
+        "enterprise_cbp_usage_based"
+      ] ->
+        :enterprise
+
+      normalized == "" ->
+        :unknown
+
+      true ->
+        {:generated, normalized}
     end
   end
 
