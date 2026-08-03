@@ -250,13 +250,19 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
     }
   end
 
+  # Only the surfaces that are actually capped to one partition carry the
+  # evidence. The translated Responses surface starts from every valid canonical
+  # assignment, so reporting seats as filtered there would be a lie.
   defp put_canonical_partition_metadata(
-         %RequestOptions{} = request_options,
+         %RequestOptions{openai_compatibility: compatibility} = request_options,
          visible_model_context
        ) do
-    case Map.get(visible_model_context, :canonical_partition_summary) do
-      %{} = summary -> RequestOptions.put_routing(request_options, canonical_partition: summary)
-      nil -> request_options
+    summary = Map.get(visible_model_context, :canonical_partition_summary)
+
+    if is_map(summary) and not OpenAICompatibility.translated_responses_surface?(compatibility) do
+      RequestOptions.put_routing(request_options, canonical_partition: summary)
+    else
+      request_options
     end
   end
 

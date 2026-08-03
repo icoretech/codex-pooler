@@ -1152,6 +1152,47 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert attempt.pool_upstream_assignment_id in starved.healthy_assignment_ids
   end
 
+  @tag :external_issues_229_231
+  @tag :partition_quota_starvation
+  test "the translated Responses surface records no partition filtering evidence" do
+    starved = starved_anchor_partition_pool!(:behavioral)
+    {:ok, auth} = Access.authenticate_authorization_header(starved.setup.authorization)
+
+    payload = %{
+      "model" => starved.model.exposed_model_id,
+      "input" => "translated surface partition evidence"
+    }
+
+    options =
+      auth
+      |> request_options(payload, [])
+      |> RequestOptions.mark_openai_compatibility_origin(
+        "/v1/responses",
+        "/backend-api/codex/responses"
+      )
+
+    assert {:ok, translated} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, options, starved.model)
+
+    # That surface is never capped to one partition, so reporting held-back
+    # seats would misrepresent what happened.
+    assert translated.request_options.routing.canonical_partition == nil
+
+    assert Enum.sort(candidate_ids(translated.candidates)) ==
+             Enum.sort(starved.exhausted_assignment_ids ++ starved.healthy_assignment_ids)
+
+    assert {:ok, backend} =
+             PreDispatch.prepare(
+               auth,
+               @endpoint_path,
+               payload,
+               request_options(auth, payload, []),
+               starved.model
+             )
+
+    assert %{"filtered_count" => 2} = backend.request_options.routing.canonical_partition
+  end
+
   test "malformed source metadata fails closed instead of using aggregate metadata" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
