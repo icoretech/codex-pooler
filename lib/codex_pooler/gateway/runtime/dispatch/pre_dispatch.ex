@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   alias CodexPooler.Gateway.Metadata.CodexCatalog
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.InputShape
+  alias CodexPooler.Gateway.Payloads.PayloadNormalizer
   alias CodexPooler.Gateway.Payloads.ReasoningEffort
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.OpenAICompatibility
@@ -95,6 +96,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
              visible_models,
              request_options
            ),
+         :ok <- PayloadNormalizer.validate(payload, request_options),
          {:ok, candidate_snapshots} <-
            CandidateEligibility.routable_candidates(visible_model_context, model),
          route_state =

@@ -325,6 +325,54 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     end
   end
 
+  @tag :model_serving_modes
+  test "backend websocket rejects a Lite typed tool choice before upstream dispatch" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_unexpected"}))
+    setup = gateway_setup(upstream)
+    _revision = set_model_serving_mode!(model_serving_scope(), setup, "lite")
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref, _response_headers} =
+      public_websocket_connect_with_headers!(port, setup, "", "/backend-api/codex/responses")
+
+    try do
+      payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic Lite typed-choice websocket request",
+          "tools" => [%{"type" => "custom", "name" => "typed_choice_fixture"}],
+          "tool_choice" => %{"type" => "custom", "name" => "typed_choice_fixture"}
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {_conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{
+               "type" => "error",
+               "status" => 400,
+               "error" => %{
+                 "code" => "unsupported_parameter",
+                 "param" => "tool_choice"
+               }
+             } = Jason.decode!(frame)
+    after
+      Mint.HTTP.close(conn)
+    end
+
+    assert FakeUpstream.count(upstream) == 0
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "rejected"
+    assert request.last_error_code == "unsupported_parameter"
+    assert request.request_metadata["gateway_denial"]["param"] == "tool_choice"
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry, where: entry.request_id == ^request.id),
+             :count
+           ) == 0
+  end
+
   for {route_label, path, accounting_endpoint, catalog_etag?} <-
         @model_serving_websocket_routes do
     test "#{path} keeps one serving mode per turn and observes a Pool edit on the next turn" do

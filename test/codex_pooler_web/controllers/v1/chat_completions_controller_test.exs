@@ -322,6 +322,50 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     end
   end
 
+  # The Lite typed-choice guard is driven by the model's serving mode, not by the
+  # endpoint, and Chat translates a named-function choice into the same map form
+  # that Responses sends. A Chat SDK client forcing a tool therefore meets the
+  # same pre-dispatch rejection on a Lite-served model, with no upstream call and
+  # no accounting side effects.
+  @tag :issue_241
+  test "public Chat rejects a named function choice on a Lite-served model before dispatch", %{
+    conn: conn
+  } do
+    upstream = start_upstream(public_chat_mode_matrix_upstream())
+    setup = gateway_setup(upstream)
+
+    put_chat_model_serving_mode!(setup, "lite")
+
+    payload =
+      chat_payload(setup)
+      |> Map.put("tools", [
+        %{
+          "type" => "function",
+          "function" => %{
+            "name" => "issue241_chat_tool",
+            "parameters" => %{"type" => "object", "properties" => %{}}
+          }
+        }
+      ])
+      |> Map.put("tool_choice", %{
+        "type" => "function",
+        "function" => %{"name" => "issue241_chat_tool"}
+      })
+
+    response =
+      conn
+      |> recycle()
+      |> auth(setup)
+      |> post("/v1/chat/completions", payload)
+
+    assert %{"error" => error} = json_response(response, 400)
+    assert error["code"] == "unsupported_parameter"
+    assert error["param"] == "tool_choice"
+
+    assert FakeUpstream.requests(upstream) == [],
+           "a rejected Lite typed choice must not reach the upstream"
+  end
+
   @tag :prompt_cache_controls
   test "POST /v1/chat/completions preserves prompt cache controls", %{conn: conn} do
     upstream =

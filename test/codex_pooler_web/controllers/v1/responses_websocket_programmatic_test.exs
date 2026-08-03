@@ -28,6 +28,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
   }
 
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
+  alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
   alias CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
@@ -308,6 +309,77 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       assert captured.json["tool_choice"] == tool_choice
 
       assert_successful_websocket_lifecycle!(setup)
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "GET /v1/responses websocket rejects a Lite named custom choice before dispatch" do
+    upstream = start_upstream(completed_websocket_response("should_not_dispatch_lite_choice"))
+    setup = gateway_setup(upstream)
+    put_public_model_serving_mode!(setup, "lite")
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    custom_tool = %{
+      "type" => "custom",
+      "name" => "lite_websocket_choice_fixture",
+      "description" => "Synthetic Lite websocket choice fixture",
+      "format" => %{
+        "type" => "grammar",
+        "definition" => ~s(start: "issue241"),
+        "syntax" => "lark"
+      }
+    }
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "lite-custom-choice-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      post_upgrade_baseline = lifecycle_counts(upstream)
+
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic Lite custom websocket request",
+          "tools" => [custom_tool],
+          "tool_choice" => %{"type" => "custom", "name" => custom_tool["name"]}
+        })
+
+      {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{
+               "type" => "error",
+               "status" => 400,
+               "error" => %{
+                 "code" => "unsupported_parameter",
+                 "param" => "tool_choice"
+               }
+             } = Jason.decode!(frame)
+
+      assert FakeUpstream.count(upstream) == 0
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.status == "rejected"
+      assert request.last_error_code == "unsupported_parameter"
+      assert request.request_metadata["gateway_denial"]["param"] == "tool_choice"
+      assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
+
+      assert Repo.aggregate(
+               from(entry in LedgerEntry, where: entry.request_id == ^request.id),
+               :count
+             ) == 0
+
+      assert_lifecycle_delta!(post_upgrade_baseline, lifecycle_counts(upstream), %{
+        upstream_requests: 0,
+        requests: 1,
+        attempts: 0,
+        ledger_entries: 0
+      })
+
       {conn, websocket}
     after
       Mint.HTTP.close(conn)
@@ -695,6 +767,18 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       ],
       done: false
     )
+  end
+
+  defp put_public_model_serving_mode!(setup, mode) do
+    timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    Repo.insert!(%ModelServingOverride{
+      pool_id: setup.pool.id,
+      exposed_model_id: setup.model.exposed_model_id,
+      mode: mode,
+      created_at: timestamp,
+      updated_at: timestamp
+    })
   end
 
   defp assert_successful_websocket_lifecycle!(setup) do

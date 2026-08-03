@@ -173,7 +173,20 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert fixture.required_keys == ["type", "name"]
       assert fixture.allowed_callers == ["direct", "programmatic"]
       assert fixture.allowed_callers_null == true
-      assert fixture.typed_choice == %{exact_keys: ["type", "name"], resolves_same_kind: true}
+
+      assert fixture.typed_choice == %{
+               exact_keys: ["type", "name"],
+               resolves_same_kind: true,
+               full_mode: "preserved",
+               lite_mode: "rejected_unsupported_parameter_before_dispatch",
+               lite_rejection_scope: "any_map_shaped_tool_choice",
+               lite_rejection_lanes: [
+                 "direct_public_responses",
+                 "chat_completions",
+                 "backend_codex"
+               ]
+             }
+
       assert fixture.custom_replay_contract == "separate_input_item_shape"
       assert fixture.chat_supported == false
       assert fixture.broad_openai_tool_parity == false

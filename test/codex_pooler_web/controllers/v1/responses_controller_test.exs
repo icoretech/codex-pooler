@@ -2296,6 +2296,54 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   @tag :issue_241
+  test "POST /v1/responses rejects a Lite named custom choice before dispatch", %{conn: conn} do
+    upstream = start_upstream(issue_241_completed_response("should_not_dispatch_lite_choice"))
+    setup = gateway_setup(upstream)
+    put_public_model_serving_mode!(setup, "lite")
+
+    custom_tool = %{
+      "type" => "custom",
+      "name" => "lite_custom_choice_fixture",
+      "description" => "Synthetic Lite choice fixture",
+      "format" => %{
+        "type" => "grammar",
+        "definition" => ~s(start: "issue241"),
+        "syntax" => "lark"
+      }
+    }
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic Lite custom choice request",
+        "tools" => [custom_tool],
+        "tool_choice" => %{"type" => "custom", "name" => custom_tool["name"]}
+      })
+
+    assert %{
+             "error" => %{
+               "code" => "unsupported_parameter",
+               "message" => "Unsupported parameter: tool_choice",
+               "param" => "tool_choice"
+             }
+           } = json_response(response, 400)
+
+    assert FakeUpstream.count(upstream) == 0
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "rejected"
+    assert request.last_error_code == "unsupported_parameter"
+    assert request.request_metadata["gateway_denial"]["param"] == "tool_choice"
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry, where: entry.request_id == ^request.id),
+             :count
+           ) == 0
+  end
+
+  @tag :issue_241
   test "POST /v1/responses forwards only direct nested strict schema type repairs", %{conn: conn} do
     upstream = start_upstream(issue_241_completed_response("resp_v1_repaired_schema"))
     setup = gateway_setup(upstream)

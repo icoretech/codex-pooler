@@ -538,7 +538,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :responses_executable_custom_tools,
       contract:
-        "direct public Responses HTTP and websocket response.create accept executable custom tools with an exact nonblank name, optional description and defer_loading, nullable direct/programmatic allowed_callers, and omitted, text, lark-grammar, or regex-grammar input format; an exact typed custom choice resolves only a declared custom tool of the same name and kind; executable names are collision-free across flat functions, namespace children, and custom tools; Chat custom definitions and choices remain unsupported, custom replay is a separate input-item contract, provider execution availability depends on the selected model and upstream account, and no broad OpenAI tool parity is claimed"
+        "direct public Responses HTTP and websocket response.create accept executable custom tools with an exact nonblank name, optional description and defer_loading, nullable direct/programmatic allowed_callers, and omitted, text, lark-grammar, or regex-grammar input format; an exact typed custom choice resolves only a declared custom tool of the same name and kind, is preserved in Full mode, and is rejected before upstream dispatch in Lite mode with unsupported_parameter for tool_choice; that Lite rejection is serving-mode driven and covers any map-shaped tool_choice on any lane dispatching to backend Responses, including translated Chat named-function choices, while string choices such as auto remain accepted in both modes; executable names are collision-free across flat functions, namespace children, and custom tools; Chat custom definitions and choices remain unsupported, custom replay is a separate input-item contract, provider execution availability depends on the selected model and upstream account, and no broad OpenAI tool parity is claimed"
     },
     %{
       slug: :function_tool_schema_lowering,
@@ -1374,7 +1374,19 @@ defmodule CodexPooler.CompatibilityMatrix do
       allowed_callers: ["direct", "programmatic"],
       allowed_callers_null: true,
       formats: ["omitted", "text", "grammar_lark", "grammar_regex"],
-      typed_choice: %{exact_keys: ["type", "name"], resolves_same_kind: true},
+      typed_choice: %{
+        exact_keys: ["type", "name"],
+        resolves_same_kind: true,
+        full_mode: "preserved",
+        lite_mode: "rejected_unsupported_parameter_before_dispatch",
+        # The Lite rejection is serving-mode driven and applies to ANY map-shaped
+        # tool_choice on any gateway lane that dispatches to the backend
+        # Responses endpoint, not only to the typed custom choice on direct
+        # public Responses. Chat named-function choices translate to the same
+        # map form and are rejected identically on a Lite-served model.
+        lite_rejection_scope: "any_map_shaped_tool_choice",
+        lite_rejection_lanes: ["direct_public_responses", "chat_completions", "backend_codex"]
+      },
       executable_name_collision_scope: [
         "flat_function",
         "namespace_nested_function",

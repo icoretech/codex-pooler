@@ -1499,6 +1499,81 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       end
     end
 
+    test "preserves typed custom tool choice for full, rejects it for Lite, and keeps Lite scalar choices" do
+      endpoint = "/backend-api/codex/responses"
+      custom_tool = %{"type" => "custom", "name" => "custom_choice_fixture"}
+      tool_choice = %{"type" => "custom", "name" => custom_tool["name"]}
+
+      payload = %{
+        "model" => "gpt-5.6-terra",
+        "input" => [],
+        "tools" => [custom_tool],
+        "tool_choice" => tool_choice
+      }
+
+      full_http_options = RequestOptions.build(serving_mode_opts("full"), endpoint, payload)
+
+      for request_options <- [
+            full_http_options,
+            RequestOptions.for_websocket(full_http_options, payload)
+          ] do
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(
+                   payload,
+                   %Model{upstream_model_id: "provider-model"},
+                   endpoint,
+                   request_options
+                 )
+
+        upstream = Jason.decode!(encoded)
+        assert upstream["tools"] == [custom_tool]
+        assert upstream["tool_choice"] == tool_choice
+        refute Enum.any?(upstream["input"], &(&1["type"] == "additional_tools"))
+      end
+
+      lite_http_options = RequestOptions.build(serving_mode_opts("lite"), endpoint, payload)
+
+      for request_options <- [
+            lite_http_options,
+            RequestOptions.for_websocket(lite_http_options, payload)
+          ] do
+        assert {:error,
+                %{
+                  status: 400,
+                  code: "unsupported_parameter",
+                  message: "Unsupported parameter: tool_choice",
+                  param: "tool_choice"
+                }} =
+                 PayloadNormalizer.upstream_payload(
+                   payload,
+                   %Model{upstream_model_id: "provider-model"},
+                   endpoint,
+                   request_options
+                 )
+      end
+
+      scalar_choice_payload = Map.put(payload, "tool_choice", "auto")
+
+      scalar_lite_http_options =
+        RequestOptions.build(serving_mode_opts("lite"), endpoint, scalar_choice_payload)
+
+      for request_options <- [
+            scalar_lite_http_options,
+            RequestOptions.for_websocket(scalar_lite_http_options, scalar_choice_payload)
+          ] do
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(
+                   scalar_choice_payload,
+                   %Model{upstream_model_id: "provider-model"},
+                   endpoint,
+                   request_options
+                 )
+
+        upstream = Jason.decode!(encoded)
+        assert upstream["tool_choice"] == "auto"
+      end
+    end
+
     test "does not expand compact Responses Lite tools instructions include or image details" do
       payload = %{
         "model" => "gpt-5.6-terra",

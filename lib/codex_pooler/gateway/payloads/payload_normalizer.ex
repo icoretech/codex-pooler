@@ -61,6 +61,19 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     {:ok, normalize_backend_codex_websocket_input(payload)}
   end
 
+  @spec validate(map(), RequestOptions.t()) :: :ok | {:error, Error.reason()}
+  def validate(
+        %{"tool_choice" => tool_choice},
+        %RequestOptions{} = request_options
+      )
+      when is_map(tool_choice) do
+    if RequestOptions.use_responses_lite?(request_options),
+      do: {:error, Error.unsupported_parameter("tool_choice")},
+      else: :ok
+  end
+
+  def validate(_payload, %RequestOptions{}), do: :ok
+
   defp json_payload(payload, model, endpoint, %RequestOptions{} = request_options) do
     payload =
       payload
@@ -103,7 +116,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
       |> put_gateway_debug_payload(debug_payload)
       |> put_reasoning_effort_snapshot(reasoning_effort_snapshot)
 
-    with {:ok, encoded} <- Jason.encode(upstream_payload) do
+    with :ok <- validate(payload, request_options),
+         {:ok, encoded} <- Jason.encode(upstream_payload) do
       {:ok, encoded, request_options}
     end
   end

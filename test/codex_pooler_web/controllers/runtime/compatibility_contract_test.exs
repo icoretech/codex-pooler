@@ -438,6 +438,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert fixture.formats == ["omitted", "text", "grammar_lark", "grammar_regex"]
       assert fixture.allowed_callers_null == true
       assert fixture.typed_choice.resolves_same_kind == true
+      assert fixture.typed_choice.full_mode == "preserved"
+      assert fixture.typed_choice.lite_mode == "rejected_unsupported_parameter_before_dispatch"
       assert fixture.custom_replay_contract == "separate_input_item_shape"
       assert fixture.chat_supported == false
       assert fixture.provider_availability == "selected_model_and_account_dependent"

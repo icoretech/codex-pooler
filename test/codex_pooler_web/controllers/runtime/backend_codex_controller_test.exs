@@ -640,6 +640,42 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :model_serving_modes
+  test "Responses Lite rejects typed tool choice before upstream dispatch", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_unexpected"}))
+    setup = gateway_setup(upstream)
+    put_model_serving_mode!(setup, "lite")
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => [],
+        "tools" => [%{"type" => "custom", "name" => "typed_choice_fixture"}],
+        "tool_choice" => %{"type" => "custom", "name" => "typed_choice_fixture"}
+      })
+
+    assert %{
+             "error" => %{
+               "code" => "unsupported_parameter",
+               "param" => "tool_choice",
+               "type" => "invalid_request_error"
+             }
+           } = json_response(response, 400)
+
+    assert FakeUpstream.count(upstream) == 0
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "rejected"
+    assert request.last_error_code == "unsupported_parameter"
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry, where: entry.request_id == ^request.id),
+             :count
+           ) == 0
+  end
+
+  @tag :model_serving_modes
   test "backend pre-visible failover does not cross a divergent Lite schema partition", %{
     conn: conn
   } do
