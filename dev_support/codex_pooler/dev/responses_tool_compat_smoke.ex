@@ -15,7 +15,8 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
   alias CodexPooler.Access.APIKeys.TouchDebounce
   alias CodexPooler.Accounts.{Scope, User}
   alias CodexPooler.Catalog
-  alias CodexPooler.Catalog.Model
+  alias CodexPooler.Catalog.{Model, SyncRun}
+  alias CodexPooler.Gateway.OpenAICompatibility.Responses.SSE, as: ResponsesSSE
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
   alias CodexPooler.Pools
   alias CodexPooler.Pools.{ModelServingMode, ModelServingOverride, Pool}
@@ -159,7 +160,8 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
          :ok <- require_regular_file(path),
          {:ok, content} <- File.read(path),
          {:ok, journal} when is_map(journal) <- Jason.decode(content),
-         ^run_id <- journal["run_id"] do
+         ^run_id <- journal["run_id"],
+         :ok <- validate_journal_targets(journal) do
       {:ok, journal}
     else
       {:error, %Jason.DecodeError{}} -> {:error, "run manifest is invalid"}
@@ -168,6 +170,18 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
       _other -> {:error, "run manifest does not own the requested run id"}
     end
   end
+
+  @doc false
+  @spec validate_journal_targets(journal()) :: :ok | {:error, String.t()}
+  def validate_journal_targets(%{"run_id" => run_id, "pool_slugs" => slugs})
+      when is_binary(run_id) and is_list(slugs) do
+    if slugs == pool_slugs(run_id),
+      do: :ok,
+      else: {:error, "run manifest contains non-deterministic Pool targets"}
+  end
+
+  def validate_journal_targets(_journal),
+    do: {:error, "run manifest contains non-deterministic Pool targets"}
 
   @doc false
   @spec publish_receipt!(map()) :: String.t()
@@ -446,7 +460,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
                %{slug: slug, name: "Issue 241 certification #{index}", status: "active"},
                broadcast?: false
              ),
-           {:ok, journal} <- after_resource(journal, run_dir, "pool", pool.id, %{slug: slug}),
+           {:ok, journal} <- after_resource(journal, run_dir, "pool", pool.id, %{slug: pool.slug}),
            :ok <- no_catalog_job(pool.id),
            {:ok, journal} <-
              before_call(journal, run_dir, "assignment", "sync", %{
@@ -486,7 +500,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
            :ok <- no_catalog_job(pool.id),
            {:ok, journal} <- before_call(journal, run_dir, "catalog", "sync", %{pool_id: pool.id}),
            {:ok, %{sync_run: sync_run, models: [_ | _], partial?: false}} <-
-             Catalog.sync_pool_catalog(pool, trigger_kind: "manual"),
+             accept_catalog_sync_result(Catalog.sync_pool_catalog(pool, trigger_kind: "manual")),
            {:ok, journal} <-
              after_resource(journal, run_dir, "sync_run", sync_run.id, %{pool_id: pool.id}),
            :ok <- no_catalog_job(pool.id),
@@ -507,10 +521,31 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
         {:ok, %{partial?: true}} -> {:halt, {:error, "catalog sync was partial"}}
         {:ok, %{skipped?: true}} -> {:halt, {:error, "catalog sync was skipped"}}
         {:error, reason} -> {:halt, {:error, context_error(reason)}}
+        {:error, _sync_run, reason} -> {:halt, {:error, context_error(reason)}}
         _other -> {:halt, {:error, "provisioning returned an unexpected shape"}}
       end
     end)
   end
+
+  @doc false
+  @spec accept_catalog_sync_result(term()) :: {:ok, map()} | {:error, String.t()}
+  def accept_catalog_sync_result(
+        {:ok, %{sync_run: %SyncRun{} = sync_run, models: models, partial?: false}}
+      )
+      when is_list(models) and models != [],
+      do: {:ok, %{sync_run: sync_run, models: models, partial?: false}}
+
+  def accept_catalog_sync_result({:ok, %{partial?: true}}),
+    do: {:error, "catalog sync was partial"}
+
+  def accept_catalog_sync_result({:ok, %{skipped?: true}}),
+    do: {:error, "catalog sync was skipped"}
+
+  def accept_catalog_sync_result({:error, _sync_run, reason}), do: {:error, context_error(reason)}
+  def accept_catalog_sync_result({:error, reason}), do: {:error, context_error(reason)}
+
+  def accept_catalog_sync_result(_other),
+    do: {:error, "provisioning returned an unexpected shape"}
 
   defp record_pool_models(journal, run_dir, pool) do
     Enum.reduce(Catalog.list_models(pool), {:ok, journal}, fn model, {:ok, current} ->
@@ -563,7 +598,239 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     end
   end
 
+  @doc false
+  @spec candidate_capability_matrix_runner(
+          URI.t(),
+          Scope.t(),
+          journal(),
+          [map()],
+          String.t(),
+          keyword()
+        ) :: {:error, String.t()}
+  def candidate_capability_matrix_runner(base_url, scope, journal, fixtures, run_dir, opts) do
+    fixtures = Enum.take(fixtures, Keyword.get(opts, :candidate_fixture_limit, length(fixtures)))
+
+    results =
+      Enum.flat_map(fixtures, fn fixture ->
+        case certification_models(base_url, fixture) do
+          {:ok, models} ->
+            models = candidate_probe_models(models, opts)
+
+            Enum.flat_map(models, fn model ->
+              Enum.flat_map(Keyword.get(opts, :candidate_profiles, ~w(lite full)), fn profile ->
+                probe_candidate_profile(
+                  base_url,
+                  scope,
+                  journal,
+                  fixture,
+                  model,
+                  profile,
+                  run_dir,
+                  opts
+                )
+              end)
+            end)
+
+          {:error, reason} ->
+            [
+              %{
+                model: "discovery",
+                profile: "none",
+                control: "discovery",
+                transport: "http",
+                status: classify_candidate_probe_result(reason)
+              }
+            ]
+        end
+      end)
+
+    Process.put(
+      :responses_tool_candidate_capability_results,
+      aggregate_candidate_probe_results(results)
+    )
+
+    {:error, "candidate capability probe completed without certification"}
+  end
+
+  defp candidate_probe_models(models, opts) do
+    models = Enum.reject(models, &(&1.exposed_model_id == "gpt-5.6-luna"))
+
+    case Keyword.fetch(opts, :candidate_model_id) do
+      {:ok, model_id} -> Enum.filter(models, &(&1.exposed_model_id == model_id))
+      :error -> models
+    end
+  end
+
+  defp probe_candidate_profile(
+         base_url,
+         scope,
+         journal,
+         fixture,
+         model,
+         profile,
+         run_dir,
+         opts
+       ) do
+    smoke_cases = candidate_capability_cases(journal["run_id"])
+
+    case set_profile(scope, fixture, model, profile, run_dir, journal["run_id"]) do
+      {:ok, _override} ->
+        results =
+          run_paired_candidate_controls(fn control, transport ->
+            run_case(
+              base_url,
+              fixture,
+              model,
+              profile,
+              transport,
+              Map.fetch!(smoke_cases, control),
+              opts
+            )
+          end)
+
+        reset_result = reset_profile(scope, fixture.pool, model.exposed_model_id)
+
+        case reset_result do
+          :ok ->
+            Enum.map(results, fn result ->
+              probe_result(model, profile, result.control, result.transport, result.result)
+            end)
+
+          {:error, reason} ->
+            [
+              probe_result(
+                model,
+                profile,
+                "profile",
+                "none",
+                {:error, "profile_reset: #{reason}"}
+              )
+            ]
+        end
+
+      {:error, reason} ->
+        [
+          probe_result(
+            model,
+            profile,
+            "profile",
+            "none",
+            {:error, "profile_setup: #{reason}"}
+          )
+        ]
+    end
+  end
+
+  @doc false
+  @spec candidate_capability_cases(String.t()) :: %{String.t() => map()}
+  def candidate_capability_cases(run_id) do
+    suffix = String.slice(run_id, -12, 12)
+
+    %{
+      "custom" =>
+        custom_case(
+          "candidate_custom_#{suffix}",
+          %{"type" => "grammar", "syntax" => "lark", "definition" => ~s(start: "issue241")},
+          "issue241"
+        ),
+      "function" =>
+        function_case("candidate_function_#{suffix}", strict_object_schema(), %{
+          "goal" => %{"value" => "issue241"}
+        })
+    }
+  end
+
+  @doc false
+  @spec run_paired_candidate_controls((String.t(), String.t() -> term())) :: [map()]
+  def run_paired_candidate_controls(run_control) when is_function(run_control, 2) do
+    custom_http = run_control.("custom", "http")
+
+    custom_websocket =
+      if custom_http == :ok,
+        do: run_control.("custom", "websocket"),
+        else: :not_tested
+
+    function_http = run_control.("function", "http")
+
+    function_websocket =
+      if function_http == :ok,
+        do: run_control.("function", "websocket"),
+        else: :not_tested
+
+    [
+      %{control: "custom", transport: "http", result: custom_http},
+      %{control: "custom", transport: "websocket", result: custom_websocket},
+      %{control: "function", transport: "http", result: function_http},
+      %{control: "function", transport: "websocket", result: function_websocket}
+    ]
+  end
+
+  defp probe_result(model, profile, control, transport, result) do
+    %{
+      model: model.exposed_model_id,
+      profile: profile,
+      control: control,
+      transport: transport,
+      status: classify_candidate_probe_result(result)
+    }
+  end
+
+  @doc false
+  @spec classify_candidate_probe_result(term()) :: String.t()
+  def classify_candidate_probe_result(:ok), do: "passed_terminal_and_settlement"
+
+  def classify_candidate_probe_result({:expected_denial, :lite_typed_tool_choice}),
+    do: "denied_unsupported_typed_choice"
+
+  def classify_candidate_probe_result(:not_tested), do: "not_tested_http_failed"
+
+  def classify_candidate_probe_result({:error, reason}) when is_binary(reason),
+    do: classify_candidate_probe_result(reason)
+
+  def classify_candidate_probe_result({:error, _reason}), do: "transport_failed"
+
+  def classify_candidate_probe_result(reason) when is_binary(reason) do
+    cond do
+      String.contains?(reason, "required tool call") -> "missing_forced_tool_call"
+      String.contains?(reason, "profile_setup") -> "profile_setup_failed"
+      String.contains?(reason, "profile_reset") -> "profile_reset_failed"
+      String.contains?(reason, "settle exactly once") -> "lifecycle_validation_failed"
+      String.contains?(reason, "public status") -> "unexpected_http_status"
+      String.contains?(reason, "public request failed") -> "transport_failed"
+      true -> "probe_failed"
+    end
+  end
+
+  def classify_candidate_probe_result(_reason), do: "probe_failed"
+
+  @doc false
+  @spec aggregate_candidate_probe_results([map()]) :: [map()]
+  def aggregate_candidate_probe_results(results) when is_list(results) do
+    results
+    |> Enum.map(&Map.take(&1, [:model, :profile, :control, :transport, :status]))
+    |> Enum.group_by(&Map.take(&1, [:model, :profile, :control, :transport]))
+    |> Enum.map(fn {dimensions, rows} ->
+      statuses = rows |> Enum.map(& &1.status) |> Enum.uniq()
+      Map.put(dimensions, :status, aggregate_probe_status(statuses))
+    end)
+    |> Enum.sort_by(&{&1.model, &1.profile, &1.control, &1.transport})
+  end
+
+  defp aggregate_probe_status([status]), do: status
+  defp aggregate_probe_status(statuses), do: statuses |> Enum.sort() |> Enum.join("+")
+
   defp select_certification_model(base_url, fixture) do
+    with {:ok, candidates} <- certification_models(base_url, fixture) do
+      selected =
+        Enum.min_by(candidates, fn model ->
+          {if(model.exposed_model_id == "gpt-5.6", do: 0, else: 1), model.exposed_model_id}
+        end)
+
+      {:ok, selected}
+    end
+  end
+
+  defp certification_models(base_url, fixture) do
     url = base_url |> URI.to_string() |> String.trim_trailing("/") |> Kernel.<>("/v1/models")
 
     with {:ok, %Req.Response{status: 200, body: %{"data" => public_models}}} <-
@@ -574,12 +841,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
            ),
          candidates when candidates != [] <-
            Enum.filter(fixture.models, &certification_model?(&1, public_models)) do
-      selected =
-        Enum.min_by(candidates, fn model ->
-          {if(model.exposed_model_id == "gpt-5.6", do: 0, else: 1), model.exposed_model_id}
-        end)
-
-      {:ok, selected}
+      {:ok, Enum.sort_by(candidates, & &1.exposed_model_id)}
     else
       [] ->
         {:error, "Pool does not advertise a suitable exact GPT-5.6 model"}
@@ -678,16 +940,25 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     Enum.reduce_while(["http", "websocket"], {:ok, []}, fn transport, {:ok, cells} ->
       Enum.reduce_while(cases, {:ok, cells}, fn smoke_case, {:ok, current} ->
         case run_case(base_url, fixture, model, profile, transport, smoke_case, opts) do
-          :ok ->
-            cell = %{
-              identity: short_hash(fixture.identity.id),
-              profile: profile,
-              transport: transport,
-              case: smoke_case.label,
-              status: if(smoke_case.accepted?, do: "passed", else: "rejected")
-            }
+          result when result == :ok or result == {:expected_denial, :lite_typed_tool_choice} ->
+            smoke_case = Map.put(smoke_case, :result, result)
+            status = certification_case_status(profile, smoke_case)
 
-            {:cont, {:ok, current ++ [cell]}}
+            if status == "failed_unexpected_success" do
+              {:halt,
+               {:error,
+                "#{profile}/#{transport}/#{smoke_case.label}: Lite typed tool choice was unexpectedly accepted"}}
+            else
+              cell = %{
+                identity: short_hash(fixture.identity.id),
+                profile: profile,
+                transport: transport,
+                case: smoke_case.label,
+                status: status
+              }
+
+              {:cont, {:ok, current ++ [cell]}}
+            end
 
           {:error, reason} ->
             {:halt, {:error, "#{profile}/#{transport}/#{smoke_case.label}: #{reason}"}}
@@ -699,6 +970,41 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
       end
     end)
   end
+
+  @doc false
+  @spec certification_case_status(String.t(), map()) :: String.t()
+  def certification_case_status(
+        "lite",
+        %{
+          accepted?: true,
+          payload: %{"tool_choice" => choice},
+          result: {:expected_denial, :lite_typed_tool_choice}
+        }
+      )
+      when is_map(choice),
+      do: "rejected_unsupported_typed_choice"
+
+  # Only a MAP-shaped choice is rejected on Lite. An unforced case must still
+  # succeed there, and that success is the only Lite cell proving the relocated
+  # `additional_tools` bundle really reaches the provider.
+  def certification_case_status(
+        "lite",
+        %{accepted?: true, payload: %{"tool_choice" => choice}, result: :ok}
+      )
+      when is_map(choice),
+      do: "failed_unexpected_success"
+
+  def certification_case_status("lite", %{accepted?: true, result: :ok}),
+    do: "passed_unforced_tool_call"
+
+  def certification_case_status(_profile, %{accepted?: true, payload: %{"tool_choice" => choice}})
+      when is_map(choice),
+      do: "passed_forced_tool_call"
+
+  def certification_case_status(_profile, %{accepted?: true}),
+    do: "passed_unforced_tool_call"
+
+  def certification_case_status(_profile, %{accepted?: false}), do: "rejected"
 
   defp run_case(base_url, fixture, model, profile, "http", smoke_case, opts) do
     url = base_url |> URI.to_string() |> String.trim_trailing("/") |> Kernel.<>("/v1/responses")
@@ -746,10 +1052,22 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
          before_counts
        ) do
     with {:ok, body} <- public_sse_terminal_body(sse_body),
-         :ok <- validate_terminal_output(body, smoke_case),
-         :ok <- validate_success_lifecycle(fixture, profile, transport, before_counts) do
+         :ok <- validate_terminal_status(body),
+         :ok <- validate_success_lifecycle(fixture, profile, transport, before_counts),
+         :ok <- validate_terminal_output(body, smoke_case) do
       :ok
     end
+  end
+
+  defp validate_case_result(
+         {:ok, %Req.Response{status: 400, body: body}},
+         fixture,
+         "lite",
+         _transport,
+         %{accepted?: true} = smoke_case,
+         before_counts
+       ) do
+    validate_lite_typed_choice_rejection(body, fixture, smoke_case, before_counts)
   end
 
   defp validate_case_result(
@@ -773,10 +1091,22 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
          %{accepted?: true} = smoke_case,
          before_counts
        ) do
-    with :ok <- validate_terminal_output(body, smoke_case),
-         :ok <- validate_success_lifecycle(fixture, profile, transport, before_counts) do
+    with :ok <- validate_terminal_status(body),
+         :ok <- validate_success_lifecycle(fixture, profile, transport, before_counts),
+         :ok <- validate_terminal_output(body, smoke_case) do
       :ok
     end
+  end
+
+  defp validate_case_result(
+         {:ok, %{status: 400, body: body}},
+         fixture,
+         "lite",
+         _transport,
+         %{accepted?: true} = smoke_case,
+         before_counts
+       ) do
+    validate_lite_typed_choice_rejection(body, fixture, smoke_case, before_counts)
   end
 
   defp validate_case_result(
@@ -798,7 +1128,33 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
   defp validate_case_result({:error, _reason}, _fixture, _profile, _transport, _case, _counts),
     do: {:error, "public request failed"}
 
-  defp validate_terminal_output(%{"output" => output}, smoke_case) when is_list(output) do
+  # The terminal `response.completed` event carries `"output": []` on this
+  # provider path — always, for every response, tool call or plain text
+  # (wire-verified 2026-08-03 on six decrypted turns). Tool calls are carried by
+  # the streamed `response.output_item.done` events instead, which is what the
+  # Codex CLI and codex-lb read.
+  #
+  # Callers must therefore hand this function a terminal body whose output has
+  # been backfilled from those events, exactly as the public
+  # `Responses.SSE.response_from_sse/1` path does for real SDK clients. Asserting
+  # on the raw terminal array is asserting on a field that is empty by
+  # construction, and it is what produced every prior `missing_forced_tool_call`
+  # verdict in this issue.
+  # A `response.incomplete` terminal that happens to carry the expected item
+  # would otherwise certify as a pass. Certification requires a fully completed
+  # turn, so the terminal status is asserted separately from its output.
+  @doc false
+  @spec validate_terminal_status(map()) :: :ok | {:error, String.t()}
+  def validate_terminal_status(%{"status" => "completed"}), do: :ok
+
+  def validate_terminal_status(%{"status" => status}) when is_binary(status),
+    do: {:error, "provider terminal status was #{status} instead of completed"}
+
+  def validate_terminal_status(_body), do: {:error, "provider terminal status was missing"}
+
+  @doc false
+  @spec validate_terminal_output(map(), map()) :: :ok | {:error, String.t()}
+  def validate_terminal_output(%{"output" => output}, smoke_case) when is_list(output) do
     case Enum.find(
            output,
            &(&1["type"] == smoke_case.output_type and &1["name"] == smoke_case.name)
@@ -808,8 +1164,45 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     end
   end
 
-  defp validate_terminal_output(_body, _smoke_case),
+  def validate_terminal_output(_body, _smoke_case),
     do: {:error, "provider terminal shape was invalid"}
+
+  defp validate_lite_typed_choice_rejection(body, fixture, smoke_case, before_counts) do
+    error = if is_binary(body), do: Jason.decode(body), else: {:ok, body}
+
+    with true <- is_map(smoke_case.payload["tool_choice"]),
+         {:ok,
+          %{
+            "error" => %{
+              "code" => "unsupported_parameter",
+              "param" => "tool_choice"
+            }
+          }} <- error,
+         after_counts = lifecycle_counts(fixture.pool.id),
+         [request] <- latest_requests(fixture.pool.id, before_counts.request_ids),
+         :ok <- validate_lite_typed_choice_lifecycle(before_counts, after_counts, request) do
+      {:expected_denial, :lite_typed_tool_choice}
+    else
+      _other -> {:error, "Lite typed tool choice was not rejected before dispatch"}
+    end
+  end
+
+  @doc false
+  @spec validate_lite_typed_choice_lifecycle(map(), map(), Request.t()) ::
+          :ok | {:error, String.t()}
+  def validate_lite_typed_choice_lifecycle(before_counts, after_counts, %Request{} = request) do
+    with 1 <- after_counts.requests - before_counts.requests,
+         0 <- after_counts.attempts - before_counts.attempts,
+         0 <- after_counts.ledger_entries - before_counts.ledger_entries,
+         0 <- after_counts.settlements - before_counts.settlements,
+         true <- request.status == "rejected",
+         true <- request.last_error_code == "unsupported_parameter",
+         "tool_choice" <- get_in(request.request_metadata || %{}, ["gateway_denial", "param"]) do
+      :ok
+    else
+      _other -> {:error, "Lite typed tool choice was not rejected before dispatch"}
+    end
+  end
 
   defp validate_success_lifecycle(fixture, profile, transport, before_counts) do
     after_counts = lifecycle_counts(fixture.pool.id)
@@ -874,6 +1267,11 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
           ),
           :count
         ),
+      ledger_entries:
+        Repo.aggregate(
+          from(entry in LedgerEntry, where: entry.request_id in ^request_ids),
+          :count
+        ),
       request_ids: request_ids
     }
   end
@@ -881,13 +1279,13 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
   defp certification_cases(run_id) do
     suffix = String.slice(run_id, -12, 12)
 
+    # Deterministic cases first. The run halts on the first failure, so leading
+    # with the two value-nondeterministic cells (a free-text literal and an
+    # `^[a-z]{8}$` grammar that any eight lowercase letters satisfy) let a single
+    # instruction-following miss abort the matrix before the cells whose output
+    # is fully constrained ever executed. That ordering is what let the original
+    # instrument bug hide behind "the provider ignores custom tools".
     [
-      custom_case("custom_text_#{suffix}", %{"type" => "text"}, "issue241-text"),
-      custom_case(
-        "custom_regex_#{suffix}",
-        %{"type" => "grammar", "syntax" => "regex", "definition" => "^[a-z]{8}$"},
-        "abcdefgh"
-      ),
       custom_case(
         "custom_lark_#{suffix}",
         %{"type" => "grammar", "syntax" => "lark", "definition" => ~s(start: "issue241")},
@@ -899,6 +1297,23 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
       function_case("function_array_#{suffix}", repaired_array_schema(), %{
         "items" => ["issue241"]
       }),
+      # Unforced: every other accepted case carries a map-shaped tool_choice, so
+      # in Lite they all certify as the expected 400. Without this cell a
+      # regression in the Lite `additional_tools` relocation — which really does
+      # carry tools upstream, wire-verified — would pass the whole matrix.
+      auto_choice_case(
+        custom_case(
+          "custom_lark_auto_#{suffix}",
+          %{"type" => "grammar", "syntax" => "lark", "definition" => ~s(start: "issue241")},
+          "issue241"
+        )
+      ),
+      custom_case("custom_text_#{suffix}", %{"type" => "text"}, "issue241-text"),
+      custom_case(
+        "custom_regex_#{suffix}",
+        %{"type" => "grammar", "syntax" => "regex", "definition" => "^[a-z]{8}$"},
+        "abcdefgh"
+      ),
       negative_case("malformed_custom_format", %{
         "input" => "issue241",
         "tools" => [
@@ -938,9 +1353,22 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
       name: name,
       output_type: "custom_tool_call",
       payload: %{
-        "input" => "Call the required tool.",
+        # The prompt must state the literal the tool is expected to emit.
+        # "Call the required tool." names no value, so a free-text custom tool
+        # is legitimately called with an empty input and the value assertion
+        # fails for a reason that has nothing to do with tool support.
+        "input" => "Call the required tool and emit exactly: #{expected_input}",
         "stream" => true,
-        "tools" => [%{"type" => "custom", "name" => name, "format" => format}],
+        "tools" => [
+          %{
+            "type" => "custom",
+            "name" => name,
+            # Codex always describes its custom tools; an undescribed tool gives
+            # the model no reason to prefer it.
+            "description" => "Emits exactly #{expected_input}. FREEFORM: do not wrap in JSON.",
+            "format" => format
+          }
+        ],
         "tool_choice" => %{"type" => "custom", "name" => name}
       },
       validate: fn item ->
@@ -958,7 +1386,7 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
       name: name,
       output_type: "function_call",
       payload: %{
-        "input" => "Call the required tool.",
+        "input" => "Call the required tool with #{Jason.encode!(expected_arguments)}.",
         "stream" => true,
         "tools" => [
           %{"type" => "function", "name" => name, "strict" => true, "parameters" => schema}
@@ -972,6 +1400,16 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
         end
       end
     }
+  end
+
+  # Drops the forced choice so the case exercises real tool calling in both
+  # serving modes: Lite relocates the definition into `additional_tools` and the
+  # provider still calls it, which a forced case can never demonstrate because
+  # Lite rejects map-shaped choices before dispatch.
+  defp auto_choice_case(smoke_case) do
+    smoke_case
+    |> Map.update!(:label, &String.replace(&1, "custom_", "custom_auto_"))
+    |> update_in([:payload], &Map.put(&1, "tool_choice", "auto"))
   end
 
   defp negative_case(label, payload) do
@@ -1000,6 +1438,11 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     }
   end
 
+  defp strict_object_schema do
+    repaired_object_schema()
+    |> put_in(["properties", "goal", "type"], "object")
+  end
+
   defp repaired_array_schema do
     %{
       "type" => "object",
@@ -1009,39 +1452,39 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     }
   end
 
+  # Delegates to the production SSE reducer rather than reading the terminal
+  # event directly, so certification sees exactly what a real SDK client sees.
+  # That path backfills `output` from the streamed `response.output_item.done`
+  # events when the terminal array is empty — which, on this provider, it always
+  # is (Responses.SSE.maybe_backfill_output/2).
   defp public_sse_terminal_body(body) when is_binary(body) do
-    body
-    |> String.split("\n\n", trim: true)
-    |> Enum.find_value(fn block ->
-      lines = String.split(block, "\n")
-
-      event =
-        Enum.find_value(lines, fn
-          "event: " <> event -> event
-          _line -> nil
-        end)
-
-      data =
-        Enum.find_value(lines, fn
-          "data: " <> data -> data
-          _line -> nil
-        end)
-
-      if event == "response.completed" and is_binary(data) do
-        case Jason.decode(data) do
-          {:ok, %{"response" => response}} when is_map(response) -> {:ok, response}
-          _other -> {:error, "public SSE terminal event was invalid"}
-        end
-      end
-    end)
-    |> case do
-      nil -> {:error, "public SSE response did not contain response.completed"}
-      result -> result
+    case ResponsesSSE.response_from_sse(body) do
+      {:ok, response} when is_map(response) -> {:ok, response}
+      {:error, %{message: message}} -> {:error, message}
     end
   end
 
   defp public_sse_terminal_body(_body),
     do: {:error, "public SSE response body was invalid"}
+
+  # Websocket counterpart of Responses.SSE.maybe_backfill_output/2: an empty
+  # terminal output array is filled from the streamed response.output_item.done
+  # frames. A non-empty terminal array always wins.
+  @doc false
+  @spec backfill_websocket_output(map(), [map()]) :: map()
+  def backfill_websocket_output(%{"output" => output} = body, _frames)
+      when is_list(output) and output != [],
+      do: body
+
+  def backfill_websocket_output(body, frames) when is_map(body) and is_list(frames) do
+    case Enum.flat_map(frames, fn
+           %{"type" => "response.output_item.done", "item" => %{} = item} -> [item]
+           _frame -> []
+         end) do
+      [] -> body
+      items -> Map.put(body, "output", items)
+    end
+  end
 
   defp websocket_request(base_url, raw_key, model_id, payload, baseline) do
     uri = base_url
@@ -1075,11 +1518,11 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
          {:ok, websocket, encoded} <-
            Mint.WebSocket.encode(websocket, {:text, Jason.encode!(frame_payload)}),
          {:ok, conn} <- Mint.WebSocket.stream_request_body(conn, ref, encoded),
-         {:ok, _conn, _websocket, terminal} <-
+         {:ok, _conn, _websocket, {terminal, frames}} <-
            receive_websocket_terminal(conn, websocket, ref, []) do
       case terminal do
         %{"type" => "response.completed", "response" => body} ->
-          {:ok, %{status: 200, body: body}, before_counts}
+          {:ok, %{status: 200, body: backfill_websocket_output(body, frames)}, before_counts}
 
         %{"type" => "error"} ->
           {:ok, %{status: 400, body: terminal}, before_counts}
@@ -1158,8 +1601,16 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
                     all_frames = current_frames ++ decoded
 
                     case Enum.find(all_frames, &(&1["type"] in ["response.completed", "error"])) do
-                      nil -> {:cont, {:ok, current_conn, next_websocket, all_frames}}
-                      terminal -> {:halt, {:ok, current_conn, next_websocket, terminal}}
+                      nil ->
+                        {:cont, {:ok, current_conn, next_websocket, all_frames}}
+
+                      terminal ->
+                        # Carry every frame alongside the terminal: the terminal
+                        # object's own output array is empty on this provider,
+                        # so the tool call lives in the earlier
+                        # response.output_item.done frames.
+                        {:halt,
+                         {:ok, current_conn, next_websocket, {terminal, all_frames}}}
                     end
 
                   {:error, _websocket, reason} ->
@@ -1341,9 +1792,13 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     end
   end
 
-  defp recover_pools(journal) do
+  @doc false
+  @spec recover_pools(journal()) :: {:ok, journal()} | {:error, String.t()}
+  def recover_pools(journal) do
     Enum.reduce_while(journal["pool_slugs"] || [], {:ok, journal}, fn slug, {:ok, current} ->
-      case resource_by(current, "pool", "slug", slug) do
+      case Enum.find(current["resources"] || [], fn resource ->
+             resource["kind"] == "pool" and String.downcase(resource["slug"] || "") == slug
+           end) do
         nil ->
           pools =
             Repo.all(
@@ -1356,14 +1811,19 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
               {:cont, {:ok, current}}
 
             [%Pool{} = pool] ->
-              {:cont, {:ok, record_resource(current, "pool", pool.id, %{slug: slug})}}
+              {:cont, {:ok, record_resource(current, "pool", pool.id, %{slug: pool.slug})}}
 
             _many ->
               {:halt, {:error, "deterministic Pool recovery was ambiguous"}}
           end
 
-        _resource ->
-          {:cont, {:ok, current}}
+        resource ->
+          updated =
+            Enum.map(current["resources"] || [], fn candidate ->
+              if candidate == resource, do: Map.put(candidate, "slug", slug), else: candidate
+            end)
+
+          {:cont, {:ok, Map.put(current, "resources", updated)}}
       end
     end)
   end
@@ -1458,11 +1918,9 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     end
   end
 
-  defp resource_by(journal, kind, field, value) do
-    Enum.find(journal["resources"] || [], &(&1["kind"] == kind and &1[field] == value))
-  end
-
-  defp validate_cleanup_ownership(plan, journal) do
+  @doc false
+  @spec validate_cleanup_ownership([map()], journal()) :: :ok | {:error, String.t()}
+  def validate_cleanup_ownership(plan, journal) do
     allowed_slugs = MapSet.new(journal["pool_slugs"] || [])
     pool_ids = plan |> Enum.filter(&(&1["kind"] == "pool")) |> MapSet.new(& &1["id"])
 
@@ -2083,15 +2541,16 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     end
   end
 
-  defp isolated_endpoint_config(config, nil), do: Keyword.put(config, :server, false)
+  def isolated_endpoint_config(config, nil), do: Keyword.put(config, :server, false)
 
-  defp isolated_endpoint_config(config, %URI{host: host, port: port}) do
+  def isolated_endpoint_config(config, %URI{host: host, port: port}) do
     config
     |> Keyword.put(:server, true)
     |> Keyword.put(:http,
       ip: loopback_ip(host),
       port: port,
-      protocol_options: [protocols: [:http1]]
+      http_1_options: [enabled: true],
+      http_2_options: [enabled: false]
     )
     |> Keyword.put(:watchers, [])
     |> Keyword.delete(:live_reload)
@@ -2423,7 +2882,8 @@ defmodule CodexPooler.Dev.ResponsesToolCompatSmoke do
     do:
       Enum.map(
         1..@identity_count,
-        &"issue-241-#{run_id}-#{String.pad_leading(Integer.to_string(&1), 2, "0")}"
+        &("issue-241-#{run_id}-#{String.pad_leading(Integer.to_string(&1), 2, "0")}"
+          |> String.downcase())
       )
 
   defp run_dir(run_id), do: Path.join(@runtime_root, run_id)
