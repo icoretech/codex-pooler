@@ -50,10 +50,10 @@
   },
   "sdk_version_policy": {
     "rule": "Every fixture pins sdk_package and sdk_version and explains provenance without raw transport bodies.",
-    "registry_checked_at": "2026-05-24",
+    "registry_checked_at": "2026-08-03",
     "registry_versions": {
       "openai:npm": "6.39.0",
-      "openai:pypi": "2.38.0",
+      "openai:pypi": "2.52.0",
       "ai:npm": "6.0.191",
       "@ai-sdk/openai:npm": "3.0.65"
     }
@@ -75,6 +75,7 @@
   },
   "fixture_files": [
     "openai-node-responses-basic.json",
+    "openai-python-responses-custom-tool.json",
     "openai-node-audio-transcription.json",
     "openai-python-chat-basic.json",
     "openai-python-audio-transcription.json",

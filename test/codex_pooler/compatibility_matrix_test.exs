@@ -161,6 +161,58 @@ defmodule CodexPooler.CompatibilityMatrixTest do
     end
   end
 
+  describe "Responses tool compatibility contract" do
+    test "separates executable custom tools from replay and Chat" do
+      feature = CompatibilityMatrix.by_slug!(:responses_executable_custom_tools)
+      fixture = CompatibilityMatrix.fixture!(:responses_executable_custom_tools)
+
+      assert feature.current == :direct_responses_custom_tool_admission
+      assert feature.contract =~ "custom replay is a separate input-item contract"
+      assert feature.contract =~ "Chat custom definitions and choices remain unsupported"
+      assert feature.contract =~ "selected model and upstream account"
+      assert fixture.required_keys == ["type", "name"]
+      assert fixture.allowed_callers == ["direct", "programmatic"]
+      assert fixture.allowed_callers_null == true
+      assert fixture.typed_choice == %{exact_keys: ["type", "name"], resolves_same_kind: true}
+      assert fixture.custom_replay_contract == "separate_input_item_shape"
+      assert fixture.chat_supported == false
+      assert fixture.broad_openai_tool_parity == false
+    end
+
+    test "keeps strict missing-type repair outside non-strict lowering" do
+      lowering = CompatibilityMatrix.fixture!(:function_tool_schema_lowering)
+      repair = CompatibilityMatrix.fixture!(:direct_responses_strict_schema_repair)
+
+      assert lowering.strict_function_tools_lowered == false
+      assert lowering.strict_structured_outputs_lowered == false
+      assert repair.strict_function_tools_lowered == false
+      assert repair.strict_structured_outputs_lowered == false
+      assert repair.inserted_types == ["object", "array"]
+
+      assert repair.target_tool_shapes == [
+               "top_level_flat_function",
+               "namespace_child_flat_function"
+             ]
+
+      assert repair.public_explicit_type_vocabulary ==
+               ~w(null boolean object array number integer string)
+
+      assert repair.exclusions == [
+               "parameters_root",
+               "explicit_type",
+               "refs",
+               "definition_tables",
+               "combinators_and_descendants",
+               "annotations_and_unknown_keywords",
+               "ambiguous_or_incomplete_evidence",
+               "strict_structured_outputs",
+               "chat",
+               "native_nested_function_shapes",
+               "backend_routes"
+             ]
+    end
+  end
+
   describe "request compression compatibility contract" do
     test "documents Pool-gated request-side fail-open metadata-only behavior" do
       feature = CompatibilityMatrix.by_slug!(:request_compression)

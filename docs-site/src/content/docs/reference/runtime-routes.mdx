@@ -454,6 +454,29 @@ limited to function tools, including nested function tools inside accepted
 namespace tools. Strict function tools and strict structured-output schemas stay
 on the strict validation path and are not made looser.
 
+Direct public Responses requests also accept executable custom tools on
+`POST /v1/responses` and websocket `response.create`. A custom tool requires
+`type: "custom"` and a nonblank `name`. It may include a description,
+`defer_loading`, nullable `allowed_callers` using `direct` or `programmatic`, and
+either unconstrained text or a `lark`/`regex` grammar format. A typed custom
+`tool_choice` resolves only a declared custom tool with the same exact name and
+kind. This is separate from accepted `custom_tool_call` replay input. Chat
+Completions does not accept executable custom definitions or custom choices,
+and actual execution availability still depends on the selected model and
+upstream account. This narrow contract does not imply broad OpenAI tool parity.
+
+For direct public Responses only, a strict flat function tool whose parameters
+already have an object root may receive a missing nested `object` or `array`
+type when the surrounding schema provides complete, unambiguous structural
+evidence. This covers top-level flat functions and flat function children of an
+accepted namespace, and the same repair applies to websocket `response.create`.
+It does not repair the parameters root, explicit type values, refs, definition
+tables, combinators or their descendants, annotations, unknown keywords,
+ambiguous or incomplete evidence, structured outputs, Chat Completions, the
+older nested `function` wrapper shape, or backend routes. Public Responses and
+Chat reject malformed, duplicate, and unsupported explicit type values. This
+strict compatibility repair is not non-strict schema lowering.
+
 ### Catalog revision and final Responses envelope
 
 The authenticated backend model routes return the same effective catalog body

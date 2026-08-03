@@ -49,7 +49,9 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     request_compression
     upstream_websocket_bridge
     image_generation_permission
+    responses_executable_custom_tools
     function_tool_schema_lowering
+    direct_responses_strict_schema_repair
     v1_supported_surface
     v1_unsupported_public_surface
   )a
@@ -419,6 +421,54 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                "/v1/responses",
                "/v1/responses websocket"
              ]
+    end
+
+    test "documents executable custom tools separately from custom replay" do
+      feature = CompatibilityMatrix.by_slug!(:responses_executable_custom_tools)
+      fixture = CompatibilityMatrix.fixture!(:responses_executable_custom_tools)
+
+      assert feature.current == :direct_responses_custom_tool_admission
+
+      assert feature.routes == [
+               %{method: :post, path: "/v1/responses"},
+               %{method: :get, path: "/v1/responses", transport: "websocket"}
+             ]
+
+      assert fixture.scope == "direct_public_responses"
+      assert fixture.formats == ["omitted", "text", "grammar_lark", "grammar_regex"]
+      assert fixture.allowed_callers_null == true
+      assert fixture.typed_choice.resolves_same_kind == true
+      assert fixture.custom_replay_contract == "separate_input_item_shape"
+      assert fixture.chat_supported == false
+      assert fixture.provider_availability == "selected_model_and_account_dependent"
+      assert fixture.broad_openai_tool_parity == false
+    end
+
+    test "documents direct Responses strict repair separately from non-strict lowering" do
+      feature = CompatibilityMatrix.by_slug!(:direct_responses_strict_schema_repair)
+      fixture = CompatibilityMatrix.fixture!(:direct_responses_strict_schema_repair)
+
+      assert feature.current == :nested_missing_type_repair
+      assert feature.contract =~ "missing nested object or array type"
+      assert feature.contract =~ "not repaired"
+      assert feature.contract =~ "excluded from non-strict lowering"
+      assert fixture.scope == "direct_public_responses_strict_flat_function_parameters"
+      assert fixture.inserted_types == ["object", "array"]
+
+      assert fixture.target_tool_shapes == [
+               "top_level_flat_function",
+               "namespace_child_flat_function"
+             ]
+
+      assert fixture.requires_typed_object_root == true
+      assert fixture.requires_unambiguous_structural_evidence == true
+      assert "parameters_root" in fixture.exclusions
+      assert "combinators_and_descendants" in fixture.exclusions
+      assert "chat" in fixture.exclusions
+      assert "backend_routes" in fixture.exclusions
+      assert fixture.malformed_duplicate_or_unsupported_explicit_type == "reject"
+      assert fixture.strict_function_tools_lowered == false
+      assert fixture.strict_structured_outputs_lowered == false
     end
 
     test "documents request compression supported input shapes" do

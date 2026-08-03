@@ -1,0 +1,60 @@
+{
+  "schema_version": "2026-05-24.sdk-shape-corpus.v1",
+  "scenario_id": "openai-python.responses.executable_custom_tool.v1",
+  "sdk_name": "OpenAI Python",
+  "sdk_package": "openai",
+  "sdk_version": "2.52.0",
+  "version_provenance": "Checked-in OpenAI Python reference package at commit cbdc98b6c1e21df7ee43d13b5de7243c6ed1ee7f dated 2026-08-01; only the local generated Responses CustomToolParam, CustomToolInputFormat, and ToolChoiceCustomParam request types were used as shape sources.",
+  "endpoint": "/v1/responses",
+  "http_method": "POST",
+  "scenario": "Responses request with one executable custom tool and an exact typed custom tool choice.",
+  "top_level_keys": ["model", "input", "tools", "tool_choice"],
+  "input_item_types": ["message:user"],
+  "content_part_types": ["input_text"],
+  "tool_shape_keys": [
+    "type",
+    "name",
+    "description",
+    "defer_loading",
+    "allowed_callers",
+    "format",
+    "format.type",
+    "format.definition",
+    "format.syntax"
+  ],
+  "expected_decision": {
+    "status": "accept",
+    "allowed_values": ["accept", "translate", "reject", "passthrough"]
+  },
+  "owner_placeholder": "CodexPooler.Gateway.OpenAICompatibility.Responses",
+  "synthetic_data_policy": {
+    "model_placeholder": "sample-model",
+    "input_placeholder": "sample-user-message",
+    "tool_name_placeholder": "sample-custom-tool",
+    "grammar_definition_stored": false
+  },
+  "structural_summary": {
+    "payload_kind": "responses_executable_custom_tool",
+    "required_tool_keys": ["type", "name"],
+    "optional_tool_keys": ["description", "defer_loading", "allowed_callers", "format"],
+    "format_variants": ["omitted", "text", "grammar:lark", "grammar:regex"],
+    "allowed_caller_values": ["direct", "programmatic"],
+    "typed_choice_keys": ["type", "name"],
+    "raw_payload_stored": false,
+    "placeholder_values_only": true,
+    "notes": [
+      "This fixture records executable custom tool definitions separately from custom_tool_call replay input.",
+      "Grammar syntax names are structural metadata; no grammar definition or request body is stored.",
+      "Provider availability remains dependent on the selected model and upstream account."
+    ]
+  },
+  "redaction_status": {
+    "metadata_only": true,
+    "contains_real_prompt": false,
+    "contains_credentials": false,
+    "contains_headers": false,
+    "contains_media_or_file_bytes": false,
+    "contains_request_body": false,
+    "contains_grammar_definition": false
+  }
+}

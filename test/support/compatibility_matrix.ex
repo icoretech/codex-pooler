@@ -527,6 +527,20 @@ defmodule CodexPooler.CompatibilityMatrix do
         "image generation and edits are Pool-gated by allow_image_generation (default on) after runtime authentication and before request parsing or upstream dispatch; disabled Pools receive a deterministic 403 image_generation_disabled error"
     },
     %{
+      slug: :responses_executable_custom_tools,
+      status: :supported,
+      current: :direct_responses_custom_tool_admission,
+      categories: [:route, :auth, :error, :streaming, :ownership],
+      routes: [
+        %{method: :post, path: "/v1/responses"},
+        %{method: :get, path: "/v1/responses", transport: "websocket"}
+      ],
+      future_routes: [],
+      fixture: :responses_executable_custom_tools,
+      contract:
+        "direct public Responses HTTP and websocket response.create accept executable custom tools with an exact nonblank name, optional description and defer_loading, nullable direct/programmatic allowed_callers, and omitted, text, lark-grammar, or regex-grammar input format; an exact typed custom choice resolves only a declared custom tool of the same name and kind; executable names are collision-free across flat functions, namespace children, and custom tools; Chat custom definitions and choices remain unsupported, custom replay is a separate input-item contract, provider execution availability depends on the selected model and upstream account, and no broad OpenAI tool parity is claimed"
+    },
+    %{
       slug: :function_tool_schema_lowering,
       status: :supported,
       current: :non_strict_function_tool_schema_lowering,
@@ -543,6 +557,20 @@ defmodule CodexPooler.CompatibilityMatrix do
       fixture: :function_tool_schema_lowering,
       contract:
         "backend Responses HTTP and websocket response.create lower and remove encrypted markers only for ordinary top-level non-strict function tool schemas while preserving every decoded top-level namespace tool term exactly; public /v1 Responses HTTP and websocket recursively lower nested namespace function tools before local validation or upstream dispatch; lowering converts boolean schemas and const values into supported schema shapes, infers missing object or array structure, drops unsupported JSON Schema keywords, preserves supported refs/definitions/combinators recursively, and never weakens strict function tools or strict structured-output schemas"
+    },
+    %{
+      slug: :direct_responses_strict_schema_repair,
+      status: :supported,
+      current: :nested_missing_type_repair,
+      categories: [:route, :auth, :error, :streaming, :ownership],
+      routes: [
+        %{method: :post, path: "/v1/responses"},
+        %{method: :get, path: "/v1/responses", transport: "websocket"}
+      ],
+      future_routes: [],
+      fixture: :direct_responses_strict_schema_repair,
+      contract:
+        "direct public Responses HTTP and websocket response.create may repair only a missing nested object or array type in top-level strict flat-function parameters or strict flat-function children of accepted namespaces when structural evidence is complete and unambiguous; the parameters root, explicit type values, refs, definition tables, combinators and their descendants, annotations, unknown keywords, ambiguous or incomplete evidence, strict structured outputs, Chat, the older nested function wrapper shape, and backend routes are not repaired; public Responses and Chat reject malformed, duplicate, or unsupported explicit type values globally before generic strict validation; strict function tools and strict structured-output schemas remain excluded from non-strict lowering"
     },
     %{
       slug: :v1_supported_surface,
@@ -1336,6 +1364,60 @@ defmodule CodexPooler.CompatibilityMatrix do
         "/v1/responses",
         "/v1/responses websocket"
       ],
+      privacy: "schema_shape_only"
+    },
+    responses_executable_custom_tools: %{
+      scope: "direct_public_responses",
+      transports: ["http", "websocket_response_create"],
+      required_keys: ["type", "name"],
+      optional_keys: ["description", "defer_loading", "allowed_callers", "format"],
+      allowed_callers: ["direct", "programmatic"],
+      allowed_callers_null: true,
+      formats: ["omitted", "text", "grammar_lark", "grammar_regex"],
+      typed_choice: %{exact_keys: ["type", "name"], resolves_same_kind: true},
+      executable_name_collision_scope: [
+        "flat_function",
+        "namespace_nested_function",
+        "custom"
+      ],
+      custom_replay_contract: "separate_input_item_shape",
+      chat_supported: false,
+      provider_availability: "selected_model_and_account_dependent",
+      broad_openai_tool_parity: false,
+      privacy: "schema_shape_only"
+    },
+    direct_responses_strict_schema_repair: %{
+      scope: "direct_public_responses_strict_flat_function_parameters",
+      transports: ["http", "websocket_response_create"],
+      inserted_types: ["object", "array"],
+      target_tool_shapes: ["top_level_flat_function", "namespace_child_flat_function"],
+      requires_typed_object_root: true,
+      requires_unambiguous_structural_evidence: true,
+      exclusions: [
+        "parameters_root",
+        "explicit_type",
+        "refs",
+        "definition_tables",
+        "combinators_and_descendants",
+        "annotations_and_unknown_keywords",
+        "ambiguous_or_incomplete_evidence",
+        "strict_structured_outputs",
+        "chat",
+        "native_nested_function_shapes",
+        "backend_routes"
+      ],
+      public_explicit_type_vocabulary: [
+        "null",
+        "boolean",
+        "object",
+        "array",
+        "number",
+        "integer",
+        "string"
+      ],
+      malformed_duplicate_or_unsupported_explicit_type: "reject",
+      strict_function_tools_lowered: false,
+      strict_structured_outputs_lowered: false,
       privacy: "schema_shape_only"
     },
     v1_supported_surface: %{
