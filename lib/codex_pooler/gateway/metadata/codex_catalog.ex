@@ -322,7 +322,8 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
   # was told about and the account that serves its turn the same partition. The
   # documented consequence is that the catalog body and its ETag can change when
   # the anchor partition flips — a legitimate revision, not churn for its own
-  # sake. See `docs/runtime-contract.md`.
+  # sake. The contract is recorded under the `:backend_models_etag` entry in
+  # `CodexPooler.CompatibilityMatrix`.
   defp select_anchored_partition(pairs, %Model{} = model, routable_assignment_ids) do
     partitions =
       pairs

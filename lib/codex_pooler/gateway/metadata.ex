@@ -64,7 +64,8 @@ defmodule CodexPooler.Gateway.Metadata do
       # computed during dispatch would never match this body. Both sides
       # therefore apply the same quota-aware anchor rule, which is why this
       # body and its ETag can legitimately change when the anchor partition
-      # flips. See `docs/runtime-contract.md`.
+      # flips. The contract is recorded under the `:backend_models_etag` entry
+      # in `CodexPooler.CompatibilityMatrix`.
       catalog =
         CodexCatalog.build_canonical(
           visible_models,
