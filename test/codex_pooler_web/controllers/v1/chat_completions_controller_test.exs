@@ -2253,10 +2253,14 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
       |> Map.put("default_reasoning_level", "medium")
       |> Map.put("default_service_tier", "default")
 
+    # The reported pool diverged on presentation hints, which no longer split
+    # a canonical partition. Keep them here as the realistic shape, and add
+    # the behavioral field that does still split.
     alternate_source =
       selected_source
       |> Map.put("default_reasoning_level", "high")
       |> Map.put("default_service_tier", "priority")
+      |> Map.put("context_window", 111_111)
 
     metadata =
       setup.model.metadata
