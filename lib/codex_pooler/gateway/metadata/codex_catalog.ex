@@ -26,8 +26,12 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
           required(:assignment_ids) => [Ecto.UUID.t()],
           required(:digest) => String.t(),
           required(:model) => Model.t(),
+          required(:partition_count) => pos_integer(),
+          required(:routable_selection?) => boolean(),
           required(:source) => map()
         }
+  @type routable_assignment_ids_resolver :: (-> MapSet.t(Ecto.UUID.t()))
+  @type selection_opts :: [routable_assignment_ids: routable_assignment_ids_resolver()]
 
   @spec build([Model.t()], normalized_policy()) :: result()
   def build(routable_models, normalized_policy)
@@ -127,18 +131,26 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
     end
   end
 
-  @spec select_canonical_sources([Model.t()], candidates_by_model_id()) :: [selected_partition()]
-  def select_canonical_sources(models, candidates_by_model_id)
-      when is_list(models) and is_map(candidates_by_model_id) do
-    Enum.flat_map(models, fn
-      %Model{} = model ->
-        case select_model_partition(model, Map.get(candidates_by_model_id, model.id, [])) do
-          nil -> []
-          partition -> [partition]
-        end
+  @spec select_canonical_sources([Model.t()], candidates_by_model_id(), selection_opts()) ::
+          [selected_partition()]
+  def select_canonical_sources(models, candidates_by_model_id, opts \\ [])
+      when is_list(models) and is_map(candidates_by_model_id) and is_list(opts) do
+    pairs_by_model =
+      Enum.flat_map(models, fn
+        %Model{} = model ->
+          case canonical_pairs(model, Map.get(candidates_by_model_id, model.id, [])) do
+            [] -> []
+            pairs -> [{model, pairs}]
+          end
 
-      _model ->
-        []
+        _model ->
+          []
+      end)
+
+    routable_assignment_ids = resolve_routable_assignment_ids(pairs_by_model, opts)
+
+    Enum.map(pairs_by_model, fn {model, pairs} ->
+      select_anchored_partition(pairs, model, routable_assignment_ids)
     end)
   end
 
@@ -186,7 +198,8 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
           normalized_policy(),
           pricing_buckets(),
           context_window_overrides(),
-          effective_model_serving_modes()
+          effective_model_serving_modes(),
+          selection_opts()
         ) :: result()
   def build_canonical(
         models,
@@ -194,10 +207,11 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
         normalized_policy,
         pricing_buckets,
         context_window_overrides,
-        effective_model_serving_modes
+        effective_model_serving_modes,
+        opts \\ []
       ) do
     models
-    |> select_canonical_sources(candidates_by_model_id)
+    |> select_canonical_sources(candidates_by_model_id, opts)
     |> build_selected_partitions(
       normalized_policy,
       pricing_buckets,
@@ -242,13 +256,25 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
     CandidateEligibility.policy_visible_models(routable_models, normalized_policy)
   end
 
-  defp select_model_partition(%Model{} = model, candidates) when is_list(candidates) do
-    model
-    |> canonical_pairs(candidates)
-    |> select_anchored_partition(model)
+  # Anchor selection is quota-aware: the oldest partition still holding at least
+  # one routable member wins, so an anchor partition whose accounts have all
+  # exhausted their quota no longer strands every healthy account behind it.
+  #
+  # Resolving routability costs a quota read, so it is deferred until a model
+  # actually has more than one partition. A pool whose accounts all advertise
+  # the same source — the overwhelmingly common shape — stays read-free and
+  # keeps byte-identical behavior.
+  defp resolve_routable_assignment_ids(pairs_by_model, opts) do
+    resolver = Keyword.get(opts, :routable_assignment_ids)
+
+    if is_function(resolver, 0) and Enum.any?(pairs_by_model, &multi_partition?/1) do
+      resolver.()
+    end
   end
 
-  defp select_model_partition(%Model{}, _candidates), do: nil
+  defp multi_partition?({_model, pairs}) do
+    pairs |> Enum.uniq_by(& &1.digest) |> length() > 1
+  end
 
   defp canonical_pairs(%Model{} = model, candidates) do
     case Map.get(model.metadata || %{}, "source_assignment_models") do
@@ -285,19 +311,52 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
 
   defp valid_source_slug?(_source, %Model{}), do: false
 
-  defp select_anchored_partition([], %Model{}), do: nil
+  # `partitions` is ordered oldest anchor first, so the head is exactly the
+  # partition the age-only rule selects. Routability moves the selection to the
+  # next-oldest partition that can still serve a turn; when nothing is routable
+  # the oldest partition is kept, so an all-exhausted pool keeps its current
+  # deterministic error shape.
+  #
+  # Selection drives BOTH the routing cap and the advertised
+  # `/backend-api/codex/models` body, which is what keeps the catalog a client
+  # was told about and the account that serves its turn the same partition. The
+  # documented consequence is that the catalog body and its ETag can change when
+  # the anchor partition flips — a legitimate revision, not churn for its own
+  # sake. See `docs/runtime-contract.md`.
+  defp select_anchored_partition(pairs, %Model{} = model, routable_assignment_ids) do
+    partitions =
+      pairs
+      |> Enum.group_by(& &1.digest)
+      |> Map.values()
+      |> Enum.sort_by(&partition_anchor_key/1)
 
-  defp select_anchored_partition(pairs, %Model{} = model) do
-    anchor = Enum.min_by(pairs, &{&1.created_at, &1.assignment_id})
-    members = Map.fetch!(Enum.group_by(pairs, & &1.digest), anchor.digest)
+    [oldest_partition | _rest] = partitions
+    members = select_routable_partition(partitions, routable_assignment_ids)
+    anchor = partition_anchor(members)
 
     %{
       assignment_ids: members |> Enum.map(& &1.assignment_id) |> Enum.sort(),
       digest: anchor.digest,
       model: model,
+      partition_count: length(partitions),
+      routable_selection?: members != oldest_partition,
       source: anchor.source
     }
   end
+
+  defp select_routable_partition([oldest_partition | _rest], nil), do: oldest_partition
+
+  defp select_routable_partition([oldest_partition | _rest] = partitions, routable) do
+    Enum.find(partitions, oldest_partition, fn members ->
+      Enum.any?(members, &MapSet.member?(routable, &1.assignment_id))
+    end)
+  end
+
+  defp partition_anchor(members), do: Enum.min_by(members, &partition_pair_key/1)
+
+  defp partition_anchor_key(members), do: members |> partition_anchor() |> partition_pair_key()
+
+  defp partition_pair_key(pair), do: {pair.created_at, pair.assignment_id}
 
   @spec etag(map()) :: String.t()
   def etag(body) when is_map(body) do

@@ -20,6 +20,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Routing do
     :requested_model,
     :effective_model,
     :api_key_policy,
+    :canonical_partition,
     :file_affinity_assignment_id,
     :prompt_cache_key,
     :quota_decision,
@@ -34,6 +35,11 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Routing do
     :use_responses_lite?
   ]
 
+  # Bounded canonical partition filtering evidence. Counts plus a short digest
+  # prefix only: never a full digest, an assignment list, or payload content.
+  @type canonical_partition :: %{
+          required(String.t()) => String.t() | non_neg_integer() | boolean()
+        }
   @type configured_model_serving_mode :: String.t()
   @type effective_model_serving_mode :: String.t()
   @type model_serving_mode_source :: String.t()
@@ -47,6 +53,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Routing do
           requested_model: String.t() | nil,
           effective_model: String.t() | nil,
           api_key_policy: map() | nil,
+          canonical_partition: canonical_partition() | nil,
           file_affinity_assignment_id: Ecto.UUID.t() | nil,
           prompt_cache_key: String.t() | nil,
           quota_decision: map() | nil,

@@ -9,6 +9,11 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
 
+  # The routing states `add_classified_quota_candidate/4` keeps as candidates.
+  # An eligibility map also carries `routing_state` when it is blocked, so
+  # matching the key alone would call every exhausted account routable.
+  @routable_routing_states [:precise, :credit_backed_probe, :weekly_only_probe]
+
   @spec filter_quota_eligible_candidates(FilterInput.t()) ::
           CodexPooler.Gateway.Routing.CandidateEligibility.quota_filter_result()
   def filter_quota_eligible_candidates(%FilterInput{} = input) do
@@ -116,6 +121,39 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility.Quota do
       present?(Map.get(exclusion, :pool_upstream_assignment_id)) and
         present?(Map.get(exclusion, :upstream_identity_id))
     end)
+  end
+
+  @doc """
+  Whether a candidate would survive quota classification right now.
+
+  Canonical partition selection uses this to answer "can this partition still
+  serve a turn?" before dispatch narrows the candidate list. It reuses the same
+  eligibility and post-reset lifecycle predicates the real filter applies, so a
+  partition is never judged unroutable on rules routing would not have enforced.
+  Circuit state is deliberately not consulted: it is per route class and
+  short-lived, and letting it move the selected partition would make the
+  advertised catalog flap.
+  """
+  @spec quota_routable?(
+          Model.t(),
+          CodexPooler.Gateway.Routing.CandidateEligibility.candidate(),
+          [CodexPooler.Upstreams.Quota.AccountQuotaWindow.t()],
+          DateTime.t()
+        ) :: boolean()
+  def quota_routable?(%Model{} = model, {_assignment, identity}, windows, %DateTime{} = at)
+      when is_list(windows) do
+    if claimed_pending_reset_probe?(identity) do
+      false
+    else
+      windows
+      |> QuotaWindows.routing_quota_eligibility_from_windows(
+        Keyword.put(quota_scope_opts(model), :at, at)
+      )
+      |> case do
+        %{routing_state: routing_state} when routing_state in @routable_routing_states -> true
+        %{exclusions: reasons} when is_list(reasons) -> reset_probe_routeable?(identity, reasons)
+      end
+    end
   end
 
   defp classify_quota_candidates(%Model{} = model, candidates) do

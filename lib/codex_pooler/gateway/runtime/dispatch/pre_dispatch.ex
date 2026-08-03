@@ -14,6 +14,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   alias CodexPooler.Gateway.Payloads.StrictSchema
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.ModelMetadata
+  alias CodexPooler.Gateway.Routing.PartitionRoutability
   alias CodexPooler.Gateway.Routing.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
@@ -75,8 +76,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
           visible_model_context
       )
       when is_list(visible_models) do
-    visible_model_context =
-      put_selected_partition_assignment_ids(visible_model_context, model)
+    visible_model_context = put_valid_canonical_assignment_ids(visible_model_context, model)
 
     has_input_image? = CandidateEligibility.payload_has_input_image?(payload)
 
@@ -99,6 +99,17 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
          :ok <- PayloadNormalizer.validate(payload, request_options),
          {:ok, candidate_snapshots} <-
            CandidateEligibility.routable_candidates(visible_model_context, model),
+         {quota_window_snapshots, quota_snapshot_at} =
+           RouteState.load_quota_window_snapshots(candidate_snapshots),
+         visible_model_context =
+           put_selected_partition_assignment_ids(
+             visible_model_context,
+             model,
+             quota_window_snapshots,
+             quota_snapshot_at
+           ),
+         request_options =
+           put_canonical_partition_metadata(request_options, visible_model_context),
          route_state =
            RouteState.new(%{
              visible_model_context: visible_model_context,
@@ -107,6 +118,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
              effective_model_serving_modes: effective_model_serving_modes,
              candidate_snapshots: candidate_snapshots,
              candidates: candidate_snapshots,
+             quota_window_snapshots: quota_window_snapshots,
+             quota_snapshot_at: quota_snapshot_at,
              routing_settings: PoolRouting.routing_settings_with_defaults(auth.pool)
            })
            |> maybe_put_codex_models_etag(endpoint, request_options),
@@ -163,22 +176,88 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
     end
   end
 
-  defp put_selected_partition_assignment_ids(visible_model_context, %Model{} = model) do
-    candidates_by_model_id = Map.get(visible_model_context, :candidates_by_model_id, %{})
-    candidates = Map.get(candidates_by_model_id, model.id, [])
+  defp put_valid_canonical_assignment_ids(visible_model_context, %Model{} = model) do
+    candidates =
+      visible_model_context
+      |> Map.get(:candidates_by_model_id, %{})
+      |> Map.get(model.id, [])
 
-    assignment_ids =
-      case CodexCatalog.select_canonical_sources([model], candidates_by_model_id) do
-        [%{assignment_ids: assignment_ids}] -> assignment_ids
-        [] -> []
-      end
-
-    visible_model_context
-    |> Map.put(:selected_partition_assignment_ids, assignment_ids)
-    |> Map.put(
+    Map.put(
+      visible_model_context,
       :valid_canonical_assignment_ids,
       CodexCatalog.valid_canonical_assignment_ids(model, candidates)
     )
+  end
+
+  # Runs after policy, payload validation, and candidate hydration so the quota
+  # snapshot that feeds partition selection is read once, only for requests that
+  # can still dispatch, and is then reused by the routing snapshots.
+  defp put_selected_partition_assignment_ids(
+         visible_model_context,
+         %Model{} = model,
+         quota_window_snapshots,
+         quota_snapshot_at
+       ) do
+    candidates_by_model_id = Map.get(visible_model_context, :candidates_by_model_id, %{})
+
+    partition =
+      [model]
+      |> CodexCatalog.select_canonical_sources(candidates_by_model_id,
+        routable_assignment_ids: fn ->
+          PartitionRoutability.routable_assignment_ids(
+            [model],
+            candidates_by_model_id,
+            quota_window_snapshots,
+            quota_snapshot_at
+          )
+        end
+      )
+      |> List.first()
+
+    visible_model_context
+    |> Map.put(:selected_partition_assignment_ids, selected_partition_assignment_ids(partition))
+    |> Map.put(
+      :canonical_partition_summary,
+      canonical_partition_summary(partition, visible_model_context)
+    )
+  end
+
+  defp selected_partition_assignment_ids(%{assignment_ids: assignment_ids}), do: assignment_ids
+  defp selected_partition_assignment_ids(nil), do: []
+
+  # Bounded, metadata-only evidence that canonical partition filtering held back
+  # otherwise-valid assignments. Without it a partition-starved pool logs a
+  # quota denial naming only the seats inside the selected partition, and an
+  # operator cannot tell that the healthy seats were never read at all. Only a
+  # 12-character digest prefix is recorded — never a full digest or any payload.
+  defp canonical_partition_summary(nil, _visible_model_context), do: nil
+  defp canonical_partition_summary(%{partition_count: 1}, _visible_model_context), do: nil
+
+  defp canonical_partition_summary(partition, visible_model_context) do
+    selected_count = length(partition.assignment_ids)
+
+    valid_count =
+      visible_model_context
+      |> Map.get(:valid_canonical_assignment_ids, [])
+      |> length()
+
+    %{
+      "digest_prefix" => String.slice(partition.digest, 0, 12),
+      "partition_count" => partition.partition_count,
+      "selected_count" => selected_count,
+      "filtered_count" => max(valid_count - selected_count, 0),
+      "routable_selection" => partition.routable_selection?
+    }
+  end
+
+  defp put_canonical_partition_metadata(
+         %RequestOptions{} = request_options,
+         visible_model_context
+       ) do
+    case Map.get(visible_model_context, :canonical_partition_summary) do
+      %{} = summary -> RequestOptions.put_routing(request_options, canonical_partition: summary)
+      nil -> request_options
+    end
   end
 
   defp continuity_assignment_ids(%RequestOptions{} = request_options, valid_assignment_ids) do
@@ -314,7 +393,13 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
           policy,
           pricing_buckets,
           context_window_overrides,
-          route_state.effective_model_serving_modes
+          route_state.effective_model_serving_modes,
+          routable_assignment_ids: fn ->
+            PartitionRoutability.routable_assignment_ids(
+              route_state.visible_models,
+              candidates_by_model_id
+            )
+          end
         )
 
       RouteState.put_codex_models_etag(route_state, etag)

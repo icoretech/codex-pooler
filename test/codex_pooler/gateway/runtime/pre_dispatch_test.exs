@@ -973,6 +973,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     # Quota is now read for every identity, healthy ones included.
     assert Enum.sort(Map.keys(prepared.route_state.quota_window_snapshots)) ==
              Enum.sort(starved.exhausted_identity_ids ++ starved.healthy_identity_ids)
+
+    # A single partition carries no partition-filtering evidence.
+    assert prepared.request_options.routing.canonical_partition == nil
   end
 
   @tag :external_issues_229_231
@@ -1001,6 +1004,123 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     assert [attempt] = Repo.all(Attempt)
     assert attempt.pool_upstream_assignment_id in starved.healthy_assignment_ids
+  end
+
+  @tag :external_issues_229_231
+  @tag :partition_quota_starvation
+  test "behavioral source drift anchors the backend turn on the oldest routable partition" do
+    starved = starved_anchor_partition_pool!(:behavioral)
+    {:ok, auth} = Access.authenticate_authorization_header(starved.setup.authorization)
+
+    payload = %{
+      "model" => starved.model.exposed_model_id,
+      "input" => "behavioral drift turn"
+    }
+
+    assert {:ok, prepared} =
+             PreDispatch.prepare(
+               auth,
+               @endpoint_path,
+               payload,
+               request_options(auth, payload, []),
+               starved.model
+             )
+
+    context = prepared.route_state.visible_model_context
+
+    assert context.valid_canonical_assignment_ids ==
+             Enum.sort(starved.exhausted_assignment_ids ++ starved.healthy_assignment_ids)
+
+    # The partitions stay apart because the drift is behavioral, but the
+    # selected anchor moves to the oldest partition that can still serve.
+    assert context.selected_partition_assignment_ids ==
+             Enum.sort(starved.healthy_assignment_ids)
+
+    assert Enum.sort(candidate_ids(prepared.candidates)) ==
+             Enum.sort(starved.healthy_assignment_ids)
+
+    assert %{
+             "partition_count" => 2,
+             "selected_count" => 6,
+             "filtered_count" => 2,
+             "routable_selection" => true
+           } = prepared.request_options.routing.canonical_partition
+  end
+
+  @tag :external_issues_229_231
+  @tag :partition_quota_starvation
+  test "behavioral source drift dispatches the backend turn to a healthy partition seat" do
+    starved = starved_anchor_partition_pool!(:behavioral)
+    {:ok, auth} = Access.authenticate_authorization_header(starved.setup.authorization)
+
+    payload = %{
+      "model" => starved.model.exposed_model_id,
+      "input" => "behavioral drift dispatch"
+    }
+
+    assert {:ok, response} =
+             Gateway.execute(
+               auth,
+               @endpoint_path,
+               payload,
+               RequestOptions.build(%{}, @endpoint_path, payload)
+             )
+
+    assert response.status == 200
+    assert %{"id" => "resp_healthy_partition"} = Jason.decode!(response.raw_body)
+    assert FakeUpstream.count(starved.healthy_upstream) == 1
+    assert FakeUpstream.count(starved.exhausted_upstream) == 0
+
+    assert [attempt] = Repo.all(Attempt)
+    assert attempt.pool_upstream_assignment_id in starved.healthy_assignment_ids
+  end
+
+  @tag :external_issues_229_231
+  @tag :partition_quota_starvation
+  test "a fully exhausted split pool records why partition filtering held seats back" do
+    starved = starved_anchor_partition_pool!(:behavioral_all_exhausted)
+    {:ok, auth} = Access.authenticate_authorization_header(starved.setup.authorization)
+
+    payload = %{
+      "model" => starved.model.exposed_model_id,
+      "input" => "fully exhausted split pool"
+    }
+
+    assert {:error, %{status: 503, code: "quota_exhausted"}} =
+             Gateway.execute(
+               auth,
+               @endpoint_path,
+               payload,
+               RequestOptions.build(%{}, @endpoint_path, payload)
+             )
+
+    assert FakeUpstream.count(starved.exhausted_upstream) == 0
+    assert FakeUpstream.count(starved.healthy_upstream) == 0
+
+    assert [request] = Repo.all(Request)
+    assert request.status == "rejected"
+    assert request.last_error_code == "quota_exhausted"
+    assert Repo.all(Attempt) == []
+
+    exclusions = request.request_metadata["candidate_exclusions"]
+
+    # Nothing is routable anywhere, so the oldest partition is kept and the
+    # denial still names only its seats.
+    assert Enum.sort(Enum.map(exclusions, & &1["pool_upstream_assignment_id"])) ==
+             Enum.sort(starved.exhausted_assignment_ids)
+
+    # The request log now says the other six seats existed and were held back
+    # by partition filtering, which is what makes this self-diagnosable.
+    assert %{
+             "partition_count" => 2,
+             "selected_count" => 2,
+             "filtered_count" => 6,
+             "routable_selection" => false,
+             "digest_prefix" => digest_prefix
+           } = request.request_metadata["canonical_partition"]
+
+    assert String.length(digest_prefix) == 12
+    assert digest_prefix =~ ~r/\A[0-9a-f]{12}\z/
   end
 
   @tag :external_issues_229_231

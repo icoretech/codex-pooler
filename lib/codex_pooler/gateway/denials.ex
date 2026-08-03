@@ -90,6 +90,10 @@ defmodule CodexPooler.Gateway.Denials do
           metadata
           |> SessionContinuity.put_session_metadata(request_options)
           |> maybe_put_metadata("candidate_exclusions", Map.get(reason, :candidate_exclusions))
+          |> maybe_put_metadata(
+            "canonical_partition",
+            request_options.routing.canonical_partition
+          )
           |> maybe_put_metadata("continuity_denial", continuity_denial_metadata(reason))
         end)
       )

@@ -166,6 +166,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
       when is_map(snapshots),
       do: put_circuit_snapshots(route_state, snapshots)
 
+  @spec load_quota_window_snapshots([candidate()]) :: {quota_window_snapshots(), DateTime.t()}
+  def load_quota_window_snapshots(candidates) when is_list(candidates),
+    do: load_quota_window_snapshot(candidates)
+
   @spec preload_routing_snapshots(t(), auth(), Model.t(), RequestOptions.t()) :: t()
   def preload_routing_snapshots(
         %__MODULE__{candidates: candidates} = route_state,
@@ -174,14 +178,38 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
         %RequestOptions{} = request_options
       ) do
     route_class = RequestOptions.route_class(request_options)
-    {quota_window_snapshots, quota_snapshot_at} = load_quota_window_snapshot(candidates)
 
     route_state
-    |> put_quota_window_snapshot(quota_window_snapshots, quota_snapshot_at)
+    |> maybe_load_quota_window_snapshot(candidates)
     |> put_circuit_snapshots(
       CircuitState.eligibility_snapshots(auth, model, candidates, route_class)
     )
   end
+
+  # Canonical partition selection loads a snapshot over the wider pre-filter
+  # candidate list. When that snapshot already covers every remaining candidate
+  # there is nothing new to learn, so reuse it instead of reading quota twice
+  # per dispatch.
+  defp maybe_load_quota_window_snapshot(%__MODULE__{} = route_state, candidates) do
+    if quota_window_snapshot_covers?(route_state, candidates) do
+      route_state
+    else
+      {quota_window_snapshots, quota_snapshot_at} = load_quota_window_snapshot(candidates)
+
+      put_quota_window_snapshot(route_state, quota_window_snapshots, quota_snapshot_at)
+    end
+  end
+
+  defp quota_window_snapshot_covers?(
+         %__MODULE__{quota_snapshot_at: %DateTime{}, quota_window_snapshots: snapshots},
+         candidates
+       ),
+       do:
+         Enum.all?(candidates, fn {_assignment, identity} ->
+           Map.has_key?(snapshots, identity.id)
+         end)
+
+  defp quota_window_snapshot_covers?(%__MODULE__{}, _candidates), do: false
 
   @spec refresh_quota_window_snapshots(t()) :: t()
   def refresh_quota_window_snapshots(%__MODULE__{candidates: candidates} = route_state) do

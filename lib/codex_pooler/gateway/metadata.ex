@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Metadata do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.ModelMetadata
+  alias CodexPooler.Gateway.Routing.PartitionRoutability
   alias CodexPooler.Pools
   alias CodexPooler.Pools.ModelServingMode
   alias CodexPooler.Pools.ModelServingOverride
@@ -57,6 +58,13 @@ defmodule CodexPooler.Gateway.Metadata do
       effective_model_serving_modes =
         effective_model_serving_modes(auth, hydration, visible_models)
 
+      # The advertised catalog and the routing cap must select the same
+      # partition: a client told about partition A and then served by partition
+      # B would see metadata that does not describe its own turn, and the ETag
+      # computed during dispatch would never match this body. Both sides
+      # therefore apply the same quota-aware anchor rule, which is why this
+      # body and its ETag can legitimately change when the anchor partition
+      # flips. See `docs/runtime-contract.md`.
       catalog =
         CodexCatalog.build_canonical(
           visible_models,
@@ -64,7 +72,13 @@ defmodule CodexPooler.Gateway.Metadata do
           policy,
           pricing_buckets,
           context_window_overrides,
-          effective_model_serving_modes
+          effective_model_serving_modes,
+          routable_assignment_ids: fn ->
+            PartitionRoutability.routable_assignment_ids(
+              visible_models,
+              hydration.candidates_by_model_id
+            )
+          end
         )
 
       {:ok,

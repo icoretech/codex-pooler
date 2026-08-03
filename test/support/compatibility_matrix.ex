@@ -79,7 +79,9 @@ defmodule CodexPooler.CompatibilityMatrix do
           "visibility"
         ],
         anchor_order: ["created_at", "assignment_id"],
-        selection: "partition_containing_minimum_anchor",
+        selection: "oldest_partition_with_quota_routable_member",
+        selection_fallback: "oldest_partition_when_none_routable",
+        selection_routability_input: "quota_evidence_only",
         api_key_policy_stage: "post_selection_admission_and_projection",
         new_turn_capacity: %{
           backend_codex_catalog_driven: "selected_partition_only",
@@ -97,7 +99,7 @@ defmodule CodexPooler.CompatibilityMatrix do
         }
       },
       contract:
-        "backend model aliases return the same policy-visible effective catalog body and deterministic weak ETag from the canonical pristine-source partition whose anchor is the minimum created_at plus assignment id; presentation hints (default_reasoning_level, default_service_tier, description, shell_type, visibility) are excluded from the partition digest but still served verbatim from the selected anchor source; API-key policy decides admission and projection only after canonical selection and never chooses or rewrites the partition; backend Codex catalog-driven new turns use the selected partition, while translated OpenAI Responses capacity includes all valid canonical assignments after concrete request compatibility; valid canonical hard pins may continue on their pinned partition; selected-partition exhaustion and malformed-source hard pins fail before accounting or upstream work; cache coherence across processes or replicas is eventual after a successful Responses token is observed"
+        "backend model aliases return the same policy-visible effective catalog body and deterministic weak ETag from the canonical pristine-source partition selected as the oldest partition, by minimum created_at plus assignment id, that still holds a quota-routable member, falling back to the oldest partition when none is routable, so the catalog body and ETag can change when the anchor partition flips; presentation hints (default_reasoning_level, default_service_tier, description, shell_type, visibility) are excluded from the partition digest but still served verbatim from the selected anchor source; API-key policy decides admission and projection only after canonical selection and never chooses or rewrites the partition; backend Codex catalog-driven new turns use the selected partition, while translated OpenAI Responses capacity includes all valid canonical assignments after concrete request compatibility; valid canonical hard pins may continue on their pinned partition; selected-partition exhaustion and malformed-source hard pins fail before accounting or upstream work; cache coherence across processes or replicas is eventual after a successful Responses token is observed"
     },
     %{
       slug: :backend_responses_etag,

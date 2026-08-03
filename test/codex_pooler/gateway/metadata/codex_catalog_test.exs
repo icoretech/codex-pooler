@@ -325,6 +325,91 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
     assert result.etag == CodexCatalog.etag(result.body)
   end
 
+  describe "quota-aware anchor selection" do
+    setup do
+      {anchor_id, sibling_id, alternate_id} = assignment_ids()
+      source = pristine_source("gpt-anchored")
+
+      model =
+        "gpt-anchored"
+        |> model(%{"source_assignment_models" => %{}})
+        |> put_source_models(%{
+          anchor_id => source,
+          sibling_id => source,
+          alternate_id => Map.put(source, "context_window", 111_111)
+        })
+
+      %{
+        model: model,
+        candidates: partition_candidates(model, [anchor_id, sibling_id, alternate_id]),
+        anchor_id: anchor_id,
+        sibling_id: sibling_id,
+        alternate_id: alternate_id
+      }
+    end
+
+    test "keeps the oldest partition when it still has a routable member", context do
+      assert [partition] =
+               CodexCatalog.select_canonical_sources([context.model], context.candidates,
+                 routable_assignment_ids: fn ->
+                   MapSet.new([context.sibling_id, context.alternate_id])
+                 end
+               )
+
+      assert partition.assignment_ids == Enum.sort([context.anchor_id, context.sibling_id])
+      assert partition.partition_count == 2
+      refute partition.routable_selection?
+    end
+
+    test "moves to the next-oldest partition when the oldest has none", context do
+      assert [partition] =
+               CodexCatalog.select_canonical_sources([context.model], context.candidates,
+                 routable_assignment_ids: fn -> MapSet.new([context.alternate_id]) end
+               )
+
+      assert partition.assignment_ids == [context.alternate_id]
+      assert partition.partition_count == 2
+      assert partition.routable_selection?
+      assert partition.source["context_window"] == 111_111
+    end
+
+    test "keeps the oldest partition when nothing is routable anywhere", context do
+      assert [partition] =
+               CodexCatalog.select_canonical_sources([context.model], context.candidates,
+                 routable_assignment_ids: fn -> MapSet.new() end
+               )
+
+      assert partition.assignment_ids == Enum.sort([context.anchor_id, context.sibling_id])
+      refute partition.routable_selection?
+    end
+
+    test "selects by age alone when no routability resolver is supplied", context do
+      assert [partition] =
+               CodexCatalog.select_canonical_sources([context.model], context.candidates)
+
+      assert partition.assignment_ids == Enum.sort([context.anchor_id, context.sibling_id])
+      assert partition.partition_count == 2
+      refute partition.routable_selection?
+    end
+
+    test "never resolves routability for a single-partition model", context do
+      single =
+        update_source(context.model, context.alternate_id, &Map.delete(&1, "context_window"))
+
+      assert [partition] =
+               CodexCatalog.select_canonical_sources([single], context.candidates,
+                 routable_assignment_ids: fn ->
+                   flunk("routability must not be resolved for a single partition")
+                 end
+               )
+
+      assert partition.partition_count == 1
+
+      assert partition.assignment_ids ==
+               Enum.sort([context.anchor_id, context.sibling_id, context.alternate_id])
+    end
+  end
+
   test "cosmetic source drift joins one partition without moving the served anchor body" do
     anchor_source = pristine_source("gpt-cosmetic")
 
