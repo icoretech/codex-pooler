@@ -325,6 +325,32 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
     assert result.etag == CodexCatalog.etag(result.body)
   end
 
+  test "anchors on the chronologically oldest assignment across month boundaries" do
+    model = model("gpt-boundary", %{"source_assignment_models" => %{}})
+    source = pristine_source("gpt-boundary")
+    {july_id, august_id, _unused} = assignment_ids()
+
+    model =
+      put_source_models(model, %{
+        july_id => source,
+        august_id => Map.put(source, "context_window", 111_111)
+      })
+
+    # Structural DateTime ordering compares day before month, so 2026-08-01
+    # would sort before 2026-07-31; the anchor contract is chronological.
+    candidates = %{
+      model.id => [
+        candidate(august_id, ~U[2026-08-01 00:00:00.000000Z]),
+        candidate(july_id, ~U[2026-07-31 23:00:00.000000Z])
+      ]
+    }
+
+    assert [partition] = CodexCatalog.select_canonical_sources([model], candidates)
+
+    assert partition.assignment_ids == [july_id]
+    assert partition.partition_count == 2
+  end
+
   describe "quota-aware anchor selection" do
     setup do
       {anchor_id, sibling_id, alternate_id} = assignment_ids()

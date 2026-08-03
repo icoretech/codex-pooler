@@ -535,8 +535,12 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibility do
     normalized in allowed
   end
 
+  # Chronological, not structural: structural DateTime comparison orders struct
+  # fields alphabetically (day before month before year), which inverts ranks
+  # across month boundaries.
   defp model_source_rank({%PoolUpstreamAssignment{} = assignment, %UpstreamIdentity{} = identity}) do
-    {model_source_plan_rank(identity), assignment.created_at, assignment.id}
+    {model_source_plan_rank(identity), DateTime.to_unix(assignment.created_at, :microsecond),
+     assignment.id}
   end
 
   defp model_source_plan_rank(%UpstreamIdentity{} = identity) do

@@ -357,7 +357,11 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
 
   defp partition_anchor_key(members), do: members |> partition_anchor() |> partition_pair_key()
 
-  defp partition_pair_key(pair), do: {pair.created_at, pair.assignment_id}
+  # Structural DateTime comparison orders struct fields alphabetically (day
+  # before month before year), so it is not chronological across month or year
+  # boundaries. The anchor contract is the chronologically oldest assignment.
+  defp partition_pair_key(pair),
+    do: {DateTime.to_unix(pair.created_at, :microsecond), pair.assignment_id}
 
   @spec etag(map()) :: String.t()
   def etag(body) when is_map(body) do
