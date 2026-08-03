@@ -212,6 +212,27 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
   end
 
   test "exposes bounded stream outcomes without identifier metadata", %{conn: conn} do
+    interrupted_metric =
+      ~s(codex_pooler_gateway_stream_outcome_count{downstream_transport="http_sse",outcome="interrupted",upstream_transport="websocket"})
+
+    unknown_metric =
+      ~s(codex_pooler_gateway_stream_outcome_count{downstream_transport="unknown",outcome="unknown",upstream_transport="unknown"})
+
+    :telemetry.execute(
+      [:codex_pooler, :gateway, :stream, :outcome],
+      %{count: 1},
+      %{
+        outcome: "interrupted",
+        downstream_transport: "http_sse",
+        upstream_transport: "websocket"
+      }
+    )
+
+    baseline =
+      build_conn()
+      |> get(~p"/metrics")
+      |> Map.fetch!(:resp_body)
+
     :telemetry.execute(
       [:codex_pooler, :gateway, :stream, :outcome],
       %{count: 1},
@@ -245,9 +266,11 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
       |> String.split("\n", trim: true)
       |> Enum.filter(&String.starts_with?(&1, "codex_pooler_gateway_stream_outcome_count"))
 
-    assert ~s(codex_pooler_gateway_stream_outcome_count{downstream_transport="http_sse",outcome="interrupted",upstream_transport="websocket"} 1) in metric_lines
+    assert metric_sample(conn.resp_body, interrupted_metric) ==
+             metric_sample(baseline, interrupted_metric) + 1
 
-    assert ~s(codex_pooler_gateway_stream_outcome_count{downstream_transport="unknown",outcome="unknown",upstream_transport="unknown"} 1) in metric_lines
+    assert metric_sample(conn.resp_body, unknown_metric) ==
+             metric_sample(baseline, unknown_metric) + 1
 
     for line <- metric_lines do
       refute line =~ "request_id"
@@ -537,6 +560,17 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
     body
     |> String.split("\n", trim: true)
     |> Enum.filter(&String.contains?(&1, "codex_pooler_admin_stats_"))
+  end
+
+  defp metric_sample(body, metric_name) do
+    body
+    |> String.split("\n", trim: true)
+    |> Enum.find_value(0, fn line ->
+      case String.split(line, " ", parts: 2) do
+        [^metric_name, sample] -> String.to_integer(sample)
+        _other -> nil
+      end
+    end)
   end
 
   defp histogram_bucket_baselines(conn, bucket_names) do
