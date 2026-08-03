@@ -460,10 +460,17 @@ Direct public Responses requests also accept executable custom tools on
 `defer_loading`, nullable `allowed_callers` using `direct` or `programmatic`, and
 either unconstrained text or a `lark`/`regex` grammar format. A typed custom
 `tool_choice` resolves only a declared custom tool with the same exact name and
-kind. This is separate from accepted `custom_tool_call` replay input. Chat
-Completions does not accept executable custom definitions or custom choices,
-and actual execution availability still depends on the selected model and
-upstream account. This narrow contract does not imply broad OpenAI tool parity.
+kind. Full mode preserves that typed choice. Lite mode rejects map-shaped typed
+choices before upstream dispatch with `unsupported_parameter` and
+`param: "tool_choice"`; use automatic or explicit Full mode when a client needs
+forced typed selection. That rejection follows the model's serving mode rather
+than the endpoint, so any map-shaped `tool_choice` is rejected on a Lite-served
+model, including a Chat Completions named-function choice. String choices such
+as `auto` are accepted in both modes. This is separate from accepted `custom_tool_call` replay
+input. Chat Completions does not accept executable custom definitions or custom
+choices, and actual execution availability still depends on the selected model
+and upstream account. This narrow contract does not imply broad OpenAI tool
+parity.
 
 For direct public Responses only, a strict flat function tool whose parameters
 already have an object root may receive a missing nested `object` or `array`

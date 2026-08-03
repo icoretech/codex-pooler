@@ -65,10 +65,12 @@ OpenAI Responses remote MCP tool definitions are unsupported request shapes insi
 Direct `POST /v1/responses` and narrow Responses websocket `response.create`
 accept executable custom tools with the proven OpenAI request shape: exact
 `type=custom`, a nonblank name, the documented optional fields, text or
-`lark`/`regex` grammar format, and an exact typed custom choice. Keep this
-separate from accepted custom-tool replay input. Chat does not accept executable
-custom definitions or choices. Provider execution availability remains selected
-model and account dependent; never claim broad OpenAI tool parity.
+`lark`/`regex` grammar format, and an exact typed custom choice. Full mode
+preserves that typed choice. Lite mode rejects it before upstream dispatch with
+`unsupported_parameter` and `param: "tool_choice"`. Keep this separate from
+accepted custom-tool replay input. Chat does not accept executable custom
+definitions or choices. Provider execution availability remains selected model
+and account dependent; never claim broad OpenAI tool parity.
 
 Direct public Responses may repair only a missing nested object or array type in
 strict flat-function parameters with a typed object root and complete,
