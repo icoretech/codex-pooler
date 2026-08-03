@@ -166,8 +166,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
             "object" => "response.compaction",
             "output" => [
               %{
+                "id" => "cmp_compaction_bridge",
                 "type" => "compaction",
-                "encrypted_content" => "encrypted-compact-fixture"
+                "encrypted_content" => "encrypted-compact-fixture",
+                "internal_chat_message_metadata_passthrough" => %{
+                  "turn_id" => "turn_compaction_bridge",
+                  "internal_detail" => "must-not-leak"
+                },
+                "plaintext_summary" => "must-not-leak"
               }
             ],
             "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8},
@@ -232,8 +238,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     assert %{
              "type" => "response.output_item.done",
              "item" => %{
+               "id" => "cmp_compaction_bridge",
                "type" => "compaction",
-               "encrypted_content" => "encrypted-compact-fixture"
+               "encrypted_content" => "encrypted-compact-fixture",
+               "internal_chat_message_metadata_passthrough" => %{
+                 "turn_id" => "turn_compaction_bridge"
+               }
              }
            } = List.first(events)["data"]
 
@@ -244,8 +254,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
                "status" => "completed",
                "output" => [
                  %{
+                   "id" => "cmp_compaction_bridge",
                    "type" => "compaction",
-                   "encrypted_content" => "encrypted-compact-fixture"
+                   "encrypted_content" => "encrypted-compact-fixture",
+                   "internal_chat_message_metadata_passthrough" => %{
+                     "turn_id" => "turn_compaction_bridge"
+                   }
                  }
                ],
                "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8}
@@ -253,6 +267,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
            } = List.last(events)["data"]
 
     refute response(conn, 200) =~ "raw_compact_detail"
+    refute response(conn, 200) =~ "plaintext_summary"
+    refute response(conn, 200) =~ "internal_detail"
 
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses/compact"

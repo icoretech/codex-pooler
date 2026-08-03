@@ -50,12 +50,12 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   def adapt_gateway_result({:ok, %{status: status} = result})
       when is_integer(status) and status >= 200 and status < 300 do
     with {:ok, decoded} <- decode_result(result),
-         {:ok, encrypted_content} <- encrypted_content(decoded) do
+         {:ok, item} <- compaction_item(decoded) do
       {:ok,
        %{
          status: 200,
          headers: stream_headers(result),
-         raw_body: sse_body(decoded, encrypted_content)
+         raw_body: sse_body(decoded, item)
        }}
     else
       {:error, :invalid_json} ->
@@ -188,35 +188,58 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   defp decode_result(%{body: body}) when is_map(body), do: {:ok, body}
   defp decode_result(_result), do: {:error, :invalid_json}
 
-  defp encrypted_content(%{"output" => output} = decoded) when is_list(output) do
+  defp compaction_item(%{"output" => output} = decoded) when is_list(output) do
     output
     |> Enum.find_value(fn
-      %{"type" => type, "encrypted_content" => content}
+      %{"type" => type, "encrypted_content" => content} = item
       when type in ["compaction", "compaction_summary"] and is_binary(content) ->
-        content
+        normalize_compaction_item(item)
 
       _item ->
         nil
     end)
     |> case do
-      nil -> encrypted_content_from_summary(decoded)
-      content -> {:ok, content}
+      nil -> compaction_item_from_summary(decoded)
+      item -> {:ok, item}
     end
   end
 
-  defp encrypted_content(decoded), do: encrypted_content_from_summary(decoded)
+  defp compaction_item(decoded), do: compaction_item_from_summary(decoded)
 
-  defp encrypted_content_from_summary(%{
-         "compaction_summary" => %{"encrypted_content" => content}
+  defp compaction_item_from_summary(%{
+         "compaction_summary" => %{"encrypted_content" => content} = item
        })
        when is_binary(content),
-       do: {:ok, content}
+       do: {:ok, normalize_compaction_item(item)}
 
-  defp encrypted_content_from_summary(_decoded), do: {:error, :missing_encrypted_content}
+  defp compaction_item_from_summary(_decoded), do: {:error, :missing_encrypted_content}
 
-  defp sse_body(decoded, encrypted_content) do
-    item = %{"type" => "compaction", "encrypted_content" => encrypted_content}
+  defp normalize_compaction_item(item) do
+    %{
+      "type" => "compaction",
+      "encrypted_content" => item["encrypted_content"]
+    }
+    |> maybe_put_item_id(item)
+    |> maybe_put_turn_metadata(item)
+  end
 
+  defp maybe_put_item_id(compaction_item, %{"id" => id}) when is_binary(id),
+    do: Map.put(compaction_item, "id", id)
+
+  defp maybe_put_item_id(compaction_item, _item), do: compaction_item
+
+  defp maybe_put_turn_metadata(compaction_item, %{
+         "internal_chat_message_metadata_passthrough" => %{"turn_id" => turn_id}
+       })
+       when is_binary(turn_id) do
+    Map.put(compaction_item, "internal_chat_message_metadata_passthrough", %{
+      "turn_id" => turn_id
+    })
+  end
+
+  defp maybe_put_turn_metadata(compaction_item, _item), do: compaction_item
+
+  defp sse_body(decoded, item) do
     response =
       %{
         "id" => response_id(decoded),
