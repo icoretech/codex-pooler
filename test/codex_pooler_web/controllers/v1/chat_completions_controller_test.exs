@@ -1959,6 +1959,37 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert Repo.aggregate(Attempt, :count) == 0
   end
 
+  test "POST /v1/chat/completions rejects custom definitions and choices before dispatch",
+       %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    cases = [
+      {Map.put(chat_payload(setup), "tools", [%{"type" => "custom", "name" => "fixture"}]),
+       %{
+         "code" => "invalid_request",
+         "message" => "tool shape is not translatable",
+         "param" => "tools"
+       }},
+      {chat_payload(setup)
+       |> Map.put("tools", [function_tool()])
+       |> Map.put("tool_choice", %{"type" => "custom", "name" => "fixture"}),
+       %{
+         "code" => "invalid_request",
+         "message" => "tool_choice shape is not translatable",
+         "param" => "tool_choice"
+       }}
+    ]
+
+    Enum.each(cases, fn {payload, expected_error} ->
+      response = conn |> recycle() |> auth(setup) |> post("/v1/chat/completions", payload)
+      assert %{"error" => error} = json_response(response, 400)
+      assert Map.take(error, Map.keys(expected_error)) == expected_error
+    end)
+
+    assert_no_chat_dispatch!(upstream)
+  end
+
   test "POST /v1/chat/completions translates named tool_choice and parallel tool call flags", %{
     conn: conn
   } do
@@ -2415,6 +2446,12 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
         }
       }
     }
+  end
+
+  defp assert_no_chat_dispatch!(upstream) do
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
   end
 
   defp additional_tools_item do

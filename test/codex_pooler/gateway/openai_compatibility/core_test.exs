@@ -330,6 +330,38 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       end
     end
 
+    @tag :responses_coercion
+    test "additional_tools names do not collide with executable top-level tools" do
+      executable_tool =
+        flat_function_tool("shared_fixture", %{"type" => "object", "properties" => %{}}, nil)
+
+      additional_tools_item = %{
+        "type" => "additional_tools",
+        "role" => "developer",
+        "tools" => [
+          flat_function_tool(
+            "shared_fixture",
+            %{"type" => "object", "properties" => %{}},
+            nil
+          )
+        ]
+      }
+
+      choice = %{"type" => "function", "name" => "shared_fixture"}
+
+      assert {:ok, result} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => [additional_tools_item],
+                 "tools" => [executable_tool],
+                 "tool_choice" => choice
+               })
+
+      assert result.payload["input"] == [additional_tools_item]
+      assert result.payload["tools"] == [executable_tool]
+      assert result.payload["tool_choice"] == choice
+    end
+
     @tag :unsupported_fields
     test "Responses rejects top-level additional_tools" do
       assert {:error, reason} =
@@ -2528,8 +2560,317 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       ]
     }
 
-    assert {:error, %{code: "invalid_function_parameters", param: "tools.0.parameters.type"}} =
+    assert {:error,
+            %{
+              code: "invalid_function_parameters",
+              param: "tools.0.parameters.properties.nested.properties.ok"
+            }} =
              Responses.coerce(payload)
+  end
+
+  describe "issue 241 direct Responses custom tool admission" do
+    test "existing function tools and named choices remain semantically unchanged" do
+      function_tool =
+        flat_function_tool(
+          "lookup_function_fixture",
+          %{
+            "type" => "object",
+            "properties" => %{}
+          },
+          nil
+        )
+
+      tool_choice = %{"type" => "function", "name" => "lookup_function_fixture"}
+
+      assert {:ok, result} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => "synthetic input",
+                 "tools" => [function_tool],
+                 "tool_choice" => tool_choice
+               })
+
+      assert result.payload["tools"] == [function_tool]
+      assert result.payload["tool_choice"] == tool_choice
+    end
+
+    test "official custom tools and typed named choices survive coercion unchanged" do
+      cases = [
+        {"omitted format with empty caller list",
+         %{
+           "type" => "custom",
+           "name" => "default_text_custom_fixture",
+           "allowed_callers" => []
+         }},
+        {"text with omitted callers",
+         %{
+           "type" => "custom",
+           "name" => " text_custom_fixture ",
+           "description" => "  Preserve custom description whitespace  ",
+           "defer_loading" => true,
+           "format" => %{"type" => "text"}
+         }},
+        {"lark grammar with explicit null callers",
+         %{
+           "type" => "custom",
+           "name" => "lark_custom_fixture",
+           "allowed_callers" => nil,
+           "defer_loading" => false,
+           "format" => %{
+             "type" => "grammar",
+             "definition" => "  start: WORD\n  %import common.WORD\n",
+             "syntax" => "lark"
+           }
+         }},
+        {"regex grammar with caller list",
+         %{
+           "type" => "custom",
+           "name" => "regex_custom_fixture",
+           "allowed_callers" => ["programmatic", "direct", "programmatic"],
+           "format" => %{
+             "type" => "grammar",
+             "definition" => "  ^fixture-[0-9]+$  ",
+             "syntax" => "regex"
+           }
+         }}
+      ]
+
+      Enum.each(cases, fn {_label, custom_tool} ->
+        tool_choice = %{"type" => "custom", "name" => custom_tool["name"]}
+
+        assert {:ok, result} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => "synthetic input",
+                   "tools" => [custom_tool],
+                   "tool_choice" => tool_choice
+                 })
+
+        assert result.payload["tools"] == [custom_tool]
+        assert result.payload["tool_choice"] == tool_choice
+
+        assert Map.has_key?(get_in(result.payload, ["tools", Access.at(0)]), "allowed_callers") ==
+                 Map.has_key?(custom_tool, "allowed_callers")
+      end)
+    end
+
+    test "invalid custom tool shapes fail closed before coercion" do
+      invalid_tools = [
+        {"missing name", %{"type" => "custom"}},
+        {"blank name", %{"type" => "custom", "name" => "   "}},
+        {"non-string name", %{"type" => "custom", "name" => true}},
+        {"non-string description",
+         %{"type" => "custom", "name" => "custom_fixture", "description" => false}},
+        {"non-boolean defer_loading",
+         %{"type" => "custom", "name" => "custom_fixture", "defer_loading" => "true"}},
+        {"null defer_loading",
+         %{"type" => "custom", "name" => "custom_fixture", "defer_loading" => nil}},
+        {"scalar allowed_callers",
+         %{"type" => "custom", "name" => "custom_fixture", "allowed_callers" => "direct"}},
+        {"boolean allowed_callers",
+         %{"type" => "custom", "name" => "custom_fixture", "allowed_callers" => true}},
+        {"invalid caller token",
+         %{
+           "type" => "custom",
+           "name" => "custom_fixture",
+           "allowed_callers" => ["direct", "unknown"]
+         }},
+        {"invalid caller member type",
+         %{"type" => "custom", "name" => "custom_fixture", "allowed_callers" => [false]}},
+        {"null format", %{"type" => "custom", "name" => "custom_fixture", "format" => nil}},
+        {"boolean format", %{"type" => "custom", "name" => "custom_fixture", "format" => true}},
+        {"text format with extra key",
+         %{
+           "type" => "custom",
+           "name" => "custom_fixture",
+           "format" => %{"type" => "text", "definition" => "fixture"}
+         }},
+        {"grammar missing definition",
+         %{
+           "type" => "custom",
+           "name" => "custom_fixture",
+           "format" => %{"type" => "grammar", "syntax" => "lark"}
+         }},
+        {"grammar blank definition",
+         %{
+           "type" => "custom",
+           "name" => "custom_fixture",
+           "format" => %{"type" => "grammar", "definition" => "  ", "syntax" => "regex"}
+         }},
+        {"grammar non-string definition",
+         %{
+           "type" => "custom",
+           "name" => "custom_fixture",
+           "format" => %{"type" => "grammar", "definition" => false, "syntax" => "regex"}
+         }},
+        {"grammar missing syntax",
+         %{
+           "type" => "custom",
+           "name" => "custom_fixture",
+           "format" => %{"type" => "grammar", "definition" => "fixture"}
+         }},
+        {"grammar unknown syntax",
+         %{
+           "type" => "custom",
+           "name" => "custom_fixture",
+           "format" => %{
+             "type" => "grammar",
+             "definition" => "fixture",
+             "syntax" => "peg"
+           }
+         }},
+        {"grammar with extra key",
+         %{
+           "type" => "custom",
+           "name" => "custom_fixture",
+           "format" => %{
+             "type" => "grammar",
+             "definition" => "fixture",
+             "syntax" => "lark",
+             "extra" => true
+           }
+         }},
+        {"unknown custom field",
+         %{"type" => "custom", "name" => "custom_fixture", "parameters" => %{}}}
+      ]
+
+      Enum.each(invalid_tools, fn {_label, custom_tool} ->
+        assert {:error, %{status: 400, code: "invalid_request", param: "tools"}} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => "synthetic input",
+                   "tools" => [custom_tool]
+                 })
+      end)
+    end
+
+    test "typed custom choices use exact names from declared custom tools" do
+      payload = %{
+        "model" => "gpt-fixture-text",
+        "input" => "synthetic input",
+        "tools" => [
+          %{"type" => "custom", "name" => "Custom_Choice_Fixture"},
+          flat_function_tool("function_choice_fixture", %{}, nil)
+        ]
+      }
+
+      invalid_choices = [
+        {"missing custom choice name", %{"type" => "custom"}},
+        {"blank custom choice name", %{"type" => "custom", "name" => "   "}},
+        {"non-string custom choice name", %{"type" => "custom", "name" => true}},
+        {"unknown custom choice", %{"type" => "custom", "name" => "missing_fixture"}},
+        {"case-mismatched custom choice",
+         %{"type" => "custom", "name" => "custom_choice_fixture"}},
+        {"whitespace-mismatched custom choice",
+         %{"type" => "custom", "name" => " Custom_Choice_Fixture "}},
+        {"function name used as custom choice",
+         %{"type" => "custom", "name" => "function_choice_fixture"}},
+        {"custom choice with extra key",
+         %{"type" => "custom", "name" => "Custom_Choice_Fixture", "extra" => true}},
+        {"custom name used as function choice",
+         %{"type" => "function", "name" => "Custom_Choice_Fixture"}}
+      ]
+
+      Enum.each(invalid_choices, fn {_label, choice} ->
+        assert {:error, %{status: 400, code: "invalid_request", param: "tool_choice"}} =
+                 payload
+                 |> Map.put("tool_choice", choice)
+                 |> Responses.coerce()
+      end)
+    end
+
+    test "invalid custom tools never produce a transformed dispatch payload" do
+      result =
+        Responses.coerce(
+          %{
+            "model" => "gpt-fixture-text",
+            "input" => "synthetic input",
+            "tools" => [
+              %{
+                "type" => "custom",
+                "name" => "custom_sentinel_fixture",
+                "format" => %{"type" => "text", "unexpected" => true}
+              }
+            ]
+          },
+          request_id: "req_custom_rejection_sentinel"
+        )
+
+      assert {:error, reason} = result
+      assert reason.code == "invalid_request"
+      assert reason.param == "tools"
+      refute Map.has_key?(reason, :payload)
+      refute match?({:ok, %{payload: _payload}}, result)
+    end
+
+    test "executable tools and namespace containers reject exact name collisions before choice lookup" do
+      function = fn name -> flat_function_tool(name, %{}, nil) end
+      custom = fn name -> %{"type" => "custom", "name" => name} end
+
+      namespace = fn container_name, child_names ->
+        %{
+          "type" => "namespace",
+          "name" => container_name,
+          "description" => "Synthetic namespace tools",
+          "tools" => Enum.map(child_names, function)
+        }
+      end
+
+      collision_cases = [
+        {"duplicate top-level functions", [function.("shared"), function.("shared")]},
+        {"duplicate custom tools", [custom.("shared"), custom.("shared")]},
+        {"duplicate namespace containers",
+         [namespace.("shared_namespace", ["first"]), namespace.("shared_namespace", ["second"])]},
+        {"duplicate children in one namespace",
+         [namespace.("first_namespace", ["shared", "shared"])]},
+        {"duplicate children across namespaces",
+         [namespace.("first_namespace", ["shared"]), namespace.("second_namespace", ["shared"])]},
+        {"function and custom", [function.("shared"), custom.("shared")]},
+        {"function and namespace child",
+         [function.("shared"), namespace.("fixture_namespace", ["shared"])]},
+        {"custom and namespace child",
+         [custom.("shared"), namespace.("fixture_namespace", ["shared"])]}
+      ]
+
+      Enum.each(collision_cases, fn {_label, tools} ->
+        assert {:error, %{status: 400, code: "invalid_request", param: "tools"}} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => "synthetic input",
+                   "tools" => tools,
+                   "tool_choice" => %{"type" => "function", "name" => "missing_fixture"}
+                 })
+      end)
+    end
+
+    test "exact executable names remain case and whitespace sensitive for collision and choice resolution" do
+      tools = [
+        flat_function_tool("lookup", %{}, nil),
+        flat_function_tool("Lookup", %{}, nil),
+        %{"type" => "custom", "name" => " lookup "}
+      ]
+
+      choices = [
+        %{"type" => "function", "name" => "lookup"},
+        %{"type" => "function", "name" => "Lookup"},
+        %{"type" => "custom", "name" => " lookup "}
+      ]
+
+      Enum.each(choices, fn choice ->
+        assert {:ok, result} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => "synthetic input",
+                   "tools" => tools,
+                   "tool_choice" => choice
+                 })
+
+        assert Enum.map(result.payload["tools"], & &1["name"]) ==
+                 Enum.map(tools, & &1["name"])
+
+        assert result.payload["tool_choice"] == choice
+      end)
+    end
   end
 
   describe "Task 5 Responses and Chat tool shape compatibility" do
@@ -2716,6 +3057,61 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
                    "messages" => [%{"role" => "user", "content" => "synthetic input"}],
                    "tools" => [tool]
                  })
+      end)
+    end
+
+    test "Chat rejects custom definitions and choices with local untranslatable errors" do
+      messages_payload = %{
+        "model" => "gpt-fixture-text",
+        "messages" => [%{"role" => "user", "content" => "synthetic input"}]
+      }
+
+      fallback_payload = %{
+        "model" => "gpt-fixture-text",
+        "input" => "synthetic fallback input"
+      }
+
+      custom_tool = %{"type" => "custom", "name" => "custom_fixture"}
+      custom_choice = %{"type" => "custom", "name" => "custom_fixture"}
+
+      invalid_cases = [
+        {Map.put(messages_payload, "tools", [custom_tool]),
+         %{
+           status: 400,
+           code: "invalid_request",
+           message: "tool shape is not translatable",
+           param: "tools"
+         }},
+        {Map.put(fallback_payload, "tools", [custom_tool]),
+         %{
+           status: 400,
+           code: "invalid_request",
+           message: "tool shape is not translatable",
+           param: "tools"
+         }},
+        {messages_payload
+         |> Map.put("tools", [function_tool("lookup_fixture", %{}, nil)])
+         |> Map.put("tool_choice", custom_choice),
+         %{
+           status: 400,
+           code: "invalid_request",
+           message: "tool_choice shape is not translatable",
+           param: "tool_choice"
+         }},
+        {fallback_payload
+         |> Map.put("tools", [flat_function_tool("lookup_fixture", %{}, nil)])
+         |> Map.put("tool_choice", custom_choice),
+         %{
+           status: 400,
+           code: "invalid_request",
+           message: "tool_choice shape is not translatable",
+           param: "tool_choice"
+         }}
+      ]
+
+      Enum.each(invalid_cases, fn {payload, expected_reason} ->
+        assert {:error, ^expected_reason} = Chat.validate(payload)
+        assert {:error, ^expected_reason} = Chat.coerce(payload)
       end)
     end
 

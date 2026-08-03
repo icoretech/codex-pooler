@@ -48,10 +48,25 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
          :ok <- validate_token_limits(payload),
          :ok <- validate_verbosity(payload),
          :ok <- validate_translatable_prompt_cache_breakpoints(payload),
+         :ok <- reject_custom_tool_definitions(payload),
+         :ok <- reject_custom_tool_choice(payload),
          {:ok, response_payload} <- response_payload(payload) do
       {:ok, %{chat_payload: payload, response_payload: response_payload}}
     end
   end
+
+  defp reject_custom_tool_definitions(%{"tools" => tools}) when is_list(tools) do
+    if Enum.any?(tools, &match?(%{"type" => "custom"}, &1)),
+      do: {:error, Error.invalid_request("tool shape is not translatable", "tools")},
+      else: :ok
+  end
+
+  defp reject_custom_tool_definitions(_payload), do: :ok
+
+  defp reject_custom_tool_choice(%{"tool_choice" => %{"type" => "custom"}}),
+    do: {:error, Error.invalid_request("tool_choice shape is not translatable", "tool_choice")}
+
+  defp reject_custom_tool_choice(_payload), do: :ok
 
   defp reject_legacy_functions(payload) do
     cond do

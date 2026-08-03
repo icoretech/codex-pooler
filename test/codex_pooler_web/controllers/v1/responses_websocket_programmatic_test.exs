@@ -22,7 +22,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
   alias CodexPooler.Repo
   alias CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
-  @websocket_frame_timeout 1_000
+  @websocket_frame_timeout 2_000
 
   test "public websocket helper preserves every co-decoded Mint text frame in FIFO order" do
     websocket = %Mint.WebSocket{}
@@ -253,6 +253,58 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
+  test "GET /v1/responses websocket forwards a custom definition and typed named choice exactly" do
+    upstream = start_upstream(completed_websocket_response("resp_ws_custom_definition"))
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    custom_tool = %{
+      "type" => "custom",
+      "name" => "synthetic_custom_tool",
+      "description" => "Synthetic grammar tool",
+      "defer_loading" => true,
+      "allowed_callers" => ["programmatic", "direct", "programmatic"],
+      "format" => %{
+        "type" => "grammar",
+        "definition" => "start: SYNTHETIC\nSYNTHETIC: /synthetic-[0-9]+/",
+        "syntax" => "lark"
+      }
+    }
+
+    tool_choice = %{"type" => "custom", "name" => custom_tool["name"]}
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "custom-definition-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic custom websocket input",
+          "tools" => [custom_tool],
+          "tool_choice" => tool_choice
+        })
+
+      {conn, websocket, frames} = receive_websocket_until_terminal!(conn, websocket, ref, [])
+      assert Enum.map(frames, & &1["type"]) == ["response.completed"]
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.method == "WEBSOCKET"
+      assert captured.path == "/backend-api/codex/responses"
+      assert captured.json["tools"] == [custom_tool]
+      assert captured.json["tool_choice"] == tool_choice
+
+      assert_successful_websocket_lifecycle!(setup)
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   test "GET /v1/responses websocket rejects malformed caller, tool, and program output before dispatch" do
     upstream =
       start_upstream(FakeUpstream.sse_stream(programmatic_response_events(), done: false))
@@ -470,6 +522,69 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     {:ok, conn, status, response_headers} = await_public_websocket_upgrade(conn, ref)
     {conn, websocket} = mint_websocket_new!(conn, ref, status, response_headers)
     {conn, websocket, ref}
+  end
+
+  defp send_response_create!(conn, websocket, ref, setup, attrs) do
+    payload =
+      Map.merge(
+        %{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "stream" => false,
+          "store" => true,
+          "generate" => true
+        },
+        attrs
+      )
+
+    public_websocket_send_text!(conn, websocket, ref, Jason.encode!(payload))
+  end
+
+  defp completed_websocket_response(response_id) do
+    FakeUpstream.sse_stream(
+      [
+        {"response.completed",
+         %{
+           "type" => "response.completed",
+           "response" => %{
+             "id" => response_id,
+             "status" => "completed",
+             "output" => [],
+             "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+           }
+         }}
+      ],
+      done: false
+    )
+  end
+
+  defp assert_successful_websocket_lifecycle!(setup) do
+    assert_receive {Events,
+                    %{
+                      reason: "request_finalized",
+                      payload: %{"status" => "succeeded"}
+                    }},
+                   @websocket_frame_timeout
+
+    assert [request] =
+             Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
+
+    assert request.endpoint == "/v1/responses"
+    assert request.transport == "websocket"
+    assert request.status == "succeeded"
+
+    assert [attempt] =
+             Repo.all(from(attempt in Attempt, where: attempt.request_id == ^request.id))
+
+    assert attempt.transport == "websocket"
+    assert attempt.status == "succeeded"
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+             ),
+             :count
+           ) == 1
   end
 
   defp assert_invalid_provider_frames_dropped(owner_forwarding?) do

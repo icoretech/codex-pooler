@@ -42,7 +42,15 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     ]
 
   alias CodexPooler.Access
-  alias CodexPooler.Accounting.{Attempt, DailyRollup, LedgerEntry, Request, RequestLogs}
+  alias CodexPooler.Accounting.{
+    Attempt,
+    DailyRollup,
+    LedgerEntry,
+    Request,
+    RequestLogFact,
+    RequestLogs
+  }
+
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Metadata.CanonicalModelSource
@@ -2240,6 +2248,49 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert captured.json["tools"] |> List.first() |> Map.fetch!("parameters") ==
              lowered_tool_schema()
+  end
+
+  @tag :issue_241
+  test "POST /v1/responses forwards an official custom tool and its exact named choice", %{
+    conn: conn
+  } do
+    upstream = start_upstream(issue_241_completed_response("resp_v1_custom_definition"))
+    setup = gateway_setup(upstream)
+
+    custom_tool = %{
+      "type" => "custom",
+      "name" => " custom_definition_fixture ",
+      "description" => "  Synthetic grammar fixture  ",
+      "defer_loading" => true,
+      "allowed_callers" => ["programmatic", "direct", "programmatic"],
+      "format" => %{
+        "type" => "grammar",
+        "definition" => "  ^fixture-[0-9]+$  ",
+        "syntax" => "regex"
+      }
+    }
+
+    tool_choice = %{"type" => "custom", "name" => custom_tool["name"]}
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic custom definition request",
+        "tools" => [custom_tool],
+        "tool_choice" => tool_choice
+      })
+
+    assert %{"id" => "resp_v1_custom_definition", "object" => "response"} =
+             json_response(response, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.method == "POST"
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["tools"] == [custom_tool]
+    assert captured.json["tool_choice"] == tool_choice
+    assert_issue_241_success_lifecycle!(setup)
   end
 
   test "POST /v1/responses preserves output-only translated tool output before dispatch",
@@ -8154,6 +8205,59 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     for sentinel <- Map.values(sentinels) do
       refute metadata =~ sentinel
     end
+  end
+
+  defp issue_241_completed_response(response_id) do
+    FakeUpstream.sse_stream([
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{
+           "id" => response_id,
+           "object" => "response",
+           "status" => "completed",
+           "output" => [],
+           "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+         }
+       }}
+    ])
+  end
+
+  defp assert_issue_241_success_lifecycle!(setup) do
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+    assert request.transport == "http_sse"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+
+    ledger_entries =
+      Repo.all(
+        from(l in LedgerEntry,
+          where: l.request_id == ^request.id,
+          order_by: [asc: l.created_at]
+        )
+      )
+
+    assert Enum.frequencies_by(ledger_entries, & &1.entry_kind) == %{
+             "reservation" => 1,
+             "release" => 1,
+             "settlement" => 1
+           }
+
+    assert %LedgerEntry{amount_status: "recorded", usage_status: "usage_pending"} =
+             Enum.find(ledger_entries, &(&1.entry_kind == "reservation"))
+
+    assert %LedgerEntry{amount_status: "recorded"} =
+             Enum.find(ledger_entries, &(&1.entry_kind == "release"))
+
+    assert %LedgerEntry{amount_status: "recorded", usage_status: "usage_known"} =
+             Enum.find(ledger_entries, &(&1.entry_kind == "settlement"))
+
+    assert Repo.aggregate(
+             from(fact in RequestLogFact, where: fact.request_id == ^request.id),
+             :count
+           ) == 1
   end
 
   defp durable_accounting_counts do
