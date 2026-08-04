@@ -37,7 +37,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   alias CodexPoolerWeb.CodexResponsesSocket
   alias Ecto.Adapters.SQL.Sandbox
 
-  @endpoint CodexPoolerWeb.Endpoint
   @detection_timeout_ms 15_000
   def stream_retry_setup(first_mode, second_mode \\ stream_success_sse()) do
     first_upstream = start_upstream(first_mode)
@@ -1368,7 +1367,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
       build_conn()
       |> auth(setup)
       |> put_req_header("content-type", "application/json")
-      |> post(~p"/backend-api/files", %{
+      |> Phoenix.ConnTest.dispatch(CodexPoolerWeb.Endpoint, :post, ~p"/backend-api/files", %{
         "file_name" => file_name,
         "file_size" => file_size,
         "use_case" => "codex"
@@ -1384,7 +1383,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     conn =
       build_conn()
       |> auth(setup)
-      |> post(~p"/backend-api/files/#{file_id}/uploaded", %{})
+      |> Phoenix.ConnTest.dispatch(
+        CodexPoolerWeb.Endpoint,
+        :post,
+        ~p"/backend-api/files/#{file_id}/uploaded",
+        %{}
+      )
 
     assert %{"status" => "success"} = json_response(conn, 200)
     file_id
