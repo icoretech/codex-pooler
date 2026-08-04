@@ -6150,7 +6150,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           payload = websocket_payload(setup, @sentinel)
 
           assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
-          assert_receive {:blocking_owner_upstream_received, owner_worker_pid, ^release_ref}
+          owner_worker_pid = assert_blocking_owner_upstream_received!(release_ref)
           assert_sensitive_process_hides_mailbox!(owner_worker_pid)
           assert_sensitive_tracked_response_task!(state)
 
