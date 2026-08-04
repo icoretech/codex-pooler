@@ -147,6 +147,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
                candidates: candidate_snapshots
              })
            ),
+         route_state = RouteState.put_saved_reset_auto_cohort(route_state, candidates),
          {:ok, request_options} <-
            SessionContinuity.attach_codex_session(auth, payload, request_options),
          canonical_filter_input_candidates = candidates,

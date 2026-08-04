@@ -174,6 +174,69 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
              route_state.circuit_eligibility_snapshots
   end
 
+  test "put_candidates narrows routing candidates without replacing candidate snapshots" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+
+    alternate =
+      active_upstream_assignment_fixture(setup.pool, %{
+        account_label: "Route state narrowing alternate upstream"
+      })
+
+    candidates = [
+      {setup.assignment, setup.identity},
+      {alternate.assignment, alternate.identity}
+    ]
+
+    route_state =
+      RouteState.new(%{
+        visible_model: setup.model,
+        candidates: candidates
+      })
+
+    narrowed = RouteState.put_candidates(route_state, [List.first(candidates)])
+
+    assert narrowed.candidate_snapshots == candidates
+    assert narrowed.saved_reset_auto_cohort == candidates
+    assert narrowed.candidates == [List.first(candidates)]
+  end
+
+  test "saved reset cohort defaults to supplied candidates and survives route state replacements" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    candidate = {setup.assignment, setup.identity}
+
+    alternate =
+      active_upstream_assignment_fixture(setup.pool, %{
+        account_label: "Saved reset cohort alternate upstream"
+      })
+
+    alternate_candidate = {alternate.assignment, alternate.identity}
+
+    request_options =
+      request_options(auth, %{"model" => setup.model.exposed_model_id},
+        requested_model: setup.model.exposed_model_id,
+        effective_model: setup.model.exposed_model_id
+      )
+
+    route_state =
+      RouteState.new(%{
+        visible_model: setup.model,
+        candidates: [candidate, alternate_candidate]
+      })
+
+    assert route_state.saved_reset_auto_cohort == [candidate, alternate_candidate]
+
+    replaced =
+      route_state
+      |> RouteState.put_saved_reset_auto_cohort([alternate_candidate])
+      |> RouteState.put_candidates([candidate])
+      |> RouteState.preload_routing_snapshots(auth, setup.model, request_options)
+      |> RouteState.refresh_quota_window_snapshots()
+
+    assert replaced.candidates == [candidate]
+    assert replaced.saved_reset_auto_cohort == [alternate_candidate]
+  end
+
   test "route state atomically binds quota snapshots to their observation instant" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     snapshot_at = ~U[2026-07-25 12:00:00.000000Z]
@@ -896,6 +959,73 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
            ]
 
     assert candidate_ids(prepared.candidates) == [setup.assignment.id]
+  end
+
+  test "prepare captures only runtime-compatible candidates before canonical partition narrowing" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {model, divergent} = add_divergent_assignment!(setup)
+
+    incompatible =
+      active_upstream_assignment_fixture(setup.pool, %{
+        account_label: "Runtime-incompatible saved reset cohort upstream"
+      })
+
+    source_models = Map.fetch!(model.metadata, "source_assignment_models")
+    source = Map.fetch!(source_models, setup.assignment.id)
+
+    model =
+      model
+      |> Ecto.Changeset.change(%{
+        source_assignment_count: 3,
+        metadata: %{
+          model.metadata
+          | "source_assignment_ids" => [
+              setup.assignment.id,
+              divergent.assignment.id,
+              incompatible.assignment.id
+            ],
+            "source_assignment_models" =>
+              Map.put(
+                source_models,
+                incompatible.assignment.id,
+                Map.put(source, "capabilities", %{"responses" => false})
+              )
+        }
+      })
+      |> Repo.update!()
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = %{"model" => model.exposed_model_id, "input" => "saved reset cohort boundary"}
+
+    assert {:ok, prepared} =
+             PreDispatch.prepare(
+               auth,
+               @endpoint_path,
+               payload,
+               request_options(auth, payload, []),
+               model
+             )
+
+    assert Enum.sort(candidate_ids(prepared.route_state.candidate_snapshots)) ==
+             Enum.sort([
+               setup.assignment.id,
+               divergent.assignment.id,
+               incompatible.assignment.id
+             ])
+
+    assert Enum.sort(candidate_ids(prepared.route_state.saved_reset_auto_cohort)) ==
+             Enum.sort([setup.assignment.id, divergent.assignment.id])
+
+    assert candidate_ids(prepared.route_state.candidates) == [setup.assignment.id]
+    assert candidate_ids(prepared.candidates) == [setup.assignment.id]
+
+    refute incompatible.identity.id in candidate_identity_ids(
+             prepared.route_state.saved_reset_auto_cohort
+           )
+
+    assert divergent.identity.id in candidate_identity_ids(
+             prepared.route_state.saved_reset_auto_cohort
+           )
   end
 
   @tag :external_issues_229_231
@@ -2246,6 +2376,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
   defp candidate_ids(candidates),
     do: Enum.map(candidates, fn {assignment, _identity} -> assignment.id end)
+
+  defp candidate_identity_ids(candidates),
+    do: Enum.map(candidates, fn {_assignment, identity} -> identity.id end)
 
   defp count_repo_sources(fun) do
     parent = self()

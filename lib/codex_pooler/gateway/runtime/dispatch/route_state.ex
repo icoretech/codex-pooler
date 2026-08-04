@@ -18,6 +18,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
     visible_models: [],
     effective_model_serving_modes: %{},
     candidate_snapshots: [],
+    saved_reset_auto_cohort: [],
     candidates: [],
     routing_settings: nil,
     quota_window_snapshots: %{},
@@ -57,6 +58,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
           visible_models: [Model.t()],
           effective_model_serving_modes: effective_model_serving_modes(),
           candidate_snapshots: [candidate()],
+          saved_reset_auto_cohort: [candidate()],
           candidates: [candidate()],
           routing_settings: RoutingSettings.t() | nil,
           quota_window_snapshots: quota_window_snapshots(),
@@ -75,6 +77,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
           optional(:visible_models) => [Model.t()],
           optional(:effective_model_serving_modes) => effective_model_serving_modes(),
           optional(:candidate_snapshots) => [candidate()],
+          optional(:saved_reset_auto_cohort) => [candidate()],
           optional(:routing_settings) => RoutingSettings.t() | nil,
           optional(:quota_window_snapshots) => quota_window_snapshots(),
           optional(:quota_snapshot_at) => DateTime.t() | nil,
@@ -95,6 +98,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
       visible_models: Map.get(attrs, :visible_models, [visible_model]),
       effective_model_serving_modes: Map.get(attrs, :effective_model_serving_modes, %{}),
       candidate_snapshots: Map.get(attrs, :candidate_snapshots, candidates),
+      saved_reset_auto_cohort: Map.get(attrs, :saved_reset_auto_cohort, candidates),
       candidates: candidates,
       routing_settings: Map.get(attrs, :routing_settings),
       circuit_snapshots: circuit_snapshots(attrs),
@@ -112,6 +116,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.RouteState do
   @spec put_candidates(t(), [candidate()]) :: t()
   def put_candidates(%__MODULE__{} = route_state, candidates) when is_list(candidates),
     do: %{route_state | candidates: candidates}
+
+  @spec put_saved_reset_auto_cohort(t(), [candidate()]) :: t()
+  def put_saved_reset_auto_cohort(%__MODULE__{} = route_state, candidates)
+      when is_list(candidates),
+      do: %{route_state | saved_reset_auto_cohort: candidates}
 
   @spec put_reset_probe(t(), ResetProbe.t()) :: t()
   def put_reset_probe(%__MODULE__{} = route_state, %ResetProbe{} = reset_probe),

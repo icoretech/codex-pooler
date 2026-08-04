@@ -113,5 +113,6 @@ defmodule CodexPooler.Gateway.Routing.QuotaRefresh.ExecutorTest do
 
     assert refreshed_route_state.visible_model == route_state.visible_model
     assert refreshed_route_state.circuit_snapshots == route_state.circuit_snapshots
+    assert refreshed_route_state.saved_reset_auto_cohort == route_state.saved_reset_auto_cohort
   end
 end
