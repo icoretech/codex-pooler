@@ -6,6 +6,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   import Ecto.Query
 
   alias CodexPooler.Events
+  alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.CloudflareCookies
@@ -14,6 +15,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.SavedResets.AutoEligibility
+  alias CodexPooler.Upstreams.SavedResets.CreditLocator
   alias CodexPooler.Upstreams.SavedResets.ObservationOrdering
   alias CodexPooler.Upstreams.SavedResets.PostResetEvidence
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
@@ -23,11 +25,20 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
   @assignment_active AssignmentStatus.active_status()
+  @identity_active IdentityStatus.active_status()
   @identity_deleted IdentityStatus.deleted_status()
   @identity_disabled IdentityStatus.disabled_status()
   @scheduled_expiry_trigger "scheduled_expiry_rescue"
-  @known_noop_codes ~w(already_redeemed no_credit nothing_to_reset)
-  @known_provider_result_codes ["reset" | @known_noop_codes]
+  @known_noop_codes ~w(no_credit nothing_to_reset)
+  @known_applied_codes ~w(reset already_redeemed)
+  @known_provider_result_codes @known_applied_codes ++ @known_noop_codes
+  @redemption_target_key "saved_reset_redemption_target"
+  @legacy_recovery_marker %{"version" => 1, "state" => "unresolved"}
+  @maximum_provider_dispatches 6
+  @replay_cutoff_seconds 6 * 60 * 60
+  @observe_only_interval_seconds 6 * 60 * 60
+  @provider_staleness_floor_seconds 30 * 60
+  @replay_delays_seconds %{1 => 60, 2 => 5 * 60, 3 => 15 * 60, 4 => 60 * 60, 5 => 3 * 60 * 60}
 
   @type trigger_kind :: String.t()
 
@@ -56,7 +67,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
   @type scheduled_redeem_result ::
           {:ok, redeem_result() | scheduled_noop_result()}
-          | {:error, lifecycle_error() | :redemption_in_progress}
+          | {:error,
+             lifecycle_error()
+             | :redemption_in_progress
+             | :saved_reset_consume_outcome_ambiguous}
 
   @type scheduled_decision_evidence :: %{
           required(:trigger_detail) => String.t(),
@@ -65,7 +79,6 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           required(:natural_reset_at_decision) => String.t(),
           required(:decided_at) => String.t()
         }
-
 
   @type stale_consuming_recovery_candidate :: %{
           required(:attempt_id) => Ecto.UUID.t(),
@@ -105,6 +118,1089 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   end
 
   def stale_consuming_recovery_candidate(_identity, _opts), do: nil
+
+  @type stale_consuming_result ::
+          {:ok, redeem_result() | scheduled_noop_result()}
+          | {:snooze, pos_integer()}
+          | {:error, term()}
+
+  @spec resume_stale_consuming(
+          PoolUpstreamAssignment.t() | Ecto.UUID.t(),
+          Ecto.UUID.t(),
+          Ecto.UUID.t(),
+          non_neg_integer(),
+          keyword()
+        ) :: stale_consuming_result()
+  def resume_stale_consuming(
+        assignment_or_id,
+        expected_identity_id,
+        expected_attempt_id,
+        expected_generation,
+        opts \\ []
+      ) do
+    now = Keyword.get_lazy(opts, :now, &now/0)
+
+    receive_timeout =
+      Keyword.get(opts, :receive_timeout, SavedResets.redemption_receive_timeout_ms())
+
+    expected = %{
+      assignment_id: assignment_id(assignment_or_id),
+      identity_id: expected_identity_id,
+      attempt_id: expected_attempt_id,
+      generation: expected_generation
+    }
+
+    case prepare_stale_consuming(expected, now, receive_timeout) do
+      {:ok, %{endpoint_kind: :chatgpt} = recovery} ->
+        resume_chatgpt_recovery(recovery, now)
+
+      {:ok, %{endpoint_kind: :codex} = recovery} ->
+        resume_codex_recovery(recovery, now)
+
+      {:snooze, seconds} ->
+        {:snooze, seconds}
+
+      {:noop, code, identity, assignment} ->
+        {:ok, noop_result(identity, assignment, code)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp prepare_stale_consuming(expected, now, receive_timeout) do
+    with {:ok, expected} <- normalize_recovery_expected(expected) do
+      Repo.transaction(fn -> prepare_stale_consuming_locked(expected, now, receive_timeout) end)
+      |> case do
+        {:ok, result} -> result
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  rescue
+    _error -> {:error, :saved_reset_persistence_failed}
+  end
+
+  defp prepare_stale_consuming_locked(expected, now, receive_timeout) do
+    identity = lock_identity!(expected.identity_id)
+    assignments = lock_canonical_assignments(identity.id)
+    canonical = List.first(assignments)
+    redemption = get_in(identity.metadata || %{}, ["saved_reset_redemption"])
+
+    cond do
+      identity.status != @identity_active or
+          not match?(%PoolUpstreamAssignment{id: id} when id == expected.assignment_id, canonical) ->
+        {:noop, "recovery_superseded", identity, canonical || recovery_assignment(expected)}
+
+      not valid_recovery_attempt?(redemption, expected, now, receive_timeout) ->
+        {:noop, "recovery_target_invalid", identity, canonical}
+
+      legacy_recovery?(redemption) ->
+        normalize_legacy_recovery!(identity, redemption, now)
+
+      true ->
+        prepare_versioned_recovery(
+          identity,
+          canonical,
+          redemption,
+          expected,
+          now,
+          receive_timeout
+        )
+    end
+  end
+
+  defp normalize_recovery_expected(expected) do
+    with {:ok, assignment_id} <- Ecto.UUID.cast(expected.assignment_id),
+         {:ok, identity_id} <- Ecto.UUID.cast(expected.identity_id),
+         {:ok, attempt_id} <- Ecto.UUID.cast(expected.attempt_id),
+         true <- is_integer(expected.generation) and expected.generation >= 0 do
+      {:ok,
+       %{
+         expected
+         | assignment_id: assignment_id,
+           identity_id: identity_id,
+           attempt_id: attempt_id
+       }}
+    else
+      _invalid -> {:error, :stale_consuming_recovery_target_invalid}
+    end
+  end
+
+  defp lock_canonical_assignments(identity_id) do
+    active_pool_ids =
+      Repo.all(from pool in Pool, where: pool.status == "active", select: pool.id)
+
+    Repo.all(
+      from assignment in PoolUpstreamAssignment,
+        where:
+          assignment.upstream_identity_id == ^identity_id and
+            assignment.status == ^@assignment_active and assignment.pool_id in ^active_pool_ids,
+        order_by: [asc: assignment.created_at, asc: assignment.id],
+        lock: "FOR UPDATE"
+    )
+  end
+
+  defp recovery_assignment(%{assignment_id: assignment_id}),
+    do: %PoolUpstreamAssignment{id: assignment_id}
+
+  defp valid_recovery_attempt?(redemption, expected, now, receive_timeout) do
+    with %{
+           "status" => "redeeming",
+           "phase" => "consuming",
+           "attempt_id" => attempt_id,
+           "generation" => generation,
+           "started_at" => started_at
+         } <- redemption,
+         {:ok, ^attempt_id} <- Ecto.UUID.cast(expected.attempt_id),
+         ^attempt_id <- attempt_id,
+         ^generation <- expected.generation,
+         %DateTime{} = started_at <- parse_datetime(started_at) do
+      DateTime.diff(now, started_at, :millisecond) >=
+        receive_timeout + SavedResets.redemption_stale_grace_ms()
+    else
+      _invalid -> false
+    end
+  end
+
+  defp legacy_recovery?(redemption) do
+    not Map.has_key?(redemption, "provider_replay") and
+      (is_nil(redemption["legacy_recovery"]) or
+         redemption["legacy_recovery"] == @legacy_recovery_marker)
+  end
+
+  defp normalize_legacy_recovery!(identity, redemption, now) do
+    next_action_at = DateTime.add(now, @observe_only_interval_seconds, :second)
+
+    normalized =
+      redemption
+      |> Map.put("legacy_recovery", @legacy_recovery_marker)
+      |> Map.put("legacy_recovery_last_code", "legacy_unresolved")
+      |> Map.put("legacy_recovery_last_observed_at", DateTime.to_iso8601(now))
+      |> Map.put("legacy_recovery_next_action_at", DateTime.to_iso8601(next_action_at))
+
+    if normalized == redemption do
+      identity
+    else
+      identity
+      |> UpstreamIdentity.changeset(%{
+        metadata: Map.put(identity.metadata || %{}, "saved_reset_redemption", normalized),
+        updated_at: now
+      })
+      |> Repo.update!()
+    end
+
+    {:snooze, @observe_only_interval_seconds}
+  end
+
+  defp prepare_versioned_recovery(
+         identity,
+         assignment,
+         redemption,
+         expected,
+         now,
+         receive_timeout
+       ) do
+    replay = redemption["provider_replay"]
+    started_at = parse_datetime(redemption["started_at"])
+
+    with %{
+           "version" => 1,
+           "endpoint_family" => endpoint_family,
+           "scope_fingerprint" => scope_fingerprint,
+           "provider_dispatches" => provider_dispatches
+         } <- replay,
+         true <-
+           is_integer(provider_dispatches) and
+             provider_dispatches in 0..@maximum_provider_dispatches do
+      context = %{
+        endpoint_family: endpoint_family,
+        expected: expected,
+        provider_dispatches: provider_dispatches,
+        receive_timeout: receive_timeout,
+        scope_fingerprint: scope_fingerprint,
+        started_at: started_at
+      }
+
+      prepare_versioned_recovery_mode(identity, assignment, redemption, replay, context, now)
+    else
+      {:error, %{code: :saved_reset_credit_locator_invalid}} ->
+        {:noop, "recovery_target_invalid", identity, assignment}
+
+      {:error, _reason} ->
+        {:noop, "missing_access_token", identity, assignment}
+
+      _invalid ->
+        {:noop, "scope_changed", identity, assignment}
+    end
+  end
+
+  defp prepare_versioned_recovery_mode(
+         identity,
+         assignment,
+         redemption,
+         replay,
+         context,
+         now
+       ) do
+    exhausted? =
+      context.provider_dispatches >= @maximum_provider_dispatches or
+        DateTime.compare(now, DateTime.add(context.started_at, @replay_cutoff_seconds, :second)) !=
+          :lt
+
+    cond do
+      replay["mode"] == "observe_only" or exhausted? ->
+        prepare_observe_only_recovery(
+          identity,
+          assignment,
+          redemption,
+          replay,
+          context,
+          now,
+          exhausted?
+        )
+
+      replay["mode"] in [nil, "replay"] ->
+        prepare_provider_recovery(
+          identity,
+          assignment,
+          redemption,
+          replay,
+          context,
+          now,
+          :replay
+        )
+
+      true ->
+        {:noop, "scope_changed", identity, assignment}
+    end
+  end
+
+  defp prepare_observe_only_recovery(
+         identity,
+         assignment,
+         redemption,
+         replay,
+         context,
+         now,
+         entering?
+       ) do
+    normalize_entry? =
+      entering? and
+        (replay["mode"] != "observe_only" or is_nil(replay["replay_exhausted_at"]) or
+           is_nil(replay["unresolved_since"]) or is_nil(replay["next_action_at"]))
+
+    {identity, redemption, replay} =
+      if normalize_entry? do
+        enter_observe_only!(identity, redemption, replay, now)
+      else
+        {identity, redemption, replay}
+      end
+
+    with {:ok, due_at} <- observe_only_due_at(replay, now),
+         false <- DateTime.compare(now, due_at) == :lt do
+      if context.provider_dispatches == 0 do
+        settle_consume_not_applied!(identity, assignment, redemption, context.expected, now)
+      else
+        prepare_provider_recovery(
+          identity,
+          assignment,
+          redemption,
+          replay,
+          context,
+          now,
+          :observe_only
+        )
+      end
+    else
+      true -> {:snooze, remaining_seconds(observe_only_due_at!(replay, now), now)}
+      :error -> persist_observe_only_locked!(identity, redemption, "scope_changed", now)
+    end
+  end
+
+  defp enter_observe_only!(identity, redemption, replay, now) do
+    exhausted_at = replay["replay_exhausted_at"] || DateTime.to_iso8601(now)
+    unresolved_since = replay["unresolved_since"] || exhausted_at
+    floor_at = provider_staleness_floor_at(replay, now)
+
+    next_action_at =
+      if DateTime.compare(now, floor_at) == :lt,
+        do: floor_at,
+        else: now
+
+    updated_replay =
+      replay
+      |> Map.put("mode", "observe_only")
+      |> Map.put("replay_exhausted_at", exhausted_at)
+      |> Map.put("unresolved_since", unresolved_since)
+      |> Map.put("last_code", "write_budget_exhausted")
+      |> Map.put("next_action_at", DateTime.to_iso8601(next_action_at))
+
+    updated_redemption = Map.put(redemption, "provider_replay", updated_replay)
+    updated_identity = persist_recovery_redemption!(identity, updated_redemption, now)
+    {updated_identity, updated_redemption, updated_replay}
+  end
+
+  defp observe_only_due_at(replay, now) do
+    case parse_datetime(replay["next_action_at"]) do
+      %DateTime{} = next_action_at ->
+        {:ok, later_datetime(next_action_at, provider_staleness_floor_at(replay, now))}
+
+      nil ->
+        :error
+    end
+  end
+
+  defp observe_only_due_at!(replay, now) do
+    {:ok, due_at} = observe_only_due_at(replay, now)
+    due_at
+  end
+
+  defp provider_staleness_floor_at(replay, now) do
+    case parse_datetime(replay["last_provider_dispatched_at"]) do
+      %DateTime{} = last_dispatched_at ->
+        DateTime.add(last_dispatched_at, @provider_staleness_floor_seconds, :second)
+
+      nil ->
+        now
+    end
+  end
+
+  defp settle_consume_not_applied!(identity, assignment, redemption, expected, now) do
+    phase = RedemptionLifecycle.consume_not_applied()
+
+    if RedemptionLifecycle.can_transition?(
+         redemption,
+         phase,
+         expected.generation,
+         expected.attempt_id
+       ) do
+      updated =
+        redemption
+        |> Map.put("status", RedemptionLifecycle.legacy_status_for(phase))
+        |> Map.put("phase", phase)
+        |> Map.put("finished_at", DateTime.to_iso8601(now))
+        |> Map.put("result", %{
+          "code" => phase,
+          "applied" => false,
+          "available_count_before" => nil,
+          "available_count_after" => nil,
+          "http_status" => nil
+        })
+
+      updated_identity =
+        identity
+        |> UpstreamIdentity.changeset(%{
+          metadata:
+            identity.metadata
+            |> Kernel.||(%{})
+            |> Map.put("saved_reset_redemption", updated)
+            |> Map.delete(@redemption_target_key),
+          updated_at: now
+        })
+        |> Repo.update!()
+
+      {:noop, phase, updated_identity, assignment}
+    else
+      {:noop, "recovery_target_invalid", identity, assignment}
+    end
+  end
+
+  defp prepare_provider_recovery(
+         identity,
+         assignment,
+         redemption,
+         replay,
+         context,
+         now,
+         mode
+       ) do
+    snapshot = SavedResets.snapshot(identity, now)
+
+    with {:ok, endpoint_family, consume_url, scope_fingerprint} <-
+           provider_scope(identity, assignment, snapshot),
+         true <- endpoint_family == context.endpoint_family,
+         true <- scope_fingerprint == context.scope_fingerprint,
+         {:ok, access_token} <- Secrets.decrypt_active_secret(identity, "access_token"),
+         {:ok, target} <-
+           recovery_target(
+             identity,
+             redemption,
+             context.expected,
+             endpoint_family,
+             scope_fingerprint
+           ) do
+      recovery = %{
+        identity: identity,
+        assignment: assignment,
+        attempt_id: context.expected.attempt_id,
+        generation: context.expected.generation,
+        trigger_kind: redemption["trigger_kind"],
+        trigger_detail: redemption["trigger_detail"],
+        started_at: context.started_at,
+        receive_timeout: context.receive_timeout,
+        endpoint_kind: endpoint_kind(endpoint_family),
+        endpoint_family: endpoint_family,
+        scope_fingerprint: scope_fingerprint,
+        consume_url: consume_url,
+        list_url: recovery_list_url(identity, assignment, endpoint_family, snapshot),
+        access_token: access_token,
+        target: target,
+        provider_dispatches: context.provider_dispatches,
+        last_provider_dispatched_at: parse_datetime(replay["last_provider_dispatched_at"]),
+        recovery_mode: mode
+      }
+
+      if mode == :observe_only,
+        do: {:ok, recovery},
+        else: prepare_due_versioned_recovery(recovery, replay, now)
+    else
+      {:error, %{code: :saved_reset_credit_locator_invalid}} when mode == :observe_only ->
+        persist_observe_only_locked!(identity, redemption, "target_invalid", now)
+
+      {:error, _reason} when mode == :observe_only ->
+        persist_observe_only_locked!(identity, redemption, "missing_access_token", now)
+
+      _invalid when mode == :observe_only ->
+        persist_observe_only_locked!(identity, redemption, "scope_changed", now)
+
+      {:error, %{code: :saved_reset_credit_locator_invalid}} ->
+        {:noop, "recovery_target_invalid", identity, assignment}
+
+      {:error, _reason} ->
+        {:noop, "missing_access_token", identity, assignment}
+
+      _invalid ->
+        {:noop, "scope_changed", identity, assignment}
+    end
+  end
+
+  defp prepare_due_versioned_recovery(recovery, replay, now) do
+    case recovery_replay_due_at(replay) do
+      {:ok, due_at} ->
+        if DateTime.compare(now, due_at) == :lt do
+          {:snooze, remaining_seconds(due_at, now)}
+        else
+          {:ok, recovery}
+        end
+
+      :error ->
+        {:noop, "scope_changed", recovery.identity, recovery.assignment}
+    end
+  end
+
+  defp recovery_target(identity, redemption, expected, "chatgpt_api", scope_fingerprint) do
+    locator = (identity.metadata || %{})[@redemption_target_key]
+    dispatches = get_in(redemption, ["provider_replay", "provider_dispatches"])
+
+    cond do
+      is_binary(locator) ->
+        CreditLocator.open(locator, %{
+          identity_id: identity.id,
+          attempt_id: expected.attempt_id,
+          generation: expected.generation,
+          endpoint_family: "chatgpt_api",
+          scope_fingerprint: scope_fingerprint
+        })
+
+      dispatches == 0 ->
+        {:ok, nil}
+
+      true ->
+        {:error, %{code: :saved_reset_credit_locator_invalid}}
+    end
+  end
+
+  defp recovery_target(_identity, _redemption, _expected, "codex_api", _scope), do: {:ok, nil}
+  defp recovery_target(_identity, _redemption, _expected, _family, _scope), do: :error
+
+  defp recovery_list_url(identity, assignment, "chatgpt_api", snapshot) do
+    case chatgpt_reset_urls(identity, assignment, snapshot) do
+      {:ok, list_url, _consume_url} -> list_url
+      _unsupported -> nil
+    end
+  end
+
+  defp recovery_list_url(_identity, _assignment, _endpoint_family, _snapshot), do: nil
+  defp endpoint_kind("chatgpt_api"), do: :chatgpt
+  defp endpoint_kind("codex_api"), do: :codex
+
+  defp remaining_seconds(%DateTime{} = due_at, now),
+    do: max(DateTime.diff(due_at, now, :second), 1)
+
+  defp recovery_replay_due_at(%{"provider_dispatches" => 0} = replay) do
+    case replay["next_action_at"] do
+      nil -> {:ok, ~U[1970-01-01 00:00:00Z]}
+      value -> parse_recovery_due_at(value)
+    end
+  end
+
+  defp recovery_replay_due_at(
+         %{
+           "provider_dispatches" => dispatches,
+           "last_provider_dispatched_at" => last_dispatched_at
+         } = replay
+       )
+       when dispatches in 1..5 do
+    with %DateTime{} = last_dispatched_at <- parse_datetime(last_dispatched_at),
+         delay when is_integer(delay) <- Map.get(@replay_delays_seconds, dispatches),
+         {:ok, persisted_due_at} <- optional_recovery_due_at(replay["next_action_at"]) do
+      dispatch_floor = DateTime.add(last_dispatched_at, delay, :second)
+      {:ok, later_datetime(dispatch_floor, persisted_due_at)}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp recovery_replay_due_at(_replay), do: :error
+
+  defp optional_recovery_due_at(nil), do: {:ok, ~U[1970-01-01 00:00:00Z]}
+  defp optional_recovery_due_at(value), do: parse_recovery_due_at(value)
+
+  defp parse_recovery_due_at(value) do
+    case parse_datetime(value) do
+      %DateTime{} = due_at -> {:ok, due_at}
+      nil -> :error
+    end
+  end
+
+  defp later_datetime(left, right) do
+    if DateTime.compare(left, right) == :lt, do: right, else: left
+  end
+
+  defp resume_chatgpt_recovery(recovery, now) do
+    case list_recovery_chatgpt_credits(recovery) do
+      {:ok, credits} ->
+        resume_from_chatgpt_credits(recovery, credits, now)
+
+      {:error, _reason} ->
+        persist_recovery_observation(recovery, "list_failed", now, observation_interval(recovery))
+    end
+  end
+
+  defp list_recovery_chatgpt_credits(recovery) do
+    case Req.get(recovery.list_url,
+           headers:
+             CloudflareCookies.request_headers(
+               recovery.list_url,
+               request_headers(
+                 recovery.access_token,
+                 recovery.identity.chatgpt_account_id,
+                 :get
+               )
+             ),
+           retry: false,
+           receive_timeout: recovery.receive_timeout
+         )
+         |> store_cloudflare_cookies(recovery.list_url) do
+      {:ok, %{status: status, body: body}} when status in 200..299 and is_map(body) ->
+        parse_recovery_chatgpt_credits(body)
+
+      _failed ->
+        {:error, :list_failed}
+    end
+  rescue
+    _error -> {:error, :list_failed}
+  end
+
+  defp parse_recovery_chatgpt_credits(%{"credits" => credits}) when is_list(credits) do
+    parsed =
+      Enum.reduce_while(credits, [], fn
+        %{"id" => id} = credit, acc when is_binary(id) and byte_size(id) in 1..1_024 ->
+          status = Map.get(credit, "status")
+          redeemed_at = Map.get(credit, "redeemed_at")
+
+          if status in ["available", "redeeming", "redeemed"] and
+               (is_nil(redeemed_at) or is_binary(redeemed_at)) do
+            {:cont, [%{id: id, status: status, redeemed_at: redeemed_at} | acc]}
+          else
+            {:halt, :invalid}
+          end
+
+        _invalid, _acc ->
+          {:halt, :invalid}
+      end)
+
+    case parsed do
+      :invalid -> {:error, :list_failed}
+      rows -> {:ok, Enum.reverse(rows)}
+    end
+  end
+
+  defp parse_recovery_chatgpt_credits(_body), do: {:error, :list_failed}
+
+  defp resume_from_chatgpt_credits(
+         %{target: nil, provider_dispatches: 0} = recovery,
+         credits,
+         now
+       ) do
+    case Enum.find(credits, &(&1.status == "available")) do
+      %{id: credit_id} -> reserve_and_dispatch_recovery(recovery, credit_id, now)
+      nil -> persist_recovery_observation(recovery, "target_available", now, 60)
+    end
+  end
+
+  defp resume_from_chatgpt_credits(%{target: target} = recovery, credits, now)
+       when is_binary(target) do
+    case Enum.find(credits, &(&1.id == target)) do
+      %{status: "redeemed", redeemed_at: redeemed_at} ->
+        settle_recovered_applied(recovery, "target_redeemed", redeemed_at, now)
+
+      %{status: "redeeming"} ->
+        persist_recovery_observation(
+          recovery,
+          "target_redeeming",
+          now,
+          observation_interval(recovery)
+        )
+
+      _available_missing_or_empty when recovery.recovery_mode == :observe_only ->
+        persist_recovery_observation(
+          recovery,
+          "target_available",
+          now,
+          @observe_only_interval_seconds
+        )
+
+      _available_missing_or_empty ->
+        reserve_and_dispatch_recovery(recovery, target, now)
+    end
+  end
+
+  defp resume_codex_recovery(%{recovery_mode: :observe_only} = recovery, now) do
+    if fresh_usable_quota_after_dispatch?(recovery, now) do
+      settle_recovered_applied(recovery, "reset", nil, now)
+    else
+      persist_recovery_observation(
+        recovery,
+        "quota_unresolved",
+        now,
+        @observe_only_interval_seconds
+      )
+    end
+  end
+
+  defp resume_codex_recovery(recovery, now) do
+    if fresh_usable_quota_after_dispatch?(recovery, now) do
+      settle_recovered_applied(recovery, "reset", nil, now)
+    else
+      reserve_and_dispatch_recovery(recovery, nil, now)
+    end
+  end
+
+  defp fresh_usable_quota_after_dispatch?(
+         %{last_provider_dispatched_at: %DateTime{} = dispatched_at, identity: identity},
+         now
+       ) do
+    identity
+    |> Windows.list_evidence()
+    |> PostResetEvidence.classify(dispatched_at, now)
+    |> Kernel.==(:confirmed)
+  end
+
+  defp fresh_usable_quota_after_dispatch?(_recovery, _now), do: false
+
+  defp reserve_and_dispatch_recovery(recovery, selected_credit_id, now) do
+    case reserve_recovery_dispatch(recovery, selected_credit_id, now) do
+      {:ok, reserved_recovery, reserved_credit_id} ->
+        dispatch_recovery(reserved_recovery, reserved_credit_id, now)
+
+      {:snooze, seconds} ->
+        {:snooze, seconds}
+
+      {:noop, code, identity, assignment} ->
+        {:ok, noop_result(identity, assignment, code)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp reserve_recovery_dispatch(recovery, selected_credit_id, now) do
+    Repo.transaction(fn ->
+      reserve_recovery_dispatch_locked(recovery, selected_credit_id, now)
+    end)
+    |> case do
+      {:ok, result} -> result
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    _error -> {:error, :saved_reset_persistence_failed}
+  end
+
+  defp reserve_recovery_dispatch_locked(recovery, selected_credit_id, now) do
+    identity = lock_identity!(recovery.identity.id)
+    assignments = lock_canonical_assignments(identity.id)
+    canonical = List.first(assignments)
+    metadata = identity.metadata || %{}
+    redemption = metadata["saved_reset_redemption"] || %{}
+    replay = redemption["provider_replay"] || %{}
+
+    with %PoolUpstreamAssignment{id: assignment_id} = assignment <- canonical,
+         true <- assignment_id == recovery.assignment.id,
+         true <- identity.status == @identity_active,
+         true <- exact_recovery_attempt?(redemption, recovery),
+         true <- replay["provider_dispatches"] == recovery.provider_dispatches,
+         true <- replay["provider_dispatches"] < @maximum_provider_dispatches,
+         true <- before_replay_cutoff?(redemption, now),
+         {:ok, due_at} <- recovery_replay_due_at(replay),
+         true <- DateTime.compare(now, due_at) != :lt,
+         {:ok, endpoint_family, consume_url, scope_fingerprint} <-
+           provider_scope(identity, assignment, SavedResets.snapshot(identity, now)),
+         true <- endpoint_family == recovery.endpoint_family,
+         true <- consume_url == recovery.consume_url,
+         true <- scope_fingerprint == recovery.scope_fingerprint,
+         {:ok, locator, credit_id} <-
+           reserve_recovery_target(
+             metadata[@redemption_target_key],
+             selected_credit_id,
+             recovery,
+             identity,
+             replay
+           ) do
+      dispatches = replay["provider_dispatches"] + 1
+      next_action_at = next_replay_action_at(dispatches, now)
+
+      updated_replay =
+        replay
+        |> Map.put("provider_dispatches", dispatches)
+        |> Map.put("last_provider_dispatched_at", DateTime.to_iso8601(now))
+        |> Map.put("next_action_at", DateTime.to_iso8601(next_action_at))
+        |> Map.put("mode", "replay")
+        |> Map.put("last_code", "dispatch_reserved")
+
+      updated_redemption = Map.put(redemption, "provider_replay", updated_replay)
+
+      updated_metadata =
+        metadata
+        |> Map.put("saved_reset_redemption", updated_redemption)
+        |> put_reserved_locator(locator)
+
+      updated_identity =
+        identity
+        |> UpstreamIdentity.changeset(%{metadata: updated_metadata, updated_at: now})
+        |> Repo.update!()
+
+      updated = %{
+        recovery
+        | identity: updated_identity,
+          assignment: assignment,
+          provider_dispatches: dispatches,
+          last_provider_dispatched_at: now
+      }
+
+      {:ok, updated, credit_id}
+    else
+      false -> recovery_reservation_conflict(identity, canonical, redemption, recovery, now)
+      nil -> {:noop, "recovery_superseded", identity, recovery.assignment}
+      _invalid -> {:noop, "scope_changed", identity, canonical || recovery.assignment}
+    end
+  end
+
+  defp exact_recovery_attempt?(redemption, recovery) do
+    redemption["status"] == "redeeming" and redemption["phase"] == "consuming" and
+      redemption["attempt_id"] == recovery.attempt_id and
+      redemption["generation"] == recovery.generation
+  end
+
+  defp before_replay_cutoff?(redemption, now) do
+    case parse_datetime(redemption["started_at"]) do
+      %DateTime{} = started_at ->
+        DateTime.compare(now, DateTime.add(started_at, @replay_cutoff_seconds, :second)) == :lt
+
+      nil ->
+        false
+    end
+  end
+
+  defp reserve_recovery_target(locator, selected_credit_id, recovery, identity, replay) do
+    reserve_target(
+      locator,
+      selected_credit_id,
+      recovery.endpoint_kind,
+      locator_binding(
+        identity.id,
+        recovery,
+        recovery.endpoint_family,
+        recovery.scope_fingerprint
+      ),
+      replay
+    )
+  end
+
+  defp recovery_reservation_conflict(identity, canonical, redemption, recovery, now) do
+    replay = redemption["provider_replay"] || %{}
+
+    cond do
+      not match?(%PoolUpstreamAssignment{id: id} when id == recovery.assignment.id, canonical) ->
+        {:noop, "recovery_superseded", identity, canonical || recovery.assignment}
+
+      not exact_recovery_attempt?(redemption, recovery) ->
+        {:noop, "recovery_target_invalid", identity, canonical}
+
+      is_integer(replay["provider_dispatches"]) and
+          replay["provider_dispatches"] >= @maximum_provider_dispatches ->
+        {:noop, "write_budget_exhausted", identity, canonical}
+
+      not before_replay_cutoff?(redemption, now) ->
+        {:noop, "write_budget_exhausted", identity, canonical}
+
+      true ->
+        recovery_reservation_due_conflict(identity, canonical, replay, now)
+    end
+  end
+
+  defp recovery_reservation_due_conflict(identity, canonical, replay, now) do
+    case recovery_replay_due_at(replay) do
+      {:ok, due_at} -> {:snooze, remaining_seconds(due_at, now)}
+      :error -> {:noop, "recovery_target_invalid", identity, canonical}
+    end
+  end
+
+  defp next_replay_action_at(dispatches, now) do
+    case Map.get(@replay_delays_seconds, dispatches) do
+      nil -> now
+      delay -> DateTime.add(now, delay, :second)
+    end
+  end
+
+  defp dispatch_recovery(%{endpoint_kind: endpoint_kind} = recovery, credit_id, now) do
+    body =
+      %{"redeem_request_id" => idempotency_key(recovery)}
+      |> maybe_put_recovery_credit_id(endpoint_kind, credit_id)
+
+    case Req.post(recovery.consume_url,
+           headers:
+             CloudflareCookies.request_headers(
+               recovery.consume_url,
+               request_headers(
+                 recovery.access_token,
+                 recovery.identity.chatgpt_account_id,
+                 :post
+               )
+             ),
+           json: body,
+           retry: false,
+           receive_timeout: recovery.receive_timeout
+         )
+         |> store_cloudflare_cookies(recovery.consume_url) do
+      {:ok, %{status: status, body: response_body}} ->
+        code = response_code(response_body, status, endpoint_kind)
+        finalize_recovery_response(recovery, code, status, now)
+
+      {:error, _reason} ->
+        preserve_and_snooze_recovery(recovery, "transport_error", now)
+    end
+  rescue
+    _error -> preserve_and_snooze_recovery(recovery, "persistence_failed", now)
+  end
+
+  defp maybe_put_recovery_credit_id(body, :chatgpt, credit_id),
+    do: Map.put(body, "credit_id", credit_id)
+
+  defp maybe_put_recovery_credit_id(body, :codex, _credit_id), do: body
+
+  defp finalize_recovery_response(recovery, code, status, now)
+       when code in @known_applied_codes do
+    result =
+      result_from_response(
+        code,
+        status,
+        SavedResets.snapshot(recovery.identity).available_count,
+        recovery.identity,
+        recovery.assignment,
+        Map.put(recovery, :finished_at, now)
+      )
+
+    finalize_reserved_attempt(result, Map.put(recovery, :finished_at, now))
+  end
+
+  defp finalize_recovery_response(recovery, code, _status, now),
+    do: preserve_and_snooze_recovery(recovery, code, now)
+
+  defp preserve_and_snooze_recovery(recovery, code, now) do
+    if recovery.provider_dispatches >= @maximum_provider_dispatches do
+      persist_observe_only_handoff(recovery, now)
+    else
+      _result =
+        recovery
+        |> Map.put(:finished_at, now)
+        |> preserve_ambiguous_attempt(bounded_recovery_code(code))
+
+      {:snooze, recovery_next_snooze(recovery, now)}
+    end
+  end
+
+  defp persist_observe_only_handoff(recovery, now) do
+    Repo.transaction(fn ->
+      identity = lock_identity!(recovery.identity.id)
+      metadata = identity.metadata || %{}
+      redemption = metadata["saved_reset_redemption"] || %{}
+
+      if exact_recovery_attempt?(redemption, recovery) do
+        replay = redemption["provider_replay"]
+
+        {updated_identity, _redemption, updated_replay} =
+          enter_observe_only!(identity, redemption, replay, now)
+
+        due_at = observe_only_due_at!(updated_replay, now)
+        {:snooze, remaining_seconds(due_at, now), updated_identity}
+      else
+        {:noop, "recovery_target_invalid", identity, recovery.assignment}
+      end
+    end)
+    |> case do
+      {:ok, {:snooze, seconds, _identity}} -> {:snooze, seconds}
+      {:ok, {:noop, code, identity, assignment}} -> {:ok, noop_result(identity, assignment, code)}
+      {:error, reason} -> {:error, reason}
+    end
+  rescue
+    _error -> {:error, :saved_reset_persistence_failed}
+  end
+
+  defp recovery_next_snooze(recovery, now) do
+    due_at =
+      next_replay_action_at(recovery.provider_dispatches, recovery.last_provider_dispatched_at)
+
+    max(DateTime.diff(due_at, now, :second), 1)
+  end
+
+  defp settle_recovered_applied(recovery, code, redeemed_at, now) do
+    consumed_at =
+      parse_datetime(redeemed_at) || recovery.last_provider_dispatched_at || recovery.started_at
+
+    recovery = Map.put(recovery, :finished_at, now)
+    result = recovered_applied_result(recovery, code, consumed_at, now)
+    finalize_reserved_attempt(result, recovery)
+  end
+
+  defp recovered_applied_result(recovery, code, consumed_at, now) do
+    %{
+      status: :succeeded,
+      applied?: true,
+      code: code,
+      phase: post_reset_phase(recovery.identity, consumed_at, now),
+      consumed_at: consumed_at,
+      available_count_before: SavedResets.snapshot(recovery.identity).available_count
+    }
+  end
+
+  defp persist_recovery_observation(recovery, code, now, snooze_seconds) do
+    result =
+      Repo.transaction(fn ->
+        identity = lock_identity!(recovery.identity.id)
+        metadata = identity.metadata || %{}
+        redemption = metadata["saved_reset_redemption"] || %{}
+
+        if exact_recovery_attempt?(redemption, recovery) do
+          next_action_at =
+            recovery
+            |> recovery_observation_due_at(now, snooze_seconds)
+            |> DateTime.to_iso8601()
+
+          replay =
+            redemption["provider_replay"]
+            |> Map.put("last_code", bounded_observation_code(code))
+            |> Map.put("last_observed_at", DateTime.to_iso8601(now))
+            |> Map.put("next_action_at", next_action_at)
+
+          identity
+          |> UpstreamIdentity.changeset(%{
+            metadata:
+              Map.put(
+                metadata,
+                "saved_reset_redemption",
+                Map.put(redemption, "provider_replay", replay)
+              ),
+            updated_at: now
+          })
+          |> Repo.update!()
+
+          {:snooze, snooze_seconds}
+        else
+          {:noop, "recovery_target_invalid", identity, recovery.assignment}
+        end
+      end)
+
+    case result do
+      {:ok, {:snooze, seconds}} ->
+        {:snooze, seconds}
+
+      {:ok, {:noop, noop_code, identity, assignment}} ->
+        {:ok, noop_result(identity, assignment, noop_code)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  rescue
+    _error -> {:error, :saved_reset_persistence_failed}
+  end
+
+  defp recovery_observation_due_at(recovery, now, snooze_seconds) do
+    requested_due_at = DateTime.add(now, snooze_seconds, :second)
+
+    if recovery.recovery_mode == :observe_only do
+      requested_due_at
+    else
+      case recovery_replay_due_at(%{
+             "provider_dispatches" => recovery.provider_dispatches,
+             "last_provider_dispatched_at" =>
+               encode_optional_datetime(recovery.last_provider_dispatched_at),
+             "next_action_at" => nil
+           }) do
+        {:ok, replay_due_at} -> later_datetime(requested_due_at, replay_due_at)
+        :error -> requested_due_at
+      end
+    end
+  end
+
+  defp observation_interval(%{recovery_mode: :observe_only}),
+    do: @observe_only_interval_seconds
+
+  defp observation_interval(_recovery), do: 60
+
+  defp bounded_observation_code(code)
+       when code in [
+              "list_failed",
+              "target_redeeming",
+              "target_available",
+              "quota_unresolved",
+              "scope_changed",
+              "target_invalid",
+              "missing_access_token",
+              "legacy_unresolved"
+            ],
+       do: code
+
+  defp bounded_observation_code(code), do: bounded_recovery_code(code)
+
+  defp persist_observe_only_locked!(identity, redemption, code, now) do
+    next_action_at = DateTime.add(now, @observe_only_interval_seconds, :second)
+
+    replay =
+      redemption["provider_replay"]
+      |> Map.put("mode", "observe_only")
+      |> Map.put("last_code", bounded_observation_code(code))
+      |> Map.put("last_observed_at", DateTime.to_iso8601(now))
+      |> Map.put("next_action_at", DateTime.to_iso8601(next_action_at))
+
+    _identity =
+      persist_recovery_redemption!(identity, Map.put(redemption, "provider_replay", replay), now)
+
+    {:snooze, @observe_only_interval_seconds}
+  end
+
+  defp persist_recovery_redemption!(identity, redemption, timestamp) do
+    identity
+    |> UpstreamIdentity.changeset(%{
+      metadata: Map.put(identity.metadata || %{}, "saved_reset_redemption", redemption),
+      updated_at: timestamp
+    })
+    |> Repo.update!()
+  end
+
+  defp encode_optional_datetime(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
+  defp encode_optional_datetime(_datetime), do: nil
+
   @type saved_reset_observation_intent :: %{
           required(:available_count) => non_neg_integer(),
           required(:authoritative_zero?) => boolean(),
@@ -144,7 +1240,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
         }
 
   @spec redeem(PoolUpstreamAssignment.t() | Ecto.UUID.t(), keyword()) ::
-          {:ok, redeem_result()} | {:error, lifecycle_error() | :redemption_in_progress}
+          {:ok, redeem_result()}
+          | {:error,
+             lifecycle_error()
+             | :redemption_in_progress
+             | :saved_reset_consume_outcome_ambiguous}
   def redeem(assignment_or_id, opts \\ []) do
     trigger_kind = Keyword.get(opts, :trigger_kind, "admin_manual")
 
@@ -209,7 +1309,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           keyword()
         ) ::
           {:ok, redeem_result() | scheduled_noop_result()}
-          | {:error, lifecycle_error() | :redemption_in_progress}
+          | {:error,
+             lifecycle_error()
+             | :redemption_in_progress
+             | :saved_reset_consume_outcome_ambiguous}
   defp redeem_claim({:ok, {:noop, result}}, _opts), do: {:ok, result}
   defp redeem_claim({:ok, claim}, opts), do: do_redeem(claim, opts)
   defp redeem_claim({:error, reason}, _opts), do: {:error, reason}
@@ -281,7 +1384,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
     cond do
       RedemptionLifecycle.blocks_new_redemption?(redemption, timestamp) ->
-        {:error, :redemption_in_progress}
+        {:error,
+         lifecycle_error(
+           :saved_reset_redemption_in_progress,
+           "saved reset redemption is already in progress"
+         )}
 
       fresh_redemption?(redemption, timestamp, receive_timeout) ->
         {:error, :redemption_in_progress}
@@ -450,9 +1557,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           trigger_kind,
           receive_timeout,
           started_at,
-          gateway_auto_context,
-          metadata,
-          redemption
+          gateway_auto_context
         )
     end
   end
@@ -464,10 +1569,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          trigger_kind,
          receive_timeout,
          started_at,
-         gateway_auto_context,
-         metadata,
-         redemption
+         gateway_auto_context
        ) do
+    metadata = locked_identity.metadata || %{}
+    redemption = metadata["saved_reset_redemption"]
+
     case validate_locked_gateway_auto(
            locked_identity,
            assignment,
@@ -475,7 +1581,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
            started_at
          ) do
       {:ok, current_assignment} ->
-        case sibling_consume_fence(
+        case gateway_auto_sibling_fence(
                locked_identity,
                locked_cohort,
                gateway_auto_context,
@@ -483,7 +1589,12 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
              ) do
           :ok ->
             locked_identity
-            |> maybe_mark_stale_admin_redemption!(metadata, redemption, trigger_kind, started_at)
+            |> maybe_mark_stale_admin_redemption!(
+              metadata,
+              redemption,
+              trigger_kind,
+              started_at
+            )
             |> build_redemption_claim!(
               locked_identity,
               current_assignment,
@@ -503,6 +1614,21 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
       {:error, reason} ->
         Repo.rollback(reason)
+    end
+  end
+
+  defp gateway_auto_sibling_fence(locked_identity, locked_cohort, gateway_auto_context, timestamp) do
+    case sibling_consume_fence(locked_identity, locked_cohort, gateway_auto_context, timestamp) do
+      :ok ->
+        sibling_usable_capacity_fence(
+          locked_identity,
+          locked_cohort,
+          gateway_auto_context,
+          timestamp
+        )
+
+      {:noop, _code} = result ->
+        result
     end
   end
 
@@ -553,6 +1679,38 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
       :ok
     end
   end
+
+  defp sibling_usable_capacity_fence(_locked_identity, _locked_cohort, nil, _timestamp), do: :ok
+
+  defp sibling_usable_capacity_fence(
+         locked_identity,
+         locked_cohort,
+         %{trigger: :threshold_pressure, session_continuity?: false} = gateway_auto_context,
+         timestamp
+       ) do
+    routable_identity_ids =
+      Map.get(
+        gateway_auto_context,
+        :routable_identity_ids,
+        gateway_auto_context.candidate_identity_ids
+      )
+
+    if Enum.any?(locked_cohort, fn {identity_id, sibling} ->
+         identity_id != locked_identity.id and identity_id in routable_identity_ids and
+           AutoEligibility.locked_sibling_usable_capacity?(
+             sibling,
+             gateway_auto_context,
+             timestamp
+           )
+       end) do
+      {:noop, "gateway_auto_sibling_usable_capacity"}
+    else
+      :ok
+    end
+  end
+
+  defp sibling_usable_capacity_fence(_locked_identity, _locked_cohort, _context, _timestamp),
+    do: :ok
 
   defp lock_scheduled_identity(identity_id) do
     case Ecto.UUID.cast(identity_id) do
@@ -643,6 +1801,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           |> put_scheduled_decision_evidence(scheduled_decision_evidence)
           |> put_carried_applied_consume(metadata["saved_reset_redemption"] || %{})
 
+        {metadata, claim} =
+          put_provider_replay_contract(metadata, claim, locked_identity, assignment, started_at)
+
         claimed_identity = update_redemption_metadata!(locked_identity, metadata, claim)
 
         %{
@@ -670,10 +1831,24 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   defp do_redeem(%{identity: identity, assignment: assignment} = claim, opts) do
     case Secrets.decrypt_active_secret(identity, "access_token") do
       {:ok, access_token} ->
-        identity
-        |> SavedResets.snapshot()
-        |> endpoint_family_result(identity, assignment, access_token, claim, opts)
-        |> finalize_attempt(claim)
+        result =
+          identity
+          |> SavedResets.snapshot()
+          |> endpoint_family_result(identity, assignment, access_token, claim, opts)
+
+        case result do
+          {:error, reason} ->
+            {:error, reason}
+
+          {:ambiguous, code} ->
+            preserve_ambiguous_attempt(claim, code)
+
+          {:finalize, result, reserved_claim} ->
+            finalize_reserved_attempt(result, reserved_claim)
+
+          result when is_map(result) ->
+            finalize_attempt(result, claim)
+        end
 
       {:error, _reason} ->
         finalize_attempt(
@@ -686,6 +1861,18 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           claim
         )
     end
+  end
+
+  defp finalize_reserved_attempt(result, claim) do
+    case finalize_attempt(result, claim) do
+      {:ok, _result} = success ->
+        success
+
+      {:error, _reason} ->
+        preserve_ambiguous_attempt(claim, "persistence_failed")
+    end
+  rescue
+    _exception -> preserve_ambiguous_attempt(claim, "persistence_failed")
   end
 
   defp endpoint_family_result(
@@ -813,32 +2000,88 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
   defp consume_credit(
          url,
-         identity,
+         _identity,
          access_token,
          body,
          available_count_before,
          claim,
          endpoint_kind
        ) do
+    credit_id = if endpoint_kind == :chatgpt, do: body["credit_id"]
+
+    with {:ok, reserved_claim, reserved_credit_id} <-
+           reserve_provider_dispatch(claim, url, endpoint_kind, credit_id) do
+      consume_reserved_credit(
+        url,
+        access_token,
+        body,
+        available_count_before,
+        reserved_claim,
+        reserved_credit_id,
+        endpoint_kind
+      )
+    end
+  end
+
+  defp consume_reserved_credit(
+         url,
+         access_token,
+         body,
+         available_count_before,
+         reserved_claim,
+         reserved_credit_id,
+         endpoint_kind
+       ) do
+    body =
+      if endpoint_kind == :chatgpt,
+        do: Map.put(body, "credit_id", reserved_credit_id),
+        else: body
+
     case Req.post(url,
            headers:
              CloudflareCookies.request_headers(
                url,
-               request_headers(access_token, identity.chatgpt_account_id, :post)
+               request_headers(
+                 access_token,
+                 reserved_claim.identity.chatgpt_account_id,
+                 :post
+               )
              ),
            json: body,
            retry: false,
-           receive_timeout: claim.receive_timeout
+           receive_timeout: reserved_claim.receive_timeout
          )
          |> store_cloudflare_cookies(url) do
       {:ok, %{status: status, body: response_body}} ->
-        response_code(response_body, status, endpoint_kind)
-        |> result_from_response(status, available_count_before, identity, claim.assignment, claim)
+        handle_consume_response(
+          response_code(response_body, status, endpoint_kind),
+          status,
+          available_count_before,
+          reserved_claim
+        )
 
       {:error, _reason} ->
-        transport_failed_result()
+        {:ambiguous, "transport_error"}
     end
+  rescue
+    _exception -> preserve_ambiguous_attempt(reserved_claim, "persistence_failed")
   end
+
+  defp handle_consume_response(code, status, available_count_before, claim)
+       when code in @known_provider_result_codes do
+    {:finalize,
+     result_from_response(
+       code,
+       status,
+       available_count_before,
+       claim.identity,
+       claim.assignment,
+       claim
+     ), claim}
+  end
+
+  defp handle_consume_response(code, _status, _available_count_before, _claim),
+    do: {:ambiguous, code}
 
   defp store_cloudflare_cookies(result, url) do
     CloudflareCookies.store_from_result(url, result)
@@ -847,10 +2090,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
   defp result_from_response(code, status, available_count_before, identity, assignment, claim) do
     cond do
-      code == "reset" ->
+      code in ["reset", "already_redeemed"] ->
         # The provider consumed a credit as of now; capture that before the
         # refresh so evidence is only accepted when observed at/after it.
-        consumed_at = now()
+        consumed_at = claim[:finished_at] || now()
 
         case PoolReconciliation.refresh_quota_from_usage(identity, assignment,
                receive_timeout: claim.receive_timeout
@@ -862,7 +2105,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
               status: :succeeded,
               applied?: true,
               code: code,
-              phase: post_reset_phase(refreshed_identity, consumed_at),
+              phase: post_reset_phase(refreshed_identity, consumed_at, consumed_at),
               consumed_at: consumed_at,
               available_count_before: available_count_before,
               available_count_after: available_count_after,
@@ -888,7 +2131,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
             }
         end
 
-      code in @known_noop_codes ->
+      code in ["no_credit", "nothing_to_reset"] ->
         %{
           status: :noop,
           applied?: false,
@@ -909,20 +2152,20 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     end
   end
 
-  defp response_code(body, status, endpoint_kind) do
-    cond do
-      endpoint_kind == :codex and status == 404 ->
-        "saved_reset_endpoint_unavailable"
-
-      is_map(body) and is_binary(body["code"]) ->
-        sanitize_result_code(body["code"])
-
-      status in 200..299 ->
-        "reset"
-
-      true ->
-        http_code(status)
+  defp response_code(body, status, _endpoint_kind) do
+    with true <- status in 200..299,
+         true <- is_map(body),
+         code when code in @known_provider_result_codes <- body["code"],
+         true <- valid_windows_reset?(body) do
+      code
+    else
+      _invalid when status in 500..599 -> "provider_failed"
+      _invalid -> "malformed_response"
     end
+  end
+
+  defp valid_windows_reset?(body) do
+    not Map.has_key?(body, "windows_reset") or is_integer(body["windows_reset"])
   end
 
   defp chatgpt_reset_urls(identity, assignment, snapshot) do
@@ -983,8 +2226,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
         headers
       end
 
-    if send_chatgpt_account_header?(chatgpt_account_id) do
-      headers ++ [{"chatgpt-account-id", chatgpt_account_id}]
+    if account_scope = emitted_chatgpt_account_scope(chatgpt_account_id) do
+      headers ++ [{"chatgpt-account-id", account_scope}]
     else
       headers
     end
@@ -999,15 +2242,273 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
   defp send_chatgpt_account_header?(_chatgpt_account_id), do: false
 
+  defp emitted_chatgpt_account_scope(chatgpt_account_id) do
+    if send_chatgpt_account_header?(chatgpt_account_id),
+      do: String.trim(chatgpt_account_id),
+      else: nil
+  end
+
+  defp put_provider_replay_contract(metadata, claim, identity, assignment, started_at) do
+    snapshot = SavedResets.snapshot(identity, started_at)
+
+    case provider_scope(identity, assignment, snapshot) do
+      {:ok, endpoint_family, _consume_url, scope_fingerprint} ->
+        metadata = Map.delete(metadata, @redemption_target_key)
+
+        replay = %{
+          "version" => 1,
+          "endpoint_family" => endpoint_family,
+          "scope_fingerprint" => scope_fingerprint,
+          "provider_dispatches" => 0,
+          "mode" => "replay",
+          "next_action_at" => DateTime.to_iso8601(started_at)
+        }
+
+        {metadata, Map.put(claim, "provider_replay", replay)}
+
+      :unsupported ->
+        {metadata, claim}
+    end
+  end
+
+  defp provider_scope(identity, assignment, %{path_style: "chatgpt_api"} = snapshot) do
+    case chatgpt_reset_urls(identity, assignment, snapshot) do
+      {:ok, _list_url, consume_url} ->
+        endpoint_family = "chatgpt_api"
+        account_scope = emitted_chatgpt_account_scope(identity.chatgpt_account_id) || ""
+
+        {:ok, endpoint_family, consume_url,
+         CreditLocator.scope_fingerprint(endpoint_family, consume_url, account_scope)}
+
+      {:error, _result} ->
+        :unsupported
+    end
+  end
+
+  defp provider_scope(identity, assignment, %{path_style: "codex_api"} = snapshot) do
+    case codex_reset_url(identity, assignment, snapshot) do
+      {:ok, consume_url} ->
+        endpoint_family = "codex_api"
+
+        {:ok, endpoint_family, consume_url,
+         CreditLocator.scope_fingerprint(endpoint_family, consume_url, "")}
+
+      {:error, _result} ->
+        :unsupported
+    end
+  end
+
+  defp provider_scope(_identity, _assignment, _snapshot), do: :unsupported
+
+  defp reserve_provider_dispatch(claim, consume_url, endpoint_kind, selected_credit_id) do
+    Repo.transaction(fn ->
+      identity = lock_identity!(claim.identity.id)
+      metadata = identity.metadata || %{}
+      redemption = metadata["saved_reset_redemption"] || %{}
+
+      with :ok <- validate_reservation_identity(redemption, claim),
+           :ok <- validate_reservation_dispatch(redemption, claim),
+           {:ok, locked_assignment} <-
+             lock_reservation_assignment(claim.assignment.id, identity.id),
+           {:ok, endpoint_family, ^consume_url, scope_fingerprint} <-
+             provider_scope(identity, locked_assignment, SavedResets.snapshot(identity)),
+           :ok <-
+             validate_replay_contract(
+               redemption["provider_replay"],
+               endpoint_family,
+               scope_fingerprint
+             ),
+           {:ok, locator, credit_id} <-
+             reserve_target(
+               metadata[@redemption_target_key],
+               selected_credit_id,
+               endpoint_kind,
+               locator_binding(identity.id, claim, endpoint_family, scope_fingerprint),
+               redemption["provider_replay"]
+             ) do
+        dispatched_at = now()
+
+        replay =
+          redemption["provider_replay"]
+          |> Map.update!("provider_dispatches", &(&1 + 1))
+          |> Map.put("last_provider_dispatched_at", DateTime.to_iso8601(dispatched_at))
+          |> Map.put(
+            "next_action_at",
+            DateTime.to_iso8601(next_replay_action_at(1, dispatched_at))
+          )
+          |> Map.put("last_code", "dispatch_reserved")
+
+        redemption = Map.put(redemption, "provider_replay", replay)
+
+        metadata =
+          metadata
+          |> Map.put("saved_reset_redemption", redemption)
+          |> put_reserved_locator(locator)
+
+        updated_identity =
+          identity
+          |> UpstreamIdentity.changeset(%{metadata: metadata, updated_at: dispatched_at})
+          |> Repo.update!()
+
+        {claim |> Map.put(:identity, updated_identity) |> Map.put(:assignment, locked_assignment),
+         credit_id}
+      else
+        _invalid -> Repo.rollback(:saved_reset_dispatch_reservation_invalid)
+      end
+    end)
+    |> case do
+      {:ok, {reserved_claim, credit_id}} -> {:ok, reserved_claim, credit_id}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp validate_reservation_identity(redemption, claim) do
+    if redemption["status"] == "redeeming" and
+         redemption["phase"] == RedemptionLifecycle.consuming() and
+         redemption["attempt_id"] == claim.attempt_id and
+         redemption["generation"] == claim.generation,
+       do: :ok,
+       else: :error
+  end
+
+  defp validate_reservation_dispatch(redemption, claim) do
+    persisted_dispatches = get_in(redemption, ["provider_replay", "provider_dispatches"])
+
+    loaded_dispatches =
+      get_in(claim.identity.metadata || %{}, [
+        "saved_reset_redemption",
+        "provider_replay",
+        "provider_dispatches"
+      ])
+
+    if is_integer(persisted_dispatches) and persisted_dispatches == loaded_dispatches,
+      do: :ok,
+      else: :error
+  end
+
+  defp lock_reservation_assignment(assignment_id, identity_id) do
+    case Repo.one(
+           from assignment in PoolUpstreamAssignment,
+             where:
+               assignment.id == ^assignment_id and
+                 assignment.upstream_identity_id == ^identity_id and
+                 assignment.status == ^@assignment_active,
+             lock: "FOR UPDATE"
+         ) do
+      %PoolUpstreamAssignment{} = assignment -> {:ok, assignment}
+      nil -> :error
+    end
+  end
+
+  defp validate_replay_contract(
+         %{
+           "version" => 1,
+           "endpoint_family" => endpoint_family,
+           "scope_fingerprint" => scope_fingerprint,
+           "provider_dispatches" => provider_dispatches
+         },
+         endpoint_family,
+         scope_fingerprint
+       )
+       when is_integer(provider_dispatches) and provider_dispatches == 0,
+       do: :ok
+
+  defp validate_replay_contract(_replay, _endpoint_family, _scope_fingerprint), do: :error
+
+  defp reserve_target(locator, selected_credit_id, :chatgpt, binding, %{
+         "provider_dispatches" => provider_dispatches
+       }) do
+    cond do
+      is_binary(locator) ->
+        with {:ok, credit_id} <- CreditLocator.open(locator, binding) do
+          {:ok, locator, credit_id}
+        end
+
+      provider_dispatches == 0 and is_binary(selected_credit_id) ->
+        with {:ok, locator} <- CreditLocator.seal(selected_credit_id, binding) do
+          {:ok, locator, selected_credit_id}
+        end
+
+      true ->
+        {:error, :saved_reset_credit_locator_invalid}
+    end
+  end
+
+  defp reserve_target(_locator, _selected_credit_id, :codex, _binding, _replay),
+    do: {:ok, nil, nil}
+
+  defp locator_binding(identity_id, claim, endpoint_family, scope_fingerprint) do
+    %{
+      identity_id: identity_id,
+      attempt_id: claim.attempt_id,
+      generation: claim.generation,
+      endpoint_family: endpoint_family,
+      scope_fingerprint: scope_fingerprint
+    }
+  end
+
+  defp put_reserved_locator(metadata, locator) when is_binary(locator),
+    do: Map.put(metadata, @redemption_target_key, locator)
+
+  defp put_reserved_locator(metadata, nil), do: Map.delete(metadata, @redemption_target_key)
+
+  defp preserve_ambiguous_attempt(claim, code) do
+    _result =
+      Repo.transaction(fn ->
+        identity = lock_identity!(claim.identity.id)
+        metadata = identity.metadata || %{}
+        redemption = metadata["saved_reset_redemption"] || %{}
+
+        if redemption["attempt_id"] == claim.attempt_id and
+             redemption["generation"] == claim.generation and
+             redemption["phase"] == RedemptionLifecycle.consuming() and
+             get_in(redemption, ["provider_replay", "provider_dispatches"]) in 1..6 do
+          replay =
+            redemption["provider_replay"]
+            |> Map.put("last_code", bounded_recovery_code(code))
+
+          identity
+          |> UpstreamIdentity.changeset(%{
+            metadata:
+              Map.put(
+                metadata,
+                "saved_reset_redemption",
+                Map.put(redemption, "provider_replay", replay)
+              ),
+            updated_at: claim[:finished_at] || now()
+          })
+          |> Repo.update!()
+        end
+      end)
+
+    {:error, :saved_reset_consume_outcome_ambiguous}
+  rescue
+    _error -> {:error, :saved_reset_consume_outcome_ambiguous}
+  end
+
+  defp bounded_recovery_code(code)
+       when code in [
+              "transport_error",
+              "provider_failed",
+              "persistence_failed",
+              "no_credit",
+              "nothing_to_reset"
+            ],
+       do: code
+
+  defp bounded_recovery_code("malformed_response"), do: "provider_failed"
+  defp bounded_recovery_code("http_" <> _status), do: "provider_failed"
+
+  defp bounded_recovery_code(_code), do: "provider_failed"
+
   defp finalize_attempt(result, claim) do
     Repo.transaction(fn ->
       identity = lock_identity!(claim.identity.id)
       metadata = identity.metadata || %{}
       redemption = metadata["saved_reset_redemption"] || %{}
 
-      if redemption["attempt_id"] == claim.attempt_id and
-           redemption["generation"] == claim.generation do
-        finished_at = now()
+      if finalization_matches_claim?(redemption, claim) do
+        finished_at = claim[:finished_at] || now()
 
         base = %{
           "attempt_id" => claim.attempt_id,
@@ -1023,8 +2524,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           |> put_trigger_detail(claim[:trigger_detail])
           |> put_scheduled_decision_evidence(claim[:scheduled_decision_evidence])
           |> put_carried_applied_consume(redemption)
+          |> put_provider_replay_history(redemption)
 
         redemption = Map.merge(base, redemption_lifecycle_fields(result))
+
+        metadata = Map.delete(metadata, @redemption_target_key)
 
         {metadata, ledger} =
           apply_saved_reset_observation(
@@ -1038,7 +2542,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
         updated_identity
       else
-        identity
+        resolve_finalizer_cas_loss(identity, claim)
       end
     end)
     |> case do
@@ -1052,8 +2556,27 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          |> Map.put(:assignment, claim.assignment)}
 
       {:error, reason} ->
-        {:error, reason}
+        if claim_has_reserved_dispatch?(claim) do
+          {:error, :saved_reset_consume_outcome_ambiguous}
+        else
+          {:error, reason}
+        end
     end
+  end
+
+  defp resolve_finalizer_cas_loss(identity, claim) do
+    if claim_has_reserved_dispatch?(claim),
+      do: Repo.rollback(:saved_reset_finalizer_cas_lost),
+      else: identity
+  end
+
+  defp finalization_matches_claim?(redemption, %{endpoint_kind: _endpoint_kind} = recovery) do
+    exact_recovery_attempt?(redemption, recovery)
+  end
+
+  defp finalization_matches_claim?(redemption, claim) do
+    redemption["attempt_id"] == claim.attempt_id and
+      redemption["generation"] == claim.generation
   end
 
   defp metadata_result(result) do
@@ -1085,8 +2608,12 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   # the consume time confirms the identity. Anything else (the provider omitted
   # the account window, or it is still exhausted) stays pending and converges
   # later from real evidence — never a fabricated success.
-  defp post_reset_phase(refreshed_identity, consumed_at) do
-    case PostResetEvidence.classify(Windows.list_evidence(refreshed_identity), consumed_at, now()) do
+  defp post_reset_phase(refreshed_identity, consumed_at, timestamp) do
+    case PostResetEvidence.classify(
+           Windows.list_evidence(refreshed_identity),
+           consumed_at,
+           timestamp
+         ) do
       :confirmed -> RedemptionLifecycle.confirmed_by_quota()
       _pending_or_reblocked -> RedemptionLifecycle.consumed_pending_probe()
     end
@@ -1373,6 +2900,24 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     end
   end
 
+  defp put_provider_replay_history(base, %{"provider_replay" => replay}) when is_map(replay),
+    do: Map.put(base, "provider_replay", replay)
+
+  defp put_provider_replay_history(base, _redemption), do: base
+
+  defp claim_has_reserved_dispatch?(%{identity: %UpstreamIdentity{metadata: metadata}}) do
+    case get_in(metadata || %{}, [
+           "saved_reset_redemption",
+           "provider_replay",
+           "provider_dispatches"
+         ]) do
+      count when is_integer(count) and count > 0 -> true
+      _count -> false
+    end
+  end
+
+  defp claim_has_reserved_dispatch?(_claim), do: false
+
   defp update_redemption_metadata!(identity, metadata, redemption) do
     timestamp = now()
 
@@ -1424,20 +2969,6 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     end
   end
 
-  defp recovery_due?(redemption, now) do
-    next_action_at =
-      get_in(redemption, ["provider_replay", "next_action_at"]) ||
-        redemption["legacy_recovery_next_action_at"]
-
-    case next_action_at do
-      nil -> true
-      next_action_at -> due_at?(parse_datetime(next_action_at), now)
-    end
-  end
-
-  defp due_at?(%DateTime{} = due_at, now), do: DateTime.compare(due_at, now) != :gt
-  defp due_at?(_invalid, _now), do: false
-
   defp broadcast_redemption(identity) do
     identity.id
     |> PoolAssignments.list_pool_assignments_for_identity()
@@ -1476,6 +3007,20 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
   defp stale_redemption?(%{"status" => "redeeming"}), do: true
   defp stale_redemption?(_redemption), do: false
+
+  defp recovery_due?(redemption, now) do
+    next_action_at =
+      get_in(redemption, ["provider_replay", "next_action_at"]) ||
+        redemption["legacy_recovery_next_action_at"]
+
+    case next_action_at do
+      nil -> true
+      next_action_at -> due_at?(parse_datetime(next_action_at), now)
+    end
+  end
+
+  defp due_at?(%DateTime{} = due_at, now), do: DateTime.compare(due_at, now) != :gt
+  defp due_at?(_invalid, _now), do: false
 
   defp next_generation(metadata) do
     case get_in(metadata || %{}, ["saved_reset_redemption", "generation"]) do
@@ -1560,17 +3105,6 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   end
 
   defp http_code(status) when is_integer(status), do: "http_#{status}"
-
-  defp sanitize_result_code(code) when is_binary(code) do
-    code =
-      code
-      |> String.downcase()
-      |> String.replace(~r/[^a-z0-9_]+/, "_")
-      |> String.trim("_")
-      |> String.slice(0, 80)
-
-    if code in @known_provider_result_codes, do: code, else: "provider_error"
-  end
 
   defp assignment_id(%PoolUpstreamAssignment{id: id}), do: id
   defp assignment_id(id) when is_binary(id), do: id

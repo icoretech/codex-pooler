@@ -491,6 +491,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       upstream_identity_id: legacy_identity.id,
       candidate_assignment_ids: [legacy_assignment.id],
       candidate_identity_ids: [legacy_identity.id],
+      cohort_identity_ids: [legacy_identity.id],
       route_class: "proxy_http"
     }
 

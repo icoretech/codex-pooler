@@ -220,6 +220,31 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
       assert redemption_phase(identity) == "confirmed_by_quota"
     end
 
+    test "later usable weekly headers confirm an applied reblocked reset immediately" do
+      identity = pending_reset_identity("reblocked")
+
+      assert :ok =
+               RateLimitObserver.record_headers(identity, %Req.Response{
+                 headers: weekly_headers("4")
+               })
+
+      assert redemption_phase(identity) == "confirmed_by_quota"
+    end
+
+    test "later usable weekly headers leave a non-applied reblock unchanged" do
+      identity =
+        pending_reset_identity("reblocked", %{
+          "result" => %{"code" => "provider_not_dispatched", "applied" => false}
+        })
+
+      assert :ok =
+               RateLimitObserver.record_headers(identity, %Req.Response{
+                 headers: weekly_headers("4")
+               })
+
+      assert redemption_phase(identity) == "reblocked"
+    end
+
     test "identities without a pending lifecycle are untouched" do
       identity = active_upstream_assignment_fixture().identity
 
@@ -377,23 +402,27 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
     }
   end
 
-  defp pending_reset_identity do
+  defp pending_reset_identity(phase \\ "consumed_pending_probe", overrides \\ %{}) do
     consumed_at =
       DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:microsecond)
 
-    active_upstream_assignment_fixture(pool_fixture(), %{
-      metadata: %{
-        "saved_reset_redemption" => %{
-          "status" => "redeeming",
-          "phase" => "consumed_pending_probe",
+    redemption =
+      Map.merge(
+        %{
+          "status" => if(phase == "reblocked", do: "failed", else: "redeeming"),
+          "phase" => phase,
           "attempt_id" => Ecto.UUID.generate(),
           "generation" => 3,
           "trigger_kind" => "gateway_auto",
           "consumed_at" => DateTime.to_iso8601(consumed_at),
           "deadline_at" => consumed_at |> DateTime.add(15, :minute) |> DateTime.to_iso8601(),
           "result" => %{"code" => "reset", "applied" => true}
-        }
-      }
+        },
+        overrides
+      )
+
+    active_upstream_assignment_fixture(pool_fixture(), %{
+      metadata: %{"saved_reset_redemption" => redemption}
     }).identity
   end
 

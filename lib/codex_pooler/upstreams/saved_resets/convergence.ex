@@ -14,10 +14,10 @@ defmodule CodexPooler.Upstreams.SavedResets.Convergence do
     * no qualifying fresh evidence, window elapsed -> `expired` (fail-closed)
     * otherwise -> left pending, untouched
 
-  Only phase-bearing pending records (`consumed_pending_probe`,
-  `confirmed_by_upstream`) are eligible. Legacy records without a phase and
-  already-settled records are ignored, so this is safe to call on every identity
-  during reconciliation.
+  Phase-bearing pending records (`consumed_pending_probe`,
+  `confirmed_by_upstream`) and exact applied `reblocked` records are eligible.
+  Legacy, malformed, non-applied, and other settled records are ignored, so
+  this is safe to call on every identity during reconciliation.
   """
 
   import Ecto.Query
@@ -44,12 +44,15 @@ defmodule CodexPooler.Upstreams.SavedResets.Convergence do
   `converge/2` could act on. Lets hot paths (per-request evidence observers)
   skip the locking transaction for the overwhelmingly common no-lifecycle case.
   """
-  @spec pending_lifecycle?(UpstreamIdentity.t() | term()) :: boolean()
-  def pending_lifecycle?(%UpstreamIdentity{metadata: metadata}) do
-    RedemptionLifecycle.phase((metadata || %{})["saved_reset_redemption"]) in @convergeable_phases
+  @spec convergeable_lifecycle?(UpstreamIdentity.t() | term()) :: boolean()
+  def convergeable_lifecycle?(%UpstreamIdentity{metadata: metadata}) do
+    metadata
+    |> Kernel.||(%{})
+    |> Map.get("saved_reset_redemption")
+    |> convergeable_redemption?()
   end
 
-  def pending_lifecycle?(_identity), do: false
+  def convergeable_lifecycle?(_identity), do: false
 
   @spec converge(UpstreamIdentity.t() | Ecto.UUID.t()) :: {:ok, outcome()} | {:error, term()}
   @spec converge(UpstreamIdentity.t() | Ecto.UUID.t(), DateTime.t()) ::
@@ -75,7 +78,7 @@ defmodule CodexPooler.Upstreams.SavedResets.Convergence do
   end
 
   defp target_phase(identity, redemption, now) do
-    with true <- RedemptionLifecycle.phase(redemption) in @convergeable_phases,
+    with true <- convergeable_redemption?(redemption),
          %DateTime{} = consumed_at <- consumed_at(redemption) do
       identity
       |> Windows.list_evidence()
@@ -93,9 +96,20 @@ defmodule CodexPooler.Upstreams.SavedResets.Convergence do
     do: RedemptionLifecycle.reblocked()
 
   defp phase_for_classification(:pending, redemption, now) do
+    if RedemptionLifecycle.phase(redemption) == RedemptionLifecycle.reblocked(),
+      do: nil,
+      else: expired_phase(redemption, now)
+  end
+
+  defp expired_phase(redemption, now) do
     if RedemptionLifecycle.expired?(redemption, now),
       do: RedemptionLifecycle.expired(),
       else: nil
+  end
+
+  defp convergeable_redemption?(redemption) do
+    RedemptionLifecycle.phase(redemption) in @convergeable_phases or
+      RedemptionLifecycle.applied_reblocked?(redemption)
   end
 
   defp apply_transition!(identity, redemption, target, now) do

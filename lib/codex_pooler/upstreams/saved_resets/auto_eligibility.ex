@@ -231,13 +231,53 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
           identity.id not in context.candidate_identity_ids ->
         {:noop, "gateway_auto_context_mismatch"}
 
-      identity.id not in context.cohort_identity_ids ->
+      identity.id not in context.cohort_identity_ids or invalid_identity_sets?(context) ->
         {:noop, "gateway_auto_context_mismatch"}
 
       true ->
         :ok
     end
   end
+
+  defp invalid_identity_sets?(context) do
+    routable_identity_ids =
+      Map.get(context, :routable_identity_ids, context.candidate_identity_ids)
+
+    not subset?(context.candidate_identity_ids, routable_identity_ids) or
+      not subset?(routable_identity_ids, context.cohort_identity_ids)
+  end
+
+  defp subset?(members, set), do: Enum.all?(members, &(&1 in set))
+
+  @spec locked_sibling_usable_capacity?(UpstreamIdentity.t(), context(), DateTime.t()) ::
+          boolean()
+  def locked_sibling_usable_capacity?(
+        %UpstreamIdentity{status: @identity_active} = identity,
+        %{quota_scope: quota_scope},
+        %DateTime{} = timestamp
+      )
+      when is_map(quota_scope) do
+    eligibility =
+      identity
+      |> Windows.list_evidence()
+      |> Enum.reject(&(&1.source_precision == "unknown"))
+      |> Windows.routing_quota_eligibility_from_windows(
+        quota_scope
+        |> Map.to_list()
+        |> Keyword.put(:at, timestamp)
+      )
+
+    eligibility.eligible? and
+      Enum.any?(eligibility.selection.routing_windows, fn window ->
+        account_window?(window) and window.source_precision != "unknown" and
+          Windows.usable_window?(window, timestamp, Map.to_list(quota_scope))
+      end)
+  end
+
+  def locked_sibling_usable_capacity?(_identity, _context, _timestamp), do: false
+
+  defp account_window?(%AccountQuotaWindow{quota_scope: scope}),
+    do: scope in [nil, "account"]
 
   @spec saved_reset_available?(UpstreamIdentity.t(), SavedResets.auto_policy_projection()) ::
           boolean()

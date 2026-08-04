@@ -15,11 +15,48 @@ defmodule CodexPooler.Jobs.SavedResetRedemptionWorker do
     ]
 
   alias CodexPooler.Upstreams.SavedResetRedemption
+  alias CodexPooler.Upstreams.SavedResets
 
   @impl Oban.Worker
+  def timeout(%Oban.Job{args: %{"recovery_kind" => "stale_consuming"}}) do
+    3 * SavedResets.redemption_receive_timeout_ms() + 15_000
+  end
+
   def timeout(%Oban.Job{}), do: :timer.seconds(45)
 
   @impl Oban.Worker
+  def perform(%Oban.Job{
+        args: %{
+          "pool_upstream_assignment_id" => assignment_id,
+          "upstream_identity_id" => identity_id,
+          "attempt_id" => attempt_id,
+          "generation" => generation,
+          "recovery_kind" => "stale_consuming"
+        }
+      })
+      when is_binary(assignment_id) and is_binary(identity_id) and is_binary(attempt_id) and
+             is_integer(generation) do
+    assignment_id
+    |> SavedResetRedemption.resume_stale_consuming(
+      identity_id,
+      attempt_id,
+      generation,
+      []
+    )
+    |> map_recovery_result()
+  rescue
+    _error in [
+      DBConnection.ConnectionError,
+      Ecto.InvalidChangesetError,
+      Ecto.StaleEntryError,
+      Postgrex.Error
+    ] ->
+      {:error, :saved_reset_persistence_failed}
+  end
+
+  def perform(%Oban.Job{args: %{"recovery_kind" => "stale_consuming"}}),
+    do: {:cancel, :stale_consuming_recovery_target_invalid}
+
   def perform(%Oban.Job{
         args: %{
           "pool_upstream_assignment_id" => assignment_id,
@@ -34,7 +71,6 @@ defmodule CodexPooler.Jobs.SavedResetRedemptionWorker do
   def perform(%Oban.Job{args: %{"trigger_kind" => "scheduled_expiry_rescue"}}),
     do: {:cancel, :scheduled_expiry_target_invalid}
 
-  @impl Oban.Worker
   def perform(%Oban.Job{args: %{"pool_upstream_assignment_id" => assignment_id} = args}) do
     trigger_kind = Map.get(args, "trigger_kind", "admin_manual")
 
@@ -56,6 +92,16 @@ defmodule CodexPooler.Jobs.SavedResetRedemptionWorker do
         {:error, code}
     end
   end
+
+  @doc false
+  @spec map_recovery_result(SavedResetRedemption.stale_consuming_result()) ::
+          Oban.Worker.result()
+  def map_recovery_result({:ok, _result}), do: :ok
+
+  def map_recovery_result({:snooze, seconds}) when is_integer(seconds) and seconds > 0,
+    do: {:snooze, seconds}
+
+  def map_recovery_result({:error, reason}), do: {:error, reason}
 
   defp redeem_scheduled_expiry(assignment_id, expected_identity_id) do
     assignment_id
@@ -105,6 +151,9 @@ defmodule CodexPooler.Jobs.SavedResetRedemptionWorker do
     do: {:error, "saved reset redemption failed"}
 
   def map_scheduled_result({:error, :redemption_in_progress}), do: {:snooze, 5}
+
+  def map_scheduled_result({:error, :saved_reset_consume_outcome_ambiguous}),
+    do: {:error, :saved_reset_consume_outcome_ambiguous}
 
   def map_scheduled_result({:error, %{code: code}})
       when code in [:pool_assignment_not_found, :upstream_identity_not_found],

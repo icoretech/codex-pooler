@@ -33,7 +33,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjectionTes
       "confirmed_by_upstream" => "Reset confirmed by probe",
       "confirmed_by_quota" => "Reset confirmed by quota",
       "reblocked" => "Still blocked after reset",
-      "expired" => "Reset confirmation expired"
+      "expired" => "Reset confirmation expired",
+      "consume_not_applied" => "Reset was not applied"
     }
 
     for {phase, label} <- labels do
@@ -44,6 +45,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjectionTes
       assert is_binary(snapshot.reset_lifecycle.consumed_at)
       assert is_binary(snapshot.reset_lifecycle.deadline_at)
     end
+  end
+
+  test "renders an applied reblock recovered by quota as confirmed" do
+    snapshot =
+      SavedResetProjection.snapshot(
+        metadata("confirmed_by_quota", %{
+          "status" => "succeeded",
+          "terminal_reason" => "converged_confirmed_by_quota"
+        }),
+        @prefs
+      )
+
+    assert snapshot.reset_lifecycle.phase == "confirmed_by_quota"
+    assert snapshot.reset_lifecycle.label == "Reset confirmed by quota"
+    refute snapshot.reset_lifecycle.label == "Still blocked after reset"
   end
 
   @tag :saved_reset_redemption_cause

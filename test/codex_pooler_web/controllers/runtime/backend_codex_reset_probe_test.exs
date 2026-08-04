@@ -112,10 +112,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
         compact?: false
       )
 
+    sibling_identity =
+      sibling.identity
+      |> UpstreamIdentity.changeset(%{
+        saved_reset_auto_redeem_enabled: true,
+        saved_reset_auto_redeem_trigger_mode: "threshold",
+        saved_reset_auto_redeem_quota_threshold_percent: 95,
+        updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      })
+      |> Repo.update!()
+
     assert {:ok, [_window]} =
-             QuotaWindows.upsert_quota_windows(sibling.identity, [
+             QuotaWindows.upsert_quota_windows(sibling_identity, [
                weekly_quota_window_attrs(%{
-                 used_percent: Decimal.new("97"),
+                 used_percent: Decimal.new("100"),
                  source: "codex_usage_api"
                })
              ])
@@ -384,10 +394,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
         compact?: false
       )
 
+    sibling_identity =
+      sibling.identity
+      |> UpstreamIdentity.changeset(%{
+        saved_reset_auto_redeem_enabled: true,
+        saved_reset_auto_redeem_trigger_mode: "threshold",
+        saved_reset_auto_redeem_quota_threshold_percent: 95,
+        updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      })
+      |> Repo.update!()
+
     assert {:ok, [_window]} =
-             QuotaWindows.upsert_quota_windows(sibling.identity, [
+             QuotaWindows.upsert_quota_windows(sibling_identity, [
                weekly_quota_window_attrs(%{
-                 used_percent: Decimal.new("97"),
+                 used_percent: Decimal.new("100"),
                  source: "codex_usage_api"
                })
              ])

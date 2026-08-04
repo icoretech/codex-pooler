@@ -119,6 +119,33 @@ defmodule CodexPooler.Jobs.SavedResetRedemptionWorkerTest do
       end
     end
 
+    test "cancels malformed stale-consuming recovery branch without provider execution" do
+      {:ok, fake} = codex_reset_fake()
+      %{identity: identity, assignment: assignment} = assignment_with_fake(fake, 1)
+      attempt_id = Ecto.UUID.generate()
+
+      assert {:cancel, :stale_consuming_recovery_target_invalid} =
+               perform_job(SavedResetRedemptionWorker, %{
+                 "pool_upstream_assignment_id" => assignment.id,
+                 "upstream_identity_id" => identity.id,
+                 "attempt_id" => attempt_id,
+                 "generation" => "4",
+                 "recovery_kind" => "stale_consuming"
+               })
+
+      assert FakeUpstream.requests(fake) == []
+    end
+
+    test "uses the expanded timeout only for stale-consuming recovery jobs" do
+      receive_timeout = SavedResets.redemption_receive_timeout_ms()
+
+      assert SavedResetRedemptionWorker.timeout(%Oban.Job{
+               args: %{"recovery_kind" => "stale_consuming"}
+             }) == 3 * receive_timeout + 15_000
+
+      assert SavedResetRedemptionWorker.timeout(%Oban.Job{args: %{}}) == 45_000
+    end
+
     test "cancels queued job when persisted available_count is zero without provider request" do
       {:ok, fake} = codex_reset_fake()
       %{assignment: assignment} = assignment_with_fake(fake, 0)
@@ -379,9 +406,16 @@ defmodule CodexPooler.Jobs.SavedResetRedemptionWorkerTest do
 
       result = perform_scheduled_job(assignment.id, identity.id)
 
-      assert {:error, "saved reset redemption failed"} = result
+      assert {:error, :saved_reset_consume_outcome_ambiguous} = result
       refute inspect(result) =~ raw_body
       refute inspect(result) =~ raw_token
+
+      redemption = Repo.reload!(identity).metadata["saved_reset_redemption"]
+      assert redemption["status"] == "redeeming"
+      assert redemption["phase"] == "consuming"
+      assert redemption["result"] == nil
+      assert redemption["provider_replay"]["provider_dispatches"] == 1
+      assert redemption["provider_replay"]["last_code"] == "provider_failed"
 
       assert [%{method: "POST", path: "/api/codex/rate-limit-reset-credits/consume"}] =
                FakeUpstream.requests(fake)

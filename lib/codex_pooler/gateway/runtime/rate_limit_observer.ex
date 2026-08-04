@@ -7,7 +7,6 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
 
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.SavedResets.Convergence
-  alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   @max_event_buffer_bytes 16_384
@@ -163,16 +162,9 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
     end
   end
 
-  # Runtime evidence is the transport-agnostic seam for probe outcomes: a
-  # confirmed quota-exhaustion error or exhausted headers reblock a pending
-  # saved-reset lifecycle immediately, and usable evidence confirms it, without
-  # waiting for the next reconciliation pass. Two cheap pre-filters keep the
-  # per-request hot path free of extra locking transactions: convergence runs
-  # only when this write actually persisted account evidence, and only for the
-  # short pre-confirmation phase — a probe-confirmed lifecycle settles to
-  # quota-confirmed on the reconciliation cadence instead of per response.
   defp maybe_converge_saved_reset(%UpstreamIdentity{} = identity, persisted_windows) do
-    if persisted_account_evidence?(persisted_windows) and awaiting_probe?(identity) do
+    if persisted_account_evidence?(persisted_windows) and
+         Convergence.convergeable_lifecycle?(identity) do
       case Convergence.converge(identity) do
         {:ok, _outcome} ->
           :ok
@@ -191,11 +183,6 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
   # Upsert results are always lists of persisted windows.
   defp persisted_account_evidence?(windows),
     do: Enum.any?(windows, &(&1.quota_key == "account"))
-
-  defp awaiting_probe?(%UpstreamIdentity{metadata: metadata}) do
-    RedemptionLifecycle.phase((metadata || %{})["saved_reset_redemption"]) ==
-      RedemptionLifecycle.consumed_pending_probe()
-  end
 
   defp normalize_event_state(%{buffer: buffer}) when is_binary(buffer), do: %{buffer: buffer}
   defp normalize_event_state(_state), do: event_state()

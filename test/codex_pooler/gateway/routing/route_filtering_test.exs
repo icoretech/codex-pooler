@@ -492,15 +492,20 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
 
         redemption = Repo.reload!(identity).metadata["saved_reset_redemption"]
         assert redemption["trigger_detail"] == detail
-        assert redemption["status"] in ["noop", "failed"]
         assert log =~ "trigger_kind=gateway_auto trigger_detail=#{detail}"
         refute Jason.encode!(redemption) =~ provider_code_sentinel
         refute log =~ provider_code_sentinel
         refute log =~ "provider-sensitive-body"
 
         if trigger == :threshold_pressure do
-          assert redemption["result"]["code"] == "provider_error"
-          assert log =~ "result_code=provider_error"
+          assert redemption["status"] == "redeeming"
+          assert redemption["phase"] == "consuming"
+          assert redemption["result"] == nil
+          assert redemption["provider_replay"]["provider_dispatches"] == 1
+          assert redemption["provider_replay"]["last_code"] == "provider_failed"
+          assert log =~ "result_code=saved_reset_consume_outcome_ambiguous"
+        else
+          assert redemption["status"] == "noop"
         end
       end
     end
@@ -599,6 +604,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
 
       assert refreshed_route_state.visible_model_context == visible_model_context
       assert refreshed_route_state.circuit_snapshots[assignment.id] == circuit_snapshot
+      assert refreshed_route_state.saved_reset_auto_cohort == route_state.saved_reset_auto_cohort
       assert route_state.quota_snapshot_at == historical_scan_at
       assert route_state.visible_model_context == visible_model_context
       assert route_state.circuit_snapshots[assignment.id] == circuit_snapshot
@@ -663,7 +669,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert is_binary(redemption["probe"]["token"])
     end
 
-    test "a latched candidate is skipped pre-lock so a sibling can redeem" do
+    test "a recent latched candidate prevents a sibling auto-redeem" do
       {:ok, latched_upstream} = auto_redeem_fake()
       {:ok, sibling_upstream} = auto_redeem_fake()
 
@@ -695,21 +701,17 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           "latched-skip"
         )
 
-      assert {:ok, [{%{id: routed_assignment_id}, routed_identity}], _filtered_options} =
+      assert {:error, %{code: "quota_exhausted"}} =
                RouteFiltering.filter_candidates(filter_input)
 
-      # The latched candidate burns no slot and no credit; the sibling redeems.
-      assert routed_assignment_id == sibling_assignment.id
-      assert routed_identity.id == sibling_identity.id
       assert [] = FakeUpstream.requests(latched_upstream)
-
-      assert Enum.any?(
-               FakeUpstream.requests(sibling_upstream),
-               &(&1.path == "/api/codex/rate-limit-reset-credits/consume")
-             )
+      assert [] = FakeUpstream.requests(sibling_upstream)
 
       persisted = Repo.reload!(latched_identity)
       assert get_in(persisted.metadata, ["saved_reset_redemption", "phase"]) == "reblocked"
+
+      sibling_persisted = Repo.reload!(sibling_identity)
+      refute get_in(sibling_persisted.metadata, ["saved_reset_redemption"])
     end
 
     test "a latched candidate's stale pressure cannot arm a threshold consume on a sibling" do
@@ -998,8 +1000,14 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           saved_reset_auto_redeem_quota_threshold_percent: 95
         })
 
+      routable_identity =
+        enable_saved_reset_auto_redeem!(routable.identity, %{
+          saved_reset_auto_redeem_trigger_mode: "threshold",
+          saved_reset_auto_redeem_quota_threshold_percent: 95
+        })
+
       upsert_weekly_pressure_quota!(redeeming_identity, Decimal.new("96"))
-      upsert_weekly_pressure_quota!(routable.identity, Decimal.new("97"))
+      upsert_weekly_exhausted_quota!(routable_identity)
       upsert_weekly_pressure_quota!(circuit_open.identity, Decimal.new("20"))
 
       filter_input =
@@ -1009,7 +1017,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           [
             {redeeming.assignment, redeeming_identity},
             {circuit_open.assignment, circuit_open.identity},
-            {routable.assignment, routable.identity}
+            {routable.assignment, routable_identity}
           ],
           "threshold-current-candidates"
         )
@@ -1020,13 +1028,12 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert {:ok, filtered_candidates, _filtered_options, filtered_route_state} =
                RouteFiltering.filter_candidates_with_route_state(filter_input, route_state)
 
-      assert candidate_ids(filtered_candidates) == [
-               redeeming.assignment.id,
-               routable.assignment.id
-             ]
+      assert candidate_ids(filtered_candidates) == [redeeming.assignment.id]
+      assert candidate_ids(filtered_route_state.candidates) == [redeeming.assignment.id]
 
-      assert candidate_ids(filtered_route_state.candidates) == [
+      assert candidate_ids(filtered_route_state.saved_reset_auto_cohort) == [
                redeeming.assignment.id,
+               circuit_open.assignment.id,
                routable.assignment.id
              ]
 
@@ -1036,7 +1043,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
     end
 
     @tag :saved_reset_redemption_cause
-    test "auto redeems saved reset before exhaustion when every candidate is near weekly limit" do
+    test "threshold redemption preserves routing when a sibling has usable capacity" do
       {:ok, upstream} =
         FakeUpstream.start_link(
           {:path_json,
@@ -1059,18 +1066,24 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           saved_reset_auto_redeem_quota_threshold_percent: 95
         })
 
+      second_identity =
+        enable_saved_reset_auto_redeem!(second.identity, %{
+          saved_reset_auto_redeem_trigger_mode: "threshold",
+          saved_reset_auto_redeem_quota_threshold_percent: 95
+        })
+
       upsert_weekly_pressure_quota!(first_identity, Decimal.new("96"))
-      upsert_weekly_pressure_quota!(second.identity, Decimal.new("97"))
+      upsert_weekly_pressure_quota!(second_identity, Decimal.new("97"))
 
       filter_input =
         filter_input(
           pool,
           api_key,
-          [{first.assignment, first_identity}, {second.assignment, second.identity}],
+          [{first.assignment, first_identity}, {second.assignment, second_identity}],
           "threshold-enabled"
         )
 
-      {{:ok, filtered_candidates, _filtered_options}, log} =
+      {{:ok, filtered_candidates, filtered_options}, log} =
         with_info_log(fn -> RouteFiltering.filter_candidates(filter_input) end)
 
       assert Enum.map(filtered_candidates, fn {assignment, _identity} -> assignment.id end) == [
@@ -1078,14 +1091,305 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
                second.assignment.id
              ]
 
-      [consume_request, usage_request] = assert_auto_redeem_usage_requests(upstream)
-      assert consume_request.method == "POST"
-      assert consume_request.path == "/api/codex/rate-limit-reset-credits/consume"
-      assert usage_request.path == "/api/codex/usage"
-
-      redemption = Repo.reload!(first_identity).metadata["saved_reset_redemption"]
-      assert redemption["trigger_detail"] == "threshold"
+      assert filtered_options.routing.quota_decision["allowed"] == true
+      assert filtered_options.routing.quota_decision["eligible_candidate_count"] == 2
+      assert [] = FakeUpstream.requests(upstream)
+      refute Map.has_key?(Repo.reload!(first_identity).metadata, "saved_reset_redemption")
       assert log =~ "trigger_kind=gateway_auto trigger_detail=threshold"
+      assert log =~ "result_code=gateway_auto_sibling_usable_capacity applied=false"
+    end
+
+    @tag :saved_reset_redemption_cause
+    test "threshold redemption evaluates every candidate against its own policy" do
+      {:ok, upstream} = auto_redeem_fake()
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+      first =
+        active_upstream_assignment_fixture(pool, %{metadata: saved_reset_metadata(upstream, 1)})
+
+      second = active_upstream_assignment_fixture(pool)
+
+      first_identity =
+        enable_saved_reset_auto_redeem!(first.identity, %{
+          saved_reset_auto_redeem_trigger_mode: "threshold",
+          saved_reset_auto_redeem_quota_threshold_percent: 95
+        })
+
+      second_identity =
+        enable_saved_reset_auto_redeem!(second.identity, %{
+          saved_reset_auto_redeem_trigger_mode: "threshold",
+          saved_reset_auto_redeem_quota_threshold_percent: 99
+        })
+
+      upsert_weekly_pressure_quota!(first_identity, Decimal.new("96"))
+      upsert_weekly_pressure_quota!(second_identity, Decimal.new("97"))
+
+      filter_input =
+        filter_input(
+          pool,
+          api_key,
+          [{first.assignment, first_identity}, {second.assignment, second_identity}],
+          "threshold-per-candidate-policy"
+        )
+
+      assert {:ok, filtered_candidates, filtered_options} =
+               RouteFiltering.filter_candidates(filter_input)
+
+      assert candidate_ids(filtered_candidates) == [first.assignment.id, second.assignment.id]
+      assert filtered_options.routing.quota_decision["allowed"] == true
+      assert [] = FakeUpstream.requests(upstream)
+      refute Map.has_key?(Repo.reload!(first_identity).metadata, "saved_reset_redemption")
+    end
+
+    @tag :saved_reset_redemption_cause
+    test "threshold sibling barrier logs a noop and preserves the chosen route" do
+      scan_at = DateTime.utc_now() |> DateTime.add(1, :second) |> DateTime.truncate(:microsecond)
+      {:ok, upstream} = auto_redeem_fake()
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+      redeeming =
+        active_upstream_assignment_fixture(pool, %{metadata: saved_reset_metadata(upstream, 1)})
+
+      sibling = active_upstream_assignment_fixture(pool)
+
+      redeeming_identity =
+        enable_saved_reset_auto_redeem!(redeeming.identity, %{
+          saved_reset_auto_redeem_trigger_mode: "threshold",
+          saved_reset_auto_redeem_quota_threshold_percent: 95
+        })
+
+      sibling_identity =
+        put_saved_reset_redemption!(
+          sibling.identity,
+          resolved_redemption("confirmed_by_quota", DateTime.add(scan_at, -5, :minute), true)
+        )
+
+      upsert_weekly_pressure_quota!(redeeming_identity, Decimal.new("96"))
+
+      filter_input =
+        filter_input(
+          pool,
+          api_key,
+          redeeming.assignment,
+          redeeming_identity,
+          "threshold-sibling-barrier"
+        )
+
+      route_state =
+        filter_input
+        |> route_state()
+        |> RouteState.put_saved_reset_auto_cohort([
+          {redeeming.assignment, redeeming_identity},
+          {sibling.assignment, sibling_identity}
+        ])
+
+      {{:ok, [{routed_assignment, routed_identity}], filtered_options, returned_route_state}, log} =
+        with_info_log(fn ->
+          RouteFiltering.filter_candidates_with_route_state(
+            filter_input,
+            route_state,
+            saved_reset_scan_at: scan_at
+          )
+        end)
+
+      assert routed_assignment.id == redeeming.assignment.id
+      assert routed_identity.id == redeeming_identity.id
+      assert filtered_options.routing.quota_decision["allowed"] == true
+      assert returned_route_state.saved_reset_auto_cohort == route_state.saved_reset_auto_cohort
+      assert [] = FakeUpstream.requests(upstream)
+      refute Map.has_key?(Repo.reload!(redeeming_identity).metadata, "saved_reset_redemption")
+      assert log =~ "trigger_kind=gateway_auto trigger_detail=threshold"
+      assert log =~ "result_code=gateway_auto_sibling_consume_barrier applied=false"
+      refute log =~ sibling_identity.account_label
+      refute log =~ sibling_identity.chatgpt_account_id
+    end
+
+    @tag :saved_reset_redemption_cause
+    test "hard exhaustion sibling barrier logs a noop and preserves the quota error" do
+      scan_at = DateTime.utc_now() |> DateTime.add(1, :second) |> DateTime.truncate(:microsecond)
+      {:ok, upstream} = auto_redeem_fake()
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+      redeeming =
+        active_upstream_assignment_fixture(pool, %{metadata: saved_reset_metadata(upstream, 1)})
+
+      sibling = active_upstream_assignment_fixture(pool)
+      redeeming_identity = enable_saved_reset_auto_redeem!(redeeming.identity)
+
+      sibling_identity =
+        put_saved_reset_redemption!(
+          sibling.identity,
+          resolved_redemption("reblocked", DateTime.add(scan_at, -5, :minute), true)
+        )
+
+      upsert_weekly_exhausted_quota!(redeeming_identity)
+
+      filter_input =
+        filter_input(
+          pool,
+          api_key,
+          redeeming.assignment,
+          redeeming_identity,
+          "exhausted-sibling-barrier"
+        )
+
+      route_state =
+        filter_input
+        |> route_state()
+        |> RouteState.put_saved_reset_auto_cohort([
+          {redeeming.assignment, redeeming_identity},
+          {sibling.assignment, sibling_identity}
+        ])
+
+      {{:error, %{code: "quota_exhausted"} = original_error}, log} =
+        with_info_log(fn ->
+          RouteFiltering.filter_candidates_with_route_state(
+            filter_input,
+            route_state,
+            saved_reset_scan_at: scan_at
+          )
+        end)
+
+      assert original_error.candidate_exclusions != []
+      assert [] = FakeUpstream.requests(upstream)
+      refute Map.has_key?(Repo.reload!(redeeming_identity).metadata, "saved_reset_redemption")
+      assert log =~ "trigger_kind=gateway_auto trigger_detail=exhausted"
+      assert log =~ "result_code=gateway_auto_sibling_consume_barrier applied=false"
+    end
+
+    test "resolved and definitively unspent siblings release without gateway recovery work" do
+      scan_at = DateTime.utc_now() |> DateTime.add(1, :second) |> DateTime.truncate(:microsecond)
+
+      for {phase, applied?, consumed_at} <- [
+            {"confirmed_by_quota", true, DateTime.add(scan_at, -30, :minute)},
+            {"consume_not_applied", false, DateTime.add(scan_at, -5, :minute)}
+          ] do
+        {:ok, upstream} = auto_redeem_fake()
+        %{pool: pool, api_key: api_key} = active_api_key_fixture()
+        jobs_before = gateway_recovery_jobs()
+
+        redeeming =
+          active_upstream_assignment_fixture(pool, %{
+            metadata: saved_reset_metadata(upstream, 1)
+          })
+
+        sibling = active_upstream_assignment_fixture(pool)
+
+        redeeming_identity =
+          enable_saved_reset_auto_redeem!(redeeming.identity, %{
+            saved_reset_auto_redeem_trigger_mode: "threshold",
+            saved_reset_auto_redeem_quota_threshold_percent: 95
+          })
+
+        sibling_identity =
+          put_saved_reset_redemption!(
+            sibling.identity,
+            resolved_redemption(phase, consumed_at, applied?)
+          )
+
+        upsert_weekly_pressure_quota!(redeeming_identity, Decimal.new("96"))
+
+        filter_input =
+          filter_input(
+            pool,
+            api_key,
+            redeeming.assignment,
+            redeeming_identity,
+            "released-sibling-#{phase}"
+          )
+
+        route_state =
+          filter_input
+          |> route_state()
+          |> RouteState.put_saved_reset_auto_cohort([
+            {redeeming.assignment, redeeming_identity},
+            {sibling.assignment, sibling_identity}
+          ])
+
+        assert {:ok, [{routed_assignment, _identity}], filtered_options, returned_route_state} =
+                 RouteFiltering.filter_candidates_with_route_state(
+                   filter_input,
+                   route_state,
+                   saved_reset_scan_at: scan_at
+                 )
+
+        assert routed_assignment.id == redeeming.assignment.id
+        assert filtered_options.routing.quota_decision["allowed"] == true
+        assert returned_route_state.saved_reset_auto_cohort == route_state.saved_reset_auto_cohort
+        requests = FakeUpstream.requests(upstream)
+
+        assert Enum.count(
+                 requests,
+                 &(&1.path == "/api/codex/rate-limit-reset-credits/consume")
+               ) == 1
+
+        assert Enum.any?(requests, &(&1.path == "/api/codex/usage"))
+        assert gateway_recovery_jobs() == jobs_before
+      end
+    end
+
+    test "replay and observe-only siblings stay fenced without gateway recovery work" do
+      scan_at = DateTime.utc_now() |> DateTime.add(1, :second) |> DateTime.truncate(:microsecond)
+
+      for mode <- ["replay", "observe_only"] do
+        {:ok, upstream} = auto_redeem_fake()
+        %{pool: pool, api_key: api_key} = active_api_key_fixture()
+        jobs_before = gateway_recovery_jobs()
+
+        redeeming =
+          active_upstream_assignment_fixture(pool, %{
+            metadata: saved_reset_metadata(upstream, 1)
+          })
+
+        sibling = active_upstream_assignment_fixture(pool)
+        redeeming_identity = enable_saved_reset_auto_redeem!(redeeming.identity)
+
+        sibling_redemption =
+          "consuming"
+          |> resolved_redemption(DateTime.add(scan_at, -40, :minute), false)
+          |> Map.put("status", "redeeming")
+          |> Map.put("finished_at", nil)
+          |> Map.put("result", nil)
+          |> Map.put("provider_replay", %{
+            "version" => 1,
+            "mode" => mode,
+            "provider_dispatches" => 1
+          })
+
+        sibling_identity = put_saved_reset_redemption!(sibling.identity, sibling_redemption)
+        upsert_weekly_exhausted_quota!(redeeming_identity)
+
+        filter_input =
+          filter_input(
+            pool,
+            api_key,
+            redeeming.assignment,
+            redeeming_identity,
+            "#{mode}-sibling-barrier"
+          )
+
+        route_state =
+          filter_input
+          |> route_state()
+          |> RouteState.put_saved_reset_auto_cohort([
+            {redeeming.assignment, redeeming_identity},
+            {sibling.assignment, sibling_identity}
+          ])
+
+        assert {:error, %{code: "quota_exhausted"}} =
+                 RouteFiltering.filter_candidates_with_route_state(
+                   filter_input,
+                   route_state,
+                   saved_reset_scan_at: scan_at
+                 )
+
+        assert [] = FakeUpstream.requests(upstream)
+
+        assert Repo.reload!(sibling_identity).metadata["saved_reset_redemption"] ==
+                 sibling_redemption
+
+        assert gateway_recovery_jobs() == jobs_before
+      end
     end
 
     @tag :saved_reset_expiry_ownership
@@ -1194,8 +1498,14 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           saved_reset_auto_redeem_quota_threshold_percent: 95
         })
 
+      sibling_identity =
+        enable_saved_reset_auto_redeem!(sibling.identity, %{
+          saved_reset_auto_redeem_trigger_mode: "threshold",
+          saved_reset_auto_redeem_quota_threshold_percent: 95
+        })
+
       upsert_weekly_pressure_quota!(redeeming_identity, Decimal.new("96"))
-      upsert_weekly_pressure_quota!(sibling.identity, Decimal.new("97"))
+      upsert_weekly_exhausted_quota!(sibling_identity)
 
       filter_input =
         filter_input(
@@ -1203,7 +1513,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           api_key,
           [
             {redeeming.assignment, redeeming_identity},
-            {sibling.assignment, sibling.identity}
+            {sibling.assignment, sibling_identity}
           ],
           "route-state-expiring-reset-singleton"
         )
@@ -1217,6 +1527,12 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
                candidate_ids_pair(claimed_candidate)
 
       assert filtered_route_state.candidates == [claimed_candidate]
+
+      assert candidate_ids(filtered_route_state.saved_reset_auto_cohort) == [
+               redeeming.assignment.id,
+               sibling.assignment.id
+             ]
+
       assert decision.routing.quota_decision["routing_state"] == "reset_probe"
       assert decision.routing.quota_decision["reset_probe_candidate_count"] == 1
       assert %ResetProbe{} = probe = decision.routing.reset_probe
@@ -1487,6 +1803,29 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
     }
   end
 
+  defp resolved_redemption(phase, %DateTime{} = consumed_at, applied?) do
+    %{
+      "status" => if(phase == "reblocked", do: "failed", else: "succeeded"),
+      "phase" => phase,
+      "attempt_id" => Ecto.UUID.generate(),
+      "generation" => 4,
+      "trigger_kind" => "gateway_auto",
+      "started_at" => DateTime.to_iso8601(consumed_at),
+      "consumed_at" => DateTime.to_iso8601(consumed_at),
+      "finished_at" => DateTime.to_iso8601(consumed_at),
+      "result" => %{"code" => phase, "applied" => applied?}
+    }
+  end
+
+  defp put_saved_reset_redemption!(%UpstreamIdentity{} = identity, redemption) do
+    identity
+    |> UpstreamIdentity.changeset(%{
+      metadata: Map.put(identity.metadata || %{}, "saved_reset_redemption", redemption),
+      updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    })
+    |> Repo.update!()
+  end
+
   defp saved_reset_metadata(upstream, available_count, saved_reset_attrs \\ %{}) do
     observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601()
 
@@ -1638,6 +1977,14 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
            ] = FakeUpstream.requests(upstream)
 
     [consume_request, usage_request]
+  end
+
+  defp gateway_recovery_jobs do
+    CodexPooler.Jobs.SavedResetRedemptionWorker
+    |> then(&all_enqueued(worker: &1))
+    |> Enum.filter(&(&1.args["recovery_kind"] == "stale_consuming"))
+    |> Enum.map(&{&1.id, &1.args})
+    |> Enum.sort()
   end
 
   defp with_info_log(fun) when is_function(fun, 0) do

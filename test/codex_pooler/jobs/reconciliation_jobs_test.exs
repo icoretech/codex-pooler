@@ -39,6 +39,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
   alias CodexPooler.Upstreams.SavedResetRedemption
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.SavedResets.AutoEligibility
+  alias CodexPooler.Upstreams.SavedResets.Convergence
   alias CodexPooler.Upstreams.SavedResets.PostResetEvidence
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -5185,7 +5186,12 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
       )
 
       Repo.delete_all(Oban.Job)
-      assert :ok = perform_job(AccountReconciliationWorker, reconciliation_args)
+
+      assert {:ok, second_reconciliation} =
+               AccountReconciliation.run(pool.id, assignment.id, "scheduled")
+
+      assert second_reconciliation.status == :succeeded, inspect(second_reconciliation)
+      assert second_reconciliation.quota.code == "quota_refreshed", inspect(second_reconciliation)
 
       converged =
         Repo.get!(UpstreamIdentity, identity.id).metadata["saved_reset_redemption"]
@@ -5222,6 +5228,67 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
 
       assert converged["phase"] == "reblocked"
       refute Map.has_key?(converged, "probe")
+      assert Repo.aggregate(Request, :count) == 0
+      assert scheduled_consume_count(upstream) == 1
+      assert scheduled_saved_reset_redemption_jobs() == []
+
+      preserved_fields =
+        Map.take(converged, [
+          "attempt_id",
+          "generation",
+          "started_at",
+          "consumed_at",
+          "deadline_at",
+          "result",
+          "trigger_kind",
+          "trigger_detail",
+          "provider_replay"
+        ])
+
+      later_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      later_reset_at = DateTime.add(later_at, 2, :day)
+
+      later_window_attrs = %{
+        quota_key: "account",
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        used_percent: Decimal.new("4"),
+        reset_at: later_reset_at,
+        observed_at: later_at,
+        last_sync_at: later_at,
+        source: "codex_usage_api",
+        source_precision: "observed",
+        quota_scope: "account",
+        quota_family: "account",
+        freshness_state: "fresh"
+      }
+
+      assert {:ok, [_window]} =
+               QuotaWindows.upsert_quota_windows(identity, [later_window_attrs])
+
+      assert {:ok, :unchanged} = Convergence.converge(identity, later_at)
+
+      confirmed_at = DateTime.add(later_at, 1, :second)
+
+      assert {:ok, [_window]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   later_window_attrs
+                   | observed_at: confirmed_at,
+                     last_sync_at: confirmed_at
+                 }
+               ])
+
+      assert {:ok, :confirmed_by_quota} = Convergence.converge(identity, confirmed_at)
+
+      recovered =
+        Repo.get!(UpstreamIdentity, identity.id).metadata["saved_reset_redemption"]
+
+      assert recovered["phase"] == "confirmed_by_quota"
+
+      assert recovered["status"] == "succeeded"
+      assert recovered["terminal_reason"] == "converged_confirmed_by_quota"
+      assert Map.take(recovered, Map.keys(preserved_fields)) == preserved_fields
       assert Repo.aggregate(Request, :count) == 0
       assert scheduled_consume_count(upstream) == 1
       assert scheduled_saved_reset_redemption_jobs() == []

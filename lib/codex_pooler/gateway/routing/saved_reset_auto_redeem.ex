@@ -428,15 +428,47 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
         Enum.map(cohort, fn {_candidate_assignment, candidate_identity} ->
           candidate_identity.id
         end),
-      route_class: route_class(refresh_plan)
+      routable_identity_ids:
+        Enum.map(routable_order(refresh_plan), fn {_candidate_assignment, candidate_identity} ->
+          candidate_identity.id
+        end),
+      route_class: route_class(refresh_plan),
+      quota_scope: quota_scope(refresh_plan),
+      session_continuity?: session_continuity?(refresh_plan)
     }
   end
+
+  defp quota_scope(%{filter_input: %{model: model}}) do
+    %{
+      requested_model: model.exposed_model_id,
+      catalog_model: model.exposed_model_id,
+      exposed_model_id: model.exposed_model_id,
+      upstream_model: model.upstream_model_id,
+      upstream_model_id: model.upstream_model_id
+    }
+  end
+
+  defp quota_scope(_refresh_plan), do: nil
+
+  defp session_continuity?(%{filter_input: %{request_options: request_options}}) do
+    continuity = request_options.continuity
+
+    not is_nil(continuity.codex_session) or is_binary(continuity.previous_response_id) or
+      is_binary(continuity.accepted_turn_state) or is_binary(continuity.session_header)
+  end
+
+  defp session_continuity?(_refresh_plan), do: false
 
   defp cohort_order(%{route_state: %RouteState{saved_reset_auto_cohort: cohort}})
        when is_list(cohort),
        do: cohort
 
   defp cohort_order(refresh_plan), do: candidate_order(refresh_plan)
+
+  defp routable_order(%{filter_input: %{candidates: candidates}}) when is_list(candidates),
+    do: candidates
+
+  defp routable_order(refresh_plan), do: candidate_order(refresh_plan)
 
   defp route_class(%{filter_input: %{route_class: route_class}})
        when is_binary(route_class) and route_class != "",
@@ -515,7 +547,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
     policy = SavedResets.auto_policy(identity)
 
     saved_reset_available?(identity, policy, timestamp) and policy.trigger_mode == "threshold" and
-      all_candidates_at_threshold?(candidates, policy, timestamp)
+      all_candidates_at_threshold?(candidates, timestamp)
   end
 
   defp threshold_redeemable_candidate?(_candidate, _candidates, _timestamp), do: false
@@ -534,14 +566,9 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
     |> AutoEligibility.blocked_weekly_exhaustion?(policy, timestamp)
   end
 
-  defp all_candidates_at_threshold?([], _policy, _timestamp), do: false
+  defp all_candidates_at_threshold?([], _timestamp), do: false
 
-  defp all_candidates_at_threshold?(candidates, policy, timestamp) when is_list(candidates) do
-    candidate_identity_ids =
-      candidates
-      |> Enum.map(fn {_assignment, identity} -> identity.id end)
-      |> Enum.reject(&is_nil/1)
-
+  defp all_candidates_at_threshold?(candidates, timestamp) when is_list(candidates) do
     latched_identity_ids =
       candidates
       |> Enum.filter(fn {_assignment, identity} ->
@@ -550,16 +577,26 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
       end)
       |> MapSet.new(fn {_assignment, identity} -> identity.id end)
 
-    windows_by_identity_id =
-      Windows.list_quota_windows_by_identity_ids(candidate_identity_ids, timestamp)
+    active_candidates =
+      Enum.reject(candidates, fn {_assignment, identity} ->
+        identity.id in latched_identity_ids
+      end)
 
-    AutoEligibility.threshold_pressure?(
-      candidate_identity_ids,
-      policy,
-      windows_by_identity_id,
-      latched_identity_ids,
-      timestamp
-    )
+    windows_by_identity_id =
+      active_candidates
+      |> Enum.map(fn {_assignment, identity} -> identity.id end)
+      |> Windows.list_quota_windows_by_identity_ids(timestamp)
+
+    active_candidates != [] and
+      Enum.all?(active_candidates, fn {_assignment, identity} ->
+        AutoEligibility.threshold_pressure?(
+          [identity.id],
+          SavedResets.auto_policy(identity),
+          windows_by_identity_id,
+          MapSet.new(),
+          timestamp
+        )
+      end)
   end
 
   defp refresh_route_state_quota(%RouteState{} = route_state, timestamp) do

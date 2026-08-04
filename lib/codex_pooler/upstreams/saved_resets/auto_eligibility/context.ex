@@ -11,7 +11,18 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
           required(:candidate_assignment_ids) => [Ecto.UUID.t()],
           required(:candidate_identity_ids) => [Ecto.UUID.t()],
           required(:cohort_identity_ids) => [Ecto.UUID.t()],
-          required(:route_class) => String.t()
+          required(:routable_identity_ids) => [Ecto.UUID.t()],
+          required(:route_class) => String.t(),
+          optional(:quota_scope) => quota_scope() | nil,
+          optional(:session_continuity?) => boolean()
+        }
+
+  @type quota_scope :: %{
+          required(:requested_model) => String.t(),
+          required(:catalog_model) => String.t(),
+          required(:exposed_model_id) => String.t(),
+          required(:upstream_model) => String.t(),
+          required(:upstream_model_id) => String.t()
         }
 
   @spec normalize(term()) :: {:ok, t()} | {:error, :invalid_gateway_auto_context}
@@ -36,8 +47,16 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
            normalize_uuid_list(context_value(context, :cohort_identity_ids),
              deterministic?: true
            ),
+         {:ok, routable_identity_ids} <-
+           normalize_uuid_list(
+             context_value(context, :routable_identity_ids) || candidate_identity_ids,
+             deterministic?: true
+           ),
          route_class when is_binary(route_class) and route_class != "" <-
-           context_value(context, :route_class) do
+           context_value(context, :route_class),
+         {:ok, quota_scope} <- normalize_quota_scope(context_value(context, :quota_scope)),
+         {:ok, session_continuity?} <-
+           normalize_boolean(context_value(context, :session_continuity?), false) do
       {:ok,
        %{
          trigger: trigger,
@@ -46,7 +65,10 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
          candidate_assignment_ids: candidate_assignment_ids,
          candidate_identity_ids: candidate_identity_ids,
          cohort_identity_ids: cohort_identity_ids,
-         route_class: route_class
+         routable_identity_ids: routable_identity_ids,
+         route_class: route_class,
+         quota_scope: quota_scope,
+         session_continuity?: session_continuity?
        }}
     else
       _invalid -> {:error, :invalid_gateway_auto_context}
@@ -77,6 +99,30 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
   end
 
   defp normalize_uuid_list(_values, _opts), do: :error
+
+  defp normalize_quota_scope(nil), do: {:ok, nil}
+
+  defp normalize_quota_scope(scope) when is_map(scope) do
+    keys = [
+      :requested_model,
+      :catalog_model,
+      :exposed_model_id,
+      :upstream_model,
+      :upstream_model_id
+    ]
+
+    values = Map.new(keys, &{&1, context_value(scope, &1)})
+
+    if Enum.all?(values, fn {_key, value} -> is_binary(value) and value != "" end),
+      do: {:ok, values},
+      else: :error
+  end
+
+  defp normalize_quota_scope(_scope), do: :error
+
+  defp normalize_boolean(nil, default), do: {:ok, default}
+  defp normalize_boolean(value, _default) when is_boolean(value), do: {:ok, value}
+  defp normalize_boolean(_value, _default), do: :error
 
   defp keyword_context?([]), do: true
   defp keyword_context?([{key, _value} | rest]) when is_atom(key), do: keyword_context?(rest)

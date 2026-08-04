@@ -79,13 +79,1268 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       refute metadata_json =~ redeem_request_id
     end
 
+    test "persists the ChatGPT target and dispatch reservation before the consume POST" do
+      parent = self()
+      release_ref = make_ref()
+
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/backend-api/wham/rate-limit-reset-credits" =>
+               {200,
+                %{
+                  "credits" => [%{"id" => "credit_reserved", "status" => "available"}],
+                  "available_count" => 1
+                }},
+             "/backend-api/wham/rate-limit-reset-credits/consume" =>
+               FakeUpstream.barrier_json_response(%{"code" => "already_redeemed"},
+                 notify: parent,
+                 release_ref: release_ref
+               ),
+             "/backend-api/wham/usage" => {200, usage_payload(0)}
+           }}
+        )
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api")
+
+      task =
+        Task.async(fn ->
+          Sandbox.allow(Repo, parent, self())
+          SavedResetRedemption.redeem(assignment)
+        end)
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid,
+                      ^release_ref},
+                     5_000
+
+      reserved = Repo.reload!(identity).metadata
+      replay = reserved["saved_reset_redemption"]["provider_replay"]
+      locator = reserved["saved_reset_redemption_target"]
+
+      assert replay["version"] == 1
+      assert replay["endpoint_family"] == "chatgpt_api"
+      assert replay["provider_dispatches"] == 1
+      assert replay["last_code"] == "dispatch_reserved"
+      assert replay["scope_fingerprint"] =~ ~r/\A[0-9a-f]{64}\z/
+      assert is_binary(locator)
+      refute locator =~ "credit_reserved"
+
+      assert %PoolUpstreamAssignment{status: status} =
+               update_assignment!(assignment, %{
+                 status: PoolUpstreamAssignment.paused_status()
+               })
+
+      assert status == PoolUpstreamAssignment.paused_status()
+
+      send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
+
+      assert {:ok, %{status: :succeeded, applied?: true, code: "already_redeemed"}} =
+               Task.await(task, 5_000)
+
+      settled = Repo.reload!(identity).metadata
+      refute Map.has_key?(settled, "saved_reset_redemption_target")
+      assert settled["saved_reset_redemption"]["provider_replay"]["provider_dispatches"] == 1
+    end
+
+    test "revalidates assignment status before reserving a provider dispatch" do
+      parent = self()
+      release_ref = make_ref()
+
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/backend-api/wham/rate-limit-reset-credits" =>
+               FakeUpstream.barrier_json_response(
+                 %{
+                   "credits" => [%{"id" => "credit_assignment_cas", "status" => "available"}],
+                   "available_count" => 1
+                 },
+                 notify: parent,
+                 release_ref: release_ref
+               ),
+             "/backend-api/wham/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}}
+           }}
+        )
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api")
+
+      task =
+        Task.async(fn ->
+          Sandbox.allow(Repo, parent, self())
+          SavedResetRedemption.redeem(assignment)
+        end)
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid,
+                      ^release_ref},
+                     5_000
+
+      update_assignment!(assignment, %{status: PoolUpstreamAssignment.paused_status()})
+      send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
+
+      assert {:error, :saved_reset_dispatch_reservation_invalid} = Task.await(task, 5_000)
+
+      assert [%{method: "GET", path: "/backend-api/wham/rate-limit-reset-credits"}] =
+               FakeUpstream.requests(fake)
+
+      metadata = Repo.reload!(identity).metadata
+      assert metadata["saved_reset_redemption"]["provider_replay"]["provider_dispatches"] == 0
+      refute Map.has_key?(metadata, "saved_reset_redemption_target")
+    end
+
+    test "revalidates assignment ownership before reserving a provider dispatch" do
+      parent = self()
+      release_ref = make_ref()
+
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/backend-api/wham/rate-limit-reset-credits" =>
+               FakeUpstream.barrier_json_response(
+                 %{
+                   "credits" => [
+                     %{"id" => "credit_assignment_owner_cas", "status" => "available"}
+                   ],
+                   "available_count" => 1
+                 },
+                 notify: parent,
+                 release_ref: release_ref
+               ),
+             "/backend-api/wham/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}}
+           }}
+        )
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api")
+
+      foreign_identity = active_upstream_identity_fixture()
+
+      task =
+        Task.async(fn ->
+          Sandbox.allow(Repo, parent, self())
+          SavedResetRedemption.redeem(assignment)
+        end)
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid,
+                      ^release_ref},
+                     5_000
+
+      update_assignment!(assignment, %{upstream_identity_id: foreign_identity.id})
+      send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
+
+      assert {:error, :saved_reset_dispatch_reservation_invalid} = Task.await(task, 5_000)
+
+      assert [%{method: "GET", path: "/backend-api/wham/rate-limit-reset-credits"}] =
+               FakeUpstream.requests(fake)
+
+      metadata = Repo.reload!(identity).metadata
+      assert metadata["saved_reset_redemption"]["provider_replay"]["provider_dispatches"] == 0
+      refute Map.has_key?(metadata, "saved_reset_redemption_target")
+    end
+
+    test "preserves the reserved attempt when the consume outcome is ambiguous" do
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/api/codex/rate-limit-reset-credits/consume" => :close_before_headers
+           }}
+        )
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+      assert {:error, :saved_reset_consume_outcome_ambiguous} =
+               SavedResetRedemption.redeem(assignment)
+
+      redemption = Repo.reload!(identity).metadata["saved_reset_redemption"]
+      assert redemption["status"] == "redeeming"
+      assert redemption["phase"] == "consuming"
+      assert redemption["result"] == nil
+      assert redemption["provider_replay"]["provider_dispatches"] == 1
+      assert redemption["provider_replay"]["last_code"] == "transport_error"
+
+      assert [%{method: "POST", json: %{"redeem_request_id" => request_id}}] =
+               FakeUpstream.requests(fake)
+
+      assert is_binary(request_id)
+
+      assert {:error, :redemption_in_progress} = SavedResetRedemption.redeem(assignment)
+      assert length(FakeUpstream.requests(fake)) == 1
+      assert Repo.reload!(identity).metadata["saved_reset_redemption"] == redemption
+    end
+
+    test "an ambiguous ChatGPT consume retains its encrypted target and cannot retarget" do
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/backend-api/wham/rate-limit-reset-credits" =>
+               {200,
+                %{
+                  "credits" => [
+                    %{"id" => "credit_original", "status" => "available"},
+                    %{"id" => "credit_other", "status" => "available"}
+                  ],
+                  "available_count" => 2
+                }},
+             "/backend-api/wham/rate-limit-reset-credits/consume" =>
+               {503, %{"code" => "provider_rejected"}}
+           }}
+        )
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api")
+
+      assert {:error, :saved_reset_consume_outcome_ambiguous} =
+               SavedResetRedemption.redeem(assignment)
+
+      metadata = Repo.reload!(identity).metadata
+      redemption = metadata["saved_reset_redemption"]
+      locator = metadata["saved_reset_redemption_target"]
+
+      assert redemption["status"] == "redeeming"
+      assert redemption["phase"] == "consuming"
+      assert redemption["result"] == nil
+      assert redemption["provider_replay"]["provider_dispatches"] == 1
+      assert is_binary(locator)
+
+      metadata_json = Jason.encode!(metadata)
+      refute metadata_json =~ "credit_original"
+      refute metadata_json =~ "credit_other"
+
+      assert [list_request, consume_request] = FakeUpstream.requests(fake)
+      assert list_request.method == "GET"
+      assert consume_request.json["credit_id"] == "credit_original"
+
+      FakeUpstream.set_mode(fake, {:path_json, %{}})
+
+      assert {:error, :redemption_in_progress} = SavedResetRedemption.redeem(assignment)
+      assert FakeUpstream.requests(fake) == [list_request, consume_request]
+
+      retained = Repo.reload!(identity).metadata
+      assert retained["saved_reset_redemption_target"] == locator
+      assert retained["saved_reset_redemption"] == redemption
+    end
+
+    test "stale recovery replays only the encrypted ChatGPT target with the original request id" do
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/backend-api/wham/rate-limit-reset-credits" =>
+               {200,
+                %{
+                  "credits" => [
+                    %{"id" => "credit_original", "status" => "available"},
+                    %{"id" => "credit_other", "status" => "available"}
+                  ],
+                  "available_count" => 2
+                }},
+             "/backend-api/wham/rate-limit-reset-credits/consume" =>
+               {503, %{"code" => "provider_failed"}},
+             "/backend-api/wham/usage" => {200, usage_payload(0)}
+           }}
+        )
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api")
+
+      assert {:error, :saved_reset_consume_outcome_ambiguous} =
+               SavedResetRedemption.redeem(assignment)
+
+      [_, first_consume] = FakeUpstream.requests(fake)
+      persisted = Repo.reload!(identity)
+      redemption = persisted.metadata["saved_reset_redemption"]
+
+      {:ok, first_dispatched_at, 0} =
+        DateTime.from_iso8601(redemption["provider_replay"]["last_provider_dispatched_at"])
+
+      recovery_now = DateTime.add(first_dispatched_at, 60, :second)
+
+      due_redemption =
+        redemption
+        |> Map.put("started_at", DateTime.to_iso8601(DateTime.add(recovery_now, -10, :minute)))
+        |> put_in(["provider_replay", "next_action_at"], DateTime.to_iso8601(recovery_now))
+
+      update_redemption!(persisted, due_redemption)
+
+      FakeUpstream.set_mode(fake, {
+        :path_json,
+        %{
+          "/backend-api/wham/rate-limit-reset-credits" =>
+            {200,
+             %{
+               "credits" => [
+                 %{"id" => "credit_other", "status" => "available"},
+                 %{"id" => "credit_original", "status" => "available"}
+               ],
+               "available_count" => 2
+             }},
+          "/backend-api/wham/rate-limit-reset-credits/consume" =>
+            {200, %{"code" => "already_redeemed"}},
+          "/backend-api/wham/usage" => {200, usage_payload(0)}
+        }
+      })
+
+      assert {:ok, %{status: :succeeded, applied?: true, code: "already_redeemed"}} =
+               SavedResetRedemption.resume_stale_consuming(
+                 assignment,
+                 identity.id,
+                 redemption["attempt_id"],
+                 redemption["generation"],
+                 now: recovery_now,
+                 receive_timeout: 1_000
+               )
+
+      requests = FakeUpstream.requests(fake)
+      replay_consume = Enum.at(requests, 3)
+      assert replay_consume.method == "POST"
+      assert replay_consume.json["credit_id"] == "credit_original"
+      assert replay_consume.json["redeem_request_id"] == first_consume.json["redeem_request_id"]
+
+      settled = Repo.reload!(identity).metadata
+      assert settled["saved_reset_redemption"]["provider_replay"]["provider_dispatches"] == 2
+      refute Map.has_key?(settled, "saved_reset_redemption_target")
+    end
+
+    test "stale recovery honors persisted replay due time without provider I/O" do
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/api/codex/rate-limit-reset-credits/consume" => :close_before_headers
+           }}
+        )
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+      assert {:error, :saved_reset_consume_outcome_ambiguous} =
+               SavedResetRedemption.redeem(assignment)
+
+      assert length(FakeUpstream.requests(fake)) == 1
+
+      recovery_now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      next_action_at = DateTime.add(recovery_now, 90, :second)
+      persisted = Repo.reload!(identity)
+      redemption = persisted.metadata["saved_reset_redemption"]
+
+      not_due_redemption =
+        redemption
+        |> Map.put("started_at", DateTime.to_iso8601(DateTime.add(recovery_now, -10, :minute)))
+        |> put_in(["provider_replay", "next_action_at"], DateTime.to_iso8601(next_action_at))
+
+      update_redemption!(persisted, not_due_redemption)
+
+      assert {:snooze, 90} =
+               SavedResetRedemption.resume_stale_consuming(
+                 assignment,
+                 identity.id,
+                 redemption["attempt_id"],
+                 redemption["generation"],
+                 now: recovery_now,
+                 receive_timeout: 0
+               )
+
+      assert length(FakeUpstream.requests(fake)) == 1
+
+      assert Repo.reload!(identity).metadata["saved_reset_redemption"]["provider_replay"][
+               "provider_dispatches"
+             ] == 1
+    end
+
+    test "stale ChatGPT recovery uses exact redeemed and redeeming list evidence without a POST" do
+      for {status, expected_result} <- [
+            {"redeemed", :settled},
+            {"redeeming", :deferred}
+          ] do
+        fixture = ambiguous_chatgpt_recovery_fixture!()
+        recovery_now = DateTime.add(fixture.last_provider_dispatched_at, 60, :second)
+        fixture = make_recovery_due!(fixture, recovery_now)
+
+        FakeUpstream.set_mode(fixture.fake, {
+          :path_json,
+          %{
+            "/backend-api/wham/rate-limit-reset-credits" =>
+              {200,
+               %{
+                 "credits" => [
+                   %{
+                     "id" => fixture.credit_id,
+                     "status" => status,
+                     "redeemed_at" => DateTime.to_iso8601(recovery_now)
+                   }
+                 ]
+               }}
+          }
+        })
+
+        result = resume_recovery(fixture, recovery_now)
+
+        case expected_result do
+          :settled ->
+            assert {:ok, %{status: :succeeded, applied?: true, code: "target_redeemed"}} = result
+
+            metadata = Repo.reload!(fixture.identity).metadata
+            refute Map.has_key?(metadata, "saved_reset_redemption_target")
+
+          :deferred ->
+            assert {:snooze, 60} = result
+
+            redemption = Repo.reload!(fixture.identity).metadata["saved_reset_redemption"]
+            assert redemption["status"] == "redeeming"
+            assert redemption["phase"] == "consuming"
+            assert redemption["provider_replay"]["last_code"] == "target_redeeming"
+        end
+
+        assert provider_credit_consume_count(fixture.fake) == 1
+        assert List.last(FakeUpstream.requests(fixture.fake)).method == "GET"
+      end
+    end
+
+    test "stale ChatGPT recovery does not POST when the fresh list fails or is malformed" do
+      for response <- [
+            {503, %{"error" => "synthetic list failure"}},
+            {200, %{"credits" => [%{"id" => "malformed_credit", "status" => "unknown"}]}}
+          ] do
+        fixture = ambiguous_chatgpt_recovery_fixture!()
+        recovery_now = DateTime.add(fixture.last_provider_dispatched_at, 60, :second)
+        fixture = make_recovery_due!(fixture, recovery_now)
+
+        FakeUpstream.set_mode(fixture.fake, {
+          :path_json,
+          %{"/backend-api/wham/rate-limit-reset-credits" => response}
+        })
+
+        assert {:snooze, 60} = resume_recovery(fixture, recovery_now)
+        assert provider_credit_consume_count(fixture.fake) == 1
+
+        redemption = Repo.reload!(fixture.identity).metadata["saved_reset_redemption"]
+        assert redemption["provider_replay"]["provider_dispatches"] == 1
+        assert redemption["provider_replay"]["last_code"] == "list_failed"
+      end
+    end
+
+    test "an available pinned ChatGPT target remains ambiguous after the 30 minute floor" do
+      fixture = ambiguous_chatgpt_recovery_fixture!()
+      recovery_now = DateTime.add(fixture.last_provider_dispatched_at, 31, :minute)
+
+      fixture =
+        make_recovery_due!(fixture, recovery_now,
+          started_at: DateTime.add(recovery_now, -40, :minute)
+        )
+
+      FakeUpstream.set_mode(fixture.fake, {
+        :path_json,
+        %{
+          "/backend-api/wham/rate-limit-reset-credits" =>
+            {200,
+             %{
+               "credits" => [
+                 %{"id" => fixture.credit_id, "status" => "available"},
+                 %{"id" => "credit_retarget_forbidden", "status" => "available"}
+               ]
+             }},
+          "/backend-api/wham/rate-limit-reset-credits/consume" =>
+            {503, %{"code" => "provider_failed"}}
+        }
+      })
+
+      result = resume_recovery(fixture, recovery_now)
+      assert {:snooze, 300} = result
+
+      requests = FakeUpstream.requests(fixture.fake)
+      replay_consume = List.last(requests)
+      assert replay_consume.method == "POST"
+      assert replay_consume.json["credit_id"] == fixture.credit_id
+      assert replay_consume.json["redeem_request_id"] == fixture.redeem_request_id
+
+      redemption = Repo.reload!(fixture.identity).metadata["saved_reset_redemption"]
+      assert redemption["status"] == "redeeming"
+      assert redemption["phase"] == "consuming"
+      assert redemption["result"] == nil
+      assert redemption["provider_replay"]["provider_dispatches"] == 2
+    end
+
+    test "stale Codex recovery settles only from fresh usable quota evidence" do
+      usable_fixture = ambiguous_codex_recovery_fixture!()
+      usable_now = DateTime.add(usable_fixture.last_provider_dispatched_at, 60, :second)
+      usable_fixture = make_recovery_due!(usable_fixture, usable_now)
+
+      assert {:ok, [_window]} =
+               QuotaWindows.upsert_quota_windows(usable_fixture.identity, [
+                 weekly_quota_attrs(Decimal.new("10"),
+                   observed_at: usable_now,
+                   last_sync_at: usable_now,
+                   reset_at: DateTime.add(usable_now, 2, :hour)
+                 )
+               ])
+
+      assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+               resume_recovery(usable_fixture, usable_now)
+
+      assert FakeUpstream.count(usable_fixture.fake) == 1
+
+      exhausted_fixture = ambiguous_codex_recovery_fixture!()
+      exhausted_now = DateTime.add(exhausted_fixture.last_provider_dispatched_at, 60, :second)
+      exhausted_fixture = make_recovery_due!(exhausted_fixture, exhausted_now)
+
+      assert {:ok, [_window]} =
+               QuotaWindows.upsert_quota_windows(exhausted_fixture.identity, [
+                 weekly_quota_attrs(Decimal.new("100"),
+                   observed_at: exhausted_now,
+                   last_sync_at: exhausted_now,
+                   reset_at: DateTime.add(exhausted_now, 2, :hour)
+                 )
+               ])
+
+      FakeUpstream.set_mode(exhausted_fixture.fake, :close_before_headers)
+
+      assert {:snooze, 300} = resume_recovery(exhausted_fixture, exhausted_now)
+      assert FakeUpstream.count(exhausted_fixture.fake) == 2
+
+      redemption = Repo.reload!(exhausted_fixture.identity).metadata["saved_reset_redemption"]
+      assert redemption["status"] == "redeeming"
+      assert redemption["provider_replay"]["provider_dispatches"] == 2
+    end
+
+    test "stale recovery enforces every persisted replay delay at the exact boundary" do
+      for {provider_dispatches, delay_seconds, expected_snooze} <- [
+            {1, 60, 5 * 60},
+            {2, 5 * 60, 15 * 60},
+            {3, 15 * 60, 60 * 60},
+            {4, 60 * 60, 3 * 60 * 60},
+            {5, 3 * 60 * 60, 30 * 60}
+          ] do
+        fixture = ambiguous_codex_recovery_fixture!()
+        due_at = DateTime.add(fixture.last_provider_dispatched_at, delay_seconds, :second)
+
+        fixture =
+          make_recovery_due!(fixture, due_at,
+            provider_dispatches: provider_dispatches,
+            last_provider_dispatched_at: fixture.last_provider_dispatched_at,
+            next_action_at: nil,
+            started_at: DateTime.add(fixture.last_provider_dispatched_at, -10, :minute)
+          )
+
+        assert {:snooze, 1} = resume_recovery(fixture, DateTime.add(due_at, -1, :second))
+        assert FakeUpstream.count(fixture.fake) == 1
+
+        FakeUpstream.set_mode(fixture.fake, :close_before_headers)
+        assert {:snooze, ^expected_snooze} = resume_recovery(fixture, due_at)
+        assert FakeUpstream.count(fixture.fake) == 2
+
+        replay =
+          Repo.reload!(fixture.identity).metadata["saved_reset_redemption"]["provider_replay"]
+
+        assert replay["provider_dispatches"] == provider_dispatches + 1
+
+        if provider_dispatches == 5 do
+          assert replay["mode"] == "observe_only"
+          assert replay["last_code"] == "write_budget_exhausted"
+
+          assert replay["next_action_at"] ==
+                   due_at |> DateTime.add(30, :minute) |> DateTime.to_iso8601()
+        else
+          assert replay["mode"] == "replay"
+        end
+      end
+    end
+
+    test "stale recovery never reserves beyond six writes or at the exact six hour cutoff" do
+      budget_fixture = ambiguous_codex_recovery_fixture!()
+      budget_now = DateTime.add(budget_fixture.last_provider_dispatched_at, 5, :minute)
+
+      budget_fixture =
+        make_recovery_due!(budget_fixture, budget_now,
+          provider_dispatches: 6,
+          last_provider_dispatched_at: budget_fixture.last_provider_dispatched_at,
+          next_action_at: budget_now,
+          started_at: DateTime.add(budget_now, -5, :hour)
+        )
+
+      assert {:snooze, 1_500} = resume_recovery(budget_fixture, budget_now)
+
+      assert FakeUpstream.count(budget_fixture.fake) == 1
+
+      budget_replay =
+        Repo.reload!(budget_fixture.identity).metadata["saved_reset_redemption"][
+          "provider_replay"
+        ]
+
+      assert budget_replay["mode"] == "observe_only"
+      assert budget_replay["last_code"] == "write_budget_exhausted"
+      assert is_binary(budget_replay["replay_exhausted_at"])
+      assert is_binary(budget_replay["unresolved_since"])
+
+      assert budget_replay["next_action_at"] ==
+               budget_fixture.last_provider_dispatched_at
+               |> DateTime.add(30, :minute)
+               |> DateTime.to_iso8601()
+
+      cutoff_fixture = ambiguous_codex_recovery_fixture!()
+      cutoff_now = DateTime.add(cutoff_fixture.last_provider_dispatched_at, 60, :second)
+
+      cutoff_fixture =
+        make_recovery_due!(cutoff_fixture, cutoff_now,
+          started_at: DateTime.add(cutoff_now, -6, :hour)
+        )
+
+      assert {:snooze, 1_740} = resume_recovery(cutoff_fixture, cutoff_now)
+
+      assert FakeUpstream.count(cutoff_fixture.fake) == 1
+    end
+
+    test "observe-only zero-dispatch attempts settle not applied without provider I/O or a new floor" do
+      fixture = ambiguous_chatgpt_recovery_fixture!()
+      now = DateTime.add(fixture.last_provider_dispatched_at, 6, :hour)
+      carried_at = DateTime.add(now, -5, :minute) |> DateTime.to_iso8601()
+      persisted = Repo.reload!(fixture.identity)
+      redemption = persisted.metadata["saved_reset_redemption"]
+
+      replay =
+        redemption["provider_replay"]
+        |> Map.put("provider_dispatches", 0)
+        |> Map.delete("last_provider_dispatched_at")
+        |> Map.put("next_action_at", DateTime.to_iso8601(now))
+
+      redemption =
+        redemption
+        |> Map.put("started_at", now |> DateTime.add(-6, :hour) |> DateTime.to_iso8601())
+        |> Map.put("last_applied_consume_at", carried_at)
+        |> Map.put("provider_replay", replay)
+
+      metadata =
+        persisted.metadata
+        |> Map.put("saved_reset_redemption", redemption)
+
+      update_identity!(persisted, %{metadata: metadata})
+      request_count = FakeUpstream.count(fixture.fake)
+
+      assert {:ok, %{status: :noop, code: "consume_not_applied"}} =
+               resume_recovery(fixture, now)
+
+      assert FakeUpstream.count(fixture.fake) == request_count
+
+      settled = Repo.reload!(fixture.identity).metadata["saved_reset_redemption"]
+      assert settled["phase"] == "consume_not_applied"
+      assert settled["result"]["applied"] == false
+      assert settled["last_applied_consume_at"] == carried_at
+      refute Map.has_key?(settled, "consumed_at")
+      refute Map.has_key?(settled, "deadline_at")
+
+      refute Map.has_key?(
+               Repo.reload!(fixture.identity).metadata,
+               "saved_reset_redemption_target"
+             )
+    end
+
+    test "observe-only ChatGPT probes settle only exact redeemed and never POST" do
+      for status <- ["redeemed", "available", "redeeming"] do
+        fixture = ambiguous_chatgpt_recovery_fixture!()
+        now = DateTime.add(fixture.last_provider_dispatched_at, 31, :minute)
+
+        fixture =
+          make_recovery_due!(fixture, now,
+            provider_dispatches: 6,
+            started_at: DateTime.add(now, -5, :hour)
+          )
+
+        FakeUpstream.set_mode(fixture.fake, {
+          :path_json,
+          %{
+            "/backend-api/wham/rate-limit-reset-credits" =>
+              {200,
+               %{
+                 "credits" => [
+                   %{
+                     "id" => fixture.credit_id,
+                     "status" => status,
+                     "redeemed_at" => DateTime.to_iso8601(now)
+                   }
+                 ]
+               }}
+          }
+        })
+
+        result = resume_recovery(fixture, now)
+
+        if status == "redeemed" do
+          assert {:ok, %{status: :succeeded, applied?: true, code: "target_redeemed"}} =
+                   result
+        else
+          assert {:snooze, 21_600} = result
+          persisted = Repo.reload!(fixture.identity).metadata
+          assert is_binary(persisted["saved_reset_redemption_target"])
+          assert persisted["saved_reset_redemption"]["phase"] == "consuming"
+        end
+
+        assert provider_credit_consume_count(fixture.fake) == 1
+        assert List.last(FakeUpstream.requests(fixture.fake)).method == "GET"
+      end
+    end
+
+    test "observe-only Codex ambiguity probes at six-hour cadence without another POST" do
+      fixture = ambiguous_codex_recovery_fixture!()
+      now = DateTime.add(fixture.last_provider_dispatched_at, 31, :minute)
+
+      fixture =
+        make_recovery_due!(fixture, now,
+          provider_dispatches: 6,
+          started_at: DateTime.add(now, -5, :hour)
+        )
+
+      assert {:snooze, 21_600} = resume_recovery(fixture, now)
+      assert FakeUpstream.count(fixture.fake) == 1
+
+      replay =
+        Repo.reload!(fixture.identity).metadata["saved_reset_redemption"]["provider_replay"]
+
+      assert replay["mode"] == "observe_only"
+      assert replay["last_code"] == "quota_unresolved"
+      assert replay["next_action_at"] == now |> DateTime.add(6, :hour) |> DateTime.to_iso8601()
+    end
+
+    test "observe-only starts exactly at the provider staleness floor" do
+      fixture = ambiguous_codex_recovery_fixture!()
+      floor_at = DateTime.add(fixture.last_provider_dispatched_at, 30, :minute)
+
+      fixture =
+        make_recovery_due!(fixture, floor_at,
+          provider_dispatches: 6,
+          started_at: DateTime.add(floor_at, -5, :hour)
+        )
+
+      assert {:snooze, 1} = resume_recovery(fixture, DateTime.add(floor_at, -1, :second))
+      assert FakeUpstream.count(fixture.fake) == 1
+
+      assert {:snooze, 21_600} = resume_recovery(fixture, floor_at)
+      assert FakeUpstream.count(fixture.fake) == 1
+
+      replay =
+        Repo.reload!(fixture.identity).metadata["saved_reset_redemption"]["provider_replay"]
+
+      assert replay["mode"] == "observe_only"
+      assert replay["last_code"] == "quota_unresolved"
+
+      assert replay["next_action_at"] ==
+               floor_at |> DateTime.add(6, :hour) |> DateTime.to_iso8601()
+    end
+
+    test "old observe-only ChatGPT failures stay consuming and retain any private target" do
+      for scenario <- [
+            :missing_row,
+            :unknown_status,
+            :list_failure,
+            :target_invalid,
+            :target_missing,
+            :scope_changed
+          ] do
+        fixture = ambiguous_chatgpt_recovery_fixture!()
+        now = DateTime.add(fixture.last_provider_dispatched_at, 2, :day)
+
+        fixture =
+          make_recovery_due!(fixture, now,
+            provider_dispatches: 6,
+            started_at: DateTime.add(now, -2, :day)
+          )
+
+        persisted = Repo.reload!(fixture.identity)
+        original_target = persisted.metadata["saved_reset_redemption_target"]
+
+        {metadata, account_id, list_response} =
+          case scenario do
+            :missing_row ->
+              {persisted.metadata, persisted.chatgpt_account_id, {200, %{"credits" => []}}}
+
+            :unknown_status ->
+              {persisted.metadata, persisted.chatgpt_account_id,
+               {200,
+                %{
+                  "credits" => [
+                    %{"id" => fixture.credit_id, "status" => "future_status"}
+                  ]
+                }}}
+
+            :list_failure ->
+              {persisted.metadata, persisted.chatgpt_account_id,
+               {503, %{"error" => "synthetic list failure"}}}
+
+            :target_invalid ->
+              {Map.put(persisted.metadata, "saved_reset_redemption_target", "tampered"),
+               persisted.chatgpt_account_id, nil}
+
+            :target_missing ->
+              {Map.delete(persisted.metadata, "saved_reset_redemption_target"),
+               persisted.chatgpt_account_id, nil}
+
+            :scope_changed ->
+              {persisted.metadata, "acct_changed_observe_only_scope", nil}
+          end
+
+        update_identity!(persisted, %{metadata: metadata, chatgpt_account_id: account_id})
+
+        if list_response do
+          FakeUpstream.set_mode(fixture.fake, {
+            :path_json,
+            %{"/backend-api/wham/rate-limit-reset-credits" => list_response}
+          })
+        end
+
+        request_count = FakeUpstream.count(fixture.fake)
+        assert {:snooze, 21_600} = resume_recovery(fixture, now)
+
+        updated_metadata = Repo.reload!(fixture.identity).metadata
+        updated = updated_metadata["saved_reset_redemption"]
+        assert updated["status"] == "redeeming"
+        assert updated["phase"] == "consuming"
+
+        assert updated["provider_replay"]["next_action_at"] ==
+                 now |> DateTime.add(6, :hour) |> DateTime.to_iso8601()
+
+        case scenario do
+          scenario
+          when scenario in [:missing_row, :unknown_status, :list_failure, :scope_changed] ->
+            assert updated_metadata["saved_reset_redemption_target"] == original_target
+
+          :target_invalid ->
+            assert updated_metadata["saved_reset_redemption_target"] == "tampered"
+
+          :target_missing ->
+            refute Map.has_key?(updated_metadata, "saved_reset_redemption_target")
+        end
+
+        expected_requests =
+          if scenario in [:missing_row, :unknown_status, :list_failure],
+            do: request_count + 1,
+            else: request_count
+
+        assert FakeUpstream.count(fixture.fake) == expected_requests
+        assert provider_credit_consume_count(fixture.fake) == 1
+      end
+    end
+
+    @tag :saved_reset_observe_only_replica_race
+    test "two observe-only replicas cannot reopen a settled attempt with a late result" do
+      parent = self()
+      first_release = make_ref()
+      second_release = make_ref()
+      {:ok, fake} = recovery_race_fake()
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      fixture = committed_chatgpt_recovery_fixture!(fake)
+      on_exit(fn -> cleanup_committed_recovery_fixture!(fixture) end)
+      now = DateTime.add(fixture.now, 31, :minute)
+
+      run_unboxed(fn ->
+        identity = Repo.get!(UpstreamIdentity, fixture.identity_id)
+        redemption = identity.metadata["saved_reset_redemption"]
+
+        replay =
+          redemption["provider_replay"]
+          |> Map.put("provider_dispatches", 6)
+          |> Map.put("mode", "observe_only")
+          |> Map.put("next_action_at", DateTime.to_iso8601(now))
+
+        update_redemption!(
+          identity,
+          redemption
+          |> Map.put("started_at", now |> DateTime.add(-5, :hour) |> DateTime.to_iso8601())
+          |> Map.put("provider_replay", replay)
+        )
+      end)
+
+      fixture = %{fixture | now: now}
+
+      FakeUpstream.set_mode(fake, {
+        :sequence,
+        [
+          FakeUpstream.barrier_json_response(
+            %{
+              "credits" => [
+                %{
+                  "id" => fixture.credit_id,
+                  "status" => "redeemed",
+                  "redeemed_at" => DateTime.to_iso8601(now)
+                }
+              ]
+            },
+            notify: parent,
+            release_ref: first_release
+          ),
+          FakeUpstream.barrier_json_response(
+            %{
+              "credits" => [
+                %{
+                  "id" => fixture.credit_id,
+                  "status" => "redeemed",
+                  "redeemed_at" => DateTime.to_iso8601(now)
+                }
+              ]
+            },
+            notify: parent,
+            release_ref: second_release
+          )
+        ]
+      })
+
+      tasks =
+        for role <- [:first, :second] do
+          start_recovery_replica_task(parent, role, fixture)
+        end
+
+      assert_receive {:recovery_replica_ready, :first}, 5_000
+      assert_receive {:recovery_replica_ready, :second}, 5_000
+      Enum.each(tasks, &send(&1.pid, :start_recovery))
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, first_pid, ^first_release},
+                     5_000
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, second_pid,
+                      ^second_release},
+                     5_000
+
+      send(first_pid, {:fake_upstream_release_timeout, first_release})
+      send(second_pid, {:fake_upstream_release_timeout, second_release})
+
+      results = Task.await_many(tasks, 15_000)
+      assert Enum.count(results, &match?({_, {:ok, %{status: :succeeded}}}, &1)) == 1
+
+      persisted =
+        run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata
+
+      assert persisted["saved_reset_redemption"]["result"]["applied"] == true
+
+      assert persisted["saved_reset_redemption"]["phase"] in [
+               "confirmed_by_quota",
+               "consumed_pending_probe"
+             ]
+
+      refute Map.has_key?(persisted, "saved_reset_redemption_target")
+      assert provider_credit_consume_count(fake) == 1
+    end
+
+    test "invalid ChatGPT recovery targets and changed scope remain provider I/O free" do
+      for mutation <- [:tampered_target, :missing_target, :scope_changed] do
+        fixture = ambiguous_chatgpt_recovery_fixture!()
+        recovery_now = DateTime.add(fixture.last_provider_dispatched_at, 60, :second)
+        fixture = make_recovery_due!(fixture, recovery_now)
+        persisted = Repo.reload!(fixture.identity)
+
+        metadata =
+          case mutation do
+            :tampered_target ->
+              Map.put(persisted.metadata, "saved_reset_redemption_target", "tampered")
+
+            :missing_target ->
+              Map.delete(persisted.metadata, "saved_reset_redemption_target")
+
+            :scope_changed ->
+              persisted.metadata
+          end
+
+        attrs =
+          if mutation == :scope_changed,
+            do: %{metadata: metadata, chatgpt_account_id: "acct_changed_scope"},
+            else: %{metadata: metadata}
+
+        update_identity!(persisted, attrs)
+
+        assert {:ok, %{status: :noop, applied?: false, code: code}} =
+                 resume_recovery(fixture, recovery_now)
+
+        assert code in ["recovery_target_invalid", "scope_changed"]
+        assert FakeUpstream.count(fixture.fake) == 2
+      end
+    end
+
+    test "markerless and marked legacy recovery normalize to the same observe-only result" do
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      marker = %{"version" => 1, "state" => "unresolved"}
+
+      for legacy_recovery <- [nil, marker] do
+        {:ok, fake} = FakeUpstream.start_link(:close_before_headers)
+        on_exit(fn -> FakeUpstream.stop(fake) end)
+
+        redemption = %{
+          "status" => "redeeming",
+          "phase" => "consuming",
+          "attempt_id" => Ecto.UUID.generate(),
+          "generation" => 3,
+          "trigger_kind" => "admin_manual",
+          "started_at" => DateTime.to_iso8601(DateTime.add(now, -10, :minute)),
+          "finished_at" => nil,
+          "result" => nil
+        }
+
+        redemption =
+          if legacy_recovery,
+            do: Map.put(redemption, "legacy_recovery", legacy_recovery),
+            else: redemption
+
+        %{identity: identity, assignment: assignment} =
+          assignment_with_fake(fake, "/api/codex/usage", "codex_api", redemption: redemption)
+
+        assert {:snooze, 21_600} =
+                 SavedResetRedemption.resume_stale_consuming(
+                   assignment,
+                   identity.id,
+                   redemption["attempt_id"],
+                   redemption["generation"],
+                   now: now,
+                   receive_timeout: 0
+                 )
+
+        persisted = Repo.reload!(identity).metadata["saved_reset_redemption"]
+        assert persisted["legacy_recovery"] == marker
+
+        assert persisted["legacy_recovery_last_code"] == "legacy_unresolved"
+        assert is_binary(persisted["legacy_recovery_last_observed_at"])
+
+        assert persisted["legacy_recovery_next_action_at"] ==
+                 now |> DateTime.add(6, :hour) |> DateTime.to_iso8601()
+
+        assert Map.drop(persisted, [
+                 "legacy_recovery",
+                 "legacy_recovery_last_code",
+                 "legacy_recovery_last_observed_at",
+                 "legacy_recovery_next_action_at"
+               ]) == Map.drop(redemption, ["legacy_recovery"])
+
+        assert FakeUpstream.requests(fake) == []
+      end
+    end
+
+    test "a present malformed replay contract remains fail-closed without provider I/O" do
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      redemption = %{
+        "status" => "redeeming",
+        "phase" => "consuming",
+        "attempt_id" => Ecto.UUID.generate(),
+        "generation" => 3,
+        "trigger_kind" => "admin_manual",
+        "started_at" => DateTime.to_iso8601(DateTime.add(now, -10, :minute)),
+        "finished_at" => nil,
+        "result" => nil,
+        "provider_replay" => "invalid"
+      }
+
+      {:ok, fake} = FakeUpstream.start_link(:close_before_headers)
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api", redemption: redemption)
+
+      assert {:ok, %{status: :noop, applied?: false, code: "scope_changed"}} =
+               SavedResetRedemption.resume_stale_consuming(
+                 assignment,
+                 identity.id,
+                 redemption["attempt_id"],
+                 redemption["generation"],
+                 now: now,
+                 receive_timeout: 0
+               )
+
+      assert Repo.reload!(identity).metadata["saved_reset_redemption"] == redemption
+      assert FakeUpstream.requests(fake) == []
+    end
+
+    @tag :saved_reset_recovery_replica_race
+    test "two recovery replicas reserve and POST at most one additional dispatch" do
+      parent = self()
+      first_release = make_ref()
+      second_release = make_ref()
+      {:ok, fake} = recovery_race_fake()
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      fixture = committed_chatgpt_recovery_fixture!(fake)
+      on_exit(fn -> cleanup_committed_recovery_fixture!(fixture) end)
+
+      FakeUpstream.set_mode(fake, {
+        :sequence,
+        [
+          FakeUpstream.barrier_json_response(
+            %{"credits" => [%{"id" => fixture.credit_id, "status" => "available"}]},
+            notify: parent,
+            release_ref: first_release
+          ),
+          FakeUpstream.barrier_json_response(
+            %{"credits" => [%{"id" => fixture.credit_id, "status" => "available"}]},
+            notify: parent,
+            release_ref: second_release
+          ),
+          {:json, 200, %{"code" => "reset"}},
+          {:json, 200, usage_payload(0)}
+        ]
+      })
+
+      tasks =
+        for role <- [:first, :second] do
+          start_recovery_replica_task(parent, role, fixture)
+        end
+
+      assert_receive {:recovery_replica_ready, :first}, 5_000
+      assert_receive {:recovery_replica_ready, :second}, 5_000
+      Enum.each(tasks, &send(&1.pid, :start_recovery))
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, first_pid, ^first_release},
+                     5_000
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, second_pid,
+                      ^second_release},
+                     5_000
+
+      send(first_pid, {:fake_upstream_release_timeout, first_release})
+      send(second_pid, {:fake_upstream_release_timeout, second_release})
+
+      results = Task.await_many(tasks, 15_000)
+      assert Enum.count(results, &match?({_, {:ok, %{applied?: true}}}, &1)) == 1
+      assert provider_credit_consume_count(fake) == 2
+
+      persisted =
+        run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata[
+          "saved_reset_redemption"
+        ]
+
+      assert persisted["provider_replay"]["provider_dispatches"] == 2
+    end
+
+    test "a finalizer persistence failure after a reserved ChatGPT POST stays ambiguous" do
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/backend-api/wham/rate-limit-reset-credits" =>
+               {200,
+                %{
+                  "credits" => [%{"id" => "credit_persistence", "status" => "available"}],
+                  "available_count" => 1
+                }},
+             "/backend-api/wham/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+             "/backend-api/wham/usage" => {200, usage_payload(0)}
+           }}
+        )
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api")
+
+      install_saved_reset_finalization_failure_trigger!(identity.id)
+
+      assert {:error, :saved_reset_consume_outcome_ambiguous} =
+               SavedResetRedemption.redeem(assignment)
+
+      metadata = Repo.reload!(identity).metadata
+      redemption = metadata["saved_reset_redemption"]
+
+      assert redemption["status"] == "redeeming"
+      assert redemption["phase"] == "consuming"
+      assert redemption["result"] == nil
+      assert redemption["finished_at"] == nil
+      assert redemption["provider_replay"]["provider_dispatches"] == 1
+      assert redemption["provider_replay"]["last_code"] == "persistence_failed"
+      assert is_binary(metadata["saved_reset_redemption_target"])
+
+      assert Enum.map(FakeUpstream.requests(fake), &{&1.method, &1.path}) == [
+               {"GET", "/backend-api/wham/rate-limit-reset-credits"},
+               {"POST", "/backend-api/wham/rate-limit-reset-credits/consume"},
+               {"GET", "/backend-api/wham/usage"}
+             ]
+    end
+
+    test "treats every non-definitive response after a reserved POST as ambiguous" do
+      scenarios = [
+        {:empty_object, {:json, 200, %{}}},
+        {:missing_code, {:json, 200, %{"credit" => %{}}}},
+        {:non_string_code, {:json, 200, %{"code" => 1}}},
+        {:unknown_code, {:json, 200, %{"code" => "provider_changed"}}},
+        {:empty_204, {:raw_body, 204, "", []}},
+        {:non_json, {:raw_body, 200, "not-json", [{"content-type", "text/plain"}]}},
+        {:malformed_json, {:malformed_json, 200, "{"}},
+        {:known_code_5xx, {:json, 503, %{"code" => "reset"}}},
+        {:invalid_windows_reset, {:json, 200, %{"code" => "reset", "windows_reset" => "1"}}}
+      ]
+
+      for {scenario, response} <- scenarios do
+        {:ok, fake} =
+          FakeUpstream.start_link(
+            {:path_json, %{"/api/codex/rate-limit-reset-credits/consume" => response}}
+          )
+
+        on_exit(fn -> FakeUpstream.stop(fake) end)
+
+        %{identity: identity, assignment: assignment} =
+          assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+        assert {:error, :saved_reset_consume_outcome_ambiguous} =
+                 SavedResetRedemption.redeem(assignment),
+               "scenario=#{scenario}"
+
+        redemption = Repo.reload!(identity).metadata["saved_reset_redemption"]
+        assert redemption["status"] == "redeeming", "scenario=#{scenario}"
+        assert redemption["phase"] == "consuming", "scenario=#{scenario}"
+        assert redemption["result"] == nil, "scenario=#{scenario}"
+
+        assert redemption["provider_replay"]["provider_dispatches"] == 1,
+               "scenario=#{scenario}"
+
+        assert [%{method: "POST"}] = FakeUpstream.requests(fake), "scenario=#{scenario}"
+        assert {:error, :redemption_in_progress} = SavedResetRedemption.redeem(assignment)
+        assert length(FakeUpstream.requests(fake)) == 1, "scenario=#{scenario}"
+      end
+    end
+
+    test "accepts only known 2xx object outcomes with valid optional fields" do
+      for {code, expected_status, applied?} <- [
+            {"already_redeemed", :succeeded, true},
+            {"no_credit", :noop, false},
+            {"nothing_to_reset", :noop, false}
+          ] do
+        {:ok, fake} =
+          FakeUpstream.start_link(
+            {:path_json,
+             %{
+               "/api/codex/rate-limit-reset-credits/consume" =>
+                 {200, %{"code" => code, "windows_reset" => 1}},
+               "/api/codex/usage" => {500, %{}}
+             }}
+          )
+
+        on_exit(fn -> FakeUpstream.stop(fake) end)
+        %{assignment: assignment} = assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+        assert {:ok, %{status: ^expected_status, applied?: ^applied?, code: ^code}} =
+                 SavedResetRedemption.redeem(assignment)
+      end
+    end
+
+    test "unsupported endpoint claims remain provider-I/O-free without replay metadata" do
+      {:ok, fake} = codex_reset_fake(1)
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/unsupported/usage", "codex_api")
+
+      assert {:ok, %{status: :noop, code: "saved_reset_endpoint_unknown"}} =
+               SavedResetRedemption.redeem(assignment)
+
+      assert [] = FakeUpstream.requests(fake)
+      redemption = Repo.reload!(identity).metadata["saved_reset_redemption"]
+      refute Map.has_key?(redemption, "provider_replay")
+      refute Map.has_key?(Repo.reload!(identity).metadata, "saved_reset_redemption_target")
+    end
+
     @tag :saved_reset_redemption_cause
-    test "gateway cause is derived from normalized trigger and survives claimed noops and failures" do
-      for {trigger, detail, status, provider_status, provider_code, result_code} <- [
-            {:blocked_weekly_exhaustion, "exhausted", :noop, 200, "nothing_to_reset",
-             "nothing_to_reset"},
-            {:threshold_pressure, "threshold", :failed, 502, "provider_rejected",
-             "provider_error"}
+    test "gateway cause is derived from normalized trigger and survives claimed noops and ambiguity" do
+      for {trigger, detail, provider_status, provider_code, expected_result} <- [
+            {:blocked_weekly_exhaustion, "exhausted", 200, "nothing_to_reset",
+             {:settled, :noop, "nothing_to_reset"}},
+            {:threshold_pressure, "threshold", 502, "provider_rejected", :ambiguous}
           ] do
         parent = self()
         release_ref = make_ref()
@@ -143,12 +1398,24 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         refute Jason.encode!(claim) =~ "caller-controlled-provider-token"
 
         send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
-        assert {:ok, %{status: ^status, code: ^result_code}} = Task.await(task, 5_000)
 
-        finalized = Repo.reload!(identity).metadata["saved_reset_redemption"]
-        assert finalized["status"] == Atom.to_string(status)
-        assert finalized["trigger_detail"] == detail
-        refute Jason.encode!(finalized) =~ "caller-controlled-provider-token"
+        persisted =
+          case expected_result do
+            {:settled, status, result_code} ->
+              assert {:ok, %{status: ^status, code: ^result_code}} = Task.await(task, 5_000)
+              Repo.reload!(identity).metadata["saved_reset_redemption"]
+
+            :ambiguous ->
+              assert {:error, :saved_reset_consume_outcome_ambiguous} = Task.await(task, 5_000)
+              redemption = Repo.reload!(identity).metadata["saved_reset_redemption"]
+              assert redemption["status"] == "redeeming"
+              assert redemption["phase"] == "consuming"
+              assert redemption["result"] == nil
+              redemption
+          end
+
+        assert persisted["trigger_detail"] == detail
+        refute Jason.encode!(persisted) =~ "caller-controlled-provider-token"
       end
     end
 
@@ -175,8 +1442,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
              ] = requests
 
       assert %{"redeem_request_id" => redeem_request_id} = body
+      assert body == %{"redeem_request_id" => redeem_request_id}
       assert is_binary(redeem_request_id)
-      refute Map.has_key?(body, "credit_id")
     end
 
     test "derives a stable idempotency key so a retry reuses the same redeem_request_id" do
@@ -244,7 +1511,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert is_binary(redemption["deadline_at"])
     end
 
-    test "a stale consume-window crash resumes the same attempt and provider key" do
+    test "a stale phase-bearing consume cannot be reclaimed by a manual attempt" do
       {:ok, fake} =
         FakeUpstream.start_link(
           {:path_json,
@@ -273,27 +1540,56 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           }
         )
 
+      before_redemption = identity.metadata["saved_reset_redemption"]
+
+      assert {:error, :redemption_in_progress} = SavedResetRedemption.redeem(assignment)
+      assert [] = FakeUpstream.requests(fake)
+      assert Repo.reload!(identity).metadata["saved_reset_redemption"] == before_redemption
+    end
+
+    test "an unconsumed persisted lifecycle record permits a fresh ordinary claim" do
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+             "/api/codex/usage" => {500, %{"error" => "synthetic usage failure"}}
+           }}
+        )
+
+      started_at =
+        DateTime.utc_now() |> DateTime.add(-5, :minute) |> DateTime.truncate(:microsecond)
+
+      previous_attempt_id = Ecto.UUID.generate()
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api",
+          redemption: %{
+            "status" => "failed",
+            "phase" => "consume_not_applied",
+            "attempt_id" => previous_attempt_id,
+            "generation" => 5,
+            "trigger_kind" => "admin_manual",
+            "started_at" => DateTime.to_iso8601(started_at),
+            "finished_at" => DateTime.to_iso8601(started_at),
+            "result" => %{"code" => "transport_error", "applied" => false},
+            "provider_replay" => %{"version" => 1, "provider_dispatches" => 0}
+          }
+        )
+
       assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
                SavedResetRedemption.redeem(assignment)
 
-      # The resumed attempt reuses the crashed attempt's identity, so the
-      # provider receives the byte-identical redeem_request_id and can
-      # deduplicate instead of consuming a second credit.
-      [consume | _] = FakeUpstream.requests(fake)
+      assert [consume_request, usage_request] = FakeUpstream.requests(fake)
+      assert consume_request.path == "/api/codex/rate-limit-reset-credits/consume"
+      assert usage_request.path == "/api/codex/usage"
 
-      expected_key =
-        :sha256
-        |> :crypto.hash("saved_reset_redeem:#{crashed_attempt_id}:5")
-        |> binary_part(0, 16)
-        |> then(fn raw -> elem(Ecto.UUID.load(raw), 1) end)
-
-      assert consume.json["redeem_request_id"] == expected_key
-
-      persisted = Repo.reload!(identity)
-      assert get_in(persisted.metadata, ["saved_reset_redemption", "generation"]) == 5
-
-      assert get_in(persisted.metadata, ["saved_reset_redemption", "attempt_id"]) ==
-               crashed_attempt_id
+      redemption = Repo.reload!(identity).metadata["saved_reset_redemption"]
+      assert redemption["phase"] == "consumed_pending_probe"
+      assert redemption["generation"] == 6
+      refute redemption["attempt_id"] == previous_attempt_id
+      assert redemption["result"]["code"] == "reset"
+      assert redemption["result"]["applied"] == true
     end
 
     test "a consumed pending reset blocks a second credit even after the stale window" do
@@ -903,6 +2199,34 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert [] = FakeUpstream.requests(fake)
     end
 
+    test "gateway auto does not reclaim a stale phase-bearing consuming redemption" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
+      context = gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion)
+
+      update_redemption!(
+        identity,
+        redemption_metadata("gateway_auto", DateTime.utc_now() |> DateTime.add(-5, :minute))
+        |> Map.put("phase", "consuming")
+      )
+
+      before_redemption = Repo.reload!(identity).metadata["saved_reset_redemption"]
+
+      assert {:error, :redemption_in_progress} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+      assert Repo.reload!(identity).metadata["saved_reset_redemption"] == before_redemption
+    end
+
     @tag :saved_reset_expiry_ownership
     test "gateway auto selects same-source exhaustion before logical cross-source ranking" do
       {:ok, fake} = codex_reset_fake(0)
@@ -964,6 +2288,138 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
       persisted = Repo.reload!(stale_identity)
       refute get_in(persisted.metadata, ["saved_reset_redemption", "status"]) == "redeeming"
+    end
+
+    test "gateway auto accepts narrowed trigger candidates within a wider normalized cohort" do
+      {:ok, fake} = codex_reset_fake(0)
+      {:ok, cohort_fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+      %{identity: cohort_identity} =
+        assignment_with_fake(cohort_fake, "/api/codex/usage", "codex_api")
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
+
+      context =
+        assignment
+        |> gateway_auto_context(identity, :blocked_weekly_exhaustion)
+        |> Map.put(:cohort_identity_ids, [
+          cohort_identity.id,
+          identity.id,
+          cohort_identity.id
+        ])
+
+      assert {:ok, normalized_context} = AutoEligibility.normalize_context(context)
+      assert normalized_context.candidate_identity_ids == [identity.id]
+
+      assert normalized_context.cohort_identity_ids ==
+               Enum.sort([identity.id, cohort_identity.id])
+
+      assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [consume_request, _usage_request] = FakeUpstream.requests(fake)
+      assert consume_request.path == "/api/codex/rate-limit-reset-credits/consume"
+      assert [] = FakeUpstream.requests(cohort_fake)
+    end
+
+    test "gateway auto rejects missing, empty, and invalid cohorts before provider I/O" do
+      for cohort_override <- [
+            :missing,
+            nil,
+            [],
+            "not-a-list",
+            ["not-a-uuid"],
+            [Ecto.UUID.generate(), "not-a-uuid"]
+          ] do
+        {:ok, fake} = codex_reset_fake(0)
+
+        %{identity: identity, assignment: assignment} =
+          assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+        identity = enable_saved_reset_auto_redeem!(identity)
+        upsert_weekly_exhausted_quota!(identity)
+
+        context = gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion)
+
+        context =
+          if cohort_override == :missing,
+            do: Map.delete(context, :cohort_identity_ids),
+            else: Map.put(context, :cohort_identity_ids, cohort_override)
+
+        assert {:ok,
+                %{
+                  status: :noop,
+                  applied?: false,
+                  code: "gateway_auto_context_invalid"
+                }} =
+                 SavedResetRedemption.redeem(assignment,
+                   trigger_kind: "gateway_auto",
+                   gateway_auto_context: context
+                 )
+
+        assert [] = FakeUpstream.requests(fake)
+      end
+    end
+
+    test "gateway auto rejects target, routeability, and cohort mismatches before provider I/O" do
+      for relation <- [
+            :target_outside_candidates,
+            :target_outside_cohort,
+            :candidate_outside_cohort,
+            :candidate_outside_routable,
+            :routable_outside_cohort
+          ] do
+        {:ok, fake} = codex_reset_fake(0)
+
+        %{identity: identity, assignment: assignment} =
+          assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+        identity = enable_saved_reset_auto_redeem!(identity)
+        upsert_weekly_exhausted_quota!(identity)
+        other_identity_id = Ecto.UUID.generate()
+
+        context = gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion)
+
+        context =
+          case relation do
+            :target_outside_candidates ->
+              Map.put(context, :candidate_identity_ids, [other_identity_id])
+
+            :target_outside_cohort ->
+              Map.put(context, :cohort_identity_ids, [other_identity_id])
+
+            :candidate_outside_cohort ->
+              context
+              |> Map.put(:candidate_identity_ids, [identity.id, other_identity_id])
+              |> Map.put(:cohort_identity_ids, [identity.id])
+
+            :candidate_outside_routable ->
+              Map.put(context, :routable_identity_ids, [other_identity_id])
+
+            :routable_outside_cohort ->
+              Map.put(context, :routable_identity_ids, [identity.id, other_identity_id])
+          end
+
+        assert {:ok,
+                %{
+                  status: :noop,
+                  applied?: false,
+                  code: "gateway_auto_context_mismatch"
+                }} =
+                 SavedResetRedemption.redeem(assignment,
+                   trigger_kind: "gateway_auto",
+                   gateway_auto_context: context
+                 )
+
+        assert [] = FakeUpstream.requests(fake)
+      end
     end
 
     test "gateway auto does not consume when persisted identity has fresh in-progress redemption" do
@@ -1656,23 +3112,39 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert Enum.any?(FakeUpstream.requests(fake), &(&1.method == "POST"))
     end
 
-    test "preserves scheduled evidence on provider noop and failure finalization" do
-      for {scenario, consume_response, expected_status} <- [
-            {:noop, {200, %{"code" => "nothing_to_reset"}}, :noop},
-            {:failure, {502, %{"code" => "provider_rejected"}}, :failed}
+    test "preserves scheduled evidence on provider noop and ambiguous failure" do
+      for {scenario, consume_response, expected_result} <- [
+            {:noop, {200, %{"code" => "nothing_to_reset"}}, {:settled, :noop}},
+            {:ambiguous, {502, %{"code" => "provider_rejected"}}, :ambiguous}
           ] do
         %{as_of: as_of, identity: identity, assignment: assignment} =
           scheduled_expiry_fixture(consume_response: consume_response)
 
-        assert {:ok, %{status: ^expected_status, identity: persisted_identity}} =
-                 SavedResetRedemption.redeem_scheduled_expiry(
-                   assignment,
-                   identity.id,
-                   started_at: as_of
-                 ),
-               "scenario=#{scenario}"
+        result =
+          SavedResetRedemption.redeem_scheduled_expiry(
+            assignment,
+            identity.id,
+            started_at: as_of
+          )
 
-        redemption = persisted_identity.metadata["saved_reset_redemption"]
+        redemption =
+          case expected_result do
+            {:settled, expected_status} ->
+              assert {:ok, %{status: ^expected_status, identity: persisted_identity}} = result,
+                     "scenario=#{scenario}"
+
+              persisted_identity.metadata["saved_reset_redemption"]
+
+            :ambiguous ->
+              assert {:error, :saved_reset_consume_outcome_ambiguous} = result,
+                     "scenario=#{scenario}"
+
+              redemption = Repo.reload!(identity).metadata["saved_reset_redemption"]
+              assert redemption["status"] == "redeeming"
+              assert redemption["phase"] == "consuming"
+              assert redemption["result"] == nil
+              redemption
+          end
 
         assert Map.keys(Map.take(redemption, scheduled_decision_metadata_keys())) |> Enum.sort() ==
                  Enum.sort(scheduled_decision_metadata_keys())
@@ -2422,6 +3894,460 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   end
 
   describe "concurrent gateway redemption (multi-node safety)" do
+    @tag :saved_reset_cohort_lock_baseline
+    test "manual and scheduled claims retain their single-target lock paths" do
+      {:ok, manual_fake} = codex_reset_fake(0)
+      {:ok, scheduled_fake} = codex_reset_fake(0)
+      on_exit(fn -> FakeUpstream.stop(manual_fake) end)
+      on_exit(fn -> FakeUpstream.stop(scheduled_fake) end)
+
+      manual_fixture = committed_scheduled_expiry_race_fixture!(manual_fake)
+      scheduled_fixture = committed_scheduled_expiry_race_fixture!(scheduled_fake)
+
+      on_exit(fn -> cleanup_committed_scheduled_expiry_race_fixture!(manual_fixture) end)
+      on_exit(fn -> cleanup_committed_scheduled_expiry_race_fixture!(scheduled_fixture) end)
+
+      {manual_result, manual_locks} =
+        run_unboxed(fn ->
+          capture_claim_locks_until_identity_update!(fn ->
+            SavedResetRedemption.redeem(List.first(manual_fixture.assignment_ids),
+              started_at: manual_fixture.as_of
+            )
+          end)
+        end)
+
+      {scheduled_result, scheduled_locks} =
+        run_unboxed(fn ->
+          capture_claim_locks_until_identity_update!(fn ->
+            SavedResetRedemption.redeem_scheduled_expiry(
+              List.first(scheduled_fixture.assignment_ids),
+              scheduled_fixture.identity_id,
+              started_at: scheduled_fixture.as_of
+            )
+          end)
+        end)
+
+      assert {:ok, %{status: :succeeded, applied?: true}} = manual_result
+      assert {:ok, %{status: :succeeded, applied?: true}} = scheduled_result
+
+      assert Enum.map(manual_locks, & &1.source) == ["upstream_identities"]
+
+      assert Enum.map(scheduled_locks, & &1.source) == [
+               "upstream_identities",
+               "pool_upstream_assignments"
+             ]
+
+      assert Enum.all?(manual_locks ++ scheduled_locks, &(not &1.cohort_query?))
+    end
+
+    test "manual and scheduled claims bypass a recent sibling fence" do
+      {:ok, manual_fake} = codex_reset_fake(0)
+      {:ok, scheduled_fake} = codex_reset_fake(0)
+      on_exit(fn -> FakeUpstream.stop(manual_fake) end)
+      on_exit(fn -> FakeUpstream.stop(scheduled_fake) end)
+
+      manual_fixture = committed_gateway_auto_cohort_fixture!(manual_fake, :same_pool, 2)
+      scheduled_fixture = committed_gateway_auto_cohort_fixture!(scheduled_fake, :same_pool, 2)
+      on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(manual_fixture) end)
+      on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(scheduled_fixture) end)
+
+      Enum.each([manual_fixture, scheduled_fixture], fn fixture ->
+        run_unboxed(fn ->
+          fixture.identity_ids
+          |> List.first()
+          |> then(&Repo.get!(UpstreamIdentity, &1))
+          |> update_redemption!(
+            sibling_redemption(
+              "confirmed_by_quota",
+              DateTime.add(fixture.as_of, -5, :minute),
+              true
+            )
+          )
+        end)
+      end)
+
+      run_unboxed(fn ->
+        scheduled_fixture.identity_ids
+        |> Enum.at(1)
+        |> then(&Repo.get!(UpstreamIdentity, &1))
+        |> update_saved_resets!(scheduled_saved_resets(scheduled_fixture.as_of, 60 * 60))
+      end)
+
+      assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+               run_unboxed(fn ->
+                 manual_fixture.assignment_ids
+                 |> Enum.at(1)
+                 |> SavedResetRedemption.redeem(started_at: manual_fixture.as_of)
+               end)
+
+      assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+               run_unboxed(fn ->
+                 SavedResetRedemption.redeem_scheduled_expiry(
+                   Enum.at(scheduled_fixture.assignment_ids, 1),
+                   Enum.at(scheduled_fixture.identity_ids, 1),
+                   started_at: scheduled_fixture.as_of
+                 )
+               end)
+
+      assert provider_consume_count(manual_fake) == 1
+      assert provider_consume_count(scheduled_fake) == 1
+    end
+
+    test "applied manual and scheduled consumes arm a later gateway-auto sibling fence" do
+      {:ok, manual_fake} = codex_reset_fake(0)
+      {:ok, scheduled_fake} = codex_reset_fake(0)
+      on_exit(fn -> FakeUpstream.stop(manual_fake) end)
+      on_exit(fn -> FakeUpstream.stop(scheduled_fake) end)
+
+      manual_fixture = committed_gateway_auto_cohort_fixture!(manual_fake, :same_pool, 2)
+      scheduled_fixture = committed_gateway_auto_cohort_fixture!(scheduled_fake, :same_pool, 2)
+      on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(manual_fixture) end)
+      on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(scheduled_fixture) end)
+
+      run_unboxed(fn ->
+        scheduled_fixture.identity_ids
+        |> List.first()
+        |> then(&Repo.get!(UpstreamIdentity, &1))
+        |> update_saved_resets!(scheduled_saved_resets(scheduled_fixture.as_of, 60 * 60))
+      end)
+
+      assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+               run_unboxed(fn ->
+                 manual_fixture.assignment_ids
+                 |> List.first()
+                 |> SavedResetRedemption.redeem(started_at: manual_fixture.as_of)
+               end)
+
+      assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+               run_unboxed(fn ->
+                 SavedResetRedemption.redeem_scheduled_expiry(
+                   List.first(scheduled_fixture.assignment_ids),
+                   List.first(scheduled_fixture.identity_ids),
+                   started_at: scheduled_fixture.as_of
+                 )
+               end)
+
+      for {fixture, fake} <- [
+            {manual_fixture, manual_fake},
+            {scheduled_fixture, scheduled_fake}
+          ] do
+        assert {:ok,
+                %{
+                  status: :noop,
+                  applied?: false,
+                  code: "gateway_auto_sibling_consume_barrier"
+                }} =
+                 run_unboxed(fn ->
+                   redeem_gateway_auto_target!(fixture, 1, fixture.identity_ids)
+                 end)
+
+        assert provider_consume_count(fake) == 1
+      end
+    end
+
+    @tag :saved_reset_cohort_lock_same_pool
+    @tag :saved_reset_sibling_barrier_concurrency
+    test "mutually visible targets in one Pool serialize on their ordered cohort rows" do
+      {:ok, fake} = codex_reset_fake(0)
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      fixture = committed_gateway_auto_cohort_fixture!(fake, :same_pool, 2)
+      on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(fixture) end)
+
+      evidence =
+        run_gateway_auto_cohort_race!(
+          fixture,
+          0,
+          Enum.reverse(fixture.identity_ids),
+          1,
+          fixture.identity_ids
+        )
+
+      assert evidence.winner_backend_pid != evidence.loser_backend_pid
+      assert evidence.winner_backend_pid in evidence.blocking_pids
+      assert evidence.wait_event_type == "Lock"
+      assert {:ok, %{status: :succeeded, applied?: true}} = evidence.winner_result
+
+      assert {:ok,
+              %{
+                status: :noop,
+                applied?: false,
+                code: "gateway_auto_sibling_consume_barrier"
+              }} = evidence.loser_result
+
+      assert evidence.winner_committed_before_loser_lock?
+      assert provider_consume_count(fake) == 1
+    end
+
+    @tag :saved_reset_cohort_lock_cross_pool
+    test "mutually visible targets across Pools serialize on the shared ordered cohort" do
+      {:ok, fake} = codex_reset_fake(0)
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      fixture = committed_gateway_auto_cohort_fixture!(fake, :cross_pool, 2)
+      on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(fixture) end)
+
+      evidence =
+        run_gateway_auto_cohort_race!(fixture, 0, fixture.identity_ids, 1, fixture.identity_ids)
+
+      assert evidence.winner_backend_pid != evidence.loser_backend_pid
+      assert evidence.winner_backend_pid in evidence.blocking_pids
+      assert evidence.wait_event_type == "Lock"
+      assert {:ok, %{status: :succeeded, applied?: true}} = evidence.winner_result
+
+      assert {:ok,
+              %{
+                status: :noop,
+                applied?: false,
+                code: "gateway_auto_sibling_consume_barrier"
+              }} = evidence.loser_result
+
+      assert evidence.winner_committed_before_loser_lock?
+      assert provider_consume_count(fake) == 1
+    end
+
+    test "recent or unresolved sibling lifecycles block gateway auto before provider I/O" do
+      {:ok, fake} = codex_reset_fake(0)
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      fixture = committed_gateway_auto_cohort_fixture!(fake, :same_pool, 2)
+      on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(fixture) end)
+
+      recent_at = DateTime.add(fixture.as_of, -5, :minute)
+      just_inside_floor = DateTime.add(fixture.as_of, -1_799_999, :millisecond)
+      old_at = DateTime.add(fixture.as_of, -40, :minute)
+
+      cases = [
+        {"confirmed_by_quota", true, recent_at, "gateway_auto"},
+        {"confirmed_by_quota", true, just_inside_floor, "gateway_auto"},
+        {"reblocked", true, recent_at, "gateway_auto"},
+        {"confirmed_by_quota", true, recent_at, "admin_manual"},
+        {"confirmed_by_quota", true, recent_at, "scheduled_expiry_rescue"},
+        {"consuming", false, old_at, "gateway_auto"},
+        {"consumed_pending_probe", true, old_at, "gateway_auto"},
+        {"confirmed_by_upstream", true, old_at, "gateway_auto"},
+        {"expired", true, old_at, "gateway_auto"},
+        {"unknown_phase", false, old_at, "gateway_auto"}
+      ]
+
+      for {phase, applied?, consumed_at, trigger_kind} <- cases do
+        run_unboxed(fn ->
+          fixture.identity_ids
+          |> List.first()
+          |> then(&Repo.get!(UpstreamIdentity, &1))
+          |> update_redemption!(sibling_redemption(phase, consumed_at, applied?, trigger_kind))
+        end)
+
+        assert {:ok,
+                %{
+                  status: :noop,
+                  applied?: false,
+                  code: "gateway_auto_sibling_consume_barrier"
+                }} =
+                 run_unboxed(fn ->
+                   redeem_gateway_auto_target!(fixture, 1, fixture.identity_ids)
+                 end)
+      end
+
+      assert provider_consume_count(fake) == 0
+    end
+
+    test "resolved sibling lifecycles release at the floor or from exact non-application" do
+      {:ok, fake} = codex_reset_fake(0)
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      cases = [
+        {"confirmed_by_quota", true, -30},
+        {"reblocked", true, -30},
+        {"consume_not_applied", false, -5}
+      ]
+
+      Enum.with_index(cases, 1)
+      |> Enum.each(fn {{phase, applied?, minutes}, expected_consume_count} ->
+        fixture = committed_gateway_auto_cohort_fixture!(fake, :same_pool, 2)
+        on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(fixture) end)
+
+        run_unboxed(fn ->
+          fixture.identity_ids
+          |> List.first()
+          |> then(&Repo.get!(UpstreamIdentity, &1))
+          |> update_redemption!(
+            sibling_redemption(
+              phase,
+              DateTime.add(fixture.as_of, minutes, :minute),
+              applied?
+            )
+          )
+        end)
+
+        assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+                 run_unboxed(fn ->
+                   redeem_gateway_auto_target!(fixture, 1, fixture.identity_ids)
+                 end)
+
+        assert provider_consume_count(fake) == expected_consume_count
+      end)
+    end
+
+    test "an ambiguous sibling consume keeps the cohort fenced without a second POST" do
+      {:ok, fake} =
+        FakeUpstream.start_link(
+          {:sequence,
+           [
+             {:json, 500, %{"error" => "synthetic failure"}},
+             {:json, 200, %{"code" => "reset"}},
+             {:json, 200, usage_payload(0)}
+           ]}
+        )
+
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      fixture = committed_gateway_auto_cohort_fixture!(fake, :same_pool, 2)
+      on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(fixture) end)
+
+      assert {:error, :saved_reset_consume_outcome_ambiguous} =
+               run_unboxed(fn ->
+                 redeem_gateway_auto_target!(fixture, 0, fixture.identity_ids)
+               end)
+
+      assert {:ok,
+              %{status: :noop, applied?: false, code: "gateway_auto_sibling_consume_barrier"}} =
+               run_unboxed(fn ->
+                 redeem_gateway_auto_target!(fixture, 1, fixture.identity_ids)
+               end)
+
+      assert provider_consume_count(fake) == 1
+    end
+
+    @tag :saved_reset_cohort_lock_reversed_order
+    test "reversed cohort input order normalizes to one lock order without deadlock" do
+      {:ok, fake} = codex_reset_fake(0)
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      fixture = committed_gateway_auto_cohort_fixture!(fake, :same_pool, 2)
+      on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(fixture) end)
+
+      evidence =
+        run_gateway_auto_cohort_race!(
+          fixture,
+          0,
+          Enum.reverse(fixture.identity_ids) ++ [List.first(fixture.identity_ids)],
+          1,
+          fixture.identity_ids ++ [List.last(fixture.identity_ids)]
+        )
+
+      assert evidence.winner_backend_pid in evidence.blocking_pids
+      assert evidence.winner_lock_ids == Enum.sort(fixture.identity_ids)
+      assert evidence.loser_lock_ids == Enum.sort(fixture.identity_ids)
+      assert {:ok, %{status: :succeeded}} = evidence.winner_result
+
+      assert {:ok, %{status: :noop, code: "gateway_auto_sibling_consume_barrier"}} =
+               evidence.loser_result
+    end
+
+    @tag :saved_reset_cohort_lock_disjoint
+    test "disjoint cohorts do not block one another" do
+      {:ok, fake} = codex_reset_fake(0)
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      fixture = committed_gateway_auto_cohort_fixture!(fake, :cross_pool, 2)
+      on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(fixture) end)
+
+      evidence =
+        run_disjoint_gateway_auto_claims!(
+          fixture,
+          0,
+          [Enum.at(fixture.identity_ids, 0)],
+          1,
+          [Enum.at(fixture.identity_ids, 1)]
+        )
+
+      assert evidence.winner_backend_pid != evidence.loser_backend_pid
+      assert evidence.loser_blocking_pids == []
+      assert {:ok, %{status: :succeeded}} = evidence.winner_result
+      assert {:ok, %{status: :succeeded}} = evidence.loser_result
+    end
+
+    @tag :saved_reset_cohort_lock_partial_overlap
+    test "partial non-target overlap serializes the row but provides no transitive target fence" do
+      {:ok, fake} = codex_reset_fake(0)
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      fixture = committed_gateway_auto_cohort_fixture!(fake, :cross_pool, 3)
+      on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(fixture) end)
+
+      [first_id, shared_id, third_id] = fixture.identity_ids
+
+      evidence =
+        run_gateway_auto_cohort_race!(fixture, 0, [first_id, shared_id], 2, [shared_id, third_id])
+
+      assert evidence.winner_backend_pid in evidence.blocking_pids
+      assert first_id not in evidence.loser_lock_ids
+      assert third_id not in evidence.winner_lock_ids
+      assert {:ok, %{status: :succeeded, applied?: true}} = evidence.winner_result
+      assert {:ok, %{status: :succeeded, applied?: true}} = evidence.loser_result
+      assert provider_consume_count(fake) == 2
+    end
+
+    @tag :saved_reset_cohort_lock_exact_set
+    test "a deleted cohort member returns context mismatch without provider I/O" do
+      {:ok, fake} = codex_reset_fake(0)
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      fixture = committed_gateway_auto_cohort_fixture!(fake, :same_pool, 2)
+      on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(fixture) end)
+
+      [target_id, deleted_id] = fixture.identity_ids
+
+      run_unboxed(fn ->
+        Repo.delete_all(from identity in UpstreamIdentity, where: identity.id == ^deleted_id)
+      end)
+
+      assert {:ok, %{status: :noop, applied?: false, code: "gateway_auto_context_mismatch"}} =
+               run_unboxed(fn ->
+                 redeem_gateway_auto_target!(fixture, 0, [deleted_id, target_id, deleted_id])
+               end)
+
+      assert [] = FakeUpstream.requests(fake)
+
+      persisted = run_unboxed(fn -> Repo.get!(UpstreamIdentity, target_id) end)
+      assert get_in(persisted.metadata, ["saved_reset_redemption"]) == nil
+    end
+
+    @tag :saved_reset_cohort_lock_200
+    test "a 200-member cohort uses one exact ordered identity lock and one assignment lock" do
+      {:ok, fake} = codex_reset_fake(0)
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      fixture = committed_gateway_auto_cohort_fixture!(fake, :same_pool, 200)
+      on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(fixture) end)
+
+      input_ids =
+        Enum.reverse(fixture.identity_ids) ++
+          [List.first(fixture.identity_ids), List.last(fixture.identity_ids)]
+
+      {result, lock_events, requests_while_locked} =
+        capture_gateway_auto_claim_locks_until_identity_update!(fixture, 0, input_ids)
+
+      assert {:ok, %{status: :succeeded, applied?: true}} = result
+      assert requests_while_locked == []
+      assert length(lock_events) == 2
+
+      assert [cohort_lock, assignment_lock] = lock_events
+      assert cohort_lock.source == "upstream_identities"
+      assert cohort_lock.cohort_query?
+      assert cohort_lock.row_count == 200
+      assert cohort_lock.lock_ids == Enum.sort(fixture.identity_ids)
+      assert cohort_lock.parameter_count == 1
+      assert cohort_lock.query =~ "ANY($1::uuid[])"
+      assert cohort_lock.query =~ ~r/ORDER BY .*\."id" FOR UPDATE/
+
+      assert assignment_lock.source == "pool_upstream_assignments"
+      refute assignment_lock.cohort_query?
+      assert assignment_lock.row_count == 1
+      assert assignment_lock.parameter_count == 1
+    end
+
     @tag :saved_reset_expiry_ownership
     test "two concurrent redeems on the same identity consume exactly one credit" do
       {:ok, fake} =
@@ -3095,7 +5021,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert [] = FakeUpstream.requests(fake)
     end
 
-    test "a failed manual attempt does not disarm the automatic latch" do
+    test "an ambiguous manual attempt retains exact-attempt ownership" do
       {:ok, fake} =
         FakeUpstream.start_link(
           {:path_json,
@@ -3110,14 +5036,14 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           redemption: applied_gateway_auto_redemption("confirmed_by_quota", 5)
         )
 
-      manual_result = SavedResetRedemption.redeem(assignment)
-      refute match?({:ok, %{applied?: true}}, manual_result)
+      assert {:error, :saved_reset_consume_outcome_ambiguous} =
+               SavedResetRedemption.redeem(assignment)
 
       identity = enable_saved_reset_auto_redeem!(identity)
       upsert_weekly_exhausted_quota!(identity)
       context = gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion)
 
-      assert {:ok, %{status: :noop, applied?: false, code: "gateway_auto_consume_cooldown"}} =
+      assert {:error, :redemption_in_progress} =
                SavedResetRedemption.redeem(assignment,
                  trigger_kind: "gateway_auto",
                  gateway_auto_context: context
@@ -3127,7 +5053,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert manual_consume.path == "/api/codex/rate-limit-reset-credits/consume"
     end
 
-    test "a permanently latched sibling no longer vetoes the threshold trigger" do
+    test "a recent reblocked sibling fences the threshold trigger" do
       {:ok, latched_fake} = codex_reset_fake(0)
       {:ok, fake} = codex_reset_fake(0)
 
@@ -3153,18 +5079,224 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         upstream_identity_id: identity.id,
         candidate_assignment_ids: [assignment.id],
         candidate_identity_ids: [latched_identity.id, identity.id],
+        cohort_identity_ids: [latched_identity.id, identity.id],
         route_class: "proxy_http"
       }
 
-      assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+      assert {:ok,
+              %{
+                status: :noop,
+                applied?: false,
+                code: "gateway_auto_sibling_consume_barrier"
+              }} =
                SavedResetRedemption.redeem(assignment,
                  trigger_kind: "gateway_auto",
                  gateway_auto_context: context
                )
 
-      assert [consume_request | _rest] = FakeUpstream.requests(fake)
-      assert consume_request.path == "/api/codex/rate-limit-reset-credits/consume"
+      assert [] = FakeUpstream.requests(fake)
       assert [] = FakeUpstream.requests(latched_fake)
+    end
+
+    test "threshold redemption noops after two cohort consumes when a sibling has usable capacity" do
+      {:ok, fake} = codex_reset_fake(0)
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      fixture = committed_gateway_auto_cohort_fixture!(fake, :same_pool, 3)
+      on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(fixture) end)
+
+      assert {:ok, %{status: :succeeded, applied?: true}} =
+               run_unboxed(fn ->
+                 redeem_gateway_auto_target!(fixture, 0, [Enum.at(fixture.identity_ids, 0)])
+               end)
+
+      assert {:ok, %{status: :succeeded, applied?: true}} =
+               run_unboxed(fn ->
+                 redeem_gateway_auto_target!(fixture, 1, [Enum.at(fixture.identity_ids, 1)])
+               end)
+
+      assert provider_consume_count(fake) == 2
+
+      [first_id, second_id, target_id] = fixture.identity_ids
+      released_at = DateTime.add(fixture.as_of, -31, :minute)
+
+      run_unboxed(fn ->
+        for identity_id <- [first_id, second_id] do
+          identity_id
+          |> then(&Repo.get!(UpstreamIdentity, &1))
+          |> update_redemption!(sibling_redemption("confirmed_by_quota", released_at, true))
+        end
+
+        first_id
+        |> then(&Repo.get!(UpstreamIdentity, &1))
+        |> upsert_weekly_pressure_quota!(Decimal.new("10"),
+          observed_at: fixture.as_of,
+          last_sync_at: fixture.as_of,
+          reset_at: DateTime.add(fixture.as_of, 2, :hour)
+        )
+
+        target_id
+        |> then(&Repo.get!(UpstreamIdentity, &1))
+        |> enable_saved_reset_auto_redeem!(%{
+          saved_reset_auto_redeem_trigger_mode: "threshold",
+          saved_reset_auto_redeem_quota_threshold_percent: 95
+        })
+        |> upsert_weekly_pressure_quota!(Decimal.new("96"),
+          observed_at: fixture.as_of,
+          last_sync_at: fixture.as_of,
+          reset_at: DateTime.add(fixture.as_of, 2, :hour)
+        )
+      end)
+
+      before_target = run_unboxed(fn -> Repo.get!(UpstreamIdentity, target_id).metadata end)
+
+      assert {:ok,
+              %{
+                status: :noop,
+                applied?: false,
+                code: "gateway_auto_sibling_usable_capacity"
+              }} =
+               run_unboxed(fn ->
+                 redeem_gateway_auto_target!(fixture, 2, fixture.identity_ids,
+                   trigger: :threshold_pressure,
+                   candidate_identity_ids: [target_id]
+                 )
+               end)
+
+      assert provider_consume_count(fake) == 2
+
+      assert run_unboxed(fn -> Repo.get!(UpstreamIdentity, target_id).metadata end) ==
+               before_target
+
+      refute Jason.encode!(before_target) =~ "acct_cohort_lock"
+    end
+
+    test "threshold sibling capacity gate rejects unusable evidence without false vetoes" do
+      {:ok, fake} = codex_reset_fake(0)
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      cases = [
+        {:missing, [reset_at: nil]},
+        {:stale,
+         [
+           observed_at: DateTime.add(DateTime.utc_now(), -2, :hour),
+           last_sync_at: DateTime.add(DateTime.utc_now(), -2, :hour)
+         ]},
+        {:unknown_precision, [source_precision: "unknown"]},
+        {:exhausted, [used_percent: Decimal.new("100")]},
+        {:model_only,
+         [
+           quota_key: "other-model",
+           quota_scope: "model",
+           quota_family: "codex_model",
+           model: "other-model"
+         ]}
+      ]
+
+      Enum.with_index(cases, 1)
+      |> Enum.each(fn {{scenario, sibling_overrides}, expected_consume_count} ->
+        fixture = committed_gateway_auto_cohort_fixture!(fake, :same_pool, 2)
+        on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(fixture) end)
+        [sibling_id, target_id] = fixture.identity_ids
+
+        run_unboxed(fn ->
+          target_id
+          |> then(&Repo.get!(UpstreamIdentity, &1))
+          |> enable_saved_reset_auto_redeem!(%{
+            saved_reset_auto_redeem_trigger_mode: "threshold",
+            saved_reset_auto_redeem_quota_threshold_percent: 95
+          })
+          |> upsert_weekly_pressure_quota!(Decimal.new("96"),
+            observed_at: fixture.as_of,
+            last_sync_at: fixture.as_of,
+            reset_at: DateTime.add(fixture.as_of, 2, :hour)
+          )
+
+          sibling_overrides =
+            Keyword.merge(
+              [
+                observed_at: fixture.as_of,
+                last_sync_at: fixture.as_of,
+                reset_at: DateTime.add(fixture.as_of, 2, :hour)
+              ],
+              sibling_overrides
+            )
+
+          sibling_id
+          |> then(&Repo.get!(UpstreamIdentity, &1))
+          |> upsert_weekly_pressure_quota!(
+            Keyword.get(sibling_overrides, :used_percent, Decimal.new("10")),
+            Keyword.delete(sibling_overrides, :used_percent)
+          )
+        end)
+
+        assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+                 run_unboxed(fn ->
+                   redeem_gateway_auto_target!(fixture, 1, fixture.identity_ids,
+                     trigger: :threshold_pressure,
+                     candidate_identity_ids: [target_id]
+                   )
+                 end),
+               "scenario=#{scenario}"
+
+        assert provider_consume_count(fake) == expected_consume_count,
+               "scenario=#{scenario}"
+      end)
+    end
+
+    test "hard exhaustion and session continuity bypass sibling usable capacity" do
+      {:ok, fake} = codex_reset_fake(0)
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      for {trigger, context_overrides, target_percent, expected_consume_count} <- [
+            {:blocked_weekly_exhaustion, %{}, Decimal.new("100"), 1},
+            {:threshold_pressure, %{session_continuity?: true}, Decimal.new("96"), 2}
+          ] do
+        fixture = committed_gateway_auto_cohort_fixture!(fake, :same_pool, 2)
+        on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(fixture) end)
+        [sibling_id, target_id] = fixture.identity_ids
+
+        run_unboxed(fn ->
+          sibling_id
+          |> then(&Repo.get!(UpstreamIdentity, &1))
+          |> upsert_weekly_pressure_quota!(Decimal.new("10"),
+            observed_at: fixture.as_of,
+            last_sync_at: fixture.as_of,
+            reset_at: DateTime.add(fixture.as_of, 2, :hour)
+          )
+
+          target = Repo.get!(UpstreamIdentity, target_id)
+
+          target =
+            if trigger == :threshold_pressure do
+              enable_saved_reset_auto_redeem!(target, %{
+                saved_reset_auto_redeem_trigger_mode: "threshold",
+                saved_reset_auto_redeem_quota_threshold_percent: 95
+              })
+            else
+              target
+            end
+
+          upsert_weekly_pressure_quota!(target, target_percent,
+            observed_at: fixture.as_of,
+            last_sync_at: fixture.as_of,
+            reset_at: DateTime.add(fixture.as_of, 2, :hour)
+          )
+        end)
+
+        assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+                 run_unboxed(fn ->
+                   redeem_gateway_auto_target!(
+                     fixture,
+                     1,
+                     fixture.identity_ids,
+                     [trigger: trigger, candidate_identity_ids: [target_id]] ++
+                       Map.to_list(context_overrides)
+                   )
+                 end)
+
+        assert provider_consume_count(fake) == expected_consume_count
+      end
     end
 
     test "a manual applied consume latches the following automatic attempt" do
@@ -3235,6 +5367,23 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       "deadline_at" => consumed_at |> DateTime.add(15, :minute) |> DateTime.to_iso8601(),
       "finished_at" => DateTime.to_iso8601(consumed_at),
       "result" => %{"code" => "reset", "applied" => true}
+    }
+  end
+
+  defp sibling_redemption(phase, consumed_at, applied?, trigger_kind \\ "gateway_auto") do
+    status =
+      if phase in ["consuming", "consumed_pending_probe"], do: "redeeming", else: "succeeded"
+
+    %{
+      "status" => status,
+      "phase" => phase,
+      "attempt_id" => Ecto.UUID.generate(),
+      "generation" => 1,
+      "trigger_kind" => trigger_kind,
+      "started_at" => DateTime.to_iso8601(consumed_at),
+      "consumed_at" => DateTime.to_iso8601(consumed_at),
+      "finished_at" => DateTime.to_iso8601(consumed_at),
+      "result" => %{"code" => "synthetic", "applied" => applied?}
     }
   end
 
@@ -3393,6 +5542,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   end
 
   defp assignment_with_fake(fake, usage_path, path_style, opts \\ []) do
+    unique = Ecto.UUID.generate()
+
     saved_resets =
       Keyword.get(opts, :saved_resets, %{
         "status" => "reported",
@@ -3416,7 +5567,223 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         redemption -> Map.put(metadata, "saved_reset_redemption", redemption)
       end
 
-    active_upstream_assignment_fixture(pool_fixture(), %{metadata: metadata})
+    active_upstream_assignment_fixture(pool_fixture(), %{
+      chatgpt_account_id: "acct_#{unique}",
+      account_label: "Gateway upstream #{unique}",
+      metadata: metadata
+    })
+  end
+
+  defp ambiguous_chatgpt_recovery_fixture! do
+    credit_id = "credit_recovery_#{System.unique_integer([:positive, :monotonic])}"
+
+    {:ok, fake} =
+      FakeUpstream.start_link(
+        {:path_json,
+         %{
+           "/backend-api/wham/rate-limit-reset-credits" =>
+             {200, %{"credits" => [%{"id" => credit_id, "status" => "available"}]}},
+           "/backend-api/wham/rate-limit-reset-credits/consume" =>
+             {503, %{"code" => "provider_failed"}}
+         }}
+      )
+
+    on_exit(fn -> FakeUpstream.stop(fake) end)
+
+    %{identity: identity, assignment: assignment} =
+      assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api")
+
+    assert {:error, :saved_reset_consume_outcome_ambiguous} =
+             SavedResetRedemption.redeem(assignment)
+
+    [_, consume_request] = FakeUpstream.requests(fake)
+    redemption = Repo.reload!(identity).metadata["saved_reset_redemption"]
+
+    {:ok, last_provider_dispatched_at, 0} =
+      DateTime.from_iso8601(redemption["provider_replay"]["last_provider_dispatched_at"])
+
+    %{
+      assignment: assignment,
+      attempt_id: redemption["attempt_id"],
+      credit_id: credit_id,
+      fake: fake,
+      generation: redemption["generation"],
+      identity: identity,
+      last_provider_dispatched_at: last_provider_dispatched_at,
+      redeem_request_id: consume_request.json["redeem_request_id"]
+    }
+  end
+
+  defp ambiguous_codex_recovery_fixture! do
+    {:ok, fake} =
+      FakeUpstream.start_link(
+        {:path_json, %{"/api/codex/rate-limit-reset-credits/consume" => :close_before_headers}}
+      )
+
+    on_exit(fn -> FakeUpstream.stop(fake) end)
+
+    %{identity: identity, assignment: assignment} =
+      assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+    assert {:error, :saved_reset_consume_outcome_ambiguous} =
+             SavedResetRedemption.redeem(assignment)
+
+    redemption = Repo.reload!(identity).metadata["saved_reset_redemption"]
+
+    {:ok, last_provider_dispatched_at, 0} =
+      DateTime.from_iso8601(redemption["provider_replay"]["last_provider_dispatched_at"])
+
+    %{
+      assignment: assignment,
+      attempt_id: redemption["attempt_id"],
+      fake: fake,
+      generation: redemption["generation"],
+      identity: identity,
+      last_provider_dispatched_at: last_provider_dispatched_at
+    }
+  end
+
+  defp make_recovery_due!(fixture, now, opts \\ []) do
+    persisted = Repo.reload!(fixture.identity)
+    redemption = persisted.metadata["saved_reset_redemption"]
+    replay = redemption["provider_replay"]
+
+    last_provider_dispatched_at =
+      Keyword.get(opts, :last_provider_dispatched_at, fixture.last_provider_dispatched_at)
+
+    replay =
+      replay
+      |> Map.put(
+        "provider_dispatches",
+        Keyword.get(opts, :provider_dispatches, replay["provider_dispatches"])
+      )
+      |> Map.put(
+        "last_provider_dispatched_at",
+        DateTime.to_iso8601(last_provider_dispatched_at)
+      )
+      |> Map.put(
+        "next_action_at",
+        encode_test_datetime(Keyword.get(opts, :next_action_at, now))
+      )
+
+    redemption =
+      redemption
+      |> Map.put(
+        "started_at",
+        opts
+        |> Keyword.get(:started_at, DateTime.add(now, -10, :minute))
+        |> DateTime.to_iso8601()
+      )
+      |> Map.put("provider_replay", replay)
+
+    identity = update_redemption!(persisted, redemption)
+    %{fixture | identity: identity, last_provider_dispatched_at: last_provider_dispatched_at}
+  end
+
+  defp encode_test_datetime(nil), do: nil
+  defp encode_test_datetime(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
+
+  defp resume_recovery(fixture, now) do
+    SavedResetRedemption.resume_stale_consuming(
+      fixture.assignment,
+      fixture.identity.id,
+      fixture.attempt_id,
+      fixture.generation,
+      now: now,
+      receive_timeout: 1_000
+    )
+  end
+
+  defp recovery_race_fake do
+    FakeUpstream.start_link(:close_before_headers)
+  end
+
+  defp committed_chatgpt_recovery_fixture!(fake) do
+    run_unboxed(fn ->
+      credit_id = "credit_race_#{System.unique_integer([:positive, :monotonic])}"
+
+      FakeUpstream.set_mode(fake, {
+        :path_json,
+        %{
+          "/backend-api/wham/rate-limit-reset-credits" =>
+            {200, %{"credits" => [%{"id" => credit_id, "status" => "available"}]}},
+          "/backend-api/wham/rate-limit-reset-credits/consume" =>
+            {503, %{"code" => "provider_failed"}}
+        }
+      })
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api")
+
+      assert {:error, :saved_reset_consume_outcome_ambiguous} =
+               SavedResetRedemption.redeem(assignment)
+
+      redemption = Repo.reload!(identity).metadata["saved_reset_redemption"]
+
+      {:ok, last_provider_dispatched_at, 0} =
+        DateTime.from_iso8601(redemption["provider_replay"]["last_provider_dispatched_at"])
+
+      now = DateTime.add(last_provider_dispatched_at, 60, :second)
+
+      due_redemption =
+        redemption
+        |> Map.put("started_at", DateTime.to_iso8601(DateTime.add(now, -10, :minute)))
+        |> put_in(["provider_replay", "next_action_at"], DateTime.to_iso8601(now))
+
+      update_redemption!(identity, due_redemption)
+
+      %{
+        assignment_id: assignment.id,
+        attempt_id: redemption["attempt_id"],
+        credit_id: credit_id,
+        generation: redemption["generation"],
+        identity_id: identity.id,
+        now: now,
+        pool_id: assignment.pool_id
+      }
+    end)
+  end
+
+  defp cleanup_committed_recovery_fixture!(fixture) do
+    run_unboxed(fn ->
+      Repo.delete_all(
+        from identity in UpstreamIdentity, where: identity.id == ^fixture.identity_id
+      )
+
+      Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool_id)
+    end)
+  end
+
+  defp start_recovery_replica_task(parent, role, fixture) do
+    Task.async(fn ->
+      Sandbox.unboxed_run(Repo, fn -> run_recovery_replica(parent, role, fixture) end)
+    end)
+  end
+
+  defp run_recovery_replica(parent, role, fixture) do
+    Repo.checkout(fn -> execute_recovery_replica(parent, role, fixture) end)
+  end
+
+  defp execute_recovery_replica(parent, role, fixture) do
+    send(parent, {:recovery_replica_ready, role})
+
+    receive do
+      :start_recovery -> :ok
+    after
+      5_000 -> raise "timed out waiting to start saved-reset recovery replica"
+    end
+
+    result =
+      SavedResetRedemption.resume_stale_consuming(
+        fixture.assignment_id,
+        fixture.identity_id,
+        fixture.attempt_id,
+        fixture.generation,
+        now: fixture.now,
+        receive_timeout: 1_000
+      )
+
+    {role, result}
   end
 
   defp saved_resets_with_expirations do
@@ -3450,14 +5817,30 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     }
   end
 
-  defp gateway_auto_context(assignment, identity, trigger) do
+  defp gateway_auto_context(assignment, identity, trigger, overrides \\ %{}) do
+    Map.merge(
+      %{
+        trigger: trigger,
+        pool_upstream_assignment_id: assignment.id,
+        upstream_identity_id: identity.id,
+        candidate_assignment_ids: [assignment.id],
+        candidate_identity_ids: [identity.id],
+        cohort_identity_ids: [identity.id],
+        route_class: "proxy_http",
+        quota_scope: test_quota_scope(),
+        session_continuity?: false
+      },
+      Map.new(overrides)
+    )
+  end
+
+  defp test_quota_scope do
     %{
-      trigger: trigger,
-      pool_upstream_assignment_id: assignment.id,
-      upstream_identity_id: identity.id,
-      candidate_assignment_ids: [assignment.id],
-      candidate_identity_ids: [identity.id],
-      route_class: "proxy_http"
+      requested_model: "test-model",
+      catalog_model: "test-model",
+      exposed_model_id: "test-model",
+      upstream_model: "test-model",
+      upstream_model_id: "test-model"
     }
   end
 
@@ -3527,12 +5910,14 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
              ])
   end
 
-  defp upsert_weekly_pressure_quota!(identity, used_percent) do
+  defp upsert_weekly_pressure_quota!(identity, used_percent, overrides \\ []) do
     assert {:ok, [_window]} =
-             QuotaWindows.upsert_quota_windows(identity, [weekly_quota_attrs(used_percent)])
+             QuotaWindows.upsert_quota_windows(identity, [
+               weekly_quota_attrs(used_percent, overrides)
+             ])
   end
 
-  defp weekly_quota_attrs(used_percent, overrides \\ []) do
+  defp weekly_quota_attrs(used_percent, overrides) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     Map.merge(
@@ -3604,7 +5989,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
   defp committed_probe_claim_fixture!(fake) do
     run_unboxed(fn ->
-      unique = System.unique_integer([:positive])
+      unique = Ecto.UUID.generate()
       pool = pool_fixture(%{slug: "saved-reset-probe-race-#{unique}"})
 
       %{assignment: assignment, identity: identity} =
@@ -3689,6 +6074,560 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         pool_ids: [first_pool.id, second_pool.id]
       }
     end)
+  end
+
+  defp committed_gateway_auto_cohort_fixture!(fake, pool_mode, identity_count) do
+    run_unboxed(fn ->
+      unique = Ecto.UUID.generate()
+      as_of = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      pools = gateway_auto_cohort_pools(pool_mode, unique, identity_count)
+
+      entries =
+        Enum.map(0..(identity_count - 1), fn index ->
+          pool = gateway_auto_cohort_pool(pools, pool_mode, index)
+
+          %{assignment: assignment, identity: identity} =
+            active_upstream_assignment_fixture(pool, %{
+              account_label: "Cohort lock account #{unique} #{index}",
+              chatgpt_account_id: "acct_cohort_lock_#{unique}_#{index}",
+              metadata: %{
+                "usage_base_url" => FakeUpstream.url(fake),
+                "saved_resets" => %{
+                  "status" => "reported",
+                  "available_count" => 1,
+                  "source" => "codex_usage_api",
+                  "path_style" => "codex_api",
+                  "observed_at" => DateTime.to_iso8601(as_of),
+                  "usage_path" => "/api/codex/usage",
+                  "reason" => nil
+                }
+              }
+            })
+
+          identity = enable_saved_reset_auto_redeem!(identity)
+
+          upsert_weekly_exhausted_quota!(identity,
+            observed_at: as_of,
+            last_sync_at: as_of,
+            reset_at: DateTime.add(as_of, 2, :hour)
+          )
+
+          %{assignment_id: assignment.id, identity_id: identity.id}
+        end)
+
+      %{
+        as_of: as_of,
+        assignment_ids: Enum.map(entries, & &1.assignment_id),
+        fake: fake,
+        identity_ids: Enum.map(entries, & &1.identity_id),
+        pool_ids: Enum.map(pools, & &1.id)
+      }
+    end)
+  end
+
+  defp cleanup_committed_gateway_auto_cohort_fixture!(fixture) do
+    run_unboxed(fn ->
+      Repo.delete_all(
+        from identity in UpstreamIdentity,
+          where: identity.id in ^fixture.identity_ids
+      )
+
+      Repo.delete_all(from pool in Pool, where: pool.id in ^fixture.pool_ids)
+    end)
+  end
+
+  defp gateway_auto_cohort_pool(pools, :same_pool, _index), do: List.first(pools)
+  defp gateway_auto_cohort_pool(pools, :cross_pool, index), do: Enum.at(pools, index)
+
+  defp gateway_auto_cohort_pools(:same_pool, unique, _identity_count) do
+    [pool_fixture(%{slug: "cohort-lock-#{unique}"})]
+  end
+
+  defp gateway_auto_cohort_pools(:cross_pool, unique, identity_count) do
+    Enum.map(1..identity_count, fn index ->
+      pool_fixture(%{slug: "cohort-lock-#{unique}-#{index}"})
+    end)
+  end
+
+  defp redeem_gateway_auto_target!(fixture, target_index, cohort_identity_ids, opts \\ []) do
+    assignment = Repo.get!(PoolUpstreamAssignment, Enum.at(fixture.assignment_ids, target_index))
+    identity = Repo.get!(UpstreamIdentity, Enum.at(fixture.identity_ids, target_index))
+
+    trigger = Keyword.get(opts, :trigger, :blocked_weekly_exhaustion)
+
+    context_overrides =
+      opts
+      |> Keyword.drop([:trigger])
+      |> Map.new()
+      |> Map.put_new(:routable_identity_ids, cohort_identity_ids)
+
+    context =
+      assignment
+      |> gateway_auto_context(identity, trigger, context_overrides)
+      |> Map.put(:cohort_identity_ids, cohort_identity_ids)
+
+    SavedResetRedemption.redeem(assignment,
+      trigger_kind: "gateway_auto",
+      gateway_auto_context: context,
+      started_at: fixture.as_of,
+      receive_timeout: 15_000
+    )
+  end
+
+  defp run_gateway_auto_cohort_race!(
+         fixture,
+         winner_index,
+         winner_cohort_ids,
+         loser_index,
+         loser_cohort_ids
+       ) do
+    parent = self()
+    barrier = make_ref()
+
+    winner_task =
+      start_gateway_auto_claim_task(
+        parent,
+        barrier,
+        :winner,
+        fixture,
+        winner_index,
+        winner_cohort_ids
+      )
+
+    loser_task =
+      start_gateway_auto_claim_task(
+        parent,
+        barrier,
+        :loser,
+        fixture,
+        loser_index,
+        loser_cohort_ids
+      )
+
+    tasks = [winner_task, loser_task]
+    handler_id = {__MODULE__, :cohort_race, System.unique_integer([:positive, :monotonic])}
+
+    :ok = attach_gateway_auto_cohort_barrier(handler_id, parent, barrier)
+
+    try do
+      assert_receive {^barrier, :claim_ready, :winner, winner_backend_pid}, 5_000
+      assert_receive {^barrier, :claim_ready, :loser, loser_backend_pid}, 5_000
+      assert winner_backend_pid != loser_backend_pid
+
+      send(winner_task.pid, {barrier, :start_claim})
+
+      assert_receive {^barrier, :cohort_locked, :winner, winner_claim_pid, winner_lock_event},
+                     5_000
+
+      send(loser_task.pid, {barrier, :start_claim})
+      assert_receive {^barrier, :claim_started, :loser, ^loser_backend_pid}, 5_000
+
+      observation = observe_blocked_probe_claim!(loser_backend_pid, winner_backend_pid)
+      send(winner_claim_pid, {barrier, :release_cohort_lock})
+
+      assert_receive {^barrier, :cohort_locked, :loser, loser_claim_pid, loser_lock_event}, 5_000
+
+      winner_identity_id = Enum.at(fixture.identity_ids, winner_index)
+
+      winner_committed_before_loser_lock? =
+        run_unboxed(fn ->
+          identity = Repo.get!(UpstreamIdentity, winner_identity_id)
+          is_map(get_in(identity.metadata, ["saved_reset_redemption"]))
+        end)
+
+      send(loser_claim_pid, {barrier, :release_cohort_lock})
+
+      {:winner, ^winner_backend_pid, winner_result} = Task.await(winner_task, 15_000)
+      {:loser, ^loser_backend_pid, loser_result} = Task.await(loser_task, 15_000)
+
+      %{
+        blocking_pids: observation.blocking_pids,
+        loser_backend_pid: loser_backend_pid,
+        loser_lock_ids: loser_lock_event.lock_ids,
+        loser_result: loser_result,
+        wait_event_type: observation.wait_event_type,
+        winner_backend_pid: winner_backend_pid,
+        winner_committed_before_loser_lock?: winner_committed_before_loser_lock?,
+        winner_lock_ids: winner_lock_event.lock_ids,
+        winner_result: winner_result
+      }
+    after
+      :telemetry.detach(handler_id)
+      release_gateway_auto_claim_tasks(tasks, barrier)
+    end
+  end
+
+  defp run_disjoint_gateway_auto_claims!(
+         fixture,
+         winner_index,
+         winner_cohort_ids,
+         loser_index,
+         loser_cohort_ids
+       ) do
+    parent = self()
+    barrier = make_ref()
+
+    winner_task =
+      start_gateway_auto_claim_task(
+        parent,
+        barrier,
+        :winner,
+        fixture,
+        winner_index,
+        winner_cohort_ids
+      )
+
+    loser_task =
+      start_gateway_auto_claim_task(
+        parent,
+        barrier,
+        :loser,
+        fixture,
+        loser_index,
+        loser_cohort_ids
+      )
+
+    tasks = [winner_task, loser_task]
+    handler_id = {__MODULE__, :disjoint_cohort, System.unique_integer([:positive, :monotonic])}
+    :ok = attach_gateway_auto_cohort_barrier(handler_id, parent, barrier)
+
+    try do
+      assert_receive {^barrier, :claim_ready, :winner, winner_backend_pid}, 5_000
+      assert_receive {^barrier, :claim_ready, :loser, loser_backend_pid}, 5_000
+
+      send(winner_task.pid, {barrier, :start_claim})
+
+      assert_receive {^barrier, :cohort_locked, :winner, winner_claim_pid, _winner_lock_event},
+                     5_000
+
+      send(loser_task.pid, {barrier, :start_claim})
+
+      assert_receive {^barrier, :cohort_locked, :loser, loser_claim_pid, _loser_lock_event},
+                     5_000
+
+      loser_blocking_pids = blocking_pids!(loser_backend_pid)
+
+      send(winner_claim_pid, {barrier, :release_cohort_lock})
+      send(loser_claim_pid, {barrier, :release_cohort_lock})
+
+      {:winner, ^winner_backend_pid, winner_result} = Task.await(winner_task, 15_000)
+      {:loser, ^loser_backend_pid, loser_result} = Task.await(loser_task, 15_000)
+
+      %{
+        loser_backend_pid: loser_backend_pid,
+        loser_blocking_pids: loser_blocking_pids,
+        loser_result: loser_result,
+        winner_backend_pid: winner_backend_pid,
+        winner_result: winner_result
+      }
+    after
+      :telemetry.detach(handler_id)
+      release_gateway_auto_claim_tasks(tasks, barrier)
+    end
+  end
+
+  defp start_gateway_auto_claim_task(
+         parent,
+         barrier,
+         role,
+         fixture,
+         target_index,
+         cohort_identity_ids
+       ) do
+    Task.async(fn ->
+      run_gateway_auto_claim_task(
+        parent,
+        barrier,
+        role,
+        fixture,
+        target_index,
+        cohort_identity_ids
+      )
+    end)
+  end
+
+  defp run_gateway_auto_claim_task(
+         parent,
+         barrier,
+         role,
+         fixture,
+         target_index,
+         cohort_identity_ids
+       ) do
+    Sandbox.unboxed_run(Repo, fn ->
+      Repo.checkout(fn ->
+        execute_gateway_auto_claim(
+          parent,
+          barrier,
+          role,
+          fixture,
+          target_index,
+          cohort_identity_ids
+        )
+      end)
+    end)
+  end
+
+  defp execute_gateway_auto_claim(
+         parent,
+         barrier,
+         role,
+         fixture,
+         target_index,
+         cohort_identity_ids
+       ) do
+    backend_pid = backend_pid!()
+    Process.put({__MODULE__, barrier, :role}, role)
+    send(parent, {barrier, :claim_ready, role, backend_pid})
+
+    receive do
+      {^barrier, :start_claim} -> :ok
+    after
+      5_000 -> raise "timed out waiting to start gateway-auto cohort claim"
+    end
+
+    send(parent, {barrier, :claim_started, role, backend_pid})
+
+    try do
+      {role, backend_pid, redeem_gateway_auto_target!(fixture, target_index, cohort_identity_ids)}
+    after
+      Process.delete({__MODULE__, barrier, :role})
+    end
+  end
+
+  defp attach_gateway_auto_cohort_barrier(handler_id, parent, barrier) do
+    :telemetry.attach(
+      handler_id,
+      [:codex_pooler, :repo, :query],
+      fn _event, _measurements, metadata, _config ->
+        role = Process.get({__MODULE__, barrier, :role})
+
+        if role in [:winner, :loser] and cohort_identity_lock_query?(metadata) do
+          send(parent, {barrier, :cohort_locked, role, self(), claim_lock_event(metadata)})
+
+          receive do
+            {^barrier, :release_cohort_lock} -> :ok
+          after
+            10_000 -> raise "timed out waiting to release gateway-auto cohort lock"
+          end
+        end
+      end,
+      nil
+    )
+  end
+
+  defp release_gateway_auto_claim_tasks(tasks, barrier) do
+    Enum.each(tasks, fn task ->
+      send(task.pid, {barrier, :start_claim})
+      send(task.pid, {barrier, :release_cohort_lock})
+    end)
+
+    Enum.each(tasks, fn task ->
+      if Process.alive?(task.pid), do: release_probe_claim_task(task)
+    end)
+  end
+
+  defp capture_claim_locks_until_identity_update!(claim_fun) do
+    handler_id = {__MODULE__, :claim_locks, System.unique_integer([:positive, :monotonic])}
+    process_key = {__MODULE__, handler_id, :capture?}
+    Process.put(process_key, true)
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          capture_claim_lock_event(metadata, process_key)
+        end,
+        nil
+      )
+
+    try do
+      result = claim_fun.()
+      {result, process_key |> then(&Process.get({&1, :locks}, [])) |> Enum.reverse()}
+    after
+      :telemetry.detach(handler_id)
+      Process.delete(process_key)
+      Process.delete({process_key, :locks})
+    end
+  end
+
+  defp capture_claim_lock_event(metadata, process_key) do
+    if Process.get(process_key) do
+      cond do
+        claim_lock_query?(metadata) ->
+          Process.put({process_key, :locks}, [
+            claim_lock_event(metadata) | Process.get({process_key, :locks}, [])
+          ])
+
+        identity_update_query?(metadata) ->
+          Process.put(process_key, false)
+
+        true ->
+          :ok
+      end
+    end
+  end
+
+  defp capture_gateway_auto_claim_locks_until_identity_update!(fixture, target_index, cohort_ids) do
+    parent = self()
+    barrier = make_ref()
+    handler_id = {__MODULE__, :claim_shape, System.unique_integer([:positive, :monotonic])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          capture_gateway_auto_claim_event(metadata, parent, barrier)
+        end,
+        nil
+      )
+
+    task =
+      Task.async(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          Process.put({__MODULE__, barrier, :capture?}, true)
+
+          try do
+            redeem_gateway_auto_target!(fixture, target_index, cohort_ids)
+          after
+            Process.delete({__MODULE__, barrier, :capture?})
+          end
+        end)
+      end)
+
+    try do
+      assert_receive {^barrier, :claim_persisted, claim_pid}, 10_000
+      lock_events = drain_claim_locks(barrier, [])
+      requests_while_locked = FakeUpstream.requests(fixture.fake)
+      send(claim_pid, {barrier, :release_claim})
+      {Task.await(task, 15_000), lock_events, requests_while_locked}
+    after
+      send(task.pid, {barrier, :release_claim})
+      :telemetry.detach(handler_id)
+      release_probe_claim_task(task)
+    end
+  end
+
+  defp capture_gateway_auto_claim_event(metadata, parent, barrier) do
+    if Process.get({__MODULE__, barrier, :capture?}) do
+      cond do
+        claim_lock_query?(metadata) ->
+          send(parent, {barrier, :claim_lock, claim_lock_event(metadata)})
+
+        identity_update_query?(metadata) ->
+          Process.put({__MODULE__, barrier, :capture?}, false)
+          send(parent, {barrier, :claim_persisted, self()})
+
+          receive do
+            {^barrier, :release_claim} -> :ok
+          after
+            5_000 -> raise "timed out waiting to release captured gateway-auto claim"
+          end
+
+        true ->
+          :ok
+      end
+    end
+  end
+
+  defp drain_claim_locks(barrier, events) do
+    receive do
+      {^barrier, :claim_lock, event} -> drain_claim_locks(barrier, [event | events])
+    after
+      0 -> Enum.reverse(events)
+    end
+  end
+
+  defp claim_lock_query?(metadata) do
+    metadata[:repo] == Repo and
+      metadata[:source] in ["upstream_identities", "pool_upstream_assignments"] and
+      is_binary(metadata[:query]) and String.contains?(metadata[:query], "FOR UPDATE")
+  end
+
+  defp cohort_identity_lock_query?(metadata) do
+    metadata[:repo] == Repo and metadata[:source] == "upstream_identities" and
+      is_binary(metadata[:query]) and String.contains?(metadata[:query], "ANY(") and
+      String.contains?(metadata[:query], "FOR UPDATE")
+  end
+
+  defp claim_lock_event(metadata) do
+    %{
+      cohort_query?: cohort_identity_lock_query?(metadata),
+      lock_ids: lock_query_ids(metadata[:params]),
+      parameter_count: length(List.wrap(metadata[:params])),
+      query: metadata[:query],
+      row_count: repo_query_row_count(metadata[:result]),
+      source: metadata[:source]
+    }
+  end
+
+  defp lock_query_ids([ids]) when is_list(ids) do
+    ids
+    |> Enum.map(fn
+      <<_::128>> = id ->
+        {:ok, uuid} = Ecto.UUID.load(id)
+        uuid
+
+      id when is_binary(id) ->
+        id
+    end)
+    |> Enum.sort()
+  end
+
+  defp lock_query_ids(_params), do: []
+
+  defp repo_query_row_count({:ok, %{num_rows: row_count}}), do: row_count
+  defp repo_query_row_count(%{num_rows: row_count}), do: row_count
+  defp repo_query_row_count(_result), do: 0
+
+  defp blocking_pids!(backend_pid) do
+    run_unboxed(fn ->
+      %{rows: [[blocking_pids]]} =
+        SQL.query!(
+          Repo,
+          "SELECT pg_blocking_pids($1) FROM pg_stat_activity WHERE pid = $1",
+          [backend_pid]
+        )
+
+      blocking_pids
+    end)
+  end
+
+  defp install_saved_reset_finalization_failure_trigger!(identity_id) do
+    trigger_name =
+      "reject_saved_reset_finalization_#{System.unique_integer([:positive, :monotonic])}"
+
+    SQL.query!(
+      Repo,
+      """
+      CREATE FUNCTION pg_temp.reject_saved_reset_finalization() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.id = '#{identity_id}'::uuid
+           AND OLD.metadata #>> '{saved_reset_redemption,provider_replay,provider_dispatches}' = '1'
+           AND NEW.metadata #>> '{saved_reset_redemption,status}' <> 'redeeming' THEN
+          RAISE EXCEPTION 'synthetic saved-reset finalization failure';
+        END IF;
+
+        RETURN NEW;
+      END;
+      $$
+      """,
+      []
+    )
+
+    SQL.query!(
+      Repo,
+      """
+      CREATE TRIGGER #{trigger_name}
+      BEFORE UPDATE ON upstream_identities
+      FOR EACH ROW EXECUTE FUNCTION pg_temp.reject_saved_reset_finalization()
+      """,
+      []
+    )
   end
 
   defp cleanup_committed_scheduled_expiry_race_fixture!(fixture) do
@@ -3899,6 +6838,12 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     |> Enum.count(&(&1.path == "/api/codex/rate-limit-reset-credits/consume"))
   end
 
+  defp provider_credit_consume_count(fake) do
+    fake
+    |> FakeUpstream.requests()
+    |> Enum.count(&String.ends_with?(&1.path, "/rate-limit-reset-credits/consume"))
+  end
+
   defp release_probe_claim_tasks(tasks, barrier) do
     Enum.each(tasks, fn task ->
       send(task.pid, {barrier, :start_claim})
@@ -3996,6 +6941,6 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
   defp run_unboxed(fun) do
     Task.async(fn -> Sandbox.unboxed_run(Repo, fun) end)
-    |> Task.await(5_000)
+    |> Task.await(15_000)
   end
 end
