@@ -284,15 +284,21 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          gateway_auto_context
        ) do
     Repo.transaction(fn ->
-      identity.id
-      |> lock_identity!()
-      |> claim_locked_identity!(
-        assignment,
-        trigger_kind,
-        receive_timeout,
-        started_at,
-        gateway_auto_context
-      )
+      case lock_claim_identity(identity.id, gateway_auto_context) do
+        {:ok, locked_identity, locked_cohort} ->
+          claim_locked_identity!(
+            locked_identity,
+            locked_cohort,
+            assignment,
+            trigger_kind,
+            receive_timeout,
+            started_at,
+            gateway_auto_context
+          )
+
+        {:noop, code} ->
+          {:noop, noop_result(identity, assignment, code)}
+      end
     end)
     |> case do
       {:ok, claim} -> {:ok, claim}
@@ -377,6 +383,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
   defp claim_locked_identity!(
          locked_identity,
+         _locked_cohort,
          assignment,
          trigger_kind,
          receive_timeout,
@@ -1307,6 +1314,46 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
       updated_at: timestamp
     })
     |> Repo.update!()
+  end
+
+  defp lock_claim_identity(identity_id, nil) do
+    locked_identity = lock_identity!(identity_id)
+    {:ok, locked_identity, %{identity_id => locked_identity}}
+  end
+
+  defp lock_claim_identity(identity_id, %{cohort_identity_ids: cohort_identity_ids}) do
+    normalized_ids =
+      cohort_identity_ids
+      |> Enum.map(&Ecto.UUID.cast!/1)
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    locked_identities =
+      Repo.all(
+        from identity in UpstreamIdentity,
+          where:
+            fragment(
+              "? = ANY(?::uuid[])",
+              identity.id,
+              ^Enum.map(normalized_ids, &Ecto.UUID.dump!/1)
+            ),
+          order_by: [asc: identity.id],
+          lock: "FOR UPDATE"
+      )
+
+    locked_ids = Enum.map(locked_identities, & &1.id)
+
+    if locked_ids == normalized_ids do
+      case Enum.find(locked_identities, &(&1.id == identity_id)) do
+        %UpstreamIdentity{} = locked_identity ->
+          {:ok, locked_identity, Map.new(locked_identities, &{&1.id, &1})}
+
+        nil ->
+          {:noop, "gateway_auto_context_mismatch"}
+      end
+    else
+      {:noop, "gateway_auto_context_mismatch"}
+    end
   end
 
   defp broadcast_redemption(identity) do
