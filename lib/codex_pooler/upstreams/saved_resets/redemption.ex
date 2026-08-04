@@ -545,6 +545,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
         started_at: context.started_at,
         receive_timeout: context.receive_timeout,
         clock: context.clock,
+        expected_provider_dispatches: context.provider_dispatches,
         endpoint_kind: endpoint_kind(endpoint_family),
         endpoint_family: endpoint_family,
         scope_fingerprint: scope_fingerprint,
@@ -1110,33 +1111,45 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
         metadata = identity.metadata || %{}
         redemption = metadata["saved_reset_redemption"] || %{}
 
-        if exact_recovery_attempt?(redemption, recovery) do
-          next_action_at =
-            recovery
-            |> recovery_observation_due_at(now, snooze_seconds)
-            |> DateTime.to_iso8601()
+        cond do
+          not exact_recovery_attempt?(redemption, recovery) ->
+            {:noop, "recovery_target_invalid", identity, recovery.assignment}
 
-          replay =
-            redemption["provider_replay"]
-            |> Map.put("last_code", bounded_observation_code(code))
-            |> Map.put("last_observed_at", DateTime.to_iso8601(now))
-            |> Map.put("next_action_at", next_action_at)
+          persisted_provider_dispatches(redemption) != recovery.provider_dispatches ->
+            # A newer dispatch reservation owns the schedule: keep its persisted
+            # state untouched and back off to its due time.
+            recovery_reservation_due_conflict(
+              identity,
+              recovery.assignment,
+              redemption["provider_replay"] || %{},
+              now
+            )
 
-          identity
-          |> UpstreamIdentity.changeset(%{
-            metadata:
-              Map.put(
-                metadata,
-                "saved_reset_redemption",
-                Map.put(redemption, "provider_replay", replay)
-              ),
-            updated_at: now
-          })
-          |> Repo.update!()
+          true ->
+            next_action_at =
+              recovery
+              |> recovery_observation_due_at(now, snooze_seconds)
+              |> DateTime.to_iso8601()
 
-          {:snooze, snooze_seconds}
-        else
-          {:noop, "recovery_target_invalid", identity, recovery.assignment}
+            replay =
+              redemption["provider_replay"]
+              |> Map.put("last_code", bounded_observation_code(code))
+              |> Map.put("last_observed_at", DateTime.to_iso8601(now))
+              |> Map.put("next_action_at", next_action_at)
+
+            identity
+            |> UpstreamIdentity.changeset(%{
+              metadata:
+                Map.put(
+                  metadata,
+                  "saved_reset_redemption",
+                  Map.put(redemption, "provider_replay", replay)
+                ),
+              updated_at: now
+            })
+            |> Repo.update!()
+
+            {:snooze, snooze_seconds}
         end
       end)
 
@@ -1832,7 +1845,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           generation: generation,
           trigger_kind: trigger_kind,
           started_at: started_at,
-          receive_timeout: receive_timeout
+          receive_timeout: receive_timeout,
+          expected_provider_dispatches: get_in(claim, ["provider_replay", "provider_dispatches"])
         }
         |> maybe_put_claim_trigger_detail(trigger_detail)
         |> maybe_put_claim_scheduled_decision_evidence(scheduled_decision_evidence)
@@ -2597,8 +2611,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   # Every finalizer — original or recovery — must observe the attempt still
   # active (`redeeming`/`consuming`) with the exact attempt id and generation.
   # A finalizer that reserved a provider dispatch must additionally match the
-  # persisted dispatch count it reserved, so a stale dispatch-N response can
-  # never finalize over dispatch N+1 or over a terminal recovery result.
+  # persisted dispatch count it reserved, and every other claim must match the
+  # dispatch count it captured (zero-dispatch claims included), so a stale
+  # dispatch-N response — or a delayed pre-dispatch result like `no_credit` —
+  # can never finalize over a newer reservation or a terminal recovery result.
   defp finalization_matches_claim?(redemption, claim) do
     exact_recovery_attempt?(redemption, claim) and
       finalization_dispatch_matches_claim?(redemption, claim)
@@ -2606,6 +2622,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
   defp finalization_dispatch_matches_claim?(redemption, %{reserved_provider_dispatches: reserved}) do
     persisted_provider_dispatches(redemption) == reserved
+  end
+
+  defp finalization_dispatch_matches_claim?(redemption, %{expected_provider_dispatches: expected}) do
+    persisted_provider_dispatches(redemption) == expected
   end
 
   defp finalization_dispatch_matches_claim?(_redemption, _claim), do: true

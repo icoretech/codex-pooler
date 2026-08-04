@@ -1123,6 +1123,180 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert provider_credit_consume_count(fake) == 1
     end
 
+    @tag :saved_reset_original_no_credit_race
+    test "a delayed original no-credit result cannot settle a recovery-reserved attempt" do
+      parent = self()
+      list_release = make_ref()
+      consume_release = make_ref()
+      {:ok, fake} = recovery_race_fake()
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      credit_id = "credit_no_credit_race_#{System.unique_integer([:positive, :monotonic])}"
+
+      FakeUpstream.set_mode(fake, {
+        :sequence,
+        [
+          FakeUpstream.barrier_json_response(%{"credits" => [], "available_count" => 0},
+            notify: parent,
+            release_ref: list_release
+          ),
+          {:json, 200, %{"credits" => [%{"id" => credit_id, "status" => "available"}]}},
+          FakeUpstream.barrier_json_response(%{"code" => "reset"},
+            notify: parent,
+            release_ref: consume_release
+          ),
+          {:json, 200, usage_payload(0)}
+        ]
+      })
+
+      fixture =
+        run_unboxed(fn ->
+          %{identity: identity, assignment: assignment} =
+            assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api")
+
+          %{
+            assignment_id: assignment.id,
+            identity_id: identity.id,
+            pool_id: assignment.pool_id
+          }
+        end)
+
+      on_exit(fn -> cleanup_committed_recovery_fixture!(fixture) end)
+
+      original_task =
+        Task.async(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            Repo.checkout(fn -> SavedResetRedemption.redeem(fixture.assignment_id) end)
+          end)
+        end)
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, list_pid, ^list_release},
+                     5_000
+
+      claimed =
+        run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata[
+          "saved_reset_redemption"
+        ]
+
+      assert claimed["provider_replay"]["provider_dispatches"] == 0
+
+      recovery_fixture =
+        fixture
+        |> Map.put(:attempt_id, claimed["attempt_id"])
+        |> Map.put(:generation, claimed["generation"])
+        |> Map.put(:now, DateTime.add(DateTime.utc_now(), 31, :minute))
+
+      recovery_task = start_recovery_replica_task(parent, :recovery, recovery_fixture)
+      assert_receive {:recovery_replica_ready, :recovery}, 5_000
+      send(recovery_task.pid, :start_recovery)
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, consume_pid,
+                      ^consume_release},
+                     5_000
+
+      reserved =
+        run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata
+
+      assert reserved["saved_reset_redemption"]["provider_replay"]["provider_dispatches"] == 1
+      assert is_binary(reserved["saved_reset_redemption_target"])
+
+      send(list_pid, {:fake_upstream_release_timeout, list_release})
+
+      assert {:ok, %{status: :noop, applied?: false, code: "no_credit"}} =
+               Task.await(original_task, 15_000)
+
+      persisted =
+        run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata
+
+      assert persisted == reserved
+
+      send(consume_pid, {:fake_upstream_release_timeout, consume_release})
+
+      assert {:recovery, {:ok, %{status: :succeeded, applied?: true}}} =
+               Task.await(recovery_task, 15_000)
+
+      settled =
+        run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata[
+          "saved_reset_redemption"
+        ]
+
+      assert settled["result"]["applied"] == true
+      assert settled["phase"] in ["confirmed_by_quota", "consumed_pending_probe"]
+      assert provider_credit_consume_count(fake) == 1
+    end
+
+    @tag :saved_reset_stale_observation_race
+    test "a stale recovery observation cannot replace a newer dispatch schedule" do
+      parent = self()
+      stale_list_release = make_ref()
+      current_consume_release = make_ref()
+      {:ok, fake} = recovery_race_fake()
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      fixture = committed_chatgpt_recovery_fixture!(fake)
+      on_exit(fn -> cleanup_committed_recovery_fixture!(fixture) end)
+
+      FakeUpstream.set_mode(fake, {
+        :sequence,
+        [
+          FakeUpstream.barrier_json_response(%{"error" => "synthetic list failure"},
+            status: 503,
+            notify: parent,
+            release_ref: stale_list_release
+          ),
+          {:json, 200, %{"credits" => [%{"id" => fixture.credit_id, "status" => "available"}]}},
+          FakeUpstream.barrier_json_response(%{"code" => "reset"},
+            notify: parent,
+            release_ref: current_consume_release
+          ),
+          {:json, 200, usage_payload(0)}
+        ]
+      })
+
+      stale_task = start_recovery_replica_task(parent, :stale, fixture)
+      assert_receive {:recovery_replica_ready, :stale}, 5_000
+      send(stale_task.pid, :start_recovery)
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, stale_list_pid,
+                      ^stale_list_release},
+                     5_000
+
+      current_task = start_recovery_replica_task(parent, :current, fixture)
+      assert_receive {:recovery_replica_ready, :current}, 5_000
+      send(current_task.pid, :start_recovery)
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, current_consume_pid,
+                      ^current_consume_release},
+                     5_000
+
+      reserved =
+        run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata
+
+      assert reserved["saved_reset_redemption"]["provider_replay"]["provider_dispatches"] == 2
+
+      send(stale_list_pid, {:fake_upstream_release_timeout, stale_list_release})
+
+      # The stale replica backs off to the newer reservation's schedule (the
+      # dispatch-2 delay), instead of rewriting it with its own dispatch-1 view.
+      assert {:stale, {:snooze, 300}} = Task.await(stale_task, 15_000)
+
+      assert run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata ==
+               reserved
+
+      send(current_consume_pid, {:fake_upstream_release_timeout, current_consume_release})
+
+      assert {:current, {:ok, %{status: :succeeded, applied?: true}}} =
+               Task.await(current_task, 15_000)
+
+      persisted =
+        run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata[
+          "saved_reset_redemption"
+        ]
+
+      assert persisted["result"]["applied"] == true
+      assert persisted["provider_replay"]["provider_dispatches"] == 2
+    end
+
     test "invalid ChatGPT recovery targets and changed scope remain provider I/O free" do
       for mutation <- [:tampered_target, :missing_target, :scope_changed] do
         fixture = ambiguous_chatgpt_recovery_fixture!()
