@@ -12,8 +12,22 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbeTest do
     assert {:ok, %{scenarios: ["sibling-barrier"]}} =
              Probe.parse_args(["--scenario", "sibling-barrier"])
 
-    assert {:ok, %{scenarios: ["sibling-barrier", "ambiguous-replay", "markerless-legacy"]}} =
-             Probe.parse_args(["--scenario", "all"])
+    assert {:ok, %{scenarios: ["first-turn-capacity"]}} =
+             Probe.parse_args(["--scenario", "first-turn-capacity"])
+
+    assert {:ok, %{scenarios: ["reblocked-convergence"]}} =
+             Probe.parse_args(["--scenario", "reblocked-convergence"])
+
+    assert {:ok,
+            %{
+              scenarios: [
+                "sibling-barrier",
+                "ambiguous-replay",
+                "markerless-legacy",
+                "first-turn-capacity",
+                "reblocked-convergence"
+              ]
+            }} = Probe.parse_args(["--scenario", "all"])
 
     assert {:error, _message} = Probe.parse_args([])
     assert {:error, _message} = Probe.parse_args(["--scenario", "production"])
@@ -176,6 +190,18 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbeTest do
                    barrier: true,
                    winner_applied: true,
                    loser_code: "gateway_auto_sibling_consume_barrier"
+                 },
+                 "first-turn-capacity" => %{
+                   first_turn_vetoed: true,
+                   veto_code: "gateway_auto_sibling_usable_capacity",
+                   hard_pin_applied: true,
+                   consume_count: 1
+                 },
+                 "reblocked-convergence" => %{
+                   converged: "confirmed_by_quota",
+                   repeat: "unchanged",
+                   provider_requests: 0,
+                   attempt_preserved: true
                  }
                },
                status: "passed",
@@ -184,6 +210,65 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbeTest do
                oban_isolated: true,
                source_sha: "0123456789abcdef0123456789abcdef01234567"
              })
+
+    # A capacity receipt that cannot prove the first-turn veto is invalid.
+    for override <- [
+          %{first_turn_vetoed: false},
+          %{veto_code: "gateway_auto_sibling_consume_barrier"},
+          %{consume_count: 2}
+        ] do
+      assert {:error, "receipt contains a field outside the metadata allowlist"} =
+               Probe.validate_receipt(%{
+                 run_fingerprint: "0a1b2c3d4e5f",
+                 scenarios: %{
+                   "first-turn-capacity" =>
+                     Map.merge(
+                       %{
+                         first_turn_vetoed: true,
+                         veto_code: "gateway_auto_sibling_usable_capacity",
+                         hard_pin_applied: true,
+                         consume_count: 1
+                       },
+                       override
+                     )
+                 },
+                 status: "passed",
+                 cleanup: "exact_owned_rows_removed",
+                 endpoint_isolated: true,
+                 oban_isolated: true,
+                 source_sha: "unavailable"
+               })
+    end
+
+    # A convergence receipt claiming provider traffic or a different outcome is
+    # invalid.
+    for override <- [
+          %{provider_requests: 1},
+          %{converged: "reblocked"},
+          %{attempt_preserved: false}
+        ] do
+      assert {:error, "receipt contains a field outside the metadata allowlist"} =
+               Probe.validate_receipt(%{
+                 run_fingerprint: "0a1b2c3d4e5f",
+                 scenarios: %{
+                   "reblocked-convergence" =>
+                     Map.merge(
+                       %{
+                         converged: "confirmed_by_quota",
+                         repeat: "unchanged",
+                         provider_requests: 0,
+                         attempt_preserved: true
+                       },
+                       override
+                     )
+                 },
+                 status: "passed",
+                 cleanup: "exact_owned_rows_removed",
+                 endpoint_isolated: true,
+                 oban_isolated: true,
+                 source_sha: "unavailable"
+               })
+    end
 
     assert {:error, "receipt contains a field outside the metadata allowlist"} =
              Probe.validate_receipt(%{run_fingerprint: "safe", raw_credit_id: "forbidden"})

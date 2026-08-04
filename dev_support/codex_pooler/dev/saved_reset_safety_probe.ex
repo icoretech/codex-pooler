@@ -12,12 +12,14 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
+  alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.SavedResetRedemption
+  alias CodexPooler.Upstreams.SavedResets.Convergence
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias __MODULE__.Provider
 
-  @scenarios ~w(sibling-barrier ambiguous-replay markerless-legacy)
+  @scenarios ~w(sibling-barrier ambiguous-replay markerless-legacy first-turn-capacity reblocked-convergence)
   @database "codex_pooler_dev"
   @lock_namespace "codex-pooler:saved-reset-safety-probe"
   @receipt_root Path.join(["tmp", "saved-reset-safety-probe", "receipts"])
@@ -28,7 +30,11 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
     "ambiguous-replay" =>
       ~w(target_reused request_reused scope_reused attempt_reused generation_reused scope_fingerprint),
     "markerless-legacy" =>
-      ~w(legacy_recovery mode provider_requests snooze_seconds next_action_scheduled)
+      ~w(legacy_recovery mode provider_requests snooze_seconds next_action_scheduled),
+    "first-turn-capacity" =>
+      ~w(first_turn_vetoed veto_code hard_pin_applied consume_count),
+    "reblocked-convergence" =>
+      ~w(converged repeat provider_requests attempt_preserved)
   }
   @probe_slug_prefix "dev-saved-reset-probe-"
 
@@ -40,7 +46,8 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
   def parse_args(_args),
     do:
       {:error,
-       "accepts exactly one --scenario sibling-barrier|ambiguous-replay|markerless-legacy|all"}
+       "accepts exactly one --scenario sibling-barrier|ambiguous-replay|markerless-legacy|" <>
+         "first-turn-capacity|reblocked-convergence|all"}
 
   @spec validate_environment(atom(), keyword()) :: :ok | {:error, String.t()}
   def validate_environment(environment \\ Mix.env(), repo_config \\ Repo.config()) do
@@ -149,7 +156,10 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
     do: {:ok, %{scenarios: [scenario]}}
 
   defp normalize_scenario(_scenario),
-    do: {:error, "scenario must be sibling-barrier, ambiguous-replay, markerless-legacy, or all"}
+    do:
+      {:error,
+       "scenario must be sibling-barrier, ambiguous-replay, markerless-legacy, " <>
+         "first-turn-capacity, reblocked-convergence, or all"}
 
   defp validate_scenarios(scenarios) do
     if scenarios != [] and Enum.uniq(scenarios) == scenarios and
@@ -175,6 +185,12 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
 
   defp run_scenario("markerless-legacy", provider, run_id),
     do: markerless_legacy(provider, run_id)
+
+  defp run_scenario("first-turn-capacity", provider, run_id),
+    do: first_turn_capacity(provider, run_id)
+
+  defp run_scenario("reblocked-convergence", provider, run_id),
+    do: reblocked_convergence(provider, run_id)
 
   defp sibling_barrier(provider, run_id) do
     Provider.configure(provider, :sibling)
@@ -350,6 +366,213 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
   end
 
   def legacy_observe_only_mode(_persisted), do: "unexpected"
+
+  # The production first-turn shape: two siblings whose applied consumes are
+  # still converging (`reblocked`, threshold-scan latched) but carry current
+  # usable quota, and a threshold-pressured target. A first-turn request (no
+  # hard continuity anchor) must not authorize the third consume; a genuinely
+  # hard-pinned continuation keeps its bypass.
+  defp first_turn_capacity(provider, run_id) do
+    Provider.configure(provider, :capacity)
+    now = now()
+    {_pool, entries} = provision_entries(run_id, provider.url, :codex, 3, now)
+    [first_sibling, second_sibling, target] = entries
+    cohort_ids = Enum.map(entries, & &1.identity.id)
+
+    # The provisioned exhausted weekly cannot be lowered in place — the weekly
+    # restart barrier would preserve it — so each scenario identity restarts
+    # from its own evidence.
+    for sibling <- [first_sibling, second_sibling] do
+      sibling.identity
+      |> put_applied_reblocked!(now)
+      |> clear_account_windows!()
+      |> put_weekly_window!(Decimal.new("26"), now)
+    end
+
+    target.identity
+    |> put_threshold_policy!()
+    |> clear_account_windows!()
+    |> put_weekly_window!(Decimal.new("96"), now)
+
+    with {:ok, %{status: :noop, applied?: false, code: "gateway_auto_sibling_usable_capacity"}} <-
+           redeem_threshold(target, cohort_ids, now, false),
+         0 <- Provider.consume_count(provider),
+         {:ok, %{status: :succeeded, applied?: true}} <-
+           redeem_threshold(target, cohort_ids, now, true),
+         1 <- Provider.consume_count(provider) do
+      {:ok,
+       %{
+         first_turn_vetoed: true,
+         veto_code: "gateway_auto_sibling_usable_capacity",
+         hard_pin_applied: true,
+         consume_count: 1
+       }}
+    else
+      _other -> {:error, "first-turn-capacity contract was not satisfied"}
+    end
+  end
+
+  # The production convergence shape: an applied reblocked lifecycle, obsolete
+  # post-consume rows from other evidence sources, and current usable canonical
+  # evidence. Convergence must settle the exact attempt to confirmed_by_quota
+  # without any provider request.
+  defp reblocked_convergence(provider, run_id) do
+    Provider.configure(provider, :legacy)
+    now = now()
+    consumed_at = DateTime.add(now, -20, :hour)
+    stale_observed_at = DateTime.add(now, -14, :hour)
+
+    {_pool, [entry]} = provision_entries(run_id, provider.url, :codex, 1, now)
+    attempt_id = Ecto.UUID.generate()
+
+    identity =
+      update_identity_metadata(entry.identity, "saved_reset_redemption", %{
+        "status" => "failed",
+        "phase" => "reblocked",
+        "attempt_id" => attempt_id,
+        "generation" => 2,
+        "trigger_kind" => "gateway_auto",
+        "trigger_detail" => "exhausted",
+        "started_at" => DateTime.to_iso8601(DateTime.add(consumed_at, -1, :minute)),
+        "consumed_at" => DateTime.to_iso8601(consumed_at),
+        "deadline_at" => consumed_at |> DateTime.add(15, :minute) |> DateTime.to_iso8601(),
+        "finished_at" => DateTime.to_iso8601(consumed_at),
+        "result" => %{"code" => "reset", "applied" => true}
+      })
+
+    clear_account_windows!(identity)
+
+    put_account_window!(identity, "codex_rate_limit_event", "secondary", 10_080,
+      used_percent: Decimal.new("100"),
+      observed_at: stale_observed_at,
+      reset_at: DateTime.add(stale_observed_at, 2, :hour)
+    )
+
+    put_account_window!(identity, "codex_response_headers", "primary", 300,
+      used_percent: Decimal.new("100"),
+      observed_at: stale_observed_at,
+      reset_at: DateTime.add(stale_observed_at, 1, :hour)
+    )
+
+    put_account_window!(identity, "codex_usage_api", "secondary", 10_080,
+      used_percent: Decimal.new("26"),
+      observed_at: now,
+      reset_at: DateTime.add(now, 2, :day)
+    )
+
+    put_account_window!(identity, "codex_usage_api", "primary", 300,
+      used_percent: Decimal.new("20"),
+      observed_at: now,
+      reset_at: DateTime.add(now, 5, :hour)
+    )
+
+    with true <- Convergence.convergeable_lifecycle?(Repo.reload!(identity)),
+         {:ok, :confirmed_by_quota} <- Convergence.converge(identity),
+         {:ok, :unchanged} <- Convergence.converge(identity),
+         persisted <- Repo.reload!(identity).metadata["saved_reset_redemption"],
+         "confirmed_by_quota" <- persisted["phase"],
+         "converged_confirmed_by_quota" <- persisted["terminal_reason"],
+         true <- persisted["attempt_id"] == attempt_id and persisted["generation"] == 2,
+         0 <- Provider.request_count(provider) do
+      {:ok,
+       %{
+         converged: "confirmed_by_quota",
+         repeat: "unchanged",
+         provider_requests: 0,
+         attempt_preserved: true
+       }}
+    else
+      _other -> {:error, "reblocked-convergence contract was not satisfied"}
+    end
+  end
+
+  defp redeem_threshold(entry, cohort_ids, started_at, hard_pinned?) do
+    SavedResetRedemption.redeem(entry.assignment,
+      trigger_kind: "gateway_auto",
+      gateway_auto_context: %{
+        trigger: :threshold_pressure,
+        pool_upstream_assignment_id: entry.assignment.id,
+        upstream_identity_id: entry.identity.id,
+        candidate_assignment_ids: [entry.assignment.id],
+        candidate_identity_ids: [entry.identity.id],
+        cohort_identity_ids: cohort_ids,
+        routable_identity_ids: cohort_ids,
+        route_class: "proxy_http",
+        quota_scope: quota_scope(),
+        hard_pinned_continuity?: hard_pinned?
+      },
+      started_at: started_at,
+      receive_timeout: 10_000
+    )
+  end
+
+  defp put_threshold_policy!(identity) do
+    identity
+    |> Repo.reload!()
+    |> UpstreamIdentity.changeset(%{
+      saved_reset_auto_redeem_trigger_mode: "threshold",
+      saved_reset_auto_redeem_quota_threshold_percent: 95
+    })
+    |> Repo.update!()
+  end
+
+  defp put_applied_reblocked!(identity, now) do
+    consumed_at = DateTime.add(now, -40, :minute)
+
+    update_identity_metadata(identity, "saved_reset_redemption", %{
+      "status" => "failed",
+      "phase" => "reblocked",
+      "attempt_id" => Ecto.UUID.generate(),
+      "generation" => 1,
+      "trigger_kind" => "gateway_auto",
+      "trigger_detail" => "exhausted",
+      "started_at" => DateTime.to_iso8601(DateTime.add(consumed_at, -1, :minute)),
+      "consumed_at" => DateTime.to_iso8601(consumed_at),
+      "deadline_at" => consumed_at |> DateTime.add(15, :minute) |> DateTime.to_iso8601(),
+      "finished_at" => DateTime.to_iso8601(consumed_at),
+      "result" => %{"code" => "reset", "applied" => true}
+    })
+  end
+
+  defp clear_account_windows!(identity) do
+    Repo.delete_all(
+      from window in AccountQuotaWindow, where: window.upstream_identity_id == ^identity.id
+    )
+
+    identity
+  end
+
+  defp put_weekly_window!(identity, used_percent, now) do
+    put_account_window!(identity, "codex_usage_api", "secondary", 10_080,
+      used_percent: used_percent,
+      observed_at: now,
+      reset_at: DateTime.add(now, 2, :hour)
+    )
+  end
+
+  defp put_account_window!(identity, source, window_kind, window_minutes, opts) do
+    observed_at = Keyword.fetch!(opts, :observed_at)
+
+    {:ok, [_window]} =
+      Windows.upsert_quota_windows(identity, [
+        %{
+          quota_key: "account",
+          window_kind: window_kind,
+          window_minutes: window_minutes,
+          used_percent: Keyword.fetch!(opts, :used_percent),
+          reset_at: Keyword.fetch!(opts, :reset_at),
+          observed_at: observed_at,
+          last_sync_at: observed_at,
+          source: source,
+          source_precision: "observed",
+          quota_scope: "account",
+          quota_family: "account",
+          freshness_state: "fresh"
+        }
+      ])
+
+    identity
+  end
 
   defp provision_entries(run_id, provider_url, family, count, started_at) do
     run_suffix = "#{run_id}-#{Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)}"
@@ -813,6 +1036,17 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
         receipt["snooze_seconds"] >= 6 * 60 * 60 and
         receipt["next_action_scheduled"] == true
 
+  defp valid_scenario_receipt?("first-turn-capacity", receipt),
+    do:
+      receipt["first_turn_vetoed"] == true and
+        receipt["veto_code"] == "gateway_auto_sibling_usable_capacity" and
+        receipt["hard_pin_applied"] == true and receipt["consume_count"] == 1
+
+  defp valid_scenario_receipt?("reblocked-convergence", receipt),
+    do:
+      receipt["converged"] == "confirmed_by_quota" and receipt["repeat"] == "unchanged" and
+        receipt["provider_requests"] == 0 and receipt["attempt_preserved"] == true
+
   defp valid_scenario_receipt?(_scenario, _receipt), do: false
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -1027,6 +1261,25 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
           {{:json, 200, %{code: "reset"}}, %{state | consume_calls: state.consume_calls + 1}}
 
         "/backend-api/wham/usage" ->
+          {{:json, 200, usage_payload(0)}, state}
+
+        _other ->
+          {{:json, 404, %{}}, state}
+      end
+    end
+
+    defp response_for(%{mode: :capacity} = state, %{path: path} = request) do
+      state = %{state | requests: [request | state.requests]}
+
+      case path do
+        "/api/codex/rate-limit-reset-credits/consume" when state.consume_calls == 0 ->
+          {{:json, 200, %{code: "reset"}}, %{state | consume_calls: 1}}
+
+        "/api/codex/rate-limit-reset-credits/consume" ->
+          {{:json, 500, %{code: "unexpected_second_consume"}},
+           %{state | consume_calls: state.consume_calls + 1}}
+
+        "/api/codex/usage" ->
           {{:json, 200, usage_payload(0)}, state}
 
         _other ->
