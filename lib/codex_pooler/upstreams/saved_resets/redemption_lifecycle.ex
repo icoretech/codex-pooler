@@ -37,6 +37,7 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
   @confirmed_by_quota "confirmed_by_quota"
   @reblocked "reblocked"
   @expired "expired"
+  @consume_not_applied "consume_not_applied"
 
   @phases [
     @consuming,
@@ -44,13 +45,20 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
     @confirmed_by_upstream,
     @confirmed_by_quota,
     @reblocked,
-    @expired
+    @expired,
+    @consume_not_applied
   ]
 
   # Nonterminal phases still hold the consume/probe claim: they must block any
   # further credit consumption or probe on the same identity.
   @nonterminal [@consuming, @consumed_pending_probe]
-  @terminal [@confirmed_by_upstream, @confirmed_by_quota, @reblocked, @expired]
+  @terminal [
+    @confirmed_by_upstream,
+    @confirmed_by_quota,
+    @reblocked,
+    @expired,
+    @consume_not_applied
+  ]
 
   # The single bounded post-consume window. Long enough for scheduler
   # convergence, strictly fail-closed afterwards.
@@ -70,7 +78,8 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
     @confirmed_by_upstream => "succeeded",
     @confirmed_by_quota => "succeeded",
     @reblocked => "failed",
-    @expired => "failed"
+    @expired => "failed",
+    @consume_not_applied => "failed"
   }
 
   # Allowed compare-and-set transitions. A transition is valid only from one of
@@ -79,7 +88,7 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
   # record: fresh provider evidence may still settle it, otherwise one elapsed
   # confirmation window would disable saved resets on the identity forever.
   @transitions %{
-    @consuming => [@consumed_pending_probe, @reblocked, @expired],
+    @consuming => [@consumed_pending_probe, @reblocked, @expired, @consume_not_applied],
     @consumed_pending_probe => [
       @confirmed_by_upstream,
       @confirmed_by_quota,
@@ -110,6 +119,9 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
 
   @spec expired() :: phase()
   def expired, do: @expired
+
+  @spec consume_not_applied() :: phase()
+  def consume_not_applied, do: @consume_not_applied
 
   @spec phases() :: [phase()]
   def phases, do: @phases
@@ -173,14 +185,15 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
   past its window, a consumed credit that fresh evidence reblocked remains
   one-shot, the `expired` phase blocks (recovery is only via fresh evidence
   through convergence), and an unrecognized phase blocks. The
-  `consuming` phase is deliberately NOT blocked here: it keeps the legacy
-  `redeeming` status, so the pre-existing freshness gates govern the in-flight
-  window and the stale-recovery path can resume the attempt after a crash.
-  Legacy records without a phase also return `false` for the same reason.
+  Phase-bearing `consuming` records stay blocked regardless of age. Recovery of
+  their exact attempt is owned by the explicit recovery entrypoint rather than
+  an ordinary claim. Legacy records without a phase retain their pre-lifecycle
+  stale-admin behavior.
   """
   @spec blocks_new_redemption?(redemption() | term(), DateTime.t()) :: boolean()
   def blocks_new_redemption?(redemption, %DateTime{} = _now) do
     case phase(redemption) do
+      @consuming -> true
       @consumed_pending_probe -> true
       @reblocked -> consumed_credit?(redemption)
       @expired -> true
@@ -201,6 +214,16 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
   """
   @spec applied_consume?(redemption() | term()) :: boolean()
   def applied_consume?(redemption), do: consumed_credit?(redemption)
+
+  @spec applied_reblocked?(redemption() | term()) :: boolean()
+  def applied_reblocked?(%{} = redemption) do
+    phase(redemption) == @reblocked and consumed_credit?(redemption) and
+      valid_attempt_id?(Map.get(redemption, "attempt_id")) and
+      is_integer(Map.get(redemption, "generation")) and
+      match?(%DateTime{}, parse_datetime(Map.get(redemption, "consumed_at")))
+  end
+
+  def applied_reblocked?(_redemption), do: false
 
   @doc """
   At most one automatic consume per exhaustion episode. After any applied
@@ -237,6 +260,37 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
 
       true ->
         :blocked_awaiting_quota
+    end
+  end
+
+  @doc """
+  Classifies whether a cohort sibling permits a new gateway-auto consume.
+
+  Any applied or carried consume retains the existing temporal floor. Once that
+  floor elapses, only resolved phases clear; phases whose provider outcome or
+  quota convergence remains ambiguous stay blocked regardless of age.
+  """
+  @spec gateway_auto_sibling_fence(redemption() | term(), DateTime.t()) ::
+          :blocked_awaiting_quota | :cooldown | :clear
+  def gateway_auto_sibling_fence(redemption, %DateTime{} = now) do
+    cond do
+      within_consume_cooldown?(redemption, now) and applied_consume?(redemption) ->
+        :cooldown
+
+      within_carried_consume_cooldown?(redemption, now) ->
+        :cooldown
+
+      phase(redemption) in [
+        @consuming,
+        @consumed_pending_probe,
+        @confirmed_by_upstream,
+        @expired,
+        :unknown
+      ] ->
+        :blocked_awaiting_quota
+
+      true ->
+        :clear
     end
   end
 
@@ -315,6 +369,8 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
     end
   end
 
+  defp parse_datetime(_value), do: nil
+
   @doc """
   Whether the identity is currently routeable on the strength of the lifecycle
   alone: a confirmed redemption within its bounded window. Outside the window
@@ -366,17 +422,61 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycle do
   def can_transition?(redemption, to_phase, expected_generation, expected_attempt_id) do
     to_phase in @phases and
       matches_identity?(redemption, expected_generation, expected_attempt_id) and
-      allowed_transition?(phase(redemption), to_phase)
+      allowed_transition?(
+        redemption,
+        phase(redemption),
+        to_phase,
+        expected_generation,
+        expected_attempt_id
+      )
   end
 
-  defp allowed_transition?(nil, @consuming), do: true
-  defp allowed_transition?(nil, _to_phase), do: false
-  defp allowed_transition?(:unknown, _to_phase), do: false
+  defp allowed_transition?(_redemption, nil, @consuming, _generation, _attempt_id), do: true
+  defp allowed_transition?(_redemption, nil, _to_phase, _generation, _attempt_id), do: false
+  defp allowed_transition?(_redemption, :unknown, _to_phase, _generation, _attempt_id), do: false
 
-  defp allowed_transition?(from_phase, to_phase) when from_phase in @phases,
-    do: to_phase in Map.get(@transitions, from_phase, [])
+  defp allowed_transition?(
+         redemption,
+         @consuming,
+         @consume_not_applied,
+         expected_generation,
+         expected_attempt_id
+       ) do
+    exact_transition_identity?(redemption, expected_generation, expected_attempt_id) and
+      match?(
+        %{"version" => 1, "provider_dispatches" => 0},
+        Map.get(redemption, "provider_replay")
+      )
+  end
 
-  defp allowed_transition?(_from_phase, _to_phase), do: false
+  defp allowed_transition?(
+         redemption,
+         @reblocked,
+         @confirmed_by_quota,
+         expected_generation,
+         expected_attempt_id
+       ) do
+    applied_reblocked?(redemption) and
+      exact_transition_identity?(redemption, expected_generation, expected_attempt_id)
+  end
+
+  defp allowed_transition?(_redemption, from_phase, to_phase, _generation, _attempt_id)
+       when from_phase in @phases,
+       do: to_phase in Map.get(@transitions, from_phase, [])
+
+  defp allowed_transition?(_redemption, _from_phase, _to_phase, _generation, _attempt_id),
+    do: false
+
+  defp exact_transition_identity?(redemption, expected_generation, expected_attempt_id) do
+    is_integer(expected_generation) and is_binary(expected_attempt_id) and
+      Map.get(redemption, "generation") == expected_generation and
+      Map.get(redemption, "attempt_id") == expected_attempt_id
+  end
+
+  defp valid_attempt_id?(attempt_id) when is_binary(attempt_id),
+    do: Ecto.UUID.cast(attempt_id) == {:ok, attempt_id}
+
+  defp valid_attempt_id?(_attempt_id), do: false
 
   defp matches_identity?(%{} = redemption, expected_generation, expected_attempt_id) do
     generation_matches?(Map.get(redemption, "generation"), expected_generation) and

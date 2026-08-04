@@ -5,6 +5,7 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycleLatchTest do
 
   @now ~U[2026-07-23 12:00:00.000000Z]
   @inside_window @now |> DateTime.add(-5, :minute) |> DateTime.to_iso8601()
+  @inside_boundary @now |> DateTime.add(-1_799_999, :millisecond) |> DateTime.to_iso8601()
   @cooldown_boundary @now |> DateTime.add(-30, :minute) |> DateTime.to_iso8601()
   @outside_window @now |> DateTime.add(-40, :minute) |> DateTime.to_iso8601()
 
@@ -163,6 +164,110 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycleLatchTest do
 
       assert RedemptionLifecycle.gateway_auto_latch(
                record(%{"phase" => "consuming", "result" => %{}}),
+               @now
+             ) == :clear
+    end
+  end
+
+  describe "gateway_auto_sibling_fence/2" do
+    test "applied and carried consumes retain the exact cooldown floor" do
+      for phase <- ["confirmed_by_quota", "reblocked", nil] do
+        assert RedemptionLifecycle.gateway_auto_sibling_fence(
+                 record(%{"phase" => phase, "consumed_at" => @inside_boundary}),
+                 @now
+               ) == :cooldown
+
+        assert RedemptionLifecycle.gateway_auto_sibling_fence(
+                 record(%{"phase" => phase, "consumed_at" => @cooldown_boundary}),
+                 @now
+               ) == :clear
+      end
+
+      unapplied =
+        record(%{
+          "phase" => "consume_not_applied",
+          "result" => %{"code" => "provider_not_dispatched", "applied" => false},
+          "consumed_at" => nil,
+          "last_applied_consume_at" => @inside_boundary
+        })
+
+      assert RedemptionLifecycle.gateway_auto_sibling_fence(unapplied, @now) == :cooldown
+
+      assert RedemptionLifecycle.gateway_auto_sibling_fence(
+               Map.put(unapplied, "last_applied_consume_at", @cooldown_boundary),
+               @now
+             ) == :clear
+    end
+
+    test "resolved phases clear after the floor while unresolved phases remain blocked" do
+      for phase <- ["confirmed_by_quota", "reblocked", "consume_not_applied"] do
+        for applied <- [true, false] do
+          assert RedemptionLifecycle.gateway_auto_sibling_fence(
+                   record(%{
+                     "phase" => phase,
+                     "consumed_at" => @outside_window,
+                     "result" => %{"applied" => applied}
+                   }),
+                   @now
+                 ) == :clear
+        end
+      end
+
+      for phase <- [
+            "consuming",
+            "consumed_pending_probe",
+            "confirmed_by_upstream",
+            "expired",
+            "brand-new"
+          ],
+          applied <- [true, false] do
+        assert RedemptionLifecycle.gateway_auto_sibling_fence(
+                 record(%{
+                   "phase" => phase,
+                   "consumed_at" => @outside_window,
+                   "result" => %{"applied" => applied}
+                 }),
+                 @now
+               ) == :blocked_awaiting_quota
+      end
+    end
+
+    test "unapplied consuming without a carried timestamp never clears" do
+      assert RedemptionLifecycle.gateway_auto_sibling_fence(
+               record(%{
+                 "phase" => "consuming",
+                 "result" => nil,
+                 "consumed_at" => nil,
+                 "started_at" => @outside_window
+               }),
+               @now
+             ) == :blocked_awaiting_quota
+    end
+
+    test "legacy and malformed unapplied records use only a carried floor" do
+      for redemption <- [
+            %{"status" => "failed", "result" => %{"applied" => false}},
+            %{"phase" => 17, "result" => %{"applied" => false}}
+          ] do
+        assert RedemptionLifecycle.gateway_auto_sibling_fence(redemption, @now) == :clear
+
+        assert redemption
+               |> Map.put("last_applied_consume_at", @inside_window)
+               |> RedemptionLifecycle.gateway_auto_sibling_fence(@now) == :cooldown
+      end
+    end
+
+    test "future-clock tolerance matches the existing automatic floor" do
+      slightly_future = @now |> DateTime.add(30, :second) |> DateTime.to_iso8601()
+      far_future = @now |> DateTime.add(10, :minute) |> DateTime.to_iso8601()
+
+      assert RedemptionLifecycle.gateway_auto_sibling_fence(
+               record(%{"phase" => "confirmed_by_quota", "consumed_at" => slightly_future}),
+               @now
+             ) == :cooldown
+
+      assert RedemptionLifecycle.gateway_auto_sibling_fence(
+               record(%{"phase" => "confirmed_by_quota", "consumed_at" => far_future}),
                @now
              ) == :clear
     end

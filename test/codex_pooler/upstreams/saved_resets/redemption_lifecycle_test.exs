@@ -4,6 +4,7 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycleTest do
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle, as: Lifecycle
 
   @base ~U[2026-07-14 03:20:30.000000Z]
+  @attempt_id "00000000-0000-4000-8000-000000000001"
 
   defp consumed(phase, opts \\ []) do
     consumed_at = Keyword.get(opts, :consumed_at, @base)
@@ -47,6 +48,7 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycleTest do
       assert Lifecycle.legacy_status_for("confirmed_by_quota") == "succeeded"
       assert Lifecycle.legacy_status_for("reblocked") == "failed"
       assert Lifecycle.legacy_status_for("expired") == "failed"
+      assert Lifecycle.legacy_status_for("consume_not_applied") == "failed"
     end
   end
 
@@ -79,8 +81,9 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycleTest do
       assert Lifecycle.blocks_new_redemption?(consumed("consumed_pending_probe"), elapsed)
     end
 
-    test "does not block the in-flight consuming phase (legacy freshness gates govern it)" do
-      refute Lifecycle.blocks_new_redemption?(consumed("consuming"), @base)
+    test "blocks a phase-bearing consuming attempt regardless of age" do
+      assert Lifecycle.blocks_new_redemption?(consumed("consuming"), @base)
+      assert Lifecycle.blocks_new_redemption?(consumed("consuming"), DateTime.add(@base, 1, :day))
     end
 
     test "blocks an expired lifecycle so recovery only comes from fresh evidence" do
@@ -100,6 +103,7 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycleTest do
     test "does not block settled confirmations, non-consuming reblocks, or legacy records" do
       refute Lifecycle.blocks_new_redemption?(consumed("confirmed_by_quota"), @base)
       refute Lifecycle.blocks_new_redemption?(consumed("reblocked"), @base)
+      refute Lifecycle.blocks_new_redemption?(consumed("consume_not_applied"), @base)
 
       refute Lifecycle.blocks_new_redemption?(
                put_in(consumed("reblocked"), ["result"], %{"applied" => false}),
@@ -129,6 +133,7 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycleTest do
       refute Lifecycle.routeable?(consumed("consumed_pending_probe"), @base)
       refute Lifecycle.routeable?(consumed("reblocked"), @base)
       refute Lifecycle.routeable?(consumed("expired"), @base)
+      refute Lifecycle.routeable?(consumed("consume_not_applied"), @base)
       refute Lifecycle.routeable?(%{"status" => "succeeded"}, @base)
     end
   end
@@ -139,12 +144,38 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycleTest do
       refute Lifecycle.can_transition?(%{"generation" => 3}, "consumed_pending_probe", 3, nil)
     end
 
-    test "consuming advances to pending, reblocked, or expired only" do
+    test "consuming advances to pending, reblocked, expired, or proven not applied only" do
       from = consumed("consuming")
 
       assert Lifecycle.can_transition?(from, "consumed_pending_probe", 3, "attempt-1")
       assert Lifecycle.can_transition?(from, "reblocked", 3, "attempt-1")
       assert Lifecycle.can_transition?(from, "expired", 3, "attempt-1")
+      refute Lifecycle.can_transition?(from, "consume_not_applied", 3, "attempt-1")
+
+      proven_unspent =
+        Map.put(from, "provider_replay", %{"version" => 1, "provider_dispatches" => 0})
+
+      assert Lifecycle.can_transition?(
+               proven_unspent,
+               "consume_not_applied",
+               3,
+               "attempt-1"
+             )
+
+      refute Lifecycle.can_transition?(
+               put_in(proven_unspent, ["provider_replay", "provider_dispatches"], 1),
+               "consume_not_applied",
+               3,
+               "attempt-1"
+             )
+
+      refute Lifecycle.can_transition?(
+               put_in(proven_unspent, ["provider_replay", "version"], 2),
+               "consume_not_applied",
+               3,
+               "attempt-1"
+             )
+
       refute Lifecycle.can_transition?(from, "confirmed_by_upstream", 3, "attempt-1")
       refute Lifecycle.can_transition?(from, "confirmed_by_quota", 3, "attempt-1")
     end
@@ -160,8 +191,49 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycleTest do
       refute Lifecycle.can_transition?(from, "consumed_pending_probe", 3, "attempt-1")
     end
 
-    test "settled phases cannot transition further" do
-      for terminal <- ~w(confirmed_by_quota reblocked) do
+    test "an applied reblocked lifecycle can only confirm from exact valid ownership" do
+      from =
+        "reblocked"
+        |> consumed(attempt_id: @attempt_id)
+        |> Map.put("result", %{"code" => "reset", "applied" => true})
+
+      assert Lifecycle.can_transition?(from, "confirmed_by_quota", 3, @attempt_id)
+
+      for invalid <- [
+            Map.put(from, "attempt_id", nil),
+            Map.put(from, "attempt_id", 123),
+            Map.put(from, "attempt_id", "attempt-1"),
+            Map.put(from, "generation", nil),
+            Map.put(from, "generation", "3"),
+            Map.put(from, "consumed_at", nil),
+            Map.put(from, "consumed_at", "not-a-date"),
+            put_in(from, ["result", "applied"], false),
+            Map.delete(from, "result")
+          ] do
+        refute Lifecycle.can_transition?(
+                 invalid,
+                 "confirmed_by_quota",
+                 invalid["generation"],
+                 invalid["attempt_id"]
+               )
+      end
+
+      refute Lifecycle.can_transition?(from, "confirmed_by_quota", 2, @attempt_id)
+
+      refute Lifecycle.can_transition?(
+               from,
+               "confirmed_by_quota",
+               3,
+               "00000000-0000-4000-8000-000000000002"
+             )
+
+      for target <- Lifecycle.phases() -- ["confirmed_by_quota"] do
+        refute Lifecycle.can_transition?(from, target, 3, @attempt_id)
+      end
+    end
+
+    test "other settled phases cannot transition further" do
+      for terminal <- ~w(confirmed_by_quota consume_not_applied) do
         from = consumed(terminal)
 
         for to <- Lifecycle.phases() do
@@ -193,6 +265,20 @@ defmodule CodexPooler.Upstreams.SavedResets.RedemptionLifecycleTest do
 
     test "an unrecognized target phase is rejected" do
       refute Lifecycle.can_transition?(consumed("consuming"), "teleported", 3, "attempt-1")
+    end
+  end
+
+  describe "consume_not_applied lifecycle" do
+    test "is terminal, non-routeable, and non-probe-claimable with an unapplied result" do
+      redemption =
+        consumed("consume_not_applied")
+        |> Map.put("result", %{"code" => "provider_not_dispatched", "applied" => false})
+
+      assert Lifecycle.terminal?("consume_not_applied")
+      refute Lifecycle.nonterminal?("consume_not_applied")
+      refute Lifecycle.routeable?(redemption, @base)
+      refute Lifecycle.probe_claimable?(redemption, @base)
+      assert redemption["result"]["applied"] == false
     end
   end
 end
