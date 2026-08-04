@@ -24,7 +24,7 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
   @receipt_keys ~w(run_fingerprint scenarios status cleanup endpoint_isolated oban_isolated source_sha)
   @scenario_receipt_keys %{
     "sibling-barrier" =>
-      ~w(consume_count distinct_backend_pids barrier winner_applied loser_code),
+      ~w(consume_count distinct_backend_pids backend_pinned barrier winner_applied loser_code),
     "ambiguous-replay" =>
       ~w(target_reused request_reused scope_reused attempt_reused generation_reused scope_fingerprint),
     "markerless-legacy" =>
@@ -194,16 +194,19 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
          {:provider_barrier, provider_pid, :sibling} <- receive_provider_barrier(),
          :ok <- send_start(loser.pid),
          :ok <- Provider.release(provider_pid),
-         {:winner, ^winner_backend_pid, {:ok, %{status: :succeeded, applied?: true}}} <-
+         {:winner, %{before: ^winner_backend_pid} = winner_pin,
+          {:ok, %{status: :succeeded, applied?: true}}} <-
            Task.await(winner, 15_000),
-         {:loser, ^loser_backend_pid,
+         {:loser, %{before: ^loser_backend_pid} = loser_pin,
           {:ok, %{status: :noop, code: "gateway_auto_sibling_consume_barrier"}}} <-
            Task.await(loser, 15_000),
+         true <- distinct_pinned_backends?(winner_pin, loser_pin),
          1 <- Provider.consume_count(provider) do
       {:ok,
        %{
          consume_count: 1,
          distinct_backend_pids: true,
+         backend_pinned: true,
          barrier: true,
          winner_applied: true,
          loser_code: "gateway_auto_sibling_consume_barrier"
@@ -212,6 +215,20 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
       _other -> {:error, "sibling-barrier contract was not satisfied"}
     end
   end
+
+  @doc """
+  True only when each caller kept one pinned database backend for its entire
+  redemption (`before == after`) and the two callers used distinct backends.
+  """
+  @spec distinct_pinned_backends?(map(), map()) :: boolean()
+  def distinct_pinned_backends?(
+        %{before: winner_pid, after: winner_pid},
+        %{before: loser_pid, after: loser_pid}
+      )
+      when is_integer(winner_pid) and is_integer(loser_pid),
+      do: winner_pid != loser_pid
+
+  def distinct_pinned_backends?(_winner_pin, _loser_pin), do: false
 
   defp ambiguous_replay(provider, run_id) do
     Provider.configure(provider, :ambiguous)
@@ -243,12 +260,7 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
              receive_timeout: 1_000
            ),
          [^first_request, second_request] <- Provider.consume_requests(provider),
-         true <- same_nonempty_binary?(first_request["credit_id"], second_request["credit_id"]),
-         true <-
-           same_nonempty_binary?(
-             first_request["redeem_request_id"],
-             second_request["redeem_request_id"]
-           ),
+         true <- replay_request_reused?(first_request, second_request),
          recovered <- Repo.reload!(identity).metadata["saved_reset_redemption"],
          recovered_replay <- recovered["provider_replay"],
          true <- replay["scope_fingerprint"] == recovered_replay["scope_fingerprint"],
@@ -306,11 +318,12 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
            persisted["legacy_recovery_next_action_at"],
          {:ok, next_action_at, 0} <- DateTime.from_iso8601(next_action_at),
          true <- DateTime.diff(next_action_at, now, :second) >= 6 * 60 * 60,
+         "observe_only" <- legacy_observe_only_mode(persisted),
          0 <- Provider.request_count(provider) do
       {:ok,
        %{
          legacy_recovery: "v1_unresolved",
-         mode: "observe_only",
+         mode: legacy_observe_only_mode(persisted),
          provider_requests: 0,
          snooze_seconds: seconds,
          next_action_scheduled: true
@@ -319,6 +332,24 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
       _other -> {:error, "markerless-legacy contract was not satisfied"}
     end
   end
+
+  @doc """
+  Derives the legacy recovery mode from the persisted record instead of
+  asserting it: a still-consuming record that carries the v1 unresolved marker
+  and no `provider_replay` contract is observe-only by definition.
+  """
+  @spec legacy_observe_only_mode(map()) :: String.t()
+  def legacy_observe_only_mode(
+        %{
+          "status" => "redeeming",
+          "phase" => "consuming",
+          "legacy_recovery" => %{"version" => 1, "state" => "unresolved"}
+        } = persisted
+      ) do
+    if Map.has_key?(persisted, "provider_replay"), do: "unexpected", else: "observe_only"
+  end
+
+  def legacy_observe_only_mode(_persisted), do: "unexpected"
 
   defp provision_entries(run_id, provider_url, family, count, started_at) do
     run_suffix = "#{run_id}-#{Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)}"
@@ -378,44 +409,62 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
     {pool, entries}
   end
 
+  # The caller holds one checked-out database connection for its entire
+  # redemption, so the backend pid measured before and after is provably the
+  # backend that executed its claim and reservation transactions.
   defp redeem_gateway_auto(parent, role, entry, cohort_ids, started_at) do
-    backend_pid = Repo.query!("SELECT pg_backend_pid()", []).rows |> List.first() |> List.first()
-    send(parent, {:probe_ready, role, backend_pid})
+    Repo.checkout(
+      fn ->
+        backend_pid = current_backend_pid()
+        send(parent, {:probe_ready, role, backend_pid})
 
-    receive do
-      :saved_reset_probe_start -> :ok
-    after
-      10_000 -> raise "saved-reset caller was not started"
-    end
+        receive do
+          :saved_reset_probe_start -> :ok
+        after
+          10_000 -> raise "saved-reset caller was not started"
+        end
 
-    result =
-      SavedResetRedemption.redeem(entry.assignment,
-        trigger_kind: "gateway_auto",
-        gateway_auto_context: %{
-          trigger: :blocked_weekly_exhaustion,
-          pool_upstream_assignment_id: entry.assignment.id,
-          upstream_identity_id: entry.identity.id,
-          candidate_assignment_ids: [entry.assignment.id],
-          candidate_identity_ids: [entry.identity.id],
-          cohort_identity_ids: cohort_ids,
-          routable_identity_ids: cohort_ids,
-          route_class: "proxy_http",
-          quota_scope: quota_scope(),
-          session_continuity?: false
-        },
-        started_at: started_at,
-        receive_timeout: 10_000
-      )
+        result =
+          SavedResetRedemption.redeem(entry.assignment,
+            trigger_kind: "gateway_auto",
+            gateway_auto_context: %{
+              trigger: :blocked_weekly_exhaustion,
+              pool_upstream_assignment_id: entry.assignment.id,
+              upstream_identity_id: entry.identity.id,
+              candidate_assignment_ids: [entry.assignment.id],
+              candidate_identity_ids: [entry.identity.id],
+              cohort_identity_ids: cohort_ids,
+              routable_identity_ids: cohort_ids,
+              route_class: "proxy_http",
+              quota_scope: quota_scope(),
+              session_continuity?: false
+            },
+            started_at: started_at,
+            receive_timeout: 10_000
+          )
 
-    {role, backend_pid, result}
+        {role, %{before: backend_pid, after: current_backend_pid()}, result}
+      end,
+      timeout: 60_000
+    )
   end
 
-  defp receive_provider_barrier do
+  defp current_backend_pid do
+    Repo.query!("SELECT pg_backend_pid()", []).rows |> List.first() |> List.first()
+  end
+
+  @doc """
+  Waits for the loopback provider's sibling barrier signal; a missing signal
+  resolves to `:timeout` so the orchestration fails closed instead of hanging.
+  """
+  @spec receive_provider_barrier(non_neg_integer()) ::
+          {:provider_barrier, pid(), :sibling} | :timeout
+  def receive_provider_barrier(timeout \\ 10_000) do
     receive do
       {:saved_reset_probe_provider_barrier, provider_pid, :sibling} ->
         {:provider_barrier, provider_pid, :sibling}
     after
-      10_000 -> :timeout
+      timeout -> :timeout
     end
   end
 
@@ -498,8 +547,19 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
   end
 
   defp cleanup_run(_run_id) do
-    journal = Process.get({__MODULE__, :journal}, empty_journal())
+    cleanup_owned!(Process.get({__MODULE__, :journal}, empty_journal()))
+  end
 
+  @doc """
+  Deletes exactly the journaled run-owned rows and raises when any of them
+  survives; rows outside the journal are never touched.
+  """
+  @spec cleanup_owned!(%{
+          required(:pool_ids) => [Ecto.UUID.t()],
+          required(:identity_ids) => [Ecto.UUID.t()],
+          required(:assignment_ids) => [Ecto.UUID.t()]
+        }) :: :ok
+  def cleanup_owned!(journal) do
     Repo.delete_all(
       from assignment in PoolUpstreamAssignment, where: assignment.id in ^journal.assignment_ids
     )
@@ -547,7 +607,11 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
 
   defp empty_journal, do: %{pool_ids: [], identity_ids: [], assignment_ids: []}
 
-  defp owned_resources_removed?(journal) do
+  @doc """
+  True only when no journaled run-owned row remains in the database.
+  """
+  @spec owned_resources_removed?(map()) :: boolean()
+  def owned_resources_removed?(journal) do
     Repo.aggregate(from(pool in Pool, where: pool.id in ^journal.pool_ids), :count) == 0 and
       Repo.aggregate(
         from(identity in UpstreamIdentity, where: identity.id in ^journal.identity_ids),
@@ -729,7 +793,8 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
   defp valid_scenario_receipt?("sibling-barrier", receipt),
     do:
       receipt["consume_count"] == 1 and receipt["distinct_backend_pids"] == true and
-        receipt["barrier"] == true and receipt["winner_applied"] == true and
+        receipt["backend_pinned"] == true and receipt["barrier"] == true and
+        receipt["winner_applied"] == true and
         receipt["loser_code"] == "gateway_auto_sibling_consume_barrier"
 
   defp valid_scenario_receipt?("ambiguous-replay", receipt),
@@ -752,6 +817,22 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
   defp stringify_keys(map), do: Map.new(map, fn {key, value} -> {to_string(key), value} end)
+
+  @doc """
+  True only when the recovery consume request replays the original pinned
+  credit target and derived idempotent request id byte-for-byte.
+  """
+  @spec replay_request_reused?(map(), map()) :: boolean()
+  def replay_request_reused?(first_request, second_request)
+      when is_map(first_request) and is_map(second_request) do
+    same_nonempty_binary?(first_request["credit_id"], second_request["credit_id"]) and
+      same_nonempty_binary?(
+        first_request["redeem_request_id"],
+        second_request["redeem_request_id"]
+      )
+  end
+
+  def replay_request_reused?(_first_request, _second_request), do: false
 
   defp same_nonempty_binary?(left, right),
     do: is_binary(left) and byte_size(left) > 0 and left == right
