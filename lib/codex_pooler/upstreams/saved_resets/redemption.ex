@@ -383,7 +383,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
   defp claim_locked_identity!(
          locked_identity,
-         _locked_cohort,
+         locked_cohort,
          assignment,
          trigger_kind,
          receive_timeout,
@@ -406,6 +406,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
       true ->
         claim_validated_identity!(
           locked_identity,
+          locked_cohort,
           assignment,
           trigger_kind,
           receive_timeout,
@@ -419,6 +420,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
   defp claim_validated_identity!(
          locked_identity,
+         locked_cohort,
          assignment,
          trigger_kind,
          receive_timeout,
@@ -434,17 +436,28 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
            started_at
          ) do
       {:ok, current_assignment} ->
-        locked_identity
-        |> maybe_mark_stale_admin_redemption!(metadata, redemption, trigger_kind, started_at)
-        |> build_redemption_claim!(
-          locked_identity,
-          current_assignment,
-          trigger_kind,
-          receive_timeout,
-          started_at,
-          nil,
-          gateway_auto_trigger_detail(gateway_auto_context)
-        )
+        case sibling_consume_fence(
+               locked_identity,
+               locked_cohort,
+               gateway_auto_context,
+               started_at
+             ) do
+          :ok ->
+            locked_identity
+            |> maybe_mark_stale_admin_redemption!(metadata, redemption, trigger_kind, started_at)
+            |> build_redemption_claim!(
+              locked_identity,
+              current_assignment,
+              trigger_kind,
+              receive_timeout,
+              started_at,
+              nil,
+              gateway_auto_trigger_detail(gateway_auto_context)
+            )
+
+          {:noop, code} ->
+            {:noop, noop_result(locked_identity, current_assignment, code)}
+        end
 
       {:noop, code} ->
         {:noop, noop_result(locked_identity, assignment, code)}
@@ -483,6 +496,22 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          ) do
       %PoolUpstreamAssignment{} = assignment -> {:ok, assignment}
       nil -> {:noop, "gateway_auto_assignment_unavailable"}
+    end
+  end
+
+  defp sibling_consume_fence(_locked_identity, _locked_cohort, nil, _timestamp), do: :ok
+
+  defp sibling_consume_fence(locked_identity, locked_cohort, _gateway_auto_context, timestamp) do
+    if Enum.any?(locked_cohort, fn {identity_id, sibling} ->
+         identity_id != locked_identity.id and
+           RedemptionLifecycle.gateway_auto_sibling_fence(
+             (sibling.metadata || %{})["saved_reset_redemption"],
+             timestamp
+           ) != :clear
+       end) do
+      {:noop, "gateway_auto_sibling_consume_barrier"}
+    else
+      :ok
     end
   end
 

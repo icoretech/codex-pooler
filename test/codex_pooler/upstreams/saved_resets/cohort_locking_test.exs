@@ -37,7 +37,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CohortLockingTest do
       )
 
     try do
-      assert {:ok, _result} =
+      assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
                SavedResetRedemption.redeem(assignment,
                  trigger_kind: "gateway_auto",
                  gateway_auto_context:
@@ -69,6 +69,27 @@ defmodule CodexPooler.Upstreams.SavedResets.CohortLockingTest do
                trigger_kind: "gateway_auto",
                gateway_auto_context:
                  gateway_context(assignment, target, [target.id, Ecto.UUID.generate()]),
+               started_at: as_of
+             )
+
+    assert [] = FakeUpstream.requests(fake)
+  end
+
+  test "blocks a gateway auto claim when a locked cohort sibling has an active consume fence" do
+    {:ok, fake} = codex_reset_fake()
+    on_exit(fn -> FakeUpstream.stop(fake) end)
+
+    %{identity: target, assignment: assignment} = assignment_with_fake(fake)
+    %{identity: sibling} = assignment_with_fake(fake)
+    target = enable_auto_redeem!(target)
+    as_of = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    upsert_weekly_exhausted_quota!(target, as_of)
+    update_redemption!(sibling, applied_redemption(as_of))
+
+    assert {:ok, %{status: :noop, code: "gateway_auto_sibling_consume_barrier"}} =
+             SavedResetRedemption.redeem(assignment,
+               trigger_kind: "gateway_auto",
+               gateway_auto_context: gateway_context(assignment, target, [sibling.id, target.id]),
                started_at: as_of
              )
 
@@ -112,6 +133,28 @@ defmodule CodexPooler.Upstreams.SavedResets.CohortLockingTest do
     |> Repo.update!()
   end
 
+  defp update_redemption!(identity, redemption) do
+    identity
+    |> UpstreamIdentity.changeset(%{
+      metadata: Map.put(identity.metadata, "saved_reset_redemption", redemption)
+    })
+    |> Repo.update!()
+  end
+
+  defp applied_redemption(as_of) do
+    %{
+      "status" => "succeeded",
+      "phase" => "confirmed_by_quota",
+      "attempt_id" => Ecto.UUID.generate(),
+      "generation" => 1,
+      "trigger_kind" => "gateway_auto",
+      "started_at" => DateTime.to_iso8601(as_of),
+      "consumed_at" => DateTime.to_iso8601(as_of),
+      "finished_at" => DateTime.to_iso8601(as_of),
+      "result" => %{"code" => "reset", "applied" => true}
+    }
+  end
+
   defp upsert_weekly_exhausted_quota!(identity, as_of) do
     assert {:ok, [_window]} =
              QuotaWindows.upsert_quota_windows(identity, [
@@ -123,7 +166,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CohortLockingTest do
                  reset_at: DateTime.add(as_of, 1, :hour),
                  observed_at: as_of,
                  last_sync_at: as_of,
-                 source: "codex_response_headers",
+                 source: "codex_usage_api",
                  source_precision: "authoritative",
                  quota_scope: "account",
                  quota_family: "account"
