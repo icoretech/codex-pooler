@@ -231,6 +231,9 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
           identity.id not in context.candidate_identity_ids ->
         {:noop, "gateway_auto_context_mismatch"}
 
+      identity.id not in context.cohort_identity_ids ->
+        {:noop, "gateway_auto_context_mismatch"}
+
       true ->
         :ok
     end

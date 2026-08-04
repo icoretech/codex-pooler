@@ -410,6 +410,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
   defp gateway_auto_context(refresh_plan, assignment, identity, trigger) do
     candidates = candidate_order(refresh_plan)
+    cohort = cohort_order(refresh_plan)
 
     %{
       trigger: trigger,
@@ -423,9 +424,19 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
         Enum.map(candidates, fn {_candidate_assignment, candidate_identity} ->
           candidate_identity.id
         end),
+      cohort_identity_ids:
+        Enum.map(cohort, fn {_candidate_assignment, candidate_identity} ->
+          candidate_identity.id
+        end),
       route_class: route_class(refresh_plan)
     }
   end
+
+  defp cohort_order(%{route_state: %RouteState{saved_reset_auto_cohort: cohort}})
+       when is_list(cohort),
+       do: cohort
+
+  defp cohort_order(refresh_plan), do: candidate_order(refresh_plan)
 
   defp route_class(%{filter_input: %{route_class: route_class}})
        when is_binary(route_class) and route_class != "",
