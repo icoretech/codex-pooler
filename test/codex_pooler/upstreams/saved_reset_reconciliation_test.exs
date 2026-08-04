@@ -65,8 +65,7 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
         metadata: %{
           "base_url" => FakeUpstream.url(fake),
           "usage_base_url" => FakeUpstream.url(fake),
-          "access_token_expires_at" =>
-            now |> DateTime.add(2, :day) |> DateTime.to_iso8601(),
+          "access_token_expires_at" => now |> DateTime.add(2, :day) |> DateTime.to_iso8601(),
           "saved_reset_redemption" => reblocked_redemption
         }
       })
