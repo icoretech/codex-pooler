@@ -2163,53 +2163,234 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute Map.has_key?(captured.json, "max_output_tokens")
   end
 
-  test "POST /v1/responses forwards encrypted compaction replay before dispatch", %{conn: conn} do
-    upstream =
-      start_upstream(
-        FakeUpstream.json_response(%{
-          "id" => "resp_v1_compaction_replay",
-          "object" => "response",
-          "usage" => %{"input_tokens" => 2, "output_tokens" => 3, "total_tokens" => 5}
-        })
-      )
+  test "POST /v1/responses preserves verified compaction variants across JSON and SSE", %{
+    conn: conn
+  } do
+    setup_runtime_ingress_override(%OperationalSettings{gateway_debug?: true})
 
+    variants = [
+      {"public_without_id",
+       %{
+         "type" => "compaction",
+         "encrypted_content" => "synthetic-public-idless-compaction-private"
+       }},
+      {"public",
+       %{
+         "type" => "compaction",
+         "encrypted_content" => "synthetic-public-compaction-private",
+         "id" => "cmp_v1_public_private"
+       }},
+      {"public_with_null_id",
+       %{
+         "type" => "compaction",
+         "encrypted_content" => "synthetic-public-null-id-compaction-private",
+         "id" => nil
+       }},
+      {"native",
+       %{
+         "type" => "compaction",
+         "encrypted_content" => "synthetic-native-compaction-private",
+         "id" => "cmp_v1_native_private",
+         "internal_chat_message_metadata_passthrough" => %{
+           "turn_id" => "turn_v1_native_private"
+         }
+       }}
+    ]
+
+    assert Enum.any?(variants, fn {_variant_name, item} ->
+             Map.has_key?(item, "id") and is_nil(item["id"])
+           end)
+
+    for {variant_name, compaction_item} <- variants,
+        {mode_name, stream?} <- [{"json", false}, {"sse", true}] do
+      response_id = "resp_v1_compaction_#{variant_name}_#{mode_name}"
+
+      upstream =
+        start_upstream(
+          FakeUpstream.sse_stream([
+            {"response.completed",
+             %{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => response_id,
+                 "object" => "response",
+                 "status" => "completed",
+                 "output" => [],
+                 "usage" => %{"input_tokens" => 2, "output_tokens" => 3, "total_tokens" => 5}
+               }
+             }}
+          ])
+        )
+
+      setup = gateway_setup(upstream)
+
+      {response, log_output} =
+        with_log(fn ->
+          conn
+          |> recycle()
+          |> auth(setup)
+          |> post("/v1/responses", %{
+            "model" => setup.model.exposed_model_id,
+            "store" => false,
+            "stream" => stream?,
+            "input" => [
+              compaction_item,
+              %{
+                "role" => "user",
+                "content" => [
+                  %{
+                    "type" => "input_text",
+                    "text" => "synthetic private follow-up for #{variant_name} #{mode_name}"
+                  }
+                ]
+              }
+            ]
+          })
+        end)
+
+      if stream? do
+        assert response.status == 200
+        assert [content_type] = get_resp_header(response, "content-type")
+        assert content_type =~ "text/event-stream"
+        assert response.resp_body =~ "event: response.completed\n"
+        assert response.resp_body =~ response_id
+      else
+        assert %{
+                 "id" => ^response_id,
+                 "object" => "response",
+                 "status" => "completed"
+               } = json_response(response, 200)
+      end
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.path == "/backend-api/codex/responses"
+      assert captured.json["stream"] == true
+      assert captured.json["store"] == false
+      refute Map.has_key?(captured.json, "previous_response_id")
+
+      assert [captured_compaction, captured_user] = captured.json["input"]
+      assert captured_compaction == compaction_item
+
+      if variant_name == "public_with_null_id" do
+        assert Map.has_key?(captured_compaction, "id")
+        assert captured_compaction["id"] == nil
+      end
+
+      assert captured_user["type"] == "message"
+      assert captured_user["role"] == "user"
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.status == "succeeded"
+
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.status == "succeeded"
+
+      assert get_in(attempt.response_metadata, ["gateway_debug", "items", "item_types"]) == [
+               "compaction",
+               "message"
+             ]
+
+      projection_text =
+        inspect({
+          request.request_metadata,
+          attempt.response_metadata,
+          RequestLogs.list(setup.pool, filters: %{request_id: request.id})
+        })
+
+      private_values = [
+        compaction_item["encrypted_content"],
+        compaction_item["id"],
+        get_in(compaction_item, ["internal_chat_message_metadata_passthrough", "turn_id"]),
+        "internal_chat_message_metadata_passthrough",
+        "created_by"
+      ]
+
+      for private_value <- Enum.reject(private_values, &is_nil/1) do
+        refute projection_text =~ private_value
+        refute log_output =~ private_value
+      end
+    end
+  end
+
+  test "POST /v1/responses rejects unverified compaction metadata without side effects", %{
+    conn: conn
+  } do
+    setup_runtime_ingress_override(%OperationalSettings{gateway_debug?: true})
+
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
     setup = gateway_setup(upstream)
 
-    encrypted_compaction = "synthetic-encrypted-compaction"
+    invalid_items = [
+      %{
+        "type" => "compaction",
+        "encrypted_content" => "synthetic-malformed-compaction-private",
+        "id" => "cmp_v1_malformed_private",
+        "internal_chat_message_metadata_passthrough" => %{
+          "turn_id" => "turn_v1_malformed_private",
+          "unexpected_nested_field" => "nested-v1-private"
+        }
+      },
+      %{
+        "type" => "compaction",
+        "encrypted_content" => "synthetic-unverified-compaction-private",
+        "id" => "cmp_v1_unverified_private",
+        "created_by" => "creator-v1-private"
+      },
+      %{
+        "type" => "compaction",
+        "encrypted_content" => "synthetic-unknown-field-compaction-private",
+        "id" => "cmp_v1_unknown_field_private",
+        "unexpected_field" => "unknown-v1-private"
+      }
+    ]
 
-    conn =
-      conn
-      |> auth(setup)
-      |> post("/v1/responses", %{
-        "model" => setup.model.exposed_model_id,
-        "store" => false,
-        "stream" => true,
-        "input" => [
-          %{"type" => "compaction", "encrypted_content" => encrypted_compaction},
-          %{
-            "role" => "user",
-            "content" => [
-              %{"type" => "input_text", "text" => "synthetic follow-up after compaction"}
-            ]
-          }
-        ]
-      })
+    counts = durable_accounting_counts()
 
-    assert response(conn, 200) == ""
-    assert get_resp_header(conn, "content-type") == ["text/event-stream"]
+    for invalid_item <- invalid_items do
+      {response, log_output} =
+        with_log(fn ->
+          conn
+          |> recycle()
+          |> auth(setup)
+          |> post("/v1/responses", %{
+            "model" => setup.model.exposed_model_id,
+            "input" => [invalid_item]
+          })
+        end)
 
-    assert [captured] = FakeUpstream.requests(upstream)
-    assert captured.path == "/backend-api/codex/responses"
-    assert captured.json["stream"] == true
-    assert captured.json["store"] == false
+      assert %{
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_request",
+                 "param" => "input"
+               }
+             } = json_response(response, 400)
 
-    assert [
-             %{"type" => "compaction", "encrypted_content" => ^encrypted_compaction},
-             %{"type" => "message", "role" => "user"}
-           ] = captured.json["input"]
+      private_values = [
+        invalid_item["encrypted_content"],
+        invalid_item["id"],
+        get_in(invalid_item, ["internal_chat_message_metadata_passthrough", "turn_id"]),
+        get_in(invalid_item, [
+          "internal_chat_message_metadata_passthrough",
+          "unexpected_nested_field"
+        ]),
+        invalid_item["created_by"],
+        invalid_item["unexpected_field"],
+        "internal_chat_message_metadata_passthrough",
+        "created_by",
+        "unexpected_nested_field",
+        "unexpected_field"
+      ]
 
-    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
-    refute inspect(request.request_metadata) =~ encrypted_compaction
+      for private_value <- Enum.reject(private_values, &is_nil/1) do
+        refute response.resp_body =~ private_value
+        refute log_output =~ private_value
+      end
+
+      assert FakeUpstream.requests(upstream) == []
+      assert durable_accounting_counts() == counts
+      assert %{items: [], total: 0} = RequestLogs.list(setup.pool)
+    end
   end
 
   test "POST /v1/responses forwards lowered non-strict function tool schemas", %{conn: conn} do
