@@ -523,21 +523,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
     result =
       case result do
         {:ok, %{windows: refreshed, identity: updated_identity}} ->
-          # Fresh quota is now persisted: converge any pending saved-reset
-          # redemption on this identity from that evidence (self-healing). Best
-          # effort and a no-op for identities without a pending lifecycle, but a
-          # genuine convergence error must not stay invisible.
-          case Convergence.converge(updated_identity, observed_at) do
-            {:ok, _outcome} ->
-              :ok
-
-            {:error, reason} ->
-              Logger.warning(
-                "saved reset convergence failed " <>
-                  "upstream_identity_id=#{updated_identity.id} " <>
-                  "reason=#{safe_error_message(reason)}"
-              )
-          end
+          converge_refreshed_identity(updated_identity, observed_at)
 
           step_result(:succeeded, "quota_refreshed", "quota windows refreshed", %{
             "window_count" => length(refreshed)
@@ -560,6 +546,24 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
       end
 
     put_expected_credential_epoch(result, context.expected_credential_epoch)
+  end
+
+  # Fresh quota is now persisted: converge any pending saved-reset redemption
+  # on this identity from that evidence (self-healing). Best effort and a no-op
+  # for identities without a pending lifecycle, but a genuine convergence error
+  # must not stay invisible.
+  defp converge_refreshed_identity(identity, observed_at) do
+    case Convergence.converge(identity, observed_at) do
+      {:ok, _outcome} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "saved reset convergence failed " <>
+            "upstream_identity_id=#{identity.id} " <>
+            "reason=#{safe_error_message(reason)}"
+        )
+    end
   end
 
   defp upsert_reconciliation_quota(%{
