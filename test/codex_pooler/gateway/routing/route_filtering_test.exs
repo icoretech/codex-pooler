@@ -9,6 +9,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
   alias CodexPooler.Gateway.Payloads.ContinuityPayload
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
+  alias CodexPooler.Gateway.Persistence.BridgeSessionAlias
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Gateway.Routing.CandidateEligibility
@@ -541,12 +542,18 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       %{
         upstream: upstream,
         filter_input: filter_input,
-        target_identity: target_identity
+        target_identity: target_identity,
+        pool: pool,
+        api_key: api_key,
+        session: session
       } = first_turn_capacity_arrangement("hard-pin-capacity")
+
+      previous_response_id = "resp_hard_pin_capacity_baseline"
+      register_previous_response_alias!(pool, api_key, session, previous_response_id)
 
       request_options =
         ContinuityPayload.put_previous_response_id(filter_input.request_options, %{
-          "previous_response_id" => "resp_hard_pin_capacity_baseline"
+          "previous_response_id" => previous_response_id
         })
 
       filter_input = %{filter_input | request_options: request_options}
@@ -568,6 +575,39 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       redemption = Repo.reload!(target_identity).metadata["saved_reset_redemption"]
       assert redemption["result"]["applied"] == true
       assert redemption["trigger_detail"] == "threshold"
+    end
+
+    test "an unresolved previous response anchor does not bypass the capacity veto" do
+      %{
+        upstream: upstream,
+        filter_input: filter_input,
+        sibling_identity: sibling_identity,
+        target_identity: target_identity
+      } = first_turn_capacity_arrangement("unresolved-hard-pin")
+
+      # The anchor never resolved through a session alias: the attached session
+      # is fallback preference, so the threshold burn keeps its veto.
+      request_options =
+        ContinuityPayload.put_previous_response_id(filter_input.request_options, %{
+          "previous_response_id" => "resp_unresolved_anchor"
+        })
+
+      filter_input = %{filter_input | request_options: request_options}
+
+      before_target = Repo.reload!(target_identity).metadata
+      before_sibling = Repo.reload!(sibling_identity).metadata
+
+      {result, log} = with_info_log(fn -> RouteFiltering.filter_candidates(filter_input) end)
+
+      assert {:ok, [_sibling_candidate, _target_candidate], _request_options} = result
+
+      assert log =~ "result_code=gateway_auto_sibling_usable_capacity"
+      assert log =~ "applied=false"
+      refute log =~ "result_code=reset"
+
+      assert FakeUpstream.requests(upstream) == []
+      assert Repo.reload!(target_identity).metadata == before_target
+      assert Repo.reload!(sibling_identity).metadata == before_sibling
     end
 
     test "normal redemption refilters from a newer persisted snapshot and preserves route state" do
@@ -1793,6 +1833,10 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
         session_key: "sess-#{suffix}-#{System.unique_integer([:positive])}",
         pool_upstream_assignment_id: target_assignment.id,
         status: "active",
+        owner_instance_id: "route-filtering-test",
+        owner_lease_token: Ecto.UUID.generate(),
+        owner_lease_expires_at: DateTime.add(now, 1, :hour),
+        last_heartbeat_at: now,
         created_at: DateTime.add(now, -4, :second),
         updated_at: DateTime.add(now, -4, :second)
       })
@@ -1803,11 +1847,31 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
     %{
       upstream: upstream,
       filter_input: %{filter_input | request_options: request_options},
+      pool: pool,
+      api_key: api_key,
+      session: session,
       sibling_identity: sibling_identity,
       sibling_assignment: sibling_assignment,
       target_identity: target_identity,
       target_assignment: target_assignment
     }
+  end
+
+  defp register_previous_response_alias!(pool, api_key, session, previous_response_id) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    Repo.insert!(%BridgeSessionAlias{
+      codex_session_id: session.id,
+      pool_id: pool.id,
+      api_key_id: api_key.id,
+      alias_kind: "previous_response_id",
+      alias_hash: :crypto.hash(:sha256, previous_response_id),
+      status: "active",
+      expires_at: DateTime.add(now, 1, :hour),
+      last_seen_at: now,
+      created_at: now,
+      updated_at: now
+    })
   end
 
   defp put_applied_reblocked_redemption!(%UpstreamIdentity{} = identity, consumed_minutes_ago) do

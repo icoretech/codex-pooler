@@ -843,10 +843,12 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     redemption = metadata["saved_reset_redemption"] || %{}
     replay = redemption["provider_replay"] || %{}
 
-    # Provider I/O (the credit list) can straddle the replay cutoff between the
-    # entry timestamp and this reservation, so the cutoff must be re-evaluated
-    # against the freshest known time before another write is authorized.
-    cutoff_now = later_datetime(now, recovery.clock.())
+    # Provider I/O (the credit list) can straddle both the replay cutoff and
+    # the dispatch schedule between the entry timestamp and this reservation:
+    # every check and every persisted timestamp uses the freshest known time,
+    # or a slow list would backdate the dispatch anchor and collapse the
+    # required delay before the next dispatch.
+    reservation_now = later_datetime(now, recovery.clock.())
 
     with %PoolUpstreamAssignment{id: assignment_id} = assignment <- canonical,
          true <- assignment_id == recovery.assignment.id,
@@ -854,11 +856,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          true <- exact_recovery_attempt?(redemption, recovery),
          true <- replay["provider_dispatches"] == recovery.provider_dispatches,
          true <- replay["provider_dispatches"] < @maximum_provider_dispatches,
-         true <- before_replay_cutoff?(redemption, cutoff_now),
+         true <- before_replay_cutoff?(redemption, reservation_now),
          {:ok, due_at} <- recovery_replay_due_at(replay),
-         true <- DateTime.compare(now, due_at) != :lt,
+         true <- DateTime.compare(reservation_now, due_at) != :lt,
          {:ok, endpoint_family, consume_url, scope_fingerprint} <-
-           provider_scope(identity, assignment, SavedResets.snapshot(identity, now)),
+           provider_scope(identity, assignment, SavedResets.snapshot(identity, reservation_now)),
          true <- endpoint_family == recovery.endpoint_family,
          true <- consume_url == recovery.consume_url,
          true <- scope_fingerprint == recovery.scope_fingerprint,
@@ -871,12 +873,12 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
              replay
            ) do
       dispatches = replay["provider_dispatches"] + 1
-      next_action_at = next_replay_action_at(dispatches, now)
+      next_action_at = next_replay_action_at(dispatches, reservation_now)
 
       updated_replay =
         replay
         |> Map.put("provider_dispatches", dispatches)
-        |> Map.put("last_provider_dispatched_at", DateTime.to_iso8601(now))
+        |> Map.put("last_provider_dispatched_at", DateTime.to_iso8601(reservation_now))
         |> Map.put("next_action_at", DateTime.to_iso8601(next_action_at))
         |> Map.put("mode", "replay")
         |> Map.put("last_code", "dispatch_reserved")
@@ -890,7 +892,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
       updated_identity =
         identity
-        |> UpstreamIdentity.changeset(%{metadata: updated_metadata, updated_at: now})
+        |> UpstreamIdentity.changeset(%{metadata: updated_metadata, updated_at: reservation_now})
         |> Repo.update!()
 
       updated =
@@ -899,14 +901,14 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           | identity: updated_identity,
             assignment: assignment,
             provider_dispatches: dispatches,
-            last_provider_dispatched_at: now
+            last_provider_dispatched_at: reservation_now
         }
         |> Map.put(:reserved_provider_dispatches, dispatches)
 
       {:ok, updated, credit_id}
     else
       false ->
-        recovery_reservation_conflict(identity, canonical, redemption, recovery, now, cutoff_now)
+        recovery_reservation_conflict(identity, canonical, redemption, recovery, reservation_now)
 
       nil ->
         {:noop, "recovery_superseded", identity, recovery.assignment}
@@ -947,7 +949,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     )
   end
 
-  defp recovery_reservation_conflict(identity, canonical, redemption, recovery, now, cutoff_now) do
+  defp recovery_reservation_conflict(identity, canonical, redemption, recovery, reservation_now) do
     replay = redemption["provider_replay"] || %{}
 
     cond do
@@ -961,11 +963,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           replay["provider_dispatches"] >= @maximum_provider_dispatches ->
         {:noop, "write_budget_exhausted", identity, canonical}
 
-      not before_replay_cutoff?(redemption, cutoff_now) ->
+      not before_replay_cutoff?(redemption, reservation_now) ->
         {:noop, "write_budget_exhausted", identity, canonical}
 
       true ->
-        recovery_reservation_due_conflict(identity, canonical, replay, now)
+        recovery_reservation_due_conflict(identity, canonical, replay, reservation_now)
     end
   end
 
@@ -1005,14 +1007,27 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          |> store_cloudflare_cookies(recovery.consume_url) do
       {:ok, %{status: status, body: response_body}} ->
         code = response_code(response_body, status, endpoint_kind)
-        finalize_recovery_response(recovery, code, status, now)
+        finalize_recovery_response(recovery, code, status, dispatch_response_now(recovery, now))
 
       {:error, _reason} ->
-        preserve_and_snooze_recovery(recovery, "transport_error", now)
+        preserve_and_snooze_recovery(
+          recovery,
+          "transport_error",
+          dispatch_response_now(recovery, now)
+        )
     end
   rescue
-    _error -> preserve_and_snooze_recovery(recovery, "persistence_failed", now)
+    _error ->
+      preserve_and_snooze_recovery(
+        recovery,
+        "persistence_failed",
+        dispatch_response_now(recovery, now)
+      )
   end
+
+  # The consume POST itself takes time: finalization, settle timestamps, and
+  # snooze arithmetic must not run on the pre-dispatch clock.
+  defp dispatch_response_now(recovery, now), do: later_datetime(now, recovery.clock.())
 
   defp maybe_put_recovery_credit_id(body, :chatgpt, credit_id),
     do: Map.put(body, "credit_id", credit_id)
@@ -1877,8 +1892,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           {:error, reason} ->
             {:error, reason}
 
-          {:ambiguous, code} ->
-            preserve_ambiguous_attempt(claim, code)
+          {:ambiguous, code, ambiguous_claim} ->
+            preserve_ambiguous_attempt(ambiguous_claim, code)
 
           {:finalize, result, reserved_claim} ->
             finalize_reserved_attempt(result, reserved_claim)
@@ -2098,7 +2113,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
         )
 
       {:error, _reason} ->
-        {:ambiguous, "transport_error"}
+        {:ambiguous, "transport_error", reserved_claim}
     end
   rescue
     _exception -> preserve_ambiguous_attempt(reserved_claim, "persistence_failed")
@@ -2117,8 +2132,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
      ), claim}
   end
 
-  defp handle_consume_response(code, _status, _available_count_before, _claim),
-    do: {:ambiguous, code}
+  defp handle_consume_response(code, _status, _available_count_before, claim),
+    do: {:ambiguous, code, claim}
 
   defp store_cloudflare_cookies(result, url) do
     CloudflareCookies.store_from_result(url, result)
@@ -2501,10 +2516,13 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
         metadata = identity.metadata || %{}
         redemption = metadata["saved_reset_redemption"] || %{}
 
+        # The same dispatch fence as finalization: a stale claim must not touch
+        # even the observational fields of a newer reservation's record.
         if redemption["attempt_id"] == claim.attempt_id and
              redemption["generation"] == claim.generation and
              redemption["phase"] == RedemptionLifecycle.consuming() and
-             get_in(redemption, ["provider_replay", "provider_dispatches"]) in 1..6 do
+             persisted_provider_dispatches(redemption) in 1..6 and
+             finalization_dispatch_matches_claim?(redemption, claim) do
           replay =
             redemption["provider_replay"]
             |> Map.put("last_code", bounded_recovery_code(code))

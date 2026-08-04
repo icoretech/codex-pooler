@@ -249,19 +249,51 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
   end
 
   @doc """
-  True only for a hard-pinned continuation: a previous-response anchor, file
-  affinity, or a live upstream websocket bound to an assigned Codex session.
-  A merely-present Codex session, session header, or accepted turn state is
-  soft preference, never a hard pin.
+  True only for a hard-pinned continuation whose pin target is genuinely
+  resolved: file affinity, a live upstream websocket bound to an assigned
+  Codex session, or a previous-response anchor that resolves through an
+  active session alias. An unresolved previous-response anchor — even with a
+  fallback-attached session — a merely-present Codex session, a session
+  header, or an accepted turn state is soft preference, never a hard pin.
   """
-  @spec hard_pinned_continuity?(RequestOptions.t(), Model.t()) :: boolean()
-  def hard_pinned_continuity?(%RequestOptions{} = request_options, %Model{} = model) do
-    match?({:hard, _reason}, classify_codex_session_pin(request_options, model))
+  @spec hard_pinned_continuity?(auth(), RequestOptions.t(), Model.t()) :: boolean()
+  def hard_pinned_continuity?(auth, %RequestOptions{} = request_options, %Model{} = model) do
+    case classify_codex_session_pin(request_options, model) do
+      {:hard, :previous_response_id} ->
+        previous_response_target_resolved?(auth, request_options)
+
+      {:hard, _reason} ->
+        true
+
+      {:soft, _reason} ->
+        false
+    end
   end
+
+  defp previous_response_target_resolved?(%{pool: pool, api_key: api_key}, request_options) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    case clean_string(request_options.continuity.previous_response_id) do
+      nil ->
+        false
+
+      previous_response_id ->
+        pool
+        |> affinity_assignment_query(
+          api_key,
+          [{"previous_response_id", previous_response_id}],
+          now
+        )
+        |> Repo.one()
+        |> is_binary()
+    end
+  end
+
+  defp previous_response_target_resolved?(_auth, _request_options), do: false
 
   @spec hard_pin_codex_session_assignment?(RequestOptions.t(), Model.t()) :: boolean()
   defp hard_pin_codex_session_assignment?(%RequestOptions{} = request_options, %Model{} = model) do
-    hard_pinned_continuity?(request_options, model)
+    match?({:hard, _reason}, classify_codex_session_pin(request_options, model))
   end
 
   @spec classify_codex_session_pin(RequestOptions.t(), Model.t()) :: {pin_mode(), pin_reason()}

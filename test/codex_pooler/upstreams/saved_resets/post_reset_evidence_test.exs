@@ -137,6 +137,20 @@ defmodule CodexPooler.Upstreams.SavedResets.PostResetEvidenceTest do
     assert PostResetEvidence.classify(windows, consumed_at, @now) == :confirmed
   end
 
+  test "a still-fresh pre-consume exhausted row cannot eclipse post-consume usable evidence" do
+    # The pre-consume row is still fresh, so it competes in the logical-window
+    # fold; it must not eat the newer usable post-consume observation and leave
+    # the account pending.
+    consumed_at = DateTime.add(@now, -5, :minute)
+
+    windows = [
+      window(used_percent: Decimal.new("100"), observed_at: DateTime.add(@now, -10, :minute)),
+      window(used_percent: Decimal.new("0"))
+    ]
+
+    assert PostResetEvidence.classify(windows, consumed_at, @now) == :confirmed
+  end
+
   test "a current canonical exhausted window still reblocks over obsolete rows" do
     consumed_at = DateTime.add(@now, -20, :hour)
     stale_observed_at = DateTime.add(@now, -14, :hour)

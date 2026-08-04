@@ -452,15 +452,19 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
   defp quota_scope(_refresh_plan), do: nil
 
-  # Only a hard-pinned continuation may bypass the threshold sibling
-  # usable-capacity protection. Classification is owned by the routing
-  # continuity authority: a newly created Codex session, session header, or
-  # accepted turn state is soft preference, not a pin, so a first turn without
-  # a previous-response, file, or live-websocket anchor never bypasses.
+  # Only a hard-pinned continuation with a genuinely resolved target may
+  # bypass the threshold sibling usable-capacity protection. Classification is
+  # owned by the routing continuity authority: a newly created Codex session,
+  # session header, accepted turn state, or an unresolved previous-response
+  # anchor is soft preference, not a pin, so a first turn never bypasses.
   defp hard_pinned_continuity?(%{
-         filter_input: %{request_options: request_options, model: %Model{} = model}
+         filter_input: %{
+           auth: auth,
+           request_options: request_options,
+           model: %Model{} = model
+         }
        }) do
-    SessionContinuity.hard_pinned_continuity?(request_options, model)
+    SessionContinuity.hard_pinned_continuity?(auth, request_options, model)
   end
 
   defp hard_pinned_continuity?(_refresh_plan), do: false

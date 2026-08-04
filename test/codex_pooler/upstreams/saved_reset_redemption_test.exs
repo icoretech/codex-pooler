@@ -1423,6 +1423,33 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert FakeUpstream.requests(fake) == []
     end
 
+    test "a slow provider list cannot backdate the dispatch schedule" do
+      fixture = ambiguous_chatgpt_recovery_fixture!()
+      recovery_now = DateTime.add(fixture.last_provider_dispatched_at, 60, :second)
+      fixture = make_recovery_due!(fixture, recovery_now)
+      reservation_at = DateTime.add(recovery_now, 70, :second)
+
+      assert {:snooze, 300} =
+               SavedResetRedemption.resume_stale_consuming(
+                 fixture.assignment,
+                 fixture.identity.id,
+                 fixture.attempt_id,
+                 fixture.generation,
+                 now: recovery_now,
+                 receive_timeout: 1_000,
+                 clock: fn -> reservation_at end
+               )
+
+      replay =
+        Repo.reload!(fixture.identity).metadata["saved_reset_redemption"]["provider_replay"]
+
+      assert replay["provider_dispatches"] == 2
+      assert replay["last_provider_dispatched_at"] == DateTime.to_iso8601(reservation_at)
+
+      assert replay["next_action_at"] ==
+               reservation_at |> DateTime.add(300, :second) |> DateTime.to_iso8601()
+    end
+
     test "a recovery reservation re-checks the six-hour cutoff after the provider list" do
       fixture = ambiguous_chatgpt_recovery_fixture!()
       recovery_now = DateTime.add(fixture.last_provider_dispatched_at, 60, :second)
@@ -1550,20 +1577,28 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                       ^second_release},
                      5_000
 
+      redemption_keys = ["saved_reset_redemption", "saved_reset_redemption_target"]
+
+      reserved =
+        run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata
+        |> Map.take(redemption_keys)
+
+      assert reserved["saved_reset_redemption"]["provider_replay"]["provider_dispatches"] == 3
+
       send(stale_pid, {:fake_upstream_release_timeout, first_release})
 
       assert {:stale, {:error, :saved_reset_consume_outcome_ambiguous}} =
                Task.await(stale_task, 15_000)
 
-      active =
-        run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata[
-          "saved_reset_redemption"
-        ]
+      # The stale finalizer must leave the current reservation's redemption
+      # record and locator byte-identical: no lifecycle change, no last_code
+      # churn, no timestamp regression. (Its usage refresh may still update the
+      # ordinary quota snapshot — that is genuine provider evidence.)
+      after_stale =
+        run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata
+        |> Map.take(redemption_keys)
 
-      assert active["status"] == "redeeming"
-      assert active["phase"] == "consuming"
-      assert active["result"] == nil
-      assert active["provider_replay"]["provider_dispatches"] == 3
+      assert after_stale == reserved
 
       send(current_pid, {:fake_upstream_release_timeout, second_release})
 
