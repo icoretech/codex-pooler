@@ -118,7 +118,7 @@ These endpoints keep Codex backend semantics and do not translate through the pu
       <td><code>/backend-api/codex/responses</code>, or <code>/backend-api/codex/responses/compact</code> for terminal compaction triggers</td>
       <td>No; backend payload is proxied through gateway normalization</td>
       <td>Supported</td>
-      <td>Primary Codex Responses route for JSON and SSE work. A valid terminal <code>compaction_trigger</code> bridges through compact handling and returns backend Responses SSE with encrypted compaction output. The compact bridge strips compact-unsupported controls such as <code>store</code>, <code>stream</code>, and <code>include</code> before upstream dispatch.</td>
+      <td>Primary Codex Responses route for JSON and SSE work. A valid terminal <code>compaction_trigger</code> bridges through compact handling and returns backend Responses SSE with encrypted compaction output. The bridge selects the first valid <code>compaction</code> or <code>compaction_summary</code> item in output, then falls back to a valid top-level <code>compaction_summary</code>. A fixed safe allowlist rebuilds a canonical <code>compaction</code> item with only encrypted content, the source item <code>id</code> when it is a string, and nested <code>internal_chat_message_metadata_passthrough.turn_id</code> when it is a string. The response-level <code>id</code> remains separate from the item <code>id</code>. Malformed or missing optional values are omitted, all other compact-result fields are dropped, and the same canonical item appears in both terminal events. This is terminal-item fidelity only and does not widen the metadata-only privacy boundary. The compact bridge strips compact-unsupported controls such as <code>store</code>, <code>stream</code>, and <code>include</code> before upstream dispatch.</td>
     </tr>
     <tr>
       <td><code>GET /backend-api/codex/responses</code></td>
@@ -178,7 +178,7 @@ Some Codex clients use `/backend-api/codex/v1` as their base URL. Codex Pooler e
       <td><code>/backend-api/codex/responses</code>, or <code>/backend-api/codex/responses/compact</code> for terminal compaction triggers</td>
       <td>No</td>
       <td>Supported</td>
-      <td>Alias for backend Responses. Prompt-cache routing locality can apply here. Terminal compaction triggers follow the canonical compact bridge.</td>
+      <td>Alias for backend Responses. Prompt-cache routing locality can apply here. Terminal compaction triggers follow the canonical compact bridge: it selects the first valid <code>compaction</code> or <code>compaction_summary</code> output item, then a valid top-level <code>compaction_summary</code> fallback. A fixed safe allowlist rebuilds a canonical <code>compaction</code> item from encrypted content, a string source item <code>id</code>, and a string nested <code>internal_chat_message_metadata_passthrough.turn_id</code>; the response-level <code>id</code> remains separate. Missing or malformed optional values are omitted, other compact-result fields are dropped, and both terminal events contain the identical item. This is terminal-item fidelity only and does not widen the metadata-only privacy boundary.</td>
     </tr>
     <tr>
       <td><code>GET /backend-api/codex/v1/responses</code></td>

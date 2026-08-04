@@ -278,6 +278,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "succeeded"
 
+    assert Repo.aggregate(
+             from(l in LedgerEntry,
+               where:
+                 l.request_id == ^request.id and l.entry_kind == "settlement" and
+                   l.amount_status == "recorded"
+             ),
+             :count
+           ) == 1
+
     persistence_text = inspect({request, attempt})
     refute persistence_text =~ request_turn_state
     refute persistence_text =~ response_turn_state
@@ -341,80 +350,358 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     assert_audio_accounting_metadata_only!(setup.pool, [audio_source, audio_data, audio_url])
   end
 
-  test "POST /backend-api/codex/v1/responses bridges compaction_summary result shape", %{
-    conn: conn
-  } do
-    upstream =
-      start_upstream(
-        FakeUpstream.json_response(%{
-          "id" => "resp_compaction_summary_bridge",
-          "object" => "response.compaction",
-          "compaction_summary" => %{
-            "encrypted_content" => "encrypted-summary-fixture",
-            "plaintext_summary" => "must-not-leak"
-          },
-          "usage" => %{"input_tokens" => 5, "output_tokens" => 2, "total_tokens" => 7}
+  @tag :client_metadata
+  test "compaction trigger aliases normalize all accepted compact result shapes", %{conn: conn} do
+    routes = [
+      {"responses", "/backend-api/codex/responses"},
+      {"v1_responses", "/backend-api/codex/v1/responses"}
+    ]
+
+    shapes = [
+      {"output_compaction", :output, "compaction", "cmp_output_current", "turn-output-current"},
+      {"output_summary", :output, "compaction_summary", "legacy item id / 1",
+       "\tlegacy turn id\n"},
+      {"top_level_summary", :top_level, "compaction_summary", "", ""}
+    ]
+
+    for {route_name, path} <- routes,
+        {shape_name, location, source_type, item_id, turn_id} <- shapes do
+      case_name = "#{route_name}-#{shape_name}"
+      encrypted_content = "encrypted-#{case_name}"
+      response_id = "resp_#{case_name}"
+      request_turn_state = "request-#{case_name}"
+      response_turn_state = "response-#{case_name}"
+      unknown_item_value = "unknown-item-#{case_name}"
+      unknown_nested_value = "unknown-nested-#{case_name}"
+      plaintext_value = "plaintext-#{case_name}"
+      unknown_response_value = "unknown-response-#{case_name}"
+
+      source_item =
+        compact_source_item(
+          source_type,
+          encrypted_content,
+          item_id,
+          turn_id,
+          unknown_item_value,
+          unknown_nested_value,
+          plaintext_value
+        )
+
+      compact_response =
+        compact_result_payload(location, source_item, response_id, unknown_response_value)
+
+      upstream =
+        start_upstream(
+          FakeUpstream.json_response_with_headers(
+            compact_response,
+            [{"x-codex-turn-state", response_turn_state}]
+          )
+        )
+
+      setup = gateway_setup(upstream, compact?: true)
+
+      response =
+        conn
+        |> recycle()
+        |> put_req_header("x-codex-turn-state", request_turn_state)
+        |> auth(setup)
+        |> post(path, %{
+          "model" => setup.model.exposed_model_id,
+          "input" => visible_input("visible #{case_name}") ++ [compaction_trigger()],
+          "stream" => true
         })
-      )
 
-    setup = gateway_setup(upstream, compact?: true)
+      assert response.status == 200
+      assert ["text/event-stream" <> _suffix] = get_resp_header(response, "content-type")
+      assert get_resp_header(response, "x-codex-turn-state") == [response_turn_state]
 
-    conn =
-      conn
-      |> auth(setup)
-      |> post("/backend-api/codex/v1/responses", %{
-        "model" => setup.model.exposed_model_id,
-        "input" => visible_input("compact alias visible fixture") ++ [compaction_trigger()],
-        "stream" => true
-      })
+      response_body = response(response, 200)
+      events = backend_sse_events(response_body)
 
-    assert conn.status == 200
-    assert response(conn, 200) =~ "encrypted-summary-fixture"
-    refute response(conn, 200) =~ "plaintext_summary"
+      assert Enum.map(events, & &1["event"]) == [
+               "response.output_item.done",
+               "response.completed"
+             ]
 
-    assert [captured] = FakeUpstream.requests(upstream)
-    assert captured.path == "/backend-api/codex/responses/compact"
+      assert response_body =~ "data: [DONE]\n\n"
 
-    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
-    assert request.endpoint == "/backend-api/codex/responses/compact"
-    assert request.transport == "http_compact_json"
-    assert request.status == "succeeded"
+      assert [done_event, completed_event] = events
+      assert done_event["data"]["type"] == "response.output_item.done"
+      assert completed_event["data"]["type"] == "response.completed"
+
+      done_item = done_event["data"]["item"]
+      completed_response = completed_event["data"]["response"]
+      assert [completed_item] = completed_response["output"]
+      assert done_item == completed_item
+
+      expected_item = %{
+        "type" => "compaction",
+        "encrypted_content" => encrypted_content,
+        "id" => item_id,
+        "internal_chat_message_metadata_passthrough" => %{"turn_id" => turn_id}
+      }
+
+      assert done_item == expected_item
+
+      assert Enum.sort(Map.keys(done_item)) ==
+               Enum.sort([
+                 "type",
+                 "encrypted_content",
+                 "id",
+                 "internal_chat_message_metadata_passthrough"
+               ])
+
+      assert Map.keys(done_item["internal_chat_message_metadata_passthrough"]) == ["turn_id"]
+      assert completed_response["id"] == response_id
+      refute completed_response["id"] == done_item["id"]
+      assert completed_response["status"] == "completed"
+
+      assert completed_response["usage"] == %{
+               "input_tokens" => 5,
+               "output_tokens" => 2,
+               "total_tokens" => 7
+             }
+
+      assert Enum.sort(Map.keys(completed_response)) ==
+               Enum.sort(["id", "status", "output", "usage"])
+
+      for forbidden <- [
+            "unknown_item_field",
+            "unknown_nested_field",
+            "plaintext_summary",
+            "unrelated_response_field",
+            unknown_item_value,
+            unknown_nested_value,
+            plaintext_value,
+            unknown_response_value
+          ] do
+        refute response_body =~ forbidden
+      end
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.path == "/backend-api/codex/responses/compact"
+      assert Map.new(captured.headers)["x-codex-turn-state"] == request_turn_state
+      refute inspect(captured.json) =~ "compaction_trigger"
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.endpoint == "/backend-api/codex/responses/compact"
+      assert request.transport == "http_compact_json"
+      assert request.status == "succeeded"
+
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.status == "succeeded"
+
+      assert [settlement] =
+               Repo.all(
+                 from(l in LedgerEntry,
+                   where:
+                     l.request_id == ^request.id and l.entry_kind == "settlement" and
+                       l.amount_status == "recorded"
+                 )
+               )
+
+      persisted = inspect({request, attempt, settlement})
+
+      for replay_value <- [
+            encrypted_content,
+            item_id,
+            turn_id,
+            unknown_item_value,
+            unknown_nested_value,
+            plaintext_value,
+            unknown_response_value
+          ],
+          replay_value != "" do
+        refute persisted =~ replay_value
+      end
+    end
   end
 
-  test "POST /backend-api/codex/responses extracts compaction_summary output items", %{
+  test "compaction replay optional fields preserve strings and omit every other shape", %{
     conn: conn
   } do
+    cases = [
+      {"missing", %{}, %{}},
+      {"nil", %{"id" => nil, "internal_chat_message_metadata_passthrough" => %{"turn_id" => nil}},
+       %{}},
+      {"non_string",
+       %{"id" => 17, "internal_chat_message_metadata_passthrough" => %{"turn_id" => ["bad"]}},
+       %{}},
+      {"missing_turn",
+       %{
+         "id" => "cmp-missing-turn",
+         "internal_chat_message_metadata_passthrough" => %{"unknown_nested_field" => "drop"}
+       }, %{"id" => "cmp-missing-turn"}},
+      {"nil_id_valid_turn",
+       %{
+         "id" => nil,
+         "internal_chat_message_metadata_passthrough" => %{"turn_id" => "turn-without-id"}
+       }, %{"internal_chat_message_metadata_passthrough" => %{"turn_id" => "turn-without-id"}}},
+      {"empty_strings",
+       %{"id" => "", "internal_chat_message_metadata_passthrough" => %{"turn_id" => ""}},
+       %{"id" => "", "internal_chat_message_metadata_passthrough" => %{"turn_id" => ""}}},
+      {"legacy_strings",
+       %{
+         "id" => " legacy item id ",
+         "internal_chat_message_metadata_passthrough" => %{"turn_id" => "\tlegacy turn\n"}
+       },
+       %{
+         "id" => " legacy item id ",
+         "internal_chat_message_metadata_passthrough" => %{"turn_id" => "\tlegacy turn\n"}
+       }}
+    ]
+
+    for {case_name, optional_source, expected_optional} <- cases do
+      source_item =
+        %{
+          "type" => "compaction_summary",
+          "encrypted_content" => "encrypted-optional-#{case_name}",
+          "unknown_item_field" => "drop-item-#{case_name}"
+        }
+        |> Map.merge(optional_source)
+
+      upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "id" => "resp_optional_#{case_name}",
+            "output" => [source_item]
+          })
+        )
+
+      setup = gateway_setup(upstream, compact?: true)
+
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => visible_input("visible optional #{case_name}") ++ [compaction_trigger()],
+          "stream" => true
+        })
+
+      item = terminal_compaction_item(response)
+
+      expected_item =
+        Map.merge(
+          %{
+            "type" => "compaction",
+            "encrypted_content" => "encrypted-optional-#{case_name}"
+          },
+          expected_optional
+        )
+
+      assert item == expected_item
+      refute response.resp_body =~ "unknown_item_field"
+      refute response.resp_body =~ "unknown_nested_field"
+      refute response.resp_body =~ "drop-item-#{case_name}"
+    end
+  end
+
+  test "compaction selection keeps first valid output precedence over later output and fallback",
+       %{
+         conn: conn
+       } do
+    selected =
+      compact_source_item(
+        "compaction_summary",
+        "encrypted-first-valid",
+        "cmp-first-valid",
+        "turn-first-valid",
+        "drop-first-item",
+        "drop-first-nested",
+        "drop-first-plaintext"
+      )
+
     upstream =
       start_upstream(
         FakeUpstream.json_response(%{
-          "id" => "resp_compaction_summary_item_bridge",
-          "object" => "response.compaction",
+          "id" => "resp_selection_precedence",
           "output" => [
+            %{"type" => "compaction", "encrypted_content" => nil},
+            %{"type" => "message", "encrypted_content" => "not-a-compaction"},
+            selected,
             %{
-              "type" => "compaction_summary",
-              "encrypted_content" => "encrypted-summary-item-fixture",
-              "plaintext_summary" => "must-not-leak"
+              "type" => "compaction",
+              "encrypted_content" => "encrypted-later-valid",
+              "id" => "cmp-later-valid"
             }
-          ]
+          ],
+          "compaction_summary" => %{
+            "encrypted_content" => "encrypted-top-level-fallback",
+            "id" => "cmp-top-level-fallback"
+          }
         })
       )
 
     setup = gateway_setup(upstream, compact?: true)
 
-    conn =
+    response =
       conn
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => visible_input("compact summary item fixture") ++ [compaction_trigger()],
+        "input" => visible_input("visible selection precedence") ++ [compaction_trigger()],
         "stream" => true
       })
 
-    assert conn.status == 200
-    assert response(conn, 200) =~ "encrypted-summary-item-fixture"
-    refute response(conn, 200) =~ "plaintext_summary"
-    assert [captured] = FakeUpstream.requests(upstream)
-    assert captured.path == "/backend-api/codex/responses/compact"
+    assert terminal_compaction_item(response) == %{
+             "type" => "compaction",
+             "encrypted_content" => "encrypted-first-valid",
+             "id" => "cmp-first-valid",
+             "internal_chat_message_metadata_passthrough" => %{"turn_id" => "turn-first-valid"}
+           }
+
+    refute response.resp_body =~ "encrypted-later-valid"
+    refute response.resp_body =~ "encrypted-top-level-fallback"
+  end
+
+  test "compaction bridge keeps malformed JSON and missing encrypted content errors stable", %{
+    conn: conn
+  } do
+    cases = [
+      {FakeUpstream.malformed_json("{malformed-compact-json", 200),
+       %{
+         "code" => "invalid_upstream_response",
+         "message" => "upstream response was not valid json",
+         "param" => nil,
+         "type" => "invalid_request_error"
+       }},
+      {FakeUpstream.json_response(%{
+         "id" => "resp_missing_encrypted_content",
+         "output" => [%{"type" => "compaction", "id" => "cmp-without-content"}],
+         "compaction_summary" => %{"id" => "cmp-fallback-without-content"}
+       }),
+       %{
+         "code" => "invalid_compaction_response",
+         "message" => "upstream compact response did not include encrypted compaction content",
+         "param" => nil,
+         "type" => "invalid_request_error"
+       }}
+    ]
+
+    for {upstream_mode, expected_error} <- cases do
+      upstream = start_upstream(upstream_mode)
+      setup = gateway_setup(upstream, compact?: true)
+
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => visible_input("visible invalid compact result") ++ [compaction_trigger()],
+          "stream" => true
+        })
+
+      assert %{"error" => ^expected_error} = json_response(response, 502)
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.path == "/backend-api/codex/responses/compact"
+      refute response.resp_body =~ "cmp-without-content"
+      refute response.resp_body =~ "cmp-fallback-without-content"
+      refute response.resp_body =~ "malformed-compact-json"
+    end
   end
 
   test "POST /backend-api/codex/responses rejects malformed compaction_trigger before dispatch",
@@ -518,6 +805,58 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
   end
 
   defp compaction_trigger, do: %{"type" => "compaction_trigger"}
+
+  defp compact_source_item(
+         type,
+         encrypted_content,
+         id,
+         turn_id,
+         unknown_item_value,
+         unknown_nested_value,
+         plaintext_value
+       ) do
+    %{
+      "type" => type,
+      "encrypted_content" => encrypted_content,
+      "id" => id,
+      "internal_chat_message_metadata_passthrough" => %{
+        "turn_id" => turn_id,
+        "unknown_nested_field" => unknown_nested_value
+      },
+      "unknown_item_field" => unknown_item_value,
+      "plaintext_summary" => plaintext_value
+    }
+  end
+
+  defp compact_result_payload(:output, source_item, response_id, unknown_response_value) do
+    %{
+      "id" => response_id,
+      "object" => "response.compaction",
+      "output" => [source_item],
+      "usage" => %{"input_tokens" => 5, "output_tokens" => 2, "total_tokens" => 7},
+      "unrelated_response_field" => unknown_response_value
+    }
+  end
+
+  defp compact_result_payload(:top_level, source_item, response_id, unknown_response_value) do
+    %{
+      "id" => response_id,
+      "object" => "response.compaction",
+      "output" => [%{"type" => "message", "content" => []}],
+      "compaction_summary" => source_item,
+      "usage" => %{"input_tokens" => 5, "output_tokens" => 2, "total_tokens" => 7},
+      "unrelated_response_field" => unknown_response_value
+    }
+  end
+
+  defp terminal_compaction_item(response) do
+    response_body = response(response, 200)
+    assert [done_event, completed_event] = backend_sse_events(response_body)
+    done_item = done_event["data"]["item"]
+    assert [completed_item] = completed_event["data"]["response"]["output"]
+    assert done_item == completed_item
+    done_item
+  end
 
   defp put_compact_model_serving_mode!(setup, mode) do
     timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)

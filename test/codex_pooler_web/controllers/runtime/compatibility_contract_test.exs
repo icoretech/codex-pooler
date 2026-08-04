@@ -831,6 +831,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
       assert responses_chat.contract =~ "terminal compaction_trigger backend payloads bridge"
       assert responses_chat.contract =~ "/backend-api/codex/responses/compact"
+      assert responses_chat.contract =~ "preserves only schema-backed string replay identity"
+      assert responses_chat.contract =~ "drops other compact-result fields"
       assert responses_chat.contract =~ "malformed trigger placement is rejected before dispatch"
 
       assert responses_chat.contract =~
@@ -875,7 +877,23 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  output_events: ["response.output_item.done", "response.completed", "[DONE]"],
                  output_item: %{
                    "type" => "compaction",
-                   "encrypted_content" => "encrypted_content"
+                   "encrypted_content" => "encrypted_content",
+                   "id" => "compaction_item_id",
+                   "internal_chat_message_metadata_passthrough" => %{"turn_id" => "turn_id"}
+                 },
+                 accepted_result_shapes: [
+                   %{location: "output", type: "compaction"},
+                   %{location: "output", type: "compaction_summary"},
+                   %{location: "top_level", key: "compaction_summary"}
+                 ],
+                 output_item_policy: %{
+                   required: ["type", "encrypted_content"],
+                   optional_string: [
+                     "id",
+                     "internal_chat_message_metadata_passthrough.turn_id"
+                   ],
+                   unknown_fields: "dropped",
+                   terminal_events_share_identical_item: true
                  },
                  websocket_bridge: false,
                  hidden_replay: false
