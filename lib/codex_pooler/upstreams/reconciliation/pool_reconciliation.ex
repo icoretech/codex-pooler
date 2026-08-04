@@ -548,6 +548,15 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
     put_expected_credential_epoch(result, context.expected_credential_epoch)
   end
 
+  defp upsert_reconciliation_quota(%{
+         credential_fence: credential_fence,
+         expected_credential_epoch: expected_credential_epoch
+       }),
+       do:
+         step_result(:failed, "quota_refresh_unavailable", "quota windows were not available")
+         |> put_credential_fence(credential_fence)
+         |> put_expected_credential_epoch(expected_credential_epoch)
+
   # Fresh quota is now persisted: converge any pending saved-reset redemption
   # on this identity from that evidence (self-healing). Best effort and a no-op
   # for identities without a pending lifecycle, but a genuine convergence error
@@ -565,15 +574,6 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
         )
     end
   end
-
-  defp upsert_reconciliation_quota(%{
-         credential_fence: credential_fence,
-         expected_credential_epoch: expected_credential_epoch
-       }),
-       do:
-         step_result(:failed, "quota_refresh_unavailable", "quota windows were not available")
-         |> put_credential_fence(credential_fence)
-         |> put_expected_credential_epoch(expected_credential_epoch)
 
   @spec persist_unfenced_reconciliation_quota(quota_refresh_context(), DateTime.t()) ::
           {:ok, map()} | {:superseded, UpstreamIdentity.t()} | {:error, term()}
