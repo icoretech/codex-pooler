@@ -6,8 +6,10 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
 
   alias CodexPooler.Catalog
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Payloads.ContinuityPayload
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
+  alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
@@ -508,6 +510,64 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           assert redemption["status"] == "noop"
         end
       end
+    end
+
+    test "a first-turn session does not bypass threshold sibling usable capacity" do
+      %{
+        upstream: upstream,
+        filter_input: filter_input,
+        sibling_identity: sibling_identity,
+        target_identity: target_identity
+      } = first_turn_capacity_arrangement("first-turn-capacity")
+
+      before_target = Repo.reload!(target_identity).metadata
+      before_sibling = Repo.reload!(sibling_identity).metadata
+
+      {result, log} = with_info_log(fn -> RouteFiltering.filter_candidates(filter_input) end)
+
+      # The successful threshold routing result is preserved; the burn is vetoed.
+      assert {:ok, [_sibling_candidate, _target_candidate], _request_options} = result
+
+      assert log =~ "result_code=gateway_auto_sibling_usable_capacity"
+      assert log =~ "applied=false"
+      refute log =~ "result_code=reset"
+
+      assert FakeUpstream.requests(upstream) == []
+      assert Repo.reload!(target_identity).metadata == before_target
+      assert Repo.reload!(sibling_identity).metadata == before_sibling
+    end
+
+    test "a hard-pinned continuation retains its threshold capacity bypass" do
+      %{
+        upstream: upstream,
+        filter_input: filter_input,
+        target_identity: target_identity
+      } = first_turn_capacity_arrangement("hard-pin-capacity")
+
+      request_options =
+        ContinuityPayload.put_previous_response_id(filter_input.request_options, %{
+          "previous_response_id" => "resp_hard_pin_capacity_baseline"
+        })
+
+      filter_input = %{filter_input | request_options: request_options}
+
+      {result, log} = with_info_log(fn -> RouteFiltering.filter_candidates(filter_input) end)
+
+      assert {:ok, _candidates, _request_options} = result
+      assert log =~ "result_code=reset"
+      assert log =~ "applied=true"
+
+      consume_paths =
+        upstream
+        |> FakeUpstream.requests()
+        |> Enum.map(& &1.path)
+        |> Enum.filter(&(&1 == "/api/codex/rate-limit-reset-credits/consume"))
+
+      assert consume_paths == ["/api/codex/rate-limit-reset-credits/consume"]
+
+      redemption = Repo.reload!(target_identity).metadata["saved_reset_redemption"]
+      assert redemption["result"]["applied"] == true
+      assert redemption["trigger_detail"] == "threshold"
     end
 
     test "normal redemption refilters from a newer persisted snapshot and preserves route state" do
@@ -1677,6 +1737,106 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
 
   defp filter_input(pool, api_key, assignment, identity, suffix) do
     filter_input(pool, api_key, [{assignment, identity}], suffix)
+  end
+
+  # The production first-turn shape: a threshold-pressured target, a routable
+  # sibling whose applied consume is still converging (`reblocked`, so it is
+  # excluded from the threshold scan but has current usable quota), and a
+  # Codex session created moments ago with no hard continuity anchor.
+  defp first_turn_capacity_arrangement(suffix) do
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        {:path_json,
+         %{
+           "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+           "/api/codex/usage" => {200, usage_payload(0)}
+         }}
+      )
+
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+    %{identity: sibling_identity, assignment: sibling_assignment} =
+      active_upstream_assignment_fixture(pool, %{metadata: saved_reset_metadata(upstream, 1)})
+
+    %{identity: target_identity, assignment: target_assignment} =
+      active_upstream_assignment_fixture(pool, %{metadata: saved_reset_metadata(upstream, 1)})
+
+    sibling_identity =
+      sibling_identity
+      |> enable_saved_reset_auto_redeem!()
+      |> put_applied_reblocked_redemption!(40)
+
+    upsert_weekly_pressure_quota!(sibling_identity, Decimal.new("26"))
+
+    target_identity =
+      enable_saved_reset_auto_redeem!(target_identity, %{
+        saved_reset_auto_redeem_trigger_mode: "threshold",
+        saved_reset_auto_redeem_quota_threshold_percent: 95
+      })
+
+    upsert_weekly_pressure_quota!(target_identity, Decimal.new("96"))
+
+    filter_input =
+      filter_input(
+        pool,
+        api_key,
+        [{sibling_assignment, sibling_identity}, {target_assignment, target_identity}],
+        suffix
+      )
+
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    session =
+      Repo.insert!(%CodexSession{
+        pool_id: pool.id,
+        api_key_id: api_key.id,
+        session_key: "sess-#{suffix}-#{System.unique_integer([:positive])}",
+        pool_upstream_assignment_id: target_assignment.id,
+        status: "active",
+        created_at: DateTime.add(now, -4, :second),
+        updated_at: DateTime.add(now, -4, :second)
+      })
+
+    request_options =
+      RequestOptions.put_continuity(filter_input.request_options, codex_session: session)
+
+    %{
+      upstream: upstream,
+      filter_input: %{filter_input | request_options: request_options},
+      sibling_identity: sibling_identity,
+      sibling_assignment: sibling_assignment,
+      target_identity: target_identity,
+      target_assignment: target_assignment
+    }
+  end
+
+  defp put_applied_reblocked_redemption!(%UpstreamIdentity{} = identity, consumed_minutes_ago) do
+    consumed_at =
+      DateTime.utc_now()
+      |> DateTime.add(-consumed_minutes_ago, :minute)
+      |> DateTime.truncate(:microsecond)
+
+    redemption = %{
+      "status" => "failed",
+      "phase" => "reblocked",
+      "attempt_id" => Ecto.UUID.generate(),
+      "generation" => 1,
+      "trigger_kind" => "gateway_auto",
+      "trigger_detail" => "exhausted",
+      "started_at" => DateTime.to_iso8601(DateTime.add(consumed_at, -1, :minute)),
+      "consumed_at" => DateTime.to_iso8601(consumed_at),
+      "deadline_at" => consumed_at |> DateTime.add(15, :minute) |> DateTime.to_iso8601(),
+      "finished_at" => DateTime.to_iso8601(consumed_at),
+      "result" => %{"code" => "reset", "applied" => true}
+    }
+
+    persisted = Repo.reload!(identity)
+
+    persisted
+    |> UpstreamIdentity.changeset(%{
+      metadata: Map.put(persisted.metadata || %{}, "saved_reset_redemption", redemption)
+    })
+    |> Repo.update!()
   end
 
   defp route_state(%FilterInput{} = filter_input) do

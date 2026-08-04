@@ -437,7 +437,7 @@ defmodule CodexPooler.Dev.SavedResetSafetyProbe do
               routable_identity_ids: cohort_ids,
               route_class: "proxy_http",
               quota_scope: quota_scope(),
-              session_continuity?: false
+              hard_pinned_continuity?: false
             },
             started_at: started_at,
             receive_timeout: 10_000

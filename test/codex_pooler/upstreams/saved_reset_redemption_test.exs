@@ -5441,13 +5441,13 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       end)
     end
 
-    test "hard exhaustion and session continuity bypass sibling usable capacity" do
+    test "hard exhaustion and hard-pinned continuity bypass sibling usable capacity" do
       {:ok, fake} = codex_reset_fake(0)
       on_exit(fn -> FakeUpstream.stop(fake) end)
 
       for {trigger, context_overrides, target_percent, expected_consume_count} <- [
             {:blocked_weekly_exhaustion, %{}, Decimal.new("100"), 1},
-            {:threshold_pressure, %{session_continuity?: true}, Decimal.new("96"), 2}
+            {:threshold_pressure, %{hard_pinned_continuity?: true}, Decimal.new("96"), 2}
           ] do
         fixture = committed_gateway_auto_cohort_fixture!(fake, :same_pool, 2)
         on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(fixture) end)
@@ -6025,7 +6025,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         cohort_identity_ids: [identity.id],
         route_class: "proxy_http",
         quota_scope: test_quota_scope(),
-        session_continuity?: false
+        hard_pinned_continuity?: false
       },
       Map.new(overrides)
     )

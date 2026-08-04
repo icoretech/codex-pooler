@@ -14,7 +14,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
           required(:routable_identity_ids) => [Ecto.UUID.t()],
           required(:route_class) => String.t(),
           optional(:quota_scope) => quota_scope() | nil,
-          optional(:session_continuity?) => boolean()
+          optional(:hard_pinned_continuity?) => boolean()
         }
 
   @type quota_scope :: %{
@@ -55,8 +55,8 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
          route_class when is_binary(route_class) and route_class != "" <-
            context_value(context, :route_class),
          {:ok, quota_scope} <- normalize_quota_scope(context_value(context, :quota_scope)),
-         {:ok, session_continuity?} <-
-           normalize_boolean(context_value(context, :session_continuity?), false) do
+         {:ok, hard_pinned_continuity?} <-
+           normalize_boolean(context_value(context, :hard_pinned_continuity?), false) do
       {:ok,
        %{
          trigger: trigger,
@@ -68,7 +68,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
          routable_identity_ids: routable_identity_ids,
          route_class: route_class,
          quota_scope: quota_scope,
-         session_continuity?: session_continuity?
+         hard_pinned_continuity?: hard_pinned_continuity?
        }}
     else
       _invalid -> {:error, :invalid_gateway_auto_context}

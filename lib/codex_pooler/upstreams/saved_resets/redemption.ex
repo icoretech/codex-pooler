@@ -1704,7 +1704,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   defp sibling_usable_capacity_fence(
          locked_identity,
          locked_cohort,
-         %{trigger: :threshold_pressure, session_continuity?: false} = gateway_auto_context,
+         %{trigger: :threshold_pressure, hard_pinned_continuity?: false} = gateway_auto_context,
          timestamp
        ) do
     routable_identity_ids =

@@ -191,7 +191,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CohortLockingTest do
         upstream_model: "test-model",
         upstream_model_id: "test-model"
       },
-      session_continuity?: false
+      hard_pinned_continuity?: false
     }
   end
 

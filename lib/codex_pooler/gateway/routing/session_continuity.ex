@@ -248,9 +248,20 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
     end
   end
 
+  @doc """
+  True only for a hard-pinned continuation: a previous-response anchor, file
+  affinity, or a live upstream websocket bound to an assigned Codex session.
+  A merely-present Codex session, session header, or accepted turn state is
+  soft preference, never a hard pin.
+  """
+  @spec hard_pinned_continuity?(RequestOptions.t(), Model.t()) :: boolean()
+  def hard_pinned_continuity?(%RequestOptions{} = request_options, %Model{} = model) do
+    match?({:hard, _reason}, classify_codex_session_pin(request_options, model))
+  end
+
   @spec hard_pin_codex_session_assignment?(RequestOptions.t(), Model.t()) :: boolean()
   defp hard_pin_codex_session_assignment?(%RequestOptions{} = request_options, %Model{} = model) do
-    match?({:hard, _reason}, classify_codex_session_pin(request_options, model))
+    hard_pinned_continuity?(request_options, model)
   end
 
   @spec classify_codex_session_pin(RequestOptions.t(), Model.t()) :: {pin_mode(), pin_reason()}

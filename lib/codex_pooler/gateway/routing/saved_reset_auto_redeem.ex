@@ -3,9 +3,11 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
   require Logger
 
+  alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.QuotaRefresh.{Executor, Plan}
+  alias CodexPooler.Gateway.Routing.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.SavedResetRedemption
@@ -434,7 +436,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
         end),
       route_class: route_class(refresh_plan),
       quota_scope: quota_scope(refresh_plan),
-      session_continuity?: session_continuity?(refresh_plan)
+      hard_pinned_continuity?: hard_pinned_continuity?(refresh_plan)
     }
   end
 
@@ -450,14 +452,18 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
   defp quota_scope(_refresh_plan), do: nil
 
-  defp session_continuity?(%{filter_input: %{request_options: request_options}}) do
-    continuity = request_options.continuity
-
-    not is_nil(continuity.codex_session) or is_binary(continuity.previous_response_id) or
-      is_binary(continuity.accepted_turn_state) or is_binary(continuity.session_header)
+  # Only a hard-pinned continuation may bypass the threshold sibling
+  # usable-capacity protection. Classification is owned by the routing
+  # continuity authority: a newly created Codex session, session header, or
+  # accepted turn state is soft preference, not a pin, so a first turn without
+  # a previous-response, file, or live-websocket anchor never bypasses.
+  defp hard_pinned_continuity?(%{
+         filter_input: %{request_options: request_options, model: %Model{} = model}
+       }) do
+    SessionContinuity.hard_pinned_continuity?(request_options, model)
   end
 
-  defp session_continuity?(_refresh_plan), do: false
+  defp hard_pinned_continuity?(_refresh_plan), do: false
 
   defp cohort_order(%{route_state: %RouteState{saved_reset_auto_cohort: cohort}})
        when is_list(cohort),
