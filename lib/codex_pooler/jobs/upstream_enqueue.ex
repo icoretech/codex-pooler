@@ -47,6 +47,12 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
     states: :incomplete,
     period: :infinity
   ]
+  @stale_consuming_recovery_unique [
+    fields: [:args, :queue, :worker],
+    keys: [:upstream_identity_id, :attempt_id, :generation, :recovery_kind],
+    states: :incomplete,
+    period: :infinity
+  ]
   # Oban applies the unique period to incomplete states too, so an
   # executing/available job older than the cooldown would stop blocking new
   # inserts. The untimed incomplete-state guard below keeps at most one
@@ -185,6 +191,39 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
 
   def enqueue_scheduled_saved_reset_redemption(_assignment),
     do: {:error, :pool_upstream_assignment_id_required}
+
+  @spec enqueue_stale_consuming_saved_reset_recovery(
+          assignment_ref(),
+          identity_ref(),
+          Ecto.UUID.t(),
+          non_neg_integer()
+        ) :: job_insert_result()
+  def enqueue_stale_consuming_saved_reset_recovery(
+        assignment_or_id,
+        identity_or_id,
+        attempt_id,
+        generation
+      ) do
+    with {:ok, assignment_id} <- assignment_id(assignment_or_id),
+         {:ok, identity_id} <- identity_id(identity_or_id),
+         {:ok, attempt_id} <- Ecto.UUID.cast(attempt_id),
+         true <- is_integer(generation) and generation >= 0 do
+      %{
+        "pool_upstream_assignment_id" => assignment_id,
+        "upstream_identity_id" => identity_id,
+        "attempt_id" => attempt_id,
+        "generation" => generation,
+        "recovery_kind" => "stale_consuming"
+      }
+      |> SavedResetRedemptionWorker.new(unique: @stale_consuming_recovery_unique)
+      |> Oban.insert()
+      |> tap_saved_reset_redemption_enqueue(assignment_or_id)
+    else
+      false -> {:error, :saved_reset_recovery_generation_required}
+      :error -> {:error, :saved_reset_recovery_attempt_id_required}
+      {:error, _reason} -> {:error, :saved_reset_recovery_attempt_id_required}
+    end
+  end
 
   @spec enqueue_scheduled_identity_account_reconciliation(PoolUpstreamAssignment.t(), keyword()) ::
           job_insert_result()

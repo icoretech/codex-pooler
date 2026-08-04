@@ -4237,6 +4237,494 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
       assert is_nil(sibling_assignment.metadata["last_reconciliation"])
     end
 
+    @tag :stale_consuming_recovery
+    test "enqueues one canonical stale-consuming recovery across assignments and replicas" do
+      upstream = start_upstream(successful_usage_response())
+      {canonical_pool, canonical_assignment} = active_usage_probe_assignment(upstream)
+      identity = Repo.get!(UpstreamIdentity, canonical_assignment.upstream_identity_id)
+
+      {later_pool, later_assignment} =
+        active_assignment_for_identity_fixture(identity,
+          assignment_label: "Later stale recovery assignment",
+          created_at: DateTime.add(canonical_assignment.created_at, 60, :second),
+          metadata: %{"base_url" => FakeUpstream.url(upstream)}
+        )
+
+      attempt_id = Ecto.UUID.generate()
+      put_stale_consuming_redemption!(identity, attempt_id, 9)
+
+      for {pool, assignment} <- [
+            {later_pool, later_assignment},
+            {canonical_pool, canonical_assignment},
+            {canonical_pool, canonical_assignment}
+          ] do
+        assert :ok =
+                 perform_job(
+                   AccountReconciliationWorker,
+                   scheduled_identity_reconciliation_args(pool, assignment, identity)
+                 )
+      end
+
+      assert [job] = stale_consuming_recovery_jobs()
+
+      assert job.args == %{
+               "pool_upstream_assignment_id" => canonical_assignment.id,
+               "upstream_identity_id" => identity.id,
+               "attempt_id" => attempt_id,
+               "generation" => 9,
+               "recovery_kind" => "stale_consuming"
+             }
+
+      assert job.max_attempts == 1
+      assert FakeUpstream.requests(upstream) |> Enum.all?(&(&1.method == "GET"))
+      assert Repo.aggregate(Request, :count) == 0
+    end
+
+    @tag :stale_consuming_recovery
+    test "simultaneous canonical and sibling reconcilers enqueue one recovery job" do
+      release_ref = make_ref()
+
+      response =
+        FakeUpstream.barrier_json_response(usage_payload(),
+          notify: self(),
+          release_ref: release_ref
+        )
+
+      upstream =
+        start_upstream({:path_json, %{"/backend-api/wham/usage" => response}})
+
+      {canonical_pool, canonical_assignment} = active_usage_probe_assignment(upstream)
+      identity = Repo.get!(UpstreamIdentity, canonical_assignment.upstream_identity_id)
+
+      {sibling_pool, sibling_assignment} =
+        active_assignment_for_identity_fixture(identity,
+          assignment_label: "Concurrent stale recovery sibling",
+          created_at: DateTime.add(canonical_assignment.created_at, 60, :second),
+          metadata: %{"base_url" => FakeUpstream.url(upstream)}
+        )
+
+      attempt_id = Ecto.UUID.generate()
+      put_stale_consuming_redemption!(identity, attempt_id, 11)
+
+      tasks =
+        Enum.map(
+          [
+            {sibling_pool, sibling_assignment},
+            {canonical_pool, canonical_assignment}
+          ],
+          fn {pool, assignment} ->
+            start_allowed_task(fn ->
+              perform_job(
+                AccountReconciliationWorker,
+                scheduled_identity_reconciliation_args(pool, assignment, identity)
+              )
+            end)
+          end
+        )
+
+      barriers = Enum.map(tasks, fn _task -> await_upstream_barrier(release_ref) end)
+      Enum.each(barriers, &release_upstream_barrier(&1, release_ref))
+
+      assert Enum.map(tasks, &Task.await(&1, 10_000)) == [:ok, :ok]
+      assert [job] = stale_consuming_recovery_jobs()
+      assert job.args["pool_upstream_assignment_id"] == canonical_assignment.id
+      assert job.args["attempt_id"] == attempt_id
+      assert Repo.aggregate(Request, :count) == 0
+      assert scheduled_consume_count(upstream) == 0
+    end
+
+    @tag :stale_consuming_recovery
+    test "recovery uniqueness spans incomplete states without assignment identity" do
+      {_pool, assignment} = active_assignment_fixture(%{})
+      identity = Repo.get!(UpstreamIdentity, assignment.upstream_identity_id)
+
+      {_sibling_pool, sibling_assignment} =
+        active_assignment_for_identity_fixture(identity,
+          assignment_label: "Stale recovery uniqueness sibling",
+          created_at: DateTime.add(assignment.created_at, 60, :second)
+        )
+
+      attempt_id = Ecto.UUID.generate()
+
+      for incomplete_state <- ~w(suspended available scheduled executing retryable) do
+        Repo.delete_all(Oban.Job)
+
+        assert {:ok, first_job} =
+                 Jobs.enqueue_stale_consuming_saved_reset_recovery(
+                   assignment,
+                   identity,
+                   attempt_id,
+                   4
+                 )
+
+        old_inserted_at = DateTime.utc_now() |> DateTime.add(-30, :day)
+
+        {1, _rows} =
+          from(job in Oban.Job, where: job.id == ^first_job.id)
+          |> Repo.update_all(set: [state: incomplete_state, inserted_at: old_inserted_at])
+
+        assert {:ok, conflict_job} =
+                 Jobs.enqueue_stale_consuming_saved_reset_recovery(
+                   sibling_assignment,
+                   identity,
+                   attempt_id,
+                   4
+                 )
+
+        assert conflict_job.conflict?
+        assert conflict_job.id == first_job.id
+      end
+
+      Repo.delete_all(Oban.Job)
+
+      assert {:ok, first_job} =
+               Jobs.enqueue_stale_consuming_saved_reset_recovery(
+                 assignment,
+                 identity,
+                 attempt_id,
+                 4
+               )
+
+      assert {:ok, next_generation_job} =
+               Jobs.enqueue_stale_consuming_saved_reset_recovery(
+                 sibling_assignment,
+                 identity,
+                 attempt_id,
+                 5
+               )
+
+      assert {:ok, next_attempt_job} =
+               Jobs.enqueue_stale_consuming_saved_reset_recovery(
+                 sibling_assignment,
+                 identity,
+                 Ecto.UUID.generate(),
+                 4
+               )
+
+      refute next_generation_job.conflict?
+      refute next_attempt_job.conflict?
+
+      assert MapSet.size(MapSet.new([first_job.id, next_generation_job.id, next_attempt_job.id])) ==
+               3
+    end
+
+    @tag :stale_consuming_recovery
+    @tag timeout: 120_000
+    test "two hundred clean scheduled reconciliations create no recovery jobs" do
+      upstream = start_upstream(successful_usage_response())
+
+      fixtures =
+        Enum.map(1..200, fn _index ->
+          {pool, assignment} = active_usage_probe_assignment(upstream)
+          identity = Repo.get!(UpstreamIdentity, assignment.upstream_identity_id)
+          {pool, assignment, identity}
+        end)
+
+      Enum.each(fixtures, fn {pool, assignment, identity} ->
+        assert :ok =
+                 perform_job(
+                   AccountReconciliationWorker,
+                   scheduled_identity_reconciliation_args(pool, assignment, identity)
+                 )
+      end)
+
+      assert stale_consuming_recovery_jobs() == []
+      assert Repo.aggregate(Request, :count) == 0
+      assert FakeUpstream.count(upstream) == 200
+      assert FakeUpstream.requests(upstream) |> Enum.all?(&(&1.method == "GET"))
+    end
+
+    @tag :stale_consuming_recovery
+    test "clean and not-due reconciliations skip the canonical recovery query" do
+      for recovery_state <- [:clean, :not_due] do
+        upstream = start_upstream(unavailable_usage_paths())
+        {pool, assignment} = active_usage_probe_assignment(upstream)
+        identity = Repo.get!(UpstreamIdentity, assignment.upstream_identity_id)
+
+        persist_quota_windows!(identity, [
+          persisted_account_primary_window_attrs(DateTime.utc_now())
+        ])
+
+        if recovery_state == :not_due do
+          put_stale_consuming_redemption!(identity, Ecto.UUID.generate(), 3,
+            mode: "observe_only",
+            next_action_at: DateTime.add(DateTime.utc_now(), 1, :hour)
+          )
+        end
+
+        args = scheduled_identity_reconciliation_args(pool, assignment, identity)
+
+        assert {:ok, :ok, 0} =
+                 capture_canonical_assignment_queries(fn ->
+                   perform_job(AccountReconciliationWorker, args)
+                 end)
+
+        assert stale_consuming_recovery_jobs() == []
+      end
+    end
+
+    @tag :stale_consuming_recovery
+    @tag timeout: 120_000
+    test "two hundred not-due identities stay quiet while one due identity enqueues once" do
+      upstream = start_upstream(successful_usage_response())
+      next_action_at = DateTime.add(DateTime.utc_now(), 1, :hour)
+
+      not_due_fixtures =
+        Enum.map(1..200, fn _index ->
+          {pool, assignment} = active_usage_probe_assignment(upstream)
+          identity = Repo.get!(UpstreamIdentity, assignment.upstream_identity_id)
+
+          put_stale_consuming_redemption!(identity, Ecto.UUID.generate(), 6,
+            mode: "observe_only",
+            next_action_at: next_action_at
+          )
+
+          {pool, assignment, identity}
+        end)
+
+      Enum.each(not_due_fixtures, fn {pool, assignment, identity} ->
+        assert :ok =
+                 perform_job(
+                   AccountReconciliationWorker,
+                   scheduled_identity_reconciliation_args(pool, assignment, identity)
+                 )
+      end)
+
+      assert stale_consuming_recovery_jobs() == []
+
+      {due_pool, due_assignment} = active_usage_probe_assignment(upstream)
+      due_identity = Repo.get!(UpstreamIdentity, due_assignment.upstream_identity_id)
+      due_attempt_id = Ecto.UUID.generate()
+      put_stale_consuming_redemption!(due_identity, due_attempt_id, 7)
+
+      assert :ok =
+               perform_job(
+                 AccountReconciliationWorker,
+                 scheduled_identity_reconciliation_args(
+                   due_pool,
+                   due_assignment,
+                   due_identity
+                 )
+               )
+
+      assert [job] = stale_consuming_recovery_jobs()
+      assert job.args["upstream_identity_id"] == due_identity.id
+      assert job.args["attempt_id"] == due_attempt_id
+      assert job.args["generation"] == 7
+      assert Repo.aggregate(Request, :count) == 0
+      assert scheduled_consume_count(upstream) == 0
+    end
+
+    @tag :stale_consuming_recovery
+    @tag timeout: 180_000
+    test "two hundred due observe-only identities retain one incomplete recovery job each" do
+      upstream = start_upstream(successful_usage_response())
+      next_action_at = DateTime.add(DateTime.utc_now(), -1, :minute)
+
+      fixtures =
+        Enum.map(1..200, fn _index ->
+          {pool, assignment} = active_usage_probe_assignment(upstream)
+          identity = Repo.get!(UpstreamIdentity, assignment.upstream_identity_id)
+          attempt_id = Ecto.UUID.generate()
+
+          identity =
+            put_stale_consuming_redemption!(identity, attempt_id, 8,
+              mode: "observe_only",
+              next_action_at: next_action_at
+            )
+
+          {pool, assignment, identity, attempt_id}
+        end)
+
+      reconcile = fn ->
+        Enum.each(fixtures, fn {pool, assignment, identity, _attempt_id} ->
+          assert :ok =
+                   perform_job(
+                     AccountReconciliationWorker,
+                     scheduled_identity_reconciliation_args(pool, assignment, identity)
+                   )
+        end)
+      end
+
+      reconcile.()
+      reconcile.()
+
+      jobs = stale_consuming_recovery_jobs()
+
+      expected_identity_ids =
+        MapSet.new(fixtures, fn {_pool, _assignment, identity, _attempt_id} -> identity.id end)
+
+      expected_attempt_ids =
+        MapSet.new(fixtures, fn {_pool, _assignment, _identity, attempt_id} -> attempt_id end)
+
+      assert length(jobs) == 200
+      assert MapSet.new(jobs, & &1.args["upstream_identity_id"]) == expected_identity_ids
+      assert MapSet.new(jobs, & &1.args["attempt_id"]) == expected_attempt_ids
+      assert Enum.all?(jobs, &(&1.state in ~w(available scheduled executing retryable suspended)))
+      assert Repo.aggregate(Request, :count) == 0
+      assert scheduled_consume_count(upstream) == 0
+      assert FakeUpstream.count(upstream) == 400
+      assert FakeUpstream.requests(upstream) |> Enum.all?(&(&1.method == "GET"))
+    end
+
+    @tag :stale_consuming_recovery
+    test "equal creation timestamps choose the lowest assignment id regardless of order" do
+      upstream = start_upstream(successful_usage_response())
+      {first_pool, first_assignment} = active_usage_probe_assignment(upstream)
+      identity = Repo.get!(UpstreamIdentity, first_assignment.upstream_identity_id)
+
+      {second_pool, second_assignment} =
+        active_assignment_for_identity_fixture(identity,
+          assignment_label: "Equal-time stale recovery assignment",
+          metadata: %{"base_url" => FakeUpstream.url(upstream)}
+        )
+
+      created_at =
+        DateTime.utc_now() |> DateTime.add(-1, :hour) |> DateTime.truncate(:microsecond)
+
+      assignment_ids = [first_assignment.id, second_assignment.id]
+
+      {2, _rows} =
+        from(assignment in PoolUpstreamAssignment, where: assignment.id in ^assignment_ids)
+        |> Repo.update_all(set: [created_at: created_at])
+
+      fixtures = [{first_pool, first_assignment}, {second_pool, second_assignment}]
+
+      {_canonical_pool, canonical_assignment} =
+        Enum.min_by(fixtures, fn {_pool, assignment} -> assignment.id end)
+
+      attempt_id = Ecto.UUID.generate()
+      put_stale_consuming_redemption!(identity, attempt_id, 8)
+
+      fixtures
+      |> Enum.sort_by(fn {_pool, assignment} -> assignment.id end, :desc)
+      |> Enum.each(fn {pool, assignment} ->
+        assert {:ok, :ok, canonical_query_count} =
+                 capture_canonical_assignment_queries(fn ->
+                   perform_job(
+                     AccountReconciliationWorker,
+                     scheduled_identity_reconciliation_args(pool, assignment, identity)
+                   )
+                 end)
+
+        assert canonical_query_count > 0
+      end)
+
+      assert [job] = stale_consuming_recovery_jobs()
+      assert job.args["pool_upstream_assignment_id"] == canonical_assignment.id
+      assert job.args["attempt_id"] == attempt_id
+      assert Repo.aggregate(Request, :count) == 0
+    end
+
+    @tag :stale_consuming_recovery
+    test "ignores an older inactive-pool assignment when choosing stale recovery canonical" do
+      upstream = start_upstream(successful_usage_response())
+      {inactive_pool, inactive_assignment} = active_usage_probe_assignment(upstream)
+      identity = Repo.get!(UpstreamIdentity, inactive_assignment.upstream_identity_id)
+
+      {active_pool, active_assignment} =
+        active_assignment_for_identity_fixture(identity,
+          assignment_label: "Active stale recovery assignment",
+          created_at: DateTime.add(inactive_assignment.created_at, 60, :second),
+          metadata: %{"base_url" => FakeUpstream.url(upstream)}
+        )
+
+      inactive_pool
+      |> Ecto.Changeset.change(%{status: "disabled", disabled_at: DateTime.utc_now()})
+      |> Repo.update!()
+
+      attempt_id = Ecto.UUID.generate()
+      put_stale_consuming_redemption!(identity, attempt_id, 2)
+
+      assert :ok =
+               perform_job(
+                 AccountReconciliationWorker,
+                 scheduled_identity_reconciliation_args(active_pool, active_assignment, identity)
+               )
+
+      assert [job] = stale_consuming_recovery_jobs()
+      assert job.args["pool_upstream_assignment_id"] == active_assignment.id
+      refute job.args["pool_upstream_assignment_id"] == inactive_assignment.id
+      assert Repo.aggregate(Request, :count) == 0
+    end
+
+    @tag :stale_consuming_recovery
+    test "re-enqueues after job loss and canonical change while settled metadata stays quiet" do
+      upstream = start_upstream(successful_usage_response())
+      {first_pool, first_assignment} = active_usage_probe_assignment(upstream)
+      identity = Repo.get!(UpstreamIdentity, first_assignment.upstream_identity_id)
+
+      {replacement_pool, replacement_assignment} =
+        active_assignment_for_identity_fixture(identity,
+          assignment_label: "Replacement stale recovery assignment",
+          created_at: DateTime.add(first_assignment.created_at, 60, :second),
+          metadata: %{"base_url" => FakeUpstream.url(upstream)}
+        )
+
+      attempt_id = Ecto.UUID.generate()
+      put_stale_consuming_redemption!(identity, attempt_id, 5)
+
+      first_args = scheduled_identity_reconciliation_args(first_pool, first_assignment, identity)
+      assert :ok = perform_job(AccountReconciliationWorker, first_args)
+      assert [first_job] = stale_consuming_recovery_jobs()
+
+      {1, _rows} =
+        from(job in Oban.Job, where: job.id == ^first_job.id)
+        |> Repo.update_all(set: [state: "discarded", discarded_at: DateTime.utc_now()])
+
+      assert :ok = perform_job(AccountReconciliationWorker, first_args)
+      assert [discarded_first_job, replacement_after_loss] = stale_consuming_recovery_jobs()
+      assert discarded_first_job.id == first_job.id
+      assert discarded_first_job.state == "discarded"
+      assert replacement_after_loss.args["pool_upstream_assignment_id"] == first_assignment.id
+
+      {1, _rows} =
+        from(job in Oban.Job, where: job.id == ^replacement_after_loss.id)
+        |> Repo.update_all(set: [state: "completed", completed_at: DateTime.utc_now()])
+
+      assert {:ok, _disabled_assignment} =
+               PoolAssignments.disable_pool_assignment(first_assignment)
+
+      assert :ok =
+               perform_job(
+                 AccountReconciliationWorker,
+                 scheduled_identity_reconciliation_args(
+                   replacement_pool,
+                   replacement_assignment,
+                   identity
+                 )
+               )
+
+      assert [discarded_first_job, completed_replacement_after_loss, canonical_replacement] =
+               stale_consuming_recovery_jobs()
+
+      assert discarded_first_job.id == first_job.id
+      assert completed_replacement_after_loss.id == replacement_after_loss.id
+      assert completed_replacement_after_loss.state == "completed"
+
+      assert canonical_replacement.args["pool_upstream_assignment_id"] ==
+               replacement_assignment.id
+
+      settle_stale_consuming_redemption!(identity)
+
+      {1, _rows} =
+        from(job in Oban.Job, where: job.id == ^canonical_replacement.id)
+        |> Repo.update_all(set: [state: "completed", completed_at: DateTime.utc_now()])
+
+      assert :ok =
+               perform_job(
+                 AccountReconciliationWorker,
+                 scheduled_identity_reconciliation_args(
+                   replacement_pool,
+                   replacement_assignment,
+                   identity
+                 )
+               )
+
+      assert length(stale_consuming_recovery_jobs()) == 3
+      assert Repo.aggregate(Request, :count) == 0
+    end
+
     @tag :scheduled_expiry_enqueue
     test "concurrent sibling assignments enqueue one incomplete saved-reset job per identity" do
       {_pool, assignment} = active_assignment_fixture(%{})
@@ -6264,6 +6752,21 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
     end
   end
 
+  def handle_canonical_assignment_query_event(
+        _event,
+        _measurements,
+        metadata,
+        {handler_id, test_pid}
+      ) do
+    query = metadata[:query] |> to_string()
+
+    if metadata[:repo] == Repo and metadata[:source] == "pool_upstream_assignments" and
+         query |> String.trim_leading() |> String.starts_with?("SELECT") and
+         String.contains?(query, "upstream_identities") and String.contains?(query, "pools") do
+      send(test_pid, {handler_id, :canonical_assignment_query})
+    end
+  end
+
   def handle_blocking_assignment_update_event(
         _event,
         _measurements,
@@ -6393,6 +6896,35 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
     end
   end
 
+  defp capture_canonical_assignment_queries(fun) when is_function(fun, 0) do
+    test_pid = self()
+    handler_id = {__MODULE__, :canonical_assignment_query, System.unique_integer([:positive])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        &__MODULE__.handle_canonical_assignment_query_event/4,
+        {handler_id, test_pid}
+      )
+
+    try do
+      result = fun.()
+      {:ok, result, drain_canonical_assignment_queries(handler_id, 0)}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_canonical_assignment_queries(handler_id, count) do
+    receive do
+      {^handler_id, :canonical_assignment_query} ->
+        drain_canonical_assignment_queries(handler_id, count + 1)
+    after
+      10 -> count
+    end
+  end
+
   defp drain_assignment_update_events(handler_id, updates) do
     receive do
       {^handler_id, update} -> drain_assignment_update_events(handler_id, [update | updates])
@@ -6441,6 +6973,13 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
         }
       }
     }
+  end
+
+  defp successful_usage_response do
+    {:path_json,
+     %{
+       "/backend-api/wham/usage" => {200, usage_payload()}
+     }}
   end
 
   defp weekly_usage_payload do
@@ -6601,6 +7140,64 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
         order_by: [asc: job.id]
       )
     )
+  end
+
+  defp stale_consuming_recovery_jobs do
+    Repo.all(
+      from(job in Oban.Job,
+        where:
+          job.worker == ^worker_name(SavedResetRedemptionWorker) and
+            fragment("?->>'recovery_kind' = ?", job.args, "stale_consuming"),
+        order_by: [asc: job.id]
+      )
+    )
+  end
+
+  defp put_stale_consuming_redemption!(identity, attempt_id, generation, opts \\ []) do
+    started_at = DateTime.utc_now() |> DateTime.add(-2, :minute) |> DateTime.to_iso8601()
+    next_action_at = Keyword.get(opts, :next_action_at, started_at)
+
+    identity
+    |> UpstreamIdentity.changeset(%{
+      metadata:
+        Map.put(identity.metadata || %{}, "saved_reset_redemption", %{
+          "status" => "redeeming",
+          "phase" => "consuming",
+          "attempt_id" => attempt_id,
+          "generation" => generation,
+          "trigger_kind" => "scheduled_expiry_rescue",
+          "started_at" => started_at,
+          "finished_at" => nil,
+          "result" => nil,
+          "provider_replay" => %{
+            "version" => 1,
+            "provider_dispatches" => 1,
+            "mode" => Keyword.get(opts, :mode, "replay"),
+            "next_action_at" => encode_datetime(next_action_at)
+          }
+        })
+    })
+    |> Repo.update!()
+  end
+
+  defp encode_datetime(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
+  defp encode_datetime(datetime) when is_binary(datetime), do: datetime
+
+  defp settle_stale_consuming_redemption!(identity) do
+    identity = Repo.reload!(identity)
+    redemption = identity.metadata["saved_reset_redemption"]
+
+    identity
+    |> UpstreamIdentity.changeset(%{
+      metadata:
+        put_in(identity.metadata, ["saved_reset_redemption"], %{
+          redemption
+          | "status" => "failed",
+            "phase" => "reblocked",
+            "finished_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+        })
+    })
+    |> Repo.update!()
   end
 
   defp scheduled_consume_count(upstream) do

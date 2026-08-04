@@ -66,6 +66,45 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           required(:decided_at) => String.t()
         }
 
+
+  @type stale_consuming_recovery_candidate :: %{
+          required(:attempt_id) => Ecto.UUID.t(),
+          required(:generation) => non_neg_integer()
+        }
+
+  @spec stale_consuming_recovery_candidate(UpstreamIdentity.t(), keyword()) ::
+          stale_consuming_recovery_candidate() | nil
+  def stale_consuming_recovery_candidate(identity, opts \\ [])
+
+  def stale_consuming_recovery_candidate(%UpstreamIdentity{} = identity, opts) do
+    now = Keyword.get_lazy(opts, :now, &now/0)
+
+    receive_timeout =
+      Keyword.get(opts, :receive_timeout, SavedResets.redemption_receive_timeout_ms())
+
+    redemption = get_in(identity.metadata || %{}, ["saved_reset_redemption"])
+
+    with %{
+           "status" => "redeeming",
+           "phase" => "consuming",
+           "attempt_id" => attempt_id,
+           "generation" => generation,
+           "started_at" => started_at
+         } <- redemption,
+         {:ok, attempt_id} <- Ecto.UUID.cast(attempt_id),
+         true <- is_integer(generation) and generation >= 0,
+         %DateTime{} = started_at <- parse_datetime(started_at),
+         true <-
+           DateTime.diff(now, started_at, :millisecond) >=
+             receive_timeout + SavedResets.redemption_stale_grace_ms(),
+         true <- recovery_due?(redemption, now) do
+      %{attempt_id: attempt_id, generation: generation}
+    else
+      _invalid_or_not_due -> nil
+    end
+  end
+
+  def stale_consuming_recovery_candidate(_identity, _opts), do: nil
   @type saved_reset_observation_intent :: %{
           required(:available_count) => non_neg_integer(),
           required(:authoritative_zero?) => boolean(),
@@ -1384,6 +1423,20 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
       {:noop, "gateway_auto_context_mismatch"}
     end
   end
+
+  defp recovery_due?(redemption, now) do
+    next_action_at =
+      get_in(redemption, ["provider_replay", "next_action_at"]) ||
+        redemption["legacy_recovery_next_action_at"]
+
+    case next_action_at do
+      nil -> true
+      next_action_at -> due_at?(parse_datetime(next_action_at), now)
+    end
+  end
+
+  defp due_at?(%DateTime{} = due_at, now), do: DateTime.compare(due_at, now) != :gt
+  defp due_at?(_invalid, _now), do: false
 
   defp broadcast_redemption(identity) do
     identity.id

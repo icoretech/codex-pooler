@@ -8,9 +8,117 @@ defmodule CodexPooler.Jobs.SavedResetRedemptionWorkerTest do
   alias CodexPooler.Jobs.SavedResetRedemptionWorker
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
+  alias CodexPooler.Upstreams.{SavedResetRedemption, SavedResets}
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   describe "perform/1" do
+    test "classifies stale consuming recovery at the age and due-time boundaries" do
+      now = ~U[2026-08-04 12:00:00Z]
+      receive_timeout = 15_000
+
+      stale_after = receive_timeout + SavedResets.redemption_stale_grace_ms()
+
+      started_at = DateTime.add(now, -stale_after, :millisecond)
+      attempt_id = Ecto.UUID.generate()
+
+      identity = %UpstreamIdentity{
+        metadata: %{
+          "saved_reset_redemption" =>
+            stale_consuming_redemption(started_at, attempt_id, 7,
+              next_action_at: DateTime.to_iso8601(now)
+            )
+        }
+      }
+
+      assert %{attempt_id: ^attempt_id, generation: 7} =
+               SavedResetRedemption.stale_consuming_recovery_candidate(identity,
+                 now: now,
+                 receive_timeout: receive_timeout
+               )
+
+      not_old_enough =
+        put_in(
+          identity.metadata["saved_reset_redemption"]["started_at"],
+          now
+          |> DateTime.add(-stale_after + 1, :millisecond)
+          |> DateTime.to_iso8601()
+        )
+
+      assert SavedResetRedemption.stale_consuming_recovery_candidate(not_old_enough,
+               now: now,
+               receive_timeout: receive_timeout
+             ) == nil
+
+      not_due =
+        put_in(
+          identity.metadata["saved_reset_redemption"]["provider_replay"]["next_action_at"],
+          now |> DateTime.add(1, :millisecond) |> DateTime.to_iso8601()
+        )
+
+      assert SavedResetRedemption.stale_consuming_recovery_candidate(not_due,
+               now: now,
+               receive_timeout: receive_timeout
+             ) == nil
+    end
+
+    test "discovers replay and legacy consuming classes but rejects malformed and settled records" do
+      now = ~U[2026-08-04 12:00:00Z]
+      started_at = DateTime.add(now, -2, :minute)
+      attempt_id = Ecto.UUID.generate()
+
+      for extra <- [
+            %{},
+            %{"legacy_recovery" => %{"version" => 1, "state" => "unresolved"}},
+            %{
+              "provider_replay" => %{
+                "version" => 1,
+                "provider_dispatches" => 0,
+                "mode" => "replay"
+              }
+            },
+            %{
+              "provider_replay" => %{
+                "version" => 1,
+                "provider_dispatches" => 6,
+                "mode" => "observe_only"
+              }
+            }
+          ] do
+        identity = %UpstreamIdentity{
+          metadata: %{
+            "saved_reset_redemption" =>
+              Map.merge(stale_consuming_redemption(started_at, attempt_id, 3), extra)
+          }
+        }
+
+        assert %{attempt_id: ^attempt_id, generation: 3} =
+                 SavedResetRedemption.stale_consuming_recovery_candidate(identity,
+                   now: now,
+                   receive_timeout: 0
+                 )
+      end
+
+      base = stale_consuming_redemption(started_at, attempt_id, 3)
+
+      for invalid <- [
+            nil,
+            %{},
+            Map.put(base, "status", "succeeded"),
+            Map.put(base, "phase", "reblocked"),
+            Map.put(base, "attempt_id", "invalid"),
+            Map.put(base, "generation", -1),
+            Map.put(base, "started_at", "invalid"),
+            put_in(base, ["provider_replay", "next_action_at"], "invalid")
+          ] do
+        identity = %UpstreamIdentity{metadata: %{"saved_reset_redemption" => invalid}}
+
+        assert SavedResetRedemption.stale_consuming_recovery_candidate(identity,
+                 now: now,
+                 receive_timeout: 0
+               ) == nil
+      end
+    end
+
     test "cancels queued job when persisted available_count is zero without provider request" do
       {:ok, fake} = codex_reset_fake()
       %{assignment: assignment} = assignment_with_fake(fake, 0)
@@ -371,6 +479,31 @@ defmodule CodexPooler.Jobs.SavedResetRedemptionWorkerTest do
       "result" => nil
     }
   end
+
+  defp stale_consuming_redemption(started_at, attempt_id, generation, opts \\ []) do
+    %{
+      "status" => "redeeming",
+      "phase" => "consuming",
+      "attempt_id" => attempt_id,
+      "generation" => generation,
+      "trigger_kind" => "scheduled_expiry_rescue",
+      "started_at" => started_at |> DateTime.truncate(:microsecond) |> DateTime.to_iso8601(),
+      "finished_at" => nil,
+      "result" => nil,
+      "provider_replay" =>
+        %{
+          "version" => 1,
+          "provider_dispatches" => 1,
+          "mode" => "replay"
+        }
+        |> maybe_put_next_action_at(Keyword.get(opts, :next_action_at))
+    }
+  end
+
+  defp maybe_put_next_action_at(replay, nil), do: replay
+
+  defp maybe_put_next_action_at(replay, next_action_at),
+    do: Map.put(replay, "next_action_at", next_action_at)
 
   defp scheduled_saved_resets(as_of) do
     observed_at = DateTime.to_iso8601(as_of)

@@ -22,6 +22,7 @@ defmodule CodexPooler.Jobs.AccountReconciliationWorker do
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
   alias CodexPooler.Upstreams.Reconciliation.AccountReconciliation
+  alias CodexPooler.Upstreams.SavedResetRedemption
   alias CodexPooler.Upstreams.SavedResets.AutoEligibility
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
@@ -81,11 +82,49 @@ defmodule CodexPooler.Jobs.AccountReconciliationWorker do
   end
 
   defp complete_reconciliation(args, result, reconciliation_started_at) do
-    case maybe_enqueue_scheduled_expiry_rescue(args, result, reconciliation_started_at) do
-      :ok -> reconciliation_outcome(result)
+    with :ok <- maybe_enqueue_stale_consuming_recovery(args, result),
+         :ok <- maybe_enqueue_scheduled_expiry_rescue(args, result, reconciliation_started_at) do
+      reconciliation_outcome(result)
+    else
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp maybe_enqueue_stale_consuming_recovery(
+         %{
+           "trigger_kind" => "scheduled",
+           "target_kind" => "upstream_identity",
+           "upstream_identity_id" => identity_id
+         } = args,
+         %{
+           identity: %UpstreamIdentity{id: identity_id} = identity,
+           assignment: %PoolUpstreamAssignment{} = result_assignment
+         } = result
+       ) do
+    with true <- AccountReconciliation.successful_status?(result),
+         %{attempt_id: attempt_id, generation: generation} <-
+           SavedResetRedemption.stale_consuming_recovery_candidate(identity),
+         %PoolUpstreamAssignment{} = canonical_assignment <-
+           PoolAssignments.canonical_active_assignment_for_identity(identity),
+         true <- canonical_assignment.id == result_assignment.id,
+         true <- Map.get(args, "pool_upstream_assignment_id") == result_assignment.id,
+         true <- Map.get(args, "pool_id") == result_assignment.pool_id,
+         {:ok, %Oban.Job{}} <-
+           Jobs.enqueue_stale_consuming_saved_reset_recovery(
+             canonical_assignment,
+             identity,
+             attempt_id,
+             generation
+           ) do
+      :ok
+    else
+      nil -> :ok
+      false -> :ok
+      {:error, _reason} -> {:error, "stale saved-reset recovery enqueue failed"}
+    end
+  end
+
+  defp maybe_enqueue_stale_consuming_recovery(_args, _result), do: :ok
 
   defp recovery_probe_required?(%{
          "recovery_required" => true,
@@ -119,7 +158,7 @@ defmodule CodexPooler.Jobs.AccountReconciliationWorker do
          true <- Map.get(args, "pool_id") == result_assignment.pool_id,
          %UpstreamIdentity{} = identity <- Upstreams.get_upstream_identity(identity_id),
          %PoolUpstreamAssignment{} = canonical_assignment <-
-           canonical_active_assignment(identity),
+           PoolAssignments.canonical_active_assignment_for_identity(identity),
          true <- canonical_assignment.id == result_assignment.id,
          true <- saved_reset_observed_at_or_after?(identity, reconciliation_started_at) do
       enqueue_scheduled_expiry_rescue(identity, canonical_assignment)
@@ -130,14 +169,6 @@ defmodule CodexPooler.Jobs.AccountReconciliationWorker do
 
   defp maybe_enqueue_scheduled_expiry_rescue(_args, _result, _reconciliation_started_at),
     do: :ok
-
-  defp canonical_active_assignment(%UpstreamIdentity{} = identity) do
-    identity
-    |> PoolAssignments.list_pool_assignments_for_identity()
-    |> Enum.map(& &1.pool_id)
-    |> PoolAssignments.list_canonical_active_assignments_for_pools()
-    |> Enum.find(&(&1.upstream_identity_id == identity.id))
-  end
 
   defp saved_reset_observed_at_or_after?(identity, reconciliation_started_at) do
     with observed_at when is_binary(observed_at) <-

@@ -124,6 +124,26 @@ defmodule CodexPooler.Jobs do
     UpstreamEnqueue.enqueue_scheduled_saved_reset_redemption(assignment)
   end
 
+  @spec enqueue_stale_consuming_saved_reset_recovery(
+          assignment_ref(),
+          identity_ref(),
+          Ecto.UUID.t(),
+          non_neg_integer()
+        ) :: job_insert_result()
+  def enqueue_stale_consuming_saved_reset_recovery(
+        assignment_or_id,
+        identity_or_id,
+        attempt_id,
+        generation
+      ) do
+    UpstreamEnqueue.enqueue_stale_consuming_saved_reset_recovery(
+      assignment_or_id,
+      identity_or_id,
+      attempt_id,
+      generation
+    )
+  end
+
   @spec enqueue_runtime_state_cleanup(keyword()) :: job_insert_result()
   def enqueue_runtime_state_cleanup(opts \\ []) do
     args =

@@ -302,6 +302,31 @@ defmodule CodexPooler.Upstreams.Assignments.PoolAssignments do
 
   def list_canonical_active_assignments_for_pools(_pool_refs), do: []
 
+  @spec canonical_active_assignment_for_identity(identity_ref()) ::
+          PoolUpstreamAssignment.t() | nil
+  def canonical_active_assignment_for_identity(identity_or_id) do
+    case identity_id(identity_or_id) do
+      nil ->
+        nil
+
+      identity_id ->
+        Repo.one(
+          from assignment in PoolUpstreamAssignment,
+            join: identity in UpstreamIdentity,
+            on: identity.id == assignment.upstream_identity_id,
+            join: pool in Pool,
+            on: pool.id == assignment.pool_id,
+            where:
+              assignment.upstream_identity_id == ^identity_id and
+                assignment.status == ^@assignment_active and identity.status == ^@active and
+                pool.status == "active",
+            order_by: [asc: assignment.created_at, asc: assignment.id],
+            limit: 1,
+            select: assignment
+        )
+    end
+  end
+
   @spec list_pool_assignments_for_identity(identity_ref()) :: [PoolUpstreamAssignment.t()]
   def list_pool_assignments_for_identity(identity_or_id) do
     case identity_id(identity_or_id) do

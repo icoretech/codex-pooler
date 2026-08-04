@@ -234,6 +234,57 @@ defmodule CodexPoolerWeb.Admin.JobsReadModelTest do
     refute Map.has_key?(projection.selected_job, :errors)
   end
 
+  @tag :stale_consuming_recovery
+  test "projects stale-consuming recovery without attempt generation or raw arguments" do
+    pool = pool_fixture(%{name: "Recovery Pool", slug: "recovery-pool"})
+
+    %{identity: identity, assignment: assignment} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Recovery account",
+        assignment_label: "Recovery assignment"
+      })
+
+    attempt_id = Ecto.UUID.generate()
+
+    job =
+      insert_job(1,
+        worker: SavedResetRedemptionWorker,
+        state: "available",
+        inserted_at: ~U[2026-08-04 10:00:00Z],
+        args: %{
+          "pool_upstream_assignment_id" => assignment.id,
+          "upstream_identity_id" => identity.id,
+          "attempt_id" => attempt_id,
+          "generation" => 12,
+          "recovery_kind" => "stale_consuming"
+        }
+      )
+
+    projection =
+      JobsReadModel.load(:system,
+        params: %{"job_id" => Integer.to_string(job.id)},
+        now: ~U[2026-08-04 10:30:00Z]
+      )
+
+    assert %{
+             id: job_id,
+             target: %{
+               assignment_id: assignment_id,
+               upstream_identity_id: identity_id
+             }
+           } = projection.selected_job
+
+    assert job_id == job.id
+    assert assignment_id == assignment.id
+    assert identity_id == identity.id
+    refute Map.has_key?(projection.selected_job, :args)
+
+    serialized = inspect(projection)
+    refute serialized =~ attempt_id
+    refute serialized =~ "generation"
+    refute serialized =~ "stale_consuming"
+  end
+
   test "default projection excludes discarded jobs resolved by a later target success" do
     resolved_target_id = Ecto.UUID.generate()
     unresolved_target_id = Ecto.UUID.generate()
