@@ -138,7 +138,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
         expected_generation,
         opts \\ []
       ) do
-    now = Keyword.get_lazy(opts, :now, &now/0)
+    clock = Keyword.get(opts, :clock, &now/0)
+    now = Keyword.get_lazy(opts, :now, clock)
 
     receive_timeout =
       Keyword.get(opts, :receive_timeout, SavedResets.redemption_receive_timeout_ms())
@@ -150,7 +151,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
       generation: expected_generation
     }
 
-    case prepare_stale_consuming(expected, now, receive_timeout) do
+    case prepare_stale_consuming(expected, now, receive_timeout, clock) do
       {:ok, %{endpoint_kind: :chatgpt} = recovery} ->
         resume_chatgpt_recovery(recovery, now)
 
@@ -168,9 +169,11 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     end
   end
 
-  defp prepare_stale_consuming(expected, now, receive_timeout) do
+  defp prepare_stale_consuming(expected, now, receive_timeout, clock) do
     with {:ok, expected} <- normalize_recovery_expected(expected) do
-      Repo.transaction(fn -> prepare_stale_consuming_locked(expected, now, receive_timeout) end)
+      Repo.transaction(fn ->
+        prepare_stale_consuming_locked(expected, now, receive_timeout, clock)
+      end)
       |> case do
         {:ok, result} -> result
         {:error, reason} -> {:error, reason}
@@ -180,7 +183,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     _error -> {:error, :saved_reset_persistence_failed}
   end
 
-  defp prepare_stale_consuming_locked(expected, now, receive_timeout) do
+  defp prepare_stale_consuming_locked(expected, now, receive_timeout, clock) do
     identity = lock_identity!(expected.identity_id)
     assignments = lock_canonical_assignments(identity.id)
     canonical = List.first(assignments)
@@ -204,7 +207,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           redemption,
           expected,
           now,
-          receive_timeout
+          receive_timeout,
+          clock
         )
     end
   end
@@ -298,7 +302,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          redemption,
          expected,
          now,
-         receive_timeout
+         receive_timeout,
+         clock
        ) do
     replay = redemption["provider_replay"]
     started_at = parse_datetime(redemption["started_at"])
@@ -313,6 +318,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
            is_integer(provider_dispatches) and
              provider_dispatches in 0..@maximum_provider_dispatches do
       context = %{
+        clock: clock,
         endpoint_family: endpoint_family,
         expected: expected,
         provider_dispatches: provider_dispatches,
@@ -538,6 +544,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
         trigger_detail: redemption["trigger_detail"],
         started_at: context.started_at,
         receive_timeout: context.receive_timeout,
+        clock: context.clock,
         endpoint_kind: endpoint_kind(endpoint_family),
         endpoint_family: endpoint_family,
         scope_fingerprint: scope_fingerprint,
@@ -835,13 +842,18 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     redemption = metadata["saved_reset_redemption"] || %{}
     replay = redemption["provider_replay"] || %{}
 
+    # Provider I/O (the credit list) can straddle the replay cutoff between the
+    # entry timestamp and this reservation, so the cutoff must be re-evaluated
+    # against the freshest known time before another write is authorized.
+    cutoff_now = later_datetime(now, recovery.clock.())
+
     with %PoolUpstreamAssignment{id: assignment_id} = assignment <- canonical,
          true <- assignment_id == recovery.assignment.id,
          true <- identity.status == @identity_active,
          true <- exact_recovery_attempt?(redemption, recovery),
          true <- replay["provider_dispatches"] == recovery.provider_dispatches,
          true <- replay["provider_dispatches"] < @maximum_provider_dispatches,
-         true <- before_replay_cutoff?(redemption, now),
+         true <- before_replay_cutoff?(redemption, cutoff_now),
          {:ok, due_at} <- recovery_replay_due_at(replay),
          true <- DateTime.compare(now, due_at) != :lt,
          {:ok, endpoint_family, consume_url, scope_fingerprint} <-
@@ -880,19 +892,26 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
         |> UpstreamIdentity.changeset(%{metadata: updated_metadata, updated_at: now})
         |> Repo.update!()
 
-      updated = %{
-        recovery
-        | identity: updated_identity,
-          assignment: assignment,
-          provider_dispatches: dispatches,
-          last_provider_dispatched_at: now
-      }
+      updated =
+        %{
+          recovery
+          | identity: updated_identity,
+            assignment: assignment,
+            provider_dispatches: dispatches,
+            last_provider_dispatched_at: now
+        }
+        |> Map.put(:reserved_provider_dispatches, dispatches)
 
       {:ok, updated, credit_id}
     else
-      false -> recovery_reservation_conflict(identity, canonical, redemption, recovery, now)
-      nil -> {:noop, "recovery_superseded", identity, recovery.assignment}
-      _invalid -> {:noop, "scope_changed", identity, canonical || recovery.assignment}
+      false ->
+        recovery_reservation_conflict(identity, canonical, redemption, recovery, now, cutoff_now)
+
+      nil ->
+        {:noop, "recovery_superseded", identity, recovery.assignment}
+
+      _invalid ->
+        {:noop, "scope_changed", identity, canonical || recovery.assignment}
     end
   end
 
@@ -927,7 +946,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     )
   end
 
-  defp recovery_reservation_conflict(identity, canonical, redemption, recovery, now) do
+  defp recovery_reservation_conflict(identity, canonical, redemption, recovery, now, cutoff_now) do
     replay = redemption["provider_replay"] || %{}
 
     cond do
@@ -941,7 +960,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           replay["provider_dispatches"] >= @maximum_provider_dispatches ->
         {:noop, "write_budget_exhausted", identity, canonical}
 
-      not before_replay_cutoff?(redemption, now) ->
+      not before_replay_cutoff?(redemption, cutoff_now) ->
         {:noop, "write_budget_exhausted", identity, canonical}
 
       true ->
@@ -2350,8 +2369,13 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           |> UpstreamIdentity.changeset(%{metadata: metadata, updated_at: dispatched_at})
           |> Repo.update!()
 
-        {claim |> Map.put(:identity, updated_identity) |> Map.put(:assignment, locked_assignment),
-         credit_id}
+        reserved_claim =
+          claim
+          |> Map.put(:identity, updated_identity)
+          |> Map.put(:assignment, locked_assignment)
+          |> Map.put(:reserved_provider_dispatches, replay["provider_dispatches"])
+
+        {reserved_claim, credit_id}
       else
         _invalid -> Repo.rollback(:saved_reset_dispatch_reservation_invalid)
       end
@@ -2570,13 +2594,27 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
       else: identity
   end
 
-  defp finalization_matches_claim?(redemption, %{endpoint_kind: _endpoint_kind} = recovery) do
-    exact_recovery_attempt?(redemption, recovery)
+  # Every finalizer — original or recovery — must observe the attempt still
+  # active (`redeeming`/`consuming`) with the exact attempt id and generation.
+  # A finalizer that reserved a provider dispatch must additionally match the
+  # persisted dispatch count it reserved, so a stale dispatch-N response can
+  # never finalize over dispatch N+1 or over a terminal recovery result.
+  defp finalization_matches_claim?(redemption, claim) do
+    exact_recovery_attempt?(redemption, claim) and
+      finalization_dispatch_matches_claim?(redemption, claim)
   end
 
-  defp finalization_matches_claim?(redemption, claim) do
-    redemption["attempt_id"] == claim.attempt_id and
-      redemption["generation"] == claim.generation
+  defp finalization_dispatch_matches_claim?(redemption, %{reserved_provider_dispatches: reserved}) do
+    persisted_provider_dispatches(redemption) == reserved
+  end
+
+  defp finalization_dispatch_matches_claim?(_redemption, _claim), do: true
+
+  defp persisted_provider_dispatches(redemption) do
+    case redemption["provider_replay"] do
+      %{"provider_dispatches" => dispatches} when is_integer(dispatches) -> dispatches
+      _missing_or_malformed -> nil
+    end
   end
 
   defp metadata_result(result) do
@@ -2905,6 +2943,10 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
   defp put_provider_replay_history(base, _redemption), do: base
 
+  defp claim_has_reserved_dispatch?(%{reserved_provider_dispatches: reserved})
+       when is_integer(reserved) and reserved > 0,
+       do: true
+
   defp claim_has_reserved_dispatch?(%{identity: %UpstreamIdentity{metadata: metadata}}) do
     case get_in(metadata || %{}, [
            "saved_reset_redemption",
@@ -3008,14 +3050,27 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   defp stale_redemption?(%{"status" => "redeeming"}), do: true
   defp stale_redemption?(_redemption), do: false
 
+  # A persisted `provider_replay` that is not a map must classify as not due
+  # instead of raising, so one malformed row cannot crash scheduled
+  # reconciliation; resume already treats the same shape as a fail-closed noop.
   defp recovery_due?(redemption, now) do
-    next_action_at =
-      get_in(redemption, ["provider_replay", "next_action_at"]) ||
-        redemption["legacy_recovery_next_action_at"]
-
-    case next_action_at do
+    case recovery_next_action_at(redemption) do
+      :malformed -> false
       nil -> true
       next_action_at -> due_at?(parse_datetime(next_action_at), now)
+    end
+  end
+
+  defp recovery_next_action_at(redemption) do
+    case Map.get(redemption, "provider_replay") do
+      nil ->
+        redemption["legacy_recovery_next_action_at"]
+
+      replay when is_map(replay) ->
+        replay["next_action_at"] || redemption["legacy_recovery_next_action_at"]
+
+      _malformed ->
+        :malformed
     end
   end
 

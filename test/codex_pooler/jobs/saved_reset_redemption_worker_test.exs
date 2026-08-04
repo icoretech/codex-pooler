@@ -108,7 +108,9 @@ defmodule CodexPooler.Jobs.SavedResetRedemptionWorkerTest do
             Map.put(base, "attempt_id", "invalid"),
             Map.put(base, "generation", -1),
             Map.put(base, "started_at", "invalid"),
-            put_in(base, ["provider_replay", "next_action_at"], "invalid")
+            put_in(base, ["provider_replay", "next_action_at"], "invalid"),
+            Map.put(base, "provider_replay", "invalid"),
+            Map.put(base, "provider_replay", ["invalid"])
           ] do
         identity = %UpstreamIdentity{metadata: %{"saved_reset_redemption" => invalid}}
 

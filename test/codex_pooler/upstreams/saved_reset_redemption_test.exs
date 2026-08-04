@@ -1025,6 +1025,104 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert provider_credit_consume_count(fake) == 1
     end
 
+    @tag :saved_reset_original_finalizer_race
+    test "a late original finalizer cannot overwrite a terminal recovery result" do
+      parent = self()
+      consume_release = make_ref()
+      {:ok, fake} = recovery_race_fake()
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      credit_id = "credit_original_race_#{System.unique_integer([:positive, :monotonic])}"
+      redeemed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      FakeUpstream.set_mode(fake, {
+        :sequence,
+        [
+          {:json, 200, %{"credits" => [%{"id" => credit_id, "status" => "available"}]}},
+          FakeUpstream.barrier_json_response(%{"code" => "no_credit"},
+            notify: parent,
+            release_ref: consume_release
+          ),
+          {:json, 200,
+           %{
+             "credits" => [
+               %{
+                 "id" => credit_id,
+                 "status" => "redeemed",
+                 "redeemed_at" => DateTime.to_iso8601(redeemed_at)
+               }
+             ]
+           }}
+        ]
+      })
+
+      fixture =
+        run_unboxed(fn ->
+          %{identity: identity, assignment: assignment} =
+            assignment_with_fake(fake, "/backend-api/wham/usage", "chatgpt_api")
+
+          %{
+            assignment_id: assignment.id,
+            identity_id: identity.id,
+            pool_id: assignment.pool_id
+          }
+        end)
+
+      on_exit(fn -> cleanup_committed_recovery_fixture!(fixture) end)
+
+      original_task =
+        Task.async(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            Repo.checkout(fn -> SavedResetRedemption.redeem(fixture.assignment_id) end)
+          end)
+        end)
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, consume_pid,
+                      ^consume_release},
+                     5_000
+
+      reserved =
+        run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata[
+          "saved_reset_redemption"
+        ]
+
+      assert reserved["provider_replay"]["provider_dispatches"] == 1
+
+      recovery_fixture =
+        fixture
+        |> Map.put(:attempt_id, reserved["attempt_id"])
+        |> Map.put(:generation, reserved["generation"])
+        |> Map.put(:now, DateTime.add(DateTime.utc_now(), 31, :minute))
+
+      recovery_task = start_recovery_replica_task(parent, :recovery, recovery_fixture)
+      assert_receive {:recovery_replica_ready, :recovery}, 5_000
+      send(recovery_task.pid, :start_recovery)
+
+      assert {:recovery, {:ok, %{status: :succeeded, applied?: true}}} =
+               Task.await(recovery_task, 15_000)
+
+      settled =
+        run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata
+
+      assert settled["saved_reset_redemption"]["result"]["applied"] == true
+
+      assert settled["saved_reset_redemption"]["phase"] in [
+               "confirmed_by_quota",
+               "consumed_pending_probe"
+             ]
+
+      send(consume_pid, {:fake_upstream_release_timeout, consume_release})
+
+      assert {:error, :saved_reset_consume_outcome_ambiguous} =
+               Task.await(original_task, 15_000)
+
+      persisted =
+        run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata
+
+      assert persisted == settled
+      assert provider_credit_consume_count(fake) == 1
+    end
+
     test "invalid ChatGPT recovery targets and changed scope remain provider I/O free" do
       for mutation <- [:tampered_target, :missing_target, :scope_changed] do
         fixture = ambiguous_chatgpt_recovery_fixture!()
@@ -1151,6 +1249,28 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert FakeUpstream.requests(fake) == []
     end
 
+    test "a recovery reservation re-checks the six-hour cutoff after the provider list" do
+      fixture = ambiguous_chatgpt_recovery_fixture!()
+      recovery_now = DateTime.add(fixture.last_provider_dispatched_at, 60, :second)
+      started_at = DateTime.add(recovery_now, -(6 * 60 * 60 - 30), :second)
+      fixture = make_recovery_due!(fixture, recovery_now, started_at: started_at)
+      before_metadata = Repo.reload!(fixture.identity).metadata
+
+      assert {:ok, %{status: :noop, applied?: false, code: "write_budget_exhausted"}} =
+               SavedResetRedemption.resume_stale_consuming(
+                 fixture.assignment,
+                 fixture.identity.id,
+                 fixture.attempt_id,
+                 fixture.generation,
+                 now: recovery_now,
+                 receive_timeout: 1_000,
+                 clock: fn -> DateTime.add(recovery_now, 60, :second) end
+               )
+
+      assert Repo.reload!(fixture.identity).metadata == before_metadata
+      assert provider_credit_consume_count(fixture.fake) == 1
+    end
+
     @tag :saved_reset_recovery_replica_race
     test "two recovery replicas reserve and POST at most one additional dispatch" do
       parent = self()
@@ -1209,6 +1329,83 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         ]
 
       assert persisted["provider_replay"]["provider_dispatches"] == 2
+    end
+
+    @tag :saved_reset_recovery_dispatch_generation_race
+    test "only the current dispatch reservation can finalize the attempt" do
+      parent = self()
+      first_release = make_ref()
+      second_release = make_ref()
+      {:ok, fake} = recovery_race_fake()
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      fixture = committed_chatgpt_recovery_fixture!(fake)
+      on_exit(fn -> cleanup_committed_recovery_fixture!(fixture) end)
+
+      FakeUpstream.set_mode(fake, {
+        :sequence,
+        [
+          {:json, 200, %{"credits" => [%{"id" => fixture.credit_id, "status" => "available"}]}},
+          FakeUpstream.barrier_json_response(%{"code" => "reset"},
+            notify: parent,
+            release_ref: first_release
+          ),
+          {:json, 200, %{"credits" => [%{"id" => fixture.credit_id, "status" => "available"}]}},
+          FakeUpstream.barrier_json_response(%{"code" => "reset"},
+            notify: parent,
+            release_ref: second_release
+          ),
+          {:json, 200, usage_payload(0)},
+          {:json, 200, usage_payload(0)}
+        ]
+      })
+
+      stale_task = start_recovery_replica_task(parent, :stale, fixture)
+      assert_receive {:recovery_replica_ready, :stale}, 5_000
+      send(stale_task.pid, :start_recovery)
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, stale_pid, ^first_release},
+                     5_000
+
+      current_fixture = %{fixture | now: DateTime.add(fixture.now, 6, :minute)}
+      current_task = start_recovery_replica_task(parent, :current, current_fixture)
+      assert_receive {:recovery_replica_ready, :current}, 5_000
+      send(current_task.pid, :start_recovery)
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, current_pid,
+                      ^second_release},
+                     5_000
+
+      send(stale_pid, {:fake_upstream_release_timeout, first_release})
+
+      assert {:stale, {:error, :saved_reset_consume_outcome_ambiguous}} =
+               Task.await(stale_task, 15_000)
+
+      active =
+        run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata[
+          "saved_reset_redemption"
+        ]
+
+      assert active["status"] == "redeeming"
+      assert active["phase"] == "consuming"
+      assert active["result"] == nil
+      assert active["provider_replay"]["provider_dispatches"] == 3
+
+      send(current_pid, {:fake_upstream_release_timeout, second_release})
+
+      assert {:current, {:ok, %{status: :succeeded, applied?: true}}} =
+               Task.await(current_task, 15_000)
+
+      persisted =
+        run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata[
+          "saved_reset_redemption"
+        ]
+
+      assert persisted["result"]["applied"] == true
+      assert persisted["provider_replay"]["provider_dispatches"] == 3
+
+      # Fixture dispatch 1 plus exactly one POST per live reservation.
+      assert provider_credit_consume_count(fake) == 3
     end
 
     test "a finalizer persistence failure after a reserved ChatGPT POST stays ambiguous" do
