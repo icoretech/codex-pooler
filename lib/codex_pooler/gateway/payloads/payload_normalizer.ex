@@ -288,7 +288,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     |> normalize_backend_codex_responses_lite(opts)
     |> normalize_backend_codex_responses_lite_input(opts)
     |> normalize_noncompact_backend_responses_envelope(opts)
-    |> sanitize_backend_codex_response_item_ids()
+    |> sanitize_backend_codex_response_item_ids(opts)
   end
 
   defp normalize_backend_codex_compact_payload(payload, opts) do
@@ -516,30 +516,51 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
          payload,
          %RequestOptions{
            transport: %{upstream_endpoint: "/backend-api/codex/responses"}
-         }
+         } = request_options
        ) do
-    sanitize_backend_codex_response_item_ids(payload)
+    sanitize_backend_codex_response_item_ids(payload, request_options)
   end
 
   defp maybe_sanitize_backend_codex_response_item_ids(payload, %RequestOptions{}), do: payload
 
-  @spec sanitize_backend_codex_response_item_ids(map()) :: map()
-  defp sanitize_backend_codex_response_item_ids(%{"input" => input} = payload)
+  @spec sanitize_backend_codex_response_item_ids(map(), RequestOptions.t()) :: map()
+  defp sanitize_backend_codex_response_item_ids(
+         %{"input" => input} = payload,
+         %RequestOptions{} = request_options
+       )
        when is_list(input) do
-    Map.put(payload, "input", Enum.map(input, &sanitize_backend_codex_response_item_id/1))
+    Map.put(
+      payload,
+      "input",
+      Enum.map(input, &sanitize_backend_codex_response_item_id(&1, request_options))
+    )
   end
 
-  defp sanitize_backend_codex_response_item_ids(payload), do: payload
+  defp sanitize_backend_codex_response_item_ids(payload, %RequestOptions{}), do: payload
 
-  @spec sanitize_backend_codex_response_item_id(term()) :: term()
-  defp sanitize_backend_codex_response_item_id(%{"type" => "item_reference"} = item),
-    do: item
+  @spec sanitize_backend_codex_response_item_id(term(), RequestOptions.t()) :: term()
+  defp sanitize_backend_codex_response_item_id(
+         %{"type" => "compaction"} = item,
+         %RequestOptions{
+           openai_compatibility: %{
+             source_endpoint: "/v1/responses",
+             translated_endpoint: "/backend-api/codex/responses"
+           }
+         }
+       ),
+       do: item
 
-  defp sanitize_backend_codex_response_item_id(%{"id" => id} = item) do
+  defp sanitize_backend_codex_response_item_id(
+         %{"type" => "item_reference"} = item,
+         %RequestOptions{}
+       ),
+       do: item
+
+  defp sanitize_backend_codex_response_item_id(%{"id" => id} = item, %RequestOptions{}) do
     if prefixed_response_item_id?(id), do: item, else: Map.delete(item, "id")
   end
 
-  defp sanitize_backend_codex_response_item_id(item), do: item
+  defp sanitize_backend_codex_response_item_id(item, %RequestOptions{}), do: item
 
   @spec prefixed_response_item_id?(term()) :: boolean()
   defp prefixed_response_item_id?(id) when is_binary(id) do

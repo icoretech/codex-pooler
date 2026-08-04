@@ -345,11 +345,31 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
   defp validate_reasoning_replay_summary_part(_part),
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
-  defp validate_compaction_replay_item(%{"encrypted_content" => encrypted_content} = item)
-       when is_binary(encrypted_content) do
+  defp validate_compaction_replay_item(
+         %{
+           "encrypted_content" => encrypted_content,
+           "id" => id,
+           @metadata_passthrough_key => %{"turn_id" => turn_id} = metadata
+         } = item
+       ) do
+    with :ok <-
+           validate_exact_item_keys(item, [
+             "type",
+             "encrypted_content",
+             "id",
+             @metadata_passthrough_key
+           ]),
+         :ok <- validate_exact_item_keys(metadata, ["turn_id"]),
+         :ok <- validate_nonblank(encrypted_content),
+         :ok <- validate_nonblank(id) do
+      validate_nonblank(turn_id)
+    end
+  end
+
+  defp validate_compaction_replay_item(%{"encrypted_content" => encrypted_content} = item) do
     with :ok <- validate_exact_item_keys(item, ["type", "encrypted_content", "id"]),
          :ok <- validate_nonblank(encrypted_content) do
-      validate_optional_id(item)
+      validate_optional_compaction_id(item)
     end
   end
 
@@ -547,6 +567,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
   defp validate_optional_id(_item), do: :ok
+
+  defp validate_optional_compaction_id(%{"id" => nil}), do: :ok
+  defp validate_optional_compaction_id(%{"id" => id}) when is_binary(id), do: :ok
+
+  defp validate_optional_compaction_id(%{"id" => _id}),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp validate_optional_compaction_id(_item), do: :ok
 
   defp validate_optional_item_metadata(item) do
     with :ok <- validate_optional_metadata(item) do

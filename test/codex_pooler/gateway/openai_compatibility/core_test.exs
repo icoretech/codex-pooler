@@ -1863,6 +1863,199 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
              ] = coerced["input"]
     end
 
+    test "compaction replay preserves each verified variant and input order exactly" do
+      passthrough_key = "internal_chat_message_metadata_passthrough"
+
+      input = [
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "synthetic-public-compaction-without-id"
+        },
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "synthetic-public-compaction-with-id",
+          "id" => "cmp_fixture_public"
+        },
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "synthetic-public-compaction-with-null-id",
+          "id" => nil
+        },
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "synthetic-public-compaction-with-empty-id",
+          "id" => ""
+        },
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "synthetic-native-compaction",
+          "id" => "cmp_fixture_native",
+          passthrough_key => %{"turn_id" => "turn_fixture_native"}
+        },
+        %{
+          "type" => "message",
+          "role" => "user",
+          "content" => [%{"type" => "input_text", "text" => "synthetic follow-up"}]
+        }
+      ]
+
+      assert {:ok, %{payload: %{"input" => ^input}}} =
+               Responses.coerce(%{"model" => "gpt-fixture-text", "input" => input})
+    end
+
+    test "compaction replay rejects malformed and unverified variants without value leakage" do
+      passthrough_key = "internal_chat_message_metadata_passthrough"
+      opaque_values = ["opaque-encrypted-fixture", "cmp_opaque_fixture", "turn_opaque_fixture"]
+
+      invalid_items = [
+        %{"type" => "compaction"},
+        %{"type" => "compaction", "encrypted_content" => ""},
+        %{"type" => "compaction", "encrypted_content" => "   "},
+        %{"type" => "compaction", "encrypted_content" => nil},
+        %{"type" => "compaction", "encrypted_content" => 1},
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "opaque-encrypted-fixture",
+          "id" => 1
+        },
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "opaque-encrypted-fixture",
+          "id" => "cmp_opaque_fixture",
+          passthrough_key => nil
+        },
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "opaque-encrypted-fixture",
+          "id" => "cmp_opaque_fixture",
+          passthrough_key => "turn_opaque_fixture"
+        },
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "opaque-encrypted-fixture",
+          "id" => "cmp_opaque_fixture",
+          passthrough_key => []
+        },
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "opaque-encrypted-fixture",
+          "id" => "cmp_opaque_fixture",
+          passthrough_key => %{}
+        },
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "opaque-encrypted-fixture",
+          "id" => "cmp_opaque_fixture",
+          passthrough_key => %{"turn_id" => nil}
+        },
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "opaque-encrypted-fixture",
+          "id" => "cmp_opaque_fixture",
+          passthrough_key => %{"turn_id" => ""}
+        },
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "opaque-encrypted-fixture",
+          "id" => "cmp_opaque_fixture",
+          passthrough_key => %{"turn_id" => 1}
+        },
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "opaque-encrypted-fixture",
+          "id" => "cmp_opaque_fixture",
+          passthrough_key => %{"turn_id" => "turn_opaque_fixture", "extra" => true}
+        },
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "opaque-encrypted-fixture",
+          "id" => "cmp_opaque_fixture",
+          passthrough_key => %{"executed_tool_calls" => []}
+        },
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "opaque-encrypted-fixture",
+          "id" => "cmp_opaque_fixture",
+          "created_by" => "fixture"
+        },
+        %{
+          "type" => "compaction_summary",
+          "encrypted_content" => "opaque-encrypted-fixture",
+          "id" => "cmp_opaque_fixture"
+        },
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "opaque-encrypted-fixture",
+          passthrough_key => %{"turn_id" => "turn_opaque_fixture"}
+        },
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "opaque-encrypted-fixture",
+          "id" => nil,
+          passthrough_key => %{"turn_id" => "turn_opaque_fixture"}
+        },
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "opaque-encrypted-fixture",
+          "id" => "",
+          passthrough_key => %{"turn_id" => "turn_opaque_fixture"}
+        },
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "opaque-encrypted-fixture",
+          "id" => 1,
+          passthrough_key => %{"turn_id" => "turn_opaque_fixture"}
+        }
+      ]
+
+      Enum.each(invalid_items, fn item ->
+        result = Responses.coerce(%{"model" => "gpt-fixture-text", "input" => [item]})
+
+        assert {:error,
+                %{
+                  status: 400,
+                  code: "invalid_request",
+                  param: "input"
+                } = error} = result
+
+        refute Map.has_key?(error, :payload)
+        Enum.each(opaque_values, &refute(inspect(result) =~ &1))
+      end)
+    end
+
+    test "compaction validation keeps established metadata passthrough on non-compaction items" do
+      passthrough_key = "internal_chat_message_metadata_passthrough"
+
+      input = [
+        %{
+          "type" => "message",
+          "role" => "assistant",
+          "content" => [%{"type" => "output_text", "text" => "synthetic assistant replay"}],
+          passthrough_key => %{"turn_id" => "turn_fixture_message"}
+        },
+        %{
+          "type" => "reasoning",
+          "id" => "rs_fixture_passthrough",
+          "summary" => [],
+          "encrypted_content" => nil,
+          passthrough_key => %{"turn_id" => "turn_fixture_reasoning"}
+        },
+        %{
+          "type" => "function_call_output",
+          "call_id" => "call_fixture_passthrough",
+          "output" => "synthetic tool output",
+          passthrough_key => %{"turn_id" => "turn_fixture_tool"}
+        }
+      ]
+
+      assert {:ok, %{payload: %{"input" => ^input}}} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "previous_response_id" => "resp_fixture_passthrough",
+                 "input" => input
+               })
+    end
+
     test "Hermes ordinary replay drops reasoning and preserves completed assistant metadata" do
       payload = %{
         "model" => "gpt-fixture-text",

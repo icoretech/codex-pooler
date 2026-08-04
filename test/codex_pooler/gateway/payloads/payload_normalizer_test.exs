@@ -2018,6 +2018,77 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       end
     end
 
+    test "preserves null IDs only on trusted public compaction replay items" do
+      input = [
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "synthetic-compaction-without-id"
+        },
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "synthetic-compaction-with-id",
+          "id" => "cmp_fixture"
+        },
+        %{
+          "type" => "compaction",
+          "encrypted_content" => "synthetic-compaction-with-null-id",
+          "id" => nil
+        },
+        %{"type" => "message", "role" => "assistant", "content" => [], "id" => nil}
+      ]
+
+      payload = %{"model" => "gpt-5.5", "input" => input}
+      model = %Model{upstream_model_id: "provider-model"}
+
+      public_options =
+        %{}
+        |> RequestOptions.build("/backend-api/codex/responses", payload)
+        |> RequestOptions.mark_openai_compatibility_origin(
+          "/v1/responses",
+          "/backend-api/codex/responses"
+        )
+
+      expected_public_input = [
+        Enum.at(input, 0),
+        Enum.at(input, 1),
+        Enum.at(input, 2),
+        %{"type" => "message", "role" => "assistant", "content" => []}
+      ]
+
+      for request_options <- [
+            public_options,
+            RequestOptions.for_websocket(public_options, payload)
+          ] do
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(
+                   payload,
+                   model,
+                   "/backend-api/codex/responses",
+                   request_options
+                 )
+
+        assert Jason.decode!(encoded)["input"] == expected_public_input
+      end
+
+      native_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+      expected_native_input = List.update_at(expected_public_input, 2, &Map.delete(&1, "id"))
+
+      for request_options <- [
+            native_options,
+            RequestOptions.for_websocket(native_options, payload)
+          ] do
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(
+                   payload,
+                   model,
+                   "/backend-api/codex/responses",
+                   request_options
+                 )
+
+        assert Jason.decode!(encoded)["input"] == expected_native_input
+      end
+    end
+
     test "leaves non-list or missing backend Codex input unchanged for HTTP and websocket" do
       model = %Model{upstream_model_id: "provider-model"}
 
