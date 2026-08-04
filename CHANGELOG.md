@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.5.14](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.13...codex-pooler-v0.5.14) (2026-08-04)
+
+
+### Features
+
+* **admin:** label the ChatGPT Go plan and newer known plan values ([6c1296b](https://github.com/icoretech/codex-pooler/commit/6c1296b281839217d3091a650c612052ace63a48))
+* **audio:** add gpt-transcribe request compatibility ([d3c4c7f](https://github.com/icoretech/codex-pooler/commit/d3c4c7fa9b09c970efcf3167375ef1bc1b16939d))
+* **routing:** persist canonical partition evidence on successful turns ([785b398](https://github.com/icoretech/codex-pooler/commit/785b39828ed7ef004cc8156df684f638c64d7396))
+* **v1:** support executable Responses custom tools ([361f937](https://github.com/icoretech/codex-pooler/commit/361f937daf6fadc8ce3ceaa65b9d9f7c273dd38d))
+
+
+### Bug Fixes
+
+* **catalog:** anchor partitions on chronological assignment age ([0d9c739](https://github.com/icoretech/codex-pooler/commit/0d9c739ec82c4e4e21c683c10ef413bd3d6045eb))
+* **catalog:** stop presentation hints from splitting canonical partitions ([3fe19fb](https://github.com/icoretech/codex-pooler/commit/3fe19fbd7b39ae14f8916110886d0f43d0da1b5e))
+* **deps:** update dependency daisyui to v5.7.14 ([#243](https://github.com/icoretech/codex-pooler/issues/243)) ([9321017](https://github.com/icoretech/codex-pooler/commit/932101747e5de64b1d6a5f786172ef6a88c25929))
+* **gateway:** normalize visible models before pre-dispatch ([7782c35](https://github.com/icoretech/codex-pooler/commit/7782c35f32703e1bf489ca16423103628b999265))
+* **gateway:** preserve compaction replay metadata ([3347288](https://github.com/icoretech/codex-pooler/commit/33472883dc1ffc3c31cafb09ca228af8d06419e5))
+* **gateway:** preserve model-scoped canonical capability partitions ([06597a7](https://github.com/icoretech/codex-pooler/commit/06597a7bb8a3e9a2862c413780aff05a2e0de5de))
+* **gateway:** preserve null upstream terminal errors on streamed responses ([ff95e50](https://github.com/icoretech/codex-pooler/commit/ff95e5059d1faf7df8962373f022ec7ea28fceb4))
+* **responses:** accept web search domain filters ([a0bb47e](https://github.com/icoretech/codex-pooler/commit/a0bb47ec3230d78f6622f33f8f55133c3cd5755d))
+* **responses:** reject reserved passthrough metadata ([daf9a65](https://github.com/icoretech/codex-pooler/commit/daf9a658e20c6df4c3afe0a3ac3476e25dd8cbdc))
+* **routing:** anchor canonical partitions on a quota-routable partition ([a74251c](https://github.com/icoretech/codex-pooler/commit/a74251cb9dd33bf8c7ba87da9e00b624bf8c0050))
+* **routing:** resolve dispatch partition routability from one quota snapshot ([813efab](https://github.com/icoretech/codex-pooler/commit/813efab6878fb675963d2e4ecee8bd807ea1ab1e))
+* **routing:** scope partition filtering evidence to the capped surfaces ([c1f5ea4](https://github.com/icoretech/codex-pooler/commit/c1f5ea4fa3a3d04ff53d569904465bde8e1ba9f3))
+* **v1:** declare content provenance checks unsupported ([50f5226](https://github.com/icoretech/codex-pooler/commit/50f5226d1aa2bbcc6196e638323eb99bb42b5808))
+* **v1:** reject typed tool_choice on Responses-Lite dispatch ([29b077b](https://github.com/icoretech/codex-pooler/commit/29b077b2be4d6eabf1a4bbf8c8fd30dc2c5d4d5a))
+* **v1:** repair strict nested schema types ([6008c96](https://github.com/icoretech/codex-pooler/commit/6008c96abbf952bb0d479c6e1783c315601e5433))
+
 ## [0.5.13](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.12...codex-pooler-v0.5.13) (2026-08-02)
 
 
