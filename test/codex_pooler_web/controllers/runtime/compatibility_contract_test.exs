@@ -900,10 +900,51 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                },
                context_overflow: %{
                  recovery_owner: "client_or_upstream",
-                 public_v1_compaction_replay_item: %{
+                 public_v1_compaction_replay: %{
                    route: "/v1/responses",
-                   item: %{"type" => "compaction", "encrypted_content" => "encrypted_content"},
-                   upstream_dispatch: true
+                   surfaces: ["http_json", "http_sse", "responses_websocket"],
+                   required: %{
+                     "type" => "compaction",
+                     "encrypted_content" => "nonblank_string"
+                   },
+                   public_id: %{
+                     presence: "optional",
+                     accepted_types: ["string", "null"],
+                     preserved_exactly: true
+                   },
+                   verified_variants: [
+                     %{name: "public_id_absent", exact_keys: ["type", "encrypted_content"]},
+                     %{
+                       name: "public_id_string",
+                       exact_keys: ["type", "encrypted_content", "id"],
+                       id_type: "string"
+                     },
+                     %{
+                       name: "public_id_null",
+                       exact_keys: ["type", "encrypted_content", "id"],
+                       id_type: "null"
+                     },
+                     %{
+                       name: "native_turn_metadata",
+                       exact_keys: [
+                         "type",
+                         "encrypted_content",
+                         "id",
+                         "internal_chat_message_metadata_passthrough"
+                       ],
+                       id_type: "nonblank_string",
+                       metadata: %{
+                         exact_keys: ["turn_id"],
+                         turn_id_type: "nonblank_string",
+                         public_documentation: false
+                       }
+                     }
+                   ],
+                   item_order: "preserved",
+                   continuation: "new_chain_without_previous_response_id",
+                   unknown_fields: "reject_before_dispatch",
+                   upstream_dispatch: true,
+                   privacy: "opaque_values_not_persisted_or_logged"
                  },
                  server_side_compaction: false,
                  hidden_replay: false,

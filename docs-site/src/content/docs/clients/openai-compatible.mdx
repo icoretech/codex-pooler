@@ -170,6 +170,24 @@ the required capability.
 
 `GET /v1/models` may include `context_length` for clients that probe OpenAI-compatible model lists, such as Hermes. The official OpenAI SDK request APIs and Vercel AI SDK generation APIs do not expose Codex model-catalog context controls. Use their output-budget fields only when your application needs one: `max_output_tokens` in OpenAI Responses, `max_completion_tokens` in Chat Completions, and `maxOutputTokens` at the Vercel AI SDK layer. Codex Pooler's public `/v1/responses` currently rejects `context_management`, and public `/v1/responses/compact` is routed but unsupported, so do not document SDK-side compaction as a Codex Pooler feature.
 
+### Replay a remote-compaction item
+
+When a remote compaction response supplies an encrypted `type: "compaction"`
+output item, submit that item unchanged at the start of the next
+`POST /v1/responses` input, followed by the new user item. Start a new chain:
+omit `previous_response_id` rather than using the compact response id. Codex
+Pooler preserves accepted compaction items and their input order over collected
+JSON, public SSE, and narrow Responses websocket turns.
+
+The stable public replay fields are `type`, a nonblank string
+`encrypted_content`, and optional `id`. The `id` key may be absent, a string, or
+explicitly `null`; key presence is preserved exactly. Unknown compaction fields
+or malformed values are rejected before upstream dispatch. Treat encrypted
+content as opaque and do not log or persist it in application telemetry.
+
+This is replay compatibility only. `POST /v1/responses/compact` remains
+unsupported, and Codex Pooler does not claim general SDK-side compaction.
+
 ## Supported or translated route support
 
 The OpenAI-compatible `/v1` surface supports or translates selected routes only:
