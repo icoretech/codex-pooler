@@ -1107,50 +1107,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   defp persist_recovery_observation(recovery, code, now, snooze_seconds) do
     result =
       Repo.transaction(fn ->
-        identity = lock_identity!(recovery.identity.id)
-        metadata = identity.metadata || %{}
-        redemption = metadata["saved_reset_redemption"] || %{}
-
-        cond do
-          not exact_recovery_attempt?(redemption, recovery) ->
-            {:noop, "recovery_target_invalid", identity, recovery.assignment}
-
-          persisted_provider_dispatches(redemption) != recovery.provider_dispatches ->
-            # A newer dispatch reservation owns the schedule: keep its persisted
-            # state untouched and back off to its due time.
-            recovery_reservation_due_conflict(
-              identity,
-              recovery.assignment,
-              redemption["provider_replay"] || %{},
-              now
-            )
-
-          true ->
-            next_action_at =
-              recovery
-              |> recovery_observation_due_at(now, snooze_seconds)
-              |> DateTime.to_iso8601()
-
-            replay =
-              redemption["provider_replay"]
-              |> Map.put("last_code", bounded_observation_code(code))
-              |> Map.put("last_observed_at", DateTime.to_iso8601(now))
-              |> Map.put("next_action_at", next_action_at)
-
-            identity
-            |> UpstreamIdentity.changeset(%{
-              metadata:
-                Map.put(
-                  metadata,
-                  "saved_reset_redemption",
-                  Map.put(redemption, "provider_replay", replay)
-                ),
-              updated_at: now
-            })
-            |> Repo.update!()
-
-            {:snooze, snooze_seconds}
-        end
+        persist_recovery_observation_locked(recovery, code, now, snooze_seconds)
       end)
 
     case result do
@@ -1165,6 +1122,53 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     end
   rescue
     _error -> {:error, :saved_reset_persistence_failed}
+  end
+
+  defp persist_recovery_observation_locked(recovery, code, now, snooze_seconds) do
+    identity = lock_identity!(recovery.identity.id)
+    metadata = identity.metadata || %{}
+    redemption = metadata["saved_reset_redemption"] || %{}
+
+    cond do
+      not exact_recovery_attempt?(redemption, recovery) ->
+        {:noop, "recovery_target_invalid", identity, recovery.assignment}
+
+      persisted_provider_dispatches(redemption) != recovery.provider_dispatches ->
+        # A newer dispatch reservation owns the schedule: keep its persisted
+        # state untouched and back off to its due time.
+        recovery_reservation_due_conflict(
+          identity,
+          recovery.assignment,
+          redemption["provider_replay"] || %{},
+          now
+        )
+
+      true ->
+        next_action_at =
+          recovery
+          |> recovery_observation_due_at(now, snooze_seconds)
+          |> DateTime.to_iso8601()
+
+        replay =
+          redemption["provider_replay"]
+          |> Map.put("last_code", bounded_observation_code(code))
+          |> Map.put("last_observed_at", DateTime.to_iso8601(now))
+          |> Map.put("next_action_at", next_action_at)
+
+        identity
+        |> UpstreamIdentity.changeset(%{
+          metadata:
+            Map.put(
+              metadata,
+              "saved_reset_redemption",
+              Map.put(redemption, "provider_replay", replay)
+            ),
+          updated_at: now
+        })
+        |> Repo.update!()
+
+        {:snooze, snooze_seconds}
+    end
   end
 
   defp recovery_observation_due_at(recovery, now, snooze_seconds) do
