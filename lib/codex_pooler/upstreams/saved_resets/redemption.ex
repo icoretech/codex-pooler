@@ -800,7 +800,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
        ) do
     identity
     |> Windows.list_evidence()
-    |> PostResetEvidence.classify(dispatched_at, now)
+    |> PostResetEvidence.classify(dispatched_at, later_datetime(now, now()))
     |> Kernel.==(:confirmed)
   end
 
@@ -2645,12 +2645,15 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   # After a consumed reset, only fresh usable account evidence observed at/after
   # the consume time confirms the identity. Anything else (the provider omitted
   # the account window, or it is still exhausted) stays pending and converges
-  # later from real evidence — never a fabricated success.
+  # later from real evidence — never a fabricated success. The classifier
+  # evaluates the canonical effective view at its clock, so a caller timestamp
+  # captured before the post-consume refresh persisted its rows must be advanced
+  # to the present or that fresh evidence would be invisible.
   defp post_reset_phase(refreshed_identity, consumed_at, timestamp) do
     case PostResetEvidence.classify(
            Windows.list_evidence(refreshed_identity),
            consumed_at,
-           timestamp
+           later_datetime(timestamp, now())
          ) do
       :confirmed -> RedemptionLifecycle.confirmed_by_quota()
       _pending_or_reblocked -> RedemptionLifecycle.consumed_pending_probe()

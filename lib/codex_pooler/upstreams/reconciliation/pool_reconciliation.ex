@@ -3,6 +3,8 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
 
   import Ecto.Query
 
+  require Logger
+
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Quotas.WindowClassifier
   alias CodexPooler.Repo
@@ -523,8 +525,19 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
         {:ok, %{windows: refreshed, identity: updated_identity}} ->
           # Fresh quota is now persisted: converge any pending saved-reset
           # redemption on this identity from that evidence (self-healing). Best
-          # effort and a no-op for identities without a pending lifecycle.
-          Convergence.converge(updated_identity, observed_at)
+          # effort and a no-op for identities without a pending lifecycle, but a
+          # genuine convergence error must not stay invisible.
+          case Convergence.converge(updated_identity, observed_at) do
+            {:ok, _outcome} ->
+              :ok
+
+            {:error, reason} ->
+              Logger.warning(
+                "saved reset convergence failed " <>
+                  "upstream_identity_id=#{updated_identity.id} " <>
+                  "reason=#{safe_error_message(reason)}"
+              )
+          end
 
           step_result(:succeeded, "quota_refreshed", "quota windows refreshed", %{
             "window_count" => length(refreshed)

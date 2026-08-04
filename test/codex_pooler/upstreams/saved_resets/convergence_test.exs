@@ -55,18 +55,23 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
 
   defp upsert_account_window!(identity, used_percent) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    upsert_source_window!(identity, used_percent, source: "codex_usage_api", observed_at: now)
+  end
+
+  defp upsert_source_window!(identity, used_percent, opts) do
+    observed_at = Keyword.fetch!(opts, :observed_at)
 
     assert {:ok, [_window]} =
              Windows.upsert_quota_windows(identity, [
                %{
                  quota_key: "account",
-                 window_kind: "secondary",
-                 window_minutes: 10_080,
+                 window_kind: Keyword.get(opts, :window_kind, "secondary"),
+                 window_minutes: Keyword.get(opts, :window_minutes, 10_080),
                  used_percent: used_percent,
-                 reset_at: DateTime.add(now, 2, :day),
-                 observed_at: now,
-                 last_sync_at: now,
-                 source: "codex_usage_api",
+                 reset_at: Keyword.get(opts, :reset_at, DateTime.add(observed_at, 2, :day)),
+                 observed_at: observed_at,
+                 last_sync_at: observed_at,
+                 source: Keyword.fetch!(opts, :source),
                  source_precision: "observed",
                  quota_scope: "account",
                  quota_family: "account",
@@ -188,8 +193,12 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
 
     upsert_account_window!(identity, Decimal.new("4"))
 
-    assert {:ok, :confirmed_by_quota} = Convergence.converge(identity, now)
-    assert {:ok, :unchanged} = Convergence.converge(identity, now)
+    # The canonical effective view evaluates at the convergence clock, so the
+    # clock must not precede the just-persisted observation.
+    converge_now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    assert {:ok, :confirmed_by_quota} = Convergence.converge(identity, converge_now)
+    assert {:ok, :unchanged} = Convergence.converge(identity, converge_now)
 
     converged = redemption(identity)
 
@@ -225,15 +234,87 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
     assert converged["phase"] == "confirmed_by_quota"
     assert converged["status"] == "succeeded"
     assert converged["terminal_reason"] == "converged_confirmed_by_quota"
-    assert converged["finished_at"] == DateTime.to_iso8601(now)
+    assert converged["finished_at"] == DateTime.to_iso8601(converge_now)
 
     assert Repo.reload!(identity).metadata["unrelated_identity_field"] == %{"preserved" => true}
-    assert RedemptionLifecycle.gateway_auto_latch(converged, now) == :cooldown
+    assert RedemptionLifecycle.gateway_auto_latch(converged, converge_now) == :cooldown
 
     assert RedemptionLifecycle.gateway_auto_latch(
              converged,
              DateTime.add(consumed_at, 30, :minute)
            ) == :clear
+  end
+
+  test "stale duplicate-source rows cannot veto canonical usable convergence" do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    consumed_at = DateTime.add(now, -20, :hour)
+    stale_observed_at = DateTime.add(now, -14, :hour)
+
+    identity = identity_with_pending(consumed_at, phase: "reblocked")
+    before = redemption(identity)
+
+    # Historical post-consume observations from other sources, now obsolete:
+    # same logical windows, already-ended cycle.
+    upsert_source_window!(identity, Decimal.new("100"),
+      source: "codex_rate_limit_event",
+      observed_at: stale_observed_at,
+      reset_at: DateTime.add(stale_observed_at, 2, :hour)
+    )
+
+    upsert_source_window!(identity, Decimal.new("100"),
+      source: "codex_response_headers",
+      window_kind: "primary",
+      window_minutes: 300,
+      observed_at: stale_observed_at,
+      reset_at: DateTime.add(stale_observed_at, 1, :hour)
+    )
+
+    # Current canonical usable account evidence for both logical windows.
+    upsert_source_window!(identity, Decimal.new("26"),
+      source: "codex_usage_api",
+      observed_at: now
+    )
+
+    upsert_source_window!(identity, Decimal.new("20"),
+      source: "codex_usage_api",
+      window_kind: "primary",
+      window_minutes: 300,
+      observed_at: now,
+      reset_at: DateTime.add(now, 5, :hour)
+    )
+
+    assert {:ok, :confirmed_by_quota} = Convergence.converge(identity)
+    assert {:ok, :unchanged} = Convergence.converge(identity)
+
+    converged = redemption(identity)
+    assert converged["phase"] == "confirmed_by_quota"
+    assert converged["status"] == "succeeded"
+    assert converged["terminal_reason"] == "converged_confirmed_by_quota"
+
+    assert Map.take(converged, ["attempt_id", "generation", "consumed_at", "result"]) ==
+             Map.take(before, ["attempt_id", "generation", "consumed_at", "result"])
+  end
+
+  test "a current canonical exhausted window keeps the applied reblock reblocked" do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    consumed_at = DateTime.add(now, -20, :hour)
+    stale_observed_at = DateTime.add(now, -14, :hour)
+
+    identity = identity_with_pending(consumed_at, phase: "reblocked")
+
+    upsert_source_window!(identity, Decimal.new("10"),
+      source: "codex_rate_limit_event",
+      observed_at: stale_observed_at,
+      reset_at: DateTime.add(stale_observed_at, 2, :hour)
+    )
+
+    upsert_source_window!(identity, Decimal.new("100"),
+      source: "codex_usage_api",
+      observed_at: now
+    )
+
+    assert {:ok, :unchanged} = Convergence.converge(identity)
+    assert redemption(identity)["phase"] == "reblocked"
   end
 
   test "an applied reblocked lifecycle remains reblocked for exhausted or absent evidence" do

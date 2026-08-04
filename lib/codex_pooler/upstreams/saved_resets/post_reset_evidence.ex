@@ -19,6 +19,12 @@ defmodule CodexPooler.Upstreams.SavedResets.PostResetEvidence do
   its *old* `observed_at`, the `observed_at >= consumed_at` filter alone keeps
   that stale evidence from confirming — no fabricated quota, fail-closed.
 
+  Classification evaluates the canonical effective window view
+  (`Windows.effective_quota_windows/2`), the same fold routing reads: obsolete
+  rows from a different source describing the same logical window cannot veto a
+  newer usable observation, while genuinely distinct current account windows
+  keep their fail-closed routing semantics.
+
   Pure: it never touches the repo and reuses the routing window classifiers so
   "usable" and "exhausted" mean exactly what routing means.
   """
@@ -45,7 +51,9 @@ defmodule CodexPooler.Upstreams.SavedResets.PostResetEvidence do
   @spec classify([AccountQuotaWindow.t()], DateTime.t(), DateTime.t()) :: classification()
   def classify(windows, %DateTime{} = consumed_at, %DateTime{} = now) when is_list(windows) do
     fresh_account_windows =
-      Enum.filter(windows, fn window ->
+      windows
+      |> Windows.effective_quota_windows(now)
+      |> Enum.filter(fn window ->
         account_window?(window) and parse_safe?(window) and
           observed_at_or_after?(window, consumed_at)
       end)

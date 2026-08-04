@@ -13,13 +13,13 @@ defmodule CodexPooler.Upstreams.SavedResets.PostResetEvidenceTest do
 
     %AccountQuotaWindow{
       quota_key: Keyword.get(opts, :quota_key, "account"),
-      window_kind: "secondary",
-      window_minutes: 10_080,
+      window_kind: Keyword.get(opts, :window_kind, "secondary"),
+      window_minutes: Keyword.get(opts, :window_minutes, 10_080),
       used_percent: Keyword.get(opts, :used_percent, Decimal.new("10")),
       reset_at: Keyword.get(opts, :reset_at, DateTime.add(@now, 2, :day)),
       observed_at: observed_at,
       last_sync_at: observed_at,
-      source: "codex_usage_api",
+      source: Keyword.get(opts, :source, "codex_usage_api"),
       source_precision: Keyword.get(opts, :source_precision, "observed"),
       quota_scope: "account",
       quota_family: "account",
@@ -87,5 +87,70 @@ defmodule CodexPooler.Upstreams.SavedResets.PostResetEvidenceTest do
     ]
 
     assert PostResetEvidence.classify(windows, @consumed_at, @now) == :reblocked
+  end
+
+  test "a genuinely distinct exhausted current window remains fail-closed" do
+    windows = [
+      window(used_percent: Decimal.new("5")),
+      window(
+        used_percent: Decimal.new("100"),
+        window_kind: "primary",
+        window_minutes: 300,
+        reset_at: DateTime.add(@now, 5, :hour)
+      )
+    ]
+
+    assert PostResetEvidence.classify(windows, @consumed_at, @now) == :reblocked
+  end
+
+  test "obsolete duplicate-source rows cannot veto newer canonical usable evidence" do
+    consumed_at = DateTime.add(@now, -20, :hour)
+    stale_observed_at = DateTime.add(@now, -14, :hour)
+
+    windows = [
+      # Current canonical account evidence, both logical windows usable.
+      window(used_percent: Decimal.new("26")),
+      window(
+        used_percent: Decimal.new("20"),
+        window_kind: "primary",
+        window_minutes: 300,
+        reset_at: DateTime.add(@now, 5, :hour)
+      ),
+      # Historical post-consume observations from other sources, now obsolete:
+      # they describe the same logical windows and an already-ended cycle.
+      window(
+        used_percent: Decimal.new("100"),
+        source: "codex_rate_limit_event",
+        observed_at: stale_observed_at,
+        reset_at: DateTime.add(stale_observed_at, 2, :hour)
+      ),
+      window(
+        used_percent: Decimal.new("100"),
+        source: "codex_response_headers",
+        window_kind: "primary",
+        window_minutes: 300,
+        observed_at: stale_observed_at,
+        reset_at: DateTime.add(stale_observed_at, 1, :hour)
+      )
+    ]
+
+    assert PostResetEvidence.classify(windows, consumed_at, @now) == :confirmed
+  end
+
+  test "a current canonical exhausted window still reblocks over obsolete rows" do
+    consumed_at = DateTime.add(@now, -20, :hour)
+    stale_observed_at = DateTime.add(@now, -14, :hour)
+
+    windows = [
+      window(used_percent: Decimal.new("100")),
+      window(
+        used_percent: Decimal.new("10"),
+        source: "codex_rate_limit_event",
+        observed_at: stale_observed_at,
+        reset_at: DateTime.add(stale_observed_at, 2, :hour)
+      )
+    ]
+
+    assert PostResetEvidence.classify(windows, consumed_at, @now) == :reblocked
   end
 end

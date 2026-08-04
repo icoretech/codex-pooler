@@ -5,11 +5,119 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
 
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.SavedResets.FirstSeenLedger
+  alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection
+  alias CodexPoolerWeb.DateTimeDisplay
 
   @saved_reset_detail_max_bytes 1_048_576
+
+  test "scheduled reconciliation self-heals an applied reblocked lifecycle from canonical evidence" do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    consumed_at = DateTime.add(now, -20, :hour)
+    stale_observed_at = DateTime.add(now, -14, :hour)
+
+    {:ok, fake} =
+      FakeUpstream.start_link(
+        {:path_json,
+         %{
+           "/backend-api/wham/usage" =>
+             {200,
+              %{
+                "plan_type" => "pro",
+                "rate_limit_reset_credits" => %{"available_count" => 0},
+                "rate_limit" => %{
+                  "primary_window" => %{
+                    "used_percent" => 20,
+                    "limit_window_seconds" => 18_000,
+                    "reset_after_seconds" => 900
+                  },
+                  "secondary_window" => %{
+                    "used_percent" => 26,
+                    "limit_window_seconds" => 604_800,
+                    "resets_at" => now |> DateTime.add(2, :day) |> DateTime.to_iso8601()
+                  }
+                }
+              }}
+         }}
+      )
+
+    reblocked_redemption = %{
+      "status" => "failed",
+      "phase" => "reblocked",
+      "attempt_id" => Ecto.UUID.generate(),
+      "generation" => 2,
+      "trigger_kind" => "gateway_auto",
+      "trigger_detail" => "exhausted",
+      "started_at" => DateTime.to_iso8601(DateTime.add(consumed_at, -1, :minute)),
+      "consumed_at" => DateTime.to_iso8601(consumed_at),
+      "deadline_at" => consumed_at |> DateTime.add(15, :minute) |> DateTime.to_iso8601(),
+      "finished_at" => DateTime.to_iso8601(consumed_at),
+      "result" => %{"code" => "reset", "applied" => true}
+    }
+
+    pool = pool_fixture()
+
+    %{identity: identity, assignment: assignment} =
+      active_upstream_assignment_fixture(pool, %{
+        metadata: %{
+          "base_url" => FakeUpstream.url(fake),
+          "usage_base_url" => FakeUpstream.url(fake),
+          "access_token_expires_at" =>
+            now |> DateTime.add(2, :day) |> DateTime.to_iso8601(),
+          "saved_reset_redemption" => reblocked_redemption
+        }
+      })
+
+    # Historical post-consume observations from other sources, now obsolete.
+    upsert_source_evidence!(identity, Decimal.new("100"),
+      source: "codex_rate_limit_event",
+      observed_at: stale_observed_at,
+      reset_at: DateTime.add(stale_observed_at, 2, :hour)
+    )
+
+    upsert_source_evidence!(identity, Decimal.new("100"),
+      source: "codex_response_headers",
+      window_kind: "primary",
+      window_minutes: 300,
+      observed_at: stale_observed_at,
+      reset_at: DateTime.add(stale_observed_at, 1, :hour)
+    )
+
+    assert {:ok, result} = PoolReconciliation.reconcile_pool_account(pool, assignment)
+    assert result.quota.code == "quota_refreshed"
+
+    converged = Repo.reload!(identity).metadata["saved_reset_redemption"]
+    assert converged["phase"] == "confirmed_by_quota"
+    assert converged["status"] == "succeeded"
+    assert converged["terminal_reason"] == "converged_confirmed_by_quota"
+
+    assert Map.take(converged, ["attempt_id", "generation", "consumed_at", "result"]) ==
+             Map.take(reblocked_redemption, ["attempt_id", "generation", "consumed_at", "result"])
+
+    # Repeating reconciliation is idempotent: no reopened lifecycle, no drift.
+    assert {:ok, second_result} = PoolReconciliation.reconcile_pool_account(pool, assignment)
+    assert second_result.quota.code == "quota_refreshed"
+    assert Repo.reload!(identity).metadata["saved_reset_redemption"] == converged
+
+    # Reconciliation only read usage; convergence performed no provider
+    # consume, list, or write request.
+    request_paths = fake |> FakeUpstream.requests() |> Enum.map(& &1.path)
+    assert request_paths != []
+    assert Enum.all?(request_paths, &String.ends_with?(&1, "/usage"))
+
+    # The admin read model reflects the recovered lifecycle after reload.
+    snapshot =
+      SavedResetProjection.snapshot(
+        Repo.reload!(identity),
+        DateTimeDisplay.preferences_for_user(nil)
+      )
+
+    assert snapshot.reset_lifecycle.phase == "confirmed_by_quota"
+    assert snapshot.reset_lifecycle.label == "Reset confirmed by quota"
+  end
 
   test "refresh_quota_from_usage stores sanitized saved reset usage snapshot" do
     {:ok, fake} =
@@ -1158,6 +1266,28 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
     after
       0 -> Enum.reverse(queries)
     end
+  end
+
+  defp upsert_source_evidence!(identity, used_percent, opts) do
+    observed_at = Keyword.fetch!(opts, :observed_at)
+
+    assert {:ok, [_window]} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               %{
+                 quota_key: "account",
+                 window_kind: Keyword.get(opts, :window_kind, "secondary"),
+                 window_minutes: Keyword.get(opts, :window_minutes, 10_080),
+                 used_percent: used_percent,
+                 reset_at: Keyword.get(opts, :reset_at, DateTime.add(observed_at, 2, :day)),
+                 observed_at: observed_at,
+                 last_sync_at: observed_at,
+                 source: Keyword.fetch!(opts, :source),
+                 source_precision: "observed",
+                 quota_scope: "account",
+                 quota_family: "account",
+                 freshness_state: "fresh"
+               }
+             ])
   end
 
   defp usage_payload(available_count) do
