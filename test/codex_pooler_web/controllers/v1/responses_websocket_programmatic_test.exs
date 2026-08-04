@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       public_websocket_receive_text!: 3,
       public_websocket_send_text!: 4,
       start_public_endpoint!: 0,
+      start_public_endpoint_with_server!: 0,
       start_upstream: 1
     ]
 
@@ -621,6 +622,243 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
+  test "GET /v1/responses websocket preserves replay-proven compaction variants as new chains" do
+    upstream = start_upstream(completed_websocket_response("resp_ws_compaction_replay"))
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    {server, port} = start_public_endpoint_with_server!()
+    user_item = compaction_replay_user_item()
+    post_setup_baseline = lifecycle_counts(upstream)
+
+    Enum.with_index(replay_proven_compaction_items(), 1)
+    |> Enum.each(fn {compaction_item, index} ->
+      {conn, websocket, ref} =
+        public_v1_websocket_connect!(
+          port,
+          setup,
+          "compaction-replay-#{index}-#{System.unique_integer([:positive])}"
+        )
+
+      assert {:ok, [downstream_pid]} = ThousandIsland.connection_pids(server)
+      downstream_monitor = Process.monitor(downstream_pid)
+
+      try do
+        input = [compaction_item, user_item]
+
+        payload = %{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => input,
+          "stream" => false,
+          "store" => true,
+          "generate" => true
+        }
+
+        refute Map.has_key?(payload, "previous_response_id")
+
+        {{conn, _websocket, frames}, log} =
+          with_log(fn ->
+            {conn, websocket} =
+              public_websocket_send_text!(conn, websocket, ref, Jason.encode!(payload))
+
+            {conn, websocket, frames} =
+              receive_websocket_until_terminal!(conn, websocket, ref, [])
+
+            assert_receive {Events,
+                            %{
+                              reason: "request_finalized",
+                              payload: %{"status" => "succeeded"}
+                            }},
+                           @websocket_frame_timeout
+
+            {conn, websocket, frames}
+          end)
+
+        assert Enum.map(frames, & &1["type"]) == ["response.completed"]
+
+        assert frames == [completed_public_websocket_frame("resp_ws_compaction_replay")]
+
+        assert List.last(FakeUpstream.requests(upstream)).json["input"] == input,
+               "compaction replay variant #{index} changed before upstream dispatch"
+
+        for opaque_value <- compaction_replay_opaque_values() do
+          refute log =~ opaque_value
+        end
+
+        upstream_pid = sole_upstream_websocket_pid!(upstream)
+        upstream_monitor = Process.monitor(upstream_pid)
+        Mint.HTTP.close(conn)
+
+        assert_receive {:DOWN, ^downstream_monitor, :process, ^downstream_pid, _reason}, 2_000
+        assert_receive {:DOWN, ^upstream_monitor, :process, ^upstream_pid, _reason}, 7_000
+      after
+        Mint.HTTP.close(conn)
+      end
+    end)
+
+    captured_inputs =
+      for captured <- FakeUpstream.requests(upstream) do
+        assert captured.method == "WEBSOCKET"
+        assert captured.path == "/backend-api/codex/responses"
+        assert captured.json["type"] == "response.create"
+        assert captured.json["stream"] == true
+        assert captured.json["store"] == false
+        assert captured.json["generate"] == true
+        refute Map.has_key?(captured.json, "previous_response_id")
+        captured.json["input"]
+      end
+
+    assert captured_inputs ==
+             Enum.map(replay_proven_compaction_items(), &[&1, user_item])
+
+    assert_lifecycle_delta!(post_setup_baseline, lifecycle_counts(upstream), %{
+      upstream_requests: 4,
+      requests: 4,
+      attempts: 4,
+      reservations: 4,
+      settlements: 4
+    })
+
+    requests = Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
+
+    attempts =
+      Repo.all(
+        from(attempt in Attempt, where: attempt.request_id in ^Enum.map(requests, & &1.id))
+      )
+
+    assert length(requests) == 4
+    assert Enum.all?(requests, &(&1.status == "succeeded" and &1.transport == "websocket"))
+    assert length(attempts) == 4
+    assert Enum.all?(attempts, &(&1.status == "succeeded" and &1.transport == "websocket"))
+
+    persistence_text =
+      inspect({
+        Enum.map(requests, & &1.request_metadata),
+        Enum.map(attempts, & &1.response_metadata),
+        RequestLogs.list(setup.pool)
+      })
+
+    for opaque_value <- compaction_replay_opaque_values() do
+      refute persistence_text =~ opaque_value
+    end
+  end
+
+  test "GET /v1/responses websocket rejects extra compaction metadata before dispatch" do
+    upstream = start_upstream(completed_websocket_response("should_not_dispatch_compaction"))
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "invalid-compaction-replay-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      post_upgrade_baseline = lifecycle_counts(upstream)
+
+      malformed_item = %{
+        "type" => "compaction",
+        "encrypted_content" => "opaque-compaction-replay-content",
+        "id" => "cmp_opaque_websocket_replay",
+        "internal_chat_message_metadata_passthrough" => %{
+          "turn_id" => "turn_opaque_websocket_replay",
+          "extra" => "nested-opaque-websocket-replay"
+        }
+      }
+
+      payload = %{
+        "type" => "response.create",
+        "model" => setup.model.exposed_model_id,
+        "input" => [malformed_item, compaction_replay_user_item()],
+        "stream" => false,
+        "store" => true,
+        "generate" => true
+      }
+
+      refute Map.has_key?(payload, "previous_response_id")
+
+      {{conn, websocket, error_frame}, log} =
+        with_log(fn ->
+          {conn, websocket} =
+            public_websocket_send_text!(conn, websocket, ref, Jason.encode!(payload))
+
+          public_websocket_receive_text!(conn, websocket, ref)
+        end)
+
+      assert Jason.decode!(error_frame) == %{
+               "type" => "error",
+               "status" => 400,
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_request",
+                 "message" => "input item shape is not translatable",
+                 "param" => "input"
+               }
+             }
+
+      assert lifecycle_counts(upstream) == post_upgrade_baseline
+      assert FakeUpstream.count(upstream) == 0
+
+      assert Repo.aggregate(
+               from(request in Request, where: request.pool_id == ^setup.pool.id),
+               :count
+             ) == 0
+
+      assert Repo.aggregate(Attempt, :count) == 0
+      assert ledger_entry_count("reservation") == 0
+      refute_received {Events, %{reason: "request_finalized"}}
+
+      observable_text = inspect({error_frame, log, RequestLogs.list(setup.pool)})
+
+      refute observable_text =~ "internal_chat_message_metadata_passthrough"
+
+      for opaque_value <- compaction_replay_opaque_values() do
+        refute observable_text =~ opaque_value
+      end
+
+      {conn, websocket} =
+        public_websocket_send_text!(
+          conn,
+          websocket,
+          ref,
+          Jason.encode!(%{
+            "type" => "response.create",
+            "model" => setup.model.exposed_model_id,
+            "input" => [hd(replay_proven_compaction_items()), compaction_replay_user_item()],
+            "stream" => false,
+            "store" => true,
+            "generate" => true
+          })
+        )
+
+      {conn, websocket, frames} = receive_websocket_until_terminal!(conn, websocket, ref, [])
+
+      assert frames == [completed_public_websocket_frame("should_not_dispatch_compaction")]
+
+      assert_receive {Events,
+                      %{
+                        reason: "request_finalized",
+                        payload: %{"status" => "succeeded"}
+                      }},
+                     @websocket_frame_timeout
+
+      assert_lifecycle_delta!(post_upgrade_baseline, lifecycle_counts(upstream), %{
+        upstream_requests: 1,
+        requests: 1,
+        attempts: 1,
+        reservations: 1,
+        settlements: 1
+      })
+
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   test "direct GET /v1/responses drops malformed and non-object provider frames" do
     assert_invalid_provider_frames_dropped(false)
   end
@@ -1068,6 +1306,80 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       TASK6_FRAME_SENTINEL
       TASK6_RESPONSE_ID_SENTINEL
     )
+  end
+
+  defp replay_proven_compaction_items do
+    [
+      %{
+        "type" => "compaction",
+        "encrypted_content" => "opaque-idless-public-websocket-compaction"
+      },
+      %{
+        "type" => "compaction",
+        "encrypted_content" => "opaque-public-websocket-compaction",
+        "id" => "cmp_public_websocket_replay"
+      },
+      %{
+        "type" => "compaction",
+        "encrypted_content" => "opaque-null-id-public-websocket-compaction",
+        "id" => nil
+      },
+      %{
+        "type" => "compaction",
+        "encrypted_content" => "opaque-native-websocket-compaction",
+        "id" => "cmp_native_websocket_replay",
+        "internal_chat_message_metadata_passthrough" => %{
+          "turn_id" => "turn_native_websocket_replay"
+        }
+      }
+    ]
+  end
+
+  defp compaction_replay_user_item do
+    %{
+      "type" => "message",
+      "role" => "user",
+      "content" => [
+        %{"type" => "input_text", "text" => "synthetic follow-up after compaction replay"}
+      ]
+    }
+  end
+
+  defp compaction_replay_opaque_values do
+    [
+      "opaque-idless-public-websocket-compaction",
+      "opaque-public-websocket-compaction",
+      "cmp_public_websocket_replay",
+      "opaque-null-id-public-websocket-compaction",
+      "opaque-native-websocket-compaction",
+      "cmp_native_websocket_replay",
+      "turn_native_websocket_replay",
+      "opaque-compaction-replay-content",
+      "cmp_opaque_websocket_replay",
+      "turn_opaque_websocket_replay",
+      "nested-opaque-websocket-replay",
+      "synthetic follow-up after compaction replay"
+    ]
+  end
+
+  defp completed_public_websocket_frame(response_id) do
+    %{
+      "type" => "response.completed",
+      "sequence_number" => 0,
+      "response" => %{
+        "id" => response_id,
+        "status" => "completed",
+        "output" => [],
+        "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+      }
+    }
+  end
+
+  defp sole_upstream_websocket_pid!(upstream) do
+    case upstream.pid |> :sys.get_state() |> Map.fetch!(:websocket_pids) |> MapSet.to_list() do
+      [pid] when is_pid(pid) -> pid
+      pids -> flunk("expected one upstream websocket process, got #{length(pids)}")
+    end
   end
 
   defp repairable_nested_parameters do
