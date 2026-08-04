@@ -32,7 +32,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjectionTes
       "consumed_pending_probe" => "Reset consumed — confirming",
       "confirmed_by_upstream" => "Reset confirmed by probe",
       "confirmed_by_quota" => "Reset confirmed by quota",
-      "reblocked" => "Still blocked after reset",
+      "reblocked" => "Reset consumed — awaiting usable quota",
       "expired" => "Reset confirmation expired",
       "consume_not_applied" => "Reset was not applied"
     }
