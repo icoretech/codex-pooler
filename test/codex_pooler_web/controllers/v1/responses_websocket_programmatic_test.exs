@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [
+      auth: 2,
       await_public_websocket_upgrade: 2,
       gateway_setup: 1,
       mint_websocket_new!: 4,
@@ -743,6 +744,198 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
+  test "compaction replay keeps HTTP and websocket output envelopes equivalent" do
+    shared_response = %{
+      "id" => "resp_compaction_transport_parity",
+      "object" => "response",
+      "status" => "completed",
+      "output" => [
+        %{
+          "type" => "reasoning",
+          "id" => "rs_compaction_parity",
+          "summary" => []
+        },
+        %{
+          "type" => "message",
+          "id" => "msg_compaction_parity",
+          "role" => "assistant",
+          "status" => "completed",
+          "content" => [
+            %{
+              "type" => "output_text",
+              "text" => "synthetic transport parity reply",
+              "annotations" => []
+            }
+          ]
+        }
+      ],
+      "usage" => %{
+        "input_tokens" => 7,
+        "input_tokens_details" => %{"cached_tokens" => 0},
+        "output_tokens" => 5,
+        "output_tokens_details" => %{"reasoning_tokens" => 2},
+        "total_tokens" => 12
+      }
+    }
+
+    shared_events = [
+      {"response.created",
+       %{
+         "type" => "response.created",
+         "response" => %{
+           "id" => "resp_compaction_transport_parity",
+           "object" => "response",
+           "status" => "in_progress",
+           "output" => []
+         }
+       }},
+      {"response.output_text.delta",
+       %{
+         "type" => "response.output_text.delta",
+         "item_id" => "msg_compaction_parity",
+         "output_index" => 1,
+         "content_index" => 0,
+         "delta" => "synthetic transport parity reply"
+       }},
+      {"response.completed", %{"type" => "response.completed", "response" => shared_response}}
+    ]
+
+    input = [
+      %{
+        "type" => "compaction",
+        "encrypted_content" => "opaque-transport-parity-compaction",
+        "id" => "cmp_transport_parity"
+      },
+      compaction_replay_user_item()
+    ]
+
+    http_upstream = start_upstream(FakeUpstream.sse_stream(shared_events))
+    http_setup = gateway_setup(http_upstream)
+
+    json_conn =
+      build_conn()
+      |> auth(http_setup)
+      |> post("/v1/responses", %{
+        "model" => http_setup.model.exposed_model_id,
+        "store" => false,
+        "stream" => false,
+        "input" => input
+      })
+
+    http_json_envelope = json_response(json_conn, 200)
+
+    sse_conn =
+      build_conn()
+      |> auth(http_setup)
+      |> post("/v1/responses", %{
+        "model" => http_setup.model.exposed_model_id,
+        "store" => false,
+        "stream" => true,
+        "input" => input
+      })
+
+    assert sse_conn.status == 200
+    http_events = public_sse_events(sse_conn.resp_body)
+
+    ws_upstream = start_upstream(FakeUpstream.sse_stream(shared_events, done: false))
+    ws_setup = gateway_setup(ws_upstream)
+    port = start_public_endpoint!()
+
+    ws_streaming_frames = parity_websocket_frames!(port, ws_setup, input, true)
+    ws_terminal_frames = parity_websocket_frames!(port, ws_setup, input, false)
+
+    # Streaming clients observe the same synthesized event sequence on both
+    # transports, and every event envelope matches modulo the per-transport
+    # sequence counter.
+    assert Enum.map(http_events, & &1["event"]) == [
+             "response.created",
+             "response.output_text.delta",
+             "response.completed"
+           ]
+
+    assert Enum.map(http_events, & &1["event"]) == Enum.map(ws_streaming_frames, & &1["type"])
+
+    for {%{"data" => sse_event}, ws_frame} <- Enum.zip(http_events, ws_streaming_frames) do
+      assert Map.delete(sse_event, "sequence_number") == Map.delete(ws_frame, "sequence_number")
+    end
+
+    # Websocket clients always observe the relayed event stream: the client
+    # stream flag does not change the delivered frame sequence.
+    assert ws_terminal_frames == ws_streaming_frames
+
+    %{"data" => sse_terminal} = List.last(http_events)
+    ws_streaming_terminal = List.last(ws_streaming_frames)
+    ws_terminal = List.last(ws_terminal_frames)
+    assert ws_terminal["type"] == "response.completed"
+
+    # The normalized terminal response object is byte-equivalent across JSON,
+    # SSE, and both websocket modes: same envelope, same output ordering, same
+    # usage.
+    sse_envelope = sse_terminal["response"]
+
+    assert http_json_envelope == sse_envelope
+    assert sse_envelope == ws_streaming_terminal["response"]
+    assert sse_envelope == ws_terminal["response"]
+
+    output_shape = Enum.map(sse_envelope["output"], &{&1["type"], &1["id"]})
+    assert output_shape == Enum.map(http_json_envelope["output"], &{&1["type"], &1["id"]})
+    assert {"message", "msg_compaction_parity"} in output_shape
+    assert sse_envelope["output"] != []
+    assert http_json_envelope["usage"] == sse_envelope["usage"]
+    assert sse_envelope["usage"]["total_tokens"] == 12
+
+    # Both transports dispatched the byte-identical compaction replay input.
+    http_captures = FakeUpstream.requests(http_upstream)
+    assert length(http_captures) == 2
+
+    for captured <- http_captures do
+      assert captured.json["input"] == input
+      assert captured.json["stream"] == true
+      assert captured.json["store"] == false
+    end
+
+    ws_captures = FakeUpstream.requests(ws_upstream)
+    assert length(ws_captures) == 2
+
+    for captured <- ws_captures do
+      assert captured.method == "WEBSOCKET"
+      assert captured.json["input"] == input
+      assert captured.json["stream"] == true
+      assert captured.json["store"] == false
+    end
+  end
+
+  defp parity_websocket_frames!(port, setup, input, stream?) do
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "compaction-parity-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        public_websocket_send_text!(
+          conn,
+          websocket,
+          ref,
+          Jason.encode!(%{
+            "type" => "response.create",
+            "model" => setup.model.exposed_model_id,
+            "input" => input,
+            "stream" => stream?,
+            "store" => false,
+            "generate" => true
+          })
+        )
+
+      {_conn, _websocket, frames} = receive_websocket_until_terminal!(conn, websocket, ref, [])
+      frames
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   test "GET /v1/responses websocket rejects extra compaction metadata before dispatch" do
     upstream = start_upstream(completed_websocket_response("should_not_dispatch_compaction"))
     setup = gateway_setup(upstream)
@@ -1182,6 +1375,30 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       _other -> :ok
     end
   end
+
+  defp public_sse_events(body) do
+    body
+    |> String.split("\n\n", trim: true)
+    |> Enum.flat_map(fn block ->
+      case public_sse_event(block) do
+        nil -> []
+        event -> [event]
+      end
+    end)
+  end
+
+  defp public_sse_event(block) do
+    lines = String.split(block, "\n")
+    event = lines |> Enum.find(&String.starts_with?(&1, "event: ")) |> strip_sse_prefix("event: ")
+    data = lines |> Enum.find(&String.starts_with?(&1, "data: ")) |> strip_sse_prefix("data: ")
+
+    if is_binary(event) and is_binary(data) and data != "[DONE]" do
+      %{"event" => event, "data" => Jason.decode!(data)}
+    end
+  end
+
+  defp strip_sse_prefix(nil, _prefix), do: nil
+  defp strip_sse_prefix(line, prefix), do: String.replace_prefix(line, prefix, "")
 
   defp receive_websocket_until_terminal!(conn, websocket, ref, frames) do
     {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
