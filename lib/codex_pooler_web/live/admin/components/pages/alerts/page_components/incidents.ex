@@ -222,7 +222,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Incidents do
           <article
             :for={incident <- @incidents}
             id={"alert-incident-card-#{incident.id}"}
-            class="rounded-box border border-base-300 bg-base-100 p-4 shadow-sm"
+            class="rounded-box border border-base-300 bg-base-100 p-4"
           >
             <div class="flex flex-wrap items-start justify-between gap-3">
               <div class="grid min-w-0 gap-1">

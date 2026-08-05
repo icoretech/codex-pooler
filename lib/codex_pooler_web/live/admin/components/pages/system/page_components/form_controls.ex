@@ -80,7 +80,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.FormControls do
 
   def settings_group(assigns) do
     ~H"""
-    <section id={@id} class="grid gap-4 rounded-box border border-base-300 bg-base-100 p-4 shadow-sm">
+    <section id={@id} class="grid gap-4 rounded-box border border-base-300 bg-base-100 p-4">
       <div class="grid gap-1 border-b border-base-300 pb-3">
         <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">{@eyebrow}</p>
         <h3 class="text-xl font-semibold text-base-content">{@title}</h3>

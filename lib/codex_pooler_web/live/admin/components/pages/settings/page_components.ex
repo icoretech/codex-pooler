@@ -37,7 +37,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents do
     ~H"""
     <section
       id="settings-appearance-panel"
-      class="rounded-box border border-base-300 bg-base-100 p-5 shadow-sm"
+      class="rounded-box border border-base-300 bg-base-100 p-5"
     >
       <div class="grid gap-5 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
         <div class="grid gap-2">

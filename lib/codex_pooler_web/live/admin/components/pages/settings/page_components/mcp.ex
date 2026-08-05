@@ -21,7 +21,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
     ~H"""
     <section
       id="settings-mcp-panel"
-      class="grid gap-4 rounded-box border border-base-300 bg-base-100 p-5 shadow-sm"
+      class="grid gap-4 rounded-box border border-base-300 bg-base-100 p-5"
     >
       <div class="grid gap-4 lg:grid-cols-[16rem_minmax(0,1fr)]">
         <div class="border-base-300 lg:border-r lg:pr-5">

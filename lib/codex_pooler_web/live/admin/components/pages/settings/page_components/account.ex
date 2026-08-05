@@ -13,7 +13,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Account do
     ~H"""
     <section
       id="settings-account-profile-panel"
-      class="grid gap-4 rounded-box border border-base-300 bg-base-100 p-5 shadow-sm lg:grid-cols-[16rem_minmax(0,1fr)]"
+      class="grid gap-4 rounded-box border border-base-300 bg-base-100 p-5 lg:grid-cols-[16rem_minmax(0,1fr)]"
     >
       <div class="border-base-300 lg:border-r lg:pr-5">
         <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">

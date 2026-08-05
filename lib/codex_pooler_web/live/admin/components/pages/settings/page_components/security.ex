@@ -36,7 +36,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Security do
 
   defp totp_panel(assigns) do
     ~H"""
-    <div class="rounded-box border border-base-300 bg-base-100 p-5 shadow-sm">
+    <div class="rounded-box border border-base-300 bg-base-100 p-5">
       <div class="flex flex-wrap items-start justify-between gap-4">
         <div class="grid gap-2">
           <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
@@ -151,7 +151,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Security do
 
   defp password_panel(assigns) do
     ~H"""
-    <div class="rounded-box border border-base-300 bg-base-100 p-4 shadow-sm">
+    <div class="rounded-box border border-base-300 bg-base-100 p-4">
       <.form
         id="settings-password-form"
         for={@password_form}
@@ -217,7 +217,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.Security do
     ~H"""
     <div
       id="settings-session-panel"
-      class="rounded-box border border-base-300 bg-base-100 p-5 shadow-sm"
+      class="rounded-box border border-base-300 bg-base-100 p-5"
     >
       <div class="flex flex-wrap items-start justify-between gap-4">
         <div class="grid gap-2">
