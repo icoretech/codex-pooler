@@ -11,6 +11,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
   alias CodexPooler.Gateway.Persistence.BridgeSessionAlias
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
+  alias CodexPooler.Gateway.Persistence.SessionContinuity, as: ContinuityStore
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
   alias CodexPooler.Gateway.Routing.SessionContinuity
@@ -622,6 +623,108 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
                )
 
       assert request_options.continuity.codex_session.id == session.id
+
+      filter_input = %{filter_input | request_options: request_options}
+
+      before_target = Repo.reload!(target_identity).metadata
+      before_sibling = Repo.reload!(sibling_identity).metadata
+
+      {result, log} = with_info_log(fn -> RouteFiltering.filter_candidates(filter_input) end)
+
+      assert {:ok, [_sibling_candidate, _target_candidate], _request_options} = result
+
+      assert log =~ "result_code=gateway_auto_sibling_usable_capacity"
+      assert log =~ "applied=false"
+      refute log =~ "result_code=reset"
+
+      assert FakeUpstream.requests(upstream) == []
+      assert Repo.reload!(target_identity).metadata == before_target
+      assert Repo.reload!(sibling_identity).metadata == before_sibling
+    end
+
+    test "an anchor proven against a different assignment than the attached session does not bypass the capacity veto" do
+      %{
+        upstream: upstream,
+        unattached_filter_input: filter_input,
+        sibling_identity: sibling_identity,
+        sibling_assignment: sibling_assignment,
+        target_identity: target_identity,
+        pool: pool,
+        api_key: api_key,
+        session: session
+      } = first_turn_capacity_arrangement("cross-assignment-anchor")
+
+      # The anchor's alias pre-exists and strictly resolves to a session pinned
+      # on the sibling assignment. The proof and the anchor attach read the same
+      # validity rules, so they can only disagree across a race — the anchor
+      # session retargeting or its alias expiring between the read-only proof
+      # and the locking attach — which is why the raced interleaving is composed
+      # here from its two halves, each driven through the production seam: the
+      # proof from the real strict lookup, the attached session from the real
+      # session-header attach. A proof that names one assignment while the
+      # attached session pins another must fail the comparison and keep the
+      # capacity veto.
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      anchor_session =
+        Repo.insert!(%CodexSession{
+          pool_id: pool.id,
+          api_key_id: api_key.id,
+          session_key: "sess-cross-anchor-#{System.unique_integer([:positive])}",
+          pool_upstream_assignment_id: sibling_assignment.id,
+          status: "active",
+          owner_instance_id: "route-filtering-test",
+          owner_lease_token: Ecto.UUID.generate(),
+          owner_lease_expires_at: DateTime.add(now, 1, :hour),
+          last_heartbeat_at: now,
+          created_at: DateTime.add(now, -4, :second),
+          updated_at: DateTime.add(now, -4, :second)
+        })
+
+      previous_response_id = "resp_cross_assignment_anchor"
+
+      register_session_alias!(
+        pool,
+        api_key,
+        anchor_session,
+        "previous_response_id",
+        previous_response_id
+      )
+
+      resolved_assignment_id =
+        ContinuityStore.previous_response_assignment_id(
+          %{pool: pool, api_key: api_key},
+          previous_response_id,
+          now
+        )
+
+      assert resolved_assignment_id == sibling_assignment.id
+
+      session_header = "sess-cross-anchor-header-#{System.unique_integer([:positive])}"
+      register_session_alias!(pool, api_key, session, "session_header", session_header)
+
+      request_options =
+        RequestOptions.put_continuity(filter_input.request_options,
+          session_header: session_header,
+          session_header_source: "x-session-id"
+        )
+
+      assert {:ok, request_options} =
+               SessionContinuity.attach_codex_session(
+                 %{pool: pool, api_key: api_key},
+                 %{},
+                 request_options
+               )
+
+      assert request_options.continuity.codex_session.id == session.id
+
+      request_options =
+        RequestOptions.put_continuity(request_options,
+          previous_response_id: previous_response_id,
+          resolved_previous_response_assignment_id: resolved_assignment_id
+        )
+
+      refute SessionContinuity.hard_pinned_continuity?(request_options, filter_input.model)
 
       filter_input = %{filter_input | request_options: request_options}
 
