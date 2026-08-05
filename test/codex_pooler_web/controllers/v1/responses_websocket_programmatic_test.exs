@@ -462,7 +462,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       )
 
     try do
-      post_upgrade_baseline = lifecycle_counts(upstream)
+      post_upgrade_baseline = settled_post_upgrade_counts!(upstream)
 
       {conn, websocket} =
         send_response_create!(conn, websocket, ref, setup, %{
@@ -538,7 +538,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
         Enum.reduce(malformed_programmatic_payloads(setup), {conn, websocket}, fn payload,
                                                                                   {conn,
                                                                                    websocket} ->
-          post_upgrade_baseline = lifecycle_counts(upstream)
+          post_upgrade_baseline = settled_post_upgrade_counts!(upstream)
 
           {conn, websocket} =
             public_websocket_send_text!(conn, websocket, ref, Jason.encode!(payload))
@@ -575,7 +575,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       )
 
     try do
-      post_upgrade_baseline = lifecycle_counts(upstream)
+      post_upgrade_baseline = settled_post_upgrade_counts!(upstream)
 
       {conn, websocket} =
         public_websocket_send_text!(
@@ -950,7 +950,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       )
 
     try do
-      post_upgrade_baseline = lifecycle_counts(upstream)
+      post_upgrade_baseline = settled_post_upgrade_counts!(upstream)
 
       malformed_item = %{
         "type" => "compaction",
@@ -1239,6 +1239,32 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
              ),
              :count
            ) == 1
+  end
+
+  # The upgrade attaches the turn-state continuity session (one session, one
+  # owner lease, one session alias) asynchronously after the 101 response, so
+  # a baseline read taken right after connect races that attach: a later
+  # whole-table equality assertion would see the rows land mid-test. Await the
+  # attach before taking any baseline that is compared with equality.
+  defp settled_post_upgrade_counts!(upstream) do
+    deadline = System.monotonic_time(:millisecond) + 5_000
+    settled_post_upgrade_counts!(upstream, deadline)
+  end
+
+  defp settled_post_upgrade_counts!(upstream, deadline) do
+    counts = lifecycle_counts(upstream)
+
+    cond do
+      match?(%{sessions: 1, owner_leases: 1, session_aliases: 1}, counts) ->
+        counts
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("websocket upgrade continuity attach did not settle: #{inspect(counts)}")
+
+      true ->
+        Process.sleep(10)
+        settled_post_upgrade_counts!(upstream, deadline)
+    end
   end
 
   defp lifecycle_counts(upstream) do
