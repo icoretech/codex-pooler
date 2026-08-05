@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.18](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.17...codex-pooler-v0.5.18) (2026-08-05)
+
+
+### Bug Fixes
+
+* **deps:** update dependency daisyui to v5.7.16 ([#262](https://github.com/icoretech/codex-pooler/issues/262)) ([02403d8](https://github.com/icoretech/codex-pooler/commit/02403d8df88c742cc835836b7a1868274f87152a))
+* **gateway:** preserve encrypted agent v2 handoffs ([e352aae](https://github.com/icoretech/codex-pooler/commit/e352aaea60b54be71488662e2a059530f7a4a9ca))
+* **routing:** drain assignment locks before deadlock retries ([07113b2](https://github.com/icoretech/codex-pooler/commit/07113b2b267d9ae6aca8ddbc3dfea5458f7c37bc))
+
 ## [0.5.17](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.16...codex-pooler-v0.5.17) (2026-08-05)
 
 
