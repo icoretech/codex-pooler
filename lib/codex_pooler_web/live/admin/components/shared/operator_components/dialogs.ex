@@ -315,49 +315,96 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
 
   defp operator_role_fields(assigns) do
     assigns =
-      assign(
-        assigns,
-        :selected_pool_ids,
-        OperatorForm.selected_pool_ids(assigns.form)
-      )
+      assigns
+      |> assign(:selected_pool_ids, OperatorForm.selected_pool_ids(assigns.form))
+      |> assign(:selected_role, to_string(Phoenix.HTML.Form.input_value(assigns.form, :role)))
 
     ~H"""
-    <.input
-      field={@form[:role]}
-      type="select"
-      label="Operator role"
-      options={OperatorForm.role_options()}
-    />
-    <div class="fieldset mb-2 md:col-span-2">
-      <span class="label mb-1">Assigned Pools for instance admins</span>
-      <input type="hidden" name={@field_prefix <> "[pool_ids][]"} value="" />
-      <div
-        id={@field_prefix <> "_pool_ids_group"}
-        class="grid gap-2 rounded-box border border-base-300 bg-base-200/60 p-3"
-      >
-        <p :if={@pool_options == []} class="text-sm text-base-content/60">
-          No Pools are available yet. Owners can still create another owner.
-        </p>
-        <label
-          :for={pool <- @pool_options}
-          id={@field_prefix <> "_pool_id_" <> pool.id <> "_option"}
-          class="flex items-center gap-3 rounded-box bg-base-100 px-3 py-2 text-sm"
-        >
-          <input
-            id={@field_prefix <> "_pool_id_" <> pool.id}
-            type="checkbox"
-            name={@field_prefix <> "[pool_ids][]"}
-            value={pool.id}
-            checked={MapSet.member?(@selected_pool_ids, pool.id)}
-            class="checkbox checkbox-sm"
+    <div class="contents group/rolegate">
+      <fieldset id={@field_prefix <> "_role"} class="grid gap-2 md:col-span-2">
+        <legend class="label mb-1">Operator role</legend>
+        <div class="grid gap-2 sm:grid-cols-2">
+          <.operator_role_card
+            id={@field_prefix <> "_role_instance_admin"}
+            field_prefix={@field_prefix}
+            value="instance_admin"
+            selected_role={@selected_role}
+            label="Instance admin"
+            description="Manages only the Pools assigned below."
           />
-          <span>{OperatorForm.pool_option_label(pool)}</span>
-        </label>
+          <.operator_role_card
+            id={@field_prefix <> "_role_instance_owner"}
+            field_prefix={@field_prefix}
+            value="instance_owner"
+            selected_role={@selected_role}
+            label="Instance owner"
+            description="Instance-wide access to every Pool and setting."
+          />
+        </div>
+      </fieldset>
+      <div class="fieldset mb-2 transition-opacity md:col-span-2 group-has-[.operator-role-owner:checked]/rolegate:opacity-45">
+        <span class="label mb-1">Assigned Pools for instance admins</span>
+        <input type="hidden" name={@field_prefix <> "[pool_ids][]"} value="" />
+        <div id={@field_prefix <> "_pool_ids_group"} class="grid gap-2 sm:grid-cols-2">
+          <p :if={@pool_options == []} class="text-sm text-base-content/60 sm:col-span-2">
+            No Pools are available yet. Owners can still create another owner.
+          </p>
+          <label
+            :for={pool <- @pool_options}
+            id={@field_prefix <> "_pool_id_" <> pool.id <> "_option"}
+            class="flex min-h-10 min-w-0 cursor-pointer items-center gap-3 rounded-box border border-base-300 bg-base-100 px-3 py-1.5 transition-colors hover:border-primary/50 hover:bg-primary/5 has-[:checked]:border-primary/40 has-[:checked]:bg-primary/5"
+          >
+            <input
+              id={@field_prefix <> "_pool_id_" <> pool.id}
+              type="checkbox"
+              name={@field_prefix <> "[pool_ids][]"}
+              value={pool.id}
+              checked={MapSet.member?(@selected_pool_ids, pool.id)}
+              class="checkbox checkbox-primary checkbox-sm shrink-0"
+            />
+            <span class="truncate text-sm font-medium text-base-content">{pool.name}</span>
+          </label>
+        </div>
+        <p class="mt-1 text-xs text-base-content/60">
+          Pool assignments apply only while the operator role is instance admin. Owners keep instance-wide access.
+        </p>
       </div>
-      <p class="mt-1 text-xs text-base-content/60">
-        Pool assignments apply only while the operator role is instance admin. Owners keep instance-wide access.
-      </p>
     </div>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :field_prefix, :string, required: true
+  attr :value, :string, required: true
+  attr :selected_role, :string, required: true
+  attr :label, :string, required: true
+  attr :description, :string, required: true
+
+  defp operator_role_card(assigns) do
+    ~H"""
+    <label class="group/rolecard relative flex min-w-0 cursor-pointer items-start gap-2.5 rounded-box border border-base-300 bg-base-100 p-2.5 transition-colors hover:border-primary/50 has-[.operator-role-radio:checked]:border-primary/60 has-[.operator-role-radio:checked]:bg-primary/5 has-[.operator-role-radio:focus-visible]:outline has-[.operator-role-radio:focus-visible]:outline-2 has-[.operator-role-radio:focus-visible]:outline-offset-2 has-[.operator-role-radio:focus-visible]:outline-primary">
+      <span class="pointer-events-none absolute right-2.5 top-3">
+        <.icon
+          name="hero-check"
+          class="hidden size-3 text-primary group-has-[.operator-role-radio:checked]/rolecard:inline-block"
+        />
+      </span>
+      <input
+        id={@id}
+        type="radio"
+        class={[
+          "operator-role-radio sr-only",
+          @value == "instance_owner" && "operator-role-owner"
+        ]}
+        name={@field_prefix <> "[role]"}
+        value={@value}
+        checked={@selected_role == @value}
+      />
+      <span class="grid min-w-0 gap-0.5">
+        <span class="text-[13px] font-semibold leading-tight text-base-content">{@label}</span>
+        <span class="text-[11px] leading-4 text-base-content/55">{@description}</span>
+      </span>
+    </label>
     """
   end
 

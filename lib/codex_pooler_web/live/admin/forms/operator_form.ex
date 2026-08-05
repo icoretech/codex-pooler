@@ -6,7 +6,6 @@ defmodule CodexPoolerWeb.Admin.OperatorForm do
   alias CodexPooler.Accounts
   alias CodexPooler.Accounts.User
   alias CodexPooler.Pools
-  alias CodexPooler.Pools.Pool
   alias CodexPoolerWeb.Admin.OperatorComponents.Identity
 
   @operator_statuses ["active", "disabled"]
@@ -134,14 +133,6 @@ defmodule CodexPoolerWeb.Admin.OperatorForm do
     |> Map.merge(lifecycle_attrs(params))
   end
 
-  @spec role_options() :: [{String.t(), String.t()}]
-  def role_options do
-    [
-      {"Instance admin", Pools.role(:instance_admin)},
-      {"Instance owner", Pools.role(:instance_owner)}
-    ]
-  end
-
   @spec selected_pool_ids(Phoenix.HTML.Form.t()) :: MapSet.t(String.t())
   def selected_pool_ids(%Phoenix.HTML.Form{} = form) do
     form[:pool_ids].value
@@ -149,9 +140,6 @@ defmodule CodexPoolerWeb.Admin.OperatorForm do
     |> Enum.map(&to_string/1)
     |> MapSet.new()
   end
-
-  @spec pool_option_label(Pool.t()) :: String.t()
-  def pool_option_label(%Pool{name: name, slug: slug}), do: "#{name} (#{slug})"
 
   @spec password_attrs(map()) :: map()
   def password_attrs(params) do
