@@ -241,7 +241,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
         </label>
       </fieldset>
 
-      <div class="grid items-start gap-4 border-t border-base-300/50 pt-4 md:grid-cols-2">
+      <div class="grid items-start gap-4 md:grid-cols-2">
         <div class="grid gap-1">
           <.input
             field={@form[:min_blocked_minutes]}
