@@ -116,10 +116,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
       |> assign(:strategy_options, PoolForm.routing_strategy_options())
 
     ~H"""
-    <div
-      id={"#{@id}-responsive-shell"}
-      class="contents sm:[&_.policy-editor-tabs]:grid-cols-2!"
-    >
+    <div id={"#{@id}-responsive-shell"} class="contents">
       <PolicyEditorComponents.policy_editor_dialog
         id={@id}
         eyebrow={@title}

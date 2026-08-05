@@ -54,14 +54,14 @@ defmodule CodexPoolerWeb.Admin.PolicyEditorComponents do
           <div id={"#{@id}-sections"} class="policy-editor-sections min-w-0">
             <ol
               id={"#{@id}-tabs"}
-              class="policy-editor-tabs grid min-w-0 gap-2 lg:flex lg:items-stretch"
+              class="policy-editor-tabs grid min-w-0 gap-2 sm:flex sm:items-stretch"
               role="tablist"
               aria-label={@sections_label}
             >
               <li
                 :for={{step, index} <- @wizard_steps}
                 id={wizard_step_dom_id(@id, step.id)}
-                class="min-w-0 lg:flex-1"
+                class="min-w-0 sm:flex-1"
               >
                 <button
                   :if={@step_event}
@@ -88,7 +88,7 @@ defmodule CodexPoolerWeb.Admin.PolicyEditorComponents do
                     </span>
                     <span
                       :if={step.description}
-                      class="truncate text-[0.68rem] normal-case tracking-normal text-base-content/55"
+                      class="hidden truncate text-[0.68rem] normal-case tracking-normal text-base-content/55 lg:block"
                     >
                       {step.description}
                     </span>
@@ -116,7 +116,7 @@ defmodule CodexPoolerWeb.Admin.PolicyEditorComponents do
                     </span>
                     <span
                       :if={step.description}
-                      class="truncate text-[0.68rem] normal-case tracking-normal text-base-content/55"
+                      class="hidden truncate text-[0.68rem] normal-case tracking-normal text-base-content/55 lg:block"
                     >
                       {step.description}
                     </span>
@@ -199,7 +199,7 @@ defmodule CodexPoolerWeb.Admin.PolicyEditorComponents do
 
   defp wizard_step_class(step_id, current_step_id) do
     [
-      "policy-editor-tab flex w-full min-w-0 items-center justify-start gap-2.5 border px-3 py-2 text-left transition-colors duration-200 lg:h-full lg:px-2.5 lg:py-2",
+      "policy-editor-tab flex w-full min-w-0 items-center justify-start gap-2.5 border px-3 py-2 text-left transition-colors duration-200 sm:h-full sm:px-2.5 sm:py-2",
       step_id == current_step_id &&
         "is-current text-base-content",
       step_id != current_step_id &&

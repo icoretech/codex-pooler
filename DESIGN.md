@@ -710,8 +710,11 @@ verified live as the orange "Pro" / green "Free" pills.
 - **Step tabs:** `role="tablist"` of numbered buttons; each has a `size-5`
   mono step marker; the current tab gets `.is-current` (orange-tinted border +
   wash) and `aria-current="step"`/`aria-selected`; hover promotes the marker to
-  solid primary. Below `lg` the tabs collapse to a 2-column grid
-  (`policy-editor-tabs` CSS).
+  solid primary. From `sm` the tabs hold **one compact row** — marker plus
+  uppercase label, with the descriptions `lg`-and-up — and below `sm` they
+  collapse to a 2-column grid of slim rows (`policy-editor-tabs` CSS). The
+  tablist never stacks one-per-row: five full-width rows pushed the step
+  content below the fold on tablets.
 - **Step panels:** `role="tabpanel"` sections toggled by `block`/`hidden`
   (state lives server-side in `current_step`).
 - **Policy mode cards** (`policy_mode_card/1`, `reasoning_policy_mode/1`):
