@@ -2015,8 +2015,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       :fresh
     )
 
+    # The guard aborts before any bytes are sent, so this is the one connection
+    # assertion in this file with no recorded request to serve as its barrier —
+    # every other one reads `requests/1` first, and a recorded request is proof
+    # the handler's `init/1` has already run.
     assert FakeUpstream.requests(upstream) == []
-    assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert FakeUpstream.await_websocket_connection_count(upstream, 1) == 1
   end
 
   @tag :fake_upstream_lifecycle_regression

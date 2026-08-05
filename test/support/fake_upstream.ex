@@ -119,6 +119,47 @@ defmodule CodexPooler.FakeUpstream do
     Agent.get(pid, fn state -> Map.get(state, :websocket_connection_count, 0) end)
   end
 
+  @doc """
+  Waits for `count` websocket connections to have registered, and returns what
+  it saw.
+
+  The counter is written by the WebSock handler's `init/1`, which runs in its
+  own process and can still be on its way there when the client already holds a
+  connection. A test that goes on to read `requests/1` never notices, because a
+  recorded request is itself proof that `init/1` has run — but one that asserts
+  the count with no bytes exchanged has nothing else to wait on.
+
+  Returns the count rather than `:ok` so a timeout fails the caller's own
+  assertion, with the number it actually reached.
+  """
+  @spec await_websocket_connection_count(t(), non_neg_integer(), timeout()) ::
+          non_neg_integer()
+  def await_websocket_connection_count(%__MODULE__{} = upstream, count, timeout \\ 2_000) do
+    poll_websocket_connection_count(
+      upstream,
+      count,
+      System.monotonic_time(:millisecond) + timeout
+    )
+  end
+
+  # Sleeping rather than spinning: the handler this waits for is a process too,
+  # and on a loaded runner a busy loop competes with the thing it wants to see.
+  defp poll_websocket_connection_count(upstream, count, deadline) do
+    seen = websocket_connection_count(upstream)
+
+    cond do
+      seen >= count ->
+        seen
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        seen
+
+      true ->
+        Process.sleep(5)
+        poll_websocket_connection_count(upstream, count, deadline)
+    end
+  end
+
   @spec websocket_connection_ids(t()) :: [reference()]
   def websocket_connection_ids(%__MODULE__{pid: pid}) do
     Agent.get(pid, fn state -> Enum.reverse(Map.get(state, :websocket_connection_ids, [])) end)
