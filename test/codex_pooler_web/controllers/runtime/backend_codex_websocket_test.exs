@@ -10,6 +10,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestLogs}
   alias CodexPooler.Accounts.Scope
+  alias CodexPooler.AgentV2ContractFixture
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
@@ -3178,7 +3179,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert request.usage_status == "usage_known"
   end
 
-  test "websocket response.create strips mixed encrypted agent messages before upstream dispatch" do
+  test "websocket response.create preserves canonical v2 encrypted handoffs before upstream dispatch" do
     upstream =
       start_upstream(
         FakeUpstream.json_response(%{
@@ -3194,7 +3195,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     {:ok, session} =
       Gateway.start_codex_session(auth, %{accepted_turn_state: "stable-ws-mixed-agent-message"})
 
-    raw_agent_encrypted_content = "sample-mixed-agent-encrypted-content"
+    canonical_handoff = AgentV2ContractFixture.handoff!(:spawn_agent)
+
+    raw_agent_encrypted_content =
+      canonical_handoff
+      |> Map.fetch!("content")
+      |> Enum.at(1)
+      |> Map.fetch!("encrypted_content")
 
     assert :ok =
              execute_websocket_response(
@@ -3204,18 +3211,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                  "model" => setup.model.exposed_model_id,
                  "input" => [
                    %{"type" => "message", "role" => "user", "content" => "hello"},
-                   %{
-                     "type" => "agent_message",
-                     "author" => "root",
-                     "recipient" => "worker",
-                     "content" => [
-                       %{"type" => "input_text", "text" => "Message Type: MESSAGE\nPayload:\n"},
-                       %{
-                         "type" => "encrypted_content",
-                         "encrypted_content" => raw_agent_encrypted_content
-                       }
-                     ]
-                   },
+                   canonical_handoff,
                    %{
                      "type" => "message",
                      "role" => "assistant",
@@ -3247,14 +3243,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     assert Enum.map(captured.json["input"], &Map.fetch!(&1, "type")) == [
              "message",
+             "agent_message",
              "message",
              "agent_message"
            ]
 
-    assert captured.json["input"] |> Enum.at(1) |> Map.fetch!("encrypted_content")
+    assert Enum.at(captured.json["input"], 1) == canonical_handoff
+
+    assert captured.json["input"] |> Enum.at(2) |> Map.fetch!("encrypted_content")
 
     assert captured.json["input"]
-           |> Enum.at(2)
+           |> Enum.at(3)
            |> Map.fetch!("content")
            |> Enum.at(0)
            |> Map.fetch!("type") ==

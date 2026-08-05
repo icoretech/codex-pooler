@@ -1,0 +1,77 @@
+{
+  "codex_version": "0.146.0",
+  "source": {
+    "tag": "rust-v0.146.0",
+    "commit": "e363b08c9175ac1cbe5893615dd2cb9ddf95043b",
+    "protocol_path": "codex-rs/protocol/src/protocol.rs",
+    "message_tool_path": "codex-rs/core/src/tools/handlers/multi_agents_v2/message_tool.rs",
+    "completion_path": "codex-rs/core/src/context/inter_agent_completion_message.rs"
+  },
+  "notes": {
+    "ciphertext": "synthetic; only the wire shape and protocol envelope are version-pinned",
+    "followup_task": "trigger_turn=true serializes as NEW_TASK in Codex 0.146.0"
+  },
+  "handoffs": {
+    "spawn_agent": {
+      "tool": "spawn_agent",
+      "message_type": "NEW_TASK",
+      "item": {
+        "type": "agent_message",
+        "author": "/root",
+        "recipient": "/root/worker",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n"
+          },
+          {
+            "type": "encrypted_content",
+            "encrypted_content": "synthetic-codex-0.146.0-spawn-ciphertext"
+          }
+        ]
+      }
+    },
+    "send_message": {
+      "tool": "send_message",
+      "message_type": "MESSAGE",
+      "item": {
+        "type": "agent_message",
+        "author": "/root",
+        "recipient": "/root/worker",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Message Type: MESSAGE\nTask name: /root/worker\nSender: /root\nPayload:\n"
+          },
+          {
+            "type": "encrypted_content",
+            "encrypted_content": "synthetic-codex-0.146.0-message-ciphertext"
+          }
+        ]
+      }
+    },
+    "followup_task": {
+      "tool": "followup_task",
+      "message_type": "NEW_TASK",
+      "item": {
+        "type": "agent_message",
+        "author": "/root",
+        "recipient": "/root/worker",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n"
+          },
+          {
+            "type": "encrypted_content",
+            "encrypted_content": "synthetic-codex-0.146.0-followup-ciphertext"
+          }
+        ]
+      }
+    }
+  },
+  "final_answer": {
+    "message_type": "FINAL_ANSWER",
+    "text": "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\nSYNTHETIC_FINAL_ANSWER_SENTINEL"
+  }
+}

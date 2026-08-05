@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest do
   use ExUnit.Case, async: false
 
+  alias CodexPooler.AgentV2ContractFixture
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.TransportFailureReason
@@ -837,7 +838,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     {:ok, session} = UpstreamWebsocketSession.start_link([])
     on_exit(fn -> UpstreamWebsocketSession.close(session) end)
 
-    request = websocket_request(FakeUpstream.url(upstream))
+    handoff = AgentV2ContractFixture.handoff!(:followup_task)
+
+    request = %{
+      websocket_request(FakeUpstream.url(upstream))
+      | payload: Jason.encode!(%{"type" => "response.create", "input" => [handoff]})
+    }
+
     initial_lifecycle = lifecycle_state(session)
 
     assert {:ok, initial_result} = UpstreamWebsocketSession.request(session, request)
@@ -863,6 +870,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert first_request.websocket_connection_id == second_request.websocket_connection_id
     assert interrupted_request.websocket_connection_id == first_request.websocket_connection_id
     assert reconnected_request.websocket_connection_id != first_request.websocket_connection_id
+
+    assert Enum.map([first_request, second_request, interrupted_request, reconnected_request], fn
+             captured -> captured.json["input"]
+           end) == List.duplicate([handoff], 4)
+
     assert FakeUpstream.websocket_connection_count(upstream) == 2
   end
 

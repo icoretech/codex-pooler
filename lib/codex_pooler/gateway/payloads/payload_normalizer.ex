@@ -11,6 +11,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   alias CodexPooler.Gateway.Payloads.ToolSchemaLowering
 
   @backend_turn_state_client_metadata_key "x-codex-turn-state"
+  @backend_codex_agent_path ~r/\A(?:\/morpheus|\/root(?:\/[a-z0-9_]+)*)\z/
   @websocket_responses_lite_client_metadata_key "ws_request_header_x_openai_internal_codex_responses_lite"
 
   @unsupported_upstream_fields ~w(
@@ -572,15 +573,41 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   defp prefixed_response_item_id?(_id), do: false
 
-  defp backend_codex_encrypted_agent_message?(%{
-         "type" => "agent_message",
-         "content" => content
-       })
+  defp backend_codex_encrypted_agent_message?(
+         %{
+           "type" => "agent_message",
+           "content" => content
+         } = item
+       )
        when is_list(content) do
-    Enum.any?(content, &backend_codex_encrypted_content_marker?/1)
+    Enum.any?(content, &backend_codex_encrypted_content_marker?/1) and
+      not backend_codex_v2_encrypted_handoff?(item)
   end
 
   defp backend_codex_encrypted_agent_message?(_item), do: false
+
+  defp backend_codex_v2_encrypted_handoff?(%{
+         "type" => "agent_message",
+         "author" => author,
+         "recipient" => recipient,
+         "content" => [
+           %{"type" => "input_text", "text" => text},
+           %{"type" => "encrypted_content", "encrypted_content" => encrypted_content}
+         ]
+       })
+       when is_binary(author) and is_binary(recipient) and is_binary(text) and
+              is_binary(encrypted_content) do
+    backend_codex_agent_path?(author) and backend_codex_agent_path?(recipient) and
+      String.trim(encrypted_content) != "" and
+      text in [
+        "Message Type: NEW_TASK\nTask name: #{recipient}\nSender: #{author}\nPayload:\n",
+        "Message Type: MESSAGE\nTask name: #{recipient}\nSender: #{author}\nPayload:\n"
+      ]
+  end
+
+  defp backend_codex_v2_encrypted_handoff?(_item), do: false
+
+  defp backend_codex_agent_path?(path), do: Regex.match?(@backend_codex_agent_path, path)
 
   defp backend_codex_encrypted_content_marker?(%{} = item) do
     Map.get(item, "type") == "encrypted_content" ||

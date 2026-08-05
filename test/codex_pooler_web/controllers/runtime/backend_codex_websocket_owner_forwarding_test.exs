@@ -38,6 +38,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.Accounting.LedgerEntry
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Accounts.Scope
+  alias CodexPooler.AgentV2ContractFixture
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -227,7 +228,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       })
 
     try do
-      first_payload = websocket_payload(setup, "first")
+      handoff = AgentV2ContractFixture.handoff!(:spawn_agent)
+      first_payload = websocket_input_payload(setup, [handoff])
 
       assert {:ok, state} =
                CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, state)
@@ -251,6 +253,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       assert [first_request, second_request] = FakeUpstream.requests(upstream)
       assert first_request.websocket_connection_id == second_request.websocket_connection_id
+      assert first_request.json["input"] == [handoff]
 
       assert [first_request_log, second_request_log] =
                Repo.all(
@@ -1124,10 +1127,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           remote_state.websocket_owner_downstream
         )
 
+      handoff = AgentV2ContractFixture.handoff!(:send_message)
+
       assert :ok =
                Gateway.run_websocket_response(
                  auth,
-                 websocket_payload(setup, "owner remote success"),
+                 websocket_input_payload(setup, [handoff]),
                  opts,
                  fn _data -> :ok end
                )
@@ -1145,6 +1150,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                       }}
 
       assert FakeUpstream.count(upstream) == 1
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.json["input"] == [handoff]
       assert [opaque_connection_id] = FakeUpstream.websocket_connection_ids(upstream)
       assert is_reference(opaque_connection_id)
       assert [request] = request_logs(setup.pool.id)
@@ -6567,10 +6574,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   defp websocket_payload(setup, content, extra \\ %{}) do
+    websocket_input_payload(
+      setup,
+      [%{"type" => "message", "role" => "user", "content" => content}],
+      extra
+    )
+  end
+
+  defp websocket_input_payload(setup, input, extra \\ %{}) do
     %{
       "type" => "response.create",
       "model" => setup.model.exposed_model_id,
-      "input" => [%{"type" => "message", "role" => "user", "content" => content}],
+      "input" => input,
       "stream" => true,
       "generate" => true
     }

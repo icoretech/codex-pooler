@@ -562,6 +562,20 @@ defmodule CodexPooler.CompatibilityMatrix do
         "direct public Responses HTTP and websocket response.create accept executable custom tools with an exact nonblank name, optional description and defer_loading, nullable direct/programmatic allowed_callers, and omitted, text, lark-grammar, or regex-grammar input format; an exact typed custom choice resolves only a declared custom tool of the same name and kind, is preserved in Full mode, and is rejected before upstream dispatch in Lite mode with unsupported_parameter for tool_choice; that Lite rejection is serving-mode driven and covers any map-shaped tool_choice on any lane dispatching to backend Responses, including translated Chat named-function choices, while string choices such as auto remain accepted in both modes; executable names are collision-free across flat functions, namespace children, and custom tools; Chat custom definitions and choices remain unsupported, custom replay is a separate input-item contract, provider execution availability depends on the selected model and upstream account, and no broad OpenAI tool parity is claimed"
     },
     %{
+      slug: :backend_agent_v2_handoffs,
+      status: :supported,
+      current: :canonical_encrypted_agent_handoff_preservation,
+      categories: [:route, :streaming, :ownership],
+      routes: [
+        %{method: :get, path: "/backend-api/codex/responses", transport: "websocket"},
+        %{method: :get, path: "/backend-api/codex/v1/responses", transport: "websocket"}
+      ],
+      future_routes: [],
+      fixture: :backend_agent_v2_handoffs,
+      contract:
+        "backend Codex websocket response.create preserves canonical encrypted agent v2 NEW_TASK and MESSAGE handoffs only when the item contains exactly one input_text protocol envelope followed by one nonempty encrypted_content part, author and recipient are /morpheus or /root paths with lowercase-letter, digit, or underscore child segments, and the envelope task name and sender exactly match recipient and author; other encrypted agent_message variants remain filtered, assistant encrypted replay remains preserved, and durable request or attempt metadata never stores the encrypted payload"
+    },
+    %{
       slug: :function_tool_schema_lowering,
       status: :supported,
       current: :non_strict_function_tool_schema_lowering,
@@ -1392,6 +1406,17 @@ defmodule CodexPooler.CompatibilityMatrix do
           "failure_summary_guard"
         ]
       }
+    },
+    backend_agent_v2_handoffs: %{
+      transports: ["websocket_response_create"],
+      preserved_message_types: ["NEW_TASK", "MESSAGE"],
+      content_shape: ["input_text", "encrypted_content"],
+      author_recipient_shape: "absolute_agent_paths",
+      protocol_bindings: %{task_name: "recipient", sender: "author"},
+      encrypted_content: "nonempty",
+      other_encrypted_agent_messages: "removed",
+      assistant_encrypted_replay: "preserved",
+      durable_metadata: "encrypted_content_omitted"
     },
     function_tool_schema_lowering: %{
       backend_namespace_passthrough: %{

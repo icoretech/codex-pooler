@@ -50,6 +50,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     upstream_websocket_bridge
     image_generation_permission
     responses_executable_custom_tools
+    backend_agent_v2_handoffs
     function_tool_schema_lowering
     direct_responses_strict_schema_repair
     v1_supported_surface
@@ -444,6 +445,36 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                "/v1/responses",
                "/v1/responses websocket"
              ]
+    end
+
+    test "documents canonical encrypted agent v2 websocket handoffs" do
+      feature = CompatibilityMatrix.by_slug!(:backend_agent_v2_handoffs)
+      fixture = CompatibilityMatrix.fixture!(:backend_agent_v2_handoffs)
+
+      assert feature.current == :canonical_encrypted_agent_handoff_preservation
+      assert feature.contract =~ "NEW_TASK and MESSAGE"
+      assert feature.contract =~ "/morpheus or /root paths"
+      assert feature.contract =~ "task name and sender exactly match recipient and author"
+      assert feature.contract =~ "durable request or attempt metadata never stores"
+
+      assert feature.routes == [
+               %{
+                 method: :get,
+                 path: "/backend-api/codex/responses",
+                 transport: "websocket"
+               },
+               %{
+                 method: :get,
+                 path: "/backend-api/codex/v1/responses",
+                 transport: "websocket"
+               }
+             ]
+
+      assert fixture.preserved_message_types == ["NEW_TASK", "MESSAGE"]
+      assert fixture.content_shape == ["input_text", "encrypted_content"]
+      assert fixture.protocol_bindings == %{task_name: "recipient", sender: "author"}
+      assert fixture.other_encrypted_agent_messages == "removed"
+      assert fixture.durable_metadata == "encrypted_content_omitted"
     end
 
     test "documents executable custom tools separately from custom replay" do

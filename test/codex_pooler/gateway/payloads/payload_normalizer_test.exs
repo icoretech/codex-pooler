@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
   use ExUnit.Case, async: false
 
+  alias CodexPooler.AgentV2ContractFixture
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.PayloadNormalizer
@@ -433,14 +434,61 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                [nil, :binary, :list]
     end
 
-    test "normalizes mixed encrypted agent messages while preserving plaintext-only items" do
+    test "preserves canonical v2 encrypted handoffs while removing other mixed encrypted agent messages" do
+      new_task_handoff = AgentV2ContractFixture.handoff!(:spawn_agent)
+      message_handoff = AgentV2ContractFixture.handoff!(:send_message)
+      followup_handoff = AgentV2ContractFixture.handoff!(:followup_task)
+
       payload = %{
         "input" => [
+          new_task_handoff,
+          message_handoff,
+          followup_handoff,
           %{
             "type" => "agent_message",
+            "author" => "/root",
+            "recipient" => "/root/worker",
             "content" => [
-              %{"type" => "input_text", "text" => "plain keeper"},
+              %{"type" => "input_text", "text" => "Message Type: MESSAGE\nPayload:\n"},
               %{"type" => "encrypted_content", "encrypted_content" => "opaque-agent-message"}
+            ]
+          },
+          %{
+            "type" => "agent_message",
+            "author" => "root",
+            "recipient" => "worker",
+            "content" => [
+              %{
+                "type" => "input_text",
+                "text" => "Message Type: NEW_TASK\nTask name: worker\nSender: root\nPayload:\n"
+              },
+              %{"type" => "encrypted_content", "encrypted_content" => "relative-path-lookalike"}
+            ]
+          },
+          %{
+            "type" => "agent_message",
+            "author" => "/root",
+            "recipient" => "/root/../worker",
+            "content" => [
+              %{
+                "type" => "input_text",
+                "text" =>
+                  "Message Type: NEW_TASK\nTask name: /root/../worker\nSender: /root\nPayload:\n"
+              },
+              %{"type" => "encrypted_content", "encrypted_content" => "invalid-agent-path"}
+            ]
+          },
+          %{
+            "type" => "agent_message",
+            "author" => "/root",
+            "recipient" => "/root/worker",
+            "content" => [
+              %{
+                "type" => "input_text",
+                "text" =>
+                  "Message Type: NEW_TASK\nTask name: /root/other\nSender: /root\nPayload:\n"
+              },
+              %{"type" => "encrypted_content", "encrypted_content" => "mismatched-binding"}
             ]
           },
           %{
@@ -460,6 +508,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       assert {:ok,
               %{
                 "input" => [
+                  ^new_task_handoff,
+                  ^message_handoff,
+                  ^followup_handoff,
                   %{
                     "type" => "agent_message",
                     "content" => [%{"type" => "input_text", "text" => "plain keeper only"}]
@@ -468,6 +519,20 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
               }} = PayloadNormalizer.normalize(payload)
 
       assert {:ok, ^malformed_payload} = PayloadNormalizer.normalize(malformed_payload)
+    end
+
+    test "pins the Codex 0.146.0 agent v2 protocol fixture" do
+      fixture = AgentV2ContractFixture.load!()
+
+      assert fixture["codex_version"] == "0.146.0"
+      assert get_in(fixture, ["source", "tag"]) == "rust-v0.146.0"
+
+      assert get_in(fixture, ["handoffs", "spawn_agent", "message_type"]) == "NEW_TASK"
+      assert get_in(fixture, ["handoffs", "send_message", "message_type"]) == "MESSAGE"
+      assert get_in(fixture, ["handoffs", "followup_task", "message_type"]) == "NEW_TASK"
+
+      assert AgentV2ContractFixture.final_answer!() ==
+               "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\nSYNTHETIC_FINAL_ANSWER_SENTINEL"
     end
 
     test "omits neutral tiers, canonicalizes binary fast, and preserves other backend tiers" do
