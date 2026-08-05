@@ -15,6 +15,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
     request_log_fixture(pool, %{correlation_id: "req-closed-drawer"})
 
     {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    _ = await_request_logs(view)
 
     assert has_element?(view, "#request-log-detail-drawer-root")
     assert has_element?(view, "#request-log-detail-sidebar[role='dialog']")
@@ -56,6 +57,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
       })
 
     {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}&status=failed")
+    _ = await_request_logs(view)
 
     render_click(element(view, "#request-log-#{request.id}-open-details"))
 
@@ -112,6 +114,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
         ~p"/admin/request-logs?pool_id=#{pool.id}&selected_request_id=#{selected_request.id}"
       )
 
+    _ = await_request_logs(view)
+
     assert has_element?(view, "#request-log-detail-drawer[checked]")
     assert has_element?(view, "#request-log-detail-correlation-id", "req-refresh-selected")
     assert has_element?(view, "#request-log-row-#{selected_request.id}")
@@ -124,7 +128,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
     end
 
     send(view.pid, :refresh_request_logs_from_events)
-    _ = :sys.get_state(view.pid)
+    _ = await_request_logs(view)
 
     refute has_element?(view, "#request-log-row-#{selected_request.id}")
     assert has_element?(view, "#request-log-detail-drawer[checked]")
@@ -148,15 +152,22 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
 
     %{conn: admin_conn} = assigned_admin_conn(owner_scope, visible_pool, unique_user_email())
 
-    assert {:error, {:live_redirect, %{to: "/admin/request-logs"}}} =
-             live(admin_conn, ~p"/admin/request-logs?selected_request_id=#{hidden_request.id}")
+    {:ok, hidden_view, _html} =
+      live(admin_conn, ~p"/admin/request-logs?selected_request_id=#{hidden_request.id}")
+
+    _ = await_request_logs(hidden_view)
+    assert_patch(hidden_view, ~p"/admin/request-logs")
 
     missing_request_id = Ecto.UUID.generate()
 
-    assert {:error, {:live_redirect, %{to: "/admin/request-logs"}}} =
-             live(owner_conn, ~p"/admin/request-logs?selected_request_id=#{missing_request_id}")
+    {:ok, missing_view, _html} =
+      live(owner_conn, ~p"/admin/request-logs?selected_request_id=#{missing_request_id}")
+
+    _ = await_request_logs(missing_view)
+    assert_patch(missing_view, ~p"/admin/request-logs")
 
     {:ok, view, _html} = live(owner_conn, ~p"/admin/request-logs")
+    _ = await_request_logs(view)
 
     refute has_element?(view, "#request-log-detail-drawer[checked]")
     refute has_element?(view, "#request-log-detail-correlation-id", "req-hidden-drawer")
@@ -206,6 +217,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
 
     {:ok, view, _html} =
       live(conn, ~p"/admin/request-logs?selected_request_id=#{request.id}")
+
+    _ = await_request_logs(view)
 
     assert has_element?(view, "#request-log-detail-drawer[checked]")
     assert has_element?(view, "#request-log-detail-transport-failure-1", "Mint.TransportError")
@@ -277,6 +290,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
     ]
 
     {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    _ = await_request_logs(view)
 
     list_html = render(view)
     assert has_element?(view, "#request-log-row-#{valid_request.id}")
@@ -378,6 +392,27 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
     })
 
     %{request: request, attempt: attempt, identity: identity, assignment: assignment}
+  end
+
+  defp await_request_logs(view, attempts \\ 200)
+
+  defp await_request_logs(view, attempts) when attempts > 0 do
+    _ = render_async(view)
+    state = :sys.get_state(view.pid)
+
+    if state.socket.assigns.request_logs_loading? or
+         state.socket.assigns.request_logs_running? do
+      receive do
+      after
+        1 -> await_request_logs(view, attempts - 1)
+      end
+    else
+      state
+    end
+  end
+
+  defp await_request_logs(view, 0) do
+    flunk("request logs did not finish loading: #{inspect(:sys.get_state(view.pid))}")
   end
 
   defp assigned_admin_conn(scope, pool, email) do
