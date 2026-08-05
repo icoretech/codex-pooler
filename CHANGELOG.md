@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.16](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.15...codex-pooler-v0.5.16) (2026-08-05)
+
+
+### Bug Fixes
+
+* **deps:** update DaisyUI to v5.7.15 ([1f7c008](https://github.com/icoretech/codex-pooler/commit/1f7c0080c7d365a51679b89cb257c56c540fce22))
+* **responses:** accept nullable function output metadata ([821498b](https://github.com/icoretech/codex-pooler/commit/821498b07a4a0d5d496c9bce7e2f87f9d86118a2))
+
 ## [0.5.15](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.14...codex-pooler-v0.5.15) (2026-08-05)
 
 
