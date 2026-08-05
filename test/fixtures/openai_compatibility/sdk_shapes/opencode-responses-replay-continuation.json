@@ -34,6 +34,12 @@
     "function_call_replay": true,
     "function_call_namespace_replay": true,
     "structured_function_call_output": true,
+    "function_call_output_metadata": {
+      "optional_nullable_nonblank_string_keys": ["name", "namespace"],
+      "output_branch": true,
+      "legacy_result_branch": true,
+      "null_or_omitted": true
+    },
     "raw_payload_stored": false,
     "placeholder_values_only": true,
     "notes": [
