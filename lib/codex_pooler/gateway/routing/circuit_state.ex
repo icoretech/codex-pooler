@@ -214,9 +214,10 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
       do: {:error, :invalid_route_class}
 
   # Same degrade/retry policy as the BridgeRing side-effect writers: a
-  # reference-lock rollback (missing or reassigned pair) and a retried
-  # residual deadlock must skip the circuit write instead of failing the
-  # turn's finalization path; other errors keep their existing plumbing.
+  # reference-lock rollback (missing or reassigned pair) and a residual
+  # deadlock after the assignment holder is drained must skip the circuit
+  # write instead of failing the turn's finalization path; other errors keep
+  # their existing plumbing.
   defp run_failure_transaction(
          auth,
          model,
@@ -273,16 +274,22 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
     error in Postgrex.Error ->
       cond do
         deadlock?(error) and retry_left > 0 ->
-          run_failure_transaction(
-            auth,
-            model,
-            assignment,
-            route_class,
-            reason_code,
-            settings,
-            now,
-            retry_left - 1
-          )
+          case ReferenceLocks.await_assignment_lock_release(assignment.id) do
+            :ok ->
+              run_failure_transaction(
+                auth,
+                model,
+                assignment,
+                route_class,
+                reason_code,
+                settings,
+                now,
+                retry_left - 1
+              )
+
+            {:error, reason} ->
+              degrade_reference_skip({:error, reason}, assignment)
+          end
 
         deadlock?(error) ->
           log_skipped_circuit_write(assignment, "routing_side_effect_deadlock")

@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingLockingTest do
   alias Ecto.Adapters.SQL.Sandbox
 
   alias CodexPooler.Access.APIKey
+  alias CodexPooler.Accounting.RequestLifecycle.ReferenceLocks
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Persistence.{BridgeAffinity, BridgeDemotion, RoutingCircuitState}
   alias CodexPooler.Gateway.Routing.{BridgeRing, CircuitState}
@@ -122,6 +123,70 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingLockingTest do
       assert [%BridgeAffinity{} = affinity] = pool_rows(BridgeAffinity, fixture)
       assert affinity.pool_upstream_assignment_id == fixture.assignment.id
     after
+      cleanup_committed_fixture!(fixture)
+    end
+  end
+
+  test "deadlock retry barrier waits for the assignment holder without locking the identity" do
+    fixture = committed_routing_fixture!()
+    parent = self()
+    release_ref = make_ref()
+
+    holder_task =
+      Task.async(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          identity_id = Ecto.UUID.dump!(fixture.identity.id)
+
+          Repo.transaction(fn ->
+            %{rows: [[backend_pid]]} = SQL.query!(Repo, "SELECT pg_backend_pid()", [])
+            lock_assignments!(identity_id)
+            send(parent, {:assignment_holder_ready, release_ref, backend_pid})
+
+            receive do
+              {:assignment_holder_release, ^release_ref} -> :ok
+            after
+              @actor_timeout -> raise "assignment holder release timed out"
+            end
+
+            lock_identity!(identity_id)
+            :ok
+          end)
+        end)
+      end)
+
+    waiter_holder = {__MODULE__, make_ref()}
+
+    try do
+      assert_receive {:assignment_holder_ready, ^release_ref, holder_backend_pid},
+                     @barrier_timeout
+
+      waiter_ref = make_ref()
+
+      waiter_task =
+        Task.async(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            Repo.checkout(fn ->
+              %{rows: [[backend_pid]]} = SQL.query!(Repo, "SELECT pg_backend_pid()", [])
+              send(parent, {:assignment_waiter_ready, waiter_ref, backend_pid})
+              ReferenceLocks.await_assignment_lock_release(fixture.assignment.id)
+            end)
+          end)
+        end)
+
+      Process.put(waiter_holder, waiter_task)
+
+      assert_receive {:assignment_waiter_ready, ^waiter_ref, waiter_backend_pid}, @barrier_timeout
+
+      held_relations = await_lock_waiter!(waiter_backend_pid, holder_backend_pid)
+      refute "upstream_identities" in held_relations
+
+      send(holder_task.pid, {:assignment_holder_release, release_ref})
+
+      assert {:ok, :ok} = Task.await(holder_task, @actor_timeout)
+      assert :ok = Task.await(waiter_task, @actor_timeout)
+    after
+      shutdown_task(holder_task)
+      shutdown_task(Process.delete(waiter_holder))
       cleanup_committed_fixture!(fixture)
     end
   end

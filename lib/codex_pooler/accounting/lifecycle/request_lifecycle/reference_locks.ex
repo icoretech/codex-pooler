@@ -23,6 +23,24 @@ defmodule CodexPooler.Accounting.RequestLifecycle.ReferenceLocks do
     lock_pair!(upstream_identity_id, pool_upstream_assignment_id)
   end
 
+  @doc false
+  @spec await_assignment_lock_release(assignment_id()) ::
+          :ok | {:error, Metadata.accounting_error()}
+  def await_assignment_lock_release(pool_upstream_assignment_id) do
+    if Repo.in_transaction?() do
+      raise ArgumentError, "assignment release wait requires a fresh transaction"
+    end
+
+    Repo.transact(fn ->
+      lock_assignment!(pool_upstream_assignment_id)
+      {:ok, :ok}
+    end)
+    |> then(fn
+      {:ok, :ok} -> :ok
+      {:error, reason} -> {:error, reason}
+    end)
+  end
+
   defp lock_pair!(nil, nil), do: :ok
 
   defp lock_pair!(nil, _pool_upstream_assignment_id) do
@@ -41,13 +59,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.ReferenceLocks do
           lock: "FOR KEY SHARE"
       ) || rollback!(:upstream_identity_not_found, "upstream identity was not found")
 
-    assignment =
-      Repo.one(
-        from assignment in PoolUpstreamAssignment,
-          where: assignment.id == ^pool_upstream_assignment_id,
-          lock: "FOR SHARE"
-      ) ||
-        rollback!(:pool_upstream_assignment_not_found, "pool upstream assignment was not found")
+    assignment = lock_assignment!(pool_upstream_assignment_id)
 
     if assignment.upstream_identity_id == identity.id do
       :ok
@@ -57,6 +69,17 @@ defmodule CodexPooler.Accounting.RequestLifecycle.ReferenceLocks do
         "pool upstream assignment does not belong to upstream identity"
       )
     end
+  end
+
+  # A fresh assignment-only transaction cannot participate in the historical
+  # identity/assignment AB-BA cycle. Deadlock retries use it to let an
+  # assignment-first holder finish before reacquiring the canonical pair.
+  defp lock_assignment!(pool_upstream_assignment_id) do
+    Repo.one(
+      from assignment in PoolUpstreamAssignment,
+        where: assignment.id == ^pool_upstream_assignment_id,
+        lock: "FOR SHARE"
+    ) || rollback!(:pool_upstream_assignment_not_found, "pool upstream assignment was not found")
   end
 
   defp rollback!(code, message), do: Repo.rollback(Metadata.accounting_error(code, message))

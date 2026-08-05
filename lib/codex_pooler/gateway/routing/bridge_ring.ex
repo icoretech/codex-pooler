@@ -187,7 +187,8 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
   # fencing and reconciliation guards (production 40P01, 2026-07-22). Taking
   # the canonical reference locks first removes the cycle; lock or ownership
   # failures degrade to a logged skip because routing bookkeeping must never
-  # fail an already-finalized turn.
+  # fail an already-finalized turn. A residual deadlock first drains the
+  # assignment holder without retaining the identity lock, then retries once.
   defp locked_side_effect(side_effect, assignment, identity, fun) do
     run_locked_side_effect(side_effect, assignment, identity, fun, _retry_left = 1)
   end
@@ -208,7 +209,13 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
     error in Postgrex.Error ->
       cond do
         deadlock?(error) and retry_left > 0 ->
-          run_locked_side_effect(side_effect, assignment, identity, fun, retry_left - 1)
+          case ReferenceLocks.await_assignment_lock_release(assignment.id) do
+            :ok ->
+              run_locked_side_effect(side_effect, assignment, identity, fun, retry_left - 1)
+
+            {:error, reason} ->
+              log_skipped_side_effect(side_effect, assignment, identity, skip_code(reason))
+          end
 
         deadlock?(error) ->
           log_skipped_side_effect(
