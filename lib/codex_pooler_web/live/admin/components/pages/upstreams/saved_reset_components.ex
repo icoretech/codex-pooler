@@ -155,19 +155,25 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
           data-role="saved-reset-policy-trigger-card"
           class={trigger_card_class(@trigger_mode == "blocked")}
         >
+          <span
+            data-role="saved-reset-trigger-check"
+            class="pointer-events-none absolute right-2.5 top-2"
+          >
+            <.icon name="hero-check" class="size-3 text-primary" />
+          </span>
           <input
             id="saved-reset-policy-trigger-mode-blocked"
             type="radio"
             name="saved_reset_policy[trigger_mode]"
             value="blocked"
             checked={@trigger_mode == "blocked"}
-            class="radio radio-primary radio-sm mt-0.5"
+            class="sr-only"
           />
-          <span class="grid gap-1">
-            <span class="text-sm font-semibold leading-5 text-base-content">
+          <span class="grid min-w-0 gap-0.5">
+            <span class="text-[13px] font-semibold leading-tight text-base-content">
               Weekly quota blocked
             </span>
-            <span class="text-xs leading-5 text-base-content/60">
+            <span class="text-[11px] leading-4 text-base-content/55">
               Request traffic can recover weekly exhaustion. Expiration rescue runs only through scheduled account checks.
             </span>
           </span>
@@ -177,17 +183,23 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
           data-role="saved-reset-policy-trigger-card"
           class={trigger_card_class(@trigger_mode == "threshold")}
         >
+          <span
+            data-role="saved-reset-trigger-check"
+            class="pointer-events-none absolute right-2.5 top-2"
+          >
+            <.icon name="hero-check" class="size-3 text-primary" />
+          </span>
           <input
             id="saved-reset-policy-trigger-mode-threshold"
             type="radio"
             name="saved_reset_policy[trigger_mode]"
             value="threshold"
             checked={@trigger_mode == "threshold"}
-            class="radio radio-primary radio-sm mt-0.5"
+            class="sr-only"
           />
-          <span class="grid gap-1">
-            <span class="text-sm font-semibold leading-5 text-base-content">Near limit</span>
-            <span class="text-xs leading-5 text-base-content/60">
+          <span class="grid min-w-0 gap-0.5">
+            <span class="text-[13px] font-semibold leading-tight text-base-content">Near limit</span>
+            <span class="text-[11px] leading-4 text-base-content/55">
               Starts earlier: once every eligible account in the Pool reaches
               <input
                 id="saved-reset-policy-quota-threshold-percent"
@@ -203,7 +215,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
                 max="100"
                 step="1"
                 class={[
-                  "input input-xs mx-0.5 inline-block w-14 border-base-300 bg-base-100 px-1.5 text-center text-xs font-semibold tabular-nums",
+                  "input input-xs mx-0.5 inline-block w-14 border-base-300 bg-base-100 px-1.5 text-center text-[11px] font-semibold tabular-nums",
                   @threshold_errors != [] && "input-error"
                 ]}
               />% of the weekly quota window.
@@ -251,15 +263,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
     """
   end
 
-  # Same selection anatomy as the API-key policy mode cards, sized down for
-  # the dense policy panels. Selection is server-rendered from the form value
-  # (both forms phx-change validate); the app.css :has(:checked) rule doubles
-  # it client-side so the tint moves before the round trip lands.
+  # Radio-less selection card, same contract as the pool routing strategy
+  # cards: sr-only radio, check glyph as the selected indicator, tint recipe
+  # border-primary/60 + bg-primary/5. Selection tint is server-rendered from
+  # the form value and doubled client-side by the app.css :has(:checked) rule
+  # (the cockpit form is submit-only); the check glyph and focus ring are
+  # app.css-only for the same reason.
   defp trigger_card_class(selected?) do
     [
-      "flex cursor-pointer items-start gap-3 rounded-box border p-3 transition-colors hover:bg-base-200",
+      "relative flex min-w-0 cursor-pointer items-start gap-2.5 rounded-box border p-2.5 transition-colors hover:border-primary/50",
       if(selected?,
-        do: "border-primary bg-primary/10",
+        do: "border-primary/60 bg-primary/5",
         else: "border-base-300 bg-base-100"
       )
     ]

@@ -186,7 +186,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                         Strategy and fan-out size used for runtime requests
                       </span>
                     </p>
-                    <span class="ml-auto hidden items-center gap-2 group-has-[.strategy-bridge:checked]/selpolicy:flex">
+                    <span class="ml-auto flex items-center gap-2 opacity-45 transition-opacity group-has-[.strategy-bridge:checked]/selpolicy:opacity-100">
                       <label
                         for={@form[:bridge_ring_size].id}
                         class="text-[0.6rem] font-bold uppercase tracking-wide text-base-content/55"
@@ -211,20 +211,26 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                   >
                     <div
                       :for={{label, value} <- @strategy_options}
-                      class="relative min-w-0 rounded-box border border-base-300 bg-base-100 p-2.5 transition-colors hover:border-primary/50 has-[.strategy-radio:checked]:border-primary/60 has-[.strategy-radio:checked]:bg-primary/5"
+                      class="group/strategy relative min-w-0 rounded-box border border-base-300 bg-base-100 transition-colors hover:border-primary/50 has-[.strategy-radio:checked]:border-primary/60 has-[.strategy-radio:checked]:bg-primary/5 has-[.strategy-radio:focus-visible]:outline has-[.strategy-radio:focus-visible]:outline-2 has-[.strategy-radio:focus-visible]:outline-offset-2 has-[.strategy-radio:focus-visible]:outline-primary"
                     >
-                      <span
-                        :if={value == "bridge_ring"}
-                        class="absolute right-2.5 top-2 text-[0.56rem] font-bold uppercase tracking-wide text-primary/70"
-                      >
-                        Default
+                      <span class="pointer-events-none absolute right-2.5 top-2 inline-flex items-center gap-1">
+                        <.icon
+                          name="hero-check"
+                          class="hidden size-3 text-primary group-has-[.strategy-radio:checked]/strategy:inline-block"
+                        />
+                        <span
+                          :if={value == "bridge_ring"}
+                          class="text-[0.56rem] font-bold uppercase tracking-wide text-primary/70"
+                        >
+                          Default
+                        </span>
                       </span>
-                      <label class="flex min-w-0 cursor-pointer items-start gap-2.5">
+                      <label class="flex min-w-0 cursor-pointer items-start gap-2.5 p-2.5">
                         <input
                           id={"#{@form[:routing_strategy].id}_#{value}"}
                           type="radio"
                           class={[
-                            "strategy-radio radio radio-primary radio-xs mt-0.5 shrink-0",
+                            "strategy-radio sr-only",
                             value == "bridge_ring" && "strategy-bridge"
                           ]}
                           name={@form[:routing_strategy].name}
@@ -523,7 +529,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
   defp pool_step_heading(step), do: Map.fetch!(@pool_step_headings, normalize_step(step))
 
   defp pool_strategy_description("bridge_ring"),
-    do: "Balances work across upstreams, honoring continuity, cache locality, and quota evidence."
+    do: "Balances upstreams by continuity, cache locality, and quota evidence."
 
   defp pool_strategy_description("deterministic_rotation"),
     do: "Rotates which upstream goes first per session, in a fixed, predictable order."

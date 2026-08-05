@@ -705,6 +705,10 @@ verified live as the orange "Pro" / green "Free" pills.
 </label>
 ```
 
+The single-choice radio cards on the pool routing step and the saved-reset
+trigger have moved to the radio-less selection card contract (§5.19); the
+policy mode cards above still carry visible radios and predate it.
+
 ### 5.15 Filters, empty state, notices, buttons, flash, theme toggle
 
 - **`filter_form/1`** (shared components.ex): a `.form` with
@@ -998,6 +1002,55 @@ stopped moving is chrome, and chrome that only appears in one state is the kind
 that gets written as an extra row. The range is what truncates when the line is
 tight; the way back to live never does. Returning to page one drops the pin, so
 live is always one click away and never something the operator has to arrange.
+
+### 5.19 Selection card (radio-less choice card)
+
+- **Source:** routing strategy cards in
+  [`wizard_components.ex`](lib/codex_pooler_web/live/admin/components/pages/pools/wizard_components.ex)
+  (pool wizard, Routing step) and trigger-mode cards in
+  [`saved_reset_components.ex`](lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_components.ex)
+  (saved-reset policy panels); decision record in the "Selection cards ·
+  Radio-less ✓" artifact (2026-08-05).
+- **Purpose:** a single-choice option card whose border and wash carry the
+  selection and whose check glyph is the non-color selected channel. There is
+  no visible radio control.
+- **Anatomy:** card shell `rounded-box border border-base-300 bg-base-100`;
+  the `p-2.5` padding lives on the inner `<label>` so the entire card is the
+  click target. Title `text-[13px] font-semibold leading-tight`; description
+  `text-[11px] leading-4 text-base-content/55`, worded to hold **two lines at
+  the narrowest column** the grid produces. Corner cluster
+  `absolute right-2.5 top-2 pointer-events-none`: a `hero-check size-3
+  text-primary` glyph rendered only while the card is checked, composing with
+  a permanent micro tag when one exists (the Bridge ring card reads
+  "✓ DEFAULT" while selected; the tag alone otherwise).
+- **States:** hover `border-primary/50`; checked `border-primary/60
+  bg-primary/5` (the §5.14 wash recipe is retired for these cards); focus
+  ring `outline-2 outline-primary outline-offset-2` driven by the hidden
+  radio's `:focus-visible`.
+- **Mechanism:** the radio input stays in the DOM as `sr-only`, so radiogroup
+  semantics, arrow-key navigation, and form submission are unchanged. The
+  pool wizard drives state with Tailwind `has-[]`/`group-has-[]` utilities;
+  the saved-reset cards use top-level `:has()` rules in `app.css` because the
+  cockpit form is submit-only and nested `&:has` re-invalidation proved
+  unreliable there. New call sites should prefer the utility form unless they
+  hit the same constraint.
+- **Dependent controls stay put:** a control owned by one option (Ring size
+  for Bridge ring) is always rendered and dims to `opacity-45` while its
+  option is unselected — never `hidden`, so changing the selection cannot
+  shift the layout.
+
+```heex
+<div class="group/strategy relative min-w-0 rounded-box border border-base-300 bg-base-100 transition-colors hover:border-primary/50 has-[.strategy-radio:checked]:border-primary/60 has-[.strategy-radio:checked]:bg-primary/5 …">
+  <span class="pointer-events-none absolute right-2.5 top-2 inline-flex items-center gap-1">
+    <.icon name="hero-check" class="hidden size-3 text-primary group-has-[.strategy-radio:checked]/strategy:inline-block" />
+    <span :if={default?} class="text-[0.56rem] font-bold uppercase tracking-wide text-primary/70">Default</span>
+  </span>
+  <label class="flex min-w-0 cursor-pointer items-start gap-2.5 p-2.5">
+    <input type="radio" class="strategy-radio sr-only" … />
+    <span class="grid min-w-0 gap-0.5">…title + two-line description…</span>
+  </label>
+</div>
+```
 
 ## 6. Components — API Key Observatory extension
 

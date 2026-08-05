@@ -1732,11 +1732,26 @@ body {
   opacity: 0.55;
 }
 
-/* Trigger-mode radio cards: selected tint as a top-level :has rule.
+/* Trigger-mode selection cards: selected state as top-level :has rules.
    Tailwind's has-[] utilities compile to nested &:has rules, whose dynamic
    re-invalidation is unreliable in Chromium; the cockpit form is
-   submit-only, so the tint must move purely client-side. */
+   submit-only, so tint, check glyph, and focus ring must move purely
+   client-side. Recipe matches the pool routing strategy cards. */
 [data-role="saved-reset-policy-trigger-card"]:has(input[type="radio"]:checked) {
-  border-color: var(--color-primary);
-  background-color: color-mix(in oklab, var(--color-primary) 10%, transparent);
+  border-color: color-mix(in oklab, var(--color-primary) 60%, transparent);
+  background-color: color-mix(in oklab, var(--color-primary) 5%, transparent);
+}
+
+[data-role="saved-reset-trigger-check"] {
+  display: none;
+}
+
+[data-role="saved-reset-policy-trigger-card"]:has(input[type="radio"]:checked)
+  [data-role="saved-reset-trigger-check"] {
+  display: inline-flex;
+}
+
+[data-role="saved-reset-policy-trigger-card"]:has(input[type="radio"]:focus-visible) {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
 }
