@@ -1653,6 +1653,108 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert provider_credit_consume_count(fake) == 3
     end
 
+    @tag :saved_reset_recovery_list_settlement_race
+    test "a stale list-redeemed settlement cannot finalize over a newer dispatch reservation" do
+      parent = self()
+      list_release = make_ref()
+      consume_release = make_ref()
+      {:ok, fake} = recovery_race_fake()
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      fixture = committed_chatgpt_recovery_fixture!(fake)
+      on_exit(fn -> cleanup_committed_recovery_fixture!(fixture) end)
+
+      # Both replicas need patient clients: the held responses must be
+      # delivered after the choreography completes, not turned into client
+      # timeouts.
+      fixture = Map.put(fixture, :receive_timeout, 15_000)
+
+      FakeUpstream.set_mode(fake, {
+        :sequence,
+        [
+          # The stale replica's list already shows the target redeemed, held
+          # before headers so a second replica can reserve dispatch two while
+          # this no-new-dispatch settlement is still in flight.
+          FakeUpstream.barrier_json_response(
+            %{
+              "credits" => [
+                %{
+                  "id" => fixture.credit_id,
+                  "status" => "redeemed",
+                  "redeemed_at" => DateTime.to_iso8601(fixture.now)
+                }
+              ]
+            },
+            notify: parent,
+            release_ref: list_release
+          ),
+          {:json, 200, %{"credits" => [%{"id" => fixture.credit_id, "status" => "available"}]}},
+          FakeUpstream.barrier_json_response(%{"code" => "reset"},
+            notify: parent,
+            release_ref: consume_release
+          ),
+          {:json, 200, usage_payload(0)}
+        ]
+      })
+
+      stale_task = start_recovery_replica_task(parent, :stale_list, fixture)
+      assert_receive {:recovery_replica_ready, :stale_list}, 5_000
+      send(stale_task.pid, :start_recovery)
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, stale_pid, ^list_release},
+                     5_000
+
+      reserving_fixture = %{fixture | now: DateTime.add(fixture.now, 6, :minute)}
+      reserving_task = start_recovery_replica_task(parent, :reserving, reserving_fixture)
+      assert_receive {:recovery_replica_ready, :reserving}, 5_000
+      send(reserving_task.pid, :start_recovery)
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, reserving_pid,
+                      ^consume_release},
+                     5_000
+
+      redemption_keys = ["saved_reset_redemption", "saved_reset_redemption_target"]
+
+      reserved =
+        run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata
+        |> Map.take(redemption_keys)
+
+      assert reserved["saved_reset_redemption"]["provider_replay"]["provider_dispatches"] == 2
+      assert is_binary(reserved["saved_reset_redemption_target"])
+
+      send(stale_pid, {:fake_upstream_release_timeout, list_release})
+
+      # The delivered list settles the stale replica, but the dispatch fence
+      # rejects its captured count (one) against the persisted reservation
+      # (two), and an attempt that has ever dispatched resolves the CAS loss
+      # as ambiguous rather than a silent success: no terminalization, no
+      # locator delete, nothing written over the newer reservation.
+      assert {:stale_list, {:error, :saved_reset_consume_outcome_ambiguous}} =
+               Task.await(stale_task, 15_000)
+
+      after_stale =
+        run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata
+        |> Map.take(redemption_keys)
+
+      assert after_stale == reserved
+
+      send(reserving_pid, {:fake_upstream_release_timeout, consume_release})
+
+      assert {:reserving, {:ok, %{status: :succeeded, applied?: true}}} =
+               Task.await(reserving_task, 15_000)
+
+      persisted =
+        run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end).metadata[
+          "saved_reset_redemption"
+        ]
+
+      assert persisted["result"]["applied"] == true
+      assert persisted["provider_replay"]["provider_dispatches"] == 2
+
+      # Fixture dispatch one plus exactly the reserving replica's POST.
+      assert provider_credit_consume_count(fake) == 2
+    end
+
     test "a finalizer persistence failure after a reserved ChatGPT POST stays ambiguous" do
       {:ok, fake} =
         FakeUpstream.start_link(
@@ -6222,7 +6324,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         fixture.attempt_id,
         fixture.generation,
         now: fixture.now,
-        receive_timeout: 1_000
+        receive_timeout: Map.get(fixture, :receive_timeout, 1_000)
       )
 
     {role, result}
