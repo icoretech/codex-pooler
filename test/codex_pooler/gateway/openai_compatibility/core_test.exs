@@ -1527,6 +1527,110 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       end)
     end
 
+    test "function call output replay accepts nullable metadata and preserves strings" do
+      input = [
+        %{
+          "type" => "function_call",
+          "id" => "fc_fixture_metadata",
+          "call_id" => "call_fixture_metadata",
+          "name" => "lookup",
+          "namespace" => "browser.search",
+          "arguments" => "{}"
+        },
+        %{
+          "type" => "function_call_output",
+          "id" => "fco_fixture_metadata",
+          "call_id" => "call_fixture_metadata",
+          "name" => "lookup",
+          "namespace" => "browser.search",
+          "output" => "synthetic tool output"
+        }
+      ]
+
+      assert {:ok, %{payload: coerced}} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "previous_response_id" => "resp_fixture_metadata_previous",
+                 "input" => input
+               })
+
+      assert [call, output] = coerced["input"]
+      assert coerced["previous_response_id"] == "resp_fixture_metadata_previous"
+
+      assert call["namespace"] == "browser.search"
+      assert call["name"] == "lookup"
+      assert output["namespace"] == "browser.search"
+      assert output["name"] == "lookup"
+    end
+
+    test "function call output replay rejects malformed or unknown metadata" do
+      valid_item = %{
+        "type" => "function_call_output",
+        "call_id" => "call_fixture_metadata",
+        "name" => "lookup",
+        "namespace" => "browser.search",
+        "output" => "synthetic tool output"
+      }
+
+      for {field, value} <- [
+            {"name", " "},
+            {"name", 123},
+            {"namespace", " "},
+            {"namespace", 123},
+            {"unknown", "value"}
+          ] do
+        assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => [Map.put(valid_item, field, value)]
+                 })
+      end
+
+      for field <- ["name", "namespace"] do
+        assert {:ok, %{payload: %{"input" => [output]}}} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => [Map.put(valid_item, field, nil)]
+                 })
+
+        assert output[field] == nil
+      end
+
+      assert {:ok, %{payload: %{"input" => [output]}}} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => [Map.drop(valid_item, ["name", "namespace"])]
+               })
+
+      refute Map.has_key?(output, "name")
+      refute Map.has_key?(output, "namespace")
+    end
+
+    test "legacy function call output result accepts nullable replay metadata" do
+      valid_item = %{
+        "type" => "function_call_output",
+        "call_id" => "call_fixture_legacy_result",
+        "name" => "lookup",
+        "namespace" => nil,
+        "result" => "synthetic legacy result"
+      }
+
+      assert {:ok, %{payload: %{"input" => [output]}}} =
+               Responses.coerce(%{"model" => "gpt-fixture-text", "input" => [valid_item]})
+
+      assert output["name"] == "lookup"
+      assert output["namespace"] == nil
+      assert output["result"] == "synthetic legacy result"
+
+      for {field, value} <- [{"name", " "}, {"namespace", 123}] do
+        assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => [Map.put(valid_item, field, value)]
+                 })
+      end
+    end
+
     test "function call replay baseline accepts and preserves supported items" do
       input = [
         %{

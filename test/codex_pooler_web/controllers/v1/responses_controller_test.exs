@@ -1094,6 +1094,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
             %{
               "type" => "function_call_output",
               "call_id" => tool_call_id,
+              "name" => "lookup",
+              "namespace" => "browser.search",
               "output" => "{\"ok\":true}"
             },
             %{
@@ -1132,6 +1134,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
       assert hd(captured.json["input"])["id"] == "msg_v1_ws_safe_reference"
       assert Enum.at(captured.json["input"], 1)["call_id"] == tool_call_id
+      assert Enum.at(captured.json["input"], 1)["name"] == "lookup"
+      assert Enum.at(captured.json["input"], 1)["namespace"] == "browser.search"
       assert Enum.at(captured.json["input"], 2)["role"] == "user"
 
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -3578,6 +3582,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
           %{
             "type" => "function_call_output",
             "call_id" => tool_call_id,
+            "name" => "lookup",
+            "namespace" => "browser.search",
             "output" => "{\"ok\":true}"
           },
           %{
@@ -3604,6 +3610,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert hd(captured.json["input"])["id"] == "msg_v1_http_safe_reference"
     assert Enum.at(captured.json["input"], 1)["call_id"] == tool_call_id
+    assert Enum.at(captured.json["input"], 1)["name"] == "lookup"
+    assert Enum.at(captured.json["input"], 1)["namespace"] == "browser.search"
     assert Enum.at(captured.json["input"], 2)["role"] == "user"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))

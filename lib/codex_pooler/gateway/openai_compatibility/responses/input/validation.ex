@@ -498,6 +498,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
                  "call_id",
                  "output",
                  "id",
+                 "name",
+                 "namespace",
                  "caller",
                  "metadata",
                  @metadata_passthrough_key
@@ -505,6 +507,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
              :ok <- validate_nonblank(Map.get(item, "call_id")),
              :ok <- validate_optional_item_metadata(item),
              :ok <- validate_optional_id(item),
+             :ok <- validate_nullable_optional_name(item),
+             :ok <- validate_nullable_optional_namespace(item),
              :ok <- validate_optional_caller(item) do
           validate_function_call_output(Map.get(item, "output"))
         end
@@ -516,14 +520,18 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
                  "call_id",
                  "result",
                  "id",
+                 "name",
+                 "namespace",
                  "caller",
                  "metadata",
                  @metadata_passthrough_key
                ]),
              :ok <- validate_optional_item_metadata(item),
              :ok <- validate_nonblank(Map.get(item, "call_id")),
-             :ok <- validate_optional_caller(item) do
-          validate_optional_id(item)
+             :ok <- validate_optional_id(item),
+             :ok <- validate_nullable_optional_name(item),
+             :ok <- validate_nullable_optional_namespace(item) do
+          validate_optional_caller(item)
         end
 
       true ->
@@ -617,6 +625,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
   defp validate_optional_name(_item), do: :ok
+
+  defp validate_nullable_optional_namespace(%{"namespace" => nil}), do: :ok
+  defp validate_nullable_optional_namespace(item), do: validate_optional_namespace(item)
+
+  defp validate_nullable_optional_name(%{"name" => nil}), do: :ok
+  defp validate_nullable_optional_name(item), do: validate_optional_name(item)
 
   defp validate_optional_caller(%{"caller" => %{"type" => "direct"} = caller}),
     do: validate_exact_item_keys(caller, ["type"])

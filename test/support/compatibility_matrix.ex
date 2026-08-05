@@ -932,6 +932,10 @@ defmodule CodexPooler.CompatibilityMatrix do
             }
           },
           function_call_output: %{
+            optional_nullable_nonblank_string_metadata: ["name", "namespace"],
+            null_or_omitted: true,
+            invalid_metadata: ["blank_string", "non_string"],
+            legacy_result_branch: true,
             caller: %{
               types: ["direct", "program"],
               program_requires: ["caller_id"],
