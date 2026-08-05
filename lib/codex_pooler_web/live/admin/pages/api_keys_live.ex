@@ -248,6 +248,12 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
 
   def handle_info({Events, _event}, socket), do: {:noreply, socket}
 
+  # Sent when the pause gate had to collapse two held events into one, so an
+  # arrival this page would have acted on may not be among what it replays.
+  def handle_info(:live_updates_resumed, socket) do
+    {:noreply, load_api_keys(socket, reset_form: false, clear_secret: false)}
+  end
+
   @impl true
   def render(assigns) do
     assigns =

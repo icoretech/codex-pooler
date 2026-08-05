@@ -1,8 +1,18 @@
 // Pausing auto-refresh belongs to the reading session, not to the account: a
 // second tab stays live, a new tab starts live, and the choice survives moving
 // between admin pages. sessionStorage is exactly that scope.
-const defaultStorage = () =>
-	typeof sessionStorage === "undefined" ? null : sessionStorage;
+// `typeof` is not a safe test here: sessionStorage is a global accessor, so
+// reading it invokes a getter that throws outright when storage is denied. This
+// runs at module scope, which means an escape takes the whole admin bundle with
+// it — no LiveSocket, every page a dead static render — rather than costing the
+// toggle its memory.
+export const defaultStorage = () => {
+	try {
+		return typeof sessionStorage === "undefined" ? null : sessionStorage;
+	} catch {
+		return null;
+	}
+};
 
 export const LIVE_UPDATES_KEY = "codexPooler.liveUpdatesPaused";
 

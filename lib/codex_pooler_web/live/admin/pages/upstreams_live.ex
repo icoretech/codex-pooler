@@ -93,7 +93,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
 
   @impl true
   def handle_info(:reload_upstreams_from_events, socket) do
-    LiveUpdatesHooks.unless_paused(socket, &resume_upstreams_reload/1)
+    # The timer that sent this has fired; a hold must not leave the assign
+    # naming it, or every later debounce coalesces onto nothing.
+    socket
+    |> assign(:upstreams_reload_timer, nil)
+    |> LiveUpdatesHooks.unless_paused(&resume_upstreams_reload/1)
   end
 
   def handle_info(:live_updates_resumed, socket) do
@@ -353,9 +357,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     end
   end
 
+  # Cancelling rather than only forgetting: on the resumed path a replayed event
+  # has just armed a fresh debounce, and dropping the reference without killing
+  # the timer leaves it to fire into a second reload.
   defp resume_upstreams_reload(socket) do
     socket
-    |> assign(:upstreams_reload_timer, nil)
+    |> cancel_upstreams_reload_timer()
     |> reload_upstreams()
   end
 

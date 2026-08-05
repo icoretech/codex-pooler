@@ -20,9 +20,15 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
 
     * a debounce already in flight when the operator pauses. Pages guard their
       own reload with `paused?/1` and call `hold/1`, or the list moves up to one
-      debounce after the click.
+      debounce after the click. A page that holds a debounce whose timer has
+      already fired must also stop naming that timer, or every later one
+      coalesces onto a reference that will never send again.
     * a refresh that is not driven by a Pool event — a fallback timer, or
       another domain's events. Those pass this gate untouched.
+
+  Every page this fronts needs a `:live_updates_resumed` clause. It arrives when
+  a page held its own reload, and when the gate had to collapse two held events
+  into one — neither of which the page can see for itself.
   """
 
   import Phoenix.Component, only: [assign: 3]
@@ -123,19 +129,27 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
   defp gate_live_update(_message, socket), do: {:cont, socket}
 
   # Events carry a generated id and a timestamp, so no two are equal and
-  # deduplicating on the whole message never matches. What decides whether a
-  # page reloads is the pool and the topics; everything else is provenance.
-  # Keying on that pair bounds the map at pools times topic-sets, and keeps the
-  # newest message for each — so a resume cannot silently drop the one arrival
-  # a page was waiting for.
+  # deduplicating on the whole message never matches. The pair below is what
+  # decides a reload for nearly every page, and it bounds the map at pools times
+  # topic-sets — where the payload does not, since a request-log event names a
+  # request id and a paused hour of traffic would hold one message per request.
+  # A page that reads further than this pair is covered by `put_held/3`.
   defp routing_key(payload) when is_map(payload) do
     {Map.get(payload, :pool_id), Map.get(payload, :topics)}
   end
 
   defp routing_key(payload), do: payload
 
+  # Collapsing is lossy for any page whose scope check reads more of the payload
+  # than this key does — the upstream cockpit compares an identity id, so a
+  # sibling identity's event in the same pool overwrites the one it was waiting
+  # for. A page cannot be told which arrival it lost, so a collapse arms its own
+  # refresh instead, which resume sends unconditionally.
   defp put_held(%Socket{} = socket, key, message) do
-    assign(socket, @held_assign, Map.put(socket.assigns[@held_assign] || %{}, key, message))
+    held = socket.assigns[@held_assign] || %{}
+    socket = assign(socket, @held_assign, Map.put(held, key, message))
+
+    if Map.has_key?(held, key), do: hold(socket), else: socket
   end
 
   # The toggle reports the session's state rather than asking to flip it, so a
@@ -180,13 +194,14 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
   # so each page reacts exactly as it would have unpaused — its own scope check,
   # its own debounce, which is what collapses a paused hour into one rebuild.
   defp resume(%Socket{} = socket) do
-    messages = held(socket)
-    Enum.each(messages, &send(self(), &1))
+    Enum.each(held(socket), &send(self(), &1))
 
-    # A page that held its own reload only needs telling when nothing was
-    # replayed to it: a replayed event already produces the rebuild, and sending
-    # both would run two. Order is explicit rather than left to map traversal.
-    if messages == [] and socket.assigns[@page_held_assign] do
+    # A page that held its own reload is told so unconditionally. This gate holds
+    # every Pool event, while a page acts only on the ones its own filters
+    # accept, so a replay is not a rebuild: an event for a pool the page is not
+    # watching replays into nothing. Making the signal conditional on an empty
+    # replay left that page resuming into a list that never redraws.
+    if socket.assigns[@page_held_assign] do
       send(self(), :live_updates_resumed)
     end
 

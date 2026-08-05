@@ -157,8 +157,13 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
     end
   end
 
+  # The debounce timer has fired by the time this arrives. Clearing the assign
+  # first keeps a hold from latching it: a stale reference makes every later
+  # `schedule_jobs_reload/1` coalesce onto a timer that will never send.
   def handle_info(:refresh_jobs, socket) do
-    LiveUpdatesHooks.unless_paused(socket, &refresh_jobs/1)
+    socket
+    |> assign(:jobs_reload_timer, nil)
+    |> LiveUpdatesHooks.unless_paused(&refresh_jobs/1)
   end
 
   # The fallback keeps ticking so the page is current the moment it resumes,

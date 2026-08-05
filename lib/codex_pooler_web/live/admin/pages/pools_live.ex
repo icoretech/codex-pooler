@@ -386,8 +386,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     end
   end
 
+  # Clearing first: a replayed usage event has just armed the traffic debounce,
+  # and leaving its token alive lets it fire a second async load behind this one.
   def handle_info(:live_updates_resumed, socket) do
-    {:noreply, start_pool_traffic_load(socket)}
+    {:noreply, socket |> clear_pool_traffic_refresh() |> start_pool_traffic_load()}
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}

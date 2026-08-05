@@ -75,7 +75,12 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
     end
   end
 
+  # The timer that sent this has already fired, so the assign must stop naming
+  # it before anything else: holding while it still answers `is_reference/1`
+  # leaves every later debounce coalescing onto a timer that never arrives.
   def handle_info(:reload_stats_dashboard, socket) do
+    socket = assign(socket, :stats_reload_timer, nil)
+
     if LiveUpdatesHooks.paused?(socket) do
       {:noreply, LiveUpdatesHooks.hold(socket)}
     else
@@ -83,8 +88,13 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
     end
   end
 
+  # Resuming replays the held events first, and a relevant one arms a fresh
+  # debounce on its way past. Cancelling it here is what keeps a resume to a
+  # single rebuild instead of this one plus the one the replay just scheduled.
   def handle_info(:live_updates_resumed, socket) do
-    reload_stats_dashboard(socket)
+    socket
+    |> cancel_stats_reload_timer()
+    |> reload_stats_dashboard()
   end
 
   defp reload_stats_dashboard(socket) do

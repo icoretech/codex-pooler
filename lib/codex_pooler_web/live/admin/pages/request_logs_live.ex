@@ -159,8 +159,14 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
     end
   end
 
+  # The debounce timer has fired by the time this arrives, so the assign must
+  # stop naming it before anything else. Holding it while it still answers
+  # `is_reference/1` makes every later `schedule_request_logs_refresh/1`
+  # coalesce onto a timer that will never send.
   def handle_info(:refresh_request_logs_from_events, socket) do
-    LiveUpdatesHooks.unless_paused(socket, &refresh_request_logs_from_events/1)
+    socket
+    |> assign(:request_logs_reload_timer, nil)
+    |> LiveUpdatesHooks.unless_paused(&refresh_request_logs_from_events/1)
   end
 
   def handle_info(:live_updates_resumed, socket) do
@@ -425,7 +431,11 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
     last_page = LogPagination.last_page(request_logs)
 
     cond do
-      total == 0 and page > 1 ->
+      # A pin names a window counted from a row. With no rows there is no such
+      # window, and the way back is inside the pager, which an empty list does
+      # not render — so a pinned empty result would be a frozen page with no
+      # exit. Unpinning is the only state that can recover itself.
+      total == 0 and (page > 1 or not is_nil(snapshot_at)) ->
         patch_request_log_window(socket, params, 1, nil)
 
       # A page number is an offset into a window. Without the cursor that window

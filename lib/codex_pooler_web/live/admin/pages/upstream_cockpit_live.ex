@@ -78,6 +78,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
     end
   end
 
+  # The pause gate collapses held events by pool and topics, which is coarser
+  # than the identity check above: a sibling identity's event in the same pool
+  # can overwrite this one's. The gate says so instead of guessing, and the only
+  # honest answer from here is to reload.
+  def handle_info(:live_updates_resumed, socket) do
+    {:noreply, load_cockpit(socket)}
+  end
+
   @impl true
   def handle_info({:poll_oauth_relink_device, flow_id}, socket) do
     {:noreply, OAuthRelinkWorkflow.poll_device(socket, flow_id, &refresh_oauth_flow_state/1)}

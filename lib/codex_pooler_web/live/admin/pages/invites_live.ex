@@ -170,6 +170,12 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
     end
   end
 
+  # Sent when the pause gate had to collapse two held events into one, so an
+  # arrival this page would have acted on may not be among what it replays.
+  def handle_info(:live_updates_resumed, socket) do
+    {:noreply, load_invites(socket, socket.assigns.filter_values)}
+  end
+
   @impl true
   def render(assigns) do
     assigns =

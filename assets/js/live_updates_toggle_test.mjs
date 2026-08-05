@@ -4,6 +4,7 @@ import test from "node:test";
 import {
 	applyState,
 	buildLiveUpdatesToggle,
+	defaultStorage,
 	LIVE_UPDATES_KEY,
 	liveUpdatesConnectParams,
 	readPaused,
@@ -25,7 +26,9 @@ const stubElement = () => {
 		root,
 		ownerDocument: { documentElement: root },
 		dataset: {},
-		attrs: {},
+		// Server-rendered, so the stub carries it: asserting it survives is
+		// vacuous against an element that never had one.
+		attrs: { "aria-label": "Pause live updates" },
 		listeners: {},
 		setAttribute(name, value) { this.attrs[name] = value; },
 		addEventListener(name, fn) { this.listeners[name] = fn; },
@@ -43,6 +46,26 @@ const mountHook = (storage) => {
 	bound.mounted();
 	return { hook: bound, el, pushed };
 };
+
+test("reading the storage global cannot escape, even when it throws", () => {
+	// sessionStorage is an accessor, so `typeof` invokes its getter — which
+	// throws when storage is denied outright. This is acquired at module scope,
+	// where an escape costs the whole admin bundle rather than the toggle.
+	Object.defineProperty(globalThis, "sessionStorage", {
+		configurable: true,
+		get() {
+			throw new Error("SecurityError: storage is disabled");
+		},
+	});
+
+	try {
+		assert.doesNotThrow(() => defaultStorage());
+		assert.equal(defaultStorage(), null);
+		assert.deepEqual(liveUpdatesConnectParams(), { live_updates_paused: false });
+	} finally {
+		delete globalThis.sessionStorage;
+	}
+});
 
 test("storage falls open to live when it throws", () => {
 	assert.equal(readPaused({ getItem() { throw new Error("denied"); } }), false);
@@ -62,7 +85,11 @@ test("applyState flips only the pressed state, never the accessible name", () =>
 	applyState(el, true);
 	assert.equal(el.dataset.paused, "true");
 	assert.equal(el.attrs["aria-pressed"], "true");
-	assert.equal(el.attrs["aria-label"], undefined, "the name is server-rendered and stays put");
+	assert.equal(
+		el.attrs["aria-label"],
+		"Pause live updates",
+		"the name is server-rendered and stays put",
+	);
 	// CSS keys off the root attribute the pre-paint script also writes.
 	assert.equal(el.root.attrs["data-live-updates-paused"], "true");
 

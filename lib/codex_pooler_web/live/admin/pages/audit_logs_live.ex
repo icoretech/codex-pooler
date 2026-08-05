@@ -185,7 +185,10 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
     last_page = LogPagination.last_page(audit_logs)
 
     cond do
-      total == 0 and page > 1 ->
+      # See request logs: a pin names a window counted from a row, an empty
+      # result has no such row, and the way back lives in a pager an empty list
+      # does not render.
+      total == 0 and (page > 1 or not is_nil(cursor)) ->
         patch_window(socket, params, 1, nil)
 
       # See request logs: an unpinned page number names no window, and pinning
