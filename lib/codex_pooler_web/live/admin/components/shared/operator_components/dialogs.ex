@@ -322,7 +322,12 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
     ~H"""
     <div class="contents group/rolegate">
       <fieldset id={@field_prefix <> "_role"} class="grid gap-2 md:col-span-2">
-        <legend class="label mb-1">Operator role</legend>
+        <legend class="mb-1 text-[0.6rem] font-bold uppercase tracking-wide text-base-content/50">
+          Operator role
+          <span class="ml-1 text-[11px] font-medium normal-case tracking-normal text-base-content/45">
+            Instance-wide owner or Pool-scoped admin
+          </span>
+        </legend>
         <div class="grid gap-2 sm:grid-cols-2">
           <.operator_role_card
             id={@field_prefix <> "_role_instance_admin"}
@@ -343,7 +348,12 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
         </div>
       </fieldset>
       <div class="fieldset mb-2 transition-opacity md:col-span-2 group-has-[.operator-role-owner:checked]/rolegate:opacity-45">
-        <span class="label mb-1">Assigned Pools for instance admins</span>
+        <p class="mb-1 text-[0.6rem] font-bold uppercase tracking-wide text-base-content/50">
+          Assigned Pools
+          <span class="ml-1 text-[11px] font-medium normal-case tracking-normal text-base-content/45">
+            Apply only while the role is instance admin; owners keep instance-wide access
+          </span>
+        </p>
         <input type="hidden" name={@field_prefix <> "[pool_ids][]"} value="" />
         <div id={@field_prefix <> "_pool_ids_group"} class="grid gap-2 sm:grid-cols-2">
           <p :if={@pool_options == []} class="text-sm text-base-content/60 sm:col-span-2">
@@ -365,9 +375,6 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
             <span class="truncate text-sm font-medium text-base-content">{pool.name}</span>
           </label>
         </div>
-        <p class="mt-1 text-xs text-base-content/60">
-          Pool assignments apply only while the operator role is instance admin. Owners keep instance-wide access.
-        </p>
       </div>
     </div>
     """
