@@ -275,14 +275,18 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
   end
 
   @doc """
-  True only for a hard-pinned continuation whose pin target is genuinely
-  resolved: file affinity, a live upstream websocket bound to an assigned
-  Codex session, or a previous-response anchor whose attach-time resolution
-  proof points at the very assignment the attached session pins. An anchor
-  that never resolved — even when the attach fallback attached a session and
-  registered the anchor as a new alias — a merely-present Codex session, a
-  session header, or an accepted turn state is soft preference, never a hard
-  pin.
+  True only for a hard-pinned continuation whose pin target is durably
+  verifiable at the burn decision: file affinity, or a previous-response
+  anchor whose attach-time resolution proof points at the very assignment the
+  attached session pins. A websocket pin is a node-local process-shape claim
+  — the owner traps upstream exits and its lease outlives it, so no shared
+  state can prove the upstream websocket is alive when the credit burns, and
+  bound probes suppress websocket recovery — so it still pins routing but
+  never authorizes the irreversible bypass. An anchor that never resolved —
+  even when the attach fallback attached a session and registered the anchor
+  as a new alias — a merely-present Codex session, a session header, or an
+  accepted turn state is soft preference, never a hard pin. Unknown future
+  pin kinds fail closed.
   """
   @spec hard_pinned_continuity?(RequestOptions.t(), Model.t()) :: boolean()
   def hard_pinned_continuity?(%RequestOptions{} = request_options, %Model{} = model) do
@@ -290,10 +294,10 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
       {:hard, :previous_response_id} ->
         resolved_previous_response_pin?(request_options)
 
-      {:hard, _reason} ->
+      {:hard, :file_affinity} ->
         true
 
-      {:soft, _reason} ->
+      {_pin_mode, _reason} ->
         false
     end
   end

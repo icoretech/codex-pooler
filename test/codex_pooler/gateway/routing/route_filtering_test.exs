@@ -744,6 +744,79 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert Repo.reload!(sibling_identity).metadata == before_sibling
     end
 
+    test "a websocket-shaped pin does not bypass the capacity veto" do
+      %{
+        upstream: upstream,
+        filter_input: filter_input,
+        sibling_identity: sibling_identity,
+        target_identity: target_identity,
+        session: session
+      } = first_turn_capacity_arrangement("websocket-pin-capacity")
+
+      # A websocket pin is a node-local process claim: the owner traps upstream
+      # exits and its lease outlives it, so no shared state can prove the
+      # upstream websocket is alive at the burn decision, and bound probes
+      # suppress websocket recovery. The pin therefore never authorizes the
+      # irreversible threshold burn — not with a dead upstream websocket pid
+      # (the incident shape below), and not with a live one either.
+      {dead_pid, dead_ref} = spawn_monitor(fn -> :ok end)
+      assert_receive {:DOWN, ^dead_ref, :process, ^dead_pid, _reason}
+
+      request_options = %{
+        filter_input.request_options
+        | transport: %{
+            filter_input.request_options.transport
+            | upstream_websocket_session: dead_pid
+          }
+      }
+
+      refute SessionContinuity.hard_pinned_continuity?(request_options, filter_input.model)
+
+      live_pinned_options = %{
+        request_options
+        | transport: %{request_options.transport | upstream_websocket_session: self()}
+      }
+
+      refute SessionContinuity.hard_pinned_continuity?(live_pinned_options, filter_input.model)
+
+      owner_forwarded_options = %{
+        request_options
+        | transport: %{
+            request_options.transport
+            | upstream_websocket_session: nil,
+              websocket_owner: %{
+                request_options.transport.websocket_owner
+                | enabled?: true,
+                  session: session,
+                  lease_token: "owner-lease-token",
+                  downstream: %{pid: self(), correlation_id: "corr-websocket-pin"}
+              }
+          }
+      }
+
+      refute SessionContinuity.hard_pinned_continuity?(
+               owner_forwarded_options,
+               filter_input.model
+             )
+
+      filter_input = %{filter_input | request_options: request_options}
+
+      before_target = Repo.reload!(target_identity).metadata
+      before_sibling = Repo.reload!(sibling_identity).metadata
+
+      {result, log} = with_info_log(fn -> RouteFiltering.filter_candidates(filter_input) end)
+
+      assert {:ok, _candidates, _request_options} = result
+
+      assert log =~ "result_code=gateway_auto_sibling_usable_capacity"
+      assert log =~ "applied=false"
+      refute log =~ "result_code=reset"
+
+      assert FakeUpstream.requests(upstream) == []
+      assert Repo.reload!(target_identity).metadata == before_target
+      assert Repo.reload!(sibling_identity).metadata == before_sibling
+    end
+
     test "normal redemption refilters from a newer persisted snapshot and preserves route state" do
       # July 25, 2026 is past/historical relative to Monday, July 27, 2026.
       historical_scan_at = ~U[2026-07-25 12:00:00.000000Z]
