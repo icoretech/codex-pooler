@@ -3,8 +3,8 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
 
   alias CodexPooler.Admin.Stats
   alias CodexPooler.Events
-  alias CodexPoolerWeb.Admin.LiveUpdatesHooks
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.LiveUpdatesHooks
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.Admin.PoolFilterComponents
   alias CodexPoolerWeb.Admin.StatsPresentation
