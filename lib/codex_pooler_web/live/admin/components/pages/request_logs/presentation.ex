@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
 
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.LogPagination
   alias CodexPoolerWeb.Admin.RequestLogFilterForm
   alias CodexPoolerWeb.Admin.RequestLogsPresentation.Usage
 
@@ -43,7 +44,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
   attr :newer_count, :integer, default: 0
 
   def request_logs_table(assigns) do
-    assigns = assign(assigns, pagination(assigns.request_logs))
+    assigns = assign(assigns, :page, LogPagination.metadata(assigns.request_logs))
 
     ~H"""
     <div id="admin-request-logs" class="grid min-w-0 gap-3">
@@ -55,73 +56,38 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
         icon="hero-document-magnifying-glass"
       />
 
-      <%!-- The pager sits above the rows and sticks: fifty records is a long
-      way to scroll to reach Next, and on a tablet the entries are taller still.
-      One tree, not one at each end. --%>
-      <nav
+      <LogPagination.pager
         :if={@request_logs.items != []}
         id="request-log-pagination"
-        class="sticky top-0 z-20 -mx-1 bg-base-200 px-1 py-2 text-xs"
-        aria-label="Request log pagination"
+        label="Request log pagination"
+        page={@page}
+        previous_path={page_path(@current_params, @page.current_page - 1, @pin_at)}
+        next_path={page_path(@current_params, @page.current_page + 1, @pin_at)}
       >
-        <%!-- One row, at every width and in every state. The page number is the
-        range said less precisely, so on a phone the range keeps the line and the
-        ordinal steps aside rather than stacking a control several rows deep. --%>
-        <div class="flex items-center gap-3">
-          <p data-role="pagination-status" class="hidden shrink-0 text-base-content/60 sm:block">
-            Page {@current_page} of {@total_pages}
-          </p>
-
-          <%!-- Behind page one the window is pinned. What arrived since, and the
-          way back to live, ride on the range line: the reader needs the count
-          and the exit, not a sentence explaining the mechanism. The range is
-          what truncates when the row is tight; the way out never does. --%>
-          <div class="flex min-w-0 grow items-center gap-2 sm:justify-center">
-            <p
-              id="request-log-range"
-              data-role="pagination-range"
-              class="min-w-0 truncate tabular-nums text-base-content/70"
-            >
-              <span class="hidden sm:inline">Showing </span>{request_log_range(@request_logs)}
-            </p>
-            <span
-              :if={@frozen? && @newer_count > 0}
-              data-role="request-log-newer-count"
-              class="shrink-0 tabular-nums text-base-content/45"
-            >
-              · {format_total(@newer_count)} newer
-            </span>
-            <.link
-              :if={@frozen?}
-              id="request-log-back-to-latest"
-              data-role="request-log-back-to-latest"
-              patch={~p"/admin/request-logs?#{RequestLogFilterForm.query_params(@current_params)}"}
-              class="shrink-0 font-semibold text-primary hover:underline"
-            >
-              Back to latest
-            </.link>
-          </div>
-
-          <div class="join shrink-0">
-            <.pagination_link
-              id="request-log-pagination-prev"
-              label="Previous"
-              enabled={@has_previous_page}
-              page={@current_page - 1}
-              current_params={@current_params}
-              pin_at={@pin_at}
-            />
-            <.pagination_link
-              id="request-log-pagination-next"
-              label="Next"
-              enabled={@has_next_page}
-              page={@current_page + 1}
-              current_params={@current_params}
-              pin_at={@pin_at}
-            />
-          </div>
-        </div>
-      </nav>
+        <%!-- Behind page one the window is pinned. What arrived since, and the
+        way back to live, ride on the range line: the reader needs the count and
+        the exit, not a sentence explaining the mechanism. Both are shrink-0, so
+        the range is what gives when the row is tight and the way out never
+        disappears. --%>
+        <:aside>
+          <span
+            :if={@frozen? && @newer_count > 0}
+            data-role="request-log-newer-count"
+            class="shrink-0 tabular-nums text-base-content/45"
+          >
+            · {format_total(@newer_count)} newer
+          </span>
+          <.link
+            :if={@frozen?}
+            id="request-log-back-to-latest"
+            data-role="request-log-back-to-latest"
+            patch={~p"/admin/request-logs?#{RequestLogFilterForm.query_params(@current_params)}"}
+            class="shrink-0 font-semibold text-primary hover:underline"
+          >
+            Back to latest
+          </.link>
+        </:aside>
+      </LogPagination.pager>
 
       <div
         :if={@request_logs.items != []}
@@ -214,55 +180,24 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
     """
   end
 
-  attr :id, :string, required: true
-  attr :label, :string, required: true
-  attr :enabled, :boolean, required: true
-  attr :page, :integer, required: true
-  attr :current_params, :map, required: true
-  attr :pin_at, :any, default: nil
-
-  defp pagination_link(assigns) do
-    ~H"""
-    <.link
-      :if={@enabled}
-      id={@id}
-      data-role="pagination-link"
-      patch={~p"/admin/request-logs?#{page_query_params(@current_params, @page, @pin_at)}"}
-      class="btn btn-xs join-item"
-    >
-      {@label}
-    </.link>
-    <span
-      :if={!@enabled}
-      id={@id}
-      data-role="pagination-link"
-      aria-disabled="true"
-      class="btn btn-xs join-item btn-disabled"
-    >
-      {@label}
-    </span>
-    """
-  end
-
-  # Paging is a list control: it carries the filters forward and drops the
-  # drawer selection, because the inspected record is not on the page you are
-  # moving to. Leaving page one also pins the window it was read at, so the
-  # pages behind it stay still; returning to page one drops the pin and the list
-  # is live again.
-  defp page_query_params(current_params, page, pin_at) do
+  # Paging carries the filters forward and drops the drawer selection, because
+  # the inspected record is not on the page you are moving to. Leaving page one
+  # pins the window it was read at; returning to page one drops the pin.
+  defp page_path(current_params, page, pin_at) do
     filters = RequestLogFilterForm.query_params(current_params)
 
-    if page <= 1 do
-      filters
-    else
-      filters
-      |> Map.put("page", Integer.to_string(page))
-      |> put_pin(pin_at)
-    end
+    params =
+      if page <= 1 do
+        filters
+      else
+        filters
+        |> Map.put("page", Integer.to_string(page))
+        |> put_pin(pin_at)
+      end
+
+    if page >= 1, do: ~p"/admin/request-logs?#{params}"
   end
 
-  # The pin is a cursor in the list's sort key — the head row, not the moment it
-  # landed — so it travels as both halves or not at all.
   defp put_pin(params, {%DateTime{} = at, id}) when is_binary(id) do
     params
     |> Map.put("as_of", DateTime.to_iso8601(at))
@@ -270,32 +205,6 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
   end
 
   defp put_pin(params, _pin_at), do: params
-
-  defp pagination(%{total: total, limit: limit, offset: offset})
-       when is_integer(limit) and limit > 0 do
-    %{
-      current_page: div(offset, limit) + 1,
-      total_pages: max(ceil(total / limit), 1),
-      has_previous_page: offset > 0,
-      has_next_page: offset + limit < total
-    }
-  end
-
-  # `request_logs` is declared as a plain map, so a caller can satisfy the attr
-  # and still not carry a window. A page of one with nowhere to go beats a
-  # FunctionClauseError raised from inside a render.
-  defp pagination(_request_logs) do
-    %{current_page: 1, total_pages: 1, has_previous_page: false, has_next_page: false}
-  end
-
-  defp request_log_range(%{total: 0}), do: "0 of 0"
-
-  defp request_log_range(%{total: total, limit: limit, offset: offset})
-       when is_integer(limit) and limit > 0 do
-    "#{offset + 1}-#{min(offset + limit, total)} of #{total}"
-  end
-
-  defp request_log_range(%{total: total}), do: "#{total}"
 
   attr :request_log, :map, required: true
   attr :plan_badge_id, :string, default: nil

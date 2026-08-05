@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
   alias CodexPooler.Audit
   alias CodexPooler.Pools
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.LogPagination
   alias CodexPoolerWeb.Admin.PoolFilterComponents
   alias CodexPoolerWeb.DateTimeDisplay
 
@@ -13,6 +14,13 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
   @page_size 50
   @outcome_options ~w(success failure)
   @actor_type_options ~w(user system)
+  @snapshot_param "as_of"
+  @snapshot_id_param "as_of_id"
+
+  # A page number is address-bar input on its way to becoming an SQL OFFSET.
+  # Unclamped it exceeds int64, raises inside handle_params, and the
+  # reconnecting client retries the same URL.
+  @max_page 10_000
 
   @impl true
   def mount(_params, _session, socket) do
@@ -22,6 +30,8 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
        pools: [],
        selected_pool: nil,
        audit_logs: empty_audit_logs(),
+       current_params: %{},
+       audit_log_pin_at: nil,
        selected_audit_event: nil,
        filter_form: to_form(%{}, as: :filters),
        filter_values: %{},
@@ -104,7 +114,12 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
               pool_filter_options={@pool_filter_options}
             />
 
-            <.audit_logs_table audit_logs={@audit_logs} datetime_preferences={@datetime_preferences} />
+            <.audit_logs_table
+              audit_logs={@audit_logs}
+              datetime_preferences={@datetime_preferences}
+              previous_path={page_path(@current_params, @audit_logs, @audit_log_pin_at, -1)}
+              next_path={page_path(@current_params, @audit_logs, @audit_log_pin_at, +1)}
+            />
           </section>
         </div>
 
@@ -122,21 +137,17 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
     {selected_pool, pool_error} = select_pool(pools, params["pool_id"])
     {filters, form_values, filter_errors} = parse_filters(params, selected_pool)
     filter_errors = Enum.reject([pool_error | filter_errors], &is_nil/1)
+    offset = page_offset(params)
+    cursor = snapshot_at(params)
+    audit_logs = audit_events(socket, selected_pool, pin(filters, cursor), offset)
 
-    audit_logs =
-      if selected_pool do
-        Audit.list_events(selected_pool, limit: @page_size, filters: filters)
-      else
-        Audit.list_events_for_scope(socket.assigns.current_scope,
-          limit: @page_size,
-          filters: filters
-        )
-      end
-
-    assign(socket,
+    socket
+    |> assign(
       pools: pools,
       selected_pool: selected_pool,
       audit_logs: audit_logs,
+      current_params: params,
+      audit_log_pin_at: cursor || newest_cursor(audit_logs),
       selected_audit_event:
         selected_audit_event(socket.assigns.selected_audit_event, audit_logs.items),
       filter_form: to_form(form_values, as: :filters, errors: form_errors(filter_errors)),
@@ -144,6 +155,106 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
       filter_errors: filter_errors,
       pool_filter_options: PoolFilterComponents.pool_filter_options(pools)
     )
+    |> normalize_audit_log_window(params, audit_logs, cursor)
+  end
+
+  defp audit_events(_socket, selected_pool, filters, offset) when not is_nil(selected_pool) do
+    Audit.list_events(selected_pool, limit: @page_size, offset: offset, filters: filters)
+  end
+
+  defp audit_events(socket, _selected_pool, filters, offset) do
+    Audit.list_events_for_scope(socket.assigns.current_scope,
+      limit: @page_size,
+      offset: offset,
+      filters: filters
+    )
+  end
+
+  # The pin is its own filter rather than a tighter date_to, so it intersects
+  # with whatever range the operator set instead of overriding it.
+  defp pin(filters, nil), do: filters
+  defp pin(filters, cursor), do: Keyword.put(filters, :at_or_before, cursor)
+
+  # Audit events are appended, not streamed, so a page only moves when someone
+  # acts while it is being read — but the same two invariants apply, for the
+  # same reason: a page past the end has no way back, and an unpinned page
+  # behind the first is an address that stops naming the same records.
+  defp normalize_audit_log_window(socket, params, audit_logs, cursor) do
+    %{total: total, limit: limit, offset: offset} = audit_logs
+    page = div(offset, limit) + 1
+    last_page = LogPagination.last_page(audit_logs)
+    pin_at = newest_cursor(audit_logs)
+
+    cond do
+      total == 0 and page > 1 ->
+        patch_window(socket, params, 1, nil)
+
+      page > last_page ->
+        patch_window(socket, params, last_page, cursor)
+
+      page > 1 and is_nil(cursor) and not is_nil(pin_at) ->
+        patch_window(socket, params, page, pin_at)
+
+      true ->
+        socket
+    end
+  end
+
+  defp patch_window(socket, params, page, cursor) do
+    push_patch(socket, to: ~p"/admin/audit-logs?#{window_params(params, page, cursor)}")
+  end
+
+  # Paging carries the filters forward and pins the window it was read at.
+  # Stepping back onto page one drops the pin: the first page is the live
+  # reading, and there is nothing behind it to hold still.
+  defp page_path(params, audit_logs, cursor, step) do
+    page = div(audit_logs.offset, max(audit_logs.limit, 1)) + 1 + step
+
+    if page >= 1 do
+      ~p"/admin/audit-logs?#{window_params(params, page, cursor)}"
+    end
+  end
+
+  defp window_params(params, page, cursor) do
+    {at, id} = cursor_params(page > 1 && cursor)
+
+    params
+    |> query_params()
+    |> put_window("page", page > 1 && Integer.to_string(page))
+    |> put_window(@snapshot_param, at)
+    |> put_window(@snapshot_id_param, id)
+  end
+
+  defp put_window(params, _key, falsy) when falsy in [nil, false], do: params
+  defp put_window(params, key, value), do: Map.put(params, key, value)
+
+  defp cursor_params({%DateTime{} = at, id}), do: {DateTime.to_iso8601(at), id}
+  defp cursor_params(_cursor), do: {nil, nil}
+
+  defp newest_cursor(%{items: [%{occurred_at: %DateTime{} = at, id: id} | _rest]}), do: {at, id}
+  defp newest_cursor(_audit_logs), do: nil
+
+  defp page_offset(params), do: (page_number(params) - 1) * @page_size
+
+  defp page_number(params) do
+    with value when is_binary(value) <- Map.get(params, "page"),
+         {page, ""} <- Integer.parse(String.trim(value)),
+         true <- page > 1 do
+      min(page, @max_page)
+    else
+      _other -> 1
+    end
+  end
+
+  defp snapshot_at(params) do
+    with value when is_binary(value) <- Map.get(params, @snapshot_param),
+         id when is_binary(id) <- Map.get(params, @snapshot_id_param),
+         {:ok, at, _offset} <- DateTime.from_iso8601(String.trim(value)),
+         {:ok, id} <- Ecto.UUID.cast(String.trim(id)) do
+      {at, id}
+    else
+      _other -> nil
+    end
   end
 
   defp parse_filters(params, selected_pool) do

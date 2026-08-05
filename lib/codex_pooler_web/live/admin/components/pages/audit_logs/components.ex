@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
 
   alias CodexPoolerWeb.Admin.AuditLogsComponents.Filters
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.LogPagination
 
   import CodexPoolerWeb.Admin.AuditLogsComponents.Presentation,
     only: [
@@ -25,214 +26,229 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
 
   attr :audit_logs, :map, required: true
   attr :datetime_preferences, :map, required: true
+  attr :previous_path, :string, default: nil
+  attr :next_path, :string, default: nil
 
   def audit_logs_table(assigns) do
+    assigns = assign(assigns, :page, LogPagination.metadata(assigns.audit_logs))
+
     ~H"""
-    <div
-      id="admin-audit-logs"
-      class="min-w-0 rounded-box border border-base-300 bg-base-100"
-    >
-      <div class="hidden overflow-x-auto md:block">
-        <table class="table min-w-[58rem] font-sans">
-          <colgroup>
-            <col style="width: 2.5rem; min-width: 2.5rem; max-width: 2.5rem;" />
-            <col class="w-36" />
-            <col />
-            <col class="w-[22rem]" />
-            <col class="w-[24rem]" />
-          </colgroup>
-          <thead>
-            <tr>
-              <th
-                class="w-10 min-w-10 max-w-10 text-center"
-                style="padding-left: 0; padding-right: 0;"
-                aria-label="Event type"
-              >
-              </th>
-              <th
-                class="whitespace-nowrap"
-                style="padding-left: 0; padding-right: 0.75rem;"
-              >
-                Time
-              </th>
-              <th class="whitespace-nowrap">Event</th>
-              <th class="whitespace-nowrap">Actor</th>
-              <th class="whitespace-nowrap">Context</th>
-            </tr>
-          </thead>
-          <tbody id="audit-logs-table">
-            <AdminComponents.table_empty_row id="audit-log-empty-state" columns={5}>
-              {empty_copy()}
-            </AdminComponents.table_empty_row>
-            <tr
-              :for={event <- @audit_logs.items}
-              id={"audit-log-row-#{event.id}"}
-              class="text-sm transition-colors hover:bg-base-200/80"
-            >
-              <td
-                class="w-10 min-w-10 max-w-10 align-middle text-center"
-                style="padding-left: 0; padding-right: 0;"
-              >
-                <.icon name={event_icon(event)} class={event_icon_class(event.outcome)} />
-              </td>
-              <td
-                class="whitespace-nowrap align-middle text-sm"
-                style="padding-left: 0; padding-right: 0.75rem;"
-              >
-                <button
-                  id={"audit-log-time-#{event.id}"}
-                  type="button"
-                  class="whitespace-nowrap text-left text-base-content/60 underline-offset-2 transition-colors hover:text-primary hover:underline"
-                  aria-haspopup="dialog"
-                  aria-controls="audit-event-details-sidebar"
-                  phx-click="show_audit_event"
-                  phx-value-id={event.id}
+    <div id="admin-audit-logs-window" class="grid min-w-0 gap-3">
+      <LogPagination.pager
+        id="audit-log-pagination"
+        label="Audit log pagination"
+        page={@page}
+        previous_path={@previous_path}
+        next_path={@next_path}
+      />
+
+      <div
+        id="admin-audit-logs"
+        class="min-w-0 rounded-box border border-base-300 bg-base-100"
+      >
+        <div class="hidden overflow-x-auto md:block">
+          <table class="table min-w-[58rem] font-sans">
+            <colgroup>
+              <col style="width: 2.5rem; min-width: 2.5rem; max-width: 2.5rem;" />
+              <col class="w-36" />
+              <col />
+              <col class="w-[22rem]" />
+              <col class="w-[24rem]" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th
+                  class="w-10 min-w-10 max-w-10 text-center"
+                  style="padding-left: 0; padding-right: 0;"
+                  aria-label="Event type"
                 >
-                  {format_datetime(event.occurred_at, @datetime_preferences)}
-                </button>
-              </td>
-              <td class="align-middle">
-                <span
-                  class="block truncate font-medium leading-5 text-base-content"
-                  title={event_title(event)}
+                </th>
+                <th
+                  class="whitespace-nowrap"
+                  style="padding-left: 0; padding-right: 0.75rem;"
                 >
-                  {event_title(event)}
-                </span>
-              </td>
-              <td class="align-middle">
-                <.link
-                  :if={actor_link(event)}
-                  navigate={actor_link(event)}
-                  class="block truncate font-medium leading-5 text-primary hover:text-primary/80"
-                  title={format_actor(event)}
+                  Time
+                </th>
+                <th class="whitespace-nowrap">Event</th>
+                <th class="whitespace-nowrap">Actor</th>
+                <th class="whitespace-nowrap">Context</th>
+              </tr>
+            </thead>
+            <tbody id="audit-logs-table">
+              <AdminComponents.table_empty_row id="audit-log-empty-state" columns={5}>
+                {empty_copy()}
+              </AdminComponents.table_empty_row>
+              <tr
+                :for={event <- @audit_logs.items}
+                id={"audit-log-row-#{event.id}"}
+                class="text-sm transition-colors hover:bg-base-200/80"
+              >
+                <td
+                  class="w-10 min-w-10 max-w-10 align-middle text-center"
+                  style="padding-left: 0; padding-right: 0;"
                 >
-                  {format_actor(event)}
-                </.link>
-                <span
-                  :if={!actor_link(event)}
-                  class="block truncate font-medium leading-5 text-base-content"
-                  title={format_actor(event)}
+                  <.icon name={event_icon(event)} class={event_icon_class(event.outcome)} />
+                </td>
+                <td
+                  class="whitespace-nowrap align-middle text-sm"
+                  style="padding-left: 0; padding-right: 0.75rem;"
                 >
-                  {format_actor(event)}
-                </span>
-              </td>
-              <td class="align-middle">
-                <div class="flex min-w-0 items-center gap-2 text-sm text-base-content/70">
-                  <.link
-                    :if={target_link(event)}
-                    navigate={target_link(event)}
-                    class="truncate leading-5 text-primary hover:text-primary/80"
-                    title={target_label(event)}
+                  <button
+                    id={"audit-log-time-#{event.id}"}
+                    type="button"
+                    class="whitespace-nowrap text-left text-base-content/60 underline-offset-2 transition-colors hover:text-primary hover:underline"
+                    aria-haspopup="dialog"
+                    aria-controls="audit-event-details-sidebar"
+                    phx-click="show_audit_event"
+                    phx-value-id={event.id}
                   >
-                    {target_label(event)}
+                    {format_datetime(event.occurred_at, @datetime_preferences)}
+                  </button>
+                </td>
+                <td class="align-middle">
+                  <span
+                    class="block truncate font-medium leading-5 text-base-content"
+                    title={event_title(event)}
+                  >
+                    {event_title(event)}
+                  </span>
+                </td>
+                <td class="align-middle">
+                  <.link
+                    :if={actor_link(event)}
+                    navigate={actor_link(event)}
+                    class="block truncate font-medium leading-5 text-primary hover:text-primary/80"
+                    title={format_actor(event)}
+                  >
+                    {format_actor(event)}
                   </.link>
                   <span
-                    :if={!target_link(event)}
-                    class="truncate leading-5 text-base-content"
-                    title={target_label(event)}
+                    :if={!actor_link(event)}
+                    class="block truncate font-medium leading-5 text-base-content"
+                    title={format_actor(event)}
                   >
-                    {target_label(event)}
+                    {format_actor(event)}
                   </span>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-          <caption
-            id="audit-log-page-size"
-            class="caption-bottom px-4 py-3 text-left text-xs text-base-content/60"
-          >
-            {format_total(@audit_logs.total)} matching redacted audit events · Hard limit: {@audit_logs.limit} rows
-          </caption>
-        </table>
-      </div>
-      <div id="mobile-audit-logs-table" class="overflow-x-auto md:hidden">
-        <table class="table table-sm w-[42rem] min-w-[42rem] font-sans">
-          <colgroup>
-            <col style="width: 2.5rem; min-width: 2.5rem; max-width: 2.5rem;" />
-            <col style="width: 9.75rem; min-width: 9.75rem;" />
-            <col style="width: 16rem; min-width: 16rem;" />
-            <col style="width: 13.75rem; min-width: 13.75rem;" />
-          </colgroup>
-          <thead>
-            <tr>
-              <th
-                class="w-10 min-w-10 max-w-10 text-center"
-                style="padding-left: 0; padding-right: 0;"
-                aria-label="Event type"
-              >
-              </th>
-              <th
-                class="whitespace-nowrap"
-                style="padding-left: 0; padding-right: 0.75rem;"
-              >
-                Time
-              </th>
-              <th class="whitespace-nowrap">Event</th>
-              <th class="whitespace-nowrap">Actor</th>
-            </tr>
-          </thead>
-          <tbody id="mobile-audit-logs-table-body">
-            <AdminComponents.table_empty_row id="mobile-audit-log-empty-state" columns={4}>
-              {empty_copy()}
-            </AdminComponents.table_empty_row>
-            <tr
-              :for={event <- @audit_logs.items}
-              id={"mobile-audit-log-row-#{event.id}"}
-              class="text-sm transition-colors hover:bg-base-200/80"
-            >
-              <td
-                class="w-10 min-w-10 max-w-10 align-middle text-center"
-                style="padding-left: 0; padding-right: 0;"
-              >
-                <.icon name={event_icon(event)} class={event_icon_class(event.outcome)} />
-              </td>
-              <td
-                class="whitespace-nowrap align-middle text-sm"
-                style="padding-left: 0; padding-right: 0.75rem;"
-              >
-                <button
-                  id={"mobile-audit-log-time-#{event.id}"}
-                  type="button"
-                  class="whitespace-nowrap text-left text-primary underline-offset-2 transition-colors hover:text-primary/80 hover:underline"
-                  aria-haspopup="dialog"
-                  aria-controls="audit-event-details-sidebar"
-                  phx-click="show_audit_event"
-                  phx-value-id={event.id}
+                </td>
+                <td class="align-middle">
+                  <div class="flex min-w-0 items-center gap-2 text-sm text-base-content/70">
+                    <.link
+                      :if={target_link(event)}
+                      navigate={target_link(event)}
+                      class="truncate leading-5 text-primary hover:text-primary/80"
+                      title={target_label(event)}
+                    >
+                      {target_label(event)}
+                    </.link>
+                    <span
+                      :if={!target_link(event)}
+                      class="truncate leading-5 text-base-content"
+                      title={target_label(event)}
+                    >
+                      {target_label(event)}
+                    </span>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+            <%!-- The count and the way to move are the pager's job now; the
+          caption names the table and its total for a screen reader before the
+          rows, which is the one thing the pager cannot do. "Hard limit" was
+          true when fifty rows were all there were. --%>
+            <caption class="sr-only">
+              Audit logs, {format_total(@audit_logs.total)} matching redacted audit events
+            </caption>
+          </table>
+        </div>
+        <div id="mobile-audit-logs-table" class="overflow-x-auto md:hidden">
+          <table class="table table-sm w-[42rem] min-w-[42rem] font-sans">
+            <colgroup>
+              <col style="width: 2.5rem; min-width: 2.5rem; max-width: 2.5rem;" />
+              <col style="width: 9.75rem; min-width: 9.75rem;" />
+              <col style="width: 16rem; min-width: 16rem;" />
+              <col style="width: 13.75rem; min-width: 13.75rem;" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th
+                  class="w-10 min-w-10 max-w-10 text-center"
+                  style="padding-left: 0; padding-right: 0;"
+                  aria-label="Event type"
                 >
-                  {format_datetime(event.occurred_at, @datetime_preferences)}
-                </button>
-              </td>
-              <td class="align-middle">
-                <span
-                  class="block truncate font-medium leading-5 text-base-content"
-                  title={event_title(event)}
+                </th>
+                <th
+                  class="whitespace-nowrap"
+                  style="padding-left: 0; padding-right: 0.75rem;"
                 >
-                  {event_title(event)}
-                </span>
-              </td>
-              <td class="align-middle">
-                <.link
-                  :if={actor_link(event)}
-                  navigate={actor_link(event)}
-                  class="block truncate font-medium leading-5 text-primary hover:text-primary/80"
-                  title={format_actor(event)}
+                  Time
+                </th>
+                <th class="whitespace-nowrap">Event</th>
+                <th class="whitespace-nowrap">Actor</th>
+              </tr>
+            </thead>
+            <tbody id="mobile-audit-logs-table-body">
+              <AdminComponents.table_empty_row id="mobile-audit-log-empty-state" columns={4}>
+                {empty_copy()}
+              </AdminComponents.table_empty_row>
+              <tr
+                :for={event <- @audit_logs.items}
+                id={"mobile-audit-log-row-#{event.id}"}
+                class="text-sm transition-colors hover:bg-base-200/80"
+              >
+                <td
+                  class="w-10 min-w-10 max-w-10 align-middle text-center"
+                  style="padding-left: 0; padding-right: 0;"
                 >
-                  {format_actor(event)}
-                </.link>
-                <span
-                  :if={!actor_link(event)}
-                  class="block truncate font-medium leading-5 text-base-content"
-                  title={format_actor(event)}
+                  <.icon name={event_icon(event)} class={event_icon_class(event.outcome)} />
+                </td>
+                <td
+                  class="whitespace-nowrap align-middle text-sm"
+                  style="padding-left: 0; padding-right: 0.75rem;"
                 >
-                  {format_actor(event)}
-                </span>
-              </td>
-            </tr>
-          </tbody>
-          <caption class="caption-bottom px-3 py-3 text-left text-xs text-base-content/60">
-            {format_total(@audit_logs.total)} matching redacted audit events · Open a time for full details
-          </caption>
-        </table>
+                  <button
+                    id={"mobile-audit-log-time-#{event.id}"}
+                    type="button"
+                    class="whitespace-nowrap text-left text-primary underline-offset-2 transition-colors hover:text-primary/80 hover:underline"
+                    aria-haspopup="dialog"
+                    aria-controls="audit-event-details-sidebar"
+                    phx-click="show_audit_event"
+                    phx-value-id={event.id}
+                  >
+                    {format_datetime(event.occurred_at, @datetime_preferences)}
+                  </button>
+                </td>
+                <td class="align-middle">
+                  <span
+                    class="block truncate font-medium leading-5 text-base-content"
+                    title={event_title(event)}
+                  >
+                    {event_title(event)}
+                  </span>
+                </td>
+                <td class="align-middle">
+                  <.link
+                    :if={actor_link(event)}
+                    navigate={actor_link(event)}
+                    class="block truncate font-medium leading-5 text-primary hover:text-primary/80"
+                    title={format_actor(event)}
+                  >
+                    {format_actor(event)}
+                  </.link>
+                  <span
+                    :if={!actor_link(event)}
+                    class="block truncate font-medium leading-5 text-base-content"
+                    title={format_actor(event)}
+                  >
+                    {format_actor(event)}
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+            <caption class="caption-bottom px-3 py-3 text-left text-xs text-base-content/60">
+              {format_total(@audit_logs.total)} matching redacted audit events · Open a time for full details
+            </caption>
+          </table>
+        </div>
       </div>
     </div>
     """

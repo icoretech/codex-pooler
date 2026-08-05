@@ -326,6 +326,8 @@ defmodule CodexPooler.Audit do
     |> maybe_filter_request(Map.get(filters, :request))
     |> maybe_filter_date_from(Map.get(filters, :date_from))
     |> maybe_filter_date_to(Map.get(filters, :date_to))
+    |> maybe_filter_at_or_before(Map.get(filters, :at_or_before))
+    |> maybe_filter_after(Map.get(filters, :after))
   end
 
   defp maybe_filter_id(query, nil), do: query
@@ -396,6 +398,31 @@ defmodule CodexPooler.Audit do
 
   defp maybe_filter_date_to(query, date_to),
     do: from([event, ...] in query, where: event.occurred_at <= ^date_to)
+
+  # Cursor bounds in the list's own sort key, so a page keeps naming the same
+  # records while a reader walks it. A bound on occurred_at alone is not enough:
+  # events written in one transaction share it exactly and only id orders them,
+  # so `occurred_at <= t` would admit a row inserted after the cursor that sorts
+  # above it and shift every page behind.
+  defp maybe_filter_at_or_before(query, nil), do: query
+
+  defp maybe_filter_at_or_before(query, {occurred_at, id}) do
+    from([event, ...] in query,
+      where:
+        event.occurred_at < ^occurred_at or
+          (event.occurred_at == ^occurred_at and event.id <= ^id)
+    )
+  end
+
+  defp maybe_filter_after(query, nil), do: query
+
+  defp maybe_filter_after(query, {occurred_at, id}) do
+    from([event, ...] in query,
+      where:
+        event.occurred_at > ^occurred_at or
+          (event.occurred_at == ^occurred_at and event.id > ^id)
+    )
+  end
 
   defp clamp_limit(limit) when is_integer(limit) and limit > 0 and limit <= 200, do: limit
   defp clamp_limit(_limit), do: 50

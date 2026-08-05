@@ -253,7 +253,10 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLiveTest do
              ~s|#audit-log-filter-form-advanced > div[class*="auto-fit"][class*="minmax(10rem,1fr)"]|
            )
 
-    assert has_element?(view, "#audit-log-page-size", "Hard limit: 50 rows")
+    # The count moved to the pager when the list stopped being capped at one
+    # page; the caption stays for assistive tech only.
+    refute has_element?(view, "#audit-log-page-size")
+    assert has_element?(view, "#audit-log-pagination [data-role='pagination-range']")
     assert has_element?(view, "#audit-event-details-drawer-root")
     assert has_element?(view, "#audit-event-details-drawer")
     refute has_element?(view, "#audit-event-details-title")
@@ -727,6 +730,99 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLiveTest do
              Accounts.login_user(%{"email" => admin.email, "password" => temporary_password})
 
     %{conn: log_in_user(build_conn(), admin, token), user: admin}
+  end
+
+  test "pages through audit events, preserving filters and pinning the window", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "audit-paging", name: "Audit Paging"})
+
+    events =
+      for index <- 1..51 do
+        assert {:ok, event} =
+                 Audit.record_system_event(%{
+                   pool_id: pool.id,
+                   action: "pool.update",
+                   target_type: "pool",
+                   target_id: pool.id,
+                   details: %{"seq" => index}
+                 })
+
+        event
+      end
+
+    [oldest | _rest] = events
+
+    {:ok, view, _html} = live(conn, ~p"/admin/audit-logs?pool_id=#{pool.id}")
+
+    # Creating the Pool is itself an audited event, so the total is 51 plus
+    # whatever the fixtures wrote — the page count is the assertion, not a
+    # hand-counted row total.
+    assert has_element?(view, "#audit-log-pagination", "Page 1 of 2")
+    assert has_element?(view, "#audit-log-pagination-prev.btn-disabled")
+    refute has_element?(view, "#audit-log-row-#{oldest.id}")
+
+    view |> element("#audit-log-pagination-next") |> render_click()
+
+    assert has_element?(view, "#audit-log-pagination", "Page 2 of 2")
+    assert has_element?(view, "#audit-log-row-#{oldest.id}")
+    assert has_element?(view, "#audit-log-pagination-next.btn-disabled")
+
+    # Stepping back onto page one drops the pin: nothing behind it to hold still.
+    view |> element("#audit-log-pagination-prev") |> render_click()
+
+    assert has_element?(view, "#audit-log-pagination", "Page 1 of 2")
+    refute has_element?(view, "#audit-log-row-#{oldest.id}")
+  end
+
+  test "a page past the end of the audit result set lands on the last page with rows", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "audit-range", name: "Audit Range"})
+
+    assert {:ok, event} =
+             Audit.record_system_event(%{
+               pool_id: pool.id,
+               action: "pool.update",
+               target_type: "pool",
+               target_id: pool.id,
+               details: %{"only" => true}
+             })
+
+    assert {:error, {:live_redirect, %{to: corrected}}} =
+             live(conn, ~p"/admin/audit-logs?pool_id=#{pool.id}&page=99")
+
+    refute corrected =~ "page="
+
+    {:ok, view, _html} = live(conn, corrected)
+
+    assert has_element?(view, "#audit-log-row-#{event.id}")
+    assert has_element?(view, "#audit-log-pagination")
+  end
+
+  test "an out-of-range audit page number is clamped instead of raising", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "audit-clamp", name: "Audit Clamp"})
+
+    assert {:ok, event} =
+             Audit.record_system_event(%{
+               pool_id: pool.id,
+               action: "pool.update",
+               target_type: "pool",
+               target_id: pool.id,
+               details: %{"only" => true}
+             })
+
+    assert {:error, {:live_redirect, %{to: corrected}}} =
+             live(conn, ~p"/admin/audit-logs?pool_id=#{pool.id}&page=200000000000000000")
+
+    {:ok, view, _html} = live(conn, corrected)
+
+    assert has_element?(view, "#audit-log-row-#{event.id}")
   end
 
   defp session_token(user) do
