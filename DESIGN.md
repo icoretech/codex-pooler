@@ -144,6 +144,14 @@ wrapped by `Layouts.app chrome={:admin}` in
   state dropdown.
 - Fixed sidebar: `w-16` icon rail, `xl:w-64` with labels; active item gets
   `!border-l-primary bg-base-300` on a `border-l-[3px]` slot.
+- The nav ends with the Observatory item, the one exit to the key-holder
+  surface. It looks like its siblings — no arrow glyphs, separators, or
+  group labels — and the protection is the interaction: it opens through the
+  hold-to-launch ring (§7) instead of a plain click, and carries "hold to
+  open in a new tab" in its accessible name and title. Plain left-click is
+  owned by the hold; modified clicks, middle-click, and keyboard Enter
+  follow `target="_blank"` natively (`HoldToLaunch` hook in
+  `assets/js/hold_to_launch.mjs`).
 - Content: `ml-16 xl:ml-64 pt-12`, inner column `flex flex-col gap-6 p-4
   sm:p-6 xl:p-8`.
 
@@ -1223,6 +1231,12 @@ animated):
   role is a 2.4s `ease-in-out` opacity pulse whose midpoint is 0.35. These map
   to the `--observatory-motion-*` tokens in §4; pause makes the dot static and
   `prefers-reduced-motion: reduce` removes the pulse and control transitions.
+
+- Observatory hold-to-launch (`admin-nav-hold-*` in `app.css`, `HoldToLaunch`
+  hook): the nav exit opens only after a ~1s press — the icon's ring fills as
+  functional progress (JS-driven stroke offset), early release drains it in
+  150ms, and the tab opens on the release gesture so popup blockers stay
+  quiet. Only the 300ms launch pop is decorative, and it is motion-gated.
 
 Rule: no looping decorative animation; the burn shine is the ceiling for
 ambient motion and it is evidence-driven (recent token burn).

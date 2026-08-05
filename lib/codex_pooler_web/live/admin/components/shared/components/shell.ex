@@ -251,14 +251,31 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
               href={~p"/observatory/login"}
               target="_blank"
               rel="noopener noreferrer"
-              aria-label="Observatory"
-              class={admin_nav_item_class(false)}
-              title="Observatory"
+              aria-label="Observatory — hold to open in a new tab"
+              class={[admin_nav_item_class(false), "admin-nav-hold select-none touch-none"]}
+              title="Observatory — hold to open in a new tab"
+              phx-hook="HoldToLaunch"
             >
-              <.icon
-                name="hero-sparkles"
-                class="size-5 shrink-0 transition-colors group-hover:text-primary"
-              />
+              <span data-role="admin-nav-hold-ring" class="relative size-5 shrink-0">
+                <svg
+                  class="pointer-events-none absolute -inset-1 size-7 -rotate-90"
+                  viewBox="0 0 28 28"
+                  aria-hidden="true"
+                >
+                  <circle class="admin-nav-hold-track" cx="14" cy="14" r="12" />
+                  <circle
+                    class="admin-nav-hold-fill"
+                    data-role="admin-nav-hold-ring-fill"
+                    cx="14"
+                    cy="14"
+                    r="12"
+                  />
+                </svg>
+                <.icon
+                  name="hero-sparkles"
+                  class="size-5 shrink-0 transition-colors group-hover:text-primary"
+                />
+              </span>
               <span class="hidden xl:block">Observatory</span>
             </.link>
           </nav>

@@ -1755,3 +1755,51 @@ body {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
+
+/* Observatory hold-to-launch ring (admin nav). Progress is functional state
+   feedback driven by the HoldToLaunch hook (stroke-dashoffset inline); only
+   the celebratory pop is decorative and motion-gated. */
+.admin-nav-hold {
+  -webkit-touch-callout: none;
+}
+
+.admin-nav-hold-track,
+.admin-nav-hold-fill {
+  fill: none;
+  stroke-width: 2;
+}
+
+.admin-nav-hold-track {
+  stroke: color-mix(in oklab, var(--color-base-content) 14%, transparent);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.admin-nav-hold-fill {
+  stroke: var(--color-primary);
+  stroke-linecap: round;
+  stroke-dasharray: 75.4;
+  stroke-dashoffset: 75.4;
+}
+
+.admin-nav-hold[data-hold-state="holding"] .admin-nav-hold-track,
+.admin-nav-hold[data-hold-state="armed"] .admin-nav-hold-track {
+  opacity: 1;
+}
+
+.admin-nav-hold[data-hold-state="armed"] [data-role="admin-nav-hold-ring"] .hero-sparkles,
+.admin-nav-hold[data-hold-state="launched"] [data-role="admin-nav-hold-ring"] .hero-sparkles {
+  color: var(--color-primary);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .admin-nav-hold[data-hold-state="launched"] [data-role="admin-nav-hold-ring"] {
+    animation: admin-nav-hold-pop 300ms ease;
+  }
+}
+
+@keyframes admin-nav-hold-pop {
+  50% {
+    transform: scale(1.15);
+  }
+}

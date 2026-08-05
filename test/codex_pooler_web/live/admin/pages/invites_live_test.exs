@@ -75,6 +75,17 @@ defmodule CodexPoolerWeb.Admin.InvitesLiveTest do
     assert has_element?(view, "#admin-invites-live")
     assert has_element?(view, "#invite-page-create-action", "Create Pool invite")
     assert has_element?(view, "#admin-nav-invites[aria-current='page'][href='/admin/invites']")
+
+    assert has_element?(
+             view,
+             ~s(#admin-nav-observatory[phx-hook="HoldToLaunch"][target="_blank"][href="/observatory/login"])
+           )
+
+    assert has_element?(
+             view,
+             ~s(#admin-nav-observatory [data-role="admin-nav-hold-ring-fill"])
+           )
+
     assert :binary.match(html, "admin-nav-operators") < :binary.match(html, "admin-nav-invites")
 
     assert :binary.match(html, "admin-nav-invites") <

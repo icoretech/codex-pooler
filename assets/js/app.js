@@ -19,6 +19,7 @@ import {
 	ObservatoryRefresh,
 	observatoryRefreshConnectParams,
 } from "./observatory_refresh.mjs";
+import { HoldToLaunch } from "./hold_to_launch.mjs";
 import { RelativeCountdown } from "./relative_countdown.mjs";
 import {
 	connectionActionLabel,
@@ -1309,6 +1310,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
 		CallyDatePicker,
 		ClipboardCopy,
 		FlashAutoDismiss,
+		HoldToLaunch,
 		LiveUpdatesToggle,
 		ModelServingTools,
 		OtpInput,
