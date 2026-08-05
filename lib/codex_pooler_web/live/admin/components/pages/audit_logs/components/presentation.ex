@@ -57,6 +57,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents.Presentation do
   def audit_action_icon("api_key." <> _suffix), do: "hero-key"
   def audit_action_icon("mcp." <> _suffix), do: "hero-command-line"
   def audit_action_icon("alert_" <> _suffix), do: "hero-bell-alert"
+  def audit_action_icon("instance_settings." <> _suffix), do: "hero-cog-6-tooth"
   def audit_action_icon(action) when action in [nil, ""], do: "hero-squares-2x2"
   def audit_action_icon(_action), do: "hero-clipboard-document-list"
 

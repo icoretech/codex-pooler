@@ -18,6 +18,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents.Filters do
       id="audit-log-filter-form"
       for={@filter_form}
       advanced_open
+      mobile_single_column
       phx-submit="filter"
     >
       <PoolFilterComponents.pool_filter_dropdown

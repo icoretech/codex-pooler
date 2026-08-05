@@ -4,33 +4,39 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
   use CodexPoolerWeb, :html
 
   alias CodexPoolerWeb.Admin.AuditLogsComponents.Filters
+  alias CodexPoolerWeb.Admin.AuditLogsComponents.Prose
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.LogPagination
 
   import CodexPoolerWeb.Admin.AuditLogsComponents.Presentation,
     only: [
       actor_link: 1,
+      audit_action_icon: 1,
+      audit_action_icon_class: 1,
       detail_rows: 1,
-      event_icon: 1,
-      event_icon_class: 1,
       event_summary_rows: 1,
       event_title: 1,
-      format_actor: 1,
       format_datetime: 2,
       format_total: 1,
-      target_label: 1,
       target_link: 1
     ]
 
   defdelegate audit_log_filters(assigns), to: Filters
 
   attr :audit_logs, :map, required: true
+  attr :pool_names, :map, required: true
   attr :datetime_preferences, :map, required: true
   attr :previous_path, :string, default: nil
   attr :next_path, :string, default: nil
 
-  def audit_logs_table(assigns) do
-    assigns = assign(assigns, :page, LogPagination.metadata(assigns.audit_logs))
+  def audit_prose_ledger(assigns) do
+    assigns =
+      assigns
+      |> assign(:page, LogPagination.metadata(assigns.audit_logs))
+      |> assign(
+        :day_groups,
+        group_events_by_day(assigns.audit_logs.items, assigns.datetime_preferences)
+      )
 
     ~H"""
     <div id="admin-audit-logs-window" class="grid min-w-0 gap-3">
@@ -43,218 +49,94 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
         next_path={@next_path}
       />
 
-      <div
-        id="admin-audit-logs"
-        class="min-w-0 rounded-box border border-base-300 bg-base-100"
-      >
-        <div class="hidden overflow-x-auto md:block">
-          <table class="table min-w-[58rem] font-sans">
-            <colgroup>
-              <col style="width: 2.5rem; min-width: 2.5rem; max-width: 2.5rem;" />
-              <col class="w-36" />
-              <col />
-              <col class="w-[22rem]" />
-              <col class="w-[24rem]" />
-            </colgroup>
-            <thead>
-              <tr>
-                <th
-                  class="w-10 min-w-10 max-w-10 text-center"
-                  style="padding-left: 0; padding-right: 0;"
-                  aria-label="Event type"
-                >
-                </th>
-                <th
-                  class="whitespace-nowrap"
-                  style="padding-left: 0; padding-right: 0.75rem;"
-                >
-                  Time
-                </th>
-                <th class="whitespace-nowrap">Event</th>
-                <th class="whitespace-nowrap">Actor</th>
-                <th class="whitespace-nowrap">Context</th>
-              </tr>
-            </thead>
-            <tbody id="audit-logs-table">
-              <AdminComponents.table_empty_row id="audit-log-empty-state" columns={5}>
-                {empty_copy()}
-              </AdminComponents.table_empty_row>
-              <tr
-                :for={event <- @audit_logs.items}
-                id={"audit-log-row-#{event.id}"}
-                class="text-sm transition-colors hover:bg-base-200/80"
+      <AdminComponents.empty_state
+        :if={@audit_logs.items == []}
+        id="audit-log-empty-state"
+        icon="hero-clipboard-document-list"
+        title="No audit events"
+        description={empty_copy()}
+      />
+
+      <div :if={@audit_logs.items != []} id="admin-audit-logs" class="grid min-w-0 gap-3">
+        <%!-- The pager carries the count and the way to move; this names the
+        list and its total for a screen reader before the sentences, which is
+        the one thing the pager cannot do. --%>
+        <p class="sr-only">
+          Audit logs, {format_total(@audit_logs.total)} matching redacted audit events
+        </p>
+        <section
+          :for={{day, events} <- @day_groups}
+          class="min-w-0 rounded-box border border-base-300 bg-base-100 px-4 pt-3 pb-1"
+        >
+          <p
+            data-role="audit-day-break"
+            class="mb-1 text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/38"
+          >
+            {day}
+          </p>
+          <ol class="min-w-0 list-none">
+            <li
+              :for={event <- events}
+              id={"audit-log-row-#{event.id}"}
+              data-role="audit-prose-event"
+              class="-mx-4 flex min-w-0 items-start gap-2.5 border-b border-base-300/55 px-4 pt-[9.5px] pb-[6.5px] transition-colors last:border-b-0 hover:bg-base-200/40"
+            >
+              <button
+                type="button"
+                data-role="audit-prose-family"
+                class="mt-[1.5px] flex shrink-0 cursor-pointer transition-opacity hover:opacity-70"
+                aria-label={"Filter by event: #{event_title(event)}"}
+                title={"Filter by event: #{event_title(event)}"}
+                phx-click="select_action_filter"
+                phx-value-action={event.action}
               >
-                <td
-                  class="w-10 min-w-10 max-w-10 align-middle text-center"
-                  style="padding-left: 0; padding-right: 0;"
-                >
-                  <.icon name={event_icon(event)} class={event_icon_class(event.outcome)} />
-                </td>
-                <td
-                  class="whitespace-nowrap align-middle text-sm"
-                  style="padding-left: 0; padding-right: 0.75rem;"
-                >
-                  <button
-                    id={"audit-log-time-#{event.id}"}
-                    type="button"
-                    class="whitespace-nowrap text-left text-base-content/60 underline-offset-2 transition-colors hover:text-primary hover:underline"
-                    aria-haspopup="dialog"
-                    aria-controls="audit-event-details-sidebar"
-                    phx-click="show_audit_event"
-                    phx-value-id={event.id}
-                  >
-                    {format_datetime(event.occurred_at, @datetime_preferences)}
-                  </button>
-                </td>
-                <td class="align-middle">
-                  <span
-                    class="block truncate font-medium leading-5 text-base-content"
-                    title={event_title(event)}
-                  >
-                    {event_title(event)}
-                  </span>
-                </td>
-                <td class="align-middle">
-                  <.link
-                    :if={actor_link(event)}
-                    navigate={actor_link(event)}
-                    class="block truncate font-medium leading-5 text-primary hover:text-primary/80"
-                    title={format_actor(event)}
-                  >
-                    {format_actor(event)}
-                  </.link>
-                  <span
-                    :if={!actor_link(event)}
-                    class="block truncate font-medium leading-5 text-base-content"
-                    title={format_actor(event)}
-                  >
-                    {format_actor(event)}
-                  </span>
-                </td>
-                <td class="align-middle">
-                  <div class="flex min-w-0 items-center gap-2 text-sm text-base-content/70">
-                    <.link
-                      :if={target_link(event)}
-                      navigate={target_link(event)}
-                      class="truncate leading-5 text-primary hover:text-primary/80"
-                      title={target_label(event)}
-                    >
-                      {target_label(event)}
-                    </.link>
-                    <span
-                      :if={!target_link(event)}
-                      class="truncate leading-5 text-base-content"
-                      title={target_label(event)}
-                    >
-                      {target_label(event)}
-                    </span>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-            <%!-- The count and the way to move are the pager's job now; the
-          caption names the table and its total for a screen reader before the
-          rows, which is the one thing the pager cannot do. "Hard limit" was
-          true when fifty rows were all there were. --%>
-            <caption class="sr-only">
-              Audit logs, {format_total(@audit_logs.total)} matching redacted audit events
-            </caption>
-          </table>
-        </div>
-        <div id="mobile-audit-logs-table" class="overflow-x-auto md:hidden">
-          <table class="table table-sm w-[42rem] min-w-[42rem] font-sans">
-            <colgroup>
-              <col style="width: 2.5rem; min-width: 2.5rem; max-width: 2.5rem;" />
-              <col style="width: 9.75rem; min-width: 9.75rem;" />
-              <col style="width: 16rem; min-width: 16rem;" />
-              <col style="width: 13.75rem; min-width: 13.75rem;" />
-            </colgroup>
-            <thead>
-              <tr>
-                <th
-                  class="w-10 min-w-10 max-w-10 text-center"
-                  style="padding-left: 0; padding-right: 0;"
-                  aria-label="Event type"
-                >
-                </th>
-                <th
-                  class="whitespace-nowrap"
-                  style="padding-left: 0; padding-right: 0.75rem;"
-                >
-                  Time
-                </th>
-                <th class="whitespace-nowrap">Event</th>
-                <th class="whitespace-nowrap">Actor</th>
-              </tr>
-            </thead>
-            <tbody id="mobile-audit-logs-table-body">
-              <AdminComponents.table_empty_row id="mobile-audit-log-empty-state" columns={4}>
-                {empty_copy()}
-              </AdminComponents.table_empty_row>
-              <tr
-                :for={event <- @audit_logs.items}
-                id={"mobile-audit-log-row-#{event.id}"}
-                class="text-sm transition-colors hover:bg-base-200/80"
+                <.icon
+                  name={audit_action_icon(event.action)}
+                  class={["size-4", audit_action_icon_class(event.action)]}
+                />
+              </button>
+              <Prose.event_sentence
+                event={event}
+                pool_names={@pool_names}
+                datetime_preferences={@datetime_preferences}
+              />
+              <button
+                type="button"
+                id={"audit-log-details-#{event.id}"}
+                data-role="audit-prose-details"
+                class="flex shrink-0 self-center cursor-pointer text-base-content/25 transition-colors hover:text-primary"
+                aria-haspopup="dialog"
+                aria-controls="audit-event-details-sidebar"
+                aria-label={"Inspect event details for #{event_title(event)}"}
+                phx-click="show_audit_event"
+                phx-value-id={event.id}
               >
-                <td
-                  class="w-10 min-w-10 max-w-10 align-middle text-center"
-                  style="padding-left: 0; padding-right: 0;"
-                >
-                  <.icon name={event_icon(event)} class={event_icon_class(event.outcome)} />
-                </td>
-                <td
-                  class="whitespace-nowrap align-middle text-sm"
-                  style="padding-left: 0; padding-right: 0.75rem;"
-                >
-                  <button
-                    id={"mobile-audit-log-time-#{event.id}"}
-                    type="button"
-                    class="whitespace-nowrap text-left text-primary underline-offset-2 transition-colors hover:text-primary/80 hover:underline"
-                    aria-haspopup="dialog"
-                    aria-controls="audit-event-details-sidebar"
-                    phx-click="show_audit_event"
-                    phx-value-id={event.id}
-                  >
-                    {format_datetime(event.occurred_at, @datetime_preferences)}
-                  </button>
-                </td>
-                <td class="align-middle">
-                  <span
-                    class="block truncate font-medium leading-5 text-base-content"
-                    title={event_title(event)}
-                  >
-                    {event_title(event)}
-                  </span>
-                </td>
-                <td class="align-middle">
-                  <.link
-                    :if={actor_link(event)}
-                    navigate={actor_link(event)}
-                    class="block truncate font-medium leading-5 text-primary hover:text-primary/80"
-                    title={format_actor(event)}
-                  >
-                    {format_actor(event)}
-                  </.link>
-                  <span
-                    :if={!actor_link(event)}
-                    class="block truncate font-medium leading-5 text-base-content"
-                    title={format_actor(event)}
-                  >
-                    {format_actor(event)}
-                  </span>
-                </td>
-              </tr>
-            </tbody>
-            <%!-- The desktop and mobile tables are one surface: the count moved
-            to the pager on both, or a phone shows it twice. --%>
-            <caption class="sr-only">
-              Audit logs, {format_total(@audit_logs.total)} matching redacted audit events
-            </caption>
-          </table>
-        </div>
+                <.icon name="hero-chevron-right" class="size-4" />
+              </button>
+            </li>
+          </ol>
+        </section>
       </div>
     </div>
     """
+  end
+
+  defp group_events_by_day(events, datetime_preferences) do
+    events
+    |> Enum.chunk_by(&event_day_label(&1, datetime_preferences))
+    |> Enum.map(fn [first | _rest] = chunk ->
+      {event_day_label(first, datetime_preferences), chunk}
+    end)
+  end
+
+  defp event_day_label(event, datetime_preferences) do
+    case CodexPoolerWeb.DateTimeDisplay.format_datetime_parts(
+           event.occurred_at,
+           datetime_preferences
+         ) do
+      %{date: date} -> date
+      nil -> "Undated"
+    end
   end
 
   attr :selected_audit_event, :map, default: nil

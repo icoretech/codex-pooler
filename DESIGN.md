@@ -576,11 +576,12 @@ Three recurring list shapes, all `text-xs`-scale and truncation-guarded:
   inline share bar `h-1 rounded-full bg-primary/70`) and the stats leaderboard
   runner rows (`divide-y divide-base-300/70`, rank medallion, name+pool stack,
   right-aligned mono values).
-- **Hairline tables** — long homogeneous records (request logs, jobs, audit)
-  use daisyUI `table` with its default row hairlines and
-  `hover:bg-base-200/80`; request logs and the jobs explorer additionally
-  compact cell padding through `admin-log-table.table-sm` in `app.css` and
-  follow the record-row contract in §5.18 for widths, tone, and reflow. There
+- **Hairline tables** — long homogeneous records (request logs, jobs) use
+  daisyUI `table` with its default row hairlines and `hover:bg-base-200/80`;
+  request logs and the jobs explorer additionally compact cell padding
+  through `admin-log-table.table-sm` in `app.css` and follow the record-row
+  contract in §5.18 for widths, tone, and reflow. The audit trail left this
+  family for the prose ledger (§5.22). There
   is no `table-zebra` in the app — the only striping is the Observatory
   outcomes table (`nth-child(odd)` in `app.css`) and the pool serving-modes
   grid (`even:`). Row detail lives in the drawer, not in ever-wider columns.
@@ -1159,6 +1160,62 @@ live is always one click away and never something the operator has to arrange.
   admin with no Pools says so in one muted sentence.
 - Panel open state lives server-side in `operator_panel_views` (pruned on
   reload), mirroring the upstreams page.
+
+### 5.22 Audit prose ledger
+
+- **Source:** the ledger shell in
+  [`components.ex`](lib/codex_pooler_web/live/admin/components/pages/audit_logs/components.ex)
+  and the sentence builder in
+  [`prose.ex`](lib/codex_pooler_web/live/admin/components/pages/audit_logs/components/prose.ex);
+  the reading was piloted on the request-logs prose experiment
+  (`feat/request-logs-prose`).
+- **Purpose:** the audit trail told as sentences — who did what to whom —
+  at every width, desktop included. One tree, no table, no reflow contract:
+  a sentence wraps where a column would truncate.
+- **Grammar:** values carry the contrast in full-ink `text-base-content` at
+  regular weight — bold entities proved too loud in a dense ledger — while
+  connective words step back to 45% ink at `text-[0.8rem] leading-relaxed`;
+  the leading timestamp is time-only, set in the day kicker's own type
+  (`text-[0.62rem] font-semibold tracking-[0.08em] tabular-nums`) at 35%
+  ink, raised `-top-px` so the cap-height digit block sits optically
+  centered on the line, and is a drawer trigger; the date lives once, in
+  the kicker that heads each day card. Free-standing em dashes are the only punctuation
+  that separates clauses. Every clause is optional because events genuinely
+  differ; a failure outcome appends an error-toned tail
+  ("— it failed: reason").
+- **Derived clauses, no schema change:** already-recorded detail keys keep
+  the sentence honest without new columns — an invite names the invited
+  email, a Pool status change names the destination status, an operator
+  update whose role actually moved appends "— role set to …" using the
+  Operators-page role labels, and any labeled record owning a `pool_id`
+  says "in the Pool …" with the Pool acting on the filter. Everything
+  heavier (previous states, assignment id lists, trigger kinds) stays in
+  the drawer.
+- **Day cards and row anatomy:** each day group is its own `rounded-box`
+  card headed by the kicker; rows are flex (`items-start gap-2.5`) with the
+  family icon leading, the sentence `flex-1`, and a `hero-chevron-right`
+  drawer trigger `self-center` at the row's end. Rows bleed to the card
+  edge (`-mx-4 px-4`) for a full-width `hover:bg-base-200/40`, split by
+  `border-base-300/55` hairlines. Both icon buttons are `flex` so they
+  collapse to the glyph's 16px instead of inheriting the 24px base line
+  box — that, plus the asymmetric `pt-[9.5px] pb-[6.5px]` (compensating
+  the bottom hairline and the half-leading), is what centers a one-line
+  sentence in its row; measure before changing either.
+- **Entities act on the page's own filters, never navigate away:** the
+  actor, the target operator, and the Pool render as inline buttons that set
+  the matching filter (`select_actor_filter`, `select_target_filter`,
+  `select_pool_filter`); the family icon (the §5.7-toned `audit_action_icon`
+  set, `size-4`) filters by that exact action, and the "failed" word filters
+  by outcome. A target with no email filters by its id while showing its
+  presentation label; an entity with nothing to filter by falls back to a
+  plain full-ink span.
+- **Coverage is a contract:** every action in `Audit.action_options/0` has a
+  handcrafted sentence in the prose map, enforced by a test that diffs the
+  two lists; unknown actions degrade to a marked generic fallback. Porting
+  this page surfaced two recorded-but-unlisted actions (the OAuth browser
+  and device link flows), which joined the vocabulary and the filter.
+- The sticky `LogPagination` pager, the filters (stacked `mobile_single_column`
+  on phones like the other log pages), and the detail drawer are unchanged.
 
 ## 6. Components — API Key Observatory extension
 

@@ -9,7 +9,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
   alias CodexPoolerWeb.DateTimeDisplay
 
   import CodexPoolerWeb.Admin.AuditLogsComponents,
-    only: [audit_event_drawer: 1, audit_log_filters: 1, audit_logs_table: 1]
+    only: [audit_event_drawer: 1, audit_log_filters: 1, audit_prose_ledger: 1]
 
   @page_size 50
   @outcome_options ~w(success failure)
@@ -70,6 +70,18 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
     {:noreply, push_patch(socket, to: ~p"/admin/audit-logs?#{query_params(params)}")}
   end
 
+  def handle_event("select_actor_filter", %{"actor" => actor}, socket) do
+    params = Map.put(socket.assigns.filter_values, "actor", actor)
+
+    {:noreply, push_patch(socket, to: ~p"/admin/audit-logs?#{query_params(params)}")}
+  end
+
+  def handle_event("select_target_filter", %{"target" => target}, socket) do
+    params = Map.put(socket.assigns.filter_values, "target", target)
+
+    {:noreply, push_patch(socket, to: ~p"/admin/audit-logs?#{query_params(params)}")}
+  end
+
   @impl true
   def handle_event("show_audit_event", %{"id" => id}, socket) do
     selected_event = Enum.find(socket.assigns.audit_logs.items, &(&1.id == id))
@@ -114,8 +126,9 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
               pool_filter_options={@pool_filter_options}
             />
 
-            <.audit_logs_table
+            <.audit_prose_ledger
               audit_logs={@audit_logs}
+              pool_names={Map.new(@pools, &{&1.id, &1.name})}
               datetime_preferences={@datetime_preferences}
               previous_path={page_path(@current_params, @audit_logs, @audit_log_pin_at, -1)}
               next_path={page_path(@current_params, @audit_logs, @audit_log_pin_at, +1)}
