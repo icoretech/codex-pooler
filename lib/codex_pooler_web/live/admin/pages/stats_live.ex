@@ -29,17 +29,24 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
      assign(socket,
        page_title: "Stats",
        dashboard: nil,
+       dashboard_loading?: true,
        filter_form: to_form(%{"pool_id" => "", "window" => "24h"}, as: :filters),
        filter_error: nil,
        pool_filter_options: [],
        leaderboard_sort: :tokens,
-       subscribed_pool_ids: MapSet.new()
+       subscribed_pool_ids: MapSet.new(),
+       current_params: %{},
+       stats_reload_timer: nil,
+       stats_dashboard_generation: 0,
+       stats_dashboard_running?: false,
+       stats_dashboard_rerun?: false,
+       stats_dashboard_preparation: nil
      )}
   end
 
   @impl true
   def handle_params(params, _uri, socket) do
-    {:noreply, load_dashboard(socket, params)}
+    {:noreply, request_stats_dashboard(socket, params)}
   end
 
   @impl true
@@ -100,10 +107,35 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
   defp reload_stats_dashboard(socket) do
     notify_stats_reload(:executed, socket.assigns.current_params)
 
-    {:noreply,
-     socket
-     |> assign(:stats_reload_timer, nil)
-     |> load_dashboard(socket.assigns.current_params)}
+    {:noreply, request_stats_dashboard(socket, socket.assigns.current_params)}
+  end
+
+  @impl true
+  def handle_async({:stats_dashboard, generation}, {:ok, result}, socket) do
+    socket = assign(socket, :stats_dashboard_running?, false)
+
+    if generation == socket.assigns.stats_dashboard_generation do
+      {:noreply, apply_stats_dashboard_result(socket, result)}
+    else
+      {:noreply, maybe_start_pending_stats_dashboard(socket)}
+    end
+  end
+
+  def handle_async({:stats_dashboard, generation}, {:exit, _reason}, socket) do
+    socket = assign(socket, :stats_dashboard_running?, false)
+
+    if generation == socket.assigns.stats_dashboard_generation do
+      {:noreply,
+       socket
+       |> assign(
+         dashboard: nil,
+         dashboard_loading?: false,
+         filter_error: %{code: :load_failed, message: "statistics could not be loaded"}
+       )
+       |> maybe_start_pending_stats_dashboard()}
+    else
+      {:noreply, maybe_start_pending_stats_dashboard(socket)}
+    end
   end
 
   @impl true
@@ -115,7 +147,11 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
       active_nav={:stats}
       alert_notification_center={@alert_notification_center}
     >
-      <section id="admin-stats" class="grid w-full min-w-0 gap-4 lg:gap-5">
+      <section
+        id="admin-stats"
+        class="grid w-full min-w-0 gap-4 lg:gap-5"
+        aria-busy={to_string(@dashboard_loading?)}
+      >
         <div class="grid min-w-0 gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(24rem,34rem)] xl:items-end">
           <AdminComponents.page_header
             id="stats-page-header"
@@ -216,10 +252,14 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
           </section>
         <% else %>
           <AdminComponents.empty_state
-            id="stats-dashboard-error"
-            title="Stats are not available"
-            description="Change filters or sign in with an operator account that can manage pools."
-            icon="hero-chart-bar"
+            id={if @dashboard_loading?, do: "stats-dashboard-loading", else: "stats-dashboard-error"}
+            title={if @dashboard_loading?, do: "Loading stats", else: "Stats are not available"}
+            description={
+              if @dashboard_loading?,
+                do: "Building usage, cost, latency, and session metrics for this scope.",
+                else: "Change filters or sign in with an operator account that can manage pools."
+            }
+            icon={if @dashboard_loading?, do: "hero-arrow-path", else: "hero-chart-bar"}
           />
         <% end %>
       </section>
@@ -227,50 +267,129 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
     """
   end
 
-  defp load_dashboard(socket, params) do
+  defp request_stats_dashboard(socket, params) do
     filters = stats_filters(params)
+    generation = socket.assigns.stats_dashboard_generation + 1
+    reset_dashboard? = params != socket.assigns.current_params
 
-    case build_dashboard_with_telemetry(socket.assigns.current_scope, filters) do
-      {:ok, dashboard} ->
+    case prepare_dashboard_with_telemetry(socket.assigns.current_scope, filters) do
+      {:ok, preparation} ->
         socket
-        |> assign(:current_params, params)
-        |> reconcile_pool_subscriptions(dashboard)
         |> assign(
-          dashboard: dashboard,
-          filter_form: stats_filter_form(dashboard.filters),
+          current_params: params,
+          stats_dashboard_generation: generation,
+          stats_dashboard_preparation: preparation,
+          dashboard: if(reset_dashboard?, do: nil, else: socket.assigns.dashboard),
+          dashboard_loading?: true,
+          filter_form: stats_filter_form(preparation.filters),
           filter_error: nil,
-          pool_filter_options: pool_filter_options(dashboard),
-          current_params: params
+          pool_filter_options: pool_filter_options(preparation.filters)
         )
+        |> cancel_stats_reload_timer()
+        |> reconcile_pool_subscriptions(preparation.pool_ids)
+        |> maybe_start_stats_dashboard(generation)
 
       {:error, error} ->
         socket
-        |> assign(:current_params, params)
-        |> reconcile_pool_subscriptions(nil)
         |> assign(
+          current_params: params,
+          stats_dashboard_generation: generation,
+          stats_dashboard_preparation: nil,
+          stats_dashboard_rerun?: false,
           dashboard: nil,
+          dashboard_loading?: false,
           filter_form: stats_filter_form(filters),
           filter_error: error,
-          pool_filter_options: [],
-          current_params: params
+          pool_filter_options: []
         )
+        |> cancel_stats_reload_timer()
+        |> reconcile_pool_subscriptions([])
     end
   end
 
-  defp build_dashboard_with_telemetry(scope, filters) do
+  defp prepare_dashboard_with_telemetry(scope, filters) do
     started_at = System.monotonic_time()
-    result = Stats.build_dashboard(scope, filters)
+    result = Stats.prepare_dashboard(scope, filters)
+
+    case result do
+      {:ok, _preparation} ->
+        result
+
+      {:error, _error} ->
+        emit_dashboard_build_telemetry(
+          result,
+          filters,
+          System.monotonic_time() - started_at
+        )
+
+        result
+    end
+  end
+
+  defp build_prepared_dashboard_with_telemetry(preparation) do
+    started_at = System.monotonic_time()
+    result = Stats.build_prepared_dashboard(preparation)
     duration = System.monotonic_time() - started_at
 
-    emit_dashboard_build_telemetry(result, filters, duration)
+    emit_dashboard_build_telemetry(result, preparation.filters, duration)
 
     result
   end
 
-  defp reconcile_pool_subscriptions(socket, dashboard) do
+  defp maybe_start_stats_dashboard(socket, generation) do
+    cond do
+      not connected?(socket) ->
+        socket
+
+      socket.assigns.stats_dashboard_running? ->
+        assign(socket, :stats_dashboard_rerun?, true)
+
+      true ->
+        start_stats_dashboard(socket, generation)
+    end
+  end
+
+  defp start_stats_dashboard(socket, generation) do
+    preparation = socket.assigns.stats_dashboard_preparation
+
+    socket
+    |> assign(stats_dashboard_running?: true, stats_dashboard_rerun?: false)
+    |> start_async({:stats_dashboard, generation}, fn ->
+      build_prepared_dashboard_with_telemetry(preparation)
+    end)
+  end
+
+  defp maybe_start_pending_stats_dashboard(socket) do
+    if socket.assigns.stats_dashboard_rerun? and
+         not is_nil(socket.assigns.stats_dashboard_preparation) do
+      start_stats_dashboard(socket, socket.assigns.stats_dashboard_generation)
+    else
+      socket
+    end
+  end
+
+  defp apply_stats_dashboard_result(socket, {:ok, dashboard}) do
+    assign(socket,
+      dashboard: dashboard,
+      dashboard_loading?: false,
+      filter_error: nil,
+      stats_dashboard_rerun?: false
+    )
+  end
+
+  defp apply_stats_dashboard_result(socket, {:error, error}) do
+    assign(socket,
+      dashboard: nil,
+      dashboard_loading?: false,
+      filter_error: error,
+      stats_dashboard_rerun?: false
+    )
+  end
+
+  defp reconcile_pool_subscriptions(socket, pool_ids) do
     if connected?(socket) do
       {socket, stale_pool_ids} =
-        PoolEventSubscriptions.reconcile(socket, dashboard_pool_ids(dashboard))
+        PoolEventSubscriptions.reconcile(socket, MapSet.new(pool_ids))
 
       socket
       |> PoolEventSubscriptions.maybe_cancel_timer_on_stale(
@@ -280,17 +399,6 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
     else
       socket
     end
-  end
-
-  defp dashboard_pool_ids(nil), do: MapSet.new()
-
-  defp dashboard_pool_ids(%{selected_pool: %{id: pool_id}}) when is_binary(pool_id),
-    do: MapSet.new([pool_id])
-
-  defp dashboard_pool_ids(%{filters: %{pool_options: pool_options}}) do
-    pool_options
-    |> Enum.map(& &1.id)
-    |> MapSet.new()
   end
 
   defp schedule_stats_reload(socket) do
@@ -414,7 +522,7 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
   defp query_param_order("window"), do: 1
   defp query_param_order(_key), do: 2
 
-  defp pool_filter_options(%{filters: %{pool_options: pool_options}}) do
+  defp pool_filter_options(%{pool_options: pool_options}) do
     case pool_options do
       [] -> []
       _pool_options -> PoolFilterComponents.pool_filter_options(pool_options)

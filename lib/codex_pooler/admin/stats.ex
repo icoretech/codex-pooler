@@ -35,6 +35,13 @@ defmodule CodexPooler.Admin.Stats do
           required(:sources) => map(),
           required(:empty_states) => [map()]
         }
+  @type dashboard_preparation :: %{
+          required(:normalized) => Filters.normalized(),
+          required(:pools) => [Pools.Pool.t()],
+          required(:pool_ids) => [Ecto.UUID.t()],
+          required(:filters) => Filters.public_filters(),
+          required(:selected_pool) => Filters.pool_summary() | nil
+        }
   @type pool_usage_opt :: PoolUsage.pool_usage_opt()
   @type pool_usage_metrics :: PoolUsage.pool_usage_metrics()
 
@@ -51,6 +58,47 @@ defmodule CodexPooler.Admin.Stats do
       {:error,
        Filters.access_error(:unauthorized, "admin statistics require an authenticated operator")}
 
+  @spec prepare_dashboard(Scope.t(), map() | keyword()) ::
+          {:ok, dashboard_preparation()} | {:error, access_error()}
+  def prepare_dashboard(%Scope{} = scope, filters) when is_map(filters) or is_list(filters) do
+    with {:ok, pools} <- Pools.list_reporting_pools(scope),
+         {:ok, normalized} <- Filters.normalize(filters, pools) do
+      {:ok,
+       %{
+         normalized: normalized,
+         pools: pools,
+         pool_ids: Filters.dashboard_pool_ids(normalized, pools),
+         filters: Filters.public(normalized, pools),
+         selected_pool: Filters.pool_summary(normalized.selected_pool)
+       }}
+    else
+      {:error, %{code: code}} when code in [:capability_denied, :invalid_request] ->
+        {:error,
+         Filters.access_error(:unauthorized, "admin statistics require an authenticated operator")}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  def prepare_dashboard(_scope, _filters),
+    do:
+      {:error,
+       Filters.access_error(:unauthorized, "admin statistics require an authenticated operator")}
+
+  @spec build_prepared_dashboard(dashboard_preparation()) :: {:ok, dashboard()}
+  def build_prepared_dashboard(%{
+        normalized: normalized,
+        pools: pools,
+        pool_ids: pool_ids
+      }) do
+    if pool_ids == [] do
+      {:ok, empty_dashboard(normalized, pools)}
+    else
+      build_dashboard_for_pool_ids(normalized, pools, pool_ids)
+    end
+  end
+
   @spec pool_usage_metrics_by_pool_ids([Ecto.UUID.t()], [pool_usage_opt()]) :: %{
           optional(Ecto.UUID.t()) => pool_usage_metrics()
         }
@@ -59,22 +107,8 @@ defmodule CodexPooler.Admin.Stats do
   end
 
   defp do_build_dashboard(scope, filters) do
-    with {:ok, pools} <- Pools.list_reporting_pools(scope),
-         {:ok, normalized} <- Filters.normalize(filters, pools) do
-      pool_ids = Filters.dashboard_pool_ids(normalized, pools)
-
-      if pool_ids == [] do
-        {:ok, empty_dashboard(normalized, pools)}
-      else
-        build_dashboard_for_pool_ids(normalized, pools, pool_ids)
-      end
-    else
-      {:error, %{code: code}} when code in [:capability_denied, :invalid_request] ->
-        {:error,
-         Filters.access_error(:unauthorized, "admin statistics require an authenticated operator")}
-
-      {:error, _reason} = error ->
-        error
+    with {:ok, preparation} <- prepare_dashboard(scope, filters) do
+      build_prepared_dashboard(preparation)
     end
   end
 
