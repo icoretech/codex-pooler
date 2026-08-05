@@ -5,7 +5,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
 
   @fixture Path.expand("../../fixtures/pricing/openai/2026-07-28.json", __DIR__)
   @target Path.expand("../../../priv/pricing/openai/pricing.json", __DIR__)
-  @target_sha256 "6f60a5009b16b872429682b2c74548b152abbe7ab6b3664bad4900ed308c18ca"
+  @target_sha256 "0d6ed91d7ad5c741fc78a6cf2f90d02915c4bc2abb59df6796817dcb95402d34"
 
   @skipped_pricing_type_paths [
     "models.gpt-4o-mini-transcribe.pricing_type",
@@ -57,14 +57,14 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
            ]
   end
 
-  test "classifies the reviewed July 31 target with exact artifact and warning coverage" do
+  test "classifies the reviewed August 5 target with exact artifact and warning coverage" do
     raw = File.read!(@target)
     payload = Jason.decode!(raw)
     result = OpenAIPricingPreflight.validate_file(@target)
 
-    assert byte_size(raw) == 62_279
+    assert byte_size(raw) == 62_975
     assert Base.encode16(:crypto.hash(:sha256, raw), case: :lower) == @target_sha256
-    assert payload["generated_at"] == "2026-07-31T05:10:03.599675Z"
+    assert payload["generated_at"] == "2026-08-05T17:15:03.219498Z"
     assert payload["models_count"] == 79
     assert map_size(payload["models"]) == 79
     assert payload["tools_count"] == 4
@@ -75,11 +75,17 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
     assert length(result.warnings) == 82
 
     assert result.summary == %{
-             importable_rows: 171,
-             priced_rows: 162,
-             unavailable_rows: 9,
+             importable_rows: 177,
+             priced_rows: 165,
+             unavailable_rows: 12,
              skipped_models: 8,
              skipped_price_buckets: 74
+           }
+
+    assert result.coverage.imported_price_buckets == %{
+             "default" => 111,
+             "long_context" => 33,
+             "short_context" => 33
            }
 
     assert Enum.frequencies_by(result.warnings, & &1.code) == %{
