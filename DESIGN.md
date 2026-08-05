@@ -1064,6 +1064,14 @@ live is always one click away and never something the operator has to arrange.
   for Bridge ring) is always rendered and dims to `opacity-45` while its
   option is unselected — never `hidden`, so changing the selection cannot
   shift the layout.
+- **Toggle-gated tunables go read-only, not disabled:** when a whole panel
+  of cards and fields is gated by a switch (auto-redeem and the saved-reset
+  tunables), the off state keeps everything rendered and dimmed, makes text
+  inputs `readonly`, and locks the card radiogroup with
+  `pointer-events-none` + `tabindex="-1"` + `aria-disabled` on the fieldset.
+  Never the `disabled` attribute: disabled controls drop out of the form
+  submit, and saving with the gate off would silently clobber the stored
+  policy values.
 
 ```heex
 <div class="group/strategy relative min-w-0 rounded-box border border-base-300 bg-base-100 transition-colors hover:border-primary/50 has-[.strategy-radio:checked]:border-primary/60 has-[.strategy-radio:checked]:bg-primary/5 …">

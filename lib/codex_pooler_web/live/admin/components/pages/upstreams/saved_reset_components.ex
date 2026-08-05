@@ -148,7 +148,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
       data-role="saved-reset-policy-tunables"
       class={["grid gap-4 transition-opacity", !@policy_enabled? && "opacity-55"]}
     >
-      <fieldset id="saved-reset-policy-trigger-mode" class="grid items-stretch gap-2.5 md:grid-cols-2">
+      <fieldset
+        id="saved-reset-policy-trigger-mode"
+        class={[
+          "grid items-stretch gap-2.5 md:grid-cols-2",
+          !@policy_enabled? && "pointer-events-none"
+        ]}
+        aria-disabled={if(!@policy_enabled?, do: "true")}
+      >
         <legend class="sr-only">When automatic redemption can start</legend>
         <label
           id="saved-reset-policy-trigger-blocked"
@@ -167,6 +174,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
             name="saved_reset_policy[trigger_mode]"
             value="blocked"
             checked={@trigger_mode == "blocked"}
+            tabindex={if(!@policy_enabled?, do: "-1")}
             class="sr-only"
           />
           <span class="grid min-w-0 gap-0.5">
@@ -195,6 +203,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
             name="saved_reset_policy[trigger_mode]"
             value="threshold"
             checked={@trigger_mode == "threshold"}
+            tabindex={if(!@policy_enabled?, do: "-1")}
             class="sr-only"
           />
           <span class="grid min-w-0 gap-0.5">
@@ -214,6 +223,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
                 min="1"
                 max="100"
                 step="1"
+                readonly={!@policy_enabled?}
                 class={[
                   "input input-xs mx-0.5 inline-block w-14 border-base-300 bg-base-100 px-1.5 text-center text-[11px] font-semibold tabular-nums",
                   @threshold_errors != [] && "input-error"
@@ -240,6 +250,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
             name="saved_reset_policy[min_blocked_minutes]"
             label="Natural reset buffer"
             min="0"
+            readonly={!@policy_enabled?}
           />
           <p class="text-xs leading-5 text-base-content/65">
             Do not spend a saved reset when the weekly quota will reset naturally within this many minutes.
@@ -253,6 +264,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
             name="saved_reset_policy[keep_credits]"
             label="Resets to keep"
             min="0"
+            readonly={!@policy_enabled?}
           />
           <p class="text-xs leading-5 text-base-content/65">
             Automatic redemption stops when the available reset count is at or below this reserve.
