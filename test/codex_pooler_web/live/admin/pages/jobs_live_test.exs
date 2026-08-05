@@ -291,7 +291,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
 
     assert has_element?(view, "#admin-jobs-explorer")
     assert has_element?(view, "#admin-jobs-explorer-total", "1 job")
-    assert has_element?(view, "#admin-jobs-explorer-range", "Showing 1-1 of 1")
+    assert has_element?(view, "#admin-jobs-explorer-pagination-range", "Showing 1-1 of 1")
     assert has_element?(view, "#admin-jobs-explorer-table")
     assert has_element?(view, "#admin-jobs-explorer-rows #job-#{job.id}")
     assert has_element?(view, "#job-#{job.id}", "Runtime state cleanup")

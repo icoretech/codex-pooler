@@ -60,7 +60,10 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTableTest do
 
     assert has_element?(view, "#admin-jobs-explorer")
     assert has_element?(view, "#admin-jobs-explorer-total", "0 jobs")
-    assert has_element?(view, "#admin-jobs-explorer-range", "Showing 0 of 0")
+    # Nothing to page through, so the pager stands aside for the empty state.
+    # The count an empty explorer still owes a screen reader is the sr-only
+    # total above, not a range of zero.
+    refute has_element?(view, "#admin-jobs-explorer-pagination")
     assert has_element?(view, "#admin-jobs-empty-state", "No jobs match these filters")
     refute has_element?(view, "#admin-jobs-explorer-table")
     refute has_element?(view, "#admin-jobs-explorer-rows")
@@ -246,12 +249,12 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTableTest do
     assert has_element?(view, "#admin-jobs-explorer")
     assert has_element?(view, "#admin-jobs-explorer-rows #admin-jobs-explorer-table")
     assert has_element?(view, "#admin-jobs-explorer-total", "55 jobs")
-    assert has_element?(view, "#admin-jobs-explorer-range", "Showing 1-20 of 55")
+    assert has_element?(view, "#admin-jobs-explorer-pagination-range", "Showing 1-20 of 55")
     refute has_element?(view, "#admin-jobs-explorer-table th", "State")
 
     assert has_element?(
              view,
-             "#admin-jobs-explorer-pagination #admin-jobs-explorer-range",
+             "#admin-jobs-explorer-pagination #admin-jobs-explorer-pagination-range",
              "Showing 1-20 of 55"
            )
 
@@ -265,7 +268,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTableTest do
     render_click(element(view, "#admin-jobs-explorer-pagination-next"))
     assert_patch(view, ~p"/admin/jobs?page=2")
 
-    assert has_element?(view, "#admin-jobs-explorer-range", "Showing 21-40 of 55")
+    assert has_element?(view, "#admin-jobs-explorer-pagination-range", "Showing 21-40 of 55")
     assert has_element?(view, "#admin-jobs-explorer-pagination", "Page 2 of 3")
     assert has_element?(view, "#admin-jobs-explorer-pagination-prev[href='/admin/jobs']")
     assert has_element?(view, "#admin-jobs-explorer-pagination-next[href='/admin/jobs?page=3']")

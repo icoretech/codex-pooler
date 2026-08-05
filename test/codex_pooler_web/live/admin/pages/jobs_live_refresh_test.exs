@@ -73,7 +73,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveRefreshTest do
 
     assert count_occurrences(rendered, ~s(<tr id="job-)) == 20
     assert has_element?(view, "#admin-jobs-explorer-total", "51 jobs")
-    assert has_element?(view, "#admin-jobs-explorer-range", "Showing 1-20 of 51")
+    assert has_element?(view, "#admin-jobs-explorer-pagination-range", "Showing 1-20 of 51")
     assert has_element?(view, "#job-#{List.last(jobs).id}")
     refute has_element?(view, "#job-#{List.first(jobs).id}")
   end

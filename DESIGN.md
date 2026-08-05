@@ -976,14 +976,14 @@ in the cell (`235.3k`, not `235.3k tokens`).
 draws from a set larger than a page, so it carries one nav: `Page X of Y` at the
 start, `Showing a-b of N` in `tabular-nums`, and a `join` of Previous/Next at
 the end, disabled as `btn-disabled` spans rather than removed so the control
-keeps its shape. On both log pages it sits **above** the rows and is
-`sticky top-0 z-20` on the page-chrome background — fifty records is a long
-scroll to reach Next, and taller on a tablet, so a pager only at the bottom is a
-pager you cannot reach. Sticky rather than rendered twice: one tree. Request
-logs and audit logs share it through `LogPagination`; the jobs explorer still
-carries the older shape (a static pager in a `<footer>` below the
-rows) and should be brought to this one; until it is, treat the sticky placement
-as the target, not as a description of both tables.
+keeps its shape. It sits **above** the rows and is `sticky top-0 z-20` on the
+page-chrome background — fifty records is a long scroll to reach Next, and
+taller on a tablet, so a pager only at the bottom is a pager you cannot reach.
+Sticky rather than rendered twice: one tree. Request logs, audit logs and the
+jobs explorer all render it from `LogPagination`, so there is no second copy of
+either the markup or the arithmetic. It renders only where there are rows: an
+empty result has nothing to page through, and the count it still owes a screen
+reader is the `sr-only` total above it, not a range of zero.
 
 The pager takes the type size of the records it counts — `text-xs` with
 `btn-xs`, not `text-sm` — because a control set one step larger than everything
@@ -996,7 +996,10 @@ record.
 
 The `<caption>` stays but goes `sr-only` —
 it names the table and its total for a screen reader before the rows, which is
-the only job a caption does that the pager cannot. A visible caption reporting
+the only job a caption does that the pager cannot. It is written **first inside
+the table**, before `<colgroup>`, because that is where the content model puts
+it: a caption placed anywhere else is silently reparented by the parser, so the
+markup stops saying what it renders. A visible caption reporting
 "594617 matching" under fifty rows and no way to reach row 51 is the shape to
 avoid; it reads as a total when it is a page. Paging is a list control: the links
 carry the filters forward and drop the drawer selection, and changing any filter

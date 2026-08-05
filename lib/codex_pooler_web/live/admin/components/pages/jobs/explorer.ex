@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
 
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.JobFilterForm
+  alias CodexPoolerWeb.Admin.LogPagination
   alias CodexPoolerWeb.DateTimeDisplay
 
   attr :explorer, :map, required: true
@@ -14,7 +15,19 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
   attr :datetime_preferences, :map, required: true
 
   def jobs_explorer(assigns) do
-    assigns = assign(assigns, pagination(assigns.explorer))
+    page = LogPagination.metadata(assigns.explorer)
+
+    assigns =
+      assigns
+      |> assign(:page, page)
+      |> assign(
+        :previous_path,
+        explorer_page_path(assigns.current_params, page.current_page - 1, page.has_previous_page)
+      )
+      |> assign(
+        :next_path,
+        explorer_page_path(assigns.current_params, page.current_page + 1, page.has_next_page)
+      )
 
     ~H"""
     <section
@@ -36,6 +49,15 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
         {explorer_total(@explorer)}
       </p>
 
+      <LogPagination.pager
+        :if={@explorer.items != []}
+        id="admin-jobs-explorer-pagination"
+        label="Jobs explorer pagination"
+        page={@page}
+        previous_path={@previous_path}
+        next_path={@next_path}
+      />
+
       <AdminComponents.empty_state
         :if={@explorer.items == []}
         id="admin-jobs-empty-state"
@@ -54,6 +76,12 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
           id="admin-jobs-explorer-table"
           class="admin-ledger-table admin-status-tick table table-sm admin-log-table lg:min-w-[72rem]"
         >
+          <%!-- Before the columns, which is where the content model puts it:
+          a caption written anywhere else is reparented by the parser rather
+          than rendered where it stands. --%>
+          <caption class="sr-only">
+            Jobs explorer, {explorer_total(@explorer)}
+          </caption>
           <colgroup>
             <col style="width: 24rem;" />
             <col style="width: 18rem;" />
@@ -61,9 +89,6 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
             <col style="width: 5rem;" />
             <col style="width: 14rem;" />
           </colgroup>
-          <caption class="sr-only">
-            Jobs explorer, {explorer_total(@explorer)}
-          </caption>
           <thead>
             <tr>
               <th class="whitespace-nowrap">Job</th>
@@ -82,41 +107,6 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
           </tbody>
         </table>
       </div>
-
-      <footer class="border-t border-base-300/70 py-3">
-        <nav
-          id="admin-jobs-explorer-pagination"
-          class="grid gap-3 text-sm sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center"
-          aria-label="Jobs explorer pagination"
-        >
-          <p data-role="pagination-status" class="text-base-content/60">
-            Page {@current_page} of {@total_pages}
-          </p>
-          <p
-            id="admin-jobs-explorer-range"
-            data-role="explorer-range"
-            class="text-center tabular-nums text-base-content/70"
-          >
-            {explorer_range(@explorer)}
-          </p>
-          <div class="join">
-            <.pagination_link
-              id="admin-jobs-explorer-pagination-prev"
-              label="Previous"
-              enabled={@has_previous_page}
-              page={@current_page - 1}
-              current_params={@current_params}
-            />
-            <.pagination_link
-              id="admin-jobs-explorer-pagination-next"
-              label="Next"
-              enabled={@has_next_page}
-              page={@current_page + 1}
-              current_params={@current_params}
-            />
-          </div>
-        </nav>
-      </footer>
     </section>
     """
   end
@@ -309,57 +299,15 @@ defmodule CodexPoolerWeb.Admin.JobsPageComponents.Explorer do
     """
   end
 
-  attr :id, :string, required: true
-  attr :label, :string, required: true
-  attr :enabled, :boolean, required: true
-  attr :page, :integer, required: true
-  attr :current_params, :map, required: true
+  # The pager renders a disabled control rather than dropping one, so a boundary
+  # is a path this page declines to build rather than a link it hides.
+  defp explorer_page_path(_current_params, _page, false = _enabled), do: nil
 
-  defp pagination_link(assigns) do
-    ~H"""
-    <.link
-      :if={@enabled}
-      id={@id}
-      data-role="pagination-link"
-      patch={~p"/admin/jobs?#{page_query_params(@current_params, @page)}"}
-      class="btn btn-sm join-item"
-    >
-      {@label}
-    </.link>
-    <span
-      :if={!@enabled}
-      id={@id}
-      data-role="pagination-link"
-      aria-disabled="true"
-      class="btn btn-sm join-item btn-disabled"
-    >
-      {@label}
-    </span>
-    """
-  end
-
-  defp pagination(%{total: total, limit: limit, offset: offset}) do
-    current_page = div(offset, limit) + 1
-    total_pages = max(ceil(total / limit), 1)
-
-    %{
-      current_page: current_page,
-      total_pages: total_pages,
-      has_previous_page: offset > 0,
-      has_next_page: offset + limit < total
-    }
-  end
+  defp explorer_page_path(current_params, page, true = _enabled),
+    do: ~p"/admin/jobs?#{page_query_params(current_params, page)}"
 
   defp explorer_total(%{total: 1}), do: "1 job"
   defp explorer_total(%{total: total}), do: "#{total} jobs"
-
-  defp explorer_range(%{total: 0}), do: "Showing 0 of 0"
-
-  defp explorer_range(%{total: total, limit: limit, offset: offset}) do
-    first = offset + 1
-    last = min(offset + limit, total)
-    "Showing #{first}-#{last} of #{total}"
-  end
 
   defp job_event_summary(job, datetime_preferences) do
     job
