@@ -18,16 +18,38 @@
     </script>
     <script>
       (() => {
+        // Every touch of the store is guarded, including the first: localStorage
+        // is a global accessor that throws outright where storage is denied, so
+        // an unguarded read here would kill this script before it registers its
+        // listeners — no theme applied and a dead theme switcher, rather than a
+        // preference that is simply not remembered.
+        const remember = (theme) => {
+          try {
+            if (theme === "system") {
+              localStorage.removeItem("phx:theme");
+            } else {
+              localStorage.setItem("phx:theme", theme);
+            }
+          } catch {
+            /* the theme still applies to this page; it just is not kept */
+          }
+        };
         const setTheme = (theme) => {
+          remember(theme);
+
           if (theme === "system") {
-            localStorage.removeItem("phx:theme");
             document.documentElement.removeAttribute("data-theme");
           } else {
-            localStorage.setItem("phx:theme", theme);
             document.documentElement.setAttribute("data-theme", theme);
           }
         };
-        const storedTheme = localStorage.getItem("phx:theme");
+        const storedTheme = (() => {
+          try {
+            return localStorage.getItem("phx:theme");
+          } catch {
+            return null;
+          }
+        })();
         const isObservatoryPath = window.location.pathname === "/observatory" ||
           window.location.pathname.startsWith("/observatory/");
         if (!document.documentElement.hasAttribute("data-theme")) {

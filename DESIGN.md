@@ -139,8 +139,9 @@ wrapped by `Layouts.app chrome={:admin}` in
 - Root: `h-svh overflow-hidden bg-base-200`; only the main region scrolls
   (`#admin-shell-scroll-region`, `overflow-y-auto`). `:root` carries
   `scrollbar-gutter: stable`.
-- Fixed top bar: `h-12`, wordmark left, GitHub/notifications/WebSocket-state
-  dropdowns right.
+- Fixed top bar: `h-12`, wordmark left; right, in order, the GitHub resources
+  dropdown, alert notifications, the live-updates toggle, and the WebSocket
+  state dropdown.
 - Fixed sidebar: `w-16` icon rail, `xl:w-64` with labels; active item gets
   `!border-l-primary bg-base-300` on a `border-l-[3px]` slot.
 - Content: `ml-16 xl:ml-64 pt-12`, inner column `flex flex-col gap-6 p-4
@@ -157,6 +158,25 @@ page in the 768–1280 band — landscape goes to 1054px and the table fits whol
 Nav labels are recoverable (each item keeps `title` and `aria-label`); a column
 that has been pushed off the screen is not. When judging any layout change,
 measure the content column, not the viewport.
+
+**The live-updates toggle is global, and belongs to the reading session.** Eight
+admin pages rebuild themselves when Pool events arrive, and the operators page
+on its own domain's events. That is right while an operator is watching traffic
+and wrong while they are reading, so one topbar control answers it for all of
+them and no single surface — pagination least of all — has to guess. State
+lives in `sessionStorage`: a second tab stays live, a new tab starts live, and
+the choice survives moving between pages.
+
+Three things follow for the UI. The accessible name stays "Pause live updates"
+in both states, because a name that flips alongside `aria-pressed` announces a
+contradiction ("Resume live updates, pressed"). Which icon shows is decided by a
+`data-live-updates-paused` attribute on `:root`, written by an inline script
+before first paint, so the button never renders the state it is about to be
+corrected out of — the same technique the theme uses, and with the attribute
+absent the resting "live" reading wins. And a change carries a flash, because
+the icon swap is easy to miss on a control this small and a list that has simply
+gone quiet does not explain itself; only an actual change speaks, since the
+control also reports on mount and on reconnect.
 
 Spacing rhythm inside content: page sections stack at `gap-6`; metric strips
 use `gap-2`; card bodies use `p-4` with `gap-3`/`gap-4` grids; surface headers

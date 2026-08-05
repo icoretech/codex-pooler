@@ -26,9 +26,11 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
     * a refresh that is not driven by a Pool event — a fallback timer, or
       another domain's events. Those pass this gate untouched.
 
-  Every page this fronts needs a `:live_updates_resumed` clause. It arrives when
-  a page held its own reload, and when the gate had to collapse two held events
-  into one — neither of which the page can see for itself.
+  Every page that subscribes to Pool events needs a `:live_updates_resumed`
+  clause. It arrives when the page held its own reload, and when the gate had to
+  collapse two held events into one — neither of which the page can see for
+  itself. A page that receives no Pool events holds nothing and is never sent it,
+  so the clause is owed the moment such a page gains a subscription.
   """
 
   import Phoenix.Component, only: [assign: 3]

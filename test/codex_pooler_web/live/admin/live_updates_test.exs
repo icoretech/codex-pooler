@@ -155,6 +155,27 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesTest do
     end
   end
 
+  test "resuming pools keeps the reload a dialog deferred", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "live-defer", name: "Live Defer"})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+
+    view |> element("[phx-click='edit_pool'][phx-value-id='#{pool.id}']") |> render_click()
+
+    # With a dialog open, a lifecycle event is deferred rather than applied: the
+    # ticks in that dialog live in client DOM and a rebuild would revert them.
+    # `pool_traffic_dirty?` is the whole memory of that deferral.
+    send(view.pid, {Events, %{pool_id: pool.id, topics: ["pools"], payload: %{}}})
+    assert pool_traffic_dirty?(view)
+
+    # Reachable through pause, a collapsed pair of held events and resume. The
+    # handler is where it is lost, so this drives it directly.
+    send(view.pid, :live_updates_resumed)
+
+    assert pool_traffic_dirty?(view),
+           "resuming must not forget a reload the dialog is still holding back"
+  end
+
   defp fire_stats_debounce(view) do
     timer = stats_reload_timer(view)
     if is_reference(timer), do: Process.cancel_timer(timer, async: false, info: false)
@@ -164,6 +185,10 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesTest do
     :sys.get_state(view.pid)
 
     :ok
+  end
+
+  defp pool_traffic_dirty?(view) do
+    :sys.get_state(view.pid).socket.assigns.pool_traffic_dirty?
   end
 
   defp stats_reload_timer(view) do

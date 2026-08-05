@@ -386,10 +386,14 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     end
   end
 
-  # Clearing first: a replayed usage event has just armed the traffic debounce,
-  # and leaving its token alive lets it fire a second async load behind this one.
+  # Cancelling the timer, not clearing the refresh: a replayed usage event has
+  # just armed the traffic debounce and leaving its token alive lets it fire a
+  # second async load behind this one, but `pool_traffic_dirty?` is not part of
+  # that — it is how a lifecycle event deferred behind an open dialog is
+  # remembered until the dialog closes. Clearing it here dropped the structural
+  # reload that deferral was protecting.
   def handle_info(:live_updates_resumed, socket) do
-    {:noreply, socket |> clear_pool_traffic_refresh() |> start_pool_traffic_load()}
+    {:noreply, socket |> cancel_pool_traffic_refresh_timer() |> start_pool_traffic_load()}
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}
