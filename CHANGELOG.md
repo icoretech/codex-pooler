@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.5.15](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.14...codex-pooler-v0.5.15) (2026-08-05)
+
+
+### Bug Fixes
+
+* **admin:** label applied reblock as converging ([24eeca2](https://github.com/icoretech/codex-pooler/commit/24eeca26b6517fd02484b7c3ce4d0b1b981620b3))
+* **jobs:** enqueue stale reset recovery once ([462ff61](https://github.com/icoretech/codex-pooler/commit/462ff61576eb45994d522e1c3dd9b19604877f95))
+* **responses:** accept verified compaction replay metadata ([265c306](https://github.com/icoretech/codex-pooler/commit/265c306574682c13bcd4e917695bab1c0318e8d7))
+* **saved-resets:** complete guarded reset recovery ([1717779](https://github.com/icoretech/codex-pooler/commit/17177792d664fd41026280671e8282b29848755f))
+* **saved-resets:** converge from canonical quota evidence ([4160662](https://github.com/icoretech/codex-pooler/commit/4160662f9123991dc217a7a51d9a59158e0e0c13))
+* **saved-resets:** define cohort sibling fence lifecycle ([5ddc2e3](https://github.com/icoretech/codex-pooler/commit/5ddc2e39b4c717a11b72bf7b2f104a050fdaf9de))
+* **saved-resets:** enforce sibling auto-redeem barrier ([e4ee118](https://github.com/icoretech/codex-pooler/commit/e4ee11811167418a74238701ffd5e5078cbd4c61))
+* **saved-resets:** exclude websocket pins from the capacity-veto bypass ([5864d8c](https://github.com/icoretech/codex-pooler/commit/5864d8c4395eef8ce14e70435fcfe1005b03b701))
+* **saved-resets:** fence recovery finalizers and replay cutoff ([5743a8d](https://github.com/icoretech/codex-pooler/commit/5743a8dc7ab4ca61215bcdeb6c3d4a95b7c79aeb))
+* **saved-resets:** fence zero-dispatch claims and stale observers ([9985cbf](https://github.com/icoretech/codex-pooler/commit/9985cbfe1298001510a592d900ce02691eebb1f4))
+* **saved-resets:** gate threshold burns on hard continuity ([1193803](https://github.com/icoretech/codex-pooler/commit/119380334291f9e2180dbad4dae764ac428f78c4))
+* **saved-resets:** pin exact credit before consume ([eaad8ee](https://github.com/icoretech/codex-pooler/commit/eaad8ee13b5f64b3433e670c577cbe3a2b7612ba))
+* **saved-resets:** prove anchors at attach, fold like routing ([c3d43b1](https://github.com/icoretech/codex-pooler/commit/c3d43b1a088bc1d57c0024242b24cad80f189546))
+* **saved-resets:** require resolved anchors and fresh schedules ([c101e59](https://github.com/icoretech/codex-pooler/commit/c101e59106f06a50ada56747b538996303b50569))
+* **saved-resets:** serialize sibling auto-redeem cohorts ([0e0c21e](https://github.com/icoretech/codex-pooler/commit/0e0c21eafe78a28e0881cfbe341213fa9c59af57))
+
 ## [0.5.14](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.13...codex-pooler-v0.5.14) (2026-08-04)
 
 
