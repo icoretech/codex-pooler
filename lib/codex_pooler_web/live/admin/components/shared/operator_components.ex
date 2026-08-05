@@ -5,7 +5,6 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
   use CodexPoolerWeb, :html
 
   alias CodexPooler.Accounts.User
-  alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.OperatorComponents.Identity
   alias CodexPoolerWeb.DateTimeDisplay
@@ -151,99 +150,206 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
   defp operator_query_filter_value(%{value: value}) when is_binary(value), do: value
   defp operator_query_filter_value(_field), do: ""
 
-  attr :operators, :any, required: true
+  attr :operators, :list, required: true
+  attr :panel_views, :map, required: true
   attr :current_scope, :any, required: true
   attr :active_operator_count, :integer, required: true
   attr :filter_form, Phoenix.HTML.Form, required: true
   attr :datetime_preferences, :map, required: true
 
-  def operators_table(assigns) do
+  def operator_cards(assigns) do
     ~H"""
     <section id="operator-inventory-surface" class="grid min-w-0 gap-4 overflow-visible">
       <.operator_filter_form form={@filter_form} />
 
-      <div class="min-w-0 rounded-box border border-base-300 bg-base-100">
-        <div id="operators-table-scroll-region" class="overflow-x-auto md:overflow-visible">
-          <table class="table min-w-[56rem]">
-            <thead>
-              <tr>
-                <th>Operator</th>
-                <th class="text-center">Status</th>
-                <th class="text-center">TOTP</th>
-                <th>Password policy</th>
-                <th>Last login</th>
-                <th class="text-center">Actions</th>
-              </tr>
-            </thead>
-            <tbody id="operators-table" phx-update="stream">
-              <AdminComponents.table_empty_row id="operator-empty-row" columns={6}>
-                No operators match the current filters.
-              </AdminComponents.table_empty_row>
-              <tr
-                :for={{row_id, operator} <- @operators}
-                id={row_id}
-                class="text-sm transition-colors hover:bg-base-200/80"
-              >
-                <td class="min-w-72 align-middle">
-                  <div class="flex items-center gap-3">
-                    <Identity.operator_avatar
-                      id={"operator-row-#{operator.id}-avatar"}
-                      operator={operator}
-                      status={operator.status}
-                    />
-                    <div class="grid gap-1.5">
-                      <span class="font-medium leading-5 text-base-content">
-                        {Identity.operator_display_name(operator)}
-                      </span>
-                      <span class="text-sm leading-5 text-base-content/60">{operator.email}</span>
-                    </div>
-                  </div>
-                </td>
-                <td class="align-middle text-center">
-                  <span
-                    id={"operator-row-#{operator.id}-status"}
-                    class={AdminBadges.lifecycle_chip_class(operator.status)}
-                  >
-                    {operator.status}
-                  </span>
-                </td>
-                <td id={"operator-row-#{operator.id}-totp"} class="w-20 align-middle text-center">
-                  <span
-                    class={totp_state_class(operator)}
-                    aria-label={totp_state_label(operator)}
-                    title={totp_state_label(operator)}
-                  >
-                    <.icon name={totp_state_icon(operator)} class="size-4" />
-                    <span class="sr-only">{totp_state_label(operator)}</span>
-                  </span>
-                </td>
-                <td
-                  id={"operator-row-#{operator.id}-password-policy"}
-                  class="min-w-60 align-middle text-sm text-base-content/70"
-                >
-                  {password_policy_label(operator)}
-                </td>
-                <td
-                  id={"operator-row-#{operator.id}-activity"}
-                  class="min-w-44 align-middle text-sm leading-5 text-base-content/60"
-                >
-                  <span id={"operator-row-#{operator.id}-last-login-at"}>
-                    {format_datetime(operator.last_login_at, @datetime_preferences)}
-                  </span>
-                </td>
-                <td class="w-16 align-middle text-center">
-                  <.operator_action_menu
-                    operator={operator}
-                    current_scope={@current_scope}
-                    active_operator_count={@active_operator_count}
-                  />
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+      <AdminComponents.empty_state
+        :if={@operators == []}
+        id="operators-empty-state"
+        icon="hero-users"
+        title="No operators match"
+        description="No operators match the current filters."
+      />
+
+      <div
+        :if={@operators != []}
+        id="operators-cards"
+        class="grid min-w-0 items-stretch gap-3 md:grid-cols-2 xl:grid-cols-3"
+      >
+        <.operator_card
+          :for={entry <- @operators}
+          entry={entry}
+          current_scope={@current_scope}
+          active_operator_count={@active_operator_count}
+          datetime_preferences={@datetime_preferences}
+          pools_panel_open?={Map.get(@panel_views, entry.operator.id) == :pools}
+        />
       </div>
     </section>
+    """
+  end
+
+  attr :entry, :map, required: true
+  attr :current_scope, :any, required: true
+  attr :active_operator_count, :integer, required: true
+  attr :datetime_preferences, :map, required: true
+  attr :pools_panel_open?, :boolean, required: true
+
+  defp operator_card(assigns) do
+    operator = assigns.entry.operator
+
+    assigns =
+      assigns
+      |> assign(:operator, operator)
+      |> assign(:owner?, assigns.entry.role == "instance_owner")
+      |> assign(:role_label, operator_role_label(assigns.entry.role))
+      |> assign(:pool_names, assigns.entry.pool_names)
+      |> assign(:dom, "operator-row-#{operator.id}")
+
+    ~H"""
+    <article
+      id={@dom}
+      data-role="operator-card"
+      class="flex min-w-0 flex-col rounded-box border border-base-300 bg-base-100"
+    >
+      <div class="flex min-w-0 items-center gap-3 border-b border-base-300 bg-base-200/35 px-4 py-3">
+        <Identity.operator_avatar
+          id={"#{@dom}-avatar"}
+          operator={@operator}
+          status={@operator.status}
+        />
+        <div class="grid min-w-0 flex-1 gap-0.5">
+          <span class="flex min-w-0 items-baseline gap-1.5">
+            <span class="truncate font-medium leading-5 text-base-content">
+              {Identity.operator_display_name(@operator)}
+            </span>
+            <span
+              :if={self_operator?(@operator, @current_scope)}
+              class="shrink-0 text-[9px] font-bold uppercase tracking-[0.06em] text-primary/75"
+            >
+              you
+            </span>
+          </span>
+          <span class="truncate text-xs leading-4 text-base-content/55">{@operator.email}</span>
+          <span id={"#{@dom}-role"} class={operator_role_class(@owner?)}>{@role_label}</span>
+        </div>
+        <.operator_action_menu
+          operator={@operator}
+          current_scope={@current_scope}
+          active_operator_count={@active_operator_count}
+        />
+      </div>
+
+      <dl class="grid grid-cols-2 gap-x-3 gap-y-2.5 px-4 py-3">
+        <div id={"#{@dom}-totp"} class="min-w-0">
+          <dt class={card_vital_label_class()}>TOTP</dt>
+          <dd
+            class={["truncate text-xs leading-5", totp_value_class(@operator)]}
+            aria-label={totp_state_label(@operator)}
+            title={totp_state_label(@operator)}
+          >
+            {totp_value_label(@operator)}
+          </dd>
+        </div>
+        <div id={"#{@dom}-password-policy"} class="min-w-0">
+          <dt class={card_vital_label_class()}>Password policy</dt>
+          <dd
+            class={["truncate text-xs leading-5", password_policy_value_class(@operator)]}
+            title={password_policy_label(@operator)}
+          >
+            {password_policy_label(@operator)}
+          </dd>
+        </div>
+        <div class="min-w-0">
+          <dt class={card_vital_label_class()}>Last login</dt>
+          <dd
+            id={"#{@dom}-last-login-at"}
+            class="truncate text-xs leading-5 text-base-content/65 tabular-nums"
+          >
+            {format_datetime(@operator.last_login_at, @datetime_preferences)}
+          </dd>
+        </div>
+        <div class="min-w-0">
+          <dt class={card_vital_label_class()}>Joined</dt>
+          <dd
+            id={"#{@dom}-joined-at"}
+            class="truncate text-xs leading-5 text-base-content/65 tabular-nums"
+          >
+            {format_datetime(@operator.created_at, @datetime_preferences)}
+          </dd>
+        </div>
+      </dl>
+
+      <div class="min-h-0 flex-1"></div>
+
+      <section
+        id={"#{@dom}-pools-panel"}
+        data-role="operator-pools-panel"
+        aria-hidden={aria_bool(!@pools_panel_open?)}
+        inert={!@pools_panel_open?}
+        class={operator_panel_class(@pools_panel_open?)}
+      >
+        <div class="mx-4 grid gap-2 border-t border-base-300/70 py-3">
+          <p class={card_vital_label_class()}>
+            {if @owner?, do: "Pool visibility", else: "Assigned Pools"}
+          </p>
+          <p :if={@owner?} class="text-xs leading-5 text-base-content/60">
+            The instance owner is not Pool-scoped: every current and future Pool is visible and manageable.
+          </p>
+          <p :if={!@owner? and @pool_names == []} class="text-xs leading-5 text-base-content/60">
+            No Pools assigned yet.
+          </p>
+          <p
+            :for={pool_name <- @pool_names}
+            :if={!@owner?}
+            class="flex min-w-0 items-center gap-2 text-xs leading-5 text-base-content/80"
+          >
+            <.icon name="hero-rectangle-stack" class="size-3.5 shrink-0 text-base-content/45" />
+            <span class="truncate">{pool_name}</span>
+          </p>
+        </div>
+      </section>
+
+      <AdminComponents.card_fact_strip id={"#{@dom}-facts"} data-role="operator-card-footer">
+        <:fact role="operator-status-cell">
+          <AdminComponents.card_fact_label>Status</AdminComponents.card_fact_label>
+          <AdminComponents.card_fact_value
+            id={"#{@dom}-status"}
+            tone_class={operator_status_value_tone(@operator.status)}
+          >
+            {String.capitalize(@operator.status)}
+          </AdminComponents.card_fact_value>
+        </:fact>
+        <:fact role="operator-pools-cell" interactive>
+          <AdminComponents.card_fact_label
+            tone_class={footer_panel_label_tone(@pools_panel_open?)}
+            class="transition-colors"
+          >
+            <button
+              id={"#{@dom}-pools-panel-trigger"}
+              type="button"
+              class={footer_panel_trigger_class(@pools_panel_open?)}
+              phx-click="toggle_operator_pools_panel"
+              phx-value-id={@operator.id}
+              aria-controls={"#{@dom}-pools-panel"}
+              aria-expanded={aria_bool(@pools_panel_open?)}
+              aria-label={pools_trigger_label(@pools_panel_open?, @owner?, @pool_names)}
+            >
+              <span class="sr-only">Pools</span>
+            </button>
+            <span class="pointer-events-none relative z-30 block max-w-full truncate text-left">
+              Pools
+            </span>
+          </AdminComponents.card_fact_label>
+          <AdminComponents.card_fact_value
+            id={"#{@dom}-pools-count"}
+            tone_class={footer_panel_value_tone(@pools_panel_open?)}
+            class="pointer-events-none relative z-30 transition-colors"
+          >
+            {pool_count_label(@owner?, @pool_names)}
+          </AdminComponents.card_fact_value>
+        </:fact>
+      </AdminComponents.card_fact_strip>
+    </article>
     """
   end
 
@@ -328,17 +434,6 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
   defp totp_state_label(%User{totp_status: "active"}), do: "TOTP enabled"
   defp totp_state_label(_operator), do: "TOTP not set up"
 
-  defp totp_state_icon(%User{totp_status: "active"}), do: "hero-shield-check"
-  defp totp_state_icon(_operator), do: "hero-shield-exclamation"
-
-  defp totp_state_class(%User{totp_status: "active"}) do
-    "inline-flex size-8 items-center justify-center rounded-full border border-success/20 bg-success/10 text-success"
-  end
-
-  defp totp_state_class(_operator) do
-    "inline-flex size-8 items-center justify-center rounded-full border border-base-300 bg-base-200 text-base-content/35"
-  end
-
   defp can_deactivate_operator?(
          %User{status: "active"} = operator,
          current_scope,
@@ -379,4 +474,80 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
 
   defp format_datetime(%DateTime{} = datetime, datetime_preferences),
     do: DateTimeDisplay.format_datetime(datetime, datetime_preferences, missing_label: "not yet")
+
+  defp card_vital_label_class,
+    do: "text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35"
+
+  defp operator_role_label("instance_owner"), do: "Instance owner"
+  defp operator_role_label("instance_admin"), do: "Instance admin"
+  defp operator_role_label(_role), do: "No role"
+
+  defp operator_role_class(true),
+    do: "truncate text-[9.5px] font-bold uppercase tracking-[0.07em] text-primary/70"
+
+  defp operator_role_class(false),
+    do: "truncate text-[9.5px] font-bold uppercase tracking-[0.07em] text-base-content/45"
+
+  defp totp_value_label(%User{totp_status: "active"}), do: "Enabled"
+  defp totp_value_label(_operator), do: "Not set up"
+
+  defp totp_value_class(%User{totp_status: "active"}), do: "text-success"
+  defp totp_value_class(_operator), do: "text-warning"
+
+  defp password_policy_value_class(%User{password_change_required: true}), do: "text-warning"
+  defp password_policy_value_class(_operator), do: "text-base-content/65"
+
+  defp operator_status_value_tone("active"), do: "text-success"
+  defp operator_status_value_tone(_status), do: "text-warning"
+
+  defp pool_count_label(true = _owner?, _pool_names), do: "All Pools"
+  defp pool_count_label(false = _owner?, [_single] = _pool_names), do: "1 Pool"
+  defp pool_count_label(false = _owner?, pool_names), do: "#{length(pool_names)} Pools"
+
+  defp pools_trigger_label(open?, owner?, pool_names) do
+    action = if open?, do: "Hide", else: "Show"
+
+    subject =
+      if owner? do
+        "Pool visibility"
+      else
+        "assigned Pools (#{pool_count_label(false, pool_names)})"
+      end
+
+    "#{action} #{subject} for this operator"
+  end
+
+  # Same panel and overlay contract as the upstream account card (§5.19 kept
+  # them radio-free; §5.17 owns the interactive cell): hidden panels stay in
+  # the DOM but collapsed, aria-hidden, and inert; the footer trigger reads as
+  # the whole cell block with a ~4px breathing gap, and, being the last cell,
+  # reaches past its box into the footer's own px-4.
+  defp operator_panel_class(true) do
+    "grid min-w-0 opacity-100 transition-opacity duration-150 ease-out motion-reduce:transition-none"
+  end
+
+  defp operator_panel_class(false) do
+    "pointer-events-none grid min-w-0 max-h-0 overflow-hidden opacity-0 transition-opacity duration-150 ease-out motion-reduce:transition-none"
+  end
+
+  defp aria_bool(true), do: "true"
+  defp aria_bool(false), do: "false"
+
+  defp footer_panel_trigger_class(active?) do
+    [
+      "absolute -inset-y-1.5 left-1 -right-3 z-20 cursor-pointer rounded border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
+      if(active?,
+        do: "border-primary/35 bg-primary/5",
+        else: "border-transparent hover:border-primary/25 hover:bg-primary/5"
+      )
+    ]
+  end
+
+  defp footer_panel_label_tone(true), do: "text-primary/70"
+  defp footer_panel_label_tone(false), do: "text-base-content/35 group-hover:text-primary/70"
+
+  defp footer_panel_value_tone(true), do: "text-base-content/75"
+
+  defp footer_panel_value_tone(false),
+    do: "text-base-content/60 group-hover:text-base-content/75"
 end

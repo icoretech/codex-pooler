@@ -850,7 +850,8 @@ control.
   [`components.ex`](lib/codex_pooler_web/live/admin/components/shared/components.ex)
 - **Purpose:** the band of two to four labeled facts that closes a card. This
   is the only sanctioned way to render a card footer strip; the upstream
-  account card (§5.4) and the jobs worker card both use it.
+  account card (§5.4), the jobs worker card, and the operator card (§5.21)
+  all use it.
 - **API:** strip attrs `id` (goes on the facts `dl`), `facts_role`
   (`data-role` for the `dl`), `class`, and a global `rest` that lands on the
   `footer` band; slot `fact` with `role` (cell `data-role`), `class`, and
@@ -1125,6 +1126,35 @@ live is always one click away and never something the operator has to arrange.
   Preserve stable `data-role="model-info-popover"`, `model-info-trigger`,
   `model-info-content`, and `model-info-description` hooks for LiveView tests
   and browser QA. Focus-visible uses the standard primary outline.
+
+### 5.21 Operator card
+
+- **Source:** `operator_cards/1` and the private `operator_card/1` in
+  [`operator_components.ex`](lib/codex_pooler_web/live/admin/components/shared/operator_components.ex);
+  page state in
+  [`operators_live.ex`](lib/codex_pooler_web/live/admin/pages/operators_live.ex).
+- **Purpose:** `/admin/operators` renders a grid of profile cards
+  (`md:grid-cols-2 xl:grid-cols-3`) instead of a table — operators are few
+  and trusted, and the page's job is identity plus security posture at a
+  glance. The filtered-empty surface is the dashed `empty_state` (§5.15).
+- **Anatomy:** header band (`border-b bg-base-200/35 px-4 py-3`) holding the
+  Gravatar avatar with lifecycle presence dot, the display name with a
+  primary "you" marker on the viewer's own card, the email, and the role as
+  a quiet uppercase micro-label — the single active **instance owner** in
+  primary ink, **instance admins** muted, never a second chip — plus the
+  §5.10 actions dropdown. Body is a 2×2 vitals `dl` (TOTP, Password policy,
+  Last login, Joined) using the §3 micro-label recipe, warning-toned values
+  for "Not set up" and a pending password change.
+- **Footer:** the §5.17 fact strip with two facts. **Status** is written
+  out (capitalized, `text-success`/`text-warning`). **Pools** is an
+  interactive cell using the upstream account card's exact overlay-trigger
+  contract, toggling `toggle_operator_pools_panel`; the assigned-Pools
+  panel above the strip follows the §5.4 collapse contract (`aria-hidden`
+  plus `inert`, 150ms opacity, reduced-motion safe). The owner's panel
+  states that the role is not Pool-scoped instead of faking a list; an
+  admin with no Pools says so in one muted sentence.
+- Panel open state lives server-side in `operator_panel_views` (pruned on
+  reload), mirroring the upstreams page.
 
 ## 6. Components — API Key Observatory extension
 

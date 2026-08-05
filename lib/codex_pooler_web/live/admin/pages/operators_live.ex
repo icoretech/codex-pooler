@@ -19,6 +19,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
        page_title: "Operators",
        operator_filters: OperatorForm.filter(),
        operator_filter_form: OperatorForm.filter_form(),
+       operator_panel_views: %{},
        subscribed_operator_events?: false,
        creating_operator: false,
        create_form: OperatorForm.create_form(),
@@ -87,6 +88,16 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
 
   def handle_event("cancel_create_operator", _params, socket) do
     {:noreply, close_create_dialog(socket)}
+  end
+
+  def handle_event("toggle_operator_pools_panel", %{"id" => operator_id}, socket) do
+    {:noreply,
+     update(socket, :operator_panel_views, fn panel_views ->
+       case Map.get(panel_views, operator_id) do
+         :pools -> Map.delete(panel_views, operator_id)
+         _view -> Map.put(panel_views, operator_id, :pools)
+       end
+     end)}
   end
 
   def handle_event("filter_operators", %{"operator_filters" => filter_params}, socket) do
@@ -338,10 +349,11 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
           reset_operation={@reset_operation}
           reset_form={@reset_form}
         />
-        <OperatorComponents.operators_table
+        <OperatorComponents.operator_cards
           :if={!@operator_management_denied?}
           filter_form={@operator_filter_form}
-          operators={@streams.operators}
+          operators={@operators}
+          panel_views={@operator_panel_views}
           current_scope={@current_scope}
           active_operator_count={@active_operator_count}
           datetime_preferences={@datetime_preferences}
@@ -463,8 +475,10 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
   defp assign_operator_management(socket) do
     case Accounts.list_operators_for_management(socket.assigns.current_scope) do
       {:ok, operators} ->
-        filtered_operators =
-          OperatorForm.filter_operators(operators, socket.assigns.operator_filters)
+        entries =
+          operators
+          |> OperatorForm.filter_operators(socket.assigns.operator_filters)
+          |> operator_card_entries(socket.assigns.current_scope)
 
         socket =
           socket
@@ -472,7 +486,8 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
           |> assign_pool_options()
           |> assign(:operator_count, length(operators))
           |> assign(:active_operator_count, OperatorForm.active_operator_count(operators))
-          |> stream(:operators, filtered_operators, reset: true, dom_id: &"operator-row-#{&1.id}")
+          |> assign(:operators, entries)
+          |> prune_operator_panel_views(entries)
 
         {:ok, socket}
 
@@ -483,10 +498,36 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
           |> assign(:pool_options, [])
           |> assign(:operator_count, 0)
           |> assign(:active_operator_count, 0)
-          |> stream(:operators, [], reset: true, dom_id: &"operator-row-#{&1.id}")
+          |> assign(:operators, [])
+          |> assign(:operator_panel_views, %{})
 
         {:error, :operator_management_denied, socket}
     end
+  end
+
+  defp operator_card_entries(operators, current_scope) do
+    pool_names_by_id =
+      current_scope
+      |> management_pool_options()
+      |> Map.new(&{&1.id, &1.name})
+
+    Enum.map(operators, fn operator ->
+      lifecycle = Accounts.operator_lifecycle(operator)
+
+      pool_names =
+        lifecycle.assigned_pool_ids
+        |> Enum.map(&Map.get(pool_names_by_id, &1))
+        |> Enum.reject(&is_nil/1)
+        |> Enum.sort_by(&String.downcase/1)
+
+      %{operator: operator, role: lifecycle.role, pool_names: pool_names}
+    end)
+  end
+
+  defp prune_operator_panel_views(socket, entries) do
+    operator_ids = Enum.map(entries, & &1.operator.id)
+
+    update(socket, :operator_panel_views, &Map.take(&1, operator_ids))
   end
 
   defp operator_management_denied?(socket), do: socket.assigns.operator_management_denied?

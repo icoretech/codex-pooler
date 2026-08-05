@@ -41,15 +41,22 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
     assert has_element?(view, "#operator_pool_ids_group")
     assert has_element?(view, "#operator-create-cancel + #operator-create-submit")
     assert_admin_dialog_docs_link(view, "operator-create-dialog-footer")
-    assert has_element?(view, "#operators-table-scroll-region")
-    assert has_element?(view, "#operators-table[phx-update='stream']")
-    assert has_element?(view, "#operators-table-scroll-region thead th", "TOTP")
-    assert has_element?(view, "#operators-table-scroll-region thead th", "Last login")
-    refute has_element?(view, "#operators-table-scroll-region thead th", "Activity")
-    assert has_element?(view, "#operator-empty-row td[colspan='6']")
+    assert has_element?(view, "#operators-cards")
+    refute has_element?(view, "#operators-table-scroll-region")
+    assert has_element?(view, "#operator-row-#{user.id}[data-role='operator-card']")
+    assert has_element?(view, "#operator-row-#{user.id}-role", "Instance owner")
+
+    assert has_element?(
+             view,
+             "#operator-row-#{user.id}-pools-panel-trigger[aria-expanded='false']" <>
+               "[aria-controls='operator-row-#{user.id}-pools-panel']"
+           )
+
+    assert has_element?(view, "#operator-row-#{user.id}-pools-count", "All Pools")
     assert has_element?(view, "#operator-actions-menu-#{user.id}")
-    assert has_element?(view, "#operator-row-#{user.id}-totp", "TOTP not set up")
+    assert has_element?(view, "#operator-row-#{user.id}-totp", "Not set up")
     assert has_element?(view, "#operator-row-#{user.id}-totp [aria-label='TOTP not set up']")
+    assert has_element?(view, "#operator-row-#{user.id}-joined-at")
 
     assert has_element?(
              view,
@@ -114,7 +121,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/admin/operators")
 
     assert setting.status == "active"
-    assert has_element?(view, "#operator-row-#{user.id}-totp", "TOTP enabled")
+    assert has_element?(view, "#operator-row-#{user.id}-totp", "Enabled")
     assert has_element?(view, "#operator-row-#{user.id}-totp [aria-label='TOTP enabled']")
   end
 
@@ -159,7 +166,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
 
     view |> element("#operator-status-filter [data-status='disabled']") |> render_click()
 
-    assert has_element?(view, "#operator-row-#{disabled_operator.id}", "disabled")
+    assert has_element?(view, "#operator-row-#{disabled_operator.id}", "Disabled")
     refute has_element?(view, "#operator-row-#{active_operator.id}", "Alpha Filter")
   end
 
@@ -259,6 +266,48 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
            }
 
     assert has_element?(view, "#operator-row-#{operator.id}", "Assigned Live Operator")
+    assert has_element?(view, "#operator-row-#{operator.id}-role", "Instance admin")
+    assert has_element?(view, "#operator-row-#{operator.id}-pools-count", "1 Pool")
+  end
+
+  test "toggles the assigned-Pools panel from the footer cell", %{conn: conn} do
+    pool = pool_fixture(%{slug: "panel-operator-pool", name: "Panel Operator Pool"})
+    {:ok, view, _html} = live(conn, ~p"/admin/operators")
+    open_create_dialog(view)
+
+    view
+    |> element("#operator-create-form")
+    |> render_submit(%{
+      "operator" => %{
+        "email" => "panel.operator@example.com",
+        "display_name" => "Panel Operator",
+        "password_mode" => "manual",
+        "password" => "ManualTempPass123!",
+        "password_change_required" => "true",
+        "send_email" => "false",
+        "role" => "instance_admin",
+        "pool_ids" => [pool.id]
+      }
+    })
+
+    operator = Accounts.get_user_by_email("panel.operator@example.com")
+    panel = "#operator-row-#{operator.id}-pools-panel"
+    trigger = "#operator-row-#{operator.id}-pools-panel-trigger"
+
+    assert has_element?(view, "#{panel}[aria-hidden='true'][inert]")
+    assert has_element?(view, "#{trigger}[aria-expanded='false']")
+
+    view |> element(trigger) |> render_click()
+
+    assert has_element?(view, "#{panel}[aria-hidden='false']")
+    refute has_element?(view, "#{panel}[inert]")
+    assert has_element?(view, "#{trigger}[aria-expanded='true']")
+    assert has_element?(view, panel, "Panel Operator Pool")
+
+    view |> element(trigger) |> render_click()
+
+    assert has_element?(view, "#{panel}[aria-hidden='true'][inert]")
+    assert has_element?(view, "#{trigger}[aria-expanded='false']")
   end
 
   test "creates a manual-password operator and sends the text credential email", %{conn: conn} do
@@ -541,7 +590,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
 
     view |> element("#deactivate-operator-#{operator.id}") |> render_click()
 
-    assert has_element?(view, "#operator-row-#{operator.id}-status", "disabled")
+    assert has_element?(view, "#operator-row-#{operator.id}-status", "Disabled")
 
     assert has_element?(
              view,
@@ -559,7 +608,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/admin/operators")
 
     assert has_element?(view, "#deactivate-operator-#{user.id}[disabled]")
-    assert has_element?(view, "#operator-row-#{user.id}-status", "active")
+    assert has_element?(view, "#operator-row-#{user.id}-status", "Active")
     assert Repo.get!(User, user.id).status == "active"
   end
 
