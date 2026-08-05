@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
 
   use CodexPoolerWeb, :html
 
+  alias CodexPooler.Catalog.ModelInfo
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
@@ -234,15 +235,31 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                 :for={row <- @token_leaderboard}
                 id={"upstream-account-#{@account.identity.id}-token-model-#{row.dom_id}"}
                 data-role="upstream-account-token-model"
-                class="grid min-w-0 grid-cols-[minmax(0,1fr)_4rem_3.5rem_3.5rem] items-center gap-3 rounded px-2 py-1.5 text-xs odd:bg-base-200/40"
+                class="grid min-w-0 grid-cols-[minmax(0,1fr)_2.25rem_2.75rem_3.25rem] items-center gap-1.5 rounded px-2 py-1.5 text-xs odd:bg-base-200/40 sm:grid-cols-[minmax(0,1fr)_4rem_3.5rem_3.5rem] sm:gap-3"
               >
-                <span
+                <div
                   data-role="upstream-account-token-model-id"
-                  class="min-w-0 truncate font-medium text-base-content"
+                  class="min-w-0"
                   title={row.label}
                 >
-                  {row.label}
-                </span>
+                  <AdminComponents.model_info_popover
+                    :if={ModelInfo.present?(row.model_info)}
+                    id={
+                      "upstream-account-#{@account.identity.id}-token-model-#{row.dom_id}-model-info"
+                    }
+                    model_label={row.label}
+                    info={row.model_info}
+                    trigger={:label}
+                    class="w-full min-w-0"
+                    trigger_class="block w-full"
+                  />
+                  <span
+                    :if={!ModelInfo.present?(row.model_info)}
+                    class="block min-w-0 truncate font-medium text-base-content"
+                  >
+                    {row.label}
+                  </span>
+                </div>
                 <span class="h-1 overflow-hidden rounded-full bg-base-300/60" aria-hidden="true">
                   <span
                     class="block h-full rounded-full bg-primary/70"
@@ -687,14 +704,28 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
       |> recent_model_usage()
       |> Map.new(&{&1.label, &1})
 
-    rows =
+    model_info_by_label =
       account
-      |> advertised_model_labels()
+      |> advertised_models()
+      |> Enum.group_by(& &1.exposed_model_id)
+      |> Map.new(fn {label, models} ->
+        {label, models |> Enum.map(& &1.model_info) |> ModelInfo.merge()}
+      end)
+
+    rows =
+      model_info_by_label
+      |> Map.keys()
       |> MapSet.new()
       |> MapSet.union(usage_by_label |> Map.keys() |> MapSet.new())
       |> Enum.map(fn label ->
         usage = Map.get(usage_by_label, label, %{tokens: 0, cost_micros: 0})
-        %{label: label, tokens: usage.tokens, cost_micros: usage.cost_micros}
+
+        %{
+          label: label,
+          tokens: usage.tokens,
+          cost_micros: usage.cost_micros,
+          model_info: Map.get(model_info_by_label, label, ModelInfo.empty())
+        }
       end)
 
     leader_tokens = rows |> Enum.map(& &1.tokens) |> Enum.max(fn -> 0 end)
@@ -715,14 +746,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
 
   defp recent_model_usage(_account), do: []
 
-  defp advertised_model_labels(%{assignments: assignments}) when is_list(assignments) do
+  defp advertised_models(%{assignments: assignments}) when is_list(assignments) do
     assignments
     |> Enum.flat_map(&assignment_models/1)
-    |> Enum.map(& &1.exposed_model_id)
-    |> Enum.uniq()
   end
 
-  defp advertised_model_labels(_account), do: []
+  defp advertised_models(_account), do: []
 
   defp assignment_models(%{models: models}) when is_list(models), do: models
   defp assignment_models(_assignment), do: []

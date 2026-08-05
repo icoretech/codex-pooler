@@ -685,6 +685,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         metadata: %{
           "source_assignment_models" => %{
             first_assignment.id => %{
+              "description" => "Synthetic busy model.",
+              "visibility" => "hide",
+              "supported_in_api" => false,
               "supports_responses" => true,
               "provider" => %{"private" => provider_sentinel}
             }
@@ -797,6 +800,29 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              "##{tokens_panel_id} ##{card_id}-token-model-gpt-example-busy" <>
                " [data-role='upstream-account-token-model-cost']",
              "$0.25"
+           )
+
+    assert has_element?(
+             view,
+             "##{card_id}-token-model-gpt-example-busy-model-info[data-role='model-info-popover'] [data-role='model-info-trigger'][popovertarget='#{card_id}-token-model-gpt-example-busy-model-info-content']",
+             "gpt-example-busy"
+           )
+
+    assert has_element?(
+             view,
+             "##{card_id}-token-model-gpt-example-busy-model-info-content[data-role='model-info-content'][popover][role='tooltip'] [data-role='model-info-description']",
+             "Synthetic busy model."
+           )
+
+    assert has_element?(
+             view,
+             "##{card_id}-token-model-gpt-example-busy-model-info-content [data-role='model-info-facts']",
+             "Hidden upstream alias"
+           )
+
+    refute has_element?(
+             view,
+             "##{card_id}-token-model-gpt-example-quiet [data-role='model-info-popover']"
            )
 
     assert has_element?(

@@ -4,6 +4,7 @@ defmodule CodexPooler.Catalog.ModelSelectorState do
   """
 
   alias CodexPooler.Catalog.Model
+  alias CodexPooler.Catalog.ModelInfo
 
   @type catalog_error :: %{required(:code) => atom(), required(:message) => String.t()}
   @type catalog_state :: %{
@@ -94,6 +95,7 @@ defmodule CodexPooler.Catalog.ModelSelectorState do
       upstream_model_id: model.upstream_model_id,
       source_assignment_count: model.source_assignment_count,
       source_assignment_ids: source_assignment_ids(model),
+      model_info: ModelInfo.from_model(model, source_assignment_ids(model)),
       supports_responses: model.supports_responses,
       supports_streaming: model.supports_streaming,
       supports_tools: model.supports_tools,

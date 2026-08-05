@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
 
   use CodexPoolerWeb, :html
 
+  alias CodexPooler.Catalog.ModelInfo
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.PolicyEditorComponents
@@ -182,27 +183,42 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
           </p>
 
           <div id="api-key-model-options" class="grid max-h-[13rem] gap-2 overflow-y-auto">
-            <label
+            <div
               :for={option <- @sorted_model_options}
               id={"api-key-model-option-#{dom_token(option.identifier)}"}
-              class="flex min-h-12 min-w-0 cursor-pointer items-center gap-3 rounded-box border border-base-300 bg-base-100 px-3 py-2 transition-colors hover:border-primary/50 hover:bg-primary/5"
+              class="flex min-h-12 min-w-0 items-center rounded-box border border-base-300 bg-base-100 transition-colors hover:border-primary/50 hover:bg-primary/5"
             >
-              <input
-                type="checkbox"
-                class="checkbox checkbox-primary checkbox-sm shrink-0"
-                name={field_array_name(@form[:allowed_model_identifiers])}
-                value={option.identifier}
-                checked={selected_value?(@form[:allowed_model_identifiers].value, option.identifier)}
+              <label class="flex min-h-12 min-w-0 flex-1 cursor-pointer items-center gap-3 px-3 py-2">
+                <input
+                  type="checkbox"
+                  class="checkbox checkbox-primary checkbox-sm shrink-0"
+                  name={field_array_name(@form[:allowed_model_identifiers])}
+                  value={option.identifier}
+                  checked={
+                    selected_value?(
+                      @form[:allowed_model_identifiers].value,
+                      option.identifier
+                    )
+                  }
+                />
+                <span class="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-3 gap-y-0.5">
+                  <span class="min-w-0 truncate text-sm font-medium text-base-content">
+                    {option.display_name || option.identifier}
+                  </span>
+                  <span class="truncate text-[10.5px] tracking-[0.015em] text-base-content/50">
+                    {option.identifier}
+                  </span>
+                </span>
+              </label>
+              <AdminComponents.model_info_popover
+                :if={ModelInfo.present?(option.model_info)}
+                id={"api-key-model-option-#{dom_token(option.identifier)}-model-info"}
+                model_label={option.display_name || option.identifier}
+                info={option.model_info}
+                placement={:end}
+                class="mr-2 shrink-0"
               />
-              <span class="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-3 gap-y-0.5">
-                <span class="min-w-0 truncate text-sm font-medium text-base-content">
-                  {option.display_name || option.identifier}
-                </span>
-                <span class="truncate text-[10.5px] tracking-[0.015em] text-base-content/50">
-                  {option.identifier}
-                </span>
-              </span>
-            </label>
+            </div>
             <p :if={@selector_state.options == []} class="text-sm text-base-content/60">
               No routable catalog models are available for this Pool.
             </p>

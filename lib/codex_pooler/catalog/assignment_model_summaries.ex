@@ -4,6 +4,7 @@ defmodule CodexPooler.Catalog.AssignmentModelSummaries do
   import Ecto.Query
 
   alias CodexPooler.Catalog.Model
+  alias CodexPooler.Catalog.ModelInfo
   alias CodexPooler.Catalog.Sync.PreservedSources
   alias CodexPooler.Repo
 
@@ -24,6 +25,7 @@ defmodule CodexPooler.Catalog.AssignmentModelSummaries do
           required(:assignment_id) => Ecto.UUID.t(),
           required(:exposed_model_id) => String.t(),
           required(:capabilities) => capabilities(),
+          required(:model_info) => ModelInfo.t(),
           required(:provenance) => provenance()
         }
   @type model_projection :: %{
@@ -74,6 +76,7 @@ defmodule CodexPooler.Catalog.AssignmentModelSummaries do
               assignment_id: assignment_id,
               exposed_model_id: model.exposed_model_id,
               capabilities: capabilities(source_metadata),
+              model_info: ModelInfo.from_sources([source_metadata]),
               provenance:
                 if(Map.has_key?(preserved, assignment_id), do: :preserved, else: :observed)
             }

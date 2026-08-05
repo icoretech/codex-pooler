@@ -144,6 +144,32 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingFormTest do
     assert row.effective_badge == %{label: "Will be removed on save", mode: "removed"}
   end
 
+  test "projects safe model info from the routable source metadata" do
+    snapshot = %{revision: "revision", overrides: []}
+
+    visible_models = [
+      model("gpt-model-info", "Model info", %{
+        "source_assignment_models" => %{
+          "assignment-1" => %{
+            "description" => "Synthetic model description.",
+            "visibility" => "hide",
+            "supported_in_api" => false,
+            "use_responses_lite" => true
+          }
+        }
+      })
+    ]
+
+    assert [row] = PoolForm.model_serving_form(snapshot, visible_models).rows
+
+    assert row.model_info == %{
+             description: "Synthetic model description.",
+             description_state: :available,
+             visibility: :hidden,
+             api_support: :unsupported
+           }
+  end
+
   defp model(exposed_model_id, display_name, metadata) do
     model = %Model{
       exposed_model_id: exposed_model_id,

@@ -27,6 +27,9 @@ defmodule CodexPooler.CatalogTest do
         metadata: %{
           "source_assignment_models" => %{
             first.id => %{
+              "description" => "Synthetic assignment model.",
+              "visibility" => "hide",
+              "supported_in_api" => false,
               "supports_responses" => true,
               "supports_streaming" => false,
               "supports_tools" => sentinel,
@@ -89,6 +92,12 @@ defmodule CodexPooler.CatalogTest do
               tools: :unknown,
               reasoning: true
             },
+            model_info: %{
+              description: "Synthetic assignment model.",
+              description_state: :available,
+              visibility: :hidden,
+              api_support: :unsupported
+            },
             provenance: :observed
           },
           %{
@@ -100,6 +109,12 @@ defmodule CodexPooler.CatalogTest do
               streaming: true,
               tools: true,
               reasoning: false
+            },
+            model_info: %{
+              description: nil,
+              description_state: :missing,
+              visibility: :unknown,
+              api_support: :unknown
             },
             provenance: :preserved
           }

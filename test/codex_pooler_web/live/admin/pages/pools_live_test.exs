@@ -1835,6 +1835,14 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         display_name: "Auto model",
         metadata: %{
           "source_assignment_ids" => [assignment.id],
+          "source_assignment_models" => %{
+            assignment.id => %{
+              "description" => "Synthetic work routing alias.",
+              "visibility" => "hide",
+              "supported_in_api" => false,
+              "use_responses_lite" => true
+            }
+          },
           "use_responses_lite" => true
         }
       })
@@ -1927,6 +1935,29 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
            )
 
     assert has_element?(view, "##{auto_row_id} legend", "Auto model")
+
+    assert has_element?(
+             view,
+             "##{auto_row_id}-model-info[data-role='model-info-popover'] [data-role='model-info-trigger'][popovertarget='#{auto_row_id}-model-info-content'][aria-controls='#{auto_row_id}-model-info-content'][aria-describedby='#{auto_row_id}-model-info-content']"
+           )
+
+    assert has_element?(
+             view,
+             "##{auto_row_id}-model-info-content[data-role='model-info-content'][popover][role='tooltip'] [data-role='model-info-description']",
+             "Synthetic work routing alias."
+           )
+
+    assert has_element?(
+             view,
+             "##{auto_row_id}-model-info-content [data-role='model-info-facts']",
+             "Hidden upstream alias"
+           )
+
+    assert has_element?(
+             view,
+             "##{auto_row_id}-model-info-content [data-role='model-info-facts']",
+             "Not exposed by the public API"
+           )
 
     assert has_element?(
              view,

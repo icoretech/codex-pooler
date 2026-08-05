@@ -520,7 +520,16 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLivePolicyTest do
     model_fixture(pool, %{
       exposed_model_id: "gpt-refresh-visible",
       display_name: "GPT Refresh Visible",
-      metadata: %{"source_assignment_ids" => [assignment.id]}
+      metadata: %{
+        "source_assignment_ids" => [assignment.id],
+        "source_assignment_models" => %{
+          assignment.id => %{
+            "description" => "Synthetic refresh-visible model.",
+            "visibility" => "hide",
+            "supported_in_api" => false
+          }
+        }
+      }
     })
 
     view
@@ -530,6 +539,24 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLivePolicyTest do
     })
 
     assert has_element?(view, "#api-key-model-option-gpt-refresh-visible", "GPT Refresh Visible")
+
+    assert has_element?(
+             view,
+             "#api-key-model-option-gpt-refresh-visible-model-info[data-role='model-info-popover'] [data-role='model-info-trigger'][popovertarget='api-key-model-option-gpt-refresh-visible-model-info-content']"
+           )
+
+    assert has_element?(
+             view,
+             "#api-key-model-option-gpt-refresh-visible-model-info-content[data-role='model-info-content'][popover][role='tooltip'] [data-role='model-info-description']",
+             "Synthetic refresh-visible model."
+           )
+
+    assert has_element?(
+             view,
+             "#api-key-model-option-gpt-refresh-visible-model-info-content [data-role='model-info-facts']",
+             "Not exposed by the public API"
+           )
+
     assert render(view) =~ "preserved after refresh"
 
     select_api_key_section(view, :review)

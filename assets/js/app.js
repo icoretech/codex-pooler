@@ -8,6 +8,10 @@ import { LiveSocket } from "phoenix_live_view";
 import { hooks as colocatedHooks } from "phoenix-colocated/codex_pooler";
 import topbar from "topbar";
 import { renderSVG } from "uqr";
+import {
+	adminEscapeTarget,
+	shouldDismissOpenPopoverFromPointer,
+} from "./admin_overlay_dismissal.mjs";
 import { cumulativeChartSeries } from "./chart_series.mjs";
 import { attachChartWheelScroll } from "./chart_wheel_scroll.mjs";
 import { classifyLiveSocketConnection } from "./live_socket_connection.mjs";
@@ -1262,24 +1266,68 @@ const dismissAdminDialog = (dialog) => {
 
 	return true;
 };
+const openModelInfoPopover = () =>
+	document.querySelector("[data-role='model-info-content']:popover-open");
+const popoverInvokerFor = (popover) =>
+	Array.from(document.querySelectorAll("[popovertarget]")).find(
+		(trigger) => trigger.getAttribute("popovertarget") === popover.id,
+	);
 const dismissTopAdminDialogFromEscape = (event) => {
-	if (event.key !== "Escape") return;
-
+	const openPopover = openModelInfoPopover();
 	const openDialogs = Array.from(
 		document.querySelectorAll("dialog.modal[open]"),
 	);
 	const dialog = openDialogs.at(-1);
-	if (!dialog) return;
+	const target = adminEscapeTarget({
+		key: event.key,
+		hasOpenPopover: openPopover !== null,
+		hasOpenDialog: dialog !== undefined,
+	});
+
+	if (target === "popover") {
+		const popoverTrigger = popoverInvokerFor(openPopover);
+		openPopover.hidePopover();
+		popoverTrigger?.focus();
+		event.preventDefault();
+		event.stopPropagation();
+		return;
+	}
+
+	if (target !== "dialog") return;
 
 	if (!dismissAdminDialog(dialog)) return;
 
 	event.preventDefault();
 	event.stopPropagation();
 };
+const dismissOpenModelInfoPopoverFromPointer = (event) => {
+	const openPopover = openModelInfoPopover();
+	const target = event.target;
+
+	if (!(target instanceof Node)) return;
+
+	const popoverTrigger = openPopover && popoverInvokerFor(openPopover);
+
+	if (
+		!shouldDismissOpenPopoverFromPointer({
+			hasOpenPopover: openPopover !== null,
+			targetInsidePopover: openPopover?.contains(target) ?? false,
+			targetInsideInvoker: popoverTrigger?.contains(target) ?? false,
+		})
+	)
+		return;
+
+	openPopover.hidePopover();
+};
 
 forgetMemorizedLongPollFallback();
 document.addEventListener("cancel", dismissAdminDialogFromKeyboard, true);
 document.addEventListener("keydown", dismissTopAdminDialogFromEscape, true);
+document.addEventListener(
+	"pointerdown",
+	dismissOpenModelInfoPopoverFromPointer,
+	true,
+);
 
 const liveSocket = new LiveSocket("/live", Socket, {
 	longPollFallbackMs: 8000,

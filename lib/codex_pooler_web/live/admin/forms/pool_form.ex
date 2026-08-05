@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
 
   alias CodexPooler.Access
   alias CodexPooler.Catalog.Model
+  alias CodexPooler.Catalog.ModelInfo
   alias CodexPooler.Pools
   alias CodexPooler.Pools.ModelServingMode
   alias CodexPooler.Pools.ModelServingOverride
@@ -52,6 +53,7 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
           },
           required(:available?) => boolean(),
           required(:warning) => String.t() | nil,
+          required(:model_info) => ModelInfo.t(),
           required(:dom_id) => String.t(),
           required(:identifier_name) => String.t(),
           required(:mode_name) => String.t(),
@@ -423,6 +425,7 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
       effective_badge: row.effective_badge,
       available?: row.available?,
       warning: row.warning,
+      model_info: ModelInfo.from_metadata(row.metadata, row.routable_source_ids),
       dom_id: dom_id,
       identifier_name: "pool_model_serving[rows][#{index}][exposed_model_id]",
       mode_name: "pool_model_serving[rows][#{index}][mode]",

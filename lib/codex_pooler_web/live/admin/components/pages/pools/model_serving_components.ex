@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
 
   use CodexPoolerWeb, :html
 
+  alias CodexPooler.Catalog.ModelInfo
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
 
   @mode_options [
@@ -181,6 +182,12 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
                 ]}>
                   {row.display_name}
                 </p>
+                <AdminComponents.model_info_popover
+                  :if={ModelInfo.present?(row.model_info)}
+                  id={"#{row.dom_id}-model-info"}
+                  model_label={row.display_name}
+                  info={row.model_info}
+                />
                 <span
                   :if={!row.available?}
                   class="rounded border border-warning/40 bg-warning/10 px-1 py-px text-[0.56rem] font-bold uppercase tracking-wide text-warning"

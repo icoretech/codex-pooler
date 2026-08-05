@@ -679,6 +679,158 @@ defmodule CodexPoolerWeb.Admin.Components do
       "dropdown-content z-20 ml-2 grid w-72 gap-1 rounded-box border border-base-300 bg-base-100 p-3 text-left text-xs font-normal leading-5 text-base-content/70 shadow-xl"
 
   attr :id, :string, required: true
+  attr :model_label, :string, required: true
+  attr :info, :map, required: true
+  attr :trigger, :atom, default: :icon, values: [:icon, :label]
+  attr :placement, :atom, default: :start, values: [:start, :end]
+  attr :class, :any, default: nil
+  attr :trigger_class, :any, default: nil
+
+  def model_info_popover(assigns) do
+    assigns =
+      assigns
+      |> assign(:anchor_name, model_info_anchor_name(assigns.id))
+      |> assign(:description, model_info_description(assigns.info))
+      |> assign(:facts, model_info_facts(assigns.info))
+      |> assign(:content_class, model_info_content_class(assigns.placement))
+
+    ~H"""
+    <span
+      id={@id}
+      data-role="model-info-popover"
+      class={["inline-flex min-w-0", @class]}
+    >
+      <button
+        :if={@trigger == :icon}
+        id={"#{@id}-trigger"}
+        type="button"
+        data-role="model-info-trigger"
+        class={[
+          "btn btn-ghost btn-xs btn-circle size-6 min-h-6 shrink-0 text-base-content/45 transition-colors hover:bg-base-200 hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
+          @trigger_class
+        ]}
+        aria-label={"About #{@model_label}"}
+        aria-controls={"#{@id}-content"}
+        aria-describedby={"#{@id}-content"}
+        popovertarget={"#{@id}-content"}
+        style={"anchor-name: #{@anchor_name};"}
+      >
+        <.icon name="hero-information-circle" class="size-4" />
+        <span class="sr-only">About {@model_label}</span>
+      </button>
+
+      <button
+        :if={@trigger == :label}
+        id={"#{@id}-trigger"}
+        type="button"
+        data-role="model-info-trigger"
+        class={[
+          "min-w-0 truncate rounded-sm text-left text-[11px] font-semibold leading-4 text-base-content underline decoration-dotted decoration-base-content/35 underline-offset-2 transition-colors hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
+          @trigger_class
+        ]}
+        title={@model_label}
+        aria-label={"About #{@model_label}"}
+        aria-controls={"#{@id}-content"}
+        aria-describedby={"#{@id}-content"}
+        popovertarget={"#{@id}-content"}
+        style={"anchor-name: #{@anchor_name};"}
+      >
+        {@model_label}
+      </button>
+
+      <div
+        id={"#{@id}-content"}
+        popover
+        role="tooltip"
+        tabindex="0"
+        data-role="model-info-content"
+        class={@content_class}
+        style={"position-anchor: #{@anchor_name};"}
+      >
+        <div class="grid gap-1 p-3">
+          <p class="text-[0.6rem] font-bold uppercase tracking-wide text-base-content/50">
+            Model info
+          </p>
+          <p class="break-words text-xs font-semibold leading-5 text-base-content">
+            {@model_label}
+          </p>
+          <p
+            data-role="model-info-description"
+            class="text-xs font-normal leading-5 text-base-content/70"
+          >
+            {@description}
+          </p>
+        </div>
+
+        <div
+          :if={@facts != []}
+          data-role="model-info-facts"
+          class="grid gap-1.5 border-t border-base-300 bg-base-200/35 px-3 py-2"
+        >
+          <p
+            :for={{icon, fact} <- @facts}
+            class="flex min-w-0 items-start gap-1.5 text-[11px] leading-4 text-base-content/65"
+          >
+            <.icon name={icon} class="mt-px size-3.5 shrink-0" />
+            <span>{fact}</span>
+          </p>
+        </div>
+      </div>
+    </span>
+    """
+  end
+
+  defp model_info_anchor_name(id) do
+    token = String.replace(id, ~r/[^a-zA-Z0-9_-]+/, "-")
+    "--#{token}-anchor"
+  end
+
+  defp model_info_description(%{description_state: :available, description: description})
+       when is_binary(description),
+       do: description
+
+  defp model_info_description(%{description_state: :conflicting}),
+    do: "Descriptions differ across the current upstreams."
+
+  defp model_info_description(_info),
+    do: "No description was reported by the current upstreams."
+
+  defp model_info_facts(info) do
+    []
+    |> append_model_info_fact(
+      Map.get(info, :visibility),
+      :hidden,
+      {"hero-eye-slash", "Hidden upstream alias"}
+    )
+    |> append_model_info_fact(
+      Map.get(info, :visibility),
+      :mixed,
+      {"hero-eye-slash", "Visibility differs across upstreams"}
+    )
+    |> append_model_info_fact(
+      Map.get(info, :api_support),
+      :unsupported,
+      {"hero-code-bracket-square", "Not exposed by the public API"}
+    )
+    |> append_model_info_fact(
+      Map.get(info, :api_support),
+      :mixed,
+      {"hero-code-bracket-square", "API support differs across upstreams"}
+    )
+  end
+
+  defp append_model_info_fact(facts, value, value, fact), do: facts ++ [fact]
+  defp append_model_info_fact(facts, _value, _expected, _fact), do: facts
+
+  defp model_info_content_class(:end),
+    do:
+      "dropdown dropdown-end dropdown-bottom w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-box border border-base-300 bg-base-100 p-0 text-left text-base-content shadow-2xl"
+
+  defp model_info_content_class(_placement),
+    do:
+      "dropdown dropdown-start dropdown-bottom w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-box border border-base-300 bg-base-100 p-0 text-left text-base-content shadow-2xl"
+
+  attr :id, :string, required: true
   attr :icon, :string, default: "hero-information-circle"
   attr :title, :string, required: true
   attr :description, :string, required: true

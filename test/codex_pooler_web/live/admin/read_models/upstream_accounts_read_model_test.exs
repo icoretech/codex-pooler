@@ -501,6 +501,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
                    tools: :unknown,
                    reasoning: :unknown
                  },
+                 model_info: %{
+                   description: nil,
+                   description_state: :missing,
+                   visibility: :unknown,
+                   api_support: :unknown
+                 },
                  provenance: :observed
                }
              ],
@@ -520,6 +526,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
                    streaming: :unknown,
                    tools: :unknown,
                    reasoning: :unknown
+                 },
+                 model_info: %{
+                   description: nil,
+                   description_state: :missing,
+                   visibility: :unknown,
+                   api_support: :unknown
                  },
                  provenance: :preserved
                }
