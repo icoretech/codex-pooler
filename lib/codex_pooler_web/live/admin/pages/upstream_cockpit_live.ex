@@ -46,7 +46,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
         saved_reset_policy_dirty?: false,
         confirming_saved_reset_redemption: nil,
         selected_request_log: nil,
-        subscribed_pool_ids: MapSet.new()
+        subscribed_pool_ids: MapSet.new(),
+        cockpit_metrics_generation: 0,
+        cockpit_metrics_running?: false,
+        cockpit_metrics_rerun?: false
       )
       |> allow_upload(:auth_json,
         accept: ~w(.json),
@@ -57,9 +60,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
         auto_upload: true
       )
 
-    case UpstreamCockpitReadModel.load_visible(socket.assigns.current_scope, identity_id) do
+    case UpstreamCockpitReadModel.load_visible_without_request_metrics(
+           socket.assigns.current_scope,
+           identity_id
+         ) do
       {:ok, cockpit} ->
-        {:ok, assign_cockpit(socket, cockpit)}
+        {:ok, socket |> assign_cockpit(cockpit) |> request_cockpit_metrics()}
 
       :error ->
         {:ok,
@@ -102,7 +108,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
 
   def handle_event("refresh_data", _params, socket) do
     {:noreply,
-     socket |> load_cockpit() |> assign(:refresh_data_message, "Account data refreshed")}
+     socket
+     |> load_cockpit()
+     |> request_cockpit_metrics()
+     |> assign(:refresh_data_message, "Account data refreshed")}
   end
 
   @impl true
@@ -285,6 +294,33 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   end
 
   @impl true
+  def handle_async({:cockpit_metrics, generation}, {:ok, metrics}, socket) do
+    socket = assign(socket, cockpit_metrics_running?: false)
+
+    if generation == socket.assigns.cockpit_metrics_generation do
+      {:noreply,
+       socket
+       |> merge_cockpit_metrics(metrics)
+       |> maybe_restart_cockpit_metrics()}
+    else
+      {:noreply, start_cockpit_metrics_task(socket, socket.assigns.cockpit_metrics_generation)}
+    end
+  end
+
+  def handle_async({:cockpit_metrics, generation}, {:exit, _reason}, socket) do
+    socket = assign(socket, cockpit_metrics_running?: false)
+
+    if generation == socket.assigns.cockpit_metrics_generation do
+      {:noreply,
+       socket
+       |> put_flash(:error, "Could not refresh request metrics")
+       |> maybe_restart_cockpit_metrics()}
+    else
+      {:noreply, start_cockpit_metrics_task(socket, socket.assigns.cockpit_metrics_generation)}
+    end
+  end
+
+  @impl true
   def render(assigns) do
     assigns =
       assign(
@@ -340,7 +376,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   end
 
   defp load_cockpit(socket) do
-    case UpstreamCockpitReadModel.load_visible(
+    case UpstreamCockpitReadModel.load_visible_without_request_metrics(
            socket.assigns.current_scope,
            socket.assigns.cockpit.identity.id
          ) do
@@ -352,6 +388,49 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
         |> put_flash(:error, "Upstream account was not found")
         |> redirect(to: ~p"/admin/upstreams")
     end
+  end
+
+  defp request_cockpit_metrics(socket) do
+    generation = socket.assigns.cockpit_metrics_generation + 1
+
+    socket =
+      assign(socket,
+        cockpit_metrics_generation: generation,
+        cockpit_metrics_rerun?: socket.assigns.cockpit_metrics_running?
+      )
+
+    if socket.assigns.cockpit_metrics_running? do
+      socket
+    else
+      start_cockpit_metrics_task(socket, generation)
+    end
+  end
+
+  defp start_cockpit_metrics_task(socket, generation) do
+    scope = socket.assigns.current_scope
+    cockpit = socket.assigns.cockpit
+
+    socket
+    |> assign(cockpit_metrics_running?: true, cockpit_metrics_rerun?: false)
+    |> start_async({:cockpit_metrics, generation}, fn ->
+      UpstreamCockpitReadModel.request_metrics(scope, cockpit.identity.id, cockpit.assignments)
+    end)
+  end
+
+  defp maybe_restart_cockpit_metrics(socket) do
+    if socket.assigns.cockpit_metrics_rerun? do
+      start_cockpit_metrics_task(socket, socket.assigns.cockpit_metrics_generation)
+    else
+      socket
+    end
+  end
+
+  defp merge_cockpit_metrics(socket, metrics) do
+    assign(
+      socket,
+      :cockpit,
+      UpstreamCockpitReadModel.merge_request_metrics(socket.assigns.cockpit, metrics)
+    )
   end
 
   # Event-driven cockpit reloads must not clobber policy edits in progress:

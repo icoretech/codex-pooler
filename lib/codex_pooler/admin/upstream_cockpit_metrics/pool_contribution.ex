@@ -54,8 +54,8 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.PoolContribution do
   end
 
   defp from_rows(identity_or_status, assignments, rows, quota_readiness) do
-    successful_requests_7d = length(rows)
-    request_counts_by_pool_id = Enum.frequencies_by(rows, & &1.pool_id)
+    successful_requests_7d = Enum.sum_by(rows, & &1.successful_request_count_7d)
+    request_counts_by_pool_id = Map.new(rows, &{&1.pool_id, &1.successful_request_count_7d})
 
     items =
       assignments
@@ -95,14 +95,24 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.PoolContribution do
   defp pool_contribution_rows(_identity_id, _pool_ids, _start_7d, _as_of), do: []
 
   defp pool_contribution_rows_for_pools(identity_id, pool_ids, start_7d, as_of) do
+    target_request_ids =
+      from attempt in Attempt,
+        where: attempt.upstream_identity_id == ^identity_id,
+        group_by: attempt.request_id,
+        select: attempt.request_id
+
     Request
-    |> join(:inner, [request], attempt in Attempt, on: attempt.request_id == request.id)
+    |> join(:inner, [request], target in subquery(target_request_ids),
+      on: target.request_id == request.id
+    )
     |> where([request], request.pool_id in ^pool_ids)
-    |> where([request, attempt], attempt.upstream_identity_id == ^identity_id)
     |> where([request], request.status == "succeeded")
     |> where([request], request.admitted_at >= ^start_7d and request.admitted_at <= ^as_of)
-    |> group_by([request], [request.id, request.pool_id])
-    |> select([request], %{pool_id: request.pool_id})
+    |> group_by([request], request.pool_id)
+    |> select([request], %{
+      pool_id: request.pool_id,
+      successful_request_count_7d: count(request.id)
+    })
     |> Repo.all()
   end
 

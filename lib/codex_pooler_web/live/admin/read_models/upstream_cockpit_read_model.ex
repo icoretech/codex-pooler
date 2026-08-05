@@ -153,6 +153,53 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
 
   @spec load_visible(term(), Ecto.UUID.t()) :: {:ok, t()} | :error
   def load_visible(scope, identity_id) when is_binary(identity_id) do
+    load_visible(scope, identity_id, request_metrics?: true)
+  end
+
+  def load_visible(_scope, _identity_id), do: :error
+
+  @spec load_visible_without_request_metrics(term(), Ecto.UUID.t()) :: {:ok, t()} | :error
+  def load_visible_without_request_metrics(scope, identity_id) when is_binary(identity_id) do
+    load_visible(scope, identity_id, request_metrics?: false)
+  end
+
+  @spec request_metrics(Scope.t(), Ecto.UUID.t(), assignments()) :: %{
+          request_health: request_health(),
+          pool_contribution: pool_contribution()
+        }
+  def request_metrics(%Scope{} = scope, identity_id, %{items: assignments}) do
+    request_health = UpstreamCockpitMetrics.request_health(scope, identity_id)
+
+    pool_contribution =
+      UpstreamCockpitMetrics.pool_contribution(scope, identity_id, assignments)
+
+    %{request_health: request_health, pool_contribution: pool_contribution}
+  end
+
+  @spec merge_request_metrics(t(), %{
+          request_health: request_health(),
+          pool_contribution: pool_contribution()
+        }) ::
+          t()
+  def merge_request_metrics(cockpit, %{
+        request_health: request_health,
+        pool_contribution: pool_contribution
+      }) do
+    flags = %{cockpit.flags | missing_requests?: request_health.missing?}
+
+    charts =
+      charts(flags, cockpit.charts.quota_health, request_health, pool_contribution)
+
+    %{
+      cockpit
+      | flags: flags,
+        charts: charts,
+        sections:
+          sections(flags, cockpit.assignments, charts, cockpit.recent_events, cockpit.actions)
+    }
+  end
+
+  defp load_visible(scope, identity_id, options) when is_binary(identity_id) do
     pools = Pools.list_visible_pools(scope)
 
     scope
@@ -162,12 +209,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       DateTimeDisplay.preferences_for_user(scope.user)
     )
     |> case do
-      [account | _rest] -> {:ok, from_account_snapshot(account, scope)}
+      [account | _rest] -> {:ok, from_account_snapshot(account, scope, options)}
       [] -> :error
     end
   end
-
-  def load_visible(_scope, _identity_id), do: :error
 
   @spec from_account_snapshot(UpstreamAccountsReadModel.account_snapshot()) :: t()
   def from_account_snapshot(%{identity: %UpstreamIdentity{}} = account) do
@@ -176,12 +221,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
 
   @spec from_account_snapshot(UpstreamAccountsReadModel.account_snapshot(), term() | nil) :: t()
   defp from_account_snapshot(%{identity: %UpstreamIdentity{}} = account, scope) do
+    from_account_snapshot(account, scope, request_metrics?: true)
+  end
+
+  defp from_account_snapshot(%{identity: %UpstreamIdentity{}} = account, scope, options) do
     safe_identity = safe_identity(account)
     header = header(account, safe_identity)
     assignments = assignments(account)
     quota_health = quota_health(account.identity, assignments, scope)
-    request_health = request_health(account.identity, scope)
-    pool_contribution = pool_contribution(account.identity, assignments, scope)
+
+    {request_health, pool_contribution} =
+      request_metrics(account.identity, assignments, scope, options)
+
     flags = flags(account, assignments, quota_health, request_health)
     charts = charts(flags, quota_health, request_health, pool_contribution)
     oauth_flows = oauth_flows(account, scope)
@@ -205,6 +256,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       sections: sections,
       flags: flags
     }
+  end
+
+  defp request_metrics(identity, assignments, scope, options) do
+    if Keyword.get(options, :request_metrics?, true) do
+      {request_health(identity, scope), pool_contribution(identity, assignments, scope)}
+    else
+      {
+        UpstreamCockpitMetrics.request_health_without_request_data(),
+        UpstreamCockpitMetrics.pool_contribution_without_request_data(assignments.items)
+      }
+    end
   end
 
   defp oauth_flows(_account, nil), do: UpstreamAccountsReadModel.empty_oauth_flow_state()
