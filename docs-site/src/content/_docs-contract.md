@@ -72,6 +72,12 @@ accepted custom-tool replay input. Chat does not accept executable custom
 definitions or choices. Provider execution availability remains selected model
 and account dependent; never claim broad OpenAI tool parity.
 
+Responses `function_call_output` replay accepts optional nullable, nonblank string
+`name` and `namespace` metadata over direct HTTP and the narrow Responses
+websocket surface. Omitted or `null` values are accepted; blank or non-string
+values are rejected before dispatch. The legacy `result` branch follows the same
+metadata contract.
+
 Direct public Responses may repair only a missing nested object or array type in
 strict flat-function parameters with a typed object root and complete,
 unambiguous structural evidence. This applies to top-level flat functions and
