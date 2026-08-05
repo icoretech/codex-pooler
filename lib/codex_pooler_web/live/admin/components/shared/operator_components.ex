@@ -173,7 +173,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
       <div
         :if={@operators != []}
         id="operators-cards"
-        class="grid min-w-0 items-stretch gap-3 md:grid-cols-2 xl:grid-cols-3"
+        class="grid min-w-0 items-start gap-3 md:grid-cols-2 xl:grid-cols-3"
       >
         <.operator_card
           :for={entry <- @operators}
@@ -278,8 +278,6 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
           </dd>
         </div>
       </dl>
-
-      <div class="min-h-0 flex-1"></div>
 
       <section
         id={"#{@dom}-pools-panel"}
