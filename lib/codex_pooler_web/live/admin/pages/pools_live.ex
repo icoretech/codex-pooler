@@ -7,8 +7,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Routing, as: PoolRouting
-  alias CodexPoolerWeb.Admin.LiveUpdatesHooks
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.LiveUpdatesHooks
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.Admin.PoolForm
   alias CodexPoolerWeb.Admin.PoolListComponents
@@ -17,6 +17,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
 
   @pool_event_topics ["model_sync", "pools", "upstreams", "usage"]
   @pool_traffic_refresh_delay_ms 1_000
+  @pool_traffic_fallback_refresh_ms 60_000
 
   @impl true
   def mount(_params, _session, socket) do
@@ -58,7 +59,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
        pool_traffic_rerun?: false
      )
      |> load_structural()
-     |> start_pool_traffic_load()}
+     |> start_pool_traffic_load()
+     |> maybe_start_connected_refresh()}
   end
 
   @impl true
@@ -386,6 +388,15 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     end
   end
 
+  # Gateway usage events remain the fast path. This conservative fallback lets
+  # rolling-window rows age out, and retries a failed async read, even when the
+  # instance is otherwise quiet. It keeps ticking while paused so resume can
+  # catch up immediately, but the refresh itself stays behind the global gate.
+  def handle_info(:fallback_refresh_pool_traffic, socket) do
+    schedule_pool_traffic_fallback_refresh()
+    LiveUpdatesHooks.unless_paused(socket, &start_pool_traffic_load/1)
+  end
+
   # Cancelling the timer, not clearing the refresh: a replayed usage event has
   # just armed the traffic debounce and leaving its token alive lets it fire a
   # second async load behind this one, but `pool_traffic_dirty?` is not part of
@@ -671,6 +682,22 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
           PoolsReadModel.traffic_metrics(pool_ids, traffic_window)
         end)
     end
+  end
+
+  defp maybe_start_connected_refresh(socket) do
+    if connected?(socket) do
+      schedule_pool_traffic_fallback_refresh()
+    end
+
+    socket
+  end
+
+  defp schedule_pool_traffic_fallback_refresh do
+    Process.send_after(
+      self(),
+      :fallback_refresh_pool_traffic,
+      @pool_traffic_fallback_refresh_ms
+    )
   end
 
   defp apply_pool_traffic(socket) do

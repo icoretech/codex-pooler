@@ -2844,6 +2844,60 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute has_element?(view, "#pool-row-#{pool.id}-quota-remaining")
   end
 
+  test "fallback tick refreshes rolling traffic on a quiet instance", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "fallback-traffic", name: "Fallback Traffic"})
+    %{api_key: api_key} = api_key_fixture(pool, %{scope: scope})
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+
+    assert has_element?(view, "#pool-row-#{pool.id}-request-count", "0")
+
+    insert_timed_usage!(pool, api_key, assignment, DateTime.utc_now(), 100, 1_250_000, 2_000)
+
+    {_result, live_view_queries} =
+      capture_repo_queries(view.pid, fn ->
+        send(view.pid, :fallback_refresh_pool_traffic)
+        _ = :sys.get_state(view.pid)
+      end)
+
+    assert live_view_queries == []
+    _ = await_pool_traffic(view)
+
+    assert has_element?(view, "#pool-row-#{pool.id}-request-count", "1")
+    assert has_element?(view, "#pool-row-#{pool.id}-settled-cost", "$1.25")
+  end
+
+  test "fallback tick holds while live updates are paused and refreshes on resume", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "paused-fallback", name: "Paused Fallback"})
+    %{api_key: api_key} = api_key_fixture(pool, %{scope: scope})
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+    render_hook(view, "set_live_updates", %{"paused" => true})
+
+    insert_timed_usage!(pool, api_key, assignment, DateTime.utc_now(), 100, 750_000, 1_000)
+    send(view.pid, :fallback_refresh_pool_traffic)
+    _ = :sys.get_state(view.pid)
+
+    refute :sys.get_state(view.pid).socket.assigns.pool_traffic_running?
+    assert has_element?(view, "#pool-row-#{pool.id}-request-count", "0")
+
+    render_hook(view, "set_live_updates", %{"paused" => false})
+    _ = await_pool_traffic(view)
+
+    assert has_element?(view, "#pool-row-#{pool.id}-request-count", "1")
+    assert has_element?(view, "#pool-row-#{pool.id}-settled-cost", "$0.75")
+  end
+
   test "coalesces traffic refreshes, ignores request logs, and makes stale timers harmless", %{
     conn: conn,
     scope: scope
