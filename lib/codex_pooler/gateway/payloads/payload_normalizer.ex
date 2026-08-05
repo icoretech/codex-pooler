@@ -577,10 +577,24 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
          "content" => content
        })
        when is_list(content) do
-    Enum.any?(content, &backend_codex_encrypted_content_marker?/1)
+    Enum.any?(content, &backend_codex_encrypted_content_marker?/1) and
+      not backend_codex_encrypted_multi_agent_message?(content)
   end
 
   defp backend_codex_encrypted_agent_message?(_item), do: false
+
+  defp backend_codex_encrypted_multi_agent_message?([
+         %{"type" => "input_text", "text" => text},
+         %{"type" => "encrypted_content", "encrypted_content" => encrypted_content}
+       ])
+       when is_binary(text) and is_binary(encrypted_content) and encrypted_content != "" do
+    Regex.match?(
+      ~r/\AMessage Type: (?:NEW_TASK|MESSAGE)\nTask name: [^\n]+\nSender: [^\n]+\nPayload:\n\z/,
+      text
+    )
+  end
+
+  defp backend_codex_encrypted_multi_agent_message?(_content), do: false
 
   defp backend_codex_encrypted_content_marker?(%{} = item) do
     Map.get(item, "type") == "encrypted_content" ||

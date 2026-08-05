@@ -232,6 +232,15 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
             ]
           },
           %{
+            "type" => "agent_message",
+            "author" => "root",
+            "recipient" => "worker",
+            "content" => [
+              %{"type" => "input_text", "text" => "Message Type: NEW_TASK\nPayload:\n"},
+              %{"type" => "encrypted_content", "encrypted_content" => "lookalike-agent-message"}
+            ]
+          },
+          %{
             "type" => "message",
             "role" => "assistant",
             "content" => nil,
@@ -330,7 +339,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
              ]
     end
 
-    test "removes backend Codex mixed encrypted agent messages from websocket upstream JSON" do
+    test "preserves backend Codex encrypted multi-agent MESSAGE envelopes in websocket upstream JSON" do
       payload = %{
         "model" => "gpt-5.5",
         "input" => [
@@ -340,7 +349,11 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
             "author" => "root",
             "recipient" => "worker",
             "content" => [
-              %{"type" => "input_text", "text" => "Message Type: MESSAGE\nPayload:\n"},
+              %{
+                "type" => "input_text",
+                "text" =>
+                  "Message Type: MESSAGE\nTask name: /root\nSender: /root/worker\nPayload:\n"
+              },
               %{"type" => "encrypted_content", "encrypted_content" => "opaque-agent-message"}
             ]
           },
@@ -378,15 +391,89 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
       assert Enum.map(upstream["input"], &Map.fetch!(&1, "type")) == [
                "message",
+               "agent_message",
                "message",
                "agent_message"
              ]
 
-      assert get_in(upstream, ["input", Access.at(1), "encrypted_content"]) ==
+      assert get_in(upstream, ["input", Access.at(1), "content"]) == [
+               %{
+                 "type" => "input_text",
+                 "text" =>
+                   "Message Type: MESSAGE\nTask name: /root\nSender: /root/worker\nPayload:\n"
+               },
+               %{"type" => "encrypted_content", "encrypted_content" => "opaque-agent-message"}
+             ]
+
+      assert get_in(upstream, ["input", Access.at(2), "encrypted_content"]) ==
                "preserved-assistant-replay"
 
-      assert get_in(upstream, ["input", Access.at(2), "content", Access.at(0), "type"]) ==
+      assert get_in(upstream, ["input", Access.at(3), "content", Access.at(0), "type"]) ==
                "input_text"
+    end
+
+    test "preserves encrypted multi-agent v2 NEW_TASK payloads in websocket upstream JSON" do
+      new_task = %{
+        "type" => "agent_message",
+        "author" => "/root",
+        "recipient" => "/root/worker",
+        "content" => [
+          %{
+            "type" => "input_text",
+            "text" => "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n"
+          },
+          %{"type" => "encrypted_content", "encrypted_content" => "opaque-new-task"}
+        ]
+      }
+
+      payload = %{"model" => "gpt-5.6", "input" => [new_task]}
+
+      request_options =
+        %{}
+        |> RequestOptions.build("/backend-api/codex/responses", payload)
+        |> RequestOptions.for_websocket(payload)
+
+      assert {:ok, encoded} =
+               PayloadNormalizer.upstream_payload(
+                 payload,
+                 %Model{upstream_model_id: "gpt-5.6"},
+                 "/backend-api/codex/responses",
+                 request_options
+               )
+
+      assert get_in(Jason.decode!(encoded), ["input", Access.at(0)]) == new_task
+    end
+
+    test "preserves encrypted multi-agent v2 MESSAGE payloads in websocket upstream JSON" do
+      message = %{
+        "type" => "agent_message",
+        "author" => "/root/worker",
+        "recipient" => "/root",
+        "content" => [
+          %{
+            "type" => "input_text",
+            "text" => "Message Type: MESSAGE\nTask name: /root\nSender: /root/worker\nPayload:\n"
+          },
+          %{"type" => "encrypted_content", "encrypted_content" => "opaque-message"}
+        ]
+      }
+
+      payload = %{"model" => "gpt-5.6", "input" => [message]}
+
+      request_options =
+        %{}
+        |> RequestOptions.build("/backend-api/codex/responses", payload)
+        |> RequestOptions.for_websocket(payload)
+
+      assert {:ok, encoded} =
+               PayloadNormalizer.upstream_payload(
+                 payload,
+                 %Model{upstream_model_id: "gpt-5.6"},
+                 "/backend-api/codex/responses",
+                 request_options
+               )
+
+      assert get_in(Jason.decode!(encoded), ["input", Access.at(0)]) == message
     end
 
     test "preserves malformed agent message content shapes while removing encrypted markers" do

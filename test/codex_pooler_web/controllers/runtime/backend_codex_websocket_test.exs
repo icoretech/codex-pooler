@@ -3178,7 +3178,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert request.usage_status == "usage_known"
   end
 
-  test "websocket response.create strips mixed encrypted agent messages before upstream dispatch" do
+  test "websocket response.create preserves encrypted multi-agent messages for upstream dispatch" do
     upstream =
       start_upstream(
         FakeUpstream.json_response(%{
@@ -3209,7 +3209,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                      "author" => "root",
                      "recipient" => "worker",
                      "content" => [
-                       %{"type" => "input_text", "text" => "Message Type: MESSAGE\nPayload:\n"},
+                       %{
+                         "type" => "input_text",
+                         "text" =>
+                           "Message Type: MESSAGE\nTask name: /root\nSender: /root/worker\nPayload:\n"
+                       },
                        %{
                          "type" => "encrypted_content",
                          "encrypted_content" => raw_agent_encrypted_content
@@ -3247,14 +3251,29 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     assert Enum.map(captured.json["input"], &Map.fetch!(&1, "type")) == [
              "message",
+             "agent_message",
              "message",
              "agent_message"
            ]
 
-    assert captured.json["input"] |> Enum.at(1) |> Map.fetch!("encrypted_content")
+    assert captured.json["input"]
+           |> Enum.at(1)
+           |> Map.fetch!("content") == [
+             %{
+               "type" => "input_text",
+               "text" =>
+                 "Message Type: MESSAGE\nTask name: /root\nSender: /root/worker\nPayload:\n"
+             },
+             %{
+               "type" => "encrypted_content",
+               "encrypted_content" => raw_agent_encrypted_content
+             }
+           ]
+
+    assert captured.json["input"] |> Enum.at(2) |> Map.fetch!("encrypted_content")
 
     assert captured.json["input"]
-           |> Enum.at(2)
+           |> Enum.at(3)
            |> Map.fetch!("content")
            |> Enum.at(0)
            |> Map.fetch!("type") ==
