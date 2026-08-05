@@ -273,11 +273,16 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
         id={"api-key-pool-group-#{group.dom_id}"}
         class="grid min-w-0 overflow-visible rounded-box border border-base-300 bg-base-100 xl:grid-cols-[13rem_minmax(0,1fr)]"
       >
-        <header class="flex min-w-0 flex-wrap content-start items-center gap-3 rounded-t-[calc(var(--radius-box)-1px)] border-b border-base-300 bg-primary/5 p-4 xl:justify-between xl:rounded-l-[calc(var(--radius-box)-1px)] xl:rounded-tr-none xl:border-r xl:border-b-0">
+        <header class="flex min-w-0 flex-wrap content-start items-center justify-between gap-3 rounded-t-[calc(var(--radius-box)-1px)] border-b border-base-300 bg-primary/5 p-4 xl:rounded-l-[calc(var(--radius-box)-1px)] xl:rounded-tr-none xl:border-r xl:border-b-0">
           <span class="grid size-9 shrink-0 place-items-center rounded-field border border-primary/30 bg-primary/15 text-primary">
             <.icon name="hero-server-stack" class="size-4" />
           </span>
-          <div class="min-w-0 flex-1 xl:order-last xl:basis-full">
+          <%!-- Beside the icon wherever it fits, on its own line where it does
+          not. On a phone the icon and the count leave it around 78px, and a
+          Pool called "Production Europe West Failover Cluster" came out broken
+          mid-word — "Productio / n Europe" — so there it drops below them. At
+          `xl` the header is a 13rem column and it drops below again. --%>
+          <div class="min-w-0 order-last basis-full sm:order-none sm:flex-1 sm:basis-auto xl:order-last xl:flex-none xl:basis-full">
             <p class="text-xs font-medium text-base-content/55">Pool</p>
             <h2 class="break-words text-lg font-bold leading-6 text-base-content">{group.name}</h2>
           </div>
@@ -408,7 +413,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
             occupy one line of it. The name row reserves the width instead. --%>
             <div
               data-role="api-key-actions"
-              class="absolute right-4 top-4 z-10 flex items-center gap-2 xl:relative xl:inset-auto xl:justify-self-end"
+              class="absolute right-4 top-4 z-10 flex h-6 items-center gap-2 xl:relative xl:inset-auto xl:h-auto xl:justify-self-end"
             >
               <span
                 id={"api-key-row-#{api_key.id}-status"}
