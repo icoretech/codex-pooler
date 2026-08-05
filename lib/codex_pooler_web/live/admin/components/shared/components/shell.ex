@@ -137,6 +137,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
                 x_profile_url={@x_profile_url}
               />
               <.alert_notification_dropdown center={@alert_notification_center} />
+              <.live_updates_toggle />
               <details
                 id="topbar-connection-indicator"
                 class="dropdown dropdown-end"
@@ -317,6 +318,38 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
       "group flex w-full items-center justify-center gap-3 border-l-[3px] border-transparent px-3 py-2.5 font-mono text-[0.58rem] font-semibold uppercase tracking-[0.12em] text-base-content/55 opacity-75 outline-none transition-all duration-200 hover:bg-base-300/70 hover:text-base-content hover:opacity-100 focus-visible:border-primary focus-visible:text-base-content xl:justify-start xl:px-4 xl:text-xs",
       active? && "!border-l-primary bg-base-300 text-base-content opacity-100"
     ]
+  end
+
+  # Whether the self-refreshing surfaces keep rebuilding is the operator's call:
+  # those pages are right to move while you watch and wrong to move while you
+  # read, and only the operator knows which they are doing. The state lives in
+  # the browser session (see live_updates_toggle.mjs), so the server renders the
+  # resting shape and the hook corrects it on mount and on rejoin.
+  #
+  # No phx-update="ignore": it would not protect data-paused anyway — LiveView
+  # merges data-* onto ignored elements — and the hook reasserts state on update.
+  # The name stays "Pause live updates" in both states, because with aria-pressed
+  # a name that flips announces a contradiction.
+  defp live_updates_toggle(assigns) do
+    ~H"""
+    <button
+      id="admin-live-updates-toggle"
+      type="button"
+      phx-hook="LiveUpdatesToggle"
+      data-paused="false"
+      class="btn btn-ghost btn-sm btn-square text-base-content/60 hover:text-base-content"
+      aria-pressed="false"
+      aria-label="Pause live updates"
+      title="Pause live updates"
+    >
+      <span data-role="live-updates-live">
+        <.icon name="hero-pause" class="size-5" />
+      </span>
+      <span data-role="live-updates-paused" class="hidden text-warning">
+        <.icon name="hero-play" class="size-5" />
+      </span>
+    </button>
+    """
   end
 
   attr :app_version, :string, required: true

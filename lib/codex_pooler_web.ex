@@ -66,6 +66,7 @@ defmodule CodexPoolerWeb do
       use Phoenix.LiveView
 
       on_mount CodexPoolerWeb.Admin.NotificationCenterHooks
+      on_mount CodexPoolerWeb.Admin.LiveUpdatesHooks
 
       unquote(html_helpers())
     end

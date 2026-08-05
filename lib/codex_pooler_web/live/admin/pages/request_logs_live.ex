@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments, as: UpstreamAssignments
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.LiveUpdatesHooks
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.Admin.PoolFilterComponents
   alias CodexPoolerWeb.Admin.RequestLogDetailDrawer
@@ -146,6 +147,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
      )}
   end
 
+  # Pausing is handled in front of this by LiveUpdatesHooks: a held event never
+  # arrives here, and on resume it arrives exactly as it would have.
   @impl true
   def handle_info({Events, %{pool_id: pool_id, topics: topics}}, socket) do
     if "request_logs" in topics and request_log_event_in_scope?(socket, pool_id) do
@@ -156,6 +159,10 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
   end
 
   def handle_info(:refresh_request_logs_from_events, socket) do
+    LiveUpdatesHooks.unless_paused(socket, &refresh_request_logs_from_events/1)
+  end
+
+  def handle_info(:live_updates_resumed, socket) do
     {:noreply, refresh_request_logs_from_events(socket)}
   end
 

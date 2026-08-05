@@ -11,6 +11,7 @@ import { renderSVG } from "uqr";
 import { cumulativeChartSeries } from "./chart_series.mjs";
 import { attachChartWheelScroll } from "./chart_wheel_scroll.mjs";
 import { classifyLiveSocketConnection } from "./live_socket_connection.mjs";
+import { LiveUpdatesToggle } from "./live_updates_toggle.mjs";
 import {
 	ObservatoryRefresh,
 	observatoryRefreshConnectParams,
@@ -1304,6 +1305,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
 		CallyDatePicker,
 		ClipboardCopy,
 		FlashAutoDismiss,
+		LiveUpdatesToggle,
 		ModelServingTools,
 		OtpInput,
 		ObservatoryRefresh,

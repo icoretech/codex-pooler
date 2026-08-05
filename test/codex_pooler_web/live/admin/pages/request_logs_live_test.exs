@@ -2854,6 +2854,117 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(view, "#request-log-row-#{request.id}")
   end
 
+  test "pausing live updates holds the list still, and resuming flushes it once", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "live-pause", name: "Live Pause"})
+    reload_ref = attach_request_log_reload_telemetry()
+
+    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    assert_request_log_reload(reload_ref, :initial_load, :selected_pool)
+
+    render_hook(view, "set_live_updates", %{"paused" => true})
+
+    %{request: first} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-paused-1",
+        status: "succeeded",
+        requested_model: "gpt-paused-1"
+      })
+
+    %{request: second} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-paused-2",
+        status: "succeeded",
+        requested_model: "gpt-paused-2"
+      })
+
+    for request <- [first, second] do
+      assert {:ok, _event} =
+               Events.broadcast_request_logs(pool.id, "request_log_created", %{
+                 request_id: request.id,
+                 status: request.status
+               })
+    end
+
+    # Longer than the reload debounce, so this refutes a refresh that was never
+    # scheduled rather than one that simply had not fired yet.
+    refute_receive {^reload_ref, _measurements, %{stage: :event_refresh}}, 400
+    refute has_element?(view, "#request-log-row-#{first.id}")
+    refute has_element?(view, "#request-log-row-#{second.id}")
+
+    render_hook(view, "set_live_updates", %{"paused" => false})
+
+    # Both arrivals collapse into one refresh, not one apiece.
+    assert_request_log_reload(reload_ref, :event_refresh, :selected_pool)
+    refute_receive {^reload_ref, _measurements, %{stage: :event_refresh}}, 400
+
+    assert has_element?(view, "#request-log-row-#{first.id}")
+    assert has_element?(view, "#request-log-row-#{second.id}")
+  end
+
+  test "resuming without anything having arrived does not re-query", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "live-pause-idle", name: "Live Pause Idle"})
+    reload_ref = attach_request_log_reload_telemetry()
+
+    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    assert_request_log_reload(reload_ref, :initial_load, :selected_pool)
+
+    render_hook(view, "set_live_updates", %{"paused" => true})
+    render_hook(view, "set_live_updates", %{"paused" => false})
+
+    refute_receive {^reload_ref, _measurements, %{stage: :event_refresh}}, 400
+  end
+
+  test "resuming replays every distinct topic held, not just the first", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "live-topics", name: "Live Topics"})
+
+    reload_ref = attach_request_log_reload_telemetry()
+
+    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    assert_request_log_reload(reload_ref, :initial_load, :selected_pool)
+
+    render_hook(view, "set_live_updates", %{"paused" => true})
+
+    # Events carry a generated id and a timestamp, so no two are ever equal.
+    # Deduplicating on the whole message would hold every one of these and hit
+    # the ceiling; the request_logs arrival has to survive the noise.
+    for index <- 1..40 do
+      assert {:ok, _event} =
+               Events.broadcast_pool_event(pool.id, ["usage"], "usage_recorded", %{
+                 index: index
+               })
+    end
+
+    %{request: arrival} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-held-topic",
+        status: "succeeded",
+        requested_model: "gpt-held-topic"
+      })
+
+    assert {:ok, _event} =
+             Events.broadcast_request_logs(pool.id, "request_log_created", %{
+               request_id: arrival.id,
+               status: arrival.status
+             })
+
+    refute has_element?(view, "#request-log-row-#{arrival.id}")
+
+    render_hook(view, "set_live_updates", %{"paused" => false})
+
+    # The replayed event goes through the page's own debounce, so wait for the
+    # refresh it schedules rather than asserting into the gap.
+    assert_request_log_reload(reload_ref, :event_refresh, :selected_pool)
+
+    assert has_element?(view, "#request-log-row-#{arrival.id}"),
+           "the request_logs event was dropped behind 40 unrelated ones"
+  end
+
   defp attach_request_log_reload_telemetry do
     test_pid = self()
     telemetry_ref = make_ref()

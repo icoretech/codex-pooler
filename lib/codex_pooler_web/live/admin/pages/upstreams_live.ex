@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   alias CodexPooler.Pools
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.LiveUpdatesHooks
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.Admin.PoolFilterComponents
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
@@ -92,10 +93,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
 
   @impl true
   def handle_info(:reload_upstreams_from_events, socket) do
-    {:noreply,
-     socket
-     |> assign(:upstreams_reload_timer, nil)
-     |> reload_upstreams()}
+    LiveUpdatesHooks.unless_paused(socket, &resume_upstreams_reload/1)
+  end
+
+  def handle_info(:live_updates_resumed, socket) do
+    {:noreply, resume_upstreams_reload(socket)}
   end
 
   @impl true
@@ -349,6 +351,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
       nil -> close_saved_reset_policy_dialog(socket)
       account -> assign(socket, :editing_saved_reset_policy, account)
     end
+  end
+
+  defp resume_upstreams_reload(socket) do
+    socket
+    |> assign(:upstreams_reload_timer, nil)
+    |> reload_upstreams()
   end
 
   @impl true

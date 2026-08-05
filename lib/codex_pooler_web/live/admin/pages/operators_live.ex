@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
   alias CodexPooler.Accounts.User
   alias CodexPooler.Pools
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.LiveUpdatesHooks
   alias CodexPoolerWeb.Admin.OperatorComponents
   alias CodexPoolerWeb.Admin.OperatorComponents.Dialogs
   alias CodexPoolerWeb.Admin.OperatorForm
@@ -259,7 +260,12 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
     {:noreply, socket}
   end
 
+  # Operator events are their own domain, so the shared gate never sees them.
   def handle_info({CodexPooler.Accounts.OperatorEvents, _event}, socket) do
+    LiveUpdatesHooks.unless_paused(socket, &reload_operators/1)
+  end
+
+  def handle_info(:live_updates_resumed, socket) do
     {:noreply, reload_operators(socket)}
   end
 

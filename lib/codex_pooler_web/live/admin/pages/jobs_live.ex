@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
   alias CodexPoolerWeb.Admin.JobsPageComponents.Filters
   alias CodexPoolerWeb.Admin.JobsPageComponents.WorkerCards
   alias CodexPoolerWeb.Admin.JobsReadModel
+  alias CodexPoolerWeb.Admin.LiveUpdatesHooks
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.DateTimeDisplay
 
@@ -157,11 +158,17 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
   end
 
   def handle_info(:refresh_jobs, socket) do
-    {:noreply, refresh_jobs(socket)}
+    LiveUpdatesHooks.unless_paused(socket, &refresh_jobs/1)
   end
 
+  # The fallback keeps ticking so the page is current the moment it resumes,
+  # but it must not redraw the table while the operator is reading it.
   def handle_info(:fallback_refresh_jobs, socket) do
     schedule_fallback_refresh()
+    LiveUpdatesHooks.unless_paused(socket, &refresh_jobs/1)
+  end
+
+  def handle_info(:live_updates_resumed, socket) do
     {:noreply, refresh_jobs(socket)}
   end
 
