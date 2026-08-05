@@ -5495,6 +5495,86 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert is_nil(state.socket.assigns[:upstreams_reload_timer])
   end
 
+  test "reloads upstream account snapshots outside the LiveView process", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "async-upstreams", name: "Async Upstreams"})
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Async account before",
+        assignment_label: "Async assignment"
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    identity
+    |> UpstreamIdentity.changeset(%{account_label: "Async account after"})
+    |> Repo.update!()
+
+    assert {:ok, _event} =
+             Events.broadcast_upstreams(pool.id, "quota_windows_updated", %{
+               "upstream_identity_id" => identity.id
+             })
+
+    {_result, live_view_queries} =
+      capture_repo_queries(view.pid, fn ->
+        execute_scheduled_upstreams_reload(view, await?: false)
+      end)
+
+    # Rendering the loading state still asks the shared admin shell whether the
+    # operator is an owner. The upstream account snapshot itself must not run
+    # in the LiveView process.
+    assert live_view_queries != []
+    assert Enum.all?(live_view_queries, &(&1 == "memberships"))
+    assert :sys.get_state(view.pid).socket.assigns[:upstreams_reload_running?]
+
+    _ = render_async(view)
+
+    assert has_element?(view, "#upstream-account-#{identity.id}", "Async account after")
+  end
+
+  test "defers an upstream event reload until the saved reset dialog closes", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "deferred-upstreams", name: "Deferred Upstreams"})
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Deferred account",
+        assignment_label: "Deferred assignment"
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    render_click(view, "open_saved_reset_policy", %{"id" => identity.id})
+    assert has_element?(view, "#saved-reset-policy-dialog[open]")
+
+    assert {:ok, _event} =
+             Events.broadcast_upstreams(pool.id, "quota_windows_updated", %{
+               "upstream_identity_id" => identity.id
+             })
+
+    state = :sys.get_state(view.pid)
+    assert Map.get(state.socket.assigns, :upstreams_reload_dirty?, false)
+    refute Map.get(state.socket.assigns, :upstreams_reload_running?, false)
+    assert is_nil(state.socket.assigns[:upstreams_reload_timer])
+    assert has_element?(view, "#saved-reset-policy-dialog[open]")
+
+    view |> element("#saved-reset-policy-cancel") |> render_click()
+
+    state = :sys.get_state(view.pid)
+    assert state.socket.assigns[:upstreams_reload_running?]
+    _ = render_async(view)
+
+    refute :sys.get_state(view.pid).socket.assigns[:upstreams_reload_dirty?]
+    refute has_element?(view, "#saved-reset-policy-dialog")
+  end
+
   test "refreshes quota limits when upstream quota windows change outside the LiveView", %{
     conn: conn,
     scope: scope
@@ -7515,7 +7595,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       ])
   end
 
-  defp execute_scheduled_upstreams_reload(view) do
+  defp execute_scheduled_upstreams_reload(view, opts \\ []) do
     state = :sys.get_state(view.pid)
     timer = state.socket.assigns[:upstreams_reload_timer]
 
@@ -7523,6 +7603,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     Process.cancel_timer(timer, async: false, info: false)
     send(view.pid, :reload_upstreams_from_events)
     _ = :sys.get_state(view.pid)
+
+    if Keyword.get(opts, :await?, true) do
+      render_async(view)
+    end
   end
 
   defp flow_summary(oauth_flows, flow_id) do
@@ -7636,6 +7720,40 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       {result, drain_repo_query_events(handler_id, [])}
     after
       :telemetry.detach(handler_id)
+    end
+  end
+
+  defp capture_repo_queries(query_pid, fun)
+       when is_pid(query_pid) and is_function(fun, 0) do
+    test_pid = self()
+    handler_id = {__MODULE__, :repo_query, test_pid, System.unique_integer([:positive])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and self() == query_pid do
+            send(test_pid, {handler_id, metadata[:source]})
+          end
+        end,
+        nil
+      )
+
+    try do
+      result = fun.()
+      {result, drain_repo_query_sources(handler_id, [])}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_repo_query_sources(handler_id, sources) do
+    receive do
+      {^handler_id, source} ->
+        drain_repo_query_sources(handler_id, [normalize_repo_query_value(source) | sources])
+    after
+      0 -> Enum.reverse(sources)
     end
   end
 

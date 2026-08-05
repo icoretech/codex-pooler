@@ -60,7 +60,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         confirming_saved_reset_redemption: nil,
         account_panel_views: %{},
         subscribed_pool_ids: MapSet.new(),
-        upstreams_reload_timer: nil
+        upstreams_reload_timer: nil,
+        upstreams_reload_generation: 0,
+        upstreams_reload_running?: false,
+        upstreams_reload_rerun?: false,
+        upstreams_reload_dirty?: false
       )
       |> allow_upload(:auth_json,
         accept: ~w(.json),
@@ -97,7 +101,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     # naming it, or every later debounce coalesces onto nothing.
     socket
     |> assign(:upstreams_reload_timer, nil)
-    |> LiveUpdatesHooks.unless_paused(&resume_upstreams_reload/1)
+    |> LiveUpdatesHooks.unless_paused(&reload_upstreams_or_defer/1)
   end
 
   def handle_info(:live_updates_resumed, socket) do
@@ -107,6 +111,31 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   @impl true
   def handle_info({:poll_oauth_device, flow_id}, socket) do
     {:noreply, OAuthWorkflow.poll_device(socket, flow_id, &reload_upstreams/1)}
+  end
+
+  @impl true
+  def handle_async({:upstreams_reload, generation}, {:ok, page_state}, socket) do
+    socket = assign(socket, :upstreams_reload_running?, false)
+
+    cond do
+      generation != socket.assigns.upstreams_reload_generation ->
+        {:noreply, maybe_run_upstreams_reload_rerun(socket)}
+
+      upstream_dialog_open?(socket) ->
+        {:noreply,
+         assign(socket,
+           upstreams_reload_dirty?: true,
+           upstreams_reload_rerun?: false
+         )}
+
+      true ->
+        {:noreply, apply_upstreams_page_state(socket, page_state)}
+    end
+  end
+
+  def handle_async({:upstreams_reload, _generation}, {:exit, _reason}, socket) do
+    socket = assign(socket, :upstreams_reload_running?, false)
+    {:noreply, maybe_run_upstreams_reload_rerun(socket)}
   end
 
   @impl true
@@ -152,19 +181,26 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
      |> assign(
        importing_auth_json: true,
        auth_json_form: AuthJsonWorkflow.form_for_open(socket.assigns.pools, params)
-     )}
+     )
+     |> defer_upstreams_reload()}
   end
 
   def handle_event("cancel_import_auth_json", _params, socket) do
-    {:noreply, AuthJsonWorkflow.close(socket)}
+    {:noreply, socket |> AuthJsonWorkflow.close() |> flush_deferred_upstreams_reload()}
   end
 
   def handle_event("open_oauth_link", params, socket) do
-    {:noreply, OAuthWorkflow.open_link(socket, params, &close_account_workflow_dialogs/1)}
+    {:noreply,
+     socket
+     |> OAuthWorkflow.open_link(params, &close_account_workflow_dialogs/1)
+     |> defer_upstreams_reload()}
   end
 
   def handle_event("open_oauth_relink", %{"id" => identity_id}, socket) do
-    {:noreply, OAuthWorkflow.open_relink(socket, identity_id, &close_account_workflow_dialogs/1)}
+    {:noreply,
+     socket
+     |> OAuthWorkflow.open_relink(identity_id, &close_account_workflow_dialogs/1)
+     |> defer_upstreams_reload()}
   end
 
   def handle_event("validate_oauth_link_pool", %{"oauth_link" => oauth_params}, socket) do
@@ -184,7 +220,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   end
 
   def handle_event("cancel_oauth_link", _params, socket) do
-    {:noreply, OAuthWorkflow.cancel(socket)}
+    {:noreply, socket |> OAuthWorkflow.cancel() |> flush_deferred_upstreams_reload()}
   end
 
   def handle_event("validate_auth_json_import", %{"auth_json" => auth_json_params}, socket) do
@@ -204,7 +240,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
          |> assign(
            renaming_account: account,
            rename_account_form: rename_account_form(identity)
-         )}
+         )
+         |> defer_upstreams_reload()}
 
       nil ->
         {:noreply, put_flash(socket, :error, "Upstream account was not found")}
@@ -212,18 +249,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   end
 
   def handle_event("cancel_rename_account", _params, socket) do
-    {:noreply, close_rename_account_dialog(socket)}
+    {:noreply, socket |> close_rename_account_dialog() |> flush_deferred_upstreams_reload()}
   end
 
   def handle_event("open_delete_account", %{"id" => identity_id}, socket) do
     {:noreply,
      socket
      |> close_account_workflow_dialogs()
-     |> AccountLifecycleWorkflow.open_delete(identity_id)}
+     |> AccountLifecycleWorkflow.open_delete(identity_id)
+     |> defer_upstreams_reload()}
   end
 
   def handle_event("cancel_delete_account", _params, socket) do
-    {:noreply, AccountLifecycleWorkflow.close_delete(socket)}
+    {:noreply,
+     socket
+     |> AccountLifecycleWorkflow.close_delete()
+     |> flush_deferred_upstreams_reload()}
   end
 
   def handle_event("confirm_delete_account", %{"upstream_delete" => delete_params}, socket) do
@@ -244,12 +285,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
            editing_saved_reset_policy: account,
            saved_reset_policy_form: saved_reset_policy_form(account.saved_reset_policy),
            confirming_saved_reset_redemption: nil
-         )}
+         )
+         |> defer_upstreams_reload()}
     end
   end
 
   def handle_event("cancel_saved_reset_policy", _params, socket) do
-    {:noreply, close_saved_reset_policy_dialog(socket)}
+    {:noreply,
+     socket
+     |> close_saved_reset_policy_dialog()
+     |> flush_deferred_upstreams_reload()}
   end
 
   def handle_event("validate_saved_reset_policy", %{"saved_reset_policy" => params}, socket) do
@@ -363,7 +408,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   defp resume_upstreams_reload(socket) do
     socket
     |> cancel_upstreams_reload_timer()
-    |> reload_upstreams()
+    |> reload_upstreams_or_defer()
   end
 
   @impl true
@@ -418,19 +463,47 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   end
 
   defp load_upstreams(socket, params) do
-    pools = Pools.list_visible_pools(socket.assigns.current_scope)
+    generation = socket.assigns.upstreams_reload_generation + 1
+
+    socket
+    |> assign(
+      upstreams_reload_generation: generation,
+      upstreams_reload_rerun?: false,
+      upstreams_reload_dirty?: false
+    )
+    |> apply_upstreams_page_state(upstreams_page_state(socket.assigns.current_scope, params))
+  end
+
+  defp upstreams_page_state(scope, params) do
+    pools = Pools.list_visible_pools(scope)
     filter_values = UpstreamFilterForm.filter_values(params, pools)
     filtered_pools = filtered_pools(pools, filter_values)
 
-    datetime_preferences = DateTimeDisplay.preferences_for_user(socket.assigns.current_scope.user)
+    datetime_preferences = DateTimeDisplay.preferences_for_user(scope.user)
 
     upstream_accounts =
       UpstreamAccountsReadModel.list_visible_accounts(
-        socket.assigns.current_scope,
+        scope,
         filtered_pools,
         filter_values,
         datetime_preferences
       )
+
+    %{
+      pools: pools,
+      filtered_pools: filtered_pools,
+      filter_values: filter_values,
+      upstream_accounts: upstream_accounts
+    }
+  end
+
+  defp apply_upstreams_page_state(socket, page_state) do
+    %{
+      pools: pools,
+      filtered_pools: filtered_pools,
+      filter_values: filter_values,
+      upstream_accounts: upstream_accounts
+    } = page_state
 
     socket =
       socket
@@ -446,25 +519,112 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
       filter_form: UpstreamFilterForm.filter_form(filter_values),
       status_options: UpstreamFilterForm.status_options(),
       upstream_accounts: upstream_accounts,
+      upstreams_reload_dirty?: false,
+      upstreams_reload_rerun?: false,
       account_panel_views:
         prune_account_panel_views(socket.assigns.account_panel_views, upstream_accounts)
     )
   end
 
+  defp request_upstreams_reload(socket) do
+    generation = socket.assigns.upstreams_reload_generation + 1
+
+    socket =
+      assign(socket,
+        upstreams_reload_generation: generation,
+        upstreams_reload_dirty?: false
+      )
+
+    if socket.assigns.upstreams_reload_running? do
+      assign(socket, :upstreams_reload_rerun?, true)
+    else
+      start_upstreams_reload(socket, generation)
+    end
+  end
+
+  defp start_upstreams_reload(socket, generation) do
+    scope = socket.assigns.current_scope
+    params = socket.assigns.filter_values
+
+    socket
+    |> assign(upstreams_reload_running?: true, upstreams_reload_rerun?: false)
+    |> start_async({:upstreams_reload, generation}, fn ->
+      upstreams_page_state(scope, params)
+    end)
+  end
+
+  defp maybe_run_upstreams_reload_rerun(socket) do
+    cond do
+      upstream_dialog_open?(socket) ->
+        assign(socket,
+          upstreams_reload_dirty?: true,
+          upstreams_reload_rerun?: false
+        )
+
+      socket.assigns.upstreams_reload_rerun? ->
+        start_upstreams_reload(socket, socket.assigns.upstreams_reload_generation)
+
+      true ->
+        socket
+    end
+  end
+
+  defp reload_upstreams_or_defer(socket) do
+    if upstream_dialog_open?(socket) do
+      assign(socket, :upstreams_reload_dirty?, true)
+    else
+      request_upstreams_reload(socket)
+    end
+  end
+
+  defp defer_upstreams_reload(socket) do
+    if socket.assigns.upstreams_reload_running? or
+         is_reference(socket.assigns.upstreams_reload_timer) do
+      socket
+      |> assign(:upstreams_reload_dirty?, true)
+      |> cancel_upstreams_reload_timer()
+    else
+      socket
+    end
+  end
+
+  defp flush_deferred_upstreams_reload(socket) do
+    if socket.assigns.upstreams_reload_dirty? and not upstream_dialog_open?(socket) do
+      request_upstreams_reload(socket)
+    else
+      socket
+    end
+  end
+
+  defp upstream_dialog_open?(socket) do
+    socket.assigns.importing_auth_json or
+      socket.assigns.oauth_linking or
+      not is_nil(socket.assigns.renaming_account) or
+      not is_nil(socket.assigns.deleting_account) or
+      not is_nil(socket.assigns.editing_saved_reset_policy)
+  end
+
   defp reload_upstreams(socket), do: load_upstreams(socket, socket.assigns.filter_values)
 
   defp schedule_upstreams_reload(socket) do
-    if is_reference(socket.assigns[:upstreams_reload_timer]) do
-      socket
-    else
-      timer =
-        Process.send_after(
-          self(),
-          :reload_upstreams_from_events,
-          @upstreams_reload_debounce_ms
-        )
+    cond do
+      upstream_dialog_open?(socket) ->
+        socket
+        |> assign(:upstreams_reload_dirty?, true)
+        |> cancel_upstreams_reload_timer()
 
-      assign(socket, :upstreams_reload_timer, timer)
+      is_reference(socket.assigns[:upstreams_reload_timer]) ->
+        socket
+
+      true ->
+        timer =
+          Process.send_after(
+            self(),
+            :reload_upstreams_from_events,
+            @upstreams_reload_debounce_ms
+          )
+
+        assign(socket, :upstreams_reload_timer, timer)
     end
   end
 
