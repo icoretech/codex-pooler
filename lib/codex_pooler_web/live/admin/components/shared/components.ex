@@ -89,8 +89,6 @@ defmodule CodexPoolerWeb.Admin.Components do
   attr :tone, :atom, default: :neutral, values: [:neutral, :primary, :success, :warning, :error]
   attr :compact_mobile, :boolean, default: false
 
-  slot :breakdown
-
   def metric_card(assigns) do
     ~H"""
     <article
@@ -121,7 +119,6 @@ defmodule CodexPoolerWeb.Admin.Components do
       >
         {@value}
       </p>
-      {render_slot(@breakdown)}
       <p
         :if={@description}
         class={[

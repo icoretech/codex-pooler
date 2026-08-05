@@ -37,18 +37,6 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseAdmin do
           tone={metric.tone}
           compact_mobile
         />
-        <AdminComponents.metric_card
-          id="showcase-metric-breakdown"
-          icon="hero-calculator"
-          label="Tokens"
-          value="18.4k"
-          description="Breakdown slot"
-          compact_mobile
-        >
-          <:breakdown>
-            <span class="font-mono text-xs tabular-nums">12k input · 4k cached</span>
-          </:breakdown>
-        </AdminComponents.metric_card>
       </AdminComponents.metric_strip>
 
       <AdminComponents.admin_surface

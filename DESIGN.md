@@ -297,9 +297,13 @@ ownership, accessibility, and a minimal real markup example.
 - **metric_card API:** attrs `id`, `icon`, `label`, `value` (req);
   `description`; `tone` (`:neutral | :primary | :success | :warning |
   :error`, colors the icon only); `compact_mobile` (denser paddings, hides
-  icon below `lg`, exposes `data-density`); slot `breakdown` (rendered under
-  the value — the stats Tokens card uses it for the input/cached/output
-  split).
+  icon below `lg`, exposes `data-density`). Every card is label + value +
+  one description line; a card that needs more than one supporting line is
+  telling you the detail belongs elsewhere. The stats Tokens card once
+  stacked an input/cached/output split under its value and read as an
+  outlier in the strip — the split's one interesting number already lives
+  in the dedicated Cache rate card, so Tokens went back to a single
+  description like its siblings.
 - **Anatomy:** micro uppercase label + trailing icon, `font-mono tabular-nums`
   value (`data-role="metric-card-value"`), optional muted description.
 - **metric_strip API:** attrs `id`, `compact_mobile`, `desktop_columns`

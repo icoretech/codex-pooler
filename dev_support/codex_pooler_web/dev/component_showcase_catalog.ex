@@ -29,7 +29,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseCatalog do
         :metric_strip,
         exports: [{AdminComponents, :metric_card, 1}],
         selectors:
-          ["#showcase-metric-strip", "#showcase-metric-breakdown"] ++
+          ["#showcase-metric-strip"] ++
             Enum.map(~w(neutral primary success warning error), &"#showcase-metric-#{&1}")
       ),
       entry(

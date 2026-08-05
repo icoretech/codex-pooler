@@ -394,47 +394,8 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       assert has_element?(view, "#stats-kpi-success-rate", "50.0%")
       assert has_element?(view, "#stats-kpi-success-rate", "Completed")
       assert has_element?(view, "#stats-kpi-tokens", "100")
-
-      token_summary_html =
-        view
-        |> element("#stats-kpi-tokens [data-role='token-summary']")
-        |> render()
-
-      token_summary = LazyHTML.from_fragment(token_summary_html)
-
-      assert token_summary
-             |> LazyHTML.query("[data-role='token-summary-item']")
-             |> Enum.count() == 3
-
-      assert token_summary
-             |> LazyHTML.query("[data-role='token-summary'].grid")
-             |> Enum.count() == 1
-
-      refute token_summary_html =~ "overflow-hidden"
-
-      for {position, label, title, value, icon} <- [
-            {1, "input", "Input", "60", "hero-arrow-down-left"},
-            {2, "cached input", "Cached input", "10", "hero-circle-stack"},
-            {3, "output", "Output", "30", "hero-arrow-up-right"}
-          ] do
-        selector =
-          "[data-role='token-summary-item']:nth-child(#{position})[role='group'][aria-label='#{label}'][title='#{title}']"
-
-        assert token_summary |> LazyHTML.query(selector) |> Enum.count() == 1
-
-        assert token_summary
-               |> LazyHTML.query(
-                 "#{selector} [data-role='token-summary-icon'][aria-hidden='true'] .#{icon}"
-               )
-               |> Enum.count() == 1
-
-        assert token_summary
-               |> LazyHTML.query(
-                 "#{selector} [data-role='token-summary-value'].whitespace-nowrap:not(.truncate)"
-               )
-               |> LazyHTML.text()
-               |> String.trim() == value
-      end
+      assert has_element?(view, "#stats-kpi-tokens", "Input and output combined")
+      refute has_element?(view, "#stats-kpi-tokens [data-role='token-summary']")
 
       assert has_element?(view, "#stats-kpi-tokens-per-sec", "50.0")
       assert has_element?(view, "#stats-kpi-tokens-per-sec", "Throughput")

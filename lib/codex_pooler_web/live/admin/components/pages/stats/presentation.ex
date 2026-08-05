@@ -42,42 +42,10 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
         icon="hero-cpu-chip"
         label="Tokens"
         value={Format.token_count(@dashboard.kpis.tokens.total_tokens)}
+        description="Input and output combined"
         tone={:primary}
         compact_mobile
-      >
-        <:breakdown>
-          <div
-            data-role="token-summary"
-            class="grid min-w-0 grid-cols-1 gap-0 text-[0.68rem] text-base-content/55 lg:grid-cols-3 lg:gap-1"
-          >
-            <span
-              :for={
-                {label, title, value, icon} <- [
-                  {"input", "Input", @dashboard.kpis.tokens.input_tokens, "hero-arrow-down-left"},
-                  {"cached input", "Cached input", @dashboard.kpis.tokens.cached_input_tokens,
-                   "hero-circle-stack"},
-                  {"output", "Output", @dashboard.kpis.tokens.output_tokens, "hero-arrow-up-right"}
-                ]
-              }
-              data-role="token-summary-item"
-              role="group"
-              aria-label={label}
-              title={title}
-              class="inline-flex min-w-0 items-center gap-1 lg:justify-center"
-            >
-              <span data-role="token-summary-icon" aria-hidden="true" class="shrink-0">
-                <.icon name={icon} class="size-3" />
-              </span>
-              <span
-                data-role="token-summary-value"
-                class="whitespace-nowrap font-mono tabular-nums"
-              >
-                {Format.token_count(value)}
-              </span>
-            </span>
-          </div>
-        </:breakdown>
-      </AdminComponents.metric_card>
+      />
       <AdminComponents.metric_card
         id="stats-kpi-tokens-per-sec"
         icon="hero-bolt"
