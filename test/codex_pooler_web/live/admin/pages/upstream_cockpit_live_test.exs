@@ -1099,6 +1099,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
              })
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+    _ = render_async(view)
 
     for selector <- [
           "#upstream-cockpit",
@@ -2472,6 +2473,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
            ] = contribution.items
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+    _ = render_async(view)
 
     assert has_element?(view, "#upstream-routing-verdict", "Auth refresh failed")
 
@@ -3125,6 +3127,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     })
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+    _ = render_async(view)
 
     assert has_element?(view, "#upstream-quota")
     assert has_element?(view, "#upstream-quota", "Fresh")
@@ -4359,6 +4362,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
       })
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+    _ = render_async(view)
 
     assert has_element?(view, "#request-health-chart #upstream-refresh-data-button", "Refresh")
     assert has_element?(view, "#upstream-cockpit-header", "Refresh action target")
@@ -4381,6 +4385,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(view, "#request-health-chart-plot[data-chart-total='0']")
 
     view |> element("#upstream-refresh-data-button") |> render_click()
+    _ = render_async(view)
 
     assert has_element?(view, "#upstream-cockpit-header", "Refresh action reloaded")
     assert has_element?(view, "#request-health-chart-plot[data-chart-total='1']")
@@ -4391,6 +4396,40 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
            )
 
     assert has_element?(view, "#upstream-refresh-data-message", "Account data refreshed")
+  end
+
+  test "manual refresh computes request metrics outside the LiveView process", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "async-cockpit", name: "Async Cockpit"})
+    %{identity: identity} = upstream_assignment_fixture(pool)
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+    _ = render_async(view)
+
+    test_pid = self()
+    handler_id = {__MODULE__, :cockpit_metrics_query, System.unique_integer([:positive])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and
+               String.contains?(to_string(metadata[:query]), "percentile_cont") do
+            send(test_pid, {handler_id, self()})
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    view |> element("#upstream-refresh-data-button") |> render_click()
+    _ = render_async(view)
+
+    assert_receive {^handler_id, query_pid}, 1_000
+    refute query_pid == view.pid
   end
 
   @tag :refresh_broadcast_degraded
@@ -4424,6 +4463,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
       })
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+    _ = render_async(view)
 
     assert has_element?(view, "#upstream-quota-limits-empty")
     assert has_element?(view, "#request-health-chart-plot[data-chart-total='0']")
@@ -4477,6 +4517,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
            )
 
     view |> element("#upstream-refresh-data-button") |> render_click()
+    _ = render_async(view)
 
     assert has_element?(view, "#request-health-chart-plot[data-chart-total='1']")
   end
