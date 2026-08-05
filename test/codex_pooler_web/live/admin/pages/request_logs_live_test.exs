@@ -2740,6 +2740,120 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
            )
   end
 
+  test "paging forward after a live refresh does not skip records admitted since the load", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "paging-pin", name: "Paging Pin"})
+    reload_ref = attach_request_log_reload_telemetry()
+
+    # Oldest inserted first, so the last fixture is the head of page one and the
+    # first two are the tail the second page has to account for.
+    requests =
+      for index <- 1..51 do
+        %{request: request} =
+          request_log_fixture(pool, %{
+            correlation_id: "req-pin-#{index}",
+            status: "succeeded",
+            requested_model: "gpt-pin-#{index}"
+          })
+
+        request
+      end
+
+    [oldest, second_oldest | _rest] = requests
+
+    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    assert_request_log_reload(reload_ref, :initial_load, :selected_pool)
+
+    %{request: arrival} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-pin-arrival",
+        status: "succeeded",
+        requested_model: "gpt-pin-arrival"
+      })
+
+    assert {:ok, _event} =
+             Events.broadcast_request_logs(pool.id, "request_log_created", %{
+               request_id: arrival.id,
+               status: arrival.status
+             })
+
+    assert_request_log_reload(reload_ref, :event_refresh, :selected_pool)
+    assert has_element?(view, "#request-log-row-#{arrival.id}")
+
+    # Page one has moved on by one record. The pin has to move with it: anchored
+    # at the pre-refresh head, the window ends one record early and the row
+    # pushed off the bottom of page one appears on neither page.
+    view |> element("#request-log-pagination-next") |> render_click()
+
+    assert has_element?(view, "#request-log-row-#{second_oldest.id}")
+    assert has_element?(view, "#request-log-row-#{oldest.id}")
+
+    # Behind page one the window is pinned, and the way back to live is offered.
+    assert has_element?(view, "#request-log-back-to-latest")
+
+    view |> element("#request-log-back-to-latest") |> render_click()
+
+    assert has_element?(view, "#request-log-row-#{arrival.id}")
+    refute has_element?(view, "#request-log-back-to-latest")
+  end
+
+  test "a page past the end of the result set lands on the last page that has rows", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "paging-range", name: "Paging Range"})
+
+    %{request: request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-range",
+        status: "succeeded",
+        requested_model: "gpt-range"
+      })
+
+    # The correction runs before the first render, so it reaches the client as a
+    # redirect to the corrected address rather than an in-place patch — which is
+    # what a stale bookmark should get, instead of a page that quietly disagrees
+    # with the URL that produced it.
+    assert {:error, {:live_redirect, %{to: corrected}}} =
+             live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}&page=99")
+
+    refute corrected =~ "page="
+
+    {:ok, view, _html} = live(conn, corrected)
+
+    # Without the correction this renders "No request logs" over a pool that has
+    # one, with no pager to climb back out of.
+    assert has_element?(view, "#request-log-row-#{request.id}")
+    refute has_element?(view, "#request-log-empty-state")
+    assert has_element?(view, "#request-log-pagination")
+  end
+
+  test "an out-of-range page number is clamped instead of raising inside the window query", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "paging-clamp", name: "Paging Clamp"})
+
+    %{request: request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-clamp",
+        status: "succeeded",
+        requested_model: "gpt-clamp"
+      })
+
+    # Unclamped this becomes an OFFSET past int64, which raises while handling
+    # the params, kills the LiveView, and is retried by the reconnecting client.
+    # Clamped, it is merely a page past the end, and is corrected like any other.
+    assert {:error, {:live_redirect, %{to: corrected}}} =
+             live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}&page=200000000000000000")
+
+    {:ok, view, _html} = live(conn, corrected)
+
+    assert has_element?(view, "#request-log-row-#{request.id}")
+  end
+
   defp attach_request_log_reload_telemetry do
     test_pid = self()
     telemetry_ref = make_ref()

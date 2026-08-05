@@ -261,12 +261,18 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
     end
   end
 
-  defp put_pin(params, %DateTime{} = pin_at),
-    do: Map.put(params, "as_of", DateTime.to_iso8601(pin_at))
+  # The pin is a cursor in the list's sort key — the head row, not the moment it
+  # landed — so it travels as both halves or not at all.
+  defp put_pin(params, {%DateTime{} = at, id}) when is_binary(id) do
+    params
+    |> Map.put("as_of", DateTime.to_iso8601(at))
+    |> Map.put("as_of_id", id)
+  end
 
   defp put_pin(params, _pin_at), do: params
 
-  defp pagination(%{total: total, limit: limit, offset: offset}) do
+  defp pagination(%{total: total, limit: limit, offset: offset})
+       when is_integer(limit) and limit > 0 do
     %{
       current_page: div(offset, limit) + 1,
       total_pages: max(ceil(total / limit), 1),
@@ -275,11 +281,21 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
     }
   end
 
+  # `request_logs` is declared as a plain map, so a caller can satisfy the attr
+  # and still not carry a window. A page of one with nowhere to go beats a
+  # FunctionClauseError raised from inside a render.
+  defp pagination(_request_logs) do
+    %{current_page: 1, total_pages: 1, has_previous_page: false, has_next_page: false}
+  end
+
   defp request_log_range(%{total: 0}), do: "0 of 0"
 
-  defp request_log_range(%{total: total, limit: limit, offset: offset}) do
+  defp request_log_range(%{total: total, limit: limit, offset: offset})
+       when is_integer(limit) and limit > 0 do
     "#{offset + 1}-#{min(offset + limit, total)} of #{total}"
   end
+
+  defp request_log_range(%{total: total}), do: "#{total}"
 
   attr :request_log, :map, required: true
   attr :plan_badge_id, :string, default: nil

@@ -931,10 +931,13 @@ in the cell (`235.3k`, not `235.3k tokens`).
 draws from a set larger than a page, so it carries one nav: `Page X of Y` at the
 start, `Showing a-b of N` in `tabular-nums`, and a `join` of Previous/Next at
 the end, disabled as `btn-disabled` spans rather than removed so the control
-keeps its shape. It sits **above** the rows and is `sticky top-0 z-20` on the
-page-chrome background — fifty records is a long scroll to reach Next, and taller
-on a tablet, so a pager only at the bottom is a pager you cannot reach. Sticky
-rather than rendered twice: one tree.
+keeps its shape. On request logs it sits **above** the rows and is
+`sticky top-0 z-20` on the page-chrome background — fifty records is a long
+scroll to reach Next, and taller on a tablet, so a pager only at the bottom is a
+pager you cannot reach. Sticky rather than rendered twice: one tree. The jobs
+explorer still carries the older shape (a static pager in a `<footer>` below the
+rows) and should be brought to this one; until it is, treat the sticky placement
+as the target, not as a description of both tables.
 
 The pager takes the type size of the records it counts — `text-xs` with
 `btn-xs`, not `text-sm` — because a control set one step larger than everything
@@ -958,12 +961,34 @@ it was counted from.
 live — request logs debounce a rebuild on every Pool event — and an offset into
 a growing set is not a stable address: rows shift down under the reader and
 records already seen come back. So page one is the live reading and rebuilds on
-every event, while **leaving page one pins the window**. The pin is the newest
-`admitted_at` on screen, carried in the URL as `as_of` and applied as an upper
-bound that composes with any `date_to` the operator set by taking the tighter of
-the two. Behind page one the list no longer rebuilds; the event refresh only
-recounts arrivals (the operator's own filters plus a `date_from` at the pin —
-never the pinned upper bound, since the two together select nothing).
+every event, while **leaving page one pins the window**.
+
+**Pin to the row, not to the clock.** The pin is a cursor in the list's own sort
+key — the head row's `{admitted_at, id}`, carried as `as_of` + `as_of_id` — and
+the window bounds on `admitted_at < t or (admitted_at = t and id <= id)`. A
+timestamp alone is not enough: `admitted_at` is the transaction timestamp, so
+requests admitted in one transaction share it exactly and only `id` separates
+them, which means an `admitted_at <= t` bound admits a row inserted *after* the
+pin that sorts *above* it — the drift the pin exists to prevent. Being its own
+filter rather than a `date_to`, the cursor also composes with the operator's date
+range by plain intersection, so nothing they set has to be merged or overridden.
+Behind page one the list no longer rebuilds; the event refresh only recounts
+arrivals, through the complement cursor, so the count and the page can never
+disagree about which side of the pin a row falls on.
+
+**The pin moves with the live page.** Page one rebuilds on every event, so the
+cursor is re-derived from each rebuild. Left at the head of the last full load it
+names a window that has already ended, and the record pushed off the bottom of
+page one lands on neither page — a gap that grows for as long as the tab stays
+open.
+
+**A page number is address-bar input.** It becomes an OFFSET, so it is clamped
+before it reaches the query — an unclamped one exceeds int64, raises while
+handling the params, kills the LiveView, and is retried by the reconnecting
+client, which is a crash loop from a single link. Past the end of the result set
+the window is then corrected against the total and lands on the last page that
+has rows: rendering the empty state over a set that has thousands, with the pager
+hidden because there are no items, leaves no way back except editing the URL.
 
 The pinned state rides on the range line rather than adding a row:
 `Showing 51-100 of 587938 · 6679 newer · Back to latest`. It needs the count and

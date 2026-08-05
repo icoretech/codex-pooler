@@ -8,6 +8,12 @@ defmodule CodexPooler.Accounting.RequestLogs do
   preserved, upstream filters apply to the latest attempt only, latest attempts
   are selected by highest `attempt_number`, and settlement presentation uses the
   newest recorded settlement by `occurred_at`, `created_at`, then `id`.
+
+  Two cursor filters bound a page in the list's own sort key rather than in time
+  alone: `:at_or_before` selects rows at or behind an `{admitted_at, id}` cursor
+  and `:after` selects rows ahead of it. They exist because `admitted_at` is the
+  transaction timestamp, so rows admitted together share it exactly and only
+  `id` orders them.
   """
 
   import Ecto.Query
@@ -413,6 +419,8 @@ defmodule CodexPooler.Accounting.RequestLogs do
     |> maybe_filter_request_log_request_id(Map.get(filters, :request_id))
     |> maybe_filter_request_log_date_from(Map.get(filters, :date_from))
     |> maybe_filter_request_log_date_to(Map.get(filters, :date_to))
+    |> maybe_filter_request_log_at_or_before(Map.get(filters, :at_or_before))
+    |> maybe_filter_request_log_after(Map.get(filters, :after))
   end
 
   defp maybe_filter_request_log_pool(query, nil), do: query
@@ -495,6 +503,31 @@ defmodule CodexPooler.Accounting.RequestLogs do
 
   defp maybe_filter_request_log_date_to(query, date_to),
     do: from([request, ...] in query, where: request.admitted_at <= ^date_to)
+
+  # Cursor bounds are expressed in the list's own sort key, not in time alone.
+  # `admitted_at` is the transaction timestamp, so two requests admitted in one
+  # transaction carry the same value and `id DESC` is what separates them: a
+  # bound of `admitted_at <= t` would admit a row inserted after the cursor and
+  # sorting above it, which is precisely the drift a cursor exists to prevent.
+  defp maybe_filter_request_log_at_or_before(query, nil), do: query
+
+  defp maybe_filter_request_log_at_or_before(query, {admitted_at, id}) do
+    from([request, ...] in query,
+      where:
+        request.admitted_at < ^admitted_at or
+          (request.admitted_at == ^admitted_at and request.id <= ^id)
+    )
+  end
+
+  defp maybe_filter_request_log_after(query, nil), do: query
+
+  defp maybe_filter_request_log_after(query, {admitted_at, id}) do
+    from([request, ...] in query,
+      where:
+        request.admitted_at > ^admitted_at or
+          (request.admitted_at == ^admitted_at and request.id > ^id)
+    )
+  end
 
   defp request_log_attempts_by_request([]), do: %{}
 

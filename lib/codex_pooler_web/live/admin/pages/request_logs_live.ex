@@ -24,6 +24,16 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
   @reload_telemetry_event [:codex_pooler, :admin, :request_logs, :reload]
   @selected_request_id_param "selected_request_id"
   @snapshot_param "as_of"
+  @snapshot_id_param "as_of_id"
+
+  # A page number arrives from the address bar, so it is attacker-shaped input,
+  # not a bounded control: it becomes an OFFSET, and an OFFSET past int64 makes
+  # the query raise inside handle_params, which kills the LiveView, which the
+  # client answers by reconnecting to the same URL — a crash loop from one link.
+  # The cap keeps the SQL legal and the scan bounded; a page past the real end
+  # is then corrected against the total, so the cap is a backstop, not the
+  # mechanism.
+  @max_page 100_000
 
   @impl true
   def mount(_params, _session, socket) do
@@ -48,7 +58,6 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
        request_logs_loaded?: false,
        visible_pool_ids: [],
        request_log_filters: %{},
-       request_log_offset: 0,
        request_log_snapshot_at: nil,
        request_log_pin_at: nil,
        request_log_newer_count: 0,
@@ -378,9 +387,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
       upstream_account_options: upstream_account_options(upstream_filter_identities),
       visible_pool_ids: visible_pool_ids,
       request_log_filters: filters,
-      request_log_offset: offset,
       request_log_snapshot_at: snapshot_at,
-      request_log_pin_at: snapshot_at || newest_admitted_at(request_logs),
+      request_log_pin_at: snapshot_at || newest_cursor(request_logs),
       request_log_newer_count:
         newer_request_log_count(selected_pool, filters, visible_pool_ids, snapshot_at),
       request_logs_loaded?: true
@@ -388,7 +396,67 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
     |> assign_selected_request_log(params)
     |> maybe_clear_missing_selected_request_log()
     |> notify_request_logs_reload(reload_stage, started_at)
+    |> normalize_request_log_window(params, request_logs, snapshot_at)
   end
+
+  # Two invariants keep a paged window honest. Both are repaired by patching to
+  # the URL that satisfies them, because the alternative is rendering a state
+  # that cannot explain itself: a page past the end shows the "no request logs"
+  # empty state while thousands match, and hides the pager that would let the
+  # operator back out.
+  #
+  #   * a page past the end lands on the last page that has rows;
+  #   * every page but the first is pinned, so no page behind the live one can
+  #     shift while it is being read.
+  #
+  # The second is why the live refresh may rebuild from offset zero: past this
+  # point, an unpinned window is always page one.
+  defp normalize_request_log_window(socket, params, request_logs, snapshot_at) do
+    %{total: total, limit: limit, offset: offset} = request_logs
+    page = div(offset, limit) + 1
+    last_page = max(div(max(total - 1, 0), limit) + 1, 1)
+    pin_at = newest_cursor(request_logs)
+
+    cond do
+      total == 0 and page > 1 ->
+        patch_request_log_window(socket, params, 1, nil)
+
+      # No rows came back, so there is no cursor to pin to. Keep the one already
+      # in the URL if there is one; otherwise the next load pins from the page
+      # this redirect lands on.
+      page > last_page ->
+        patch_request_log_window(socket, params, last_page, snapshot_at)
+
+      page > 1 and is_nil(snapshot_at) and not is_nil(pin_at) ->
+        patch_request_log_window(socket, params, page, pin_at)
+
+      true ->
+        socket
+    end
+  end
+
+  defp patch_request_log_window(socket, params, page, pin_at) do
+    push_patch(socket,
+      to: ~p"/admin/request-logs?#{request_log_window_params(params, page, pin_at)}"
+    )
+  end
+
+  defp request_log_window_params(params, page, cursor) do
+    {at, id} = cursor_params(page > 1 && cursor)
+
+    params
+    |> Map.drop(["page", @snapshot_param, @snapshot_id_param])
+    |> put_window_param("page", page > 1 && Integer.to_string(page))
+    |> put_window_param(@snapshot_param, at)
+    |> put_window_param(@snapshot_id_param, id)
+    |> normalize_request_log_query_params()
+  end
+
+  defp put_window_param(params, _key, falsy) when falsy in [nil, false], do: params
+  defp put_window_param(params, key, value), do: Map.put(params, key, value)
+
+  defp cursor_params({%DateTime{} = at, id}), do: {DateTime.to_iso8601(at), id}
+  defp cursor_params(_cursor), do: {nil, nil}
 
   defp refresh_request_logs_from_events(socket) do
     started_at = System.monotonic_time()
@@ -417,8 +485,16 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
   # page one, so rows cannot shift under them mid-read; new arrivals are counted
   # instead, and going back to page one resumes the live reading.
   defp refresh_request_log_window(socket, selected_pool, filters, visible_pool_ids, nil) do
+    request_logs = request_logs(selected_pool, filters, visible_pool_ids, 0)
+
+    # The pin has to move with the live page. Leaving it at the newest row of
+    # the last full load means paging forward asks for a window that already
+    # ended, and every record admitted since is skipped: it appears neither on
+    # page one, which has moved past it, nor on page two, which is anchored
+    # behind it. The gap is unbounded in the time the tab stays open.
     assign(socket,
-      request_logs: request_logs(selected_pool, filters, visible_pool_ids, 0),
+      request_logs: request_logs,
+      request_log_pin_at: newest_cursor(request_logs),
       request_log_newer_count: 0
     )
   end
@@ -490,54 +566,62 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
     |> Map.new()
   end
 
-  defp request_logs(selected_pool, filters, _visible_pool_ids, offset)
+  defp request_logs(selected_pool, filters, visible_pool_ids, offset) do
+    request_log_page(selected_pool, filters, visible_pool_ids,
+      offset: offset,
+      limit: @page_size
+    )
+  end
+
+  defp request_log_page(selected_pool, filters, _visible_pool_ids, opts)
        when not is_nil(selected_pool) do
-    Accounting.list_request_logs(selected_pool,
-      limit: @page_size,
-      offset: offset,
-      filters: filters
+    Accounting.list_request_logs(selected_pool, [{:filters, filters} | opts])
+  end
+
+  defp request_log_page(_selected_pool, filters, visible_pool_ids, opts) do
+    Accounting.list_request_logs(
+      nil,
+      [{:filters, filters}, {:visible_pool_ids, visible_pool_ids} | opts]
     )
   end
 
-  defp request_logs(_selected_pool, filters, visible_pool_ids, offset) do
-    Accounting.list_request_logs(nil,
-      limit: @page_size,
-      offset: offset,
-      filters: filters,
-      visible_pool_ids: visible_pool_ids
-    )
-  end
-
-  # The frozen window is an upper bound on admitted_at, so it composes with a
-  # date_to the operator set by taking whichever bound is tighter.
+  # The pin is a cursor in the list's sort key, not a time: it is its own filter
+  # and composes with the operator's date range by intersection, so nothing the
+  # operator set has to be merged or overridden.
   defp snapshot_filters(filters, nil), do: filters
-
-  defp snapshot_filters(filters, snapshot_at) do
-    Keyword.update(filters, :date_to, snapshot_at, fn date_to ->
-      if DateTime.compare(date_to, snapshot_at) == :lt, do: date_to, else: snapshot_at
-    end)
-  end
+  defp snapshot_filters(filters, cursor), do: Keyword.put(filters, :at_or_before, cursor)
 
   # Counting arrivals uses the operator's own filters plus a lower bound at the
   # freeze, never the frozen upper bound — the two together select nothing.
   defp newer_request_log_count(_selected_pool, _filters, _visible_pool_ids, nil), do: 0
 
-  defp newer_request_log_count(selected_pool, filters, visible_pool_ids, snapshot_at) do
-    filters = Keyword.put(filters, :date_from, DateTime.add(snapshot_at, 1, :microsecond))
+  defp newer_request_log_count(selected_pool, filters, visible_pool_ids, cursor) do
+    # The complement of the pinned window, expressed in the same key, so the
+    # count and the page cannot disagree about which side of the pin a row is
+    # on. The operator's own filters are carried through untouched.
+    filters = Keyword.put(filters, :after, cursor)
 
-    %{total: total} = request_logs(selected_pool, filters, visible_pool_ids, 0)
+    # Only the total is wanted. The list query still costs its count, but asking
+    # for one row instead of fifty keeps the join and the debug projection off
+    # the debounce path; a count-only query in the facade is the real fix.
+    %{total: total} =
+      request_log_page(selected_pool, filters, visible_pool_ids, offset: 0, limit: 1)
+
     total
   end
 
-  defp newest_admitted_at(%{items: [%{admitted_at: %DateTime{} = admitted_at} | _rest]}),
-    do: admitted_at
+  # The head of the page, as a cursor: the row itself, not the moment it landed.
+  defp newest_cursor(%{items: [%{admitted_at: %DateTime{} = admitted_at, id: id} | _rest]}),
+    do: {admitted_at, id}
 
-  defp newest_admitted_at(_request_logs), do: nil
+  defp newest_cursor(_request_logs), do: nil
 
   defp snapshot_at(params) do
     with value when is_binary(value) <- Map.get(params, @snapshot_param),
-         {:ok, snapshot_at, _offset} <- DateTime.from_iso8601(String.trim(value)) do
-      snapshot_at
+         id when is_binary(id) <- Map.get(params, @snapshot_id_param),
+         {:ok, snapshot_at, _offset} <- DateTime.from_iso8601(String.trim(value)),
+         {:ok, id} <- Ecto.UUID.cast(String.trim(id)) do
+      {snapshot_at, id}
     else
       _other -> nil
     end
@@ -546,13 +630,15 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
   # Pages are 1-based in the URL and become an offset here. Anything that is not
   # a positive integer reads as page 1 rather than as an error: a paging param
   # is navigation state, not a filter the operator typed.
-  defp page_offset(params) do
+  defp page_offset(params), do: (page_number(params) - 1) * @page_size
+
+  defp page_number(params) do
     with value when is_binary(value) <- Map.get(params, "page"),
          {page, ""} <- Integer.parse(String.trim(value)),
          true <- page > 1 do
-      (page - 1) * @page_size
+      min(page, @max_page)
     else
-      _other -> 0
+      _other -> 1
     end
   end
 
