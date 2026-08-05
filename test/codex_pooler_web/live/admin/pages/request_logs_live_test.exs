@@ -39,7 +39,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         }
       })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     assert has_element?(view, "#request-log-row-#{request.id}")
     refute render(view) =~ lifecycle_id
@@ -211,7 +211,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         status: "succeeded"
       })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     assert has_element?(view, "#admin-request-logs-live")
     assert has_element?(view, "#request-log-filter-form[phx-change='filter']")
@@ -308,7 +308,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     assert has_element?(view, "#request-log-request-id-clear.hidden")
 
-    {:ok, filtered_view, _html} = live(conn, ~p"/admin/request-logs?request_id=req-live-1")
+    {:ok, filtered_view, _html} =
+      live_request_logs(conn, ~p"/admin/request-logs?request_id=req-live-1")
 
     assert has_element?(filtered_view, "#request-log-filter-form-advanced[open]")
     assert has_element?(filtered_view, "#filters_request_id[value='req-live-1']")
@@ -522,7 +523,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         }
       })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     assert has_element?(view, "#request-log-row-#{priced_request.id}", "$0.00")
     refute has_element?(view, "#request-log-row-#{priced_request.id}", "$0.000061")
@@ -586,7 +587,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     assert {:ok, _hidden_pool} = Pools.change_pool_status(scope, hidden_pool, "disabled")
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs")
     assert has_element?(view, "#filters_pool_id[type='hidden'][value='']")
 
     assert has_element?(
@@ -614,6 +615,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     |> element("#request-log-filter-form")
     |> render_submit(%{"filters" => %{"pool_id" => second_pool.id, "status" => "failed"}})
 
+    assert_patch(view, ~p"/admin/request-logs?pool_id=#{second_pool.id}&status=failed")
+    _ = await_request_logs(view)
+
     assert has_element?(view, "#request-log-row-#{second_request.id}", "gpt-second-pool")
     refute has_element?(view, "#request-log-row-#{first_request.id}")
 
@@ -622,6 +626,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     |> render_click()
 
     assert_patch(view, ~p"/admin/request-logs?pool_id=#{hidden_pool.id}&status=failed")
+    _ = await_request_logs(view)
     assert has_element?(view, "#filters_pool_id[type='hidden'][value='#{hidden_pool.id}']")
     assert has_element?(view, "#request-log-row-#{hidden_request.id}", "gpt-hidden-pool")
     refute has_element?(view, "#request-log-row-#{first_request.id}")
@@ -661,7 +666,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         assignment_label: "Hidden upstream assignment"
       })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs")
 
     assert has_element?(view, "#filters_upstream_identity_id[type='hidden'][value='']")
 
@@ -692,7 +697,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
            )
 
     {:ok, invalid_filter_view, _html} =
-      live(conn, ~p"/admin/request-logs?upstream_identity_id=#{hidden_identity.id}")
+      live_request_logs(conn, ~p"/admin/request-logs?upstream_identity_id=#{hidden_identity.id}")
 
     assert has_element?(
              invalid_filter_view,
@@ -705,6 +710,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
       "#request-log-upstream-filter [data-role='upstream-filter-option'][data-upstream-id='#{second_identity.id}']"
     )
     |> render_click()
+
+    assert_patch(view, ~p"/admin/request-logs?upstream_identity_id=#{second_identity.id}")
+    _ = await_request_logs(view)
 
     assert has_element?(
              view,
@@ -791,7 +799,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
       |> Repo.update!()
     end
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs")
 
     assert has_element?(view, "#filters_pool_id[type='hidden'][value='']")
 
@@ -835,6 +843,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     )
     |> render_click()
 
+    assert_patch(view, ~p"/admin/request-logs?pool_id=#{second_pool.id}")
+    _ = await_request_logs(view)
+
     assert has_element?(view, "#filters_pool_id[type='hidden'][value='#{second_pool.id}']")
     assert has_element?(view, "#request-log-row-#{second_pool_request.id}", "gpt-custom-second")
     refute has_element?(view, "#request-log-row-#{failed_request.id}")
@@ -844,6 +855,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
       "#request-log-pool-filter [data-role='pool-filter-option'][data-pool-id='#{first_pool.id}']"
     )
     |> render_click()
+
+    assert_patch(view, ~p"/admin/request-logs?pool_id=#{first_pool.id}")
+    _ = await_request_logs(view)
 
     assert has_element?(view, "#request-log-row-#{succeeded_request.id}", "gpt-custom-success")
 
@@ -936,7 +950,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     request_log_fixture(pool, %{status: "succeeded"})
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}&status=failed")
+    {:ok, view, _html} =
+      live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}&status=failed")
 
     assert has_element?(view, "#admin-request-logs")
     assert has_element?(view, "#request-log-empty-state")
@@ -953,7 +968,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "realtime-logs", name: "Realtime Logs"})
     reload_ref = attach_request_log_reload_telemetry()
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
     assert_request_log_reload(reload_ref, :initial_load, :selected_pool)
     assert has_element?(view, "#request-log-empty-state")
     _ = :sys.get_state(view.pid)
@@ -985,7 +1000,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     reload_ref = attach_request_log_reload_telemetry()
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?status=failed")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?status=failed")
     assert_request_log_reload(reload_ref, :initial_load, :all_pools)
     assert has_element?(view, "#request-log-empty-state")
     _ = :sys.get_state(view.pid)
@@ -1032,7 +1047,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     reload_ref = attach_request_log_reload_telemetry()
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
     assert_request_log_reload(reload_ref, :initial_load, :selected_pool)
     refute_request_log_reload(reload_ref, :initial_load)
     assert has_element?(view, "#request-log-empty-state")
@@ -1127,7 +1142,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         status: "in_progress"
       })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     assert has_element?(
              view,
@@ -1223,7 +1238,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         status: "succeeded"
       })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     assert has_element?(view, "#request-log-#{plan_request.id}-plan-badge", "Pro")
     assert has_element?(view, "#request-log-#{plan_request.id}-plan-badge", "chatgpt")
@@ -1269,7 +1284,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         status: "succeeded"
       })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     assert has_element?(
              view,
@@ -1330,7 +1345,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
       })
 
     {:ok, view, _html} =
-      live(
+      live_request_logs(
         conn,
         ~p"/admin/request-logs?pool_id=#{pool.id}&selected_request_id=#{positive_request.id}"
       )
@@ -1405,7 +1420,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
       response_metadata: %{"upstream_error_param" => raw_value}
     })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     for prefix <- ["request-log"] do
       render_click(element(view, "##{prefix}-#{request.id}-open-details"))
@@ -1562,7 +1577,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
       details: %{"pricing_status" => "priced", "settled_cost_micros" => "400"}
     })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     assert has_element?(
              view,
@@ -1621,7 +1636,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         status: "succeeded"
       })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     assert has_element?(view, "#request-log-#{ws_request.id}-protocol", "WebSocket")
 
@@ -1712,7 +1727,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         }
       })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     assert has_element?(
              view,
@@ -1756,7 +1771,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         status: "succeeded"
       })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     html = render(view)
 
@@ -1832,7 +1847,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         }
       })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     row_selector = "#request-log-row-#{request.id}"
     expected_datetime = Calendar.strftime(request.admitted_at, "%Y-%m-%d %H:%M:%S UTC")
@@ -2061,7 +2076,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
       })
 
     {:ok, view, _html} =
-      live(
+      live_request_logs(
         build_conn() |> log_in_user(user, session_token(user)),
         ~p"/admin/request-logs?pool_id=#{pool.id}"
       )
@@ -2118,7 +2133,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     |> Ecto.Changeset.change(account_label: "Renamed upstream account")
     |> Repo.update!()
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     row_selector = "#request-log-row-#{request.id}"
 
@@ -2204,7 +2219,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
                }
              })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     assert has_element?(
              view,
@@ -2287,7 +2302,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         upstream_account_plan_family: nil
       })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     row_selector = "#request-log-row-#{request.id}"
 
@@ -2325,7 +2340,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         request_metadata: %{}
       })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     row_selector = "#request-log-row-#{request.id}"
 
@@ -2353,7 +2368,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         }
       })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     row_selector = "#request-log-row-#{request.id}"
 
@@ -2382,7 +2397,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         status: "succeeded"
       })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     row_selector = "#request-log-row-#{request.id}"
 
@@ -2413,7 +2428,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         }
       })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     assert has_element?(view, "#request-log-#{error_request.id}-errors", "upstream_status")
     assert has_element?(view, "#request-log-#{error_request.id}-errors", "no_eligible_backend")
@@ -2459,7 +2474,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
       response_metadata: %{}
     })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     row_selector = "#request-log-row-#{request.id}"
     errors_selector = "#request-log-#{request.id}-errors"
@@ -2533,7 +2548,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         }
       })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     in_progress_row = "#request-log-row-#{in_progress_request.id}"
     failed_row = "#request-log-row-#{failed_request.id}"
@@ -2623,7 +2638,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         }
       })
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
 
     row_selector = "#request-log-row-#{request.id}"
 
@@ -2654,7 +2669,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     request_log_fixture(pool, %{correlation_id: "req-invalid"})
 
     {:ok, view, _html} =
-      live(
+      live_request_logs(
         conn,
         ~p"/admin/request-logs?pool_id=#{pool.id}&status=bogus&date_from=not-a-date"
       )
@@ -2686,7 +2701,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     %{conn: admin_conn} = assigned_admin_conn(scope, assigned_pool, "log-scope-admin@example.com")
 
-    {:ok, view, _html} = live(admin_conn, ~p"/admin/request-logs")
+    {:ok, view, _html} = live_request_logs(admin_conn, ~p"/admin/request-logs")
 
     assert has_element?(view, "#request-log-row-#{assigned_request.id}", "gpt-log-scope-assigned")
     refute has_element?(view, "#request-log-row-#{hidden_request.id}")
@@ -2699,7 +2714,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     refute has_element?(view, "#request-log-pool-filter button[data-pool-id='#{hidden_pool.id}']")
 
     {:ok, hidden_filter_view, _html} =
-      live(
+      live_request_logs(
         admin_conn,
         ~p"/admin/request-logs?pool_id=#{hidden_pool.id}&request_id=#{hidden_request.id}"
       )
@@ -2714,7 +2729,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     assert {:ok, archived_pool} = Pools.change_pool_status(scope, assigned_pool, "archived")
 
-    {:ok, revoked_admin_view, _html} = live(admin_conn, ~p"/admin/request-logs")
+    {:ok, revoked_admin_view, _html} = live_request_logs(admin_conn, ~p"/admin/request-logs")
     refute has_element?(revoked_admin_view, "#request-log-row-#{assigned_request.id}")
 
     refute has_element?(
@@ -2723,7 +2738,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
            )
 
     {:ok, owner_view, _html} =
-      live(
+      live_request_logs(
         build_conn() |> log_in_user(scope.user, session_token(scope.user)),
         ~p"/admin/request-logs"
       )
@@ -2763,7 +2778,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     [oldest, second_oldest | _rest] = requests
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
     assert_request_log_reload(reload_ref, :initial_load, :selected_pool)
 
     %{request: arrival} =
@@ -2786,6 +2801,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     # at the pre-refresh head, the window ends one record early and the row
     # pushed off the bottom of page one appears on neither page.
     view |> element("#request-log-pagination-next") |> render_click()
+    _next_page = assert_patch(view)
+    _ = await_request_logs(view)
 
     assert has_element?(view, "#request-log-row-#{second_oldest.id}")
     assert has_element?(view, "#request-log-row-#{oldest.id}")
@@ -2794,9 +2811,80 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(view, "#request-log-back-to-latest")
 
     view |> element("#request-log-back-to-latest") |> render_click()
+    _ = await_request_logs(view)
+    _latest_page = assert_patch(view)
+    _ = await_request_logs(view)
 
     assert has_element?(view, "#request-log-row-#{arrival.id}")
     refute has_element?(view, "#request-log-back-to-latest")
+  end
+
+  test "filter generation replaces a blocked event refresh outside the LiveView", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, first_pool} =
+      Pools.create_pool(scope, %{slug: "logs-async-first", name: "Logs Async First"})
+
+    {:ok, second_pool} =
+      Pools.create_pool(scope, %{slug: "logs-async-second", name: "Logs Async Second"})
+
+    %{request: first_request} =
+      request_log_fixture(first_pool, %{
+        correlation_id: "req-async-first",
+        requested_model: "gpt-async-first"
+      })
+
+    %{request: second_request} =
+      request_log_fixture(second_pool, %{
+        correlation_id: "req-async-second",
+        requested_model: "gpt-async-second"
+      })
+
+    {:ok, view, _html} =
+      live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{first_pool.id}")
+
+    handler_id = {__MODULE__, :blocked_request_logs_query, make_ref()}
+    test_pid = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and self() != view.pid and
+               normalize_repo_source(metadata[:source]) == "requests" and
+               is_nil(Process.get(handler_id)) do
+            Process.put(handler_id, true)
+            send(test_pid, {handler_id, self()})
+
+            receive do
+              {^handler_id, :release} -> :ok
+            after
+              5_000 -> :ok
+            end
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    send(view.pid, :refresh_request_logs_from_events)
+    assert_receive {^handler_id, refresh_pid}
+
+    view
+    |> element("#request-log-pool-filter button[data-pool-id='#{second_pool.id}']")
+    |> render_click()
+
+    send(refresh_pid, {handler_id, :release})
+    assert_receive {^handler_id, replacement_pid}
+    refute replacement_pid == refresh_pid
+    send(replacement_pid, {handler_id, :release})
+    _ = await_request_logs(view)
+
+    assert has_element?(view, "#request-log-row-#{second_request.id}", "gpt-async-second")
+    refute has_element?(view, "#request-log-row-#{first_request.id}")
   end
 
   test "a page past the end of the result set lands on the last page that has rows", %{
@@ -2812,16 +2900,15 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
         requested_model: "gpt-range"
       })
 
-    # The correction runs before the first render, so it reaches the client as a
-    # redirect to the corrected address rather than an in-place patch — which is
-    # what a stale bookmark should get, instead of a page that quietly disagrees
-    # with the URL that produced it.
-    assert {:error, {:live_redirect, %{to: corrected}}} =
-             live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}&page=99")
+    {:ok, view, _html} =
+      live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}&page=99")
+
+    _ = await_request_logs(view)
+    corrected = assert_patch(view)
 
     refute corrected =~ "page="
 
-    {:ok, view, _html} = live(conn, corrected)
+    _ = await_request_logs(view)
 
     # Without the correction this renders "No request logs" over a pool that has
     # one, with no pager to climb back out of.
@@ -2846,10 +2933,15 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     # Unclamped this becomes an OFFSET past int64, which raises while handling
     # the params, kills the LiveView, and is retried by the reconnecting client.
     # Clamped, it is merely a page past the end, and is corrected like any other.
-    assert {:error, {:live_redirect, %{to: corrected}}} =
-             live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}&page=200000000000000000")
+    {:ok, view, _html} =
+      live(
+        conn,
+        ~p"/admin/request-logs?pool_id=#{pool.id}&page=200000000000000000"
+      )
 
-    {:ok, view, _html} = live(conn, corrected)
+    _ = await_request_logs(view)
+    _corrected = assert_patch(view)
+    _ = await_request_logs(view)
 
     assert has_element?(view, "#request-log-row-#{request.id}")
   end
@@ -2861,7 +2953,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "live-pause", name: "Live Pause"})
     reload_ref = attach_request_log_reload_telemetry()
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
     assert_request_log_reload(reload_ref, :initial_load, :selected_pool)
 
     render_hook(view, "set_live_updates", %{"paused" => true})
@@ -2908,7 +3000,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "live-pause-idle", name: "Live Pause Idle"})
     reload_ref = attach_request_log_reload_telemetry()
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
     assert_request_log_reload(reload_ref, :initial_load, :selected_pool)
 
     render_hook(view, "set_live_updates", %{"paused" => true})
@@ -2925,7 +3017,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     reload_ref = attach_request_log_reload_telemetry()
 
-    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
     assert_request_log_reload(reload_ref, :initial_load, :selected_pool)
 
     render_hook(view, "set_live_updates", %{"paused" => true})
@@ -2975,7 +3067,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     {:ok, view, _html} =
       conn
       |> put_connect_params(%{"live_updates_paused" => true})
-      |> live(~p"/admin/request-logs?pool_id=#{pool.id}")
+      |> live_request_logs(~p"/admin/request-logs?pool_id=#{pool.id}")
 
     assert_request_log_reload(reload_ref, :initial_load, :selected_pool)
 
@@ -2997,7 +3089,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
     # And the same join without the param is live, so this is the param working
     # rather than the event never having arrived.
-    {:ok, live_view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    {:ok, live_view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
     assert_request_log_reload(reload_ref, :initial_load, :selected_pool)
 
     assert {:ok, _event} =
@@ -3196,6 +3288,38 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
   defp maybe_put(metadata, _key, nil), do: metadata
   defp maybe_put(metadata, key, value), do: Map.put(metadata, key, value)
+
+  defp normalize_repo_source(value) when is_binary(value), do: value
+  defp normalize_repo_source(value) when is_atom(value), do: Atom.to_string(value)
+  defp normalize_repo_source(value), do: to_string(value)
+
+  defp live_request_logs(conn, path) do
+    with {:ok, view, html} <- live(conn, path) do
+      _ = await_request_logs(view)
+      {:ok, view, html}
+    end
+  end
+
+  defp await_request_logs(view, attempts \\ 200)
+
+  defp await_request_logs(view, attempts) when attempts > 0 do
+    _ = render_async(view)
+    state = :sys.get_state(view.pid)
+
+    if state.socket.assigns.request_logs_loading? or
+         state.socket.assigns.request_logs_running? do
+      receive do
+      after
+        1 -> await_request_logs(view, attempts - 1)
+      end
+    else
+      state
+    end
+  end
+
+  defp await_request_logs(view, 0) do
+    flunk("request logs did not finish loading: #{inspect(:sys.get_state(view.pid))}")
+  end
 
   defp assigned_admin_conn(scope, pool, email) do
     %{user: admin, temporary_password: temporary_password} =

@@ -58,6 +58,11 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
        subscribed_pool_ids: MapSet.new(),
        request_logs_reload_timer: nil,
        request_logs_loaded?: false,
+       request_logs_loading?: true,
+       request_logs_generation: 0,
+       request_logs_running?: false,
+       request_logs_rerun?: false,
+       request_logs_preparation: nil,
        visible_pool_ids: [],
        request_log_filters: %{},
        request_log_snapshot_at: nil,
@@ -80,7 +85,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
        |> assign_selected_request_log(params)
        |> maybe_clear_missing_selected_request_log()}
     else
-      {:noreply, load_request_logs(socket, params)}
+      {:noreply, request_request_logs(socket, params, :filter_patch)}
     end
   end
 
@@ -166,11 +171,35 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
   def handle_info(:refresh_request_logs_from_events, socket) do
     socket
     |> assign(:request_logs_reload_timer, nil)
-    |> LiveUpdatesHooks.unless_paused(&refresh_request_logs_from_events/1)
+    |> LiveUpdatesHooks.unless_paused(&request_request_logs_refresh/1)
   end
 
   def handle_info(:live_updates_resumed, socket) do
-    {:noreply, refresh_request_logs_from_events(socket)}
+    {:noreply, request_request_logs_refresh(socket)}
+  end
+
+  @impl true
+  def handle_async({:request_logs, generation}, {:ok, result}, socket) do
+    socket = assign(socket, :request_logs_running?, false)
+
+    if generation == socket.assigns.request_logs_generation do
+      {:noreply, apply_request_logs_result(socket, result)}
+    else
+      {:noreply, maybe_start_pending_request_logs(socket)}
+    end
+  end
+
+  def handle_async({:request_logs, generation}, {:exit, _reason}, socket) do
+    socket = assign(socket, :request_logs_running?, false)
+
+    if generation == socket.assigns.request_logs_generation do
+      {:noreply,
+       socket
+       |> assign(request_logs_loading?: false, request_logs_rerun?: false)
+       |> put_flash(:error, "request logs could not be loaded")}
+    else
+      {:noreply, maybe_start_pending_request_logs(socket)}
+    end
   end
 
   @impl true
@@ -191,7 +220,11 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
         />
 
         <div class="drawer-content min-w-0">
-          <section id="admin-request-logs-live" class="grid gap-6">
+          <section
+            id="admin-request-logs-live"
+            class="grid gap-6"
+            aria-busy={to_string(@request_logs_loading?)}
+          >
             <AdminComponents.page_header
               id="request-log-page-header"
               title="Request logs"
@@ -345,9 +378,11 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
   defp form_field_value(%{value: value}) when is_binary(value), do: value
   defp form_field_value(_field), do: ""
 
-  defp load_request_logs(socket, params) do
-    started_at = System.monotonic_time()
-    reload_stage = if socket.assigns.request_logs_loaded?, do: :filter_patch, else: :initial_load
+  defp request_request_logs(socket, params, requested_stage) do
+    stage =
+      if socket.assigns.request_logs_loaded?, do: requested_stage, else: :initial_load
+
+    generation = socket.assigns.request_logs_generation + 1
     pools = Pools.list_log_filter_pools(socket.assigns.current_scope)
 
     visible_upstream_identities =
@@ -368,18 +403,22 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
 
     filter_errors = Enum.reject([pool_error | filter_errors], &is_nil/1)
     visible_pool_ids = pool_ids(pools)
-    offset = page_offset(params)
     snapshot_at = snapshot_at(params)
 
-    request_logs =
-      request_logs(
-        selected_pool,
-        snapshot_filters(filters, snapshot_at),
-        visible_pool_ids,
-        offset
-      )
-
-    model_filter_models = request_log_models(selected_pool, visible_pool_ids)
+    preparation = %{
+      selected_pool: selected_pool,
+      filters: filters,
+      visible_pool_ids: visible_pool_ids,
+      snapshot_at: snapshot_at,
+      offset: page_offset(params),
+      params: params,
+      stage: stage,
+      current_request_logs: socket.assigns.request_logs,
+      current_pin_at: socket.assigns.request_log_pin_at,
+      scope: socket.assigns.current_scope,
+      selected_request_id: selected_request_id(params),
+      started_at: System.monotonic_time()
+    }
 
     socket
     |> cancel_request_logs_reload_timer()
@@ -387,7 +426,6 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
     |> assign(
       pools: pools,
       selected_pool: selected_pool,
-      request_logs: request_logs,
       current_params: params,
       filter_form:
         to_form(form_values,
@@ -397,21 +435,146 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
       filter_values: form_values,
       filter_errors: filter_errors,
       pool_filter_options: PoolFilterComponents.pool_filter_options(pools),
-      model_filter_options: model_filter_options(model_filter_models, form_values["model"]),
       upstream_account_options: upstream_account_options(upstream_filter_identities),
       visible_pool_ids: visible_pool_ids,
       request_log_filters: filters,
       request_log_snapshot_at: snapshot_at,
-      request_log_pin_at: snapshot_at || newest_cursor(request_logs),
-      request_log_newer_count:
-        newer_request_log_count(selected_pool, filters, visible_pool_ids, snapshot_at),
-      request_logs_loaded?: true
+      request_logs_loading?: true,
+      request_logs_generation: generation,
+      request_logs_preparation: preparation
     )
-    |> assign_selected_request_log(params)
-    |> maybe_clear_missing_selected_request_log()
-    |> notify_request_logs_reload(reload_stage, started_at)
-    |> normalize_request_log_window(params, request_logs, snapshot_at)
+    |> maybe_start_request_logs(generation)
   end
+
+  defp request_request_logs_refresh(socket) do
+    preparation = %{
+      selected_pool: socket.assigns.selected_pool,
+      filters: socket.assigns.request_log_filters,
+      visible_pool_ids: socket.assigns.visible_pool_ids,
+      snapshot_at: socket.assigns.request_log_snapshot_at,
+      offset: 0,
+      params: socket.assigns.current_params,
+      stage: :event_refresh,
+      current_request_logs: socket.assigns.request_logs,
+      current_pin_at: socket.assigns.request_log_pin_at,
+      scope: socket.assigns.current_scope,
+      selected_request_id: selected_request_id(socket.assigns.current_params),
+      started_at: System.monotonic_time()
+    }
+
+    generation = socket.assigns.request_logs_generation + 1
+
+    socket
+    |> cancel_request_logs_reload_timer()
+    |> assign(
+      request_logs_loading?: true,
+      request_logs_generation: generation,
+      request_logs_preparation: preparation
+    )
+    |> maybe_start_request_logs(generation)
+  end
+
+  defp maybe_start_request_logs(socket, generation) do
+    if connected?(socket) and not socket.assigns.request_logs_running? do
+      preparation = socket.assigns.request_logs_preparation
+
+      socket
+      |> assign(request_logs_running?: true, request_logs_rerun?: false)
+      |> start_async({:request_logs, generation}, fn ->
+        build_request_logs_result(preparation)
+      end)
+    else
+      assign(socket, :request_logs_rerun?, connected?(socket))
+    end
+  end
+
+  defp maybe_start_pending_request_logs(socket) do
+    if socket.assigns.request_logs_rerun? do
+      maybe_start_request_logs(socket, socket.assigns.request_logs_generation)
+    else
+      socket
+    end
+  end
+
+  defp build_request_logs_result(preparation) do
+    request_logs =
+      case preparation do
+        %{stage: :event_refresh, snapshot_at: %DateTime{}} ->
+          preparation.current_request_logs
+
+        _preparation ->
+          request_logs(
+            preparation.selected_pool,
+            snapshot_filters(preparation.filters, preparation.snapshot_at),
+            preparation.visible_pool_ids,
+            preparation.offset
+          )
+      end
+
+    pin_at =
+      if preparation.stage == :event_refresh and not is_nil(preparation.snapshot_at) do
+        preparation.current_pin_at
+      else
+        preparation.snapshot_at || newest_cursor(request_logs)
+      end
+
+    %{
+      preparation: preparation,
+      request_logs: request_logs,
+      pin_at: pin_at,
+      newer_count:
+        newer_request_log_count(
+          preparation.selected_pool,
+          preparation.filters,
+          preparation.visible_pool_ids,
+          preparation.snapshot_at
+        ),
+      model_filter_models:
+        request_log_models(preparation.selected_pool, preparation.visible_pool_ids),
+      selected_request_log:
+        selected_request_log(preparation.scope, preparation.selected_request_id)
+    }
+  end
+
+  defp apply_request_logs_result(socket, result) do
+    preparation = result.preparation
+    current_selected_request_id = selected_request_id(socket.assigns.current_params)
+
+    socket =
+      socket
+      |> assign(
+        request_logs: result.request_logs,
+        request_log_pin_at: result.pin_at,
+        request_log_newer_count: result.newer_count,
+        model_filter_options:
+          model_filter_options(result.model_filter_models, socket.assigns.filter_values["model"]),
+        request_logs_loading?: false,
+        request_logs_loaded?: true,
+        request_logs_rerun?: false
+      )
+      |> maybe_assign_async_selected_request_log(
+        preparation.selected_request_id,
+        current_selected_request_id,
+        result.selected_request_log
+      )
+      |> notify_request_logs_reload(preparation.stage, preparation.started_at)
+      |> normalize_request_log_window(
+        preparation.params,
+        result.request_logs,
+        preparation.snapshot_at
+      )
+
+    if preparation.selected_request_id == current_selected_request_id do
+      maybe_clear_missing_selected_request_log(socket)
+    else
+      socket
+    end
+  end
+
+  defp maybe_assign_async_selected_request_log(socket, selected_id, selected_id, log),
+    do: assign(socket, :selected_request_log, log)
+
+  defp maybe_assign_async_selected_request_log(socket, _result_id, _current_id, _log), do: socket
 
   # Two invariants keep a paged window honest. Both are repaired by patching to
   # the URL that satisfies them, because the alternative is rendering a state
@@ -480,55 +643,6 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
   defp cursor_params({%DateTime{} = at, id}), do: {DateTime.to_iso8601(at), id}
   defp cursor_params(_cursor), do: {nil, nil}
 
-  defp refresh_request_logs_from_events(socket) do
-    started_at = System.monotonic_time()
-    selected_pool = socket.assigns.selected_pool
-    filters = socket.assigns.request_log_filters
-    visible_pool_ids = socket.assigns.visible_pool_ids
-    snapshot_at = socket.assigns.request_log_snapshot_at
-
-    model_filter_models = request_log_models(selected_pool, visible_pool_ids)
-
-    socket
-    |> cancel_request_logs_reload_timer()
-    |> refresh_request_log_window(selected_pool, filters, visible_pool_ids, snapshot_at)
-    |> assign(
-      model_filter_options:
-        model_filter_options(model_filter_models, socket.assigns.filter_values["model"])
-    )
-    |> assign_selected_request_log(socket.assigns.current_params)
-    |> maybe_clear_missing_selected_request_log()
-    |> notify_request_logs_reload(:event_refresh, started_at)
-  end
-
-  # Offset pagination over a live list only holds still if the list holds still.
-  # Page one is the live view of the newest rows and rebuilds on every event.
-  # Any page behind it reads a window frozen at the moment the operator left
-  # page one, so rows cannot shift under them mid-read; new arrivals are counted
-  # instead, and going back to page one resumes the live reading.
-  defp refresh_request_log_window(socket, selected_pool, filters, visible_pool_ids, nil) do
-    request_logs = request_logs(selected_pool, filters, visible_pool_ids, 0)
-
-    # The pin has to move with the live page. Leaving it at the newest row of
-    # the last full load means paging forward asks for a window that already
-    # ended, and every record admitted since is skipped: it appears neither on
-    # page one, which has moved past it, nor on page two, which is anchored
-    # behind it. The gap is unbounded in the time the tab stays open.
-    assign(socket,
-      request_logs: request_logs,
-      request_log_pin_at: newest_cursor(request_logs),
-      request_log_newer_count: 0
-    )
-  end
-
-  defp refresh_request_log_window(socket, selected_pool, filters, visible_pool_ids, snapshot_at) do
-    assign(
-      socket,
-      :request_log_newer_count,
-      newer_request_log_count(selected_pool, filters, visible_pool_ids, snapshot_at)
-    )
-  end
-
   defp assign_selected_request_log(socket, params) do
     case selected_request_id(params) do
       nil ->
@@ -543,6 +657,12 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
           )
         )
     end
+  end
+
+  defp selected_request_log(_scope, nil), do: nil
+
+  defp selected_request_log(scope, request_id) do
+    Accounting.get_request_log_for_scope(scope, request_id, surface: :admin)
   end
 
   defp maybe_clear_missing_selected_request_log(socket) do
