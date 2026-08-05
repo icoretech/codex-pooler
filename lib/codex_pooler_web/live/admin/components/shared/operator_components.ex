@@ -474,7 +474,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents do
     do: DateTimeDisplay.format_datetime(datetime, datetime_preferences, missing_label: "not yet")
 
   defp card_vital_label_class,
-    do: "text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/35"
+    do: [AdminComponents.card_fact_label_class(), "text-base-content/35"]
 
   defp operator_role_label("instance_owner"), do: "Instance owner"
   defp operator_role_label("instance_admin"), do: "Instance admin"

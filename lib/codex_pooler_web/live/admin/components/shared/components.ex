@@ -286,6 +286,16 @@ defmodule CodexPoolerWeb.Admin.Components do
   end
 
   @doc """
+  The type an admin card names a fact with.
+
+  One definition rather than a string repeated per card, because "the same as
+  the operator panel" is a claim that has to survive the next edit. Callers that
+  cannot render a `dt` — a fact outside a `dl` — take the class directly.
+  """
+  @spec card_fact_label_class() :: String.t()
+  def card_fact_label_class, do: "text-[0.62rem] font-semibold uppercase tracking-[0.08em]"
+
+  @doc """
   Micro label for one `card_fact_strip/1` fact.
 
   Pass `tone_class` to replace the resting colour (interactive cells swap it on
@@ -299,10 +309,7 @@ defmodule CodexPoolerWeb.Admin.Components do
 
   def card_fact_label(assigns) do
     ~H"""
-    <dt
-      class={["text-[0.62rem] font-semibold uppercase tracking-[0.08em]", @tone_class, @class]}
-      {@rest}
-    >
+    <dt class={[card_fact_label_class(), @tone_class, @class]} {@rest}>
       {render_slot(@inner_block)}
     </dt>
     """

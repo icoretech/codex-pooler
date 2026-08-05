@@ -60,16 +60,25 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveDashboardAccessTest do
 
     row_selector = "#api-key-row-#{api_key.id}"
 
+    # The actions stay at the right and stay one line, but they no longer take a
+    # grid column to do it: reserving one for the whole card left the facts 146px
+    # of a 375px viewport, so labels wrapped to two lines beside truncated
+    # values. Below `xl` they sit over the row and the name line reserves the
+    # width instead, which is what keeps "at the right" from becoming "on top
+    # of the name".
     assert has_element?(
              view,
-             "#{row_selector}[class~='grid-cols-[minmax(0,1fr)_auto]']"
+             "#{row_selector}[class~='grid-cols-1'][class~='xl:grid-cols-[minmax(12rem,0.9fr)_minmax(12rem,0.85fr)_minmax(14rem,1fr)_auto]']"
            )
 
-    refute has_element?(view, "#{row_selector}[class~='grid-cols-1']")
+    assert has_element?(
+             view,
+             "#{row_selector} > [data-role='api-key-actions'][class~='absolute'][class~='right-4'][class~='top-4'][class~='z-10'][class~='flex'][class~='items-center'][class~='gap-2'][class~='xl:relative'][class~='xl:justify-self-end']"
+           )
 
     assert has_element?(
              view,
-             "#{row_selector} > [data-role='api-key-actions'][class~='relative'][class~='z-10'][class~='flex'][class~='items-center'][class~='gap-2'][class~='justify-self-end']"
+             "#{row_selector} #{row_selector}-key > [class~='pr-24'][class~='xl:pr-0']"
            )
 
     refute has_element?(view, "#{row_selector} > [data-role='api-key-actions'][class~='w-full']")
@@ -129,9 +138,16 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveDashboardAccessTest do
     refute has_element?(view, "#{row_selector}-observatory")
     assert has_element?(view, "#{row_selector}-status", "active")
 
+    # At `xl` the actions return to the fourth column and the name line gives
+    # its reserved width back, so the desktop row is the one it always was.
     assert has_element?(
              view,
-             "#{row_selector} > [data-role='api-key-actions'][class~='relative'][class~='z-10'][class~='flex'][class~='items-center'][class~='gap-2'][class~='justify-self-end']"
+             "#{row_selector} > [data-role='api-key-actions'][class~='z-10'][class~='flex'][class~='items-center'][class~='gap-2'][class~='xl:relative'][class~='xl:inset-auto'][class~='xl:justify-self-end']"
+           )
+
+    assert has_element?(
+             view,
+             "#{row_selector} #{row_selector}-key > [class~='xl:pr-0']"
            )
 
     refute has_element?(
@@ -144,10 +160,9 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveDashboardAccessTest do
              "#{row_selector} > [data-role='api-key-actions'][class~='xl:flex-nowrap']"
            )
 
-    refute has_element?(
-             view,
-             "#{row_selector} > [data-role='api-key-actions'][class~='xl:justify-self-end']"
-           )
+    # The alignment is deliberately `xl:`-only now. It used to be unprefixed
+    # because the actions were a grid column at every width; below `xl` they are
+    # out of flow, where there is no grid track to align within.
 
     assert has_element?(
              view,

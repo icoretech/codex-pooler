@@ -296,11 +296,15 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
           <article
             :for={api_key <- group.api_keys}
             id={"api-key-row-#{api_key.id}"}
-            class="relative grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 p-4 transition-colors last:rounded-b-[calc(var(--radius-box)-1px)] hover:bg-base-200/60 focus-within:z-30 xl:grid-cols-[minmax(12rem,0.9fr)_minmax(12rem,0.85fr)_minmax(14rem,1fr)_auto] xl:gap-4 xl:last:rounded-bl-none"
+            class="relative grid min-w-0 grid-cols-1 items-start gap-x-3 p-4 transition-colors last:rounded-b-[calc(var(--radius-box)-1px)] hover:bg-base-200/60 focus-within:z-30 xl:grid-cols-[minmax(12rem,0.9fr)_minmax(12rem,0.85fr)_minmax(14rem,1fr)_auto] xl:gap-4 xl:last:rounded-bl-none"
           >
             <div class="grid min-w-0 gap-2 xl:contents">
               <div id={"api-key-row-#{api_key.id}-key"} class="grid min-w-0 gap-1.5 xl:content-start">
-                <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                <%!-- Only this line makes room for the chip and the menu, which
+                sit over it below `xl`. The status vocabulary is closed and
+                validated — active, paused, revoked — so the widest of them plus
+                the gap and the menu is what `pr-24` reserves. --%>
+                <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 pr-24 xl:pr-0">
                   <span class="truncate font-semibold text-base-content">
                     {api_key.display_name}
                   </span>
@@ -327,17 +331,22 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
                   />
                 </div>
               </div>
-              <div class="flex min-w-0 flex-wrap items-baseline gap-x-6 gap-y-1 text-sm text-base-content/70 xl:contents">
+              <%!-- Two by two below `xl`, on the vitals block the operator
+              cards already use: a label over its value never shares a line with
+              it, so it stops wrapping in a column this narrow. --%>
+              <div class="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2.5 text-xs leading-5 text-base-content/65 xl:contents">
                 <dl class="contents xl:grid xl:content-start xl:gap-2">
                   <div
                     id={"api-key-row-#{api_key.id}-last-used"}
-                    class="flex items-baseline gap-1.5 xl:grid xl:gap-0.5"
+                    class="min-w-0 xl:grid xl:gap-0.5"
                   >
-                    <dt class="text-xs font-medium text-base-content/50">Last used</dt>
-                    <dd>{last_used_label(api_key.last_used_at, @datetime_preferences)}</dd>
+                    <dt class={card_vital_label_class()}>Last used</dt>
+                    <dd class="truncate tabular-nums">
+                      {last_used_label(api_key.last_used_at, @datetime_preferences)}
+                    </dd>
                   </div>
-                  <div class="flex min-w-0 items-baseline gap-1.5 xl:grid xl:gap-0.5">
-                    <dt class="text-xs font-medium text-base-content/50">Prefix</dt>
+                  <div class="min-w-0 xl:grid xl:gap-0.5">
+                    <dt class={card_vital_label_class()}>Prefix</dt>
                     <dd class="flex min-w-0 items-center gap-1">
                       <span class="min-w-0 truncate">{api_key.key_prefix}</span>
                       <button
@@ -356,15 +365,18 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
                 <div class="contents xl:grid xl:content-start xl:gap-2">
                   <div
                     id={"api-key-row-#{api_key.id}-expires"}
-                    class="flex items-baseline gap-1.5 xl:grid xl:gap-0.5"
+                    class="min-w-0 xl:grid xl:gap-0.5"
                   >
-                    <span class="text-xs font-medium text-base-content/50">Expires</span>
-                    <span class={expiry_label_class(api_key.expires_at)}>
+                    <span class={["block", card_vital_label_class()]}>Expires</span>
+                    <span class={[
+                      "block truncate tabular-nums",
+                      expiry_label_class(api_key.expires_at)
+                    ]}>
                       {expiry_label(api_key.expires_at, @datetime_preferences)}
                     </span>
                   </div>
-                  <div class="flex min-w-0 items-baseline gap-1.5 xl:grid xl:gap-1">
-                    <span class="text-xs font-medium text-base-content/50">Model access</span>
+                  <div class="min-w-0 xl:grid xl:gap-1">
+                    <span class={["block", card_vital_label_class()]}>Model access</span>
                     <div
                       id={"api-key-row-#{api_key.id}-models"}
                       class="flex min-w-0 flex-wrap items-center gap-1"
@@ -379,7 +391,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
                       )
                     }
                     id={"api-key-row-#{api_key.id}-model-policy-warning"}
-                    class="inline-flex basis-full items-start gap-1.5 text-xs font-medium leading-5 text-warning xl:basis-auto"
+                    class="col-span-2 inline-flex basis-full items-start gap-1.5 text-xs font-medium leading-5 text-warning xl:col-span-1 xl:basis-auto"
                   >
                     <.icon name="hero-exclamation-triangle" class="mt-0.5 size-3.5 shrink-0" />
                     <span>
@@ -391,9 +403,12 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
                 </div>
               </div>
             </div>
+            <%!-- Out of flow below `xl`, where it was a full-height column
+            reserving a third of the card's width for a chip and a menu that
+            occupy one line of it. The name row reserves the width instead. --%>
             <div
               data-role="api-key-actions"
-              class="relative z-10 flex items-center gap-2 justify-self-end"
+              class="absolute right-4 top-4 z-10 flex items-center gap-2 xl:relative xl:inset-auto xl:justify-self-end"
             >
               <span
                 id={"api-key-row-#{api_key.id}-status"}
@@ -522,6 +537,12 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
     </div>
     """
   end
+
+  # The same label the operator cards name a vital with, from the same
+  # definition — these rows sit two clicks apart and used to disagree about what
+  # a fact label is.
+  defp card_vital_label_class,
+    do: [AdminComponents.card_fact_label_class(), "text-base-content/35"]
 
   defp last_used_label(nil, _datetime_preferences), do: "Never used"
 
