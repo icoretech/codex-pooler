@@ -160,6 +160,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
   """
   attr :cockpit, :map, required: true
   attr :refresh_data_message, :string, default: nil
+  attr :request_metrics_loaded?, :boolean, default: true
+  attr :request_metrics_loading?, :boolean, default: false
+  attr :request_metrics_running?, :boolean, default: false
 
   def request_section(assigns) do
     assigns =
@@ -169,6 +172,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
     <section
       id="request-health-chart"
       aria-label="Request health"
+      aria-busy={to_string(@request_metrics_loading? || @request_metrics_running?)}
       class="min-w-0 overflow-hidden rounded-box border border-base-300 bg-base-100"
     >
       <header class="flex flex-wrap items-center justify-between gap-3 border-b border-base-300 bg-base-200/35 px-4 py-3">
@@ -207,7 +211,36 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
         </div>
       </header>
 
-      <div class="flex flex-wrap gap-x-7 gap-y-2 px-4 pb-1 pt-3">
+      <div
+        :if={!@request_metrics_loaded?}
+        id="request-health-state-wrapper"
+        class="p-4"
+      >
+        <AdminComponents.empty_state
+          id={
+            if @request_metrics_loading?,
+              do: "request-health-loading-state",
+              else: "request-health-error-state"
+          }
+          title={
+            if @request_metrics_loading?,
+              do: "Loading request metrics",
+              else: "Request metrics are not available"
+          }
+          description={
+            if @request_metrics_loading?,
+              do: "Building request health and Pool contribution for this account.",
+              else: "Refresh the account data to try again."
+          }
+          icon={if @request_metrics_loading?, do: "hero-arrow-path", else: "hero-chart-bar"}
+          loading?={@request_metrics_loading?}
+        />
+      </div>
+
+      <div
+        :if={@request_metrics_loaded?}
+        class="flex flex-wrap gap-x-7 gap-y-2 px-4 pb-1 pt-3"
+      >
         <.health_fact
           label="24h requests"
           value={@cockpit.charts.request_health.kpis.total_requests_24h}
@@ -228,7 +261,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
         />
       </div>
 
-      <div class="p-4 pt-2">
+      <div :if={@request_metrics_loaded?} class="p-4 pt-2">
         <div
           id="request-health-chart-plot"
           class="admin-apex-bar-chart min-h-56 w-full"
@@ -263,7 +296,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
       </div>
 
       <div
-        :if={@model.error_breakdown != []}
+        :if={@request_metrics_loaded? && @model.error_breakdown != []}
         id="request-health-error-breakdown"
         class="border-t border-base-300/60"
       >

@@ -260,6 +260,7 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
                 else: "Change filters or sign in with an operator account that can manage pools."
             }
             icon={if @dashboard_loading?, do: "hero-arrow-path", else: "hero-chart-bar"}
+            loading?={@dashboard_loading?}
           />
         <% end %>
       </section>

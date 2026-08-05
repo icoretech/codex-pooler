@@ -597,6 +597,7 @@ defmodule CodexPoolerWeb.Admin.Components do
   attr :title, :string, required: true
   attr :description, :string, default: nil
   attr :icon, :string, default: "hero-inbox"
+  attr :loading?, :boolean, default: false
 
   slot :actions
 
@@ -606,7 +607,10 @@ defmodule CodexPoolerWeb.Admin.Components do
       id={@id}
       class="grid place-items-center gap-3 rounded-box border border-dashed border-base-300 bg-base-100 p-8 text-center"
     >
-      <.icon name={@icon} class="size-8 text-base-content/40" />
+      <.icon
+        name={@icon}
+        class={["size-8 text-base-content/40", @loading? && "admin-loading-icon"]}
+      />
       <div class="grid gap-1">
         <p class="font-semibold text-base-content">{@title}</p>
         <p :if={@description} class="max-w-md text-sm text-base-content/70">{@description}</p>
@@ -850,13 +854,14 @@ defmodule CodexPoolerWeb.Admin.Components do
   attr :description, :string, required: true
   attr :tone, :atom, default: :info, values: [:info, :success, :warning, :error]
   attr :role, :string, default: "status"
+  attr :loading?, :boolean, default: false
 
   def extended_notice(assigns) do
     assigns = assign(assigns, :class, extended_notice_class(assigns.tone))
 
     ~H"""
     <div id={@id} class={@class} role={@role}>
-      <.icon name={@icon} class="size-5" />
+      <.icon name={@icon} class={["size-5", @loading? && "admin-loading-icon"]} />
       <div class="grid gap-1">
         <p class="font-semibold">{@title}</p>
         <p class="text-sm leading-5">{@description}</p>

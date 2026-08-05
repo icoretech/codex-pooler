@@ -274,6 +274,64 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       end)
     end
 
+    test "renders a rotating icon while the initial dashboard is loading", %{
+      conn: conn,
+      scope: scope
+    } do
+      {:ok, pool} =
+        Pools.create_pool(scope, %{slug: "stats-loading-icon", name: "Stats Loading Icon"})
+
+      stats_usage_fixture(pool, %{
+        total_tokens: 12,
+        correlation_id: "stats-loading-icon"
+      })
+
+      handler_id = {__MODULE__, :initial_stats_loading_query, make_ref()}
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:codex_pooler, :repo, :query],
+          fn _event, _measurements, metadata, _config ->
+            if metadata[:repo] == Repo and
+                 normalize_repo_query_value(metadata[:source]) == "requests" and
+                 is_nil(Process.get(handler_id)) do
+              Process.put(handler_id, true)
+              send(test_pid, {handler_id, self()})
+
+              receive do
+                {^handler_id, :release} -> :ok
+              after
+                5_000 -> :ok
+              end
+            end
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/admin/stats?pool_id=#{pool.id}&window=24h")
+
+      assert_receive {^handler_id, query_pid}, 1_000
+
+      try do
+        assert has_element?(view, "#admin-stats[aria-busy='true']")
+        assert has_element?(view, "#stats-dashboard-loading", "Loading stats")
+        assert has_element?(view, "#stats-dashboard-loading .admin-loading-icon")
+      after
+        send(query_pid, {handler_id, :release})
+      end
+
+      _ = await_stats_dashboard(view)
+
+      assert has_element?(view, "#admin-stats[aria-busy='false']")
+      refute has_element?(view, "#stats-dashboard-loading")
+      assert has_element?(view, "#stats-kpis")
+    end
+
     test "renders required selectors and fixture-derived KPI table and chart values", %{
       conn: conn,
       scope: scope
@@ -1684,7 +1742,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
   defp await_stats_dashboard(view, attempts \\ 100)
 
   defp await_stats_dashboard(view, attempts) when attempts > 0 do
-    _ = render_async(view)
+    _ = render_async(view, 5_000)
     state = :sys.get_state(view.pid)
 
     if Map.get(state.socket.assigns, :dashboard_loading?, false) or
@@ -1712,7 +1770,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
          not assigns.stats_dashboard_running? do
       state
     else
-      _ = render_async(view)
+      _ = render_async(view, 5_000)
 
       receive do
       after

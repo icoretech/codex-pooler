@@ -43,6 +43,7 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
         :if={@status in [:idle, :loading]}
         id="pool-model-serving-state-loading"
         icon="hero-arrow-path"
+        loading?={true}
         title="Loading model modes"
         description="Reading the latest saved modes and routable model catalog."
       />

@@ -316,6 +316,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
 
             <.request_logs_table
               request_logs={@request_logs}
+              loading?={@request_logs_loading?}
+              loaded?={@request_logs_loaded?}
               datetime_preferences={@datetime_preferences}
               current_params={@current_params}
               pin_at={@request_log_pin_at}

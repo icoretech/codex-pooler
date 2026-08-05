@@ -37,6 +37,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
     ]
 
   attr :request_logs, :map, required: true
+  attr :loading?, :boolean, default: false
+  attr :loaded?, :boolean, default: true
   attr :datetime_preferences, :map, required: true
   attr :current_params, :map, required: true
   attr :pin_at, :any, default: nil
@@ -48,8 +50,29 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
 
     ~H"""
     <div id="admin-request-logs" class="grid min-w-0 gap-3">
+      <div
+        :if={@request_logs.items == [] && @loading? && !@loaded?}
+        id="request-log-loading-state-wrapper"
+      >
+        <AdminComponents.empty_state
+          id="request-log-loading-state"
+          title="Loading request logs"
+          description="Loading the latest requests for the selected filters."
+          icon="hero-arrow-path"
+          loading?={true}
+        />
+      </div>
+
       <AdminComponents.empty_state
-        :if={@request_logs.items == []}
+        :if={@request_logs.items == [] && !@loading? && !@loaded?}
+        id="request-log-error-state"
+        title="Request logs are not available"
+        description="Reload the page or adjust the filters to try again."
+        icon="hero-exclamation-triangle"
+      />
+
+      <AdminComponents.empty_state
+        :if={@request_logs.items == [] && @loaded?}
         id="request-log-empty-state"
         title="No request logs"
         description="Send a request through a Pool or adjust the filters to find existing log rows."

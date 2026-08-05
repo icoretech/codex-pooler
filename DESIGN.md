@@ -1377,6 +1377,10 @@ animated):
   chips, pills, dropdown items.
 - Flash show/hide: 200–300ms fade/scale via `CoreComponents.show/hide`;
   reconnect spinner is `motion-safe:animate-spin`.
+- Shared admin loading indicators: `admin-loading-icon` rotates through
+  `transform` on an 800ms linear loop. Reduced-motion sessions replace the
+  rotation with a calm 1.4s opacity pulse, so loading never reads as a static
+  refresh glyph.
 - Theme toggle thumb: `transition-[left]`.
 - Observatory segmented/pause/logout controls: the semantic control motion
   role is 150ms `ease` for border/background/text state changes; the live-dot

@@ -1875,6 +1875,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     loading_html = view |> element("#edit-pool-#{pool.id}") |> render_click()
     assert loading_html =~ ~s(id="pool-model-serving-state-loading")
+    assert loading_html =~ "admin-loading-icon"
 
     _ = render_async(view)
     view |> element("#pool-edit-dialog-tab-models") |> render_click()

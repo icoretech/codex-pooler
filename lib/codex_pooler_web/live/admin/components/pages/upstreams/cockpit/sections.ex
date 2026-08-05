@@ -17,12 +17,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
   """
   attr :cockpit, :map, required: true
   attr :datetime_preferences, :map, required: true
+  attr :request_metrics_loaded?, :boolean, default: true
+  attr :request_metrics_loading?, :boolean, default: false
+  attr :request_metrics_running?, :boolean, default: false
 
   def readiness_section(assigns) do
     ~H"""
     <section
       id="upstream-assignments"
       aria-label="Routing lanes"
+      aria-busy={to_string(@request_metrics_loading? || @request_metrics_running?)}
       class="min-w-0 overflow-hidden rounded-box border border-base-300 bg-base-100"
     >
       <header class="flex flex-wrap items-center justify-between gap-3 border-b border-base-300 bg-base-200/35 px-4 py-3">
@@ -69,7 +73,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
             {routing_readiness(@cockpit).reason}
           </p>
           <p
-            :if={request_note(@cockpit.charts.request_health)}
+            :if={@request_metrics_loaded? && request_note(@cockpit.charts.request_health)}
             id="upstream-routing-request-note"
             class="text-xs leading-5 text-base-content/45"
           >
@@ -154,10 +158,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
               data-role="upstream-assignment-share"
               class="text-sm font-semibold tabular-nums text-base-content"
             >
-              {lane_share_label(@cockpit, assignment)}
+              {lane_share_label(
+                @cockpit,
+                assignment,
+                @request_metrics_loaded?,
+                @request_metrics_loading?
+              )}
             </span>
             <span class="text-[11px] leading-4 tabular-nums text-base-content/50">
-              {lane_share_detail(@cockpit, assignment)}
+              {lane_share_detail(
+                @cockpit,
+                assignment,
+                @request_metrics_loaded?,
+                @request_metrics_loading?
+              )}
             </span>
           </div>
         </article>
@@ -573,14 +587,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Sections do
 
   defp reconciled_label(_assignment, _datetime_preferences), do: nil
 
-  defp lane_share_label(cockpit, assignment) do
+  defp lane_share_label(_cockpit, _assignment, false, true), do: "…"
+  defp lane_share_label(_cockpit, _assignment, false, false), do: "–"
+
+  defp lane_share_label(cockpit, assignment, true, _loading?) do
     case contribution_item(cockpit, assignment) do
       %{bar_value: share} when is_number(share) -> "#{format_rate(share * 1.0)}"
       _item -> "–"
     end
   end
 
-  defp lane_share_detail(cockpit, assignment) do
+  defp lane_share_detail(_cockpit, _assignment, false, true), do: "Loading request metrics"
+  defp lane_share_detail(_cockpit, _assignment, false, false), do: "Request metrics unavailable"
+
+  defp lane_share_detail(cockpit, assignment, true, _loading?) do
     case contribution_item(cockpit, assignment) do
       %{successful_request_count_7d: count} ->
         "#{Formatting.pluralize_count(count, "success", "successes")} · 7d"

@@ -28,6 +28,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
   attr :confirming_saved_reset_redemption, :map, default: nil
   attr :selected_request_log, :map, default: nil
   attr :refresh_data_message, :string, default: nil
+  attr :request_metrics_loaded?, :boolean, default: true
+  attr :request_metrics_loading?, :boolean, default: false
+  attr :request_metrics_running?, :boolean, default: false
   attr :uploads, :map, required: true
   attr :datetime_preferences, :map, required: true
 
@@ -42,7 +45,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
       />
 
       <div class="drawer-content min-w-0">
-        <section id="upstream-cockpit" class="grid gap-4">
+        <section
+          id="upstream-cockpit"
+          class="grid gap-4"
+          aria-busy={to_string(@request_metrics_loading? || @request_metrics_running?)}
+        >
           <AdminComponents.page_header
             id="upstream-cockpit-page-header"
             title="Upstream health"
@@ -90,13 +97,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
               <Sections.readiness_section
                 cockpit={@cockpit}
                 datetime_preferences={@datetime_preferences}
+                request_metrics_loaded?={@request_metrics_loaded?}
+                request_metrics_loading?={@request_metrics_loading?}
+                request_metrics_running?={@request_metrics_running?}
               />
               <Charts.quota_section
                 cockpit={@cockpit}
                 saved_reset_policy_form={@saved_reset_policy_form}
                 datetime_preferences={@datetime_preferences}
               />
-              <Charts.request_section cockpit={@cockpit} refresh_data_message={@refresh_data_message} />
+              <Charts.request_section
+                cockpit={@cockpit}
+                refresh_data_message={@refresh_data_message}
+                request_metrics_loaded?={@request_metrics_loaded?}
+                request_metrics_loading?={@request_metrics_loading?}
+                request_metrics_running?={@request_metrics_running?}
+              />
               <Sections.recent_events_section
                 cockpit={@cockpit}
                 datetime_preferences={@datetime_preferences}

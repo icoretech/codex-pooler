@@ -110,6 +110,40 @@
 @custom-variant observatory-freshness-compact (@media (width <= 26.25rem));
 @custom-variant observatory-wordmark-compact (@media (width <= 23.4375rem));
 
+@keyframes admin-loading-icon-rotate {
+  from {
+    transform: rotate(0turn);
+  }
+
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@keyframes admin-loading-icon-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.admin-loading-icon {
+  animation: admin-loading-icon-rotate 800ms linear infinite;
+  transform-origin: center;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-loading-icon {
+    animation: admin-loading-icon-pulse 1.4s ease-in-out infinite;
+    will-change: opacity;
+  }
+}
+
 /* This file is for your main application CSS */
 
 @font-face {

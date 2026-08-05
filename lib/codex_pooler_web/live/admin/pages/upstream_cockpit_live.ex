@@ -48,6 +48,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
         selected_request_log: nil,
         subscribed_pool_ids: MapSet.new(),
         cockpit_metrics_generation: 0,
+        cockpit_metrics_loaded?: false,
+        cockpit_metrics_loading?: true,
         cockpit_metrics_running?: false,
         cockpit_metrics_rerun?: false
       )
@@ -299,6 +301,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
     if generation == socket.assigns.cockpit_metrics_generation do
       {:noreply,
        socket
+       |> assign(cockpit_metrics_loaded?: true, cockpit_metrics_loading?: false)
        |> merge_cockpit_metrics(metrics)
        |> maybe_restart_cockpit_metrics()}
     else
@@ -312,6 +315,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
     if generation == socket.assigns.cockpit_metrics_generation do
       {:noreply,
        socket
+       |> assign(:cockpit_metrics_loading?, false)
        |> put_flash(:error, "Could not refresh request metrics")
        |> maybe_restart_cockpit_metrics()}
     else
@@ -355,6 +359,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
         confirming_saved_reset_redemption={@confirming_saved_reset_redemption}
         selected_request_log={@selected_request_log}
         refresh_data_message={@refresh_data_message}
+        request_metrics_loaded?={@cockpit_metrics_loaded?}
+        request_metrics_loading?={@cockpit_metrics_loading?}
+        request_metrics_running?={@cockpit_metrics_running?}
         uploads={@uploads}
         datetime_preferences={@datetime_preferences}
       />
@@ -398,6 +405,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
       socket =
         assign(socket,
           cockpit_metrics_generation: generation,
+          cockpit_metrics_loading?: not socket.assigns.cockpit_metrics_loaded?,
           cockpit_metrics_rerun?: socket.assigns.cockpit_metrics_running?
         )
 
@@ -416,7 +424,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
     cockpit = socket.assigns.cockpit
 
     socket
-    |> assign(cockpit_metrics_running?: true, cockpit_metrics_rerun?: false)
+    |> assign(
+      cockpit_metrics_loading?: not socket.assigns.cockpit_metrics_loaded?,
+      cockpit_metrics_running?: true,
+      cockpit_metrics_rerun?: false
+    )
     |> start_async({:cockpit_metrics, generation}, fn ->
       UpstreamCockpitReadModel.request_metrics(scope, cockpit.identity.id, cockpit.assignments)
     end)

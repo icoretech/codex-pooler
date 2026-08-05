@@ -971,6 +971,63 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
            )
   end
 
+  test "shows loading instead of empty until the initial async result arrives", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "loading-logs", name: "Loading Logs"})
+
+    handler_id = {__MODULE__, :initial_request_logs_query, make_ref()}
+    test_pid = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and
+               normalize_repo_source(metadata[:source]) == "requests" and
+               is_nil(Process.get(handler_id)) do
+            Process.put(handler_id, true)
+            send(test_pid, {handler_id, self()})
+
+            receive do
+              {^handler_id, :release} -> :ok
+            after
+              5_000 -> :ok
+            end
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    assert_receive {^handler_id, query_pid}, 1_000
+
+    try do
+      assert has_element?(view, "#admin-request-logs-live[aria-busy='true']")
+      assert has_element?(view, "#request-log-loading-state", "Loading request logs")
+
+      assert has_element?(
+               view,
+               "#request-log-loading-state .admin-loading-icon"
+             )
+
+      refute has_element?(view, "#request-log-empty-state")
+    after
+      send(query_pid, {handler_id, :release})
+    end
+
+    _ = await_request_logs(view)
+
+    assert has_element?(view, "#admin-request-logs-live[aria-busy='false']")
+    refute has_element?(view, "#request-log-loading-state")
+    assert has_element?(view, "#request-log-empty-state", "No request logs")
+  end
+
   test "refreshes selected pool rows when request log events arrive", %{conn: conn, scope: scope} do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "realtime-logs", name: "Realtime Logs"})
     reload_ref = attach_request_log_reload_telemetry()
@@ -3310,7 +3367,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
   defp await_request_logs(view, attempts \\ 200)
 
   defp await_request_logs(view, attempts) when attempts > 0 do
-    _ = render_async(view)
+    _ = render_async(view, 5_000)
     state = :sys.get_state(view.pid)
 
     if state.socket.assigns.request_logs_loading? or

@@ -1200,6 +1200,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
       })
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+    _ = render_async(view, 5_000)
 
     for selector <- [
           "#upstream-cockpit",
@@ -1259,6 +1260,86 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(
              view,
              "#upstream-event-summary-audit-logs-link[href='/admin/audit-logs?target=#{identity.id}']"
+           )
+  end
+
+  test "shows loading instead of zero request metrics until the initial async result arrives", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "loading-cockpit", name: "Loading Cockpit"})
+
+    %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    request_health_request_fixture(pool, assignment, %{
+      status: "succeeded",
+      admitted_at: DateTime.add(now, -1, :minute),
+      correlation_id: "loading-cockpit-request"
+    })
+
+    handler_id = {__MODULE__, :initial_cockpit_metrics_query, make_ref()}
+    test_pid = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and
+               String.contains?(to_string(metadata[:query]), "percentile_disc") and
+               is_nil(Process.get(handler_id)) do
+            Process.put(handler_id, true)
+            send(test_pid, {handler_id, self()})
+
+            receive do
+              {^handler_id, :release} -> :ok
+            after
+              5_000 -> :ok
+            end
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+    assert_receive {^handler_id, query_pid}, 1_000
+
+    try do
+      assert has_element?(view, "#upstream-cockpit[aria-busy='true']")
+      assert has_element?(view, "#request-health-chart[aria-busy='true']")
+      assert has_element?(view, "#request-health-loading-state", "Loading request metrics")
+      assert has_element?(view, "#request-health-loading-state .admin-loading-icon")
+      refute has_element?(view, "#request-health-chart-plot")
+
+      assert has_element?(
+               view,
+               "#upstream-assignment-#{assignment.id} [data-role='upstream-assignment-share']",
+               "…"
+             )
+
+      assert has_element?(
+               view,
+               "#upstream-assignment-#{assignment.id}",
+               "Loading request metrics"
+             )
+    after
+      send(query_pid, {handler_id, :release})
+    end
+
+    _ = render_async(view, 5_000)
+
+    assert has_element?(view, "#upstream-cockpit[aria-busy='false']")
+    refute has_element?(view, "#request-health-loading-state")
+    assert has_element?(view, "#request-health-chart-plot[data-chart-total='1']")
+
+    assert has_element?(
+             view,
+             "#upstream-assignment-#{assignment.id} [data-role='upstream-assignment-share']",
+             "100.0%"
            )
   end
 
@@ -3271,6 +3352,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
              })
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+    _ = render_async(view, 5_000)
 
     assert has_element?(view, "#upstream-quota")
     assert has_element?(view, "#upstream-quota", "Quota missing")
