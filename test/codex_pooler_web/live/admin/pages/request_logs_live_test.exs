@@ -929,6 +929,9 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     )
     |> render_click()
 
+    _ = assert_patch(view)
+    _ = await_request_logs(view)
+
     assert has_element?(view, "#filters_model[type='hidden'][value='gpt-custom-failed']")
     assert has_element?(view, "#request-log-row-#{failed_request.id}", "gpt-custom-failed")
     refute has_element?(view, "#request-log-row-#{succeeded_request.id}")
@@ -939,6 +942,10 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
       "#request-log-status-filter [data-role='status-filter-option'][data-status='failed']"
     )
     |> render_click()
+
+    _ = assert_patch(view)
+
+    _ = await_request_logs(view)
 
     assert has_element?(view, "#filters_status[type='hidden'][value='failed']")
     assert has_element?(view, "#request-log-row-#{failed_request.id}", "gpt-custom-failed")
