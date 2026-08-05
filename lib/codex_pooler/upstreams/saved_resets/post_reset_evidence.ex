@@ -23,10 +23,12 @@ defmodule CodexPooler.Upstreams.SavedResets.PostResetEvidence do
   (`Windows.effective_quota_windows/2`), the same fold routing reads: obsolete
   rows from a different source describing the same logical window cannot veto a
   newer usable observation, while genuinely distinct current account windows
-  keep their fail-closed routing semantics. The post-consume filter runs
-  *before* the fold, so a still-fresh pre-consume row can never win the
+  keep their fail-closed routing semantics. Only the *temporal* filter runs
+  before the fold — a still-fresh pre-consume row can never win the
   logical-window ranking and eclipse the post-consume evidence it would then
-  be filtered away from.
+  be filtered away from — while the account and parse-safety checks run after
+  it, so the fold ranks exactly the rows routing ranks and an unparseable
+  winner fails closed instead of being folded away.
 
   Pure: it never touches the repo and reuses the routing window classifiers so
   "usable" and "exhausted" mean exactly what routing means.
@@ -55,11 +57,9 @@ defmodule CodexPooler.Upstreams.SavedResets.PostResetEvidence do
   def classify(windows, %DateTime{} = consumed_at, %DateTime{} = now) when is_list(windows) do
     fresh_account_windows =
       windows
-      |> Enum.filter(fn window ->
-        account_window?(window) and parse_safe?(window) and
-          observed_at_or_after?(window, consumed_at)
-      end)
+      |> Enum.filter(&observed_at_or_after?(&1, consumed_at))
       |> Windows.effective_quota_windows(now)
+      |> Enum.filter(fn window -> account_window?(window) and parse_safe?(window) end)
 
     cond do
       fresh_account_windows == [] -> :pending

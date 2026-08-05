@@ -151,6 +151,23 @@ defmodule CodexPooler.Upstreams.SavedResets.PostResetEvidenceTest do
     assert PostResetEvidence.classify(windows, consumed_at, @now) == :confirmed
   end
 
+  test "a newer unparseable exhausted row keeps the reset pending like routing" do
+    # Routing's canonical fold ranks the newer unknown-precision exhausted row;
+    # classification must fold the same way and then fail closed on it, instead
+    # of discarding it early and declaring recovery routing cannot see.
+    consumed_at = DateTime.add(@now, -10, :minute)
+
+    windows = [
+      window(
+        used_percent: Decimal.new("5"),
+        observed_at: DateTime.add(@now, -5, :minute)
+      ),
+      window(used_percent: Decimal.new("100"), source_precision: "unknown")
+    ]
+
+    assert PostResetEvidence.classify(windows, consumed_at, @now) == :pending
+  end
+
   test "a current canonical exhausted window still reblocks over obsolete rows" do
     consumed_at = DateTime.add(@now, -20, :hour)
     stale_observed_at = DateTime.add(@now, -14, :hour)

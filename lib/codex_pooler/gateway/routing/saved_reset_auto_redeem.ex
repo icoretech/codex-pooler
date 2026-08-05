@@ -458,13 +458,9 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
   # session header, accepted turn state, or an unresolved previous-response
   # anchor is soft preference, not a pin, so a first turn never bypasses.
   defp hard_pinned_continuity?(%{
-         filter_input: %{
-           auth: auth,
-           request_options: request_options,
-           model: %Model{} = model
-         }
+         filter_input: %{request_options: request_options, model: %Model{} = model}
        }) do
-    SessionContinuity.hard_pinned_continuity?(auth, request_options, model)
+    SessionContinuity.hard_pinned_continuity?(request_options, model)
   end
 
   defp hard_pinned_continuity?(_refresh_plan), do: false

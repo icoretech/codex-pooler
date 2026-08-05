@@ -30,7 +30,10 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
         %RequestOptions{continuity: %{codex_session: %CodexSession{id: session_id}}} =
           request_options
       ) do
-    request_options = ContinuityPayload.put_previous_response_id(request_options, payload)
+    request_options =
+      request_options
+      |> ContinuityPayload.put_previous_response_id(payload)
+      |> put_previous_response_resolution(auth)
 
     case start_previous_response_codex_session(auth, request_options) do
       {:ok, %CodexSession{} = session} ->
@@ -45,7 +48,10 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
   end
 
   def attach_codex_session(auth, payload, %RequestOptions{} = request_options) do
-    request_options = ContinuityPayload.put_previous_response_id(request_options, payload)
+    request_options =
+      request_options
+      |> ContinuityPayload.put_previous_response_id(payload)
+      |> put_previous_response_resolution(auth)
 
     if continuity_session_requested?(request_options) do
       with {:ok, session} <- ContinuityStore.start_codex_session(auth, request_options) do
@@ -53,6 +59,26 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
       end
     else
       {:ok, request_options}
+    end
+  end
+
+  # The immutable resolution proof for the previous-response anchor, captured
+  # by a read-only strict lookup BEFORE any attach fallback can register this
+  # request's own anchors as aliases. A self-created alias therefore never
+  # counts as a resolved anchor within the request that created it.
+  defp put_previous_response_resolution(%RequestOptions{} = request_options, auth) do
+    with nil <- request_options.continuity.resolved_previous_response_assignment_id,
+         previous_response_id when is_binary(previous_response_id) <-
+           clean_string(request_options.continuity.previous_response_id),
+         %{pool: %{id: _pool_id}, api_key: %{id: _api_key_id}} <- auth do
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      RequestOptions.put_continuity(request_options,
+        resolved_previous_response_assignment_id:
+          ContinuityStore.previous_response_assignment_id(auth, previous_response_id, now)
+      )
+    else
+      _already_resolved_or_unresolvable -> request_options
     end
   end
 
@@ -251,16 +277,18 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
   @doc """
   True only for a hard-pinned continuation whose pin target is genuinely
   resolved: file affinity, a live upstream websocket bound to an assigned
-  Codex session, or a previous-response anchor that resolves through an
-  active session alias. An unresolved previous-response anchor — even with a
-  fallback-attached session — a merely-present Codex session, a session
-  header, or an accepted turn state is soft preference, never a hard pin.
+  Codex session, or a previous-response anchor whose attach-time resolution
+  proof points at the very assignment the attached session pins. An anchor
+  that never resolved — even when the attach fallback attached a session and
+  registered the anchor as a new alias — a merely-present Codex session, a
+  session header, or an accepted turn state is soft preference, never a hard
+  pin.
   """
-  @spec hard_pinned_continuity?(auth(), RequestOptions.t(), Model.t()) :: boolean()
-  def hard_pinned_continuity?(auth, %RequestOptions{} = request_options, %Model{} = model) do
+  @spec hard_pinned_continuity?(RequestOptions.t(), Model.t()) :: boolean()
+  def hard_pinned_continuity?(%RequestOptions{} = request_options, %Model{} = model) do
     case classify_codex_session_pin(request_options, model) do
       {:hard, :previous_response_id} ->
-        previous_response_target_resolved?(auth, request_options)
+        resolved_previous_response_pin?(request_options)
 
       {:hard, _reason} ->
         true
@@ -270,26 +298,18 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
     end
   end
 
-  defp previous_response_target_resolved?(%{pool: pool, api_key: api_key}, request_options) do
-    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-
-    case clean_string(request_options.continuity.previous_response_id) do
+  defp resolved_previous_response_pin?(%RequestOptions{continuity: continuity}) do
+    case clean_string(continuity.resolved_previous_response_assignment_id) do
       nil ->
         false
 
-      previous_response_id ->
-        pool
-        |> affinity_assignment_query(
-          api_key,
-          [{"previous_response_id", previous_response_id}],
-          now
+      resolved_assignment_id ->
+        match?(
+          %CodexSession{pool_upstream_assignment_id: ^resolved_assignment_id},
+          continuity.codex_session
         )
-        |> Repo.one()
-        |> is_binary()
     end
   end
-
-  defp previous_response_target_resolved?(_auth, _request_options), do: false
 
   @spec hard_pin_codex_session_assignment?(RequestOptions.t(), Model.t()) :: boolean()
   defp hard_pin_codex_session_assignment?(%RequestOptions{} = request_options, %Model{} = model) do

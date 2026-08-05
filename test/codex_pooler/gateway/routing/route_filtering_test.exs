@@ -6,11 +6,11 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
 
   alias CodexPooler.Catalog
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Gateway.Payloads.ContinuityPayload
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Persistence.BridgeSessionAlias
   alias CodexPooler.Gateway.Persistence.CodexSession
+  alias CodexPooler.Gateway.Routing.SessionContinuity
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
@@ -541,20 +541,33 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
     test "a hard-pinned continuation retains its threshold capacity bypass" do
       %{
         upstream: upstream,
-        filter_input: filter_input,
+        unattached_filter_input: filter_input,
         target_identity: target_identity,
         pool: pool,
         api_key: api_key,
         session: session
       } = first_turn_capacity_arrangement("hard-pin-capacity")
 
+      # The anchor resolves through an alias that existed before this request:
+      # a genuinely pinned continuation, attached through the real seam.
       previous_response_id = "resp_hard_pin_capacity_baseline"
-      register_previous_response_alias!(pool, api_key, session, previous_response_id)
 
-      request_options =
-        ContinuityPayload.put_previous_response_id(filter_input.request_options, %{
-          "previous_response_id" => previous_response_id
-        })
+      register_session_alias!(
+        pool,
+        api_key,
+        session,
+        "previous_response_id",
+        previous_response_id
+      )
+
+      assert {:ok, request_options} =
+               SessionContinuity.attach_codex_session(
+                 %{pool: pool, api_key: api_key},
+                 %{"previous_response_id" => previous_response_id},
+                 filter_input.request_options
+               )
+
+      assert request_options.continuity.codex_session.id == session.id
 
       filter_input = %{filter_input | request_options: request_options}
 
@@ -580,17 +593,35 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
     test "an unresolved previous response anchor does not bypass the capacity veto" do
       %{
         upstream: upstream,
-        filter_input: filter_input,
+        unattached_filter_input: filter_input,
         sibling_identity: sibling_identity,
-        target_identity: target_identity
+        target_identity: target_identity,
+        pool: pool,
+        api_key: api_key,
+        session: session
       } = first_turn_capacity_arrangement("unresolved-hard-pin")
 
-      # The anchor never resolved through a session alias: the attached session
-      # is fallback preference, so the threshold burn keeps its veto.
+      # The real attach seam: the unknown anchor does not resolve, the session
+      # resolves through its soft session-header alias, and the attach then
+      # registers the unknown anchor onto that session — a self-created alias
+      # that must not count as a hard pin for the capacity bypass.
+      session_header = "sess-unresolved-anchor-#{System.unique_integer([:positive])}"
+      register_session_alias!(pool, api_key, session, "session_header", session_header)
+
       request_options =
-        ContinuityPayload.put_previous_response_id(filter_input.request_options, %{
-          "previous_response_id" => "resp_unresolved_anchor"
-        })
+        RequestOptions.put_continuity(filter_input.request_options,
+          session_header: session_header,
+          session_header_source: "x-session-id"
+        )
+
+      assert {:ok, request_options} =
+               SessionContinuity.attach_codex_session(
+                 %{pool: pool, api_key: api_key},
+                 %{"previous_response_id" => "resp_unresolved_anchor"},
+                 request_options
+               )
+
+      assert request_options.continuity.codex_session.id == session.id
 
       filter_input = %{filter_input | request_options: request_options}
 
@@ -1847,6 +1878,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
     %{
       upstream: upstream,
       filter_input: %{filter_input | request_options: request_options},
+      unattached_filter_input: filter_input,
       pool: pool,
       api_key: api_key,
       session: session,
@@ -1857,15 +1889,15 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
     }
   end
 
-  defp register_previous_response_alias!(pool, api_key, session, previous_response_id) do
+  defp register_session_alias!(pool, api_key, session, alias_kind, alias_value) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     Repo.insert!(%BridgeSessionAlias{
       codex_session_id: session.id,
       pool_id: pool.id,
       api_key_id: api_key.id,
-      alias_kind: "previous_response_id",
-      alias_hash: :crypto.hash(:sha256, previous_response_id),
+      alias_kind: alias_kind,
+      alias_hash: :crypto.hash(:sha256, alias_value),
       status: "active",
       expires_at: DateTime.add(now, 1, :hour),
       last_seen_at: now,

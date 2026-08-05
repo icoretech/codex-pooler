@@ -1450,6 +1450,42 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                reservation_at |> DateTime.add(300, :second) |> DateTime.to_iso8601()
     end
 
+    test "a regressive clock cannot settle a response before its reservation" do
+      fixture = ambiguous_chatgpt_recovery_fixture!()
+      recovery_now = DateTime.add(fixture.last_provider_dispatched_at, 60, :second)
+      fixture = make_recovery_due!(fixture, recovery_now)
+      reservation_at = DateTime.add(recovery_now, 70, :second)
+      counter = :counters.new(1, [])
+
+      clock = fn ->
+        :counters.add(counter, 1, 1)
+
+        case :counters.get(counter, 1) do
+          1 -> reservation_at
+          _later -> DateTime.add(recovery_now, -100, :second)
+        end
+      end
+
+      # The post-response clock regressed below the reservation; snooze and
+      # timestamps must still be floored at the dispatch anchor.
+      assert {:snooze, 300} =
+               SavedResetRedemption.resume_stale_consuming(
+                 fixture.assignment,
+                 fixture.identity.id,
+                 fixture.attempt_id,
+                 fixture.generation,
+                 now: recovery_now,
+                 receive_timeout: 1_000,
+                 clock: clock
+               )
+
+      replay =
+        Repo.reload!(fixture.identity).metadata["saved_reset_redemption"]["provider_replay"]
+
+      assert replay["provider_dispatches"] == 2
+      assert replay["last_provider_dispatched_at"] == DateTime.to_iso8601(reservation_at)
+    end
+
     test "a recovery reservation re-checks the six-hour cutoff after the provider list" do
       fixture = ambiguous_chatgpt_recovery_fixture!()
       recovery_now = DateTime.add(fixture.last_provider_dispatched_at, 60, :second)

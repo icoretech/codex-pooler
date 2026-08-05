@@ -1026,8 +1026,12 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   end
 
   # The consume POST itself takes time: finalization, settle timestamps, and
-  # snooze arithmetic must not run on the pre-dispatch clock.
-  defp dispatch_response_now(recovery, now), do: later_datetime(now, recovery.clock.())
+  # snooze arithmetic must not run on the pre-dispatch clock — and a regressive
+  # clock must not produce a response time before the dispatch reservation, so
+  # the reservation anchor is the floor.
+  defp dispatch_response_now(recovery, now) do
+    later_datetime(recovery.last_provider_dispatched_at || now, recovery.clock.())
+  end
 
   defp maybe_put_recovery_credit_id(body, :chatgpt, credit_id),
     do: Map.put(body, "credit_id", credit_id)
