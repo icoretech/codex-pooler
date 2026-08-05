@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
 
   import Phoenix.LiveViewTest
   import CodexPooler.AccountsFixtures
+  import CodexPooler.PoolerFixtures
   import Ecto.Query
 
   alias CodexPooler.Access
@@ -425,6 +426,42 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
     assert_no_ledger_reads(cancel_queries)
   end
 
+  test "mount batches API key and visible model reads across Pools", %{conn: conn, scope: scope} do
+    api_keys =
+      for index <- 1..8 do
+        {:ok, pool} =
+          Pools.create_pool(scope, %{
+            slug: "batched-api-key-page-#{index}",
+            name: "Batched API key page #{index}"
+          })
+
+        %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+        model_fixture(pool, %{
+          exposed_model_id: "gpt-api-key-page-#{index}",
+          metadata: %{"source_assignment_ids" => [assignment.id]}
+        })
+
+        {:ok, %{api_key: api_key}} =
+          Access.create_api_key(scope, pool, %{display_name: "Batched page key #{index}"})
+
+        api_key
+      end
+
+    {{:ok, view, _html}, mount_queries} =
+      capture_repo_queries(fn -> live(conn, ~p"/admin/api-keys") end)
+
+    query_counts = Enum.frequencies(mount_queries)
+
+    assert query_counts["api_keys"] == 2
+    assert query_counts["models"] == 4
+    assert query_counts["pool_upstream_assignments"] == 4
+
+    for api_key <- api_keys do
+      assert has_element?(view, "#api-key-row-#{api_key.id}")
+    end
+  end
+
   test "reloads API keys only for visible Pool lifecycle events while preserving wizard state", %{
     conn: conn,
     scope: scope
@@ -496,7 +533,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveTest do
         _ = :sys.get_state(view.pid)
       end)
 
-    assert length(visible_queries) == 12
+    assert length(visible_queries) == 10
     assert_no_ledger_reads(visible_queries)
     assert has_element?(view, "#api-key-tab-review[aria-selected='true']")
     assert has_element?(view, "#api_key_display_name[value='#{draft_name}']")

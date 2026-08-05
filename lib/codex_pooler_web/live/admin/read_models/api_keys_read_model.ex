@@ -255,10 +255,11 @@ defmodule CodexPoolerWeb.Admin.ApiKeysReadModel do
   end
 
   defp visible_model_identifier_sets(pools) do
-    Map.new(pools, fn %Pool{id: pool_id} = pool ->
+    pools
+    |> Catalog.list_visible_models_for_pools()
+    |> Map.new(fn {pool_id, models} ->
       identifiers =
-        pool
-        |> Catalog.list_visible_models()
+        models
         |> Enum.map(&normalize_model_identifier(&1.exposed_model_id))
         |> Enum.reject(&is_nil/1)
 

@@ -295,6 +295,40 @@ defmodule CodexPooler.AccessTest do
     end
   end
 
+  describe "API key listing" do
+    test "batches authorized Pool reads as the Pool count grows" do
+      %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+      scope = Scope.for_user(owner)
+
+      first_pool = pool_fixture(%{name: "Batched API keys 1"})
+      %{api_key: first_key} = api_key_fixture(first_pool, %{scope: scope, display_name: "Key 1"})
+
+      {{:ok, [listed_first_key]}, one_pool_queries} =
+        count_repo_sources(fn -> Access.list_api_keys(scope) end)
+
+      assert listed_first_key.id == first_key.id
+
+      additional_keys =
+        for index <- 2..10 do
+          pool = pool_fixture(%{name: "Batched API keys #{index}"})
+
+          %{api_key: api_key} =
+            api_key_fixture(pool, %{scope: scope, display_name: "Key #{index}"})
+
+          api_key
+        end
+
+      {{:ok, listed_keys}, ten_pool_queries} =
+        count_repo_sources(fn -> Access.list_api_keys(scope) end)
+
+      assert MapSet.new(Enum.map(listed_keys, & &1.id)) ==
+               MapSet.new(Enum.map([first_key | additional_keys], & &1.id))
+
+      assert one_pool_queries == %{"api_keys" => 1, "memberships" => 1, "pools" => 1}
+      assert ten_pool_queries == one_pool_queries
+    end
+  end
+
   describe "assigned-admin API key scoping" do
     test "pool count projections include visible key statuses and exclude inactive parent pools" do
       {scope, active_pool} = owner_scope_and_pool()
@@ -787,6 +821,39 @@ defmodule CodexPooler.AccessTest do
       {^handler_id, :api_key_update} -> count_received_api_key_updates(handler_id, count + 1)
     after
       0 -> count
+    end
+  end
+
+  defp count_repo_sources(fun) when is_function(fun, 0) do
+    parent = self()
+    handler_id = {__MODULE__, :repo_sources, System.unique_integer([:positive])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and is_binary(metadata[:source]) do
+            send(parent, {handler_id, metadata.source})
+          end
+        end,
+        nil
+      )
+
+    try do
+      result = fun.()
+      {result, drain_repo_sources(handler_id, %{})}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_repo_sources(handler_id, counts) do
+    receive do
+      {^handler_id, source} ->
+        drain_repo_sources(handler_id, Map.update(counts, source, 1, &(&1 + 1)))
+    after
+      0 -> counts
     end
   end
 end

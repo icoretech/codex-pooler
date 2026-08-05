@@ -28,22 +28,26 @@ defmodule CodexPooler.Access.APIKeys.Queries do
              PoolAuthorization.capability(:pool_api_key_manage),
              ["active"]
            ) do
-      list_api_keys_for_pools(scope, pools)
+      {:ok, list_api_keys_for_authorized_pools(pools)}
     end
   end
 
   def list_api_keys(_scope),
     do: {:error, Errors.access_error(:invalid_request, "user scope is required")}
 
-  defp list_api_keys_for_pools(scope, pools) do
-    Enum.reduce_while(pools, {:ok, []}, &append_pool_api_keys(scope, &1, &2))
-  end
+  defp list_api_keys_for_authorized_pools([]), do: []
 
-  defp append_pool_api_keys(scope, pool, {:ok, keys}) do
-    case list_api_keys(scope, pool) do
-      {:ok, pool_keys} -> {:cont, {:ok, keys ++ pool_keys}}
-      {:error, _reason} = error -> {:halt, error}
-    end
+  defp list_api_keys_for_authorized_pools(pools) do
+    pool_ids = Enum.map(pools, & &1.id)
+
+    keys_by_pool_id =
+      APIKey
+      |> where([key], key.pool_id in ^pool_ids)
+      |> order_by([key], asc: key.pool_id, desc: key.created_at)
+      |> Repo.all()
+      |> Enum.group_by(& &1.pool_id)
+
+    Enum.flat_map(pools, &Map.get(keys_by_pool_id, &1.id, []))
   end
 
   @spec count_api_keys_by_pool_ids([Ecto.UUID.t()]) :: %{

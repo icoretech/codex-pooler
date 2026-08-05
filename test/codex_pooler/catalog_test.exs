@@ -157,6 +157,62 @@ defmodule CodexPooler.CatalogTest do
     end
   end
 
+  describe "list_visible_models_for_pools/2" do
+    test "batches model and assignment visibility as the Pool count grows" do
+      entries =
+        for index <- 1..10 do
+          pool = pool_fixture(%{name: "Visible model batch #{index}"})
+          %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+          model =
+            model_fixture(pool, %{
+              exposed_model_id: "gpt-visible-batch-#{index}",
+              metadata: %{"source_assignment_ids" => [assignment.id]}
+            })
+
+          {pool, model}
+        end
+
+      {first_pool, first_model} = hd(entries)
+
+      %{assignment: hidden_assignment} =
+        upstream_assignment_fixture(first_pool, %{health_status: "errored"})
+
+      hidden_model =
+        model_fixture(first_pool, %{
+          exposed_model_id: "gpt-hidden-batch",
+          metadata: %{"source_assignment_ids" => [hidden_assignment.id]}
+        })
+
+      {one_pool_models, one_pool_queries} =
+        count_repo_sources(fn -> Catalog.list_visible_models_for_pools([first_pool]) end)
+
+      pools = Enum.map(entries, &elem(&1, 0))
+
+      {all_pool_models, all_pool_queries} =
+        count_repo_sources(fn -> Catalog.list_visible_models_for_pools(pools) end)
+
+      assert Enum.map(one_pool_models[first_pool.id], & &1.id) == [first_model.id]
+      refute Enum.any?(one_pool_models[first_pool.id], &(&1.id == hidden_model.id))
+
+      assert Map.keys(all_pool_models) |> MapSet.new() ==
+               pools |> Enum.map(& &1.id) |> MapSet.new()
+
+      assert Enum.all?(entries, fn {pool, model} ->
+               Enum.any?(all_pool_models[pool.id], &(&1.id == model.id))
+             end)
+
+      assert one_pool_queries == %{"models" => 1, "pool_upstream_assignments" => 1}
+      assert all_pool_queries == one_pool_queries
+
+      assert {empty_models, empty_queries} =
+               count_repo_sources(fn -> Catalog.list_visible_models_for_pools([]) end)
+
+      assert empty_models == %{}
+      assert empty_queries == %{}
+    end
+  end
+
   describe "catalog sync" do
     test "excludes reauth-required identities even if assignment state is still eligible" do
       pool = pool_fixture()

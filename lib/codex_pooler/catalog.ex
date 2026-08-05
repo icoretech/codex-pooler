@@ -45,6 +45,7 @@ defmodule CodexPooler.Catalog do
           | {:error, term(), catalog_error() | Ecto.Changeset.t() | term()}
   @type pool_ref :: Pool.t() | Ecto.UUID.t()
   @type pricing_bucket_map :: %{optional(String.t()) => [String.t()]}
+  @type visible_models_by_pool_id :: %{optional(Ecto.UUID.t()) => [Model.t()]}
 
   @spec list_assignment_model_summaries(term()) :: [AssignmentModelSummaries.summary()]
   @spec exposed_model_ids_by_ids([Ecto.UUID.t() | nil]) :: %{
@@ -89,11 +90,30 @@ defmodule CodexPooler.Catalog do
 
   @spec list_visible_models(pool_ref(), keyword()) :: [Model.t()]
   def list_visible_models(pool_or_id, opts \\ []) do
+    pool_id = pool_id(pool_or_id)
+
+    [pool_id]
+    |> list_visible_models_for_pools(opts)
+    |> Map.get(pool_id, [])
+  end
+
+  @spec list_visible_models_for_pools([pool_ref()], keyword()) :: visible_models_by_pool_id()
+  def list_visible_models_for_pools(pools, opts \\ []) when is_list(pools) do
     timestamp = Keyword.get(opts, :at, now())
 
-    pool_or_id
-    |> list_models(status: @active)
-    |> Enum.filter(&visible_model?(&1, timestamp))
+    pool_ids =
+      pools
+      |> Enum.map(&pool_id/1)
+      |> Enum.filter(&is_binary/1)
+      |> Enum.uniq()
+
+    visible_models_by_pool_id =
+      pool_ids
+      |> list_models_for_pool_ids(@active)
+      |> visible_models(timestamp)
+      |> Enum.group_by(& &1.pool_id)
+
+    Map.new(pool_ids, &{&1, Map.get(visible_models_by_pool_id, &1, [])})
   end
 
   @spec model_source_identity([Model.t()] | nil) :: UpstreamIdentity.t() | nil
@@ -335,20 +355,46 @@ defmodule CodexPooler.Catalog do
   @spec catalog_error(atom(), String.t()) :: catalog_error()
   def catalog_error(code, message), do: %{code: code, message: message}
 
-  defp visible_model?(%Model{} = model, timestamp) do
-    ids = get_in(model.metadata || %{}, ["source_assignment_ids"]) || []
+  defp list_models_for_pool_ids([], _status), do: []
 
-    Repo.exists?(
-      from assignment in PoolUpstreamAssignment,
-        join: identity in UpstreamIdentity,
-        on: identity.id == assignment.upstream_identity_id,
-        where:
-          assignment.id in ^ids and assignment.status == ^@assignment_active and
-            assignment.eligibility_status == ^@assignment_eligible and
-            identity.status == ^@identity_active and
-            assignment.health_status not in ^@health_excluded and
-            (is_nil(assignment.cooldown_until) or assignment.cooldown_until <= ^timestamp)
+  defp list_models_for_pool_ids(pool_ids, status) do
+    Model
+    |> where([model], model.pool_id in ^pool_ids)
+    |> maybe_where_status(status)
+    |> order_by([model], asc: model.pool_id, asc: model.exposed_model_id)
+    |> Repo.all()
+  end
+
+  defp visible_models([], _timestamp), do: []
+
+  defp visible_models(models, timestamp) do
+    visible_assignment_ids = visible_assignment_ids(models, timestamp)
+
+    Enum.filter(models, fn model ->
+      model
+      |> source_assignment_ids()
+      |> Enum.any?(&MapSet.member?(visible_assignment_ids, &1))
+    end)
+  end
+
+  defp visible_assignment_ids(models, timestamp) do
+    assignment_ids = models |> Enum.flat_map(&source_assignment_ids/1) |> Enum.uniq()
+
+    PoolUpstreamAssignment
+    |> join(:inner, [assignment], identity in UpstreamIdentity,
+      on: identity.id == assignment.upstream_identity_id
     )
+    |> where(
+      [assignment, identity],
+      assignment.id in ^assignment_ids and assignment.status == ^@assignment_active and
+        assignment.eligibility_status == ^@assignment_eligible and
+        identity.status == ^@identity_active and
+        assignment.health_status not in ^@health_excluded and
+        (is_nil(assignment.cooldown_until) or assignment.cooldown_until <= ^timestamp)
+    )
+    |> select([assignment, _identity], assignment.id)
+    |> Repo.all()
+    |> MapSet.new()
   end
 
   defp source_assignment_ids(%Model{} = model) do
