@@ -2095,7 +2095,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     html =
       render_component(&RequestLogsPresentation.request_logs_table/1,
         request_logs: request_logs,
-        datetime_preferences: %{datetime_format: "default", timezone: "Etc/UTC"}
+        datetime_preferences: %{datetime_format: "default", timezone: "Etc/UTC"},
+        current_params: %{}
       )
 
     assert html =~ ~s(id="request-log-row-#{request.id}")

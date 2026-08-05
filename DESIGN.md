@@ -141,10 +141,22 @@ wrapped by `Layouts.app chrome={:admin}` in
   `scrollbar-gutter: stable`.
 - Fixed top bar: `h-12`, wordmark left, GitHub/notifications/WebSocket-state
   dropdowns right.
-- Fixed sidebar: `w-16` icon rail on mobile, `md:w-64` with labels; active item
-  gets `!border-l-primary bg-base-300` on a `border-l-[3px]` slot.
-- Content: `ml-16 md:ml-64 pt-12`, inner column `flex flex-col gap-6 p-4
+- Fixed sidebar: `w-16` icon rail, `xl:w-64` with labels; active item gets
+  `!border-l-primary bg-base-300` on a `border-l-[3px]` slot.
+- Content: `ml-16 xl:ml-64 pt-12`, inner column `flex flex-col gap-6 p-4
   sm:p-6 xl:p-8`.
+
+**The rail holds until `xl`, and this is a content decision, not a nav one.**
+The usable content column is `viewport − sidebar − padding`. With labels from
+`md` the sidebar took 256px from every viewport at 768 and up, which is exactly
+the band where the widest surfaces have the least room to give: an iPad
+landscape at 1180 had 862px of content for a table that needs 896, so the last
+column fell off the edge, and an iPad portrait at 820 had 502px and dropped to
+a phone layout. Holding the 64px rail to `xl` returns ~192px to every admin
+page in the 768–1280 band — landscape goes to 1054px and the table fits whole.
+Nav labels are recoverable (each item keeps `title` and `aria-label`); a column
+that has been pushed off the screen is not. When judging any layout change,
+measure the content column, not the viewport.
 
 Spacing rhythm inside content: page sections stack at `gap-6`; metric strips
 use `gap-2`; card bodies use `p-4` with `gap-3`/`gap-4` grids; surface headers
@@ -855,17 +867,41 @@ a fourth shape.
 
 **One markup tree, two readings.** A record table is a real `<table>` that
 reflows below its breakpoint instead of being duplicated as a card list. Add
-`admin-ledger-table` for a collapse at `lg`, or `admin-ledger-table-md` when the
-columns still fit a tablet (the request-log table, six narrow columns); the CSS
-in `app.css` switches `display` and the template places cells with `max-lg:` /
-`max-md:` grid utilities. The `thead` becomes `sr-only`, never absent. Never
-render a second tree for small screens: the explorer used to print twenty
-articles beside twenty rows on every update.
+`admin-ledger-table`; the CSS in `app.css` switches `display` and the template
+places cells with `max-lg:` grid utilities. The `thead` becomes `sr-only`, never
+absent. Never render a second tree for small screens: the explorer used to print
+twenty articles beside twenty rows on every update.
 
-**Column widths belong to the `colgroup`.** Give every column a floor and leave
-exactly one elastic — the one whose content already truncates with the full
-value in a `title`. A blanket `min-w-[Nrem]` on the table is what pushes columns
-off the screen on a laptop while the content itself would have fitted.
+**The breakpoint is `lg`, for every record table.** There was briefly a second
+opt-in (`admin-ledger-table-md`) for tables whose columns "still fit a tablet."
+They do not. The tablet band is precisely where a table stops giving way in its
+elastic column and starts compressing all of them at once — on the request-log
+table at 900px, model, attribution and transport all truncated together, which
+is worse than the reflow the second breakpoint existed to postpone. One
+breakpoint also means the reflow CSS is written once.
+
+**A ledger entry is not automatically a phone layout.** The reflowed entry
+stacks one field per line, which is right at 430px and wasteful at 700: on an
+iPad portrait a record ran 141px tall with half its width empty and six records
+filled the screen. From `sm` up to the reflow breakpoint a table opts in with
+`data-ledger-dense`, the entry gets a second content column, and the template
+places the paired fields with stacked `max-lg:sm:` utilities — on request logs
+attribution and transport move beside the identity instead of under it, 141px
+becomes 79px, and ten records fit. Two things to keep in mind: each `tr` is its
+own grid container, so any `auto` track is measured per row and a record missing
+that field will shift its neighbours' columns — the figures track is a fixed
+`4.5rem` for exactly this reason; and the opt-in is per table, because a table
+whose fields do not pair up gains nothing from a second column.
+
+**Column widths belong to the `colgroup`, and only hold up with a floor under
+the table.** Give every column a floor and leave exactly one elastic — the one
+whose content already truncates with the full value in a `title`. Then give the
+table `lg:min-w-[Nrem]` equal to the sum of those floors, and let the wrapper
+scroll (`lg:overflow-x-auto`). Without it the floors are decoration: `<col>`
+widths are hints, so a narrow container compresses every column at once and the
+elastic column stops being the one that gives. The min-width is safe *because*
+the table reflows below `lg` — it never applies at a width where it could push
+content off a phone. Request logs: `8+9+10+17+6+6 = 56rem`. Jobs: `72rem`.
 
 **Status tick.** Opt in with `admin-status-tick` and put `data-tone` on the row
 (`success` / `warning` / `error` / `info`). A rounded 4px bar is painted inside
@@ -890,6 +926,52 @@ qualifier under its figure — cached tokens under the total, compression under
 the cost. Units and currency marks are notation, not figure: same weight as the
 number, stepped back to `text-base-content/60`. Never repeat the column heading
 in the cell (`235.3k`, not `235.3k tokens`).
+
+**The count comes with the way to move, and the pager sticks.** A record table
+draws from a set larger than a page, so it carries one nav: `Page X of Y` at the
+start, `Showing a-b of N` in `tabular-nums`, and a `join` of Previous/Next at
+the end, disabled as `btn-disabled` spans rather than removed so the control
+keeps its shape. It sits **above** the rows and is `sticky top-0 z-20` on the
+page-chrome background — fifty records is a long scroll to reach Next, and taller
+on a tablet, so a pager only at the bottom is a pager you cannot reach. Sticky
+rather than rendered twice: one tree.
+
+The pager takes the type size of the records it counts — `text-xs` with
+`btn-xs`, not `text-sm` — because a control set one step larger than everything
+around it reads as though it came from another design, even in the same
+typeface. And it stays **one row at every width**: the ordinal (`Page 2 of
+11893`) is the range said less precisely, so below `sm` it is the part that
+steps aside, leaving `51-100 of 587938` on the line with the buttons. Stacking
+the three parts turned a control into four rows of chrome above the first
+record.
+
+The `<caption>` stays but goes `sr-only` —
+it names the table and its total for a screen reader before the rows, which is
+the only job a caption does that the pager cannot. A visible caption reporting
+"594617 matching" under fifty rows and no way to reach row 51 is the shape to
+avoid; it reads as a total when it is a page. Paging is a list control: the links
+carry the filters forward and drop the drawer selection, and changing any filter
+drops the page, because a page number only means something against the result set
+it was counted from.
+
+**Offset paging only holds still if the list holds still.** These tables are
+live — request logs debounce a rebuild on every Pool event — and an offset into
+a growing set is not a stable address: rows shift down under the reader and
+records already seen come back. So page one is the live reading and rebuilds on
+every event, while **leaving page one pins the window**. The pin is the newest
+`admitted_at` on screen, carried in the URL as `as_of` and applied as an upper
+bound that composes with any `date_to` the operator set by taking the tighter of
+the two. Behind page one the list no longer rebuilds; the event refresh only
+recounts arrivals (the operator's own filters plus a `date_from` at the pin —
+never the pinned upper bound, since the two together select nothing).
+
+The pinned state rides on the range line rather than adding a row:
+`Showing 51-100 of 587938 · 6679 newer · Back to latest`. It needs the count and
+the exit, not a sentence naming the mechanism — an explanation of why the list
+stopped moving is chrome, and chrome that only appears in one state is the kind
+that gets written as an extra row. The range is what truncates when the line is
+tight; the way back to live never does. Returning to page one drops the pin, so
+live is always one click away and never something the operator has to arrange.
 
 ## 6. Components — API Key Observatory extension
 

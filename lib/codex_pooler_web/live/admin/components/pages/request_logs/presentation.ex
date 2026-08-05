@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
 
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.RequestLogFilterForm
   alias CodexPoolerWeb.Admin.RequestLogsPresentation.Usage
 
   import CodexPoolerWeb.Admin.RequestLogsDisplay,
@@ -36,17 +37,16 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
 
   attr :request_logs, :map, required: true
   attr :datetime_preferences, :map, required: true
+  attr :current_params, :map, required: true
+  attr :pin_at, :any, default: nil
+  attr :frozen?, :boolean, default: false
+  attr :newer_count, :integer, default: 0
 
   def request_logs_table(assigns) do
+    assigns = assign(assigns, pagination(assigns.request_logs))
+
     ~H"""
-    <div
-      id="admin-request-logs"
-      class={[
-        "min-w-0",
-        @request_logs.items != [] &&
-          "overflow-hidden rounded-box border border-base-300 bg-base-100"
-      ]}
-    >
+    <div id="admin-request-logs" class="grid min-w-0 gap-3">
       <AdminComponents.empty_state
         :if={@request_logs.items == []}
         id="request-log-empty-state"
@@ -55,16 +55,100 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
         icon="hero-document-magnifying-glass"
       />
 
-      <div :if={@request_logs.items != []} class="overflow-x-auto">
-        <table class="admin-status-tick admin-ledger-table admin-ledger-table-md table table-sm admin-log-table">
+      <%!-- The pager sits above the rows and sticks: fifty records is a long
+      way to scroll to reach Next, and on a tablet the entries are taller still.
+      One tree, not one at each end. --%>
+      <nav
+        :if={@request_logs.items != []}
+        id="request-log-pagination"
+        class="sticky top-0 z-20 -mx-1 bg-base-200 px-1 py-2 text-xs"
+        aria-label="Request log pagination"
+      >
+        <%!-- One row, at every width and in every state. The page number is the
+        range said less precisely, so on a phone the range keeps the line and the
+        ordinal steps aside rather than stacking a control several rows deep. --%>
+        <div class="flex items-center gap-3">
+          <p data-role="pagination-status" class="hidden shrink-0 text-base-content/60 sm:block">
+            Page {@current_page} of {@total_pages}
+          </p>
+
+          <%!-- Behind page one the window is pinned. What arrived since, and the
+          way back to live, ride on the range line: the reader needs the count
+          and the exit, not a sentence explaining the mechanism. The range is
+          what truncates when the row is tight; the way out never does. --%>
+          <div class="flex min-w-0 grow items-center gap-2 sm:justify-center">
+            <p
+              id="request-log-range"
+              data-role="pagination-range"
+              class="min-w-0 truncate tabular-nums text-base-content/70"
+            >
+              <span class="hidden sm:inline">Showing </span>{request_log_range(@request_logs)}
+            </p>
+            <span
+              :if={@frozen? && @newer_count > 0}
+              data-role="request-log-newer-count"
+              class="shrink-0 tabular-nums text-base-content/45"
+            >
+              · {format_total(@newer_count)} newer
+            </span>
+            <.link
+              :if={@frozen?}
+              id="request-log-back-to-latest"
+              data-role="request-log-back-to-latest"
+              patch={~p"/admin/request-logs?#{RequestLogFilterForm.query_params(@current_params)}"}
+              class="shrink-0 font-semibold text-primary hover:underline"
+            >
+              Back to latest
+            </.link>
+          </div>
+
+          <div class="join shrink-0">
+            <.pagination_link
+              id="request-log-pagination-prev"
+              label="Previous"
+              enabled={@has_previous_page}
+              page={@current_page - 1}
+              current_params={@current_params}
+              pin_at={@pin_at}
+            />
+            <.pagination_link
+              id="request-log-pagination-next"
+              label="Next"
+              enabled={@has_next_page}
+              page={@current_page + 1}
+              current_params={@current_params}
+              pin_at={@pin_at}
+            />
+          </div>
+        </div>
+      </nav>
+
+      <div
+        :if={@request_logs.items != []}
+        class="rounded-box border border-base-300 bg-base-100 lg:overflow-x-auto"
+      >
+        <table
+          data-ledger-dense
+          class="admin-status-tick admin-ledger-table table table-sm admin-log-table lg:min-w-[56rem]"
+        >
+          <%!-- The count is the footer's job; the caption repeats it only for
+          assistive tech, which reads it before the rows. --%>
+          <caption class="sr-only">
+            Request logs, {format_total(@request_logs.total)} matching sanitized request logs
+          </caption>
           <%!-- Transport is the only elastic column: its route, origin and client
           all truncate with the full value in a title, so it is the one that gives
-          way when the table has to fit. Everything else keeps a floor. --%>
+          way when the table has to fit. Everything else keeps a floor.
+
+          The floors only hold because the table carries a min-width equal to
+          their sum (8+9+10+17+6+6 = 56rem); without it a narrow container
+          compresses every column at once and the elastic column stops being the
+          one that gives. Below lg the rows reflow and the floors do not apply. --%>
           <colgroup>
             <col class="w-32" />
             <col class="w-36" />
             <col class="w-40" />
-            <col class="min-w-32" />
+            <col class="min-w-68" />
             <col class="w-24" />
             <col class="w-24" />
           </colgroup>
@@ -88,29 +172,33 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
                 phx-value-request-id={request_log.id}
                 class="group/request-log cursor-pointer transition-colors hover:bg-base-200/80"
               >
-                <td class="whitespace-nowrap align-middle text-base-content/70 max-md:col-start-2 max-md:row-start-1">
+                <td class="whitespace-nowrap align-middle text-base-content/70 max-lg:col-start-2 max-lg:row-start-1">
                   <.request_log_timestamp_cell
                     request_log={request_log}
                     datetime_preferences={@datetime_preferences}
                     prefix="request-log"
                   />
                 </td>
-                <td class="min-w-0 align-middle max-md:col-start-2 max-md:row-start-2">
+                <td class="min-w-0 align-middle max-lg:col-start-2 max-lg:row-start-2">
                   <.request_log_model_cell request_log={request_log} prefix="request-log" />
                 </td>
-                <td class="min-w-0 align-middle max-md:col-span-2 max-md:col-start-2 max-md:row-start-3">
+                <%!-- Below lg the row is a ledger entry. On a phone the fields
+                stack one per line; from sm up the entry has two content columns
+                (see data-ledger-dense in app.css) and attribution and transport
+                move beside the identity instead of under it. --%>
+                <td class="min-w-0 align-middle max-lg:col-span-2 max-lg:col-start-2 max-lg:row-start-3 max-lg:sm:col-span-1 max-lg:sm:col-start-3 max-lg:sm:row-start-1">
                   <.request_log_attribution_cell
                     request_log={request_log}
                     plan_badge_id={"request-log-#{request_log.id}-plan-badge"}
                   />
                 </td>
-                <td class="min-w-0 align-middle max-md:col-span-2 max-md:col-start-2 max-md:row-start-4">
+                <td class="min-w-0 align-middle max-lg:col-span-2 max-lg:col-start-2 max-lg:row-start-4 max-lg:sm:col-span-1 max-lg:sm:col-start-3 max-lg:sm:row-start-2">
                   <.request_log_route_cell request_log={request_log} prefix="request-log" />
                 </td>
-                <td class="align-middle max-md:col-start-3 max-md:row-start-1">
+                <td class="align-middle max-lg:col-start-3 max-lg:row-start-1 max-lg:sm:col-start-4">
                   <Usage.request_log_token_lines request_log={request_log} prefix="request-log" />
                 </td>
-                <td class="align-middle max-md:col-start-3 max-md:row-start-2">
+                <td class="align-middle max-lg:col-start-3 max-lg:row-start-2 max-lg:sm:col-start-4">
                   <Usage.request_log_cost_lines request_log={request_log} prefix="request-log" />
                 </td>
               </tr>
@@ -120,13 +208,77 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
               />
             <% end %>
           </tbody>
-          <caption class="caption-bottom border-t border-base-300/70 px-3 py-2.5 text-left text-xs text-base-content/60">
-            {format_total(@request_logs.total)} matching sanitized request logs<span class="lg:hidden"> · Swipe sideways for more columns</span>
-          </caption>
         </table>
       </div>
     </div>
     """
+  end
+
+  attr :id, :string, required: true
+  attr :label, :string, required: true
+  attr :enabled, :boolean, required: true
+  attr :page, :integer, required: true
+  attr :current_params, :map, required: true
+  attr :pin_at, :any, default: nil
+
+  defp pagination_link(assigns) do
+    ~H"""
+    <.link
+      :if={@enabled}
+      id={@id}
+      data-role="pagination-link"
+      patch={~p"/admin/request-logs?#{page_query_params(@current_params, @page, @pin_at)}"}
+      class="btn btn-xs join-item"
+    >
+      {@label}
+    </.link>
+    <span
+      :if={!@enabled}
+      id={@id}
+      data-role="pagination-link"
+      aria-disabled="true"
+      class="btn btn-xs join-item btn-disabled"
+    >
+      {@label}
+    </span>
+    """
+  end
+
+  # Paging is a list control: it carries the filters forward and drops the
+  # drawer selection, because the inspected record is not on the page you are
+  # moving to. Leaving page one also pins the window it was read at, so the
+  # pages behind it stay still; returning to page one drops the pin and the list
+  # is live again.
+  defp page_query_params(current_params, page, pin_at) do
+    filters = RequestLogFilterForm.query_params(current_params)
+
+    if page <= 1 do
+      filters
+    else
+      filters
+      |> Map.put("page", Integer.to_string(page))
+      |> put_pin(pin_at)
+    end
+  end
+
+  defp put_pin(params, %DateTime{} = pin_at),
+    do: Map.put(params, "as_of", DateTime.to_iso8601(pin_at))
+
+  defp put_pin(params, _pin_at), do: params
+
+  defp pagination(%{total: total, limit: limit, offset: offset}) do
+    %{
+      current_page: div(offset, limit) + 1,
+      total_pages: max(ceil(total / limit), 1),
+      has_previous_page: offset > 0,
+      has_next_page: offset + limit < total
+    }
+  end
+
+  defp request_log_range(%{total: 0}), do: "0 of 0"
+
+  defp request_log_range(%{total: total, limit: limit, offset: offset}) do
+    "#{offset + 1}-#{min(offset + limit, total)} of #{total}"
   end
 
   attr :request_log, :map, required: true
@@ -141,7 +293,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       <%!-- A rejected request never reached an upstream, so on a phone this line
       would be two dashes taking a whole row. It keeps its place from md up,
       where the column has to line up with its neighbours. --%>
-      <span class={["flex h-5 min-w-0 items-center gap-1.5", !@account_named? && "max-md:hidden"]}>
+      <span class={["flex h-5 min-w-0 items-center gap-1.5", !@account_named? && "max-lg:hidden"]}>
         <span
           data-role="upstream-account"
           class="min-w-0 truncate font-semibold text-base-content"
@@ -218,7 +370,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
       phx-value-request-id={@request_log.id}
       class="cursor-pointer transition-colors group-hover/request-log:bg-base-200/80"
     >
-      <td colspan="6" class="!border-t-0 !pt-0 align-top max-md:col-span-3 max-md:col-start-2">
+      <td colspan="6" class="!border-t-0 !pt-0 align-top max-lg:col-span-3 max-lg:col-start-2">
         <%!-- Reasons run along one line: they are facets of a single failure, not
         separate events, and a line each doubles the height of every failed
         record. No icon either — the tone rail beside them already says this is
@@ -311,16 +463,16 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
     <span
       id={"#{@prefix}-#{@request_log.id}-model-details"}
       data-role="model-details"
-      class="min-w-0 gap-0.5 max-md:block max-md:h-5 max-md:truncate max-md:whitespace-nowrap md:grid"
+      class="min-w-0 gap-0.5 max-lg:block max-lg:h-5 max-lg:truncate max-lg:whitespace-nowrap lg:grid"
       title={format_model_details_title(@request_log)}
     >
       <span
         data-role="model-name"
-        class="h-5 min-w-0 truncate whitespace-nowrap font-semibold leading-5 text-base-content max-md:inline md:block"
+        class="h-5 min-w-0 truncate whitespace-nowrap font-semibold leading-5 text-base-content max-lg:inline lg:block"
       >
         {format_model_name(@request_log)}
       </span>
-      <span class="h-5 min-w-0 items-center gap-1 truncate whitespace-nowrap leading-5 text-base-content/60 max-md:inline md:flex">
+      <span class="h-5 min-w-0 items-center gap-1 truncate whitespace-nowrap leading-5 text-base-content/60 max-lg:inline lg:flex">
         <span :if={reasoning = format_model_reasoning(@request_log)} data-role="model-reasoning">
           {reasoning}
         </span>
@@ -375,7 +527,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation do
     <div class="grid min-w-0 gap-0.5">
       <%!-- The route repeats on every record and is one tap away in the drawer;
       on a phone it is the line that earns its height least. --%>
-      <span class="h-5 min-w-0 items-center gap-2 text-base-content/60 max-md:hidden md:flex">
+      <span class="h-5 min-w-0 items-center gap-2 text-base-content/60 max-lg:hidden lg:flex">
         <span
           id={"#{@prefix}-#{@request_log.id}-route"}
           data-role="route"

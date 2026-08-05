@@ -54,7 +54,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Usage do
       <% else %>
         <span
           data-role="usage-placeholder"
-          class="h-5 items-center justify-end whitespace-nowrap text-base-content/45 max-md:hidden md:flex"
+          class="h-5 items-center justify-end whitespace-nowrap text-base-content/45 max-lg:hidden lg:flex"
         >
           —
         </span>
@@ -105,7 +105,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsPresentation.Usage do
       <% else %>
         <span
           data-role="cost-placeholder"
-          class="h-5 items-center justify-end whitespace-nowrap text-base-content/45 max-md:hidden md:flex"
+          class="h-5 items-center justify-end whitespace-nowrap text-base-content/45 max-lg:hidden lg:flex"
           title={format_total_cost(@request_log.cost)}
         >
           —

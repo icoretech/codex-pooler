@@ -266,34 +266,33 @@ body {
 }
 
 /* Ledger table. One markup tree for every width: an ordinary admin table from
-   its breakpoint up, and below it the same rows reflow into two-column ledger
-   entries with the column header left to assistive tech. Cell placement stays
-   in the template as max-lg: / max-md: utilities; only the display switch lives
-   here.
+   lg up, and below it the same rows reflow into two-column ledger entries with
+   the column header left to assistive tech. Cell placement stays in the
+   template as max-lg: utilities; only the display switch lives here.
 
-   Two breakpoints, because the point at which a table stops fitting depends on
-   how many columns it carries: the default waits for lg, and
-   .admin-ledger-table-md — for tables whose columns still fit a tablet — waits
-   for md. The declarations are repeated rather than shared because a media
-   query cannot be parameterised. */
+   One breakpoint, and it is lg for every ledger table. A table wide enough to
+   need this contract does not fit a tablet either: the tablet band is where a
+   table stops giving way in its elastic column and starts compressing all of
+   them at once, which is worse than the reflow it was avoiding. Rows are
+   placed by the template's row-start utilities, so no row template is declared
+   here — a table with four rows of content needs no CSS change. */
 @media (width < 64rem) {
-  .admin-ledger-table:not(.admin-ledger-table-md) {
+  .admin-ledger-table {
     display: block;
     min-width: 0;
   }
 
-  .admin-ledger-table:not(.admin-ledger-table-md) > thead {
+  .admin-ledger-table > thead {
     @apply sr-only;
   }
 
-  .admin-ledger-table:not(.admin-ledger-table-md) > tbody {
+  .admin-ledger-table > tbody {
     display: block;
   }
 
-  .admin-ledger-table:not(.admin-ledger-table-md) > tbody > tr {
+  .admin-ledger-table > tbody > tr {
     display: grid;
     grid-template-columns: 0.625rem minmax(0, 1fr) auto;
-    grid-template-rows: auto auto auto;
     align-items: start;
     column-gap: 0.625rem;
     padding: 0.5rem 0.75rem;
@@ -301,18 +300,16 @@ body {
       color-mix(in oklab, var(--color-base-300) 70%, transparent);
   }
 
-  .admin-ledger-table:not(.admin-ledger-table-md) > tbody > tr:last-child {
+  .admin-ledger-table > tbody > tr:last-child {
     border-bottom: 0;
   }
 
-  .admin-ledger-table.table:not(.admin-ledger-table-md) > tbody > tr > td {
+  .admin-ledger-table.table > tbody > tr > td {
     padding: 0;
     border: 0;
   }
 
-  .admin-status-tick.admin-ledger-table:not(.admin-ledger-table-md)
-    > tbody
-    > tr::before {
+  .admin-status-tick.admin-ledger-table > tbody > tr::before {
     content: "";
     grid-column: 1;
     grid-row: 1 / 3;
@@ -323,71 +320,11 @@ body {
     background: var(--admin-status-tick, var(--color-base-300));
   }
 
-  .admin-status-tick.admin-ledger-table:not(.admin-ledger-table-md)
-    > tbody
-    > tr
-    > td:first-child {
+  .admin-status-tick.admin-ledger-table > tbody > tr > td:first-child {
     padding-left: 0;
   }
 
-  .admin-status-tick.admin-ledger-table:not(.admin-ledger-table-md)
-    > tbody
-    > tr
-    > td:first-child::before {
-    content: none;
-  }
-}
-
-@media (width < 48rem) {
-  .admin-ledger-table-md {
-    display: block;
-    min-width: 0;
-  }
-
-  .admin-ledger-table-md > thead {
-    @apply sr-only;
-  }
-
-  .admin-ledger-table-md > tbody {
-    display: block;
-  }
-
-  .admin-ledger-table-md > tbody > tr {
-    display: grid;
-    grid-template-columns: 0.625rem minmax(0, 1fr) auto;
-    grid-template-rows: auto auto auto auto;
-    align-items: start;
-    column-gap: 0.625rem;
-    padding: 0.5rem 0.75rem;
-    border-bottom: 1px solid
-      color-mix(in oklab, var(--color-base-300) 70%, transparent);
-  }
-
-  .admin-ledger-table-md > tbody > tr:last-child {
-    border-bottom: 0;
-  }
-
-  .admin-ledger-table-md.table > tbody > tr > td {
-    padding: 0;
-    border: 0;
-  }
-
-  .admin-status-tick.admin-ledger-table-md > tbody > tr::before {
-    content: "";
-    grid-column: 1;
-    grid-row: 1 / 3;
-    align-self: stretch;
-    width: 4px;
-    margin-top: 2px;
-    border-radius: 2px;
-    background: var(--admin-status-tick, var(--color-base-300));
-  }
-
-  .admin-status-tick.admin-ledger-table-md > tbody > tr > td:first-child {
-    padding-left: 0;
-  }
-
-  .admin-status-tick.admin-ledger-table-md
+  .admin-status-tick.admin-ledger-table
     > tbody
     > tr
     > td:first-child::before {
@@ -395,23 +332,47 @@ body {
   }
 
   /* The failure line is the tail of the record above it: no tick, no rule,
-     and no gap between the two. */
-  .admin-ledger-table-md > tbody > tr[data-role="request-log-failure"] {
-    grid-template-rows: auto;
+     and no gap between the two. In ledger mode the entry rule sits on the row
+     itself, not on its cells, so the table-mode rule that clears it (which
+     targets > td) does not reach here and the pair needs its own. */
+  .admin-ledger-table
+    > tbody
+    > tr:has(+ tr[data-role="request-log-failure"]) {
+    border-bottom: 0;
+  }
+
+  .admin-ledger-table > tbody > tr[data-role="request-log-failure"] {
     padding-top: 0;
   }
 
-  .admin-status-tick.admin-ledger-table-md
+  .admin-status-tick.admin-ledger-table
     > tbody
     > tr[data-role="request-log-failure"]::before {
     content: none;
   }
 }
 
+/* Dense ledger. A ledger entry is a phone layout: one content column, one line
+   per field. From sm up to the reflow breakpoint there is room for two content
+   columns, and a tablet that keeps the phone stack wastes most of its width and
+   halves how many records fit the screen — on an iPad portrait that was a 141px
+   record and six of them on an 1180px screen. A table opts in with
+   data-ledger-dense and places its own cells with stacked max-lg:sm:
+   utilities, so a table whose fields do not pair up is unaffected. */
+@media (40rem <= width < 64rem) {
+  /* Every row is its own grid container, so an `auto` track is measured per
+     row and a record with no figures shifts its neighbours' columns. The
+     figures track is therefore fixed: it is what makes a column of entries
+     read as a column. */
+  .admin-ledger-table[data-ledger-dense] > tbody > tr {
+    grid-template-columns: 0.625rem minmax(0, 1fr) minmax(0, 1fr) 4.5rem;
+  }
+}
+
 /* A failure line is the tail of its record, not a record of its own: the tone
    bar runs on through it, the two ends meeting so the rail reads continuous,
    and the message indents to the record's own text. */
-@media (width >= 48rem) {
+@media (width >= 64rem) {
   .admin-status-tick tbody > tr[data-role="request-log-failure"] > td:first-child {
     padding-left: 1.625rem;
   }

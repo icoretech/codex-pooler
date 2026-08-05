@@ -198,17 +198,17 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
         </header>
 
         <aside
-          class="fixed left-0 top-12 z-40 flex h-[calc(100svh-3rem)] w-16 flex-col border-r border-base-300/70 bg-base-100 py-4 md:w-64"
+          class="fixed left-0 top-12 z-40 flex h-[calc(100svh-3rem)] w-16 flex-col border-r border-base-300/70 bg-base-100 py-4 xl:w-64"
           aria-label="Admin navigation"
         >
-          <div class="mb-6 flex min-w-0 shrink-0 justify-center px-3 text-center md:flex-col md:items-start md:gap-1 md:px-4 md:text-left">
+          <div class="mb-6 flex min-w-0 shrink-0 justify-center px-3 text-center xl:flex-col xl:items-start xl:gap-1 xl:px-4 xl:text-left">
             <Identity.operator_avatar
               id="admin-sidebar-operator-avatar"
               operator={@current_scope.user}
               status={@current_scope.user.status}
-              class="md:hidden"
+              class="xl:hidden"
             />
-            <div id="admin-sidebar-operator-label" class="hidden min-w-0 md:block md:w-full">
+            <div id="admin-sidebar-operator-label" class="hidden min-w-0 xl:block xl:w-full">
               <p class="text-sm font-semibold uppercase tracking-wide text-primary">
                 operator
               </p>
@@ -242,7 +242,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
                   item.key == @active_nav && "text-primary"
                 ]}
               />
-              <span class="hidden md:block">{item.label}</span>
+              <span class="hidden xl:block">{item.label}</span>
             </.link>
 
             <.link
@@ -258,7 +258,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
                 name="hero-sparkles"
                 class="size-5 shrink-0 transition-colors group-hover:text-primary"
               />
-              <span class="hidden md:block">Observatory</span>
+              <span class="hidden xl:block">Observatory</span>
             </.link>
           </nav>
 
@@ -279,7 +279,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
                   item.key == @active_nav && "text-primary"
                 ]}
               />
-              <span class="hidden md:block">{item.label}</span>
+              <span class="hidden xl:block">{item.label}</span>
             </.link>
 
             <.link
@@ -294,14 +294,14 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
                 name="hero-arrow-left-on-rectangle"
                 class="size-5 shrink-0 transition-colors group-hover:text-primary"
               />
-              <span class="hidden md:block">Log out</span>
+              <span class="hidden xl:block">Log out</span>
             </.link>
           </div>
         </aside>
 
         <main
           id="admin-shell-scroll-region"
-          class="relative ml-16 h-full min-h-0 overflow-x-hidden overflow-y-auto bg-base-200 pt-12 md:ml-64"
+          class="relative ml-16 h-full min-h-0 overflow-x-hidden overflow-y-auto bg-base-200 pt-12 xl:ml-64"
         >
           <div class="flex min-w-0 flex-col gap-6 p-4 sm:p-6 xl:p-8">
             {render_slot(@inner_block)}
@@ -314,7 +314,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
 
   defp admin_nav_item_class(active?) do
     [
-      "group flex w-full items-center justify-center gap-3 border-l-[3px] border-transparent px-3 py-2.5 font-mono text-[0.58rem] font-semibold uppercase tracking-[0.12em] text-base-content/55 opacity-75 outline-none transition-all duration-200 hover:bg-base-300/70 hover:text-base-content hover:opacity-100 focus-visible:border-primary focus-visible:text-base-content md:justify-start md:px-4 md:text-xs",
+      "group flex w-full items-center justify-center gap-3 border-l-[3px] border-transparent px-3 py-2.5 font-mono text-[0.58rem] font-semibold uppercase tracking-[0.12em] text-base-content/55 opacity-75 outline-none transition-all duration-200 hover:bg-base-300/70 hover:text-base-content hover:opacity-100 focus-visible:border-primary focus-visible:text-base-content xl:justify-start xl:px-4 xl:text-xs",
       active? && "!border-l-primary bg-base-300 text-base-content opacity-100"
     ]
   end

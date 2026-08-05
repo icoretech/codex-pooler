@@ -23,6 +23,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
   @request_logs_reload_debounce_ms 250
   @reload_telemetry_event [:codex_pooler, :admin, :request_logs, :reload]
   @selected_request_id_param "selected_request_id"
+  @snapshot_param "as_of"
 
   @impl true
   def mount(_params, _session, socket) do
@@ -47,6 +48,10 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
        request_logs_loaded?: false,
        visible_pool_ids: [],
        request_log_filters: %{},
+       request_log_offset: 0,
+       request_log_snapshot_at: nil,
+       request_log_pin_at: nil,
+       request_log_newer_count: 0,
        selected_request_log: nil
      )}
   end
@@ -256,6 +261,10 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
             <.request_logs_table
               request_logs={@request_logs}
               datetime_preferences={@datetime_preferences}
+              current_params={@current_params}
+              pin_at={@request_log_pin_at}
+              frozen?={@request_log_snapshot_at != nil}
+              newer_count={@request_log_newer_count}
             />
           </section>
         </div>
@@ -336,7 +345,17 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
 
     filter_errors = Enum.reject([pool_error | filter_errors], &is_nil/1)
     visible_pool_ids = pool_ids(pools)
-    request_logs = request_logs(selected_pool, filters, visible_pool_ids)
+    offset = page_offset(params)
+    snapshot_at = snapshot_at(params)
+
+    request_logs =
+      request_logs(
+        selected_pool,
+        snapshot_filters(filters, snapshot_at),
+        visible_pool_ids,
+        offset
+      )
+
     model_filter_models = request_log_models(selected_pool, visible_pool_ids)
 
     socket
@@ -359,6 +378,11 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
       upstream_account_options: upstream_account_options(upstream_filter_identities),
       visible_pool_ids: visible_pool_ids,
       request_log_filters: filters,
+      request_log_offset: offset,
+      request_log_snapshot_at: snapshot_at,
+      request_log_pin_at: snapshot_at || newest_admitted_at(request_logs),
+      request_log_newer_count:
+        newer_request_log_count(selected_pool, filters, visible_pool_ids, snapshot_at),
       request_logs_loaded?: true
     )
     |> assign_selected_request_log(params)
@@ -371,19 +395,40 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
     selected_pool = socket.assigns.selected_pool
     filters = socket.assigns.request_log_filters
     visible_pool_ids = socket.assigns.visible_pool_ids
-    request_logs = request_logs(selected_pool, filters, visible_pool_ids)
+    snapshot_at = socket.assigns.request_log_snapshot_at
+
     model_filter_models = request_log_models(selected_pool, visible_pool_ids)
 
     socket
     |> cancel_request_logs_reload_timer()
+    |> refresh_request_log_window(selected_pool, filters, visible_pool_ids, snapshot_at)
     |> assign(
-      request_logs: request_logs,
       model_filter_options:
         model_filter_options(model_filter_models, socket.assigns.filter_values["model"])
     )
     |> assign_selected_request_log(socket.assigns.current_params)
     |> maybe_clear_missing_selected_request_log()
     |> notify_request_logs_reload(:event_refresh, started_at)
+  end
+
+  # Offset pagination over a live list only holds still if the list holds still.
+  # Page one is the live view of the newest rows and rebuilds on every event.
+  # Any page behind it reads a window frozen at the moment the operator left
+  # page one, so rows cannot shift under them mid-read; new arrivals are counted
+  # instead, and going back to page one resumes the live reading.
+  defp refresh_request_log_window(socket, selected_pool, filters, visible_pool_ids, nil) do
+    assign(socket,
+      request_logs: request_logs(selected_pool, filters, visible_pool_ids, 0),
+      request_log_newer_count: 0
+    )
+  end
+
+  defp refresh_request_log_window(socket, selected_pool, filters, visible_pool_ids, snapshot_at) do
+    assign(
+      socket,
+      :request_log_newer_count,
+      newer_request_log_count(selected_pool, filters, visible_pool_ids, snapshot_at)
+    )
   end
 
   defp assign_selected_request_log(socket, params) do
@@ -445,16 +490,70 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
     |> Map.new()
   end
 
-  defp request_logs(selected_pool, filters, _visible_pool_ids) when not is_nil(selected_pool) do
-    Accounting.list_request_logs(selected_pool, limit: @page_size, filters: filters)
+  defp request_logs(selected_pool, filters, _visible_pool_ids, offset)
+       when not is_nil(selected_pool) do
+    Accounting.list_request_logs(selected_pool,
+      limit: @page_size,
+      offset: offset,
+      filters: filters
+    )
   end
 
-  defp request_logs(_selected_pool, filters, visible_pool_ids) do
+  defp request_logs(_selected_pool, filters, visible_pool_ids, offset) do
     Accounting.list_request_logs(nil,
       limit: @page_size,
+      offset: offset,
       filters: filters,
       visible_pool_ids: visible_pool_ids
     )
+  end
+
+  # The frozen window is an upper bound on admitted_at, so it composes with a
+  # date_to the operator set by taking whichever bound is tighter.
+  defp snapshot_filters(filters, nil), do: filters
+
+  defp snapshot_filters(filters, snapshot_at) do
+    Keyword.update(filters, :date_to, snapshot_at, fn date_to ->
+      if DateTime.compare(date_to, snapshot_at) == :lt, do: date_to, else: snapshot_at
+    end)
+  end
+
+  # Counting arrivals uses the operator's own filters plus a lower bound at the
+  # freeze, never the frozen upper bound — the two together select nothing.
+  defp newer_request_log_count(_selected_pool, _filters, _visible_pool_ids, nil), do: 0
+
+  defp newer_request_log_count(selected_pool, filters, visible_pool_ids, snapshot_at) do
+    filters = Keyword.put(filters, :date_from, DateTime.add(snapshot_at, 1, :microsecond))
+
+    %{total: total} = request_logs(selected_pool, filters, visible_pool_ids, 0)
+    total
+  end
+
+  defp newest_admitted_at(%{items: [%{admitted_at: %DateTime{} = admitted_at} | _rest]}),
+    do: admitted_at
+
+  defp newest_admitted_at(_request_logs), do: nil
+
+  defp snapshot_at(params) do
+    with value when is_binary(value) <- Map.get(params, @snapshot_param),
+         {:ok, snapshot_at, _offset} <- DateTime.from_iso8601(String.trim(value)) do
+      snapshot_at
+    else
+      _other -> nil
+    end
+  end
+
+  # Pages are 1-based in the URL and become an offset here. Anything that is not
+  # a positive integer reads as page 1 rather than as an error: a paging param
+  # is navigation state, not a filter the operator typed.
+  defp page_offset(params) do
+    with value when is_binary(value) <- Map.get(params, "page"),
+         {page, ""} <- Integer.parse(String.trim(value)),
+         true <- page > 1 do
+      (page - 1) * @page_size
+    else
+      _other -> 0
+    end
   end
 
   defp request_log_models(selected_pool, _visible_pool_ids) when not is_nil(selected_pool) do
