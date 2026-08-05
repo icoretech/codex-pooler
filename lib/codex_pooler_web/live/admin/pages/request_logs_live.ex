@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
   alias CodexPooler.Upstreams.Assignments, as: UpstreamAssignments
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.LiveUpdatesHooks
+  alias CodexPoolerWeb.Admin.LogPagination
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.Admin.PoolFilterComponents
   alias CodexPoolerWeb.Admin.RequestLogDetailDrawer
@@ -421,21 +422,25 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLive do
   defp normalize_request_log_window(socket, params, request_logs, snapshot_at) do
     %{total: total, limit: limit, offset: offset} = request_logs
     page = div(offset, limit) + 1
-    last_page = max(div(max(total - 1, 0), limit) + 1, 1)
-    pin_at = newest_cursor(request_logs)
+    last_page = LogPagination.last_page(request_logs)
 
     cond do
       total == 0 and page > 1 ->
         patch_request_log_window(socket, params, 1, nil)
 
-      # No rows came back, so there is no cursor to pin to. Keep the one already
-      # in the URL if there is one; otherwise the next load pins from the page
-      # this redirect lands on.
+      # A page number is an offset into a window. Without the cursor that window
+      # was counted from it names nothing, and it cannot be repaired by pinning
+      # here: the only cursor available is the head of the page just loaded, and
+      # bounding the list there and then applying the same offset again lands
+      # past where the operator asked, skipping every row in between. So a page
+      # that arrives unpinned — a bookmark, a hand-edited URL — goes to the live
+      # first page. Paging from page one always carries its pin, so this is the
+      # stale-address case, not the ordinary one.
+      page > 1 and is_nil(snapshot_at) ->
+        patch_request_log_window(socket, params, 1, nil)
+
       page > last_page ->
         patch_request_log_window(socket, params, last_page, snapshot_at)
-
-      page > 1 and is_nil(snapshot_at) and not is_nil(pin_at) ->
-        patch_request_log_window(socket, params, page, pin_at)
 
       true ->
         socket

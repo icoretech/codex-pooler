@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Routing, as: PoolRouting
+  alias CodexPoolerWeb.Admin.LiveUpdatesHooks
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.Admin.PoolForm
@@ -371,14 +372,22 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   end
 
   def handle_info({:refresh_pool_traffic, refresh_token}, socket) do
-    if socket.assigns.pool_traffic_refresh_token == refresh_token do
-      {:noreply,
-       socket
-       |> clear_pool_traffic_refresh()
-       |> start_pool_traffic_load()}
-    else
-      {:noreply, socket}
+    cond do
+      socket.assigns.pool_traffic_refresh_token != refresh_token ->
+        {:noreply, socket}
+
+      # A debounce armed before the operator paused must not redraw the panel
+      # they paused to read.
+      LiveUpdatesHooks.paused?(socket) ->
+        {:noreply, socket |> clear_pool_traffic_refresh() |> LiveUpdatesHooks.hold()}
+
+      true ->
+        {:noreply, socket |> clear_pool_traffic_refresh() |> start_pool_traffic_load()}
     end
+  end
+
+  def handle_info(:live_updates_resumed, socket) do
+    {:noreply, start_pool_traffic_load(socket)}
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}

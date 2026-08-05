@@ -5,6 +5,7 @@ import {
 	applyState,
 	buildLiveUpdatesToggle,
 	LIVE_UPDATES_KEY,
+	liveUpdatesConnectParams,
 	readPaused,
 	writePaused,
 } from "./live_updates_toggle.mjs";
@@ -18,26 +19,15 @@ const memoryStorage = () => {
 };
 
 const stubElement = () => {
-	const span = () => {
-		const node = { hidden: false };
-		node.classList = { toggle: (_class, on) => { node.hidden = on; } };
-		return node;
-	};
-	const spans = {
-		"live-updates-live": span(),
-		"live-updates-paused": span(),
-	};
+	const root = { attrs: {}, setAttribute(name, value) { this.attrs[name] = value; } };
 
 	return {
+		root,
+		ownerDocument: { documentElement: root },
 		dataset: {},
 		attrs: {},
 		listeners: {},
-		spans,
 		setAttribute(name, value) { this.attrs[name] = value; },
-		querySelector(selector) {
-			const role = selector.match(/data-role="([^"]+)"/)?.[1];
-			return spans[role] || null;
-		},
 		addEventListener(name, fn) { this.listeners[name] = fn; },
 		removeEventListener(name) { delete this.listeners[name]; },
 	};
@@ -73,12 +63,27 @@ test("applyState flips only the pressed state, never the accessible name", () =>
 	assert.equal(el.dataset.paused, "true");
 	assert.equal(el.attrs["aria-pressed"], "true");
 	assert.equal(el.attrs["aria-label"], undefined, "the name is server-rendered and stays put");
-	assert.equal(el.spans["live-updates-live"].hidden, true);
-	assert.equal(el.spans["live-updates-paused"].hidden, false);
+	// CSS keys off the root attribute the pre-paint script also writes.
+	assert.equal(el.root.attrs["data-live-updates-paused"], "true");
 
 	applyState(el, false);
 	assert.equal(el.dataset.paused, "false");
 	assert.equal(el.attrs["aria-pressed"], "false");
+	assert.equal(el.root.attrs["data-live-updates-paused"], "false");
+});
+
+test("connect params carry the state, so a join knows before it renders", () => {
+	const storage = memoryStorage();
+	assert.deepEqual(liveUpdatesConnectParams(storage), { live_updates_paused: false });
+
+	writePaused(storage, true);
+	assert.deepEqual(liveUpdatesConnectParams(storage), { live_updates_paused: true });
+
+	// Storage can be refused; a join must still be told something.
+	assert.deepEqual(
+		liveUpdatesConnectParams({ getItem() { throw new Error("denied"); } }),
+		{ live_updates_paused: false },
+	);
 });
 
 test("mounting reports the stored state to the server", () => {
@@ -106,9 +111,11 @@ test("a patch reasserts data-paused, which LiveView merges away", () => {
 	const { hook, el } = mountHook(storage);
 
 	el.dataset.paused = "false"; // what a server-driven patch leaves behind
+	el.root.attrs["data-live-updates-paused"] = "false";
 	hook.updated();
 
 	assert.equal(el.dataset.paused, "true");
+	assert.equal(el.root.attrs["data-live-updates-paused"], "true");
 });
 
 test("clicking toggles, persists and reports", () => {

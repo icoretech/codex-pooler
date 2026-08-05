@@ -21,6 +21,30 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesTest do
     end
   end
 
+  test "toggling says so, and reporting the same state does not", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "live-toast", name: "Live Toast"})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+
+    # The icon swapping on a small control is easy to miss, and a list that has
+    # simply gone quiet does not explain itself. These strings live only in the
+    # flash — "Live updates" alone is also the button's own label.
+    assert render_hook(view, "set_live_updates", %{"paused" => true}) =~
+             "Lists hold still until you resume"
+
+    assert render_hook(view, "set_live_updates", %{"paused" => false}) =~
+             "Live updates resumed."
+
+    # The toggle also reports on mount and on reconnect, and those agree with
+    # what the join already established. On a fresh view, reporting the state it
+    # is already in must not put a toast on the page.
+    {:ok, fresh, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    html = render_hook(fresh, "set_live_updates", %{"paused" => false})
+
+    refute html =~ "Lists hold still until you resume"
+    refute html =~ "Live updates resumed."
+  end
+
   test "a malformed toggle payload cannot kill the LiveView", %{conn: conn, scope: scope} do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "live-garbage", name: "Live Garbage"})
 

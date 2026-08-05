@@ -825,6 +825,58 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLiveTest do
     assert has_element?(view, "#audit-log-row-#{event.id}")
   end
 
+  test "an unpinned page number never hides the rows between it and the head", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "audit-unpinned", name: "Audit Unpinned"})
+
+    events =
+      for index <- 1..120 do
+        assert {:ok, event} =
+                 Audit.record_system_event(%{
+                   pool_id: pool.id,
+                   action: "pool.update",
+                   target_type: "pool",
+                   target_id: pool.id,
+                   details: %{"seq" => index}
+                 })
+
+        event
+      end
+
+    # Pinning this page in place would bound the list at the head of page two
+    # and then apply the same offset again, landing on rows 101+ and reporting
+    # "Page 2 of 2" — with everything between silently absent from both pages.
+    assert {:error, {:live_redirect, %{to: corrected}}} =
+             live(conn, ~p"/admin/audit-logs?pool_id=#{pool.id}&page=2")
+
+    refute corrected =~ "page="
+    refute corrected =~ "as_of"
+
+    {:ok, view, _html} = live(conn, corrected)
+
+    assert has_element?(view, "#audit-log-pagination", "Page 1 of 3")
+
+    # Walking forward from the live first page reaches every record, because
+    # each link carries the window it was counted from.
+    seen =
+      Enum.reduce(1..3, MapSet.new(), fn page, seen ->
+        if page > 1, do: view |> element("#audit-log-pagination-next") |> render_click()
+
+        Enum.reduce(events, seen, fn event, acc ->
+          if has_element?(view, "#audit-log-row-#{event.id}"),
+            do: MapSet.put(acc, event.id),
+            else: acc
+        end)
+      end)
+
+    missing = Enum.reject(events, &MapSet.member?(seen, &1.id))
+
+    assert missing == [],
+           "#{length(missing)} audit events were reachable on no page at all"
+  end
+
   defp session_token(user) do
     assert {:ok, %{token: token}} =
              Accounts.login_user(%{"email" => user.email, "password" => valid_user_password()})

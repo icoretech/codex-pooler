@@ -2965,6 +2965,51 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
            "the request_logs event was dropped behind 40 unrelated ones"
   end
 
+  test "a page joined while paused is paused before it renders", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "live-join", name: "Live Join"})
+    reload_ref = attach_request_log_reload_telemetry()
+
+    # Navigating to a page while paused used to leave it live for a round trip,
+    # until the topbar hook mounted and reported it. The session's answer now
+    # arrives with the join, so there is no window to land an event in.
+    {:ok, view, _html} =
+      conn
+      |> put_connect_params(%{"live_updates_paused" => true})
+      |> live(~p"/admin/request-logs?pool_id=#{pool.id}")
+
+    assert_request_log_reload(reload_ref, :initial_load, :selected_pool)
+
+    %{request: arrival} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-joined-paused",
+        status: "succeeded",
+        requested_model: "gpt-joined-paused"
+      })
+
+    assert {:ok, _event} =
+             Events.broadcast_request_logs(pool.id, "request_log_created", %{
+               request_id: arrival.id,
+               status: arrival.status
+             })
+
+    refute_receive {^reload_ref, _measurements, %{stage: :event_refresh}}, 400
+    refute has_element?(view, "#request-log-row-#{arrival.id}")
+
+    # And the same join without the param is live, so this is the param working
+    # rather than the event never having arrived.
+    {:ok, live_view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    assert_request_log_reload(reload_ref, :initial_load, :selected_pool)
+
+    assert {:ok, _event} =
+             Events.broadcast_request_logs(pool.id, "request_log_created", %{
+               request_id: arrival.id,
+               status: arrival.status
+             })
+
+    assert_request_log_reload(reload_ref, :event_refresh, :selected_pool)
+    assert has_element?(live_view, "#request-log-row-#{arrival.id}")
+  end
+
   defp attach_request_log_reload_telemetry do
     test_pid = self()
     telemetry_ref = make_ref()

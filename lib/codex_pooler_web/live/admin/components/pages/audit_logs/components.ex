@@ -35,6 +35,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
     ~H"""
     <div id="admin-audit-logs-window" class="grid min-w-0 gap-3">
       <LogPagination.pager
+        :if={@audit_logs.items != []}
         id="audit-log-pagination"
         label="Audit log pagination"
         page={@page}
@@ -244,8 +245,10 @@ defmodule CodexPoolerWeb.Admin.AuditLogsComponents do
                 </td>
               </tr>
             </tbody>
-            <caption class="caption-bottom px-3 py-3 text-left text-xs text-base-content/60">
-              {format_total(@audit_logs.total)} matching redacted audit events · Open a time for full details
+            <%!-- The desktop and mobile tables are one surface: the count moved
+            to the pager on both, or a phone shows it twice. --%>
+            <caption class="sr-only">
+              Audit logs, {format_total(@audit_logs.total)} matching redacted audit events
             </caption>
           </table>
         </div>

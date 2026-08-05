@@ -11,7 +11,10 @@ import { renderSVG } from "uqr";
 import { cumulativeChartSeries } from "./chart_series.mjs";
 import { attachChartWheelScroll } from "./chart_wheel_scroll.mjs";
 import { classifyLiveSocketConnection } from "./live_socket_connection.mjs";
-import { LiveUpdatesToggle } from "./live_updates_toggle.mjs";
+import {
+	liveUpdatesConnectParams,
+	LiveUpdatesToggle,
+} from "./live_updates_toggle.mjs";
 import {
 	ObservatoryRefresh,
 	observatoryRefreshConnectParams,
@@ -1282,6 +1285,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
 	params: () => ({
 		_csrf_token: csrfToken,
 		...observatoryRefreshConnectParams(),
+		...liveUpdatesConnectParams(),
 	}),
 	dom: {
 		// Client-toggled disclosure state lives only in the DOM; without this,

@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
 
   alias CodexPooler.Admin.Stats
   alias CodexPooler.Events
+  alias CodexPoolerWeb.Admin.LiveUpdatesHooks
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.Admin.PoolFilterComponents
@@ -75,6 +76,18 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
   end
 
   def handle_info(:reload_stats_dashboard, socket) do
+    if LiveUpdatesHooks.paused?(socket) do
+      {:noreply, LiveUpdatesHooks.hold(socket)}
+    else
+      reload_stats_dashboard(socket)
+    end
+  end
+
+  def handle_info(:live_updates_resumed, socket) do
+    reload_stats_dashboard(socket)
+  end
+
+  defp reload_stats_dashboard(socket) do
     notify_stats_reload(:executed, socket.assigns.current_params)
 
     {:noreply,

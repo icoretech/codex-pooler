@@ -931,11 +931,12 @@ in the cell (`235.3k`, not `235.3k tokens`).
 draws from a set larger than a page, so it carries one nav: `Page X of Y` at the
 start, `Showing a-b of N` in `tabular-nums`, and a `join` of Previous/Next at
 the end, disabled as `btn-disabled` spans rather than removed so the control
-keeps its shape. On request logs it sits **above** the rows and is
+keeps its shape. On both log pages it sits **above** the rows and is
 `sticky top-0 z-20` on the page-chrome background — fifty records is a long
 scroll to reach Next, and taller on a tablet, so a pager only at the bottom is a
-pager you cannot reach. Sticky rather than rendered twice: one tree. The jobs
-explorer still carries the older shape (a static pager in a `<footer>` below the
+pager you cannot reach. Sticky rather than rendered twice: one tree. Request
+logs and audit logs share it through `LogPagination`; the jobs explorer still
+carries the older shape (a static pager in a `<footer>` below the
 rows) and should be brought to this one; until it is, treat the sticky placement
 as the target, not as a description of both tables.
 

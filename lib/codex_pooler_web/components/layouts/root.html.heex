@@ -44,6 +44,22 @@
         window.addEventListener("phx:set-theme", (e) => setTheme(e.target.dataset.phxTheme));
       })();
     </script>
+    <script>
+      // Same reason as the theme above: the live-updates toggle would otherwise
+      // paint its resting icon and be corrected once the socket connects and the
+      // hook mounts — around 100ms locally, longer on a real link, and visibly
+      // wrong for anyone who had paused. Reading it here, synchronously, means
+      // the first paint is already right. If this never runs the attribute is
+      // absent and the CSS falls back to "live", which is the safe reading.
+      (() => {
+        try {
+          const paused = sessionStorage.getItem("codexPooler.liveUpdatesPaused") === "true";
+          document.documentElement.setAttribute("data-live-updates-paused", paused ? "true" : "false");
+        } catch {
+          /* storage can be refused; the fallback is the resting state */
+        }
+      })();
+    </script>
   </head>
   <body>
     {@inner_content}

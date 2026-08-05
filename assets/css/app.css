@@ -352,6 +352,27 @@ body {
   }
 }
 
+/* Live-updates toggle. Which icon shows is decided by an attribute the root
+   layout sets from sessionStorage before first paint, so the button is never
+   painted in the state it is about to be corrected out of. With the attribute
+   absent — storage refused, script blocked — the resting "live" reading wins,
+   which is also what the button does when nothing can pause it. */
+#admin-live-updates-toggle [data-role="live-updates-paused"] {
+  display: none;
+}
+
+:root[data-live-updates-paused="true"]
+  #admin-live-updates-toggle
+  [data-role="live-updates-live"] {
+  display: none;
+}
+
+:root[data-live-updates-paused="true"]
+  #admin-live-updates-toggle
+  [data-role="live-updates-paused"] {
+  display: inline-flex;
+}
+
 /* Dense ledger. A ledger entry is a phone layout: one content column, one line
    per field. From sm up to the reflow breakpoint there is room for two content
    columns, and a tablet that keeps the phone stack wastes most of its width and

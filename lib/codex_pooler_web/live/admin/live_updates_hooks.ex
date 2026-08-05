@@ -32,13 +32,15 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
 
   @paused_assign :live_updates_paused?
   @held_assign :live_updates_held
+  @page_held_assign :live_updates_page_held?
 
   @spec on_mount(:default, map(), map(), Socket.t()) :: {:cont, Socket.t()}
   def on_mount(:default, _params, _session, %Socket{} = socket) do
     socket =
       socket
-      |> assign(@paused_assign, false)
+      |> assign(@paused_assign, connected_paused?(socket))
       |> assign(@held_assign, %{})
+      |> assign(@page_held_assign, false)
       |> Phoenix.LiveView.attach_hook(
         :admin_live_updates,
         :handle_event,
@@ -59,6 +61,20 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
   @spec paused?(Socket.t()) :: boolean()
   def paused?(%Socket{assigns: assigns}), do: assigns[@paused_assign] == true
 
+  # The session's answer arrives with the join, so a page mounted by live
+  # navigation is paused before it renders rather than a round trip later. The
+  # toggle still reports on mount: this covers the gap, not the toggle.
+  #
+  # The disconnected render has no connect params and processes no events, so
+  # its answer does not matter — but it must not be `nil`.
+  defp connected_paused?(%Socket{} = socket) do
+    Phoenix.LiveView.connected?(socket) and
+      case Phoenix.LiveView.get_connect_params(socket) do
+        %{"live_updates_paused" => paused} -> paused in [true, "true"]
+        _params -> false
+      end
+  end
+
   @doc """
   Records that a refresh was skipped, so resuming runs it.
 
@@ -66,7 +82,7 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
   fallback timer, another domain's events, or a debounce armed before the pause.
   """
   @spec hold(Socket.t()) :: Socket.t()
-  def hold(%Socket{} = socket), do: put_held(socket, :page, :resume)
+  def hold(%Socket{} = socket), do: assign(socket, @page_held_assign, true)
 
   @doc """
   Runs a page's reload unless the session is paused, holding it if it is.
@@ -125,15 +141,35 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
   # The toggle reports the session's state rather than asking to flip it, so a
   # mount, a reconnect and a click all say the same thing.
   defp handle_live_updates_event("set_live_updates", params, socket) do
-    wanted = params |> params_paused() |> Kernel.==(true)
+    wanted = params_paused(params)
+    changed? = paused?(socket) != wanted
     resumed? = paused?(socket) and not wanted
 
     socket = assign(socket, @paused_assign, wanted)
+    socket = if resumed?, do: resume(socket), else: socket
 
-    if resumed?, do: {:halt, resume(socket)}, else: {:halt, socket}
+    # Only an actual change is worth a toast. The toggle also reports on mount
+    # and on reconnect, and those agree with what the join already established,
+    # so announcing every report would put a toast on every page load.
+    if changed?, do: {:halt, announce(socket, wanted)}, else: {:halt, socket}
   end
 
   defp handle_live_updates_event(_event, _params, socket), do: {:cont, socket}
+
+  # The icon swapping is easy to miss on a control this small, and the
+  # consequence of pausing — that lists stop moving — is not something to leave
+  # the operator to infer from a list that has gone quiet.
+  defp announce(socket, true) do
+    Phoenix.LiveView.put_flash(
+      socket,
+      :info,
+      "Live updates paused. Lists hold still until you resume."
+    )
+  end
+
+  defp announce(socket, false) do
+    Phoenix.LiveView.put_flash(socket, :info, "Live updates resumed.")
+  end
 
   # The event name is owned here, so every shape of it is too: a payload without
   # the key must not fall through to a page that has no clause for it.
@@ -144,13 +180,18 @@ defmodule CodexPoolerWeb.Admin.LiveUpdatesHooks do
   # so each page reacts exactly as it would have unpaused — its own scope check,
   # its own debounce, which is what collapses a paused hour into one rebuild.
   defp resume(%Socket{} = socket) do
-    socket
-    |> held()
-    |> Enum.each(fn
-      :resume -> send(self(), :live_updates_resumed)
-      message -> send(self(), message)
-    end)
+    messages = held(socket)
+    Enum.each(messages, &send(self(), &1))
 
-    assign(socket, @held_assign, %{})
+    # A page that held its own reload only needs telling when nothing was
+    # replayed to it: a replayed event already produces the rebuild, and sending
+    # both would run two. Order is explicit rather than left to map traversal.
+    if messages == [] and socket.assigns[@page_held_assign] do
+      send(self(), :live_updates_resumed)
+    end
+
+    socket
+    |> assign(@held_assign, %{})
+    |> assign(@page_held_assign, false)
   end
 end

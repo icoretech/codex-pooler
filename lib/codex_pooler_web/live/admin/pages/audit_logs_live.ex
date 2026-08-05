@@ -183,17 +183,19 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
     %{total: total, limit: limit, offset: offset} = audit_logs
     page = div(offset, limit) + 1
     last_page = LogPagination.last_page(audit_logs)
-    pin_at = newest_cursor(audit_logs)
 
     cond do
       total == 0 and page > 1 ->
         patch_window(socket, params, 1, nil)
 
+      # See request logs: an unpinned page number names no window, and pinning
+      # it here would bound the list at the head of the page just loaded and
+      # then apply the same offset again, skipping everything in between.
+      page > 1 and is_nil(cursor) ->
+        patch_window(socket, params, 1, nil)
+
       page > last_page ->
         patch_window(socket, params, last_page, cursor)
-
-      page > 1 and is_nil(cursor) and not is_nil(pin_at) ->
-        patch_window(socket, params, page, pin_at)
 
       true ->
         socket

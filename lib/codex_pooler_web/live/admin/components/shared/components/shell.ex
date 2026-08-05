@@ -345,7 +345,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
       <span data-role="live-updates-live">
         <.icon name="hero-pause" class="size-5" />
       </span>
-      <span data-role="live-updates-paused" class="hidden text-warning">
+      <span data-role="live-updates-paused" class="text-warning">
         <.icon name="hero-play" class="size-5" />
       </span>
     </button>

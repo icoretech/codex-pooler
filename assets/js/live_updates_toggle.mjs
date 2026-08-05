@@ -1,11 +1,14 @@
 // Pausing auto-refresh belongs to the reading session, not to the account: a
 // second tab stays live, a new tab starts live, and the choice survives moving
 // between admin pages. sessionStorage is exactly that scope.
+const defaultStorage = () =>
+	typeof sessionStorage === "undefined" ? null : sessionStorage;
+
 export const LIVE_UPDATES_KEY = "codexPooler.liveUpdatesPaused";
 
 export const readPaused = (storage) => {
 	try {
-		return storage.getItem(LIVE_UPDATES_KEY) === "true";
+		return storage?.getItem(LIVE_UPDATES_KEY) === "true";
 	} catch {
 		// Private modes and embedded browsers can refuse storage. Live is the safe
 		// default: an operator who cannot pause still sees fresh data.
@@ -15,27 +18,32 @@ export const readPaused = (storage) => {
 
 export const writePaused = (storage, paused) => {
 	try {
-		storage.setItem(LIVE_UPDATES_KEY, paused ? "true" : "false");
+		storage?.setItem(LIVE_UPDATES_KEY, paused ? "true" : "false");
 	} catch {
 		/* the toggle still works for this page; it just is not remembered */
 	}
 };
 
+// LiveView evaluates the socket's `params` closure on every join, not once per
+// connection, so a page mounted by live navigation can be told it is paused
+// before it renders — rather than a round trip later, when the hook mounts.
+// Without this a page that reloads straight from an event, with no debounce to
+// sit behind, gets one refresh it was asked not to do.
+export const liveUpdatesConnectParams = (storage = defaultStorage()) => ({
+	live_updates_paused: readPaused(storage),
+});
+
 // The accessible name stays put and only the pressed state flips. Naming the
 // button for what the next click does, while also reporting pressed, announces
 // a contradiction: "Resume live updates, pressed".
-export const applyState = (el, paused) => {
+export const applyState = (el, paused, root = el?.ownerDocument?.documentElement) => {
 	el.dataset.paused = paused ? "true" : "false";
 	el.setAttribute("aria-pressed", paused ? "true" : "false");
 
-	el.querySelector('[data-role="live-updates-live"]')?.classList.toggle(
-		"hidden",
-		paused,
-	);
-	el.querySelector('[data-role="live-updates-paused"]')?.classList.toggle(
-		"hidden",
-		!paused,
-	);
+	// The same attribute the root layout set before first paint. CSS owns which
+	// icon shows, so there is one mechanism rather than a class toggle racing a
+	// pre-paint attribute.
+	root?.setAttribute("data-live-updates-paused", paused ? "true" : "false");
 };
 
 export const buildLiveUpdatesToggle = (storage) => ({
@@ -82,6 +90,4 @@ export const buildLiveUpdatesToggle = (storage) => ({
 	},
 });
 
-export const LiveUpdatesToggle = buildLiveUpdatesToggle(
-	typeof sessionStorage === "undefined" ? null : sessionStorage,
-);
+export const LiveUpdatesToggle = buildLiveUpdatesToggle(defaultStorage());
