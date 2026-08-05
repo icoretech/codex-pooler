@@ -2851,7 +2851,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(
              view,
              "#upstream-account-page-header",
-             "Link upstream accounts, monitor routing capacity, and manage credential, quota, and saved-reset recovery."
+             "The accounts your Pools serve from: token health, quota windows, and the saved-reset bank."
            )
 
     refute has_element?(view, "#upstream-account-form")

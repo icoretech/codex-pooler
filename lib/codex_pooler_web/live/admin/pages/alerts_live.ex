@@ -122,7 +122,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
         <AdminComponents.page_header
           id="alerts-page-header"
           title="Alerts"
-          description="Configure Pool-scoped alert rules and safe delivery channels for serving risk, quota evidence, and upstream account state."
+          description="Rules that watch Pools and upstream accounts, delivering incidents by email or signed webhook."
         />
 
         <section id="alerts-workspace" class="grid gap-4">

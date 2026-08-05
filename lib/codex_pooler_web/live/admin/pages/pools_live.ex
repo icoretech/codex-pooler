@@ -511,7 +511,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
         <AdminComponents.page_header
           id="pool-page-header"
           title="Pools"
-          description="Create and manage the Pools that group API keys, upstream accounts, routing policy, and logs."
+          description="A Pool groups upstream accounts behind shared API keys, routing, and serving modes."
         >
           <:actions>
             <AdminComponents.action_button

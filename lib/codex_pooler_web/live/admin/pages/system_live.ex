@@ -269,7 +269,7 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
         <AdminComponents.page_header
           id="system-page-header"
           title="System"
-          description="Review and adjust instance-wide runtime settings without exposing stored credentials."
+          description="Instance-wide runtime settings, from gateway and ingress behavior to metrics and SMTP delivery."
         />
 
         <AdminComponents.empty_state

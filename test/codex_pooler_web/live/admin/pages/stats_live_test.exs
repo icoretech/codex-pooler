@@ -309,7 +309,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       assert has_element?(
                view,
                "#stats-page-header",
-               "Usage, cost, latency, sessions, and cache activity"
+               "Tokens, spend, latency, and cache activity"
              )
 
       assert has_element?(view, "#stats-pool-filter[type='hidden'][value='#{pool.id}']")

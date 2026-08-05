@@ -199,7 +199,7 @@ defmodule CodexPoolerWeb.Admin.JobsLive do
             <AdminComponents.page_header
               id="admin-jobs-page-header"
               title="System Jobs"
-              description="Monitor background work and quickly check whether jobs are queued, running, completed, or need attention."
+              description="Background jobs across the instance: queued, running, retrying, or done."
             />
 
             <AdminComponents.empty_state

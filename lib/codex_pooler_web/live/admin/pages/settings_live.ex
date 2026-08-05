@@ -306,7 +306,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLive do
         <AdminComponents.page_header
           id="settings-page-header"
           title="Settings"
-          description="Manage this browser session, your operator profile, and account security."
+          description="Your operator account: profile, password, two-factor, and browser sessions."
         />
 
         <section id="settings-workspace" class="grid gap-4">

@@ -156,7 +156,7 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
           <AdminComponents.page_header
             id="stats-page-header"
             title="Usage"
-            description="Usage, cost, latency, sessions, and cache activity for the current scope."
+            description="Tokens, spend, latency, and cache activity for the Pools and window you pick."
           />
 
           <AdminComponents.filter_form
@@ -256,7 +256,7 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
             title={if @dashboard_loading?, do: "Loading stats", else: "Stats are not available"}
             description={
               if @dashboard_loading?,
-                do: "Building usage, cost, latency, and session metrics for this scope.",
+                do: "Building the dashboard for the Pools and window you picked.",
                 else: "Change filters or sign in with an operator account that can manage pools."
             }
             icon={if @dashboard_loading?, do: "hero-arrow-path", else: "hero-chart-bar"}

@@ -196,7 +196,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLive do
         <AdminComponents.page_header
           id="invite-page-header"
           title="Invites"
-          description="Review Pool invites, delivery status, and onboarding outcomes."
+          description="Each invite lets its recipient link an account into a Pool through the device-code flow."
         >
           <:actions>
             <AdminComponents.action_button

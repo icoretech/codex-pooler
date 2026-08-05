@@ -46,7 +46,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
           <AdminComponents.page_header
             id="upstream-cockpit-page-header"
             title="Upstream health"
-            description="Credential, routing, and quota status for one upstream account, plus the actions to recover it."
+            description="One upstream account up close: serving state, quota evidence, and its recovery actions."
           />
 
           <AuthJsonDialog.auth_json_import_dialog

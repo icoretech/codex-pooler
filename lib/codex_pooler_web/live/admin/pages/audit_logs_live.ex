@@ -116,7 +116,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLive do
             <AdminComponents.page_header
               id="audit-log-page-header"
               title="Audit logs"
-              description="Review sign-ins, operator changes, and other operator account activity with sensitive values redacted."
+              description="Who did what on this instance, from sign-ins to settings changes."
             />
 
             <.audit_log_filters

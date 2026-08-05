@@ -644,7 +644,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
 
     assert has_element?(view, "#upstream-cockpit-page-header h1", "Upstream health")
-    assert has_element?(view, "#upstream-cockpit-page-header", "actions to recover it")
+    assert has_element?(view, "#upstream-cockpit-page-header", "its recovery actions")
     refute has_element?(view, "#upstream-cockpit-page-header button")
   end
 

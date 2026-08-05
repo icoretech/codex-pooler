@@ -218,7 +218,7 @@ defmodule CodexPoolerWeb.Admin.JobsLiveTest do
 
     assert has_element?(view, "#admin-jobs-page")
     assert has_element?(view, "#admin-jobs-page-header", "System Jobs")
-    assert has_element?(view, "#admin-jobs-page-header", "Monitor background work")
+    assert has_element?(view, "#admin-jobs-page-header", "Background jobs across the instance")
     assert has_element?(view, "#admin-jobs-worker-grid")
     assert has_element?(view, worker_card_selector(:runtime_cleanup), "Runtime cleanup")
 

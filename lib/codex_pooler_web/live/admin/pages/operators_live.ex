@@ -300,7 +300,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLive do
         <AdminComponents.page_header
           id="operators-page-header"
           title="Operators"
-          description="Invite and manage the people who can access this admin area, reset passwords, and deactivate accounts."
+          description="The accounts that can sign in to this admin area, with their roles and assigned Pools."
         >
           <:actions>
             <AdminComponents.action_button

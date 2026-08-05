@@ -334,7 +334,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     assert has_element?(
              view,
              "#request-log-page-header",
-             "Audit recent gateway traffic, routing decisions, upstream outcomes, quota evidence, token usage, and cost settlement."
+             "Every request through the gateway: where it routed, how it ended, and what it cost."
            )
 
     refute has_element?(view, "#request-log-page-header", "Review recent requests")

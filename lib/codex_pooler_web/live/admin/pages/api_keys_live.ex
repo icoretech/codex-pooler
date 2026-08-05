@@ -275,7 +275,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLive do
         <AdminComponents.page_header
           id="api-key-page-header"
           title="API keys"
-          description="Create and manage API keys for each Pool, including model access, usage limits, rotation, and status."
+          description="The keys clients use to reach a Pool, each with its own model access and policies."
         >
           <:actions>
             <AdminComponents.action_button

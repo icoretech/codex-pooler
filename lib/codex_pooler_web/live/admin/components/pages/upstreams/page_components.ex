@@ -53,7 +53,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
       <AdminComponents.page_header
         id="upstream-account-page-header"
         title="Upstreams"
-        description="Link upstream accounts, monitor routing capacity, and manage credential, quota, and saved-reset recovery."
+        description="The accounts your Pools serve from: token health, quota windows, and the saved-reset bank."
       >
         <:actions>
           <AdminComponents.action_button
