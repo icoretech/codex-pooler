@@ -7,13 +7,14 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.OperatorComponents.Identity
   alias CodexPoolerWeb.Admin.OperatorForm
+  alias Phoenix.HTML.{Form, FormField}
 
   @operator_docs_url "https://docs.codex-pooler.com/operators/operators/#create-operator"
   @operator_actions_docs_url "https://docs.codex-pooler.com/operators/operators/#action-menu"
   @operator_password_docs_url "https://docs.codex-pooler.com/operators/operators/#password-reset"
 
   attr :creating_operator, :boolean, required: true
-  attr :create_form, Phoenix.HTML.Form, required: true
+  attr :create_form, Form, required: true
   attr :temporary_password_receipt, :map, default: nil
   attr :pool_options, :list, default: []
 
@@ -106,7 +107,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
   end
 
   attr :editing_operator, :any, default: nil
-  attr :edit_form, Phoenix.HTML.Form, default: nil
+  attr :edit_form, Form, default: nil
   attr :pool_options, :list, default: []
 
   def operator_edit_dialog(assigns) do
@@ -181,7 +182,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
   attr :resetting_operator, :any, default: nil
   attr :password_dialog_receipt, :map, default: nil
   attr :reset_operation, :atom, default: nil
-  attr :reset_form, Phoenix.HTML.Form, required: true
+  attr :reset_form, Form, required: true
 
   def operator_password_dialog(assigns) do
     assigns = assign(assigns, :operator_password_docs_url, @operator_password_docs_url)
@@ -268,12 +269,12 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
     """
   end
 
-  attr :field, Phoenix.HTML.FormField, required: true
+  attr :field, FormField, required: true
   attr :label, :string, default: "Email"
   attr :placeholder, :string, default: "operator@example.com"
   attr :required, :boolean, default: false
 
-  defp operator_email_input(%{field: %Phoenix.HTML.FormField{} = field} = assigns) do
+  defp operator_email_input(%{field: %FormField{} = field} = assigns) do
     errors = if Phoenix.Component.used_input?(field), do: field.errors, else: []
 
     assigns =
@@ -293,7 +294,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
             type="email"
             id={@id}
             name={@name}
-            value={Phoenix.HTML.Form.normalize_value("email", @value)}
+            value={Form.normalize_value("email", @value)}
             placeholder={@placeholder}
             autocomplete="email"
             required={@required}
@@ -309,7 +310,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
     """
   end
 
-  attr :form, Phoenix.HTML.Form, required: true
+  attr :form, Form, required: true
   attr :pool_options, :list, required: true
   attr :field_prefix, :string, required: true
 
@@ -317,7 +318,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
     assigns =
       assigns
       |> assign(:selected_pool_ids, OperatorForm.selected_pool_ids(assigns.form))
-      |> assign(:selected_role, to_string(Phoenix.HTML.Form.input_value(assigns.form, :role)))
+      |> assign(:selected_role, to_string(Form.input_value(assigns.form, :role)))
 
     ~H"""
     <div class="contents group/rolegate">
@@ -492,7 +493,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
     """
   end
 
-  attr :form, Phoenix.HTML.Form, required: true
+  attr :form, Form, required: true
 
   defp temporary_password_fields(assigns) do
     ~H"""

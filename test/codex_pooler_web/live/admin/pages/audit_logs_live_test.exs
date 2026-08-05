@@ -15,6 +15,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLiveTest do
   alias CodexPooler.InstanceSettings.Settings
   alias CodexPooler.Pools
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.Admin.AuditLogsComponents.Prose
 
   setup :register_and_log_in_user
 
@@ -904,7 +905,7 @@ defmodule CodexPoolerWeb.Admin.AuditLogsLiveTest do
 
   test "every supported audit action reads as handcrafted prose" do
     supported = Audit.action_options() |> Enum.map(fn {_label, action} -> action end)
-    covered = CodexPoolerWeb.Admin.AuditLogsComponents.Prose.covered_actions()
+    covered = Prose.covered_actions()
 
     assert Enum.sort(covered) == Enum.sort(supported)
   end
