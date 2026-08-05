@@ -745,7 +745,11 @@ defmodule CodexPoolerWeb.Admin.Components do
         style={"position-anchor: #{@anchor_name};"}
       >
         <div class="grid gap-1 p-3">
-          <p class="text-[0.6rem] font-bold uppercase tracking-wide text-base-content/50">
+          <%!-- The eyebrow every other admin popover and dropdown already
+          prints — the topbar menus, the api-key panels, the token burn card
+          this one opens from. It was the only one rendering a quieter grey
+          heading of its own. --%>
+          <p class="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-primary">
             Model info
           </p>
           <p class="break-words text-xs font-semibold leading-5 text-base-content">
@@ -792,6 +796,12 @@ defmodule CodexPoolerWeb.Admin.Components do
   defp model_info_description(_info),
     do: "No description was reported by the current upstreams."
 
+  # The icon follows the state, not the field: a barred eye where the answer is
+  # settled and closed, opposing arrows where it depends on which upstream the
+  # request lands on. The sentence already says whether it is about visibility
+  # or the API, so the icon is free to carry the thing the sentence buries — and
+  # "it varies" is the one an operator has to read differently, because it makes
+  # the outcome a routing question rather than a property of the model.
   defp model_info_facts(info) do
     []
     |> append_model_info_fact(
@@ -802,17 +812,17 @@ defmodule CodexPoolerWeb.Admin.Components do
     |> append_model_info_fact(
       Map.get(info, :visibility),
       :mixed,
-      {"hero-eye-slash", "Visibility differs across upstreams"}
+      {"hero-arrows-right-left", "Visibility differs across upstreams"}
     )
     |> append_model_info_fact(
       Map.get(info, :api_support),
       :unsupported,
-      {"hero-code-bracket-square", "Not exposed by the public API"}
+      {"hero-eye-slash", "Not exposed by the public API"}
     )
     |> append_model_info_fact(
       Map.get(info, :api_support),
       :mixed,
-      {"hero-code-bracket-square", "API support differs across upstreams"}
+      {"hero-arrows-right-left", "API support differs across upstreams"}
     )
   end
 
