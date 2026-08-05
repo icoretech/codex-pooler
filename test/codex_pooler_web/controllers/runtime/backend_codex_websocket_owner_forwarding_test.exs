@@ -3545,7 +3545,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         assert {:ok, origin_state} =
                  CodexResponsesSocket.handle_in({active_payload, [opcode: :text]}, origin_state)
 
-        assert_receive {:blocking_owner_upstream_received, active_worker_pid, ^release_ref}
+        active_worker_pid = assert_blocking_owner_upstream_received!(release_ref)
 
         assert {:ok, origin_state} =
                  CodexResponsesSocket.handle_in({queued_a_payload, [opcode: :text]}, origin_state)
