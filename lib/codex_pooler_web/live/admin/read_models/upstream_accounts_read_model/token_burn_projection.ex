@@ -15,6 +15,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.TokenBurnProjection do
           required(:cost_micros) => non_neg_integer()
         }
   @type usage_state :: :idle | :complete | :partial | :unknown
+  @type pool_traffic :: %{
+          required(:tokens) => non_neg_integer(),
+          required(:request_count) => non_neg_integer(),
+          required(:known_request_count) => non_neg_integer(),
+          required(:unknown_request_count) => non_neg_integer()
+        }
   @type token_burn :: %{
           required(:level) => non_neg_integer() | nil,
           required(:label) => String.t(),
@@ -25,7 +31,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.TokenBurnProjection do
           required(:unknown_request_count) => non_neg_integer(),
           required(:usage_state) => usage_state(),
           required(:baseline_tokens) => non_neg_integer(),
-          required(:recent_models) => [recent_model()]
+          required(:recent_models) => [recent_model()],
+          required(:recent_pools) => %{optional(Ecto.UUID.t()) => pool_traffic()}
         }
 
   @type opts :: [now: DateTime.t()]
@@ -42,7 +49,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.TokenBurnProjection do
     baseline_started_at = DateTime.add(recent_started_at, -@token_burn_baseline_seconds, :second)
 
     recent_model_totals =
-      Accounting.token_totals_by_upstream_identity_and_model_ids(
+      Accounting.token_totals_by_upstream_identity_pool_and_model_ids(
         upstream_identity_ids,
         recent_started_at,
         ended_at
@@ -73,8 +80,25 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.TokenBurnProjection do
          known_request_count,
          unknown_request_count,
          baseline_tokens,
-         recent_models
+         recent_models,
+         recent_pools(model_totals)
        )}
+    end)
+  end
+
+  # The same settlement rows, folded by Pool instead of by model, so the
+  # assignment rows on the account card can show where the burn is going.
+  defp recent_pools(model_totals) do
+    model_totals
+    |> Enum.group_by(& &1.pool_id)
+    |> Map.new(fn {pool_id, rows} ->
+      {pool_id,
+       %{
+         tokens: Enum.sum_by(rows, & &1.total_tokens),
+         request_count: Enum.sum_by(rows, & &1.request_count),
+         known_request_count: Enum.sum_by(rows, & &1.known_request_count),
+         unknown_request_count: Enum.sum_by(rows, & &1.unknown_request_count)
+       }}
     end)
   end
 
@@ -103,7 +127,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.TokenBurnProjection do
          known_request_count,
          unknown_request_count,
          baseline_tokens,
-         recent_models
+         recent_models,
+         recent_pools
        ) do
     usage_state = usage_state(recent_requests, known_request_count)
     level = level(usage_state, recent_tokens, baseline_tokens)
@@ -126,7 +151,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.TokenBurnProjection do
       unknown_request_count: unknown_request_count,
       usage_state: usage_state,
       baseline_tokens: baseline_tokens,
-      recent_models: recent_models
+      recent_models: recent_models,
+      recent_pools: recent_pools
     }
   end
 

@@ -386,6 +386,18 @@ opacity-0 pointer-events-none` plus `aria-hidden` and `inert`; the visible one
 saved-reset meter (§5.6); tokens panel holds a model leaderboard list (§5.8);
 pools panel renders per-assignment route chevrons:
 
+- Each assignment row heads with the pool label on the left and a live
+  traffic stat on the right
+  (`data-role="upstream-account-pool-assignment-traffic"`): settled tokens
+  this account routed toward that Pool in the last 5 minutes, formatted
+  `1.2M tok/5m` (`Format.token_count`, 11px `tabular-nums` at 60% ink,
+  detail sentence in `title`). It reuses the token-burn window and ledger
+  rows — the projection folds the same single settlement query by Pool —
+  so it costs no extra query. A row whose recent requests all lack settled
+  usage shows `? tok/5m`, never a false zero. This stat replaced the old
+  binary "Eligible" label: readiness already lives gate-by-gate in the
+  route meter below, so the label now says what the assignment is actually
+  doing.
 - The route path is always four gates in this order: **Assignment → Health →
   Quota → Circuit**. The compact account-card segment shortens only the first
   visible label to **Assign**; cockpit segments, the meter's accessible name,

@@ -57,7 +57,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           required(:model_count) => non_neg_integer(),
           required(:advertised_state) => assignment_advertised_state(),
           required(:model_freshness) => assignment_model_freshness(),
-          required(:circuit_readiness) => UpstreamCircuitReadiness.summary()
+          required(:circuit_readiness) => UpstreamCircuitReadiness.summary(),
+          required(:recent_traffic) => TokenBurnProjection.pool_traffic()
         }
   @type quota_limit_row :: QuotaProjection.quota_limit_row()
   @type quota_readiness :: UpstreamQuotaReadiness.t()
@@ -356,7 +357,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     snapshot_at = DateTime.utc_now()
     quota_windows = QuotaWindows.list_quota_windows(identity, snapshot_at)
     quota_readiness = QuotaProjection.readiness(quota_windows, snapshot_at)
-    identity_assignments = identity_assignments(identity, assignments, quota_readiness)
+    token_burn = Map.fetch!(token_burns, identity.id)
+
+    identity_assignments =
+      identity_assignments(identity, assignments, quota_readiness, token_burn)
 
     identity_observability =
       identity_observability(
@@ -413,7 +417,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       reauth_reason_message: reauth_reason_message(identity),
       saved_resets: SavedResetProjection.snapshot(identity, datetime_preferences),
       saved_reset_policy: SavedResetProjection.policy(identity),
-      token_burn: Map.fetch!(token_burns, identity.id),
+      token_burn: token_burn,
       assignments: identity_assignments,
       quota_readiness: quota_readiness,
       routing_readiness: routing_readiness,
@@ -429,17 +433,27 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     )
   end
 
-  defp identity_assignments(identity, assignments, quota_readiness) do
+  defp identity_assignments(identity, assignments, quota_readiness, token_burn) do
     assignments
     |> Map.get(identity.id, [])
-    |> Enum.map(&identity_assignment(&1, identity, quota_readiness))
+    |> Enum.map(&identity_assignment(&1, identity, quota_readiness, token_burn))
   end
 
-  defp identity_assignment(assignment, identity, quota_readiness) do
+  defp identity_assignment(assignment, identity, quota_readiness, token_burn) do
     assignment
     |> Map.delete(:last_reconciliation)
     |> Map.put(:assignment_label, assignment_display_label(identity, assignment))
+    |> Map.put(:recent_traffic, assignment_recent_traffic(token_burn, assignment.pool_id))
     |> QuotaProjection.put_current_quota_priming(quota_readiness)
+  end
+
+  defp assignment_recent_traffic(token_burn, pool_id) do
+    Map.get(token_burn.recent_pools, pool_id, %{
+      tokens: 0,
+      request_count: 0,
+      known_request_count: 0,
+      unknown_request_count: 0
+    })
   end
 
   defp assignment_display_label(identity, assignment) do

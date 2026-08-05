@@ -341,10 +341,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                     {assignment.pool_label}
                   </span>
                   <span
-                    data-role="upstream-account-pool-assignment-eligibility"
-                    class={assignment_eligibility_class(assignment.eligibility_status)}
+                    data-role="upstream-account-pool-assignment-traffic"
+                    class="shrink-0 text-[11px] font-medium leading-4 tabular-nums text-base-content/60"
+                    title={assignment_traffic_title(assignment)}
                   >
-                    {assignment_eligibility_label(assignment.eligibility_status)}
+                    {assignment_traffic_label(assignment)}
                   </span>
                 </div>
                 <div
@@ -916,28 +917,39 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   defp assignment_count_label([_assignment]), do: "1 Pool"
   defp assignment_count_label(assignments), do: "#{length(assignments)} Pools"
 
-  defp assignment_eligibility_label(value) when is_binary(value) do
-    value
-    |> String.replace("_", " ")
-    |> String.capitalize()
+  # Settled tokens this account routed toward the assignment's Pool in the
+  # last 5 minutes — same window and ledger rows as the token burn indicator.
+  # Requests whose usage has not settled yet cannot be counted, so a row that
+  # is all-unknown shows "?" rather than a false zero.
+  defp assignment_traffic_label(assignment) do
+    case assignment_recent_traffic(assignment) do
+      %{tokens: 0, request_count: requests, known_request_count: 0} when requests > 0 ->
+        "? tok/5m"
+
+      %{tokens: tokens} ->
+        "#{Format.token_count(tokens)} tok/5m"
+    end
   end
 
-  defp assignment_eligibility_label(_value), do: "Unknown"
+  defp assignment_traffic_title(%{pool_label: pool_label} = assignment) do
+    case assignment_recent_traffic(assignment) do
+      %{request_count: 0} ->
+        "No requests toward #{pool_label} in the last 5 minutes."
 
-  defp assignment_eligibility_class("eligible") do
-    "shrink-0 text-[11px] font-medium leading-4 text-success"
+      %{tokens: tokens, request_count: requests, unknown_request_count: 0} ->
+        "Last 5m toward #{pool_label}: #{Format.token_count(tokens)} settled tokens across #{request_count_label(requests)}."
+
+      %{tokens: tokens, request_count: requests, unknown_request_count: unknown} ->
+        "Last 5m toward #{pool_label}: #{Format.token_count(tokens)} settled tokens across #{request_count_label(requests)}; usage still missing for #{request_count_label(unknown)}."
+    end
   end
 
-  defp assignment_eligibility_class("blocked") do
-    "shrink-0 text-[11px] font-medium leading-4 text-error"
-  end
+  defp request_count_label(1), do: "1 request"
+  defp request_count_label(count), do: "#{count} requests"
 
-  defp assignment_eligibility_class("paused") do
-    "shrink-0 text-[11px] font-medium leading-4 text-warning"
-  end
-
-  defp assignment_eligibility_class(_status) do
-    "shrink-0 text-[11px] font-medium leading-4 text-base-content/60"
+  defp assignment_recent_traffic(assignment) do
+    Map.get(assignment, :recent_traffic) ||
+      %{tokens: 0, request_count: 0, known_request_count: 0, unknown_request_count: 0}
   end
 
   defp recent_token_count_label(%{token_burn: %{usage_state: :unknown}}),

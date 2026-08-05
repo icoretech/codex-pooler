@@ -204,6 +204,7 @@ defmodule CodexPooler.Accounting.Reporting do
   end
 
   @type model_usage_total :: %{
+          required(:pool_id) => Ecto.UUID.t() | nil,
           required(:model_id) => Ecto.UUID.t() | nil,
           required(:total_tokens) => non_neg_integer(),
           required(:request_count) => non_neg_integer(),
@@ -212,23 +213,27 @@ defmodule CodexPooler.Accounting.Reporting do
           required(:settled_cost_micros) => non_neg_integer()
         }
 
-  @spec token_totals_by_upstream_identity_and_model_ids(
+  @spec token_totals_by_upstream_identity_pool_and_model_ids(
           [Ecto.UUID.t()],
           DateTime.t(),
           DateTime.t()
         ) :: %{optional(Ecto.UUID.t()) => [model_usage_total()]}
-  def token_totals_by_upstream_identity_and_model_ids([], _started_at, _ended_at), do: %{}
+  def token_totals_by_upstream_identity_pool_and_model_ids([], _started_at, _ended_at), do: %{}
 
-  def token_totals_by_upstream_identity_and_model_ids(upstream_identity_ids, started_at, ended_at) do
+  def token_totals_by_upstream_identity_pool_and_model_ids(
+        upstream_identity_ids,
+        started_at,
+        ended_at
+      ) do
     Repo.all(
       from entry in LedgerEntry,
         where:
           entry.upstream_identity_id in ^upstream_identity_ids and
             entry.entry_kind == ^@settlement and entry.amount_status == ^@recorded and
             entry.occurred_at >= ^started_at and entry.occurred_at <= ^ended_at,
-        group_by: [entry.upstream_identity_id, entry.model_id],
+        group_by: [entry.upstream_identity_id, entry.pool_id, entry.model_id],
         select:
-          {entry.upstream_identity_id, entry.model_id,
+          {entry.upstream_identity_id, entry.pool_id, entry.model_id,
            sum(
              fragment(
                "CASE WHEN ? = ? THEN ? ELSE 0 END",
@@ -262,10 +267,11 @@ defmodule CodexPooler.Accounting.Reporting do
              )
            )}
     )
-    |> Enum.reduce(%{}, fn {upstream_identity_id, model_id, total, requests, known_requests,
-                            unknown_requests, cost},
+    |> Enum.reduce(%{}, fn {upstream_identity_id, pool_id, model_id, total, requests,
+                            known_requests, unknown_requests, cost},
                            acc ->
       row = %{
+        pool_id: pool_id,
         model_id: model_id,
         total_tokens: non_negative_integer(total),
         request_count: non_negative_integer(requests),

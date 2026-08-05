@@ -1841,13 +1841,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-account-#{active_identity.id}-pools-panel [data-role='upstream-account-pool-assignment-eligibility']",
-             "Eligible"
+             "#upstream-account-#{active_identity.id}-pools-panel [data-role='upstream-account-pool-assignment-traffic']",
+             "0 tok/5m"
            )
 
-    refute has_element?(
+    assert has_element?(
              view,
-             "#upstream-account-#{active_identity.id}-pools-panel [data-role='upstream-account-pool-assignment-eligibility'].rounded-full"
+             "#upstream-account-#{active_identity.id}-pools-panel [data-role='upstream-account-pool-assignment-traffic'][title='No requests toward Saved Reset Card in the last 5 minutes.']"
            )
 
     assert has_element?(
@@ -2875,6 +2875,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(view, "#upstream-account-#{identity.id}.min-w-0")
     assert has_element?(view, "[data-role='upstream-account-card']")
     assert has_element?(view, "#upstream-account-#{identity.id}-plan-label", "Team")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-pools-panel [data-role='upstream-account-pool-assignment-traffic']",
+             "700 tok/5m"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-pools-panel [data-role='upstream-account-pool-assignment-traffic'][title*='700 settled tokens across 1 request']"
+           )
 
     assert has_element?(
              view,

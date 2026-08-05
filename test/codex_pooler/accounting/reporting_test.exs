@@ -90,14 +90,25 @@ defmodule CodexPooler.Accounting.ReportingTest do
       settled_cost_micros: 999_999
     })
 
+    second_pool = pool_fixture(%{slug: "reporting-second-pool", name: "Reporting Second Pool"})
+    %{api_key: second_api_key} = active_api_key_fixture(second_pool)
+
+    insert_settlement!(second_pool, second_api_key, assignment, identity, occurred_at, %{
+      model_id: known_model.id,
+      request_count: 5,
+      total_tokens: 70,
+      settled_cost_micros: 700
+    })
+
     totals_by_model =
-      Reporting.token_totals_by_upstream_identity_and_model_ids(
+      Reporting.token_totals_by_upstream_identity_pool_and_model_ids(
         [identity.id],
         started_at,
         ended_at
       )[identity.id]
 
-    totals = Enum.find(totals_by_model, &(&1.model_id == known_model.id))
+    totals =
+      Enum.find(totals_by_model, &(&1.model_id == known_model.id and &1.pool_id == pool.id))
 
     assert totals.request_count == 2
     assert totals.known_request_count == 2
@@ -109,8 +120,16 @@ defmodule CodexPooler.Accounting.ReportingTest do
              totals_by_model
              |> Enum.filter(&(&1.unknown_request_count > 0))
 
+    assert unknown.pool_id == pool.id
     assert unknown.total_tokens == 0
     assert unknown.settled_cost_micros == 0
+
+    # The same identity and model split by Pool rather than rolling up.
+    assert %{request_count: 5, total_tokens: 70, known_request_count: 5} =
+             Enum.find(
+               totals_by_model,
+               &(&1.model_id == known_model.id and &1.pool_id == second_pool.id)
+             )
   end
 
   test "settlement usage buckets aggregate exact inclusive windows without model rollups" do

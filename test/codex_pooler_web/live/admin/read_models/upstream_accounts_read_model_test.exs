@@ -397,12 +397,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
 
     started_at = DateTime.add(now, -5 * 60, :second)
 
-    assert Reporting.token_totals_by_upstream_identity_and_model_ids(
+    assert Reporting.token_totals_by_upstream_identity_pool_and_model_ids(
              [identity.id],
              started_at,
              now
            )[identity.id] == [
              %{
+               pool_id: pool.id,
                model_id: model.id,
                total_tokens: 20,
                request_count: 2,
@@ -418,13 +419,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
              :recent_tokens,
              :recent_requests,
              :known_request_count,
-             :unknown_request_count
+             :unknown_request_count,
+             :recent_pools
            ]) == %{
              usage_state: :partial,
              recent_tokens: 20,
              recent_requests: 2,
              known_request_count: 1,
-             unknown_request_count: 1
+             unknown_request_count: 1,
+             recent_pools: %{
+               pool.id => %{
+                 tokens: 20,
+                 request_count: 2,
+                 known_request_count: 1,
+                 unknown_request_count: 1
+               }
+             }
            }
   end
 
