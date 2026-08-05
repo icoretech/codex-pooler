@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.5.17](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.16...codex-pooler-v0.5.17) (2026-08-05)
+
+
+### Features
+
+* **admin:** bring the operator dialogs onto the house selection idioms ([f4285af](https://github.com/icoretech/codex-pooler/commit/f4285af8d22432bd5e3b4f9c8506789d461ab373))
+* **admin:** explain discovered models in context ([3747e16](https://github.com/icoretech/codex-pooler/commit/3747e164d7b624343d56682c4c16bc607c6bb080))
+* **admin:** finish the selection-card contract on the API-key wizard ([f8cd62b](https://github.com/icoretech/codex-pooler/commit/f8cd62bbad73001438d4fca086341244918e7217))
+* **admin:** let the operator pause auto-refresh ([26c4926](https://github.com/icoretech/codex-pooler/commit/26c492640e3f644e1b7de01973d4072820f8d519))
+* **admin:** make single-choice policy cards radio-less selection cards ([b0a03aa](https://github.com/icoretech/codex-pooler/commit/b0a03aa0555b447a9f2582079244d06927630a15))
+* **admin:** open the Observatory exit by holding, not clicking ([f186e87](https://github.com/icoretech/codex-pooler/commit/f186e874b5f03d40b73ba3594d49ce6fba931e16))
+* **admin:** rebuild the operators page as profile cards ([2c1372e](https://github.com/icoretech/codex-pooler/commit/2c1372ea079ea0a974bd094beab2d9847fe1e3a5))
+* **admin:** retell the audit trail as a prose ledger ([0176e51](https://github.com/icoretech/codex-pooler/commit/0176e51605757d6946e31bc627ba7ed1b7f3e485))
+* **admin:** tell what an assignment burns, not whether it is Eligible ([fade06c](https://github.com/icoretech/codex-pooler/commit/fade06cf97d1ce751447be03a50c87f1d507ffaf))
+* **audit-logs:** page the audit list on the request-log contract ([09f5eef](https://github.com/icoretech/codex-pooler/commit/09f5eef4ab21737a9baeb494c0420967883ef273))
+
+
+### Bug Fixes
+
+* **admin:** distinguish async loading from empty states ([fc128cf](https://github.com/icoretech/codex-pooler/commit/fc128cfd97b9d388d696b40c399d8c1b5968d053))
+* **admin:** drop the hairline above the saved-reset numeric fields ([2920208](https://github.com/icoretech/codex-pooler/commit/292020898a0abddb5c5ca51fd9b4f4802d53a757))
+* **admin:** drop the resting-card shadow from the settings family ([cb818c1](https://github.com/icoretech/codex-pooler/commit/cb818c1e24e2f0a20b200a2c84f9c723c107cdda))
+* **admin:** give the API key rows their width back on a phone ([b01641e](https://github.com/icoretech/codex-pooler/commit/b01641edf879b8058be3473b4b0789f54febf3e4))
+* **admin:** head the operator dialog groups with the house kicker ([d955beb](https://github.com/icoretech/codex-pooler/commit/d955bebc944a180d47abd9b04e12c737b1ae1830))
+* **admin:** keep operator card heights independent, like upstreams ([f440234](https://github.com/icoretech/codex-pooler/commit/f4402340a71552a0cc02fb3e52d91114cf608a6a))
+* **admin:** keep wizard step tabs to one row on tablets ([6ea7288](https://github.com/icoretech/codex-pooler/commit/6ea7288cf2bb502d9a2c87a21baa7d2d3ec0823e))
+* **admin:** let a Pool name have the room its card header has ([c6e4557](https://github.com/icoretech/codex-pooler/commit/c6e4557163454c6f8782d1fa39576b39041b20a2))
+* **admin:** make gated saved-reset tunables read-only, not just dim ([0de29fd](https://github.com/icoretech/codex-pooler/commit/0de29fdd5647f75267ba3c5f3b69b5800602c950))
+* **admin:** preserve cockpit metrics across async reloads ([6634a60](https://github.com/icoretech/codex-pooler/commit/6634a60006d4d6e1570787a4485db84f35edcd55))
+* **admin:** refresh quiet pool traffic on a fallback tick ([46bd71c](https://github.com/icoretech/codex-pooler/commit/46bd71cd1e4c79e4c374ae763a3eb2ee6001147e))
+* **admin:** stop a resume from forgetting the reload a dialog deferred ([e371d88](https://github.com/icoretech/codex-pooler/commit/e371d881e537c74142864bb5336e2d1e8795d566))
+* **admin:** stop an unpinned page number from hiding the rows behind it ([cd13e42](https://github.com/icoretech/codex-pooler/commit/cd13e4275c509601c1366abb328c8f88b0d52557))
+* **admin:** stop the pause from leaving admin pages deaf to events ([12723c6](https://github.com/icoretech/codex-pooler/commit/12723c6cdd0df1d885871830c17b52f80df4685f))
+* **request-logs:** pin the paged window to a row, not to a clock ([0c43217](https://github.com/icoretech/codex-pooler/commit/0c4321715ee8d72beba639187f65abf492b87813))
+* **request-logs:** repair the tablet band and page a live list ([ca817ac](https://github.com/icoretech/codex-pooler/commit/ca817acb8bafa661cce85997661cd2034d24411c))
+* **stats:** give the Tokens KPI one description line like its siblings ([6aae82f](https://github.com/icoretech/codex-pooler/commit/6aae82fb7545ca5b92a6262f87bf6cecdc4507d8))
+
+
+### Performance Improvements
+
+* **admin:** aggregate cockpit request metrics asynchronously ([cd174f4](https://github.com/icoretech/codex-pooler/commit/cd174f4348ef89a77dd2567a121ae25a7fe4512e))
+* **admin:** batch API key page reads ([2b9d743](https://github.com/icoretech/codex-pooler/commit/2b9d743a75a09183036f714920dc0f487ddb2b14))
+* **admin:** build stats dashboards off the LiveView process ([6e99f0a](https://github.com/icoretech/codex-pooler/commit/6e99f0ad733f4e57ef8148d499e184aef2bbda4b))
+* **admin:** load request logs outside the LiveView process ([203a3a0](https://github.com/icoretech/codex-pooler/commit/203a3a054aba9f685625e432d4db13ae86c96210))
+* **admin:** move upstream event reloads off the LiveView process ([5c25567](https://github.com/icoretech/codex-pooler/commit/5c25567cd6e3aa3d4da56438ed2e23f678d88626))
+
 ## [0.5.16](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.15...codex-pooler-v0.5.16) (2026-08-05)
 
 
