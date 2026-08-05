@@ -714,28 +714,20 @@ verified live as the orange "Pro" / green "Free" pills.
   (`policy-editor-tabs` CSS).
 - **Step panels:** `role="tabpanel"` sections toggled by `block`/`hidden`
   (state lives server-side in `current_step`).
-- **Policy mode cards** (`policy_mode_card/1`, `reasoning_policy_mode/1`): a
-  radio wrapped in a selectable card label — selected state
-  `border-primary bg-primary/10`, idle `border-base-300 bg-base-100
-  hover:bg-base-200`. The checkbox flavor of this pattern (orange
-  checkbox-card multi-select) is the reference multi-select list
-  (`api-key-model-option-*` rows: `checkbox checkbox-primary` inside a
-  `rounded-box border hover:border-primary/50 hover:bg-primary/5` label).
+- **Policy mode cards** (`policy_mode_card/1`, `reasoning_policy_mode/1`):
+  single-choice selection cards following the §5.19 radio-less contract
+  (sr-only radio, ✓ corner glyph while checked, `border-primary/60 +
+  bg-primary/5` checked recipe, 13px/11px type scale). The checkbox flavor
+  of this pattern (orange checkbox-card multi-select) is the reference
+  multi-select list (`api-key-model-option-*` rows: `checkbox
+  checkbox-primary` inside a `rounded-box border hover:border-primary/50
+  hover:bg-primary/5` label) — the checkbox stays visible because
+  multi-select state has no other per-card glyph channel.
 
-```heex
-<label class={["grid cursor-pointer gap-2 rounded-box border p-3 transition-colors hover:bg-base-200",
-  selected? && "border-primary bg-primary/10", !selected? && "border-base-300 bg-base-100"]}>
-  <input type="radio" class="radio radio-primary radio-sm mt-1" … />
-  <span class="grid gap-1">
-    <span class="font-semibold text-base-content">All models</span>
-    <span class="text-sm leading-5 text-base-content/60">Allow current and future routable models.</span>
-  </span>
-</label>
-```
-
-The single-choice radio cards on the pool routing step and the saved-reset
-trigger have moved to the radio-less selection card contract (§5.19); the
-policy mode cards above still carry visible radios and predate it.
+Every single-choice card family — the pool routing step, the saved-reset
+trigger, and the policy mode cards above — follows the radio-less selection
+card contract (§5.19). Only multi-select checkbox cards keep a visible
+control.
 
 ### 5.15 Filters, empty state, notices, buttons, flash, theme toggle
 
@@ -1035,10 +1027,13 @@ live is always one click away and never something the operator has to arrange.
 
 - **Source:** routing strategy cards in
   [`wizard_components.ex`](lib/codex_pooler_web/live/admin/components/pages/pools/wizard_components.ex)
-  (pool wizard, Routing step) and trigger-mode cards in
+  (pool wizard, Routing step), trigger-mode cards in
   [`saved_reset_components.ex`](lib/codex_pooler_web/live/admin/components/pages/upstreams/saved_reset_components.ex)
-  (saved-reset policy panels); decision record in the "Selection cards ·
-  Radio-less ✓" artifact (2026-08-05).
+  (saved-reset policy panels), and the policy mode cards
+  (`policy_mode_card/1`, `reasoning_policy_mode/1`) in the API-key
+  [`wizard_components.ex`](lib/codex_pooler_web/live/admin/components/pages/api_keys/wizard_components.ex)
+  (§5.14); decision record in the "Selection cards · Radio-less ✓" artifact
+  (2026-08-05).
 - **Purpose:** a single-choice option card whose border and wash carry the
   selection and whose check glyph is the non-color selected channel. There is
   no visible radio control.

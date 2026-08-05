@@ -157,7 +157,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
         >
           <span
             data-role="saved-reset-trigger-check"
-            class="pointer-events-none absolute right-2.5 top-2"
+            class="pointer-events-none absolute right-2.5 top-3"
           >
             <.icon name="hero-check" class="size-3 text-primary" />
           </span>
@@ -185,7 +185,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents do
         >
           <span
             data-role="saved-reset-trigger-check"
-            class="pointer-events-none absolute right-2.5 top-2"
+            class="pointer-events-none absolute right-2.5 top-3"
           >
             <.icon name="hero-check" class="size-3 text-primary" />
           </span>

@@ -213,7 +213,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
                       :for={{label, value} <- @strategy_options}
                       class="group/strategy relative min-w-0 rounded-box border border-base-300 bg-base-100 transition-colors hover:border-primary/50 has-[.strategy-radio:checked]:border-primary/60 has-[.strategy-radio:checked]:bg-primary/5 has-[.strategy-radio:focus-visible]:outline has-[.strategy-radio:focus-visible]:outline-2 has-[.strategy-radio:focus-visible]:outline-offset-2 has-[.strategy-radio:focus-visible]:outline-primary"
                     >
-                      <span class="pointer-events-none absolute right-2.5 top-2 inline-flex items-center gap-1">
+                      <span class="pointer-events-none absolute right-2.5 top-3 inline-flex items-center gap-1">
                         <.icon
                           name="hero-check"
                           class="hidden size-3 text-primary group-has-[.strategy-radio:checked]/strategy:inline-block"

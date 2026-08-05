@@ -134,6 +134,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
           value="all_models"
           label="All models"
           description="Allow current and future routable models."
+          default
         />
         <.policy_mode_card
           id="api-key-model-mode-selected"
@@ -197,7 +198,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
                 <span class="min-w-0 truncate text-sm font-medium text-base-content">
                   {option.display_name || option.identifier}
                 </span>
-                <span class="truncate font-mono text-xs text-base-content/50">
+                <span class="truncate text-[10.5px] tracking-[0.015em] text-base-content/50">
                   {option.identifier}
                 </span>
               </span>
@@ -224,7 +225,9 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
                 checked={selected_value?(@form[:allowed_model_identifiers].value, chip.identifier)}
               />
               <span class="grid min-w-0 gap-1">
-                <span class="break-all font-mono font-semibold text-base-content">{chip.label}</span>
+                <span class="break-all text-[10.5px] font-semibold tracking-[0.015em] text-base-content">
+                  {chip.label}
+                </span>
                 <span class="text-base-content/65">{chip.warning}</span>
               </span>
             </label>
@@ -284,6 +287,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
             value="unrestricted"
             label="Unrestricted"
             description="Keep request values unchanged."
+            default
           />
           <.reasoning_policy_mode
             id="api_key_reasoning_policy_mode_allow_up_to"
@@ -505,29 +509,33 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
   attr :value, :string, required: true
   attr :label, :string, required: true
   attr :description, :string, required: true
+  attr :default, :boolean, default: false
 
   defp policy_mode_card(assigns) do
     ~H"""
     <label
       id={@id}
-      class={[
-        "grid cursor-pointer gap-2 rounded-box border p-3 transition-colors hover:bg-base-200",
-        field_string_value(@field) == @value && "border-primary bg-primary/10",
-        field_string_value(@field) != @value && "border-base-300 bg-base-100"
-      ]}
+      class="group/policymode relative flex min-w-0 cursor-pointer items-start gap-2.5 rounded-box border border-base-300 bg-base-100 p-2.5 transition-colors hover:border-primary/50 has-[.policy-mode-radio:checked]:border-primary/60 has-[.policy-mode-radio:checked]:bg-primary/5 has-[.policy-mode-radio:focus-visible]:outline has-[.policy-mode-radio:focus-visible]:outline-2 has-[.policy-mode-radio:focus-visible]:outline-offset-2 has-[.policy-mode-radio:focus-visible]:outline-primary"
     >
-      <span class="flex items-start gap-3">
-        <input
-          type="radio"
-          class="radio radio-primary radio-sm mt-1"
-          name={@field.name}
-          value={@value}
-          checked={field_string_value(@field) == @value}
+      <span class="pointer-events-none absolute right-2.5 top-3 inline-flex items-center gap-1">
+        <.icon
+          name="hero-check"
+          class="hidden size-3 text-primary group-has-[.policy-mode-radio:checked]/policymode:inline-block"
         />
-        <span class="grid gap-1">
-          <span class="font-semibold text-base-content">{@label}</span>
-          <span class="text-sm leading-5 text-base-content/60">{@description}</span>
+        <span :if={@default} class="text-[0.56rem] font-bold uppercase tracking-wide text-primary/70">
+          Default
         </span>
+      </span>
+      <input
+        type="radio"
+        class="policy-mode-radio sr-only"
+        name={@field.name}
+        value={@value}
+        checked={field_string_value(@field) == @value}
+      />
+      <span class="grid min-w-0 gap-0.5">
+        <span class="text-[13px] font-semibold leading-tight text-base-content">{@label}</span>
+        <span class="text-[11px] leading-4 text-base-content/55">{@description}</span>
       </span>
     </label>
     """
@@ -538,25 +546,31 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
   attr :value, :string, required: true
   attr :label, :string, required: true
   attr :description, :string, required: true
+  attr :default, :boolean, default: false
 
   defp reasoning_policy_mode(assigns) do
     ~H"""
-    <label class={[
-      "flex min-w-0 cursor-pointer items-start gap-3 rounded-box border p-3 transition-colors hover:bg-base-200",
-      field_string_value(@field) == @value && "border-primary bg-primary/10",
-      field_string_value(@field) != @value && "border-base-300 bg-base-100"
-    ]}>
+    <label class="group/policymode relative flex min-w-0 cursor-pointer items-start gap-2.5 rounded-box border border-base-300 bg-base-100 p-2.5 transition-colors hover:border-primary/50 has-[.policy-mode-radio:checked]:border-primary/60 has-[.policy-mode-radio:checked]:bg-primary/5 has-[.policy-mode-radio:focus-visible]:outline has-[.policy-mode-radio:focus-visible]:outline-2 has-[.policy-mode-radio:focus-visible]:outline-offset-2 has-[.policy-mode-radio:focus-visible]:outline-primary">
+      <span class="pointer-events-none absolute right-2.5 top-3 inline-flex items-center gap-1">
+        <.icon
+          name="hero-check"
+          class="hidden size-3 text-primary group-has-[.policy-mode-radio:checked]/policymode:inline-block"
+        />
+        <span :if={@default} class="text-[0.56rem] font-bold uppercase tracking-wide text-primary/70">
+          Default
+        </span>
+      </span>
       <input
         id={@id}
         type="radio"
-        class="radio radio-primary radio-sm mt-1"
+        class="policy-mode-radio sr-only"
         name={@field.name}
         value={@value}
         checked={field_string_value(@field) == @value}
       />
-      <span class="grid gap-1">
-        <span class="font-semibold text-base-content">{@label}</span>
-        <span class="text-sm leading-5 text-base-content/60">{@description}</span>
+      <span class="grid min-w-0 gap-0.5">
+        <span class="text-[13px] font-semibold leading-tight text-base-content">{@label}</span>
+        <span class="text-[11px] leading-4 text-base-content/55">{@description}</span>
       </span>
     </label>
     """
