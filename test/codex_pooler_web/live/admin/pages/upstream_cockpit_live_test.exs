@@ -4416,7 +4416,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
         [:codex_pooler, :repo, :query],
         fn _event, _measurements, metadata, _config ->
           if metadata[:repo] == Repo and
-               String.contains?(to_string(metadata[:query]), "percentile_cont") do
+               String.contains?(to_string(metadata[:query]), "percentile_disc") do
             send(test_pid, {handler_id, self()})
           end
         end,
@@ -4433,7 +4433,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   end
 
   @tag :refresh_broadcast_degraded
-  test "supported upstream broadcasts refresh quota while request metrics stay explicit-refresh only",
+  test "supported upstream broadcasts refresh quota and request metrics asynchronously",
        %{
          conn: conn,
          scope: scope
@@ -4504,22 +4504,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     })
 
     assert {:ok, _event} =
-             Events.broadcast_request_logs(pool.id, "request_log_created", %{
+             Events.broadcast_upstreams(pool.id, "request_metrics_updated", %{
                upstream_identity_id: identity.id
              })
 
     _ = :sys.get_state(view.pid)
-    assert has_element?(view, "#request-health-chart-plot[data-chart-total='0']")
+    _ = render_async(view)
+    assert has_element?(view, "#request-health-chart-plot[data-chart-total='1']")
 
     assert has_element?(
              view,
              "#upstream-refresh-data-button[title='Traffic, contribution, and activity data refresh on page load or on demand']"
            )
-
-    view |> element("#upstream-refresh-data-button") |> render_click()
-    _ = render_async(view)
-
-    assert has_element?(view, "#request-health-chart-plot[data-chart-total='1']")
   end
 
   @tag :cockpit_actions

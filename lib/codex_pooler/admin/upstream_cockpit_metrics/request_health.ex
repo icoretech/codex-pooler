@@ -111,8 +111,6 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.RequestHealth do
     |> Repo.all()
   end
 
-  # One day is intentionally a hard upper bound: an abandoned request with a
-  # bogus completion timestamp must not distort the operator-facing p50.
   defp p50_latency_ms(base_query, start_24h) do
     base_query
     |> where([request], request.admitted_at >= ^start_24h and request.status == "succeeded")
@@ -120,14 +118,10 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.RequestHealth do
       [request],
       not is_nil(request.completed_at) and request.completed_at >= request.admitted_at
     )
-    |> where(
-      [request],
-      fragment("? <= ? + interval '1 day'", request.completed_at, request.admitted_at)
-    )
     |> select(
       [request],
       fragment(
-        "percentile_cont(0.5) within group (order by extract(epoch from (? - ?)) * 1000)",
+        "percentile_disc(0.5) within group (order by floor(extract(epoch from (? - ?)) * 1000)::bigint)",
         request.completed_at,
         request.admitted_at
       )
@@ -137,9 +131,6 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.RequestHealth do
   end
 
   defp normalize_latency_percentile(nil), do: nil
-
-  defp normalize_latency_percentile(value) when is_float(value),
-    do: value |> Float.round() |> trunc()
 
   defp normalize_latency_percentile(value) when is_integer(value), do: value
 

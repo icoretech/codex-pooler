@@ -110,7 +110,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
     {:noreply,
      socket
      |> load_cockpit()
-     |> request_cockpit_metrics()
      |> assign(:refresh_data_message, "Account data refreshed")}
   end
 
@@ -381,7 +380,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
            socket.assigns.cockpit.identity.id
          ) do
       {:ok, cockpit} ->
-        assign_cockpit(socket, cockpit)
+        socket
+        |> assign_cockpit(preserve_request_metrics(socket, cockpit))
+        |> request_cockpit_metrics()
 
       :error ->
         socket
@@ -391,18 +392,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
   end
 
   defp request_cockpit_metrics(socket) do
-    generation = socket.assigns.cockpit_metrics_generation + 1
+    if connected?(socket) do
+      generation = socket.assigns.cockpit_metrics_generation + 1
 
-    socket =
-      assign(socket,
-        cockpit_metrics_generation: generation,
-        cockpit_metrics_rerun?: socket.assigns.cockpit_metrics_running?
-      )
+      socket =
+        assign(socket,
+          cockpit_metrics_generation: generation,
+          cockpit_metrics_rerun?: socket.assigns.cockpit_metrics_running?
+        )
 
-    if socket.assigns.cockpit_metrics_running? do
-      socket
+      if socket.assigns.cockpit_metrics_running? do
+        socket
+      else
+        start_cockpit_metrics_task(socket, generation)
+      end
     else
-      start_cockpit_metrics_task(socket, generation)
+      socket
     end
   end
 
@@ -431,6 +436,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLive do
       :cockpit,
       UpstreamCockpitReadModel.merge_request_metrics(socket.assigns.cockpit, metrics)
     )
+  end
+
+  defp preserve_request_metrics(socket, cockpit) do
+    current = socket.assigns.cockpit.charts
+
+    UpstreamCockpitReadModel.merge_request_metrics(cockpit, %{
+      request_health: current.request_health,
+      pool_contribution: current.pool_contribution
+    })
   end
 
   # Event-driven cockpit reloads must not clobber policy edits in progress:

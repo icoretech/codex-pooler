@@ -156,6 +156,49 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetricsTest do
     refute inspect(quota_health) =~ "Quota hidden assignment"
   end
 
+  test "request aggregates count retried requests once and retain the lower median latency" do
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    scope = Scope.for_user(owner)
+
+    {:ok, pool} =
+      Pools.create_pool(scope, %{
+        slug: unique_slug("request-aggregate"),
+        name: "Request Aggregate"
+      })
+
+    %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    requests =
+      for {seconds_ago, latency_ms} <- [{10, 1_000}, {8, 2_000}, {6, 3_000}, {4, 4_000}] do
+        admitted_at = DateTime.add(now, -seconds_ago, :second)
+
+        insert_request!(pool, assignment, %{
+          status: "succeeded",
+          admitted_at: admitted_at,
+          completed_at: DateTime.add(admitted_at, latency_ms, :millisecond)
+        })
+      end
+
+    requests
+    |> Enum.at(1)
+    |> attempt_fixture(assignment, %{
+      attempt_number: 2,
+      status: "succeeded",
+      completed_at: DateTime.add(now, -1, :second)
+    })
+
+    assignments = [assignment_summary(assignment, pool)]
+    request_health = UpstreamCockpitMetrics.request_health(scope, identity, now)
+    contribution = UpstreamCockpitMetrics.pool_contribution(scope, identity, assignments)
+
+    assert request_health.kpis.total_requests_24h == 4
+    assert request_health.kpis.total_requests_7d == 4
+    assert request_health.kpis.p50_latency_ms_24h == 2_000
+    assert contribution.kpis.successful_requests_7d == 4
+    assert hd(contribution.items).successful_request_count_7d == 4
+  end
+
   test "recent request event rows return only safe metadata for visible retried and failed requests" do
     %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
     scope = Scope.for_user(owner)
