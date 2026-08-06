@@ -39,7 +39,7 @@ local helmVersion = 'v4.2.3';
     steps: [
       {
         name: 'quality',
-        image: 'elixir:1.20.1-otp-28-slim',
+        image: 'elixir:1.20.2-otp-28-slim',
         commands: [
           'apt-get update',
           'apt-get install -y --no-install-recommends build-essential ca-certificates curl git python3 ripgrep tar tzdata',
