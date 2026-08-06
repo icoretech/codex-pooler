@@ -325,6 +325,304 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
+  test "GET /v1/responses websocket characterizes function-only namespace choices" do
+    upstream = start_upstream(completed_websocket_response("resp_ws_function_namespace"))
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    namespace_tool = %{
+      "type" => "namespace",
+      "name" => "functions",
+      "description" => "Synthetic function namespace",
+      "tools" => [
+        %{
+          "type" => "function",
+          "name" => "namespace_function_fixture",
+          "description" => "Synthetic namespace function",
+          "parameters" => %{"type" => "object", "properties" => %{}}
+        }
+      ]
+    }
+
+    tool_choice = %{"type" => "function", "name" => "namespace_function_fixture"}
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "function-namespace-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic function namespace websocket request",
+          "tools" => [namespace_tool],
+          "tool_choice" => tool_choice
+        })
+
+      {conn, websocket, frames} = receive_websocket_until_terminal!(conn, websocket, ref, [])
+      assert Enum.map(frames, & &1["type"]) == ["response.completed"]
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.method == "WEBSOCKET"
+      assert captured.path == "/backend-api/codex/responses"
+      assert captured.json["tools"] == [namespace_tool]
+      assert captured.json["tool_choice"] == tool_choice
+
+      assert_successful_websocket_lifecycle!(setup)
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "GET /v1/responses websocket forwards mixed namespaced custom tools without metadata leakage" do
+    upstream = start_upstream(completed_websocket_response("resp_ws_namespace_custom_definition"))
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+    prompt_marker = "synthetic websocket namespaced custom prompt marker"
+    description_marker = "synthetic websocket namespaced custom description marker"
+    custom_input_marker = "synthetic_websocket_namespaced_custom_input_marker"
+    grammar_marker = ~s(start: "#{custom_input_marker}")
+
+    namespace_tool = %{
+      "type" => "namespace",
+      "name" => "functions",
+      "description" => "Synthetic mixed namespace",
+      "tools" => [
+        %{
+          "type" => "function",
+          "name" => "namespaced_function_fixture",
+          "description" => "Synthetic adjacent function",
+          "parameters" => %{"type" => "object", "properties" => %{}}
+        },
+        %{
+          "type" => "custom",
+          "name" => "namespaced_custom_fixture",
+          "description" => description_marker,
+          "format" => %{
+            "type" => "grammar",
+            "definition" => grammar_marker,
+            "syntax" => "lark"
+          }
+        }
+      ]
+    }
+
+    tool_choice = %{"type" => "custom", "name" => "namespaced_custom_fixture"}
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "namespace-custom-definition-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => prompt_marker,
+          "tools" => [namespace_tool],
+          "tool_choice" => tool_choice
+        })
+
+      {conn, websocket, frames} = receive_websocket_until_terminal!(conn, websocket, ref, [])
+      assert Enum.map(frames, & &1["type"]) == ["response.completed"]
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.method == "WEBSOCKET"
+      assert captured.path == "/backend-api/codex/responses"
+      assert captured.json["tools"] == [namespace_tool]
+      assert captured.json["tool_choice"] == tool_choice
+
+      assert_successful_websocket_lifecycle!(setup)
+
+      assert [request] =
+               Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
+
+      assert [attempt] =
+               Repo.all(from(attempt in Attempt, where: attempt.request_id == ^request.id))
+
+      persistence_text =
+        inspect(
+          {request.request_metadata, attempt.response_metadata, RequestLogs.list(setup.pool)}
+        )
+
+      for marker <- [prompt_marker, description_marker, grammar_marker, custom_input_marker] do
+        refute persistence_text =~ marker
+      end
+
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "GET /v1/responses websocket restores omitted and null declared custom namespaces" do
+    name = "websocket_restored_custom_fixture"
+
+    output = [
+      %{
+        "type" => "custom_tool_call",
+        "name" => name,
+        "call_id" => "call_websocket_omitted",
+        "input" => "websocket_omitted"
+      },
+      %{
+        "type" => "custom_tool_call",
+        "name" => name,
+        "namespace" => nil,
+        "call_id" => "call_websocket_null",
+        "input" => "websocket_null"
+      },
+      %{
+        "type" => "custom_tool_call",
+        "name" => name,
+        "namespace" => "provider.websocket",
+        "call_id" => "call_websocket_explicit",
+        "input" => "websocket_explicit"
+      }
+    ]
+
+    upstream =
+      start_upstream(completed_websocket_response("resp_ws_restored_custom_namespaces", output))
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "namespace-restoration-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic websocket namespace restoration",
+          "tools" => [
+            %{
+              "type" => "namespace",
+              "name" => "functions",
+              "description" => "Synthetic websocket namespace",
+              "tools" => [%{"type" => "custom", "name" => name}]
+            }
+          ]
+        })
+
+      {conn, websocket, frames} = receive_websocket_until_terminal!(conn, websocket, ref, [])
+      assert [%{"type" => "response.completed", "response" => %{"output" => calls}}] = frames
+
+      assert Enum.map(calls, & &1["namespace"]) == [
+               "functions",
+               "functions",
+               "provider.websocket"
+             ]
+
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "GET /v1/responses websocket rejects a Lite namespaced custom choice before upstream dispatch" do
+    upstream =
+      start_upstream(completed_websocket_response("should_not_dispatch_lite_namespace_choice"))
+
+    setup = gateway_setup(upstream)
+    put_public_model_serving_mode!(setup, "lite")
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    namespace_tool = %{
+      "type" => "namespace",
+      "name" => "functions",
+      "description" => "Synthetic Lite namespace",
+      "tools" => [
+        %{
+          "type" => "function",
+          "name" => "lite_namespaced_function_fixture",
+          "description" => "Synthetic Lite function",
+          "parameters" => %{"type" => "object", "properties" => %{}}
+        },
+        %{
+          "type" => "custom",
+          "name" => "lite_namespaced_custom_fixture",
+          "format" => %{
+            "type" => "grammar",
+            "definition" => ~s(start: "lite_namespaced_custom_input"),
+            "syntax" => "lark"
+          }
+        }
+      ]
+    }
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "lite-namespace-custom-choice-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      post_upgrade_baseline = settled_post_upgrade_counts!(upstream)
+
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic Lite namespaced custom websocket request",
+          "tools" => [namespace_tool],
+          "tool_choice" => %{"type" => "custom", "name" => "lite_namespaced_custom_fixture"}
+        })
+
+      {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{
+               "type" => "error",
+               "status" => 400,
+               "error" => %{
+                 "code" => "unsupported_parameter",
+                 "param" => "tool_choice"
+               }
+             } = Jason.decode!(frame)
+
+      assert FakeUpstream.count(upstream) == 0
+
+      assert [request] =
+               Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
+
+      assert request.status == "rejected"
+      assert request.last_error_code == "unsupported_parameter"
+      assert request.request_metadata["gateway_denial"]["param"] == "tool_choice"
+
+      assert Repo.aggregate(
+               from(attempt in Attempt, where: attempt.request_id == ^request.id),
+               :count
+             ) == 0
+
+      assert Repo.aggregate(
+               from(entry in LedgerEntry, where: entry.request_id == ^request.id),
+               :count
+             ) == 0
+
+      assert_lifecycle_delta!(post_upgrade_baseline, lifecycle_counts(upstream), %{
+        upstream_requests: 0,
+        requests: 1,
+        attempts: 0,
+        ledger_entries: 0,
+        turns: 0
+      })
+
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   test "GET /v1/responses websocket forwards a custom definition and typed named choice exactly" do
     upstream = start_upstream(completed_websocket_response("resp_ws_custom_definition"))
     setup = gateway_setup(upstream)
@@ -1242,7 +1540,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     public_websocket_send_text!(conn, websocket, ref, Jason.encode!(payload))
   end
 
-  defp completed_websocket_response(response_id) do
+  defp completed_websocket_response(response_id, output \\ []) do
     FakeUpstream.sse_stream(
       [
         {"response.completed",
@@ -1251,7 +1549,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
            "response" => %{
              "id" => response_id,
              "status" => "completed",
-             "output" => [],
+             "output" => output,
              "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
            }
          }}

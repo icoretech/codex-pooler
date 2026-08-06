@@ -15,7 +15,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.OpenAIStreamCollector do
           {:ok, map()} | {:error, term()}
   def collect_response(response, %SelectedCandidateContext{} = context, finalization_callbacks) do
     collect_stream(response, context, finalization_callbacks, fn body ->
-      with {:ok, response_body} <- Responses.response_from_sse(body) do
+      with {:ok, response_body} <- Responses.response_from_sse(body, context.request_options) do
         {:ok, %{status: 200, headers: json_headers(), raw_body: Jason.encode!(response_body)}}
       end
     end)

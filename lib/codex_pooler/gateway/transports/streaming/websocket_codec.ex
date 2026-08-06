@@ -96,6 +96,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   def coerce_request(payload, %RequestOptions{} = opts, push_frame)
       when is_map(payload) and is_function(push_frame, 1) do
     with {:ok, coerced} <- coerce_response_payload(payload, opts) do
+      push_frame = namespace_restoring_writer(push_frame, coerced.request_options)
+
       request_options =
         coerced.request_options
         |> RequestOptions.for_payload(coerced.endpoint, coerced.payload)
@@ -111,6 +113,27 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
         )
 
       {:ok, %{coerced | request_options: request_options}}
+    end
+  end
+
+  defp namespace_restoring_writer(
+         push_frame,
+         %RequestOptions{openai_compatibility: %{custom_tool_namespaces: namespaces}}
+       )
+       when is_function(push_frame, 1) and map_size(namespaces) > 0 do
+    fn data -> push_frame.(restore_custom_tool_call_namespaces(data, namespaces)) end
+  end
+
+  defp namespace_restoring_writer(push_frame, %RequestOptions{}), do: push_frame
+
+  defp restore_custom_tool_call_namespaces(data, namespaces) do
+    case Jason.decode(data) do
+      {:ok, %{} = decoded} ->
+        restored = Responses.restore_custom_tool_call_namespaces(decoded, namespaces)
+        if restored === decoded, do: data, else: Jason.encode!(restored)
+
+      _invalid ->
+        data
     end
   end
 

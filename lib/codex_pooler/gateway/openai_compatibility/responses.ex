@@ -70,7 +70,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
       payload =
         maybe_force_backend_streaming(payload, opts)
 
-      request_options = RequestOptions.build(drop_surface(opts), @endpoint, payload)
+      request_options =
+        opts
+        |> drop_surface()
+        |> RequestOptions.build(@endpoint, payload)
+        |> RequestOptions.put_openai_compatibility(
+          custom_tool_namespaces: custom_tool_namespaces(payload)
+        )
+
       {:ok, %{endpoint: @endpoint, payload: payload, request_options: request_options}}
     end
   end
@@ -88,8 +95,21 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   defp drop_surface(%RequestOptions{} = opts), do: opts
   defp drop_surface(opts) when is_map(opts), do: Map.delete(opts, :surface)
 
-  @spec response_from_sse(binary()) :: {:ok, map()} | {:error, Error.reason()}
-  def response_from_sse(body) when is_binary(body), do: SSE.response_from_sse(body)
+  @spec response_from_sse(binary(), RequestOptions.t() | map()) ::
+          {:ok, map()} | {:error, Error.reason()}
+  def response_from_sse(body, request_options \\ %{}) when is_binary(body) do
+    SSE.response_from_sse(body, custom_tool_namespaces(request_options))
+  end
+
+  @spec restore_custom_tool_call_namespaces(map(), map()) :: map()
+  def restore_custom_tool_call_namespaces(%{} = value, custom_tool_namespaces)
+      when is_map(custom_tool_namespaces) do
+    value
+    |> restore_nested_response(custom_tool_namespaces)
+    |> restore_nested_item(custom_tool_namespaces)
+    |> restore_output_items(custom_tool_namespaces)
+    |> restore_custom_tool_call_namespace(custom_tool_namespaces)
+  end
 
   defp maybe_force_backend_streaming(payload, opts) do
     if backend_streaming_required?(opts) do
@@ -119,6 +139,74 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
 
   defp backend_streaming_required?(opts) when is_list(opts),
     do: backend_streaming_required?(Map.new(opts))
+
+  defp custom_tool_namespaces(%RequestOptions{
+         openai_compatibility: %{custom_tool_namespaces: custom_tool_namespaces}
+       })
+       when is_map(custom_tool_namespaces),
+       do: custom_tool_namespaces
+
+  defp custom_tool_namespaces(%{"tools" => tools}) when is_list(tools),
+    do: custom_tool_namespaces_from_tools(tools)
+
+  defp custom_tool_namespaces(%{tools: tools}) when is_list(tools),
+    do: custom_tool_namespaces_from_tools(tools)
+
+  defp custom_tool_namespaces(_value), do: %{}
+
+  defp custom_tool_namespaces_from_tools(tools) do
+    Enum.reduce(tools, %{}, fn
+      %{"type" => "namespace", "name" => namespace, "tools" => children}, acc
+      when is_binary(namespace) and is_list(children) ->
+        Enum.reduce(children, acc, fn
+          %{"type" => "custom", "name" => name}, child_acc when is_binary(name) ->
+            Map.put(child_acc, name, namespace)
+
+          _child, child_acc ->
+            child_acc
+        end)
+
+      _tool, acc ->
+        acc
+    end)
+  end
+
+  defp restore_nested_response(%{"response" => %{} = response} = value, namespaces) do
+    Map.put(value, "response", restore_custom_tool_call_namespaces(response, namespaces))
+  end
+
+  defp restore_nested_response(value, _namespaces), do: value
+
+  defp restore_nested_item(%{"item" => %{} = item} = value, namespaces) do
+    Map.put(value, "item", restore_custom_tool_call_namespaces(item, namespaces))
+  end
+
+  defp restore_nested_item(value, _namespaces), do: value
+
+  defp restore_output_items(%{"output" => output} = value, namespaces) when is_list(output) do
+    output =
+      Enum.map(output, fn
+        %{} = item -> restore_custom_tool_call_namespaces(item, namespaces)
+        item -> item
+      end)
+
+    Map.put(value, "output", output)
+  end
+
+  defp restore_output_items(value, _namespaces), do: value
+
+  defp restore_custom_tool_call_namespace(
+         %{"type" => "custom_tool_call", "name" => name} = item,
+         namespaces
+       )
+       when is_binary(name) do
+    case {Map.get(item, "namespace"), Map.fetch(namespaces, name)} do
+      {nil, {:ok, namespace}} -> Map.put(item, "namespace", namespace)
+      {_provider_namespace, _mapping} -> item
+    end
+  end
+
+  defp restore_custom_tool_call_namespace(value, _namespaces), do: value
 
   defp validate_prompt_cache_options(%{"prompt_cache_options" => options})
        when is_map(options) do
@@ -506,7 +594,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
 
   defp validate_namespace_tools(tools) when is_list(tools) and tools != [] do
     Enum.reduce_while(tools, :ok, fn tool, _acc ->
-      case validate_namespace_function_tool(tool) do
+      case validate_namespace_tool(tool) do
         :ok -> {:cont, :ok}
         {:error, reason} -> {:halt, {:error, reason}}
       end
@@ -516,14 +604,16 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   defp validate_namespace_tools(_tools),
     do: {:error, Error.invalid_request("namespace tool requires function tools", "tools")}
 
-  defp validate_namespace_function_tool(
+  defp validate_namespace_tool(
          %{"type" => "function", "name" => name, "parameters" => parameters} = tool
        )
        when is_binary(name) and is_map(parameters) do
     validate_function_tool(tool)
   end
 
-  defp validate_namespace_function_tool(_tool),
+  defp validate_namespace_tool(%{"type" => "custom"} = tool), do: validate_custom_tool(tool)
+
+  defp validate_namespace_tool(_tool),
     do: {:error, Error.invalid_request("namespace tool requires function tools", "tools")}
 
   defp validate_function_tool(
@@ -817,8 +907,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
 
   defp custom_tool_names(%{"tools" => tools}) when is_list(tools) do
     Enum.flat_map(tools, fn
-      %{"type" => "custom", "name" => name} when is_binary(name) -> [name]
-      _tool -> []
+      %{"type" => "custom", "name" => name} when is_binary(name) ->
+        [name]
+
+      %{"type" => "namespace", "tools" => namespace_tools} when is_list(namespace_tools) ->
+        custom_tool_names(%{"tools" => namespace_tools})
+
+      _tool ->
+        []
     end)
   end
 

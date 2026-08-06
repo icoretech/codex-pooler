@@ -24,7 +24,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   alias CodexPooler.Gateway, as: RuntimeGateway
   alias CodexPooler.Gateway.OpenAICompatibility.Responses, as: ResponsesCompat
   alias CodexPooler.Gateway.OperationalSettings
-  alias CodexPooler.Gateway.Persistence.CodexTurn
+  alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Runtime.Finalization.ResponseUsage
   alias CodexPooler.Gateway.Transports.Streaming.{RetainedBody, WebsocketBridgeStream}
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
@@ -91,12 +91,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
   end
 
-  defp completed_event(id) do
+  defp completed_event(id, output \\ []) do
     {"response.completed",
      %{
        "type" => "response.completed",
        "response" => %{
          "id" => id,
+         "output" => output,
          "usage" => %{"input_tokens" => 12, "output_tokens" => 5, "total_tokens" => 17}
        }
      }}
@@ -384,6 +385,241 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert completed_id(response.resp_body) == "resp_parity"
     assert FakeUpstream.websocket_connection_count(upstream) == 1
     assert event_types(response.resp_body) == ["response.created", "response.completed"]
+  end
+
+  test "the owner-forwarded bridge preserves a function-only namespace and exact typed choice", %{
+    conn: conn
+  } do
+    upstream = start_upstream(FakeUpstream.sse_stream([completed_event("resp_bridge_namespace")]))
+    setup = gateway_setup(upstream)
+    session = "bridge-namespace-#{System.unique_integer([:positive])}"
+
+    namespace_tool = %{
+      "type" => "namespace",
+      "name" => "functions",
+      "description" => "Synthetic function namespace",
+      "tools" => [
+        %{
+          "type" => "function",
+          "name" => "bridge_function_fixture",
+          "description" => "Synthetic bridge function",
+          "parameters" => %{"type" => "object", "properties" => %{}}
+        }
+      ]
+    }
+
+    tool_choice = %{"type" => "function", "name" => "bridge_function_fixture"}
+
+    response =
+      post_stream(
+        conn,
+        setup,
+        session,
+        stream_payload(setup, "function namespace bridge characterization")
+        |> Map.merge(%{"tools" => [namespace_tool], "tool_choice" => tool_choice})
+      )
+
+    assert response.status == 200
+    assert completed_id(response.resp_body) == "resp_bridge_namespace"
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.method == "WEBSOCKET"
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["tools"] == [namespace_tool]
+    assert captured.json["tool_choice"] == tool_choice
+  end
+
+  test "the owner-forwarded bridge sends a mixed namespaced custom tool and exact choice", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(FakeUpstream.sse_stream([completed_event("resp_bridge_namespace_custom")]))
+
+    setup = gateway_setup(upstream)
+    session = "bridge-namespace-custom-#{System.unique_integer([:positive])}"
+    prompt_marker = "synthetic bridge namespaced custom prompt marker"
+    description_marker = "synthetic bridge namespaced custom description marker"
+    custom_input_marker = "synthetic_bridge_namespaced_custom_input_marker"
+    grammar_marker = ~s(start: "#{custom_input_marker}")
+
+    namespace_tool = %{
+      "type" => "namespace",
+      "name" => "functions",
+      "description" => "Synthetic mixed namespace",
+      "tools" => [
+        %{
+          "type" => "function",
+          "name" => "bridge_namespaced_function_fixture",
+          "description" => "Synthetic adjacent function",
+          "parameters" => %{"type" => "object", "properties" => %{}}
+        },
+        %{
+          "type" => "custom",
+          "name" => "bridge_namespaced_custom_fixture",
+          "description" => description_marker,
+          "format" => %{
+            "type" => "grammar",
+            "definition" => grammar_marker,
+            "syntax" => "lark"
+          }
+        }
+      ]
+    }
+
+    tool_choice = %{"type" => "custom", "name" => "bridge_namespaced_custom_fixture"}
+
+    response =
+      post_stream(
+        conn,
+        setup,
+        session,
+        stream_payload(setup, prompt_marker)
+        |> Map.merge(%{"tools" => [namespace_tool], "tool_choice" => tool_choice})
+      )
+
+    assert response.status == 200
+    assert event_types(response.resp_body) == ["response.created", "response.completed"]
+    assert completed_id(response.resp_body) == "resp_bridge_namespace_custom"
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.method == "WEBSOCKET"
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["tools"] == [namespace_tool]
+    assert captured.json["tool_choice"] == tool_choice
+
+    request = latest_request(setup.pool)
+    assert request.status == "succeeded"
+    assert request.transport == "http_sse"
+    assert [attempt] = attempts_for(request)
+    assert attempt.status == "succeeded"
+    assert attempt.transport == "websocket"
+
+    assert [%CodexTurn{codex_session_id: codex_session_id, status: "succeeded"}] =
+             Repo.all(from(turn in CodexTurn, where: turn.request_id == ^request.id))
+
+    assert {:ok, owner_pid} = WebsocketOwnerSession.lookup(codex_session_id)
+    assert Process.alive?(owner_pid)
+
+    persistence_text =
+      inspect({
+        request.request_metadata,
+        attempt.response_metadata,
+        RequestLogs.list(setup.pool, filters: %{request_id: request.id})
+      })
+
+    for marker <- [prompt_marker, description_marker, grammar_marker, custom_input_marker] do
+      refute persistence_text =~ marker
+    end
+
+    owner_ref = Process.monitor(owner_pid)
+    assert :ok = GenServer.stop(owner_pid, :shutdown, 1_000)
+    assert_receive {:DOWN, ^owner_ref, :process, ^owner_pid, :shutdown}, 1_000
+    assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(codex_session_id)
+  end
+
+  test "the owner-forwarded bridge restores null and omitted declared custom namespaces", %{
+    conn: conn
+  } do
+    name = "bridge_restored_custom_fixture"
+
+    null_namespace_call = %{
+      "type" => "custom_tool_call",
+      "name" => name,
+      "namespace" => nil,
+      "call_id" => "call_bridge_restored",
+      "input" => "bridge_restored"
+    }
+
+    omitted_namespace_call = %{
+      "type" => "custom_tool_call",
+      "name" => name,
+      "call_id" => "call_bridge_restored_omitted",
+      "input" => "bridge_restored_omitted"
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          completed_event("resp_bridge_restored_custom_namespace", [
+            null_namespace_call,
+            omitted_namespace_call
+          ])
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    session = "bridge-namespace-restoration-#{System.unique_integer([:positive])}"
+
+    response =
+      post_stream(
+        conn,
+        setup,
+        session,
+        stream_payload(setup, "synthetic bridge namespace restoration")
+        |> Map.put("tools", [
+          %{
+            "type" => "namespace",
+            "name" => "functions",
+            "description" => "Synthetic bridge namespace",
+            "tools" => [%{"type" => "custom", "name" => name}]
+          }
+        ])
+      )
+
+    assert response.status == 200
+
+    assert %{"response" => %{"output" => restored}} =
+             response.resp_body
+             |> event_payloads()
+             |> Enum.find(&(&1["type"] == "response.completed"))
+
+    assert Enum.map(restored, & &1["namespace"]) == ["functions", "functions"]
+  end
+
+  test "the owner-forwarded bridge rejects malformed nested custom tools before forwarding", %{
+    conn: conn
+  } do
+    upstream = start_upstream(FakeUpstream.sse_stream([completed_event("should_not_forward")]))
+    setup = gateway_setup(upstream)
+    session = "bridge-malformed-custom-#{System.unique_integer([:positive])}"
+
+    malformed_namespace_tool = %{
+      "type" => "namespace",
+      "name" => "functions",
+      "description" => "Synthetic malformed namespace",
+      "tools" => [
+        %{
+          "type" => "custom",
+          "name" => "bridge_malformed_custom_fixture",
+          "format" => %{
+            "type" => "grammar",
+            "definition" => 42,
+            "syntax" => "lark"
+          }
+        }
+      ]
+    }
+
+    response =
+      post_stream(
+        conn,
+        setup,
+        session,
+        stream_payload(setup, "synthetic malformed nested custom request")
+        |> Map.merge(%{"tools" => [malformed_namespace_tool]})
+      )
+
+    assert %{"error" => %{"code" => "invalid_request", "param" => "tools"}} =
+             json_response(response, 400)
+
+    assert FakeUpstream.count(upstream) == 0
+    assert FakeUpstream.websocket_connection_count(upstream) == 0
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
+    assert Repo.aggregate(LedgerEntry, :count) == 0
+    assert Repo.aggregate(CodexSession, :count) == 0
+    assert Repo.aggregate(CodexTurn, :count) == 0
+    assert %{items: [], total: 0} = RequestLogs.list(setup.pool)
   end
 
   test "a bridged attempt records payload compression metadata for the websocket envelope", %{

@@ -59,12 +59,19 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
   end
 
   defp reject_custom_tool_definitions(%{"tools" => tools}) when is_list(tools) do
-    if Enum.any?(tools, &match?(%{"type" => "custom"}, &1)),
+    if Enum.any?(tools, &custom_tool_definition?/1),
       do: {:error, Error.invalid_request("tool shape is not translatable", "tools")},
       else: :ok
   end
 
   defp reject_custom_tool_definitions(_payload), do: :ok
+
+  defp custom_tool_definition?(%{"type" => "custom"}), do: true
+
+  defp custom_tool_definition?(%{"tools" => tools}) when is_list(tools),
+    do: Enum.any?(tools, &custom_tool_definition?/1)
+
+  defp custom_tool_definition?(_tool), do: false
 
   defp reject_custom_tool_choice(%{"tool_choice" => %{"type" => "custom"}}),
     do: {:error, Error.invalid_request("tool_choice shape is not translatable", "tool_choice")}

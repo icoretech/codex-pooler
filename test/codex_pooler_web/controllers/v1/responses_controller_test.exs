@@ -3529,6 +3529,424 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   @tag :tool_result_previous_response
+  test "POST /v1/responses characterizes function-only namespace choices", %{conn: conn} do
+    upstream = start_upstream(issue_241_completed_response("resp_v1_function_namespace"))
+    setup = gateway_setup(upstream)
+
+    namespace_tool = %{
+      "type" => "namespace",
+      "name" => "functions",
+      "description" => "Synthetic function namespace",
+      "tools" => [
+        %{
+          "type" => "function",
+          "name" => "namespace_function_fixture",
+          "description" => "Synthetic namespace function",
+          "parameters" => %{"type" => "object", "properties" => %{}}
+        }
+      ]
+    }
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic function namespace request",
+        "tools" => [namespace_tool],
+        "tool_choice" => %{"type" => "function", "name" => "namespace_function_fixture"}
+      })
+
+    assert %{"id" => "resp_v1_function_namespace", "object" => "response"} =
+             json_response(response, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["tools"] == [namespace_tool]
+
+    assert captured.json["tool_choice"] == %{
+             "type" => "function",
+             "name" => "namespace_function_fixture"
+           }
+
+    assert_issue_241_success_lifecycle!(setup)
+  end
+
+  test "POST /v1/responses forwards mixed namespaced custom tools without metadata leakage", %{
+    conn: conn
+  } do
+    upstream = start_upstream(issue_241_completed_response("resp_v1_namespace_custom_definition"))
+    setup = gateway_setup(upstream)
+    prompt_marker = "synthetic namespaced custom prompt marker"
+    description_marker = "synthetic namespaced custom description marker"
+    custom_input_marker = "synthetic_namespaced_custom_input_marker"
+    grammar_marker = ~s(start: "#{custom_input_marker}")
+
+    namespace_tool = %{
+      "type" => "namespace",
+      "name" => "functions",
+      "description" => "Synthetic mixed namespace",
+      "tools" => [
+        %{
+          "type" => "function",
+          "name" => "namespaced_function_fixture",
+          "description" => "Synthetic adjacent function",
+          "parameters" => %{"type" => "object", "properties" => %{}}
+        },
+        %{
+          "type" => "custom",
+          "name" => "namespaced_custom_fixture",
+          "description" => description_marker,
+          "format" => %{
+            "type" => "grammar",
+            "definition" => grammar_marker,
+            "syntax" => "lark"
+          }
+        }
+      ]
+    }
+
+    tool_choice = %{"type" => "custom", "name" => "namespaced_custom_fixture"}
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => prompt_marker,
+        "tools" => [namespace_tool],
+        "tool_choice" => tool_choice
+      })
+
+    assert %{"id" => "resp_v1_namespace_custom_definition", "object" => "response"} =
+             json_response(response, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.method == "POST"
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["tools"] == [namespace_tool]
+    assert captured.json["tool_choice"] == tool_choice
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+
+    persistence_text =
+      inspect({request.request_metadata, attempt.response_metadata, RequestLogs.list(setup.pool)})
+
+    for marker <- [prompt_marker, description_marker, grammar_marker, custom_input_marker] do
+      refute persistence_text =~ marker
+    end
+
+    assert_issue_241_success_lifecycle!(setup)
+  end
+
+  test "POST /v1/responses restores only declared custom namespaces in collected output", %{
+    conn: conn
+  } do
+    namespaced_name = "collected_namespaced_custom_fixture"
+    flat_name = "collected_flat_custom_fixture"
+
+    output = [
+      %{
+        "type" => "custom_tool_call",
+        "name" => namespaced_name,
+        "call_id" => "call_collected_omitted",
+        "input" => "collected_omitted"
+      },
+      %{
+        "type" => "custom_tool_call",
+        "name" => namespaced_name,
+        "namespace" => nil,
+        "call_id" => "call_collected_null",
+        "input" => "collected_null"
+      },
+      %{
+        "type" => "custom_tool_call",
+        "name" => namespaced_name,
+        "namespace" => "provider.tools",
+        "call_id" => "call_collected_explicit",
+        "input" => "collected_explicit"
+      },
+      %{
+        "type" => "custom_tool_call",
+        "name" => flat_name,
+        "call_id" => "call_collected_flat",
+        "input" => "collected_flat"
+      },
+      %{
+        "type" => "custom_tool_call",
+        "name" => "collected_unknown_custom_fixture",
+        "namespace" => nil,
+        "call_id" => "call_collected_unknown",
+        "input" => "collected_unknown"
+      }
+    ]
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_v1_collected_custom_namespaces",
+               "status" => "completed",
+               "output" => output,
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    namespace_tool = %{
+      "type" => "namespace",
+      "name" => "functions",
+      "description" => "Synthetic collected namespace",
+      "tools" => [%{"type" => "custom", "name" => namespaced_name}]
+    }
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic collected namespace restoration",
+        "tools" => [namespace_tool, %{"type" => "custom", "name" => flat_name}]
+      })
+
+    assert %{"output" => [omitted, null, explicit, flat, unknown]} = json_response(response, 200)
+    assert omitted["namespace"] == "functions"
+    assert null["namespace"] == "functions"
+    assert explicit["namespace"] == "provider.tools"
+    refute Map.has_key?(flat, "namespace")
+    assert unknown["namespace"] == nil
+  end
+
+  test "POST /v1/responses restores declared custom namespaces in SSE output items", %{
+    conn: conn
+  } do
+    name = "streamed_namespaced_custom_fixture"
+
+    calls = [
+      %{
+        "type" => "custom_tool_call",
+        "name" => name,
+        "call_id" => "call_streamed_omitted",
+        "input" => "streamed_omitted"
+      },
+      %{
+        "type" => "custom_tool_call",
+        "name" => name,
+        "namespace" => nil,
+        "call_id" => "call_streamed_null",
+        "input" => "streamed_null"
+      }
+    ]
+
+    events =
+      Enum.map(calls, fn call ->
+        {"response.output_item.done", %{"type" => "response.output_item.done", "item" => call}}
+      end) ++
+        [
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_v1_streamed_custom_namespaces",
+               "status" => "completed",
+               "output" => [],
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+             }
+           }}
+        ]
+
+    upstream = start_upstream(FakeUpstream.sse_stream(events))
+    setup = gateway_setup(upstream)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic streamed namespace restoration",
+        "stream" => true,
+        "tools" => [
+          %{
+            "type" => "namespace",
+            "name" => "functions",
+            "description" => "Synthetic streamed namespace",
+            "tools" => [%{"type" => "custom", "name" => name}]
+          }
+        ]
+      })
+
+    restored_calls =
+      response.resp_body
+      |> public_sse_events()
+      |> Enum.filter(&(&1["event"] == "response.output_item.done"))
+      |> Enum.map(&get_in(&1, ["data", "item"]))
+
+    assert Enum.map(restored_calls, & &1["namespace"]) == ["functions", "functions"]
+  end
+
+  test "POST /v1/responses rejects invalid namespaced custom tools before gateway accounting", %{
+    conn: conn
+  } do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    invalid_tools = [
+      {"malformed nested custom",
+       %{
+         "type" => "namespace",
+         "name" => "functions",
+         "description" => "Synthetic namespace",
+         "tools" => [
+           %{
+             "type" => "custom",
+             "name" => "malformed_namespaced_custom_fixture",
+             "format" => %{"type" => "grammar", "syntax" => "lark"}
+           }
+         ]
+       }},
+      {"hosted namespace child",
+       %{
+         "type" => "namespace",
+         "name" => "functions",
+         "description" => "Synthetic namespace",
+         "tools" => [%{"type" => "web_search_preview"}]
+       }},
+      {"nested namespace child",
+       %{
+         "type" => "namespace",
+         "name" => "functions",
+         "description" => "Synthetic namespace",
+         "tools" => [
+           %{
+             "type" => "namespace",
+             "name" => "nested",
+             "description" => "Synthetic nested namespace",
+             "tools" => [
+               %{
+                 "type" => "function",
+                 "name" => "nested_function_fixture",
+                 "parameters" => %{"type" => "object", "properties" => %{}}
+               }
+             ]
+           }
+         ]
+       }},
+      {"duplicate executable name",
+       [
+         %{
+           "type" => "function",
+           "name" => "duplicated_namespaced_executable",
+           "parameters" => %{"type" => "object", "properties" => %{}}
+         },
+         %{
+           "type" => "namespace",
+           "name" => "functions",
+           "description" => "Synthetic namespace",
+           "tools" => [
+             %{"type" => "custom", "name" => "duplicated_namespaced_executable"}
+           ]
+         }
+       ]}
+    ]
+
+    for {label, tools} <- invalid_tools do
+      tools = if is_list(tools), do: tools, else: [tools]
+
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic invalid namespaced custom request",
+          "tools" => tools
+        })
+
+      assert %{
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_request",
+                 "param" => "tools"
+               }
+             } = json_response(response, 400),
+             label
+
+      assert FakeUpstream.count(upstream) == 0, label
+      assert Repo.aggregate(Request, :count) == 0, label
+      assert Repo.aggregate(Attempt, :count) == 0, label
+      assert Repo.aggregate(LedgerEntry, :count) == 0, label
+      assert Repo.aggregate(RequestLogFact, :count) == 0, label
+    end
+  end
+
+  test "POST /v1/responses keeps Lite namespaced custom choice denial inside gateway accounting",
+       %{
+         conn: conn
+       } do
+    upstream =
+      start_upstream(issue_241_completed_response("should_not_dispatch_lite_namespace_choice"))
+
+    setup = gateway_setup(upstream)
+    put_public_model_serving_mode!(setup, "lite")
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic Lite namespaced custom choice request",
+        "tools" => [
+          %{
+            "type" => "namespace",
+            "name" => "functions",
+            "description" => "Synthetic namespace",
+            "tools" => [
+              %{
+                "type" => "custom",
+                "name" => "lite_namespaced_custom_fixture",
+                "format" => %{
+                  "type" => "grammar",
+                  "definition" => ~s(start: "lite_namespaced_custom_input"),
+                  "syntax" => "lark"
+                }
+              }
+            ]
+          }
+        ],
+        "tool_choice" => %{"type" => "custom", "name" => "lite_namespaced_custom_fixture"}
+      })
+
+    assert %{
+             "error" => %{
+               "code" => "unsupported_parameter",
+               "message" => "Unsupported parameter: tool_choice",
+               "param" => "tool_choice"
+             }
+           } = json_response(response, 400)
+
+    assert FakeUpstream.count(upstream) == 0
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "rejected"
+    assert request.last_error_code == "unsupported_parameter"
+    assert request.request_metadata["gateway_denial"]["param"] == "tool_choice"
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry, where: entry.request_id == ^request.id),
+             :count
+           ) == 0
+  end
+
   test "POST /v1/responses keeps nested namespace lowering and strict function handling", %{
     conn: conn
   } do

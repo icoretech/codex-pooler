@@ -463,23 +463,39 @@ limited to function tools, including nested function tools inside accepted
 namespace tools. Strict function tools and strict structured-output schemas stay
 on the strict validation path and are not made looser.
 
-Direct public Responses requests also accept executable custom tools on
-`POST /v1/responses` and websocket `response.create`. A custom tool requires
-`type: "custom"` and a nonblank `name`. It may include a description,
-`defer_loading`, nullable `allowed_callers` using `direct` or `programmatic`, and
-either unconstrained text or a `lark`/`regex` grammar format. A typed custom
-`tool_choice` resolves only a declared custom tool with the same exact name and
-kind. Full mode preserves that typed choice. Lite mode rejects map-shaped typed
-choices before upstream dispatch with `unsupported_parameter` and
+Direct public Responses requests also accept exact executable custom tools on
+`POST /v1/responses` and websocket `response.create`. Exact top-level custom
+definitions and nested custom definitions are accepted in an already-valid
+namespace. `functions` is the
+canonical Codex namespace example, not a restriction: any nonblank valid
+namespace accepts the same flat `function` and exact `custom` children. A custom
+tool requires `type: "custom"` and a nonblank `name`. It may include a
+description, boolean `defer_loading`, nullable `allowed_callers` using `direct`
+or `programmatic`, and omitted, unconstrained text, or a `lark`/`regex` grammar
+format. Hosted, MCP, tool-search, nested-namespace, malformed, and duplicate
+executable-name shapes are rejected; executable names must be globally unique
+across top-level and namespace children.
+
+A typed custom `tool_choice` resolves only a declared same-kind custom tool with
+the same exact name, whether it is top-level or an accepted namespace child.
+Full mode preserves that typed choice. Lite mode rejects every map-shaped
+`tool_choice` before upstream dispatch with `unsupported_parameter` and
 `param: "tool_choice"`; use automatic or explicit Full mode when a client needs
 forced typed selection. That rejection follows the model's serving mode rather
 than the endpoint, so any map-shaped `tool_choice` is rejected on a Lite-served
 model, including a Chat Completions named-function choice. String choices such
-as `auto` are accepted in both modes. This is separate from accepted `custom_tool_call` replay
-input. Chat Completions does not accept executable custom definitions or custom
-choices, and actual execution availability still depends on the selected model
-and upstream account. This narrow contract does not imply broad OpenAI tool
-parity.
+as `auto` are accepted in both modes. This is separate from accepted
+`custom_tool_call` replay input. Chat Completions does not accept executable
+custom definitions or custom choices, and actual execution availability still
+depends on the selected model and upstream account. Smoke verification retains
+metadata only. This narrow contract does not imply backend, Chat, or broad
+OpenAI tool parity.
+
+When an accepted namespace custom declaration has one exact executable name,
+public Responses HTTP, SSE, and direct or owner-forwarded websocket output
+restores that namespace on a `custom_tool_call` only if the provider omits it or
+returns `null`. An explicit provider namespace is preserved. Flat, unknown, and
+non-unique names remain unchanged rather than guessed.
 
 For direct public Responses only, a strict flat function tool whose parameters
 already have an object root may receive a missing nested `object` or `array`

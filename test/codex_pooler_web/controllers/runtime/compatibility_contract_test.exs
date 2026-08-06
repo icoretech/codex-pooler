@@ -509,13 +509,94 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert fixture.scope == "direct_public_responses"
       assert fixture.formats == ["omitted", "text", "grammar_lark", "grammar_regex"]
       assert fixture.allowed_callers_null == true
+
+      assert fixture.nested_definitions == %{
+               container: "namespace",
+               transports: ["http", "websocket_response_create"],
+               public_scope: "direct_public_responses",
+               full_mode: "preserved",
+               typed_choice_scope: "namespace_nested_custom"
+             }
+
       assert fixture.typed_choice.resolves_same_kind == true
       assert fixture.typed_choice.full_mode == "preserved"
       assert fixture.typed_choice.lite_mode == "rejected_unsupported_parameter_before_dispatch"
+
+      assert fixture.response_namespace_restoration == %{
+               transports: ["http", "sse", "websocket_direct", "websocket_owner_forwarded"],
+               when:
+                 "missing_or_null_provider_namespace_with_one_exact_namespaced_custom_declaration",
+               preserves: "explicit_provider_namespace",
+               unchanged: ["flat", "unknown", "non_unique"]
+             }
+
+      assert fixture.executable_name_collision_scope == [
+               "flat_function",
+               "namespace_nested_function",
+               "namespace_nested_custom",
+               "custom"
+             ]
+
       assert fixture.custom_replay_contract == "separate_input_item_shape"
       assert fixture.chat_supported == false
       assert fixture.provider_availability == "selected_model_and_account_dependent"
       assert fixture.broad_openai_tool_parity == false
+    end
+
+    test "locks the namespace custom contract and its provenance boundaries" do
+      namespace_tool = CompatibilityMatrix.fixture!(:responses_chat).namespace_tool
+
+      expected_namespace_tool = %{
+        shape: "top_level_namespace_tool",
+        required: ["type", "name", "description", "tools"],
+        namespace_name: "nonblank",
+        nested_tool_types: ["function", "custom"],
+        nested_function_optional: ["strict", "defer_loading"],
+        nested_custom_required: ["type", "name"],
+        nested_custom_optional: ["description", "defer_loading", "allowed_callers", "format"],
+        nested_custom_formats: ["omitted", "text", "grammar_lark", "grammar_regex"],
+        nested_custom_allowed_callers: ["direct", "programmatic"],
+        nested_custom_allowed_callers_null: true,
+        excluded_nested_tool_types: ["hosted", "mcp", "namespace", "tool_search"],
+        satisfies_tool_choice: true,
+        executable_name_collision_scope: "global"
+      }
+
+      assert namespace_tool == expected_namespace_tool
+
+      stale_function_only_expected_namespace_tool =
+        Map.put(expected_namespace_tool, :nested_tool_types, ["function"])
+
+      refute namespace_tool == stale_function_only_expected_namespace_tool
+
+      assert %{
+               source: "OpenAI Python `openai`",
+               version: "`2.52.0`",
+               decision: "accept",
+               observed_shape:
+                 "Custom tool requires `type=custom` and nonblank `name`; optional description, boolean `defer_loading`, nullable direct/programmatic `allowed_callers`, and omitted/text/lark/regex format; typed choice has exact `type` and `name`"
+             } = sdk_shape_row!("openai-python.responses.executable_custom_tool.v1")
+
+      assert %{
+               source: "Vercel OpenAI provider `@ai-sdk/openai`",
+               version: "`3.0.65+`",
+               decision: "accept",
+               observed_shape:
+                 "Top-level `tools` entry has `type=namespace`, nonblank `name`, nonblank `description`, and nested function tools with flat `type`, `name`, `description`, `parameters`, optional `strict`, and optional `defer_loading`"
+             } = sdk_shape_row!("vercel-ai-sdk-openai.responses.namespace_function_tool.v1")
+
+      assert sdk_shape_row!("codex.responses.namespace_custom_tool.v1") == %{
+               source: "Codex native Responses shape",
+               version:
+                 "Codex commits `f21dc4638803f40046c9e294b0349782928f6b36` and `d4fb78bfc59009a2bbc3245d125bf8ba92a8e33e`",
+               endpoint:
+                 "`POST /v1/responses` and `GET /v1/responses` websocket `response.create`",
+               decision: "accept",
+               observed_shape:
+                 "Top-level `tools` entry has exact `type=namespace`, nonblank `name` and `description`, and a nonempty `tools` list whose children are exact flat `function` or exact executable `custom` definitions; typed custom choice has exact `type` and `name`",
+               notes:
+                 "Direct public Responses HTTP and websocket preserve valid namespace custom definitions and exact typed custom choices in Full mode. HTTP, SSE, direct websocket, and owner-forwarded websocket output restore a missing or null custom_tool_call namespace only when one exact namespaced custom declaration matches, while explicit, flat, unknown, and non-unique namespaces remain unchanged. Lite keeps the existing pre-dispatch `unsupported_parameter` rejection for map-shaped `tool_choice`; Chat custom definitions/choices, hosted/MCP/tool_search/nested namespace children, blank namespace names, malformed custom fields, and global executable-name collisions remain excluded. This Codex provenance is separate from the OpenAI Python direct-custom and Vercel namespace-function rows."
+             }
     end
 
     test "documents direct Responses strict repair separately from non-strict lowering" do
@@ -1716,6 +1797,47 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                "/backend-api/codex/images/generations",
                "/backend-api/codex/images/edits"
              ]
+    end
+  end
+
+  defp sdk_shape_row!(id) do
+    matrix_path =
+      Path.expand("../../../fixtures/openai_compatibility/sdk_shapes/MATRIX.md", __DIR__)
+
+    matrix_path
+    |> File.stream!()
+    |> Enum.find(&String.starts_with?(&1, "| `#{id}` |"))
+    |> case do
+      nil ->
+        flunk("missing SDK-shape provenance row: #{id}")
+
+      row ->
+        [
+          _id,
+          source,
+          version,
+          endpoint,
+          _scenario,
+          observed_shape,
+          decision,
+          _owner,
+          _code_target,
+          _test_target,
+          notes
+        ] =
+          row
+          |> String.trim()
+          |> String.split("|", trim: true)
+          |> Enum.map(&String.trim/1)
+
+        %{
+          source: source,
+          version: version,
+          endpoint: endpoint,
+          decision: String.trim(decision, "`"),
+          observed_shape: observed_shape,
+          notes: notes
+        }
     end
   end
 

@@ -1,7 +1,7 @@
 defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses do
   @moduledoc false
 
-  alias CodexPooler.Gateway.OpenAICompatibility.PublicResponse
+  alias CodexPooler.Gateway.OpenAICompatibility.{PublicResponse, Responses}
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
@@ -33,6 +33,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
           required(:text_delta?) => boolean(),
           required(:terminal_kind) => atom() | nil,
           required(:terminal_failure) => StreamProtocol.terminal_failure() | nil,
+          required(:custom_tool_namespaces) => map(),
           required(:sequence) => PublicResponsesSequence.state(),
           required(:summary) => summary_state(),
           required(:passthrough?) => boolean(),
@@ -42,8 +43,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
           required(:passthrough_terminal_seen?) => boolean()
         }
 
-  @spec new_state() :: state()
-  def new_state do
+  @spec new_state(map()) :: state()
+  def new_state(custom_tool_namespaces \\ %{}) when is_map(custom_tool_namespaces) do
     %{
       buffer: "",
       buffer_candidate?: false,
@@ -51,6 +52,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
       text_delta?: false,
       terminal_kind: nil,
       terminal_failure: nil,
+      custom_tool_namespaces: custom_tool_namespaces,
       sequence: PublicResponsesSequence.new_state(),
       summary: new_summary(),
       passthrough?: false,
@@ -318,6 +320,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   defp normalize_block(block, state) do
     {event_type, decoded} = stream_block_event(block)
+
+    decoded =
+      Responses.restore_custom_tool_call_namespaces(decoded, state.custom_tool_namespaces)
+
     source_type = effective_source_public_type(event_type, decoded)
     source_terminal_outcome = source_terminal_outcome(source_type, decoded)
     decoded = normalize_matching_terminal_errors(event_type, decoded)

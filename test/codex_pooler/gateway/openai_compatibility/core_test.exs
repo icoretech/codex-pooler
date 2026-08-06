@@ -1313,6 +1313,39 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   @tag :unsupported_fields
+  test "Chat rejects namespace-contained custom definitions while Responses accepts them" do
+    namespace_tool = %{
+      "type" => "namespace",
+      "name" => "functions",
+      "description" => "Synthetic custom namespace",
+      "tools" => [%{"type" => "custom", "name" => "nested_custom_fixture"}]
+    }
+
+    assert {:error, %{status: 400, code: "invalid_request", param: "tools"}} =
+             Chat.coerce(%{
+               "model" => "gpt-fixture-text",
+               "messages" => [%{"role" => "user", "content" => "synthetic input"}],
+               "tools" => [namespace_tool]
+             })
+
+    assert {:error, %{status: 400, code: "invalid_request", param: "tools"}} =
+             Chat.coerce(%{
+               "model" => "gpt-fixture-text",
+               "input" => "synthetic fallback input",
+               "tools" => [namespace_tool]
+             })
+
+    assert {:ok, result} =
+             Responses.coerce(%{
+               "model" => "gpt-fixture-text",
+               "input" => "synthetic input",
+               "tools" => [namespace_tool]
+             })
+
+    assert result.payload["tools"] == [namespace_tool]
+  end
+
+  @tag :unsupported_fields
   test "untranslatable tool and legacy Chat function shapes are rejected" do
     assert {:error, %{status: 400, code: "invalid_request", param: "tools"}} =
              Responses.coerce(%{
@@ -3080,6 +3113,210 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
       assert result.payload["tools"] == [function_tool]
       assert result.payload["tool_choice"] == tool_choice
+    end
+
+    test "namespace function children preserve exact containers and function choices" do
+      Enum.each(["functions", "fixture_namespace"], fn namespace_name ->
+        namespace_tool = %{
+          "type" => "namespace",
+          "name" => namespace_name,
+          "description" => "Synthetic namespace tools",
+          "tools" => [
+            flat_function_tool(
+              "lookup_#{namespace_name}",
+              %{"type" => "object", "properties" => %{}},
+              nil
+            )
+          ]
+        }
+
+        tool_choice = %{"type" => "function", "name" => "lookup_#{namespace_name}"}
+
+        assert {:ok, result} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => "synthetic input",
+                   "tools" => [namespace_tool],
+                   "tool_choice" => tool_choice
+                 })
+
+        assert result.payload["tools"] == [namespace_tool]
+        assert result.payload["tool_choice"] == tool_choice
+      end)
+    end
+
+    test "namespace custom children preserve exact mixed declarations and custom choices" do
+      Enum.each(["functions", "fixture_namespace"], fn namespace_name ->
+        custom_tool = %{
+          "type" => "custom",
+          "name" => "Custom_#{namespace_name}_Fixture",
+          "description" => "Synthetic custom namespace fixture",
+          "allowed_callers" => ["direct", "programmatic"],
+          "format" => %{
+            "type" => "grammar",
+            "definition" => "start: TOKEN\nTOKEN: /[a-z]+/\n",
+            "syntax" => "lark"
+          }
+        }
+
+        namespace_tool = %{
+          "type" => "namespace",
+          "name" => namespace_name,
+          "description" => "Synthetic namespace tools",
+          "tools" => [
+            flat_function_tool(
+              "lookup_#{namespace_name}",
+              %{"type" => "object", "properties" => %{}},
+              nil
+            ),
+            custom_tool
+          ]
+        }
+
+        tool_choice = %{"type" => "custom", "name" => custom_tool["name"]}
+
+        assert {:ok, result} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => "synthetic input",
+                   "tools" => [namespace_tool],
+                   "tool_choice" => tool_choice
+                 })
+
+        assert result.payload["tools"] == [namespace_tool]
+        assert result.payload["tool_choice"] == tool_choice
+
+        assert result.request_options.openai_compatibility.custom_tool_namespaces == %{
+                 custom_tool["name"] => namespace_name
+               }
+
+        assert RequestOptions.openai_compatibility_metadata(result.request_options) == %{}
+      end)
+    end
+
+    test "namespace custom choices retain exact case and whitespace semantics" do
+      custom_tool = %{
+        "type" => "custom",
+        "name" => " Nested_Custom_Choice ",
+        "format" => %{"type" => "text"}
+      }
+
+      namespace_tool = %{
+        "type" => "namespace",
+        "name" => "functions",
+        "description" => "Synthetic namespace tools",
+        "tools" => [custom_tool]
+      }
+
+      payload = %{
+        "model" => "gpt-fixture-text",
+        "input" => "synthetic input",
+        "tools" => [namespace_tool],
+        "tool_choice" => %{"type" => "custom", "name" => custom_tool["name"]}
+      }
+
+      assert {:ok, result} = Responses.coerce(payload)
+      assert result.payload["tools"] == [namespace_tool]
+      assert result.payload["tool_choice"] == payload["tool_choice"]
+
+      for choice_name <- ["nested_custom_choice", " Nested_Custom_Choice"] do
+        assert {:error,
+                %{
+                  status: 400,
+                  code: "invalid_request",
+                  message: "tool_choice references unknown custom tool",
+                  param: "tool_choice"
+                }} =
+                 payload
+                 |> put_in(["tool_choice", "name"], choice_name)
+                 |> Responses.coerce()
+      end
+    end
+
+    test "namespace custom children reject malformed and unsupported entries before coercion" do
+      namespace_tool = fn child ->
+        %{
+          "type" => "namespace",
+          "name" => "functions",
+          "description" => "Synthetic namespace tools",
+          "tools" => [child]
+        }
+      end
+
+      invalid_children = [
+        %{
+          "type" => "custom",
+          "name" => "malformed_custom_format",
+          "format" => %{"type" => "grammar", "syntax" => "lark"}
+        },
+        %{
+          "type" => "custom",
+          "name" => "malformed_custom_callers",
+          "allowed_callers" => ["hosted"]
+        },
+        %{"type" => "web_search_preview"},
+        %{"type" => "web_search"},
+        %{"type" => "image_generation"},
+        %{"type" => "programmatic_tool_calling"},
+        %{"type" => "mcp"},
+        %{"type" => "tool_search"},
+        %{
+          "type" => "namespace",
+          "name" => "nested",
+          "description" => "Nested namespace",
+          "tools" => [flat_function_tool("nested_lookup", %{}, nil)]
+        }
+      ]
+
+      Enum.each(invalid_children, fn child ->
+        assert {:error, %{status: 400, code: "invalid_request", param: "tools"}} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => "synthetic input",
+                   "tools" => [namespace_tool.(child)]
+                 })
+      end)
+    end
+
+    test "namespace custom choices reject unknown names and cross-container executable collisions" do
+      nested_custom = %{"type" => "custom", "name" => "nested_custom_fixture"}
+
+      namespace_tool = %{
+        "type" => "namespace",
+        "name" => "functions",
+        "description" => "Synthetic namespace tools",
+        "tools" => [nested_custom]
+      }
+
+      assert {:error,
+              %{
+                status: 400,
+                code: "invalid_request",
+                message: "tool_choice references unknown custom tool",
+                param: "tool_choice"
+              }} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => "synthetic input",
+                 "tools" => [namespace_tool],
+                 "tool_choice" => %{"type" => "custom", "name" => "missing_custom_fixture"}
+               })
+
+      assert {:error,
+              %{
+                status: 400,
+                code: "invalid_request",
+                message: "tool names must be unique",
+                param: "tools"
+              }} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => "synthetic input",
+                 "tools" => [
+                   %{"type" => "custom", "name" => "nested_custom_fixture"},
+                   namespace_tool
+                 ]
+               })
     end
 
     test "official custom tools and typed named choices survive coercion unchanged" do

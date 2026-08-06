@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.OpenAICompatibility do
             public_openai_chat_stream: false,
             collect_openai_response_stream: false,
             collect_openai_image_stream: false,
+            custom_tool_namespaces: %{},
             openai_chat_payload: nil,
             source_endpoint: nil,
             translated_endpoint: nil
@@ -16,6 +17,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.OpenAICompatibility do
           public_openai_chat_stream: boolean(),
           collect_openai_response_stream: boolean(),
           collect_openai_image_stream: boolean(),
+          custom_tool_namespaces: %{optional(String.t()) => String.t()},
           openai_chat_payload: map() | nil,
           source_endpoint: String.t() | nil,
           translated_endpoint: String.t() | nil
@@ -30,6 +32,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.OpenAICompatibility do
       public_openai_chat_stream: Map.get(opts, :public_openai_chat_stream, false),
       collect_openai_response_stream: Map.get(opts, :collect_openai_response_stream, false),
       collect_openai_image_stream: Map.get(opts, :collect_openai_image_stream, false),
+      custom_tool_namespaces: %{},
       openai_chat_payload: Map.get(opts, :openai_chat_payload),
       source_endpoint: Normalization.safe_endpoint(Map.get(opts, :openai_source_endpoint)),
       translated_endpoint: Normalization.safe_endpoint(Map.get(opts, :openai_translated_endpoint))

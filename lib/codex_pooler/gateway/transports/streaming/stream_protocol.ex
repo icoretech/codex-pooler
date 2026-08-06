@@ -29,9 +29,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   @type public_openai_responses_websocket_state :: PublicResponsesWebsocket.state()
   @type websocket_frame_headers :: %{optional(String.t()) => String.t()}
 
-  @spec public_openai_responses_stream_state() :: public_openai_responses_stream_state()
-  def public_openai_responses_stream_state do
-    PublicResponses.new_state()
+  @spec public_openai_responses_stream_state(map()) :: public_openai_responses_stream_state()
+  def public_openai_responses_stream_state(custom_tool_namespaces \\ %{}) do
+    PublicResponses.new_state(custom_tool_namespaces)
   end
 
   @spec public_openai_responses_websocket_state() :: public_openai_responses_websocket_state()

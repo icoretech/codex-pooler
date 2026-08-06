@@ -286,7 +286,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       programmatic_tool_calling_contract:
         "closed-world Responses programmatic-tool calling rejects remote MCP and unrelated hosted tools and makes no full OpenAI parity claim",
       contract:
-        "Responses and chat completions proxy JSON/SSE through the shared gateway accounting path; chat completions use messages when present and fall back to top-level input only when messages is absent or empty, with omitted fallback instructions defaulting to a blank string; /v1/responses and translated /v1/chat/completions accept client service_tier fast as canonical upstream priority while retaining existing invalid-tier rejection, preserve literal provider service_tier output, and include a Chat stream tier only on chunks emitted after observation without buffering or rewriting earlier chunks; /v1/responses and translated /v1/chat/completions accept prompt_cache_options and supported content-part prompt_cache_breakpoint controls as public input, while account-backed egress omits both explicit controls and preserves prompt_cache_key; Pool affinity remains exclusively keyed by prompt_cache_key; request-shaped additional_tools input items are preserved as non-executable input, never merged into executable tools, and never used to satisfy tool_choice; OpenAI Responses remote MCP tool definitions are rejected before dispatch in both top-level tools and nested additional_tools.tools locations; Responses namespace tool definitions are accepted only for non-empty namespace name/description values and nested function tools; Responses truncation accepts auto and disabled locally but is not forwarded upstream; terminal compaction_trigger backend payloads bridge through /backend-api/codex/responses/compact with compact accounting and backend Responses SSE compaction output that preserves only schema-backed string replay identity and drops other compact-result fields, while malformed trigger placement is rejected before dispatch; public /v1 Responses accepts encrypted compaction output replay items from prior remote compaction turns; backend regular HTTP Responses and compact routes forward approved metadata headers, including request-scoped x-codex-turn-state, x-codex-window-id, and x-codex-installation-id, and relay upstream x-codex-turn-state response headers downstream, while public /v1 and websocket request-header lanes do not; context-overflow recovery stays client/upstream-owned with no server-side hidden replay, no server-side memory tool injection, no client store=false-to-true override policy, and no stored prompt/frame reconstruction; Hermes assistant replay may include safe assistant status metadata; OpenClaw assistant replay drops thinking metadata and normalizes text before upstream dispatch; public /v1/responses and /v1/chat/completions accept exactly five lowercase input_audio labels (wav=>audio/wav, mp3=>audio/mpeg, m4a=>audio/mp4, webm=>audio/webm, ogg=>audio/ogg), apply a 52,428,800 decoded-byte maximum and a 69,905,068 non-whitespace encoded-byte precheck, canonicalize backend input_audio to an audio_url data URL after accepted ASCII whitespace normalization, reject malformed/empty/unsupported/oversized input as sanitized invalid_request without dispatch or accounting, honor configured request-envelope rejection before adapter checks, and keep audio metadata-only outside dispatch; safe OpenAI Responses fields, prompt-cache locality, SDK-control rejection, and backend-only control stripping stay scope-specific"
+        "Responses and chat completions proxy JSON/SSE through the shared gateway accounting path; chat completions use messages when present and fall back to top-level input only when messages is absent or empty, with omitted fallback instructions defaulting to a blank string; /v1/responses and translated /v1/chat/completions accept client service_tier fast as canonical upstream priority while retaining existing invalid-tier rejection, preserve literal provider service_tier output, and include a Chat stream tier only on chunks emitted after observation without buffering or rewriting earlier chunks; /v1/responses and translated /v1/chat/completions accept prompt_cache_options and supported content-part prompt_cache_breakpoint controls as public input, while account-backed egress omits both explicit controls and preserves prompt_cache_key; Pool affinity remains exclusively keyed by prompt_cache_key; request-shaped additional_tools input items are preserved as non-executable input, never merged into executable tools, and never used to satisfy tool_choice; OpenAI Responses remote MCP tool definitions are rejected before dispatch in both top-level tools and nested additional_tools.tools locations; Responses namespace tool definitions are accepted only for non-empty namespace name/description values and exact flat function or executable custom namespace children; Responses truncation accepts auto and disabled locally but is not forwarded upstream; terminal compaction_trigger backend payloads bridge through /backend-api/codex/responses/compact with compact accounting and backend Responses SSE compaction output that preserves only schema-backed string replay identity and drops other compact-result fields, while malformed trigger placement is rejected before dispatch; public /v1 Responses accepts encrypted compaction output replay items from prior remote compaction turns; backend regular HTTP Responses and compact routes forward approved metadata headers, including request-scoped x-codex-turn-state, x-codex-window-id, and x-codex-installation-id, and relay upstream x-codex-turn-state response headers downstream, while public /v1 and websocket request-header lanes do not; context-overflow recovery stays client/upstream-owned with no server-side hidden replay, no server-side memory tool injection, no client store=false-to-true override policy, and no stored prompt/frame reconstruction; Hermes assistant replay may include safe assistant status metadata; OpenClaw assistant replay drops thinking metadata and normalizes text before upstream dispatch; public /v1/responses and /v1/chat/completions accept exactly five lowercase input_audio labels (wav=>audio/wav, mp3=>audio/mpeg, m4a=>audio/mp4, webm=>audio/webm, ogg=>audio/ogg), apply a 52,428,800 decoded-byte maximum and a 69,905,068 non-whitespace encoded-byte precheck, canonicalize backend input_audio to an audio_url data URL after accepted ASCII whitespace normalization, reject malformed/empty/unsupported/oversized input as sanitized invalid_request without dispatch or accounting, honor configured request-envelope rejection before adapter checks, and keep audio metadata-only outside dispatch; safe OpenAI Responses fields, prompt-cache locality, SDK-control rejection, and backend-only control stripping stay scope-specific"
     },
     %{
       slug: :response_body_cap,
@@ -559,7 +559,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :responses_executable_custom_tools,
       contract:
-        "direct public Responses HTTP and websocket response.create accept executable custom tools with an exact nonblank name, optional description and defer_loading, nullable direct/programmatic allowed_callers, and omitted, text, lark-grammar, or regex-grammar input format; an exact typed custom choice resolves only a declared custom tool of the same name and kind, is preserved in Full mode, and is rejected before upstream dispatch in Lite mode with unsupported_parameter for tool_choice; that Lite rejection is serving-mode driven and covers any map-shaped tool_choice on any lane dispatching to backend Responses, including translated Chat named-function choices, while string choices such as auto remain accepted in both modes; executable names are collision-free across flat functions, namespace children, and custom tools; Chat custom definitions and choices remain unsupported, custom replay is a separate input-item contract, provider execution availability depends on the selected model and upstream account, and no broad OpenAI tool parity is claimed"
+        "direct public Responses HTTP and websocket response.create accept executable custom tools with an exact nonblank name, optional description and defer_loading, nullable direct/programmatic allowed_callers, and omitted, text, lark-grammar, or regex-grammar input format; the same exact custom definition is accepted as a child of a nonblank namespace with a nonempty tool list alongside exact flat function children; an exact typed custom choice resolves only a declared custom tool of the same name and kind, including a namespace child, is preserved in Full mode, and is rejected before upstream dispatch in Lite mode with unsupported_parameter for tool_choice; that Lite rejection is serving-mode driven and covers any map-shaped tool_choice on any lane dispatching to backend Responses, including translated Chat named-function choices, while string choices such as auto remain accepted in both modes; executable names are collision-free across flat functions, namespace children, and custom tools; Chat custom definitions and choices remain unsupported, custom replay is a separate input-item contract, provider execution availability depends on the selected model and upstream account, and no broad OpenAI tool parity is claimed"
     },
     %{
       slug: :backend_agent_v2_handoffs,
@@ -928,9 +928,17 @@ defmodule CodexPooler.CompatibilityMatrix do
       namespace_tool: %{
         shape: "top_level_namespace_tool",
         required: ["type", "name", "description", "tools"],
-        nested_tool_types: ["function"],
-        nested_optional: ["strict", "defer_loading"],
-        satisfies_tool_choice: true
+        namespace_name: "nonblank",
+        nested_tool_types: ["function", "custom"],
+        nested_function_optional: ["strict", "defer_loading"],
+        nested_custom_required: ["type", "name"],
+        nested_custom_optional: ["description", "defer_loading", "allowed_callers", "format"],
+        nested_custom_formats: ["omitted", "text", "grammar_lark", "grammar_regex"],
+        nested_custom_allowed_callers: ["direct", "programmatic"],
+        nested_custom_allowed_callers_null: true,
+        excluded_nested_tool_types: ["hosted", "mcp", "namespace", "tool_search"],
+        satisfies_tool_choice: true,
+        executable_name_collision_scope: "global"
       },
       programmatic_tool_calling: %{
         input_items: %{
@@ -1483,6 +1491,13 @@ defmodule CodexPooler.CompatibilityMatrix do
       allowed_callers: ["direct", "programmatic"],
       allowed_callers_null: true,
       formats: ["omitted", "text", "grammar_lark", "grammar_regex"],
+      nested_definitions: %{
+        container: "namespace",
+        transports: ["http", "websocket_response_create"],
+        public_scope: "direct_public_responses",
+        full_mode: "preserved",
+        typed_choice_scope: "namespace_nested_custom"
+      },
       typed_choice: %{
         exact_keys: ["type", "name"],
         resolves_same_kind: true,
@@ -1496,9 +1511,16 @@ defmodule CodexPooler.CompatibilityMatrix do
         lite_rejection_scope: "any_map_shaped_tool_choice",
         lite_rejection_lanes: ["direct_public_responses", "chat_completions", "backend_codex"]
       },
+      response_namespace_restoration: %{
+        transports: ["http", "sse", "websocket_direct", "websocket_owner_forwarded"],
+        when: "missing_or_null_provider_namespace_with_one_exact_namespaced_custom_declaration",
+        preserves: "explicit_provider_namespace",
+        unchanged: ["flat", "unknown", "non_unique"]
+      },
       executable_name_collision_scope: [
         "flat_function",
         "namespace_nested_function",
+        "namespace_nested_custom",
         "custom"
       ],
       custom_replay_contract: "separate_input_item_shape",

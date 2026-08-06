@@ -5,11 +5,17 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.SSE do
   alias CodexPooler.Gateway.OpenAICompatibility.PublicResponse
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
 
-  @spec response_from_sse(binary()) :: {:ok, map()} | {:error, Error.reason()}
-  def response_from_sse(body) when is_binary(body) do
+  alias CodexPooler.Gateway.OpenAICompatibility.Responses
+
+  @spec response_from_sse(binary(), map()) :: {:ok, map()} | {:error, Error.reason()}
+  def response_from_sse(body, custom_tool_namespaces \\ %{})
+      when is_binary(body) and is_map(custom_tool_namespaces) do
     case Jason.decode(body) do
       {:ok, %{} = decoded} ->
-        response = Map.put_new(decoded, "object", "response")
+        response =
+          decoded
+          |> Responses.restore_custom_tool_call_namespaces(custom_tool_namespaces)
+          |> Map.put_new("object", "response")
 
         case response_terminal_type(response) do
           nil ->
@@ -20,16 +26,17 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.SSE do
         end
 
       _error ->
-        body |> decoded_sse_events() |> response_from_sse_events()
+        body |> decoded_sse_events() |> response_from_sse_events(custom_tool_namespaces)
     end
   end
 
-  defp response_from_sse_events(events) do
+  defp response_from_sse_events(events, custom_tool_namespaces) do
     with {:ok, response, event} <- terminal_response(events) do
       response =
         response
         |> Map.put_new("object", "response")
         |> maybe_backfill_output(events)
+        |> Responses.restore_custom_tool_call_namespaces(custom_tool_namespaces)
 
       terminal_error(event, response) || {:ok, response}
     end
