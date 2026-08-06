@@ -144,6 +144,26 @@ defmodule CodexPoolerWeb.AuthControllerTest do
     assert session.ip_address == "203.0.113.55"
   end
 
+  test "browser login falls back to the peer when trusted forwarding input is malformed", %{
+    conn: conn
+  } do
+    setup_trusted_proxies(["10.42.0.0/16"])
+    %{user: user} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
+
+    conn =
+      conn
+      |> Map.put(:remote_ip, {10, 42, 0, 50})
+      |> put_req_header("x-forwarded-for", <<255>>)
+      |> post(~p"/login", %{
+        "user" => %{"email" => user.email, "password" => valid_user_password()}
+      })
+
+    assert redirected_to(conn) == ~p"/admin/pools"
+    session = Repo.get!(Session, Accounts.session_id_for_token(get_session(conn, :user_token)))
+
+    assert session.ip_address == "10.42.0.50"
+  end
+
   test "authenticated root redirects to pools", %{conn: conn} do
     bootstrap_owner_fixture(%{"email" => "owner@example.com"})
 

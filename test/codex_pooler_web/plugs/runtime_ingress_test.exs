@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   alias CodexPooler.Catalog.PricingSnapshot
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.OperationalSettings.IPRules
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
   alias CodexPooler.Pools
@@ -16,8 +17,15 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Quota.Windows
-  alias CodexPoolerWeb.Plugs.RuntimeIngress
-  alias CodexPoolerWeb.Plugs.RuntimeIngress.CompressedBody
+  alias CodexPoolerWeb.Plugs.{RuntimeIngress, TrustedProxyRemoteIp}
+
+  alias CodexPoolerWeb.Plugs.RuntimeIngress.{
+    CompressedBody,
+    Firewall,
+    ForwardedClientIP
+  }
+
+  alias CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIP.Resolution
 
   defp append_req_header(conn, name, value) do
     %{conn | req_headers: conn.req_headers ++ [{name, value}]}
@@ -196,6 +204,59 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   end
 
   describe "JSON parser context" do
+    test "endpoint ingress reads one operational settings snapshot and resolves the client once" do
+      setup_runtime_ingress_override(%OperationalSettings{
+        firewall_allowlist: ["203.0.113.10"],
+        trusted_proxies: ["10.0.0.1"]
+      })
+
+      conn =
+        Plug.Test.conn(:post, "/login", "{}")
+        |> remote_ip({10, 0, 0, 1})
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header("x-forwarded-for", "203.0.113.10")
+
+      {conn, settings_calls} =
+        trace_call_count({OperationalSettings, :current, 0}, fn ->
+          conn
+          |> TrustedProxyRemoteIp.call([])
+          |> RuntimeIngress.call([])
+        end)
+
+      assert settings_calls == 1
+
+      assert %OperationalSettings{} =
+               conn.private[:codex_pooler_runtime_ingress_settings]
+
+      assert %Resolution{
+               status: :ok,
+               client_ip: {203, 0, 113, 10},
+               source: :x_forwarded_for
+             } = conn.private[:codex_pooler_client_ip_resolution]
+
+      assert conn.private[:codex_pooler_peer_ip] == {10, 0, 0, 1}
+      assert conn.remote_ip == {203, 0, 113, 10}
+    end
+
+    test "endpoint ingress invokes the bounded forwarded client resolver exactly once" do
+      setup_runtime_ingress_override(%OperationalSettings{trusted_proxies: ["10.0.0.1"]})
+
+      conn =
+        Plug.Test.conn(:get, "/healthz")
+        |> remote_ip({10, 0, 0, 1})
+        |> put_req_header("x-forwarded-for", "203.0.113.10")
+
+      {conn, resolver_calls} =
+        trace_call_count({ForwardedClientIP, :resolve, 2}, fn ->
+          conn
+          |> TrustedProxyRemoteIp.call([])
+          |> RuntimeIngress.call([])
+        end)
+
+      assert resolver_calls == 1
+      assert %Resolution{status: :ok} = conn.private[:codex_pooler_client_ip_resolution]
+    end
+
     test "stores settings and protected-backend classification before parsing" do
       setup_runtime_ingress(%OperationalSettings{})
       setup = active_api_key_fixture()
@@ -245,6 +306,116 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   end
 
   describe "runtime API firewall" do
+    test "reuses the stored resolution without reparsing changed forwarded headers" do
+      setup_runtime_ingress_override(%OperationalSettings{
+        firewall_allowlist: ["203.0.113.10"],
+        trusted_proxies: ["10.0.0.1"]
+      })
+
+      conn =
+        Plug.Test.conn(:get, "/api/codex/usage")
+        |> remote_ip({10, 0, 0, 1})
+        |> put_req_header("x-forwarded-for", "203.0.113.10")
+        |> TrustedProxyRemoteIp.call([])
+        |> put_req_header("x-forwarded-for", "198.51.100.20")
+
+      settings = conn.private[:codex_pooler_runtime_ingress_settings]
+
+      assert {:ok, allowed_conn} = Firewall.enforce(conn, settings)
+      assert allowed_conn.remote_ip == {203, 0, 113, 10}
+    end
+
+    test "fails closed when the compiled firewall snapshot is invalid" do
+      {:ok, trusted_rules} = IPRules.compile([])
+
+      settings = %OperationalSettings{
+        firewall_allowlist: ["203.0.113.10"],
+        firewall_allowlist_compiled: {:error, :invalid_rule},
+        trusted_proxies_compiled: {:ok, trusted_rules}
+      }
+
+      conn =
+        Plug.Test.conn(:get, "/api/codex/usage")
+        |> remote_ip({203, 0, 113, 10})
+        |> Plug.Conn.put_private(
+          :codex_pooler_client_ip_resolution,
+          %Resolution{
+            status: :ok,
+            peer_ip: {203, 0, 113, 10},
+            client_ip: {203, 0, 113, 10},
+            source: :peer,
+            reason: nil,
+            inspected_hops: 0
+          }
+        )
+
+      assert {:error, %{status: 403, code: "access_denied"}} =
+               Firewall.enforce(conn, settings)
+    end
+
+    test "empty raw allowlist remains disabled when client resolution failed" do
+      settings = %OperationalSettings{
+        firewall_allowlist: [],
+        firewall_allowlist_compiled: {:error, :invalid_rule}
+      }
+
+      conn =
+        Plug.Test.conn(:get, "/api/codex/usage")
+        |> Plug.Conn.put_private(
+          :codex_pooler_client_ip_resolution,
+          %Resolution{
+            status: :error,
+            peer_ip: {10, 0, 0, 1},
+            client_ip: {10, 0, 0, 1},
+            source: :peer,
+            reason: :invalid_forwarded_entry,
+            inspected_hops: 1
+          }
+        )
+
+      assert {:ok, ^conn} = Firewall.enforce(conn, settings)
+    end
+
+    test "malformed trusted forwarding input fails closed only on runtime routes", %{conn: conn} do
+      setup_runtime_ingress(%OperationalSettings{
+        firewall_allowlist: ["203.0.113.10"],
+        trusted_proxies: ["10.0.0.1"]
+      })
+
+      malformed_headers = [
+        "203.0.113.10, unknown",
+        "203.0.113.10:0",
+        "203.0.113.10:65536",
+        <<255>>,
+        :binary.copy("1", 65),
+        Enum.join(List.duplicate("10.0.0.1", 33), ",")
+      ]
+
+      for value <- malformed_headers do
+        denied =
+          conn
+          |> recycle()
+          |> remote_ip({10, 0, 0, 1})
+          |> put_req_header("x-forwarded-for", value)
+          |> get("/api/codex/usage")
+
+        assert json_response(denied, 403)["error"]["code"] == "access_denied"
+
+        health =
+          conn
+          |> recycle()
+          |> remote_ip({10, 0, 0, 1})
+          |> put_req_header("x-forwarded-for", value)
+          |> get("/healthz")
+
+        assert json_response(health, 200) == %{"status" => "ok"}
+        assert health.remote_ip == {10, 0, 0, 1}
+
+        assert %Resolution{status: :error} =
+                 health.private[:codex_pooler_client_ip_resolution]
+      end
+    end
+
     test "preserves current runtime API behavior when no allowlist is configured", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{firewall_allowlist: []})
       setup = active_api_key_fixture()
@@ -1120,6 +1291,66 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
     )
 
     on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
+  end
+
+  defp trace_call_count({module, function, arity} = traced_mfa, callback) do
+    parent = self()
+    start_ref = make_ref()
+    release_ref = make_ref()
+    {:module, ^module} = Code.ensure_loaded(module)
+    :erlang.trace_pattern(traced_mfa, true, [:local])
+
+    task =
+      Task.async(fn ->
+        receive do
+          {:start_trace, ^start_ref} -> :ok
+        end
+
+        result = callback.()
+        send(parent, {:trace_result, self(), result})
+
+        receive do
+          {:release_trace, ^release_ref} -> result
+        end
+      end)
+
+    try do
+      :erlang.trace(task.pid, true, [:call, {:tracer, parent}])
+      send(task.pid, {:start_trace, start_ref})
+
+      result =
+        receive do
+          {:trace_result, pid, result} when pid == task.pid -> result
+        after
+          1_000 -> flunk("traced callback did not complete")
+        end
+
+      delivered_ref = :erlang.trace_delivered(task.pid)
+      assert_receive {:trace_delivered, pid, ^delivered_ref} when pid == task.pid, 1_000
+
+      calls = collect_traced_calls(task.pid, module, function, arity, 0)
+      send(task.pid, {:release_trace, release_ref})
+      assert Task.await(task, 1_000) == result
+      {result, calls}
+    after
+      :erlang.trace_pattern(traced_mfa, false, [:local])
+
+      if Process.alive?(task.pid) do
+        :erlang.trace(task.pid, false, [:call])
+        send(task.pid, {:release_trace, release_ref})
+        Task.shutdown(task, :brutal_kill)
+      end
+    end
+  end
+
+  defp collect_traced_calls(traced_pid, module, function, arity, count) do
+    receive do
+      {:trace, ^traced_pid, :call, {^module, ^function, arguments}}
+      when length(arguments) == arity ->
+        collect_traced_calls(traced_pid, module, function, arity, count + 1)
+    after
+      0 -> count
+    end
   end
 
   defp remote_ip(conn, ip), do: %{conn | remote_ip: ip}

@@ -47,7 +47,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
         send_runtime_error(conn, 400, "invalid_request", "request path is invalid")
 
       path.scope == :mcp ->
-        settings = OperationalSettings.current()
+        settings = operational_settings(conn)
 
         conn
         |> put_json_parser_context(settings, :mcp)
@@ -59,7 +59,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
         send_pruned_runtime_helper_absent(conn)
 
       path.scope == :runtime ->
-        settings = OperationalSettings.current()
+        settings = operational_settings(conn)
 
         conn
         |> put_json_parser_context(settings, json_parse_error_scope(conn))
@@ -73,7 +73,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
         |> maybe_decode_compressed_body(settings)
 
       json_request?(conn) ->
-        put_json_parser_context(conn, OperationalSettings.current(), :passthrough)
+        put_json_parser_context(conn, operational_settings(conn), :passthrough)
 
       true ->
         conn
@@ -197,6 +197,13 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
     |> put_private(@parser_settings_private_key, settings)
     |> put_private(@parser_error_scope_private_key, error_scope)
   end
+
+  defp operational_settings(%Plug.Conn{
+         private: %{@parser_settings_private_key => %OperationalSettings{} = settings}
+       }),
+       do: settings
+
+  defp operational_settings(_conn), do: OperationalSettings.current()
 
   defp read_mcp_body(conn, settings) do
     read_opts = [
