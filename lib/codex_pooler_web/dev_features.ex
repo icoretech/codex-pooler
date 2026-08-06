@@ -3,28 +3,6 @@ defmodule CodexPoolerWeb.DevFeatures do
 
   @build_enabled Application.compile_env(:codex_pooler, :dev_features_build_enabled, false)
 
-  # Impeccable keeps its local live state here. Overridable so the test env can
-  # point at a directory that never exists and stay deterministic while a real
-  # helper is running on the developer's machine.
-  @live_dir ".impeccable/live"
-
-  # The helper writes `{pid, port, token}` to server.json when it starts and
-  # deletes the file on a clean stop. Both values have to be read at render
-  # time: `/live.js` is token-gated and the token is a fresh UUID per start, so
-  # a hardcoded src can only ever be answered with 401. Reading the handshake
-  # file also frees the helper from having to bind one fixed port.
-  @helper_info_file "server.json"
-
-  # Impeccable's own injector (`live.mjs` / `live-inject.mjs`) writes a literal
-  # script tag wrapped in these markers into the files listed by config.json.
-  # `live.js` has no double-init guard, so an injected tag plus the
-  # app-rendered one means two floating widgets. When a marker is present the
-  # injected tag owns the page and this module stands down.
-  @live_config_file "config.json"
-  @injected_marker "impeccable-live-start"
-
-  @helper_probe_timeout_ms 200
-
   alias CodexPooler.Jobs.DevelopmentControls
 
   @type helper :: %{port: pos_integer(), token: String.t(), origin: String.t()}
@@ -119,7 +97,33 @@ defmodule CodexPoolerWeb.DevFeatures do
     def browser_csp_extra_sources, do: []
   end
 
+  # These constants are read only by the private helpers below, which are
+  # themselves compiled away when dev features are off. Declaring them inside
+  # the same guard keeps a release build from carrying five orphaned module
+  # attributes, which `--warnings-as-errors` rejects outright.
   if @build_enabled do
+    # Impeccable keeps its local live state here. Overridable so the test env
+    # can point at a directory that never exists and stay deterministic while a
+    # real helper is running on the developer's machine.
+    @live_dir ".impeccable/live"
+
+    # The helper writes `{pid, port, token}` to server.json when it starts and
+    # deletes the file on a clean stop. Both values have to be read at render
+    # time: `/live.js` is token-gated and the token is a fresh UUID per start,
+    # so a hardcoded src can only ever be answered with 401. Reading the
+    # handshake file also frees the helper from having to bind one fixed port.
+    @helper_info_file "server.json"
+
+    # Impeccable's own injector (`live.mjs` / `live-inject.mjs`) writes a
+    # literal script tag wrapped in these markers into the files listed by
+    # config.json. `live.js` has no double-init guard, so an injected tag plus
+    # the app-rendered one means two floating widgets. When a marker is present
+    # the injected tag owns the page and this module stands down.
+    @live_config_file "config.json"
+    @injected_marker "impeccable-live-start"
+
+    @helper_probe_timeout_ms 200
+
     defp helper_status do
       # A leftover injected tag is reported first: it is the one state that
       # dirties tracked source and duplicates the widget.
