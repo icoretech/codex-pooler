@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Pools
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.Plugs.RuntimeIngress.Path, as: IngressPath
   alias CodexPoolerWeb.V1.UnsupportedRoutes
 
   @supported_routes [
@@ -213,6 +214,31 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
   end
 
   describe "unsupported /v1 public OpenAI surfaces" do
+    test "unsupported route matching uses the canonical path view with direct fallback" do
+      direct = Plug.Test.conn(:post, "/v1/%69mages/variations")
+
+      cached =
+        direct
+        |> IngressPath.populate()
+        |> Map.put(:path_info, ["unrelated"])
+
+      assert UnsupportedRoutes.unsupported?(direct)
+      assert UnsupportedRoutes.unsupported?(cached)
+    end
+
+    test "encoded unsupported route spelling returns the deterministic OpenAI error", %{
+      conn: conn
+    } do
+      setup = active_api_key_fixture()
+
+      conn = conn |> auth(setup) |> post("/v1/%69mages/variations", %{})
+
+      assert_openai_error(conn, 404,
+        code: "unsupported_endpoint",
+        message: "Unsupported OpenAI /v1 endpoint"
+      )
+    end
+
     test "unsupported route registry lists the SDK-probed endpoint shapes exactly" do
       assert @unsupported_routes == [
                {:post, "/v1/images/variations"},

@@ -99,6 +99,34 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
   end
 
   describe "MCP body parser ingress" do
+    test "encoded MCP spelling reaches the same pre-parser content-type guard", %{conn: conn} do
+      setup_runtime_ingress(%OperationalSettings{})
+
+      conn =
+        conn
+        |> put_req_header("content-type", "multipart/form-data; boundary=example")
+        |> put_req_header("accept", "application/json, text/event-stream")
+        |> put_req_header("mcp-protocol-version", @mcp_version)
+        |> post("/%6dcp", "invalid multipart fixture")
+
+      assert json_rpc_error(conn, 415)["error"] == %{
+               "code" => -32_600,
+               "message" => "content-type must be application/json"
+             }
+    end
+
+    test "unsafe MCP candidate returns only the fixed invalid-request envelope", %{conn: conn} do
+      setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
+
+      conn = conn |> remote_ip({198, 51, 100, 20}) |> get("/mcp%00suffix")
+
+      assert json_rpc_error(conn, 400) == %{
+               "jsonrpc" => "2.0",
+               "id" => nil,
+               "error" => %{"code" => -32_600, "message" => "invalid request"}
+             }
+    end
+
     test "oversized bodies are rejected before controller dispatch", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{max_decompressed_body_bytes: 8})
 

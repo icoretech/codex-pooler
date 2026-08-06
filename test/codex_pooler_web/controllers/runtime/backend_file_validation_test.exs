@@ -13,6 +13,8 @@ defmodule CodexPoolerWeb.Runtime.BackendFileValidationTest do
   alias CodexPooler.Files.FileRecord
   alias CodexPooler.Gateway.Transports.FileBridge
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.Plugs.BackendFilesMultipartGuard
+  alias CodexPoolerWeb.Plugs.RuntimeIngress.Path, as: IngressPath
 
   setup do
     old_config = Application.get_env(:codex_pooler, Files, [])
@@ -354,6 +356,54 @@ defmodule CodexPoolerWeb.Runtime.BackendFileValidationTest do
       assert Repo.aggregate(Request, :count) == request_count_before
       assert tmpdir_paths(tmp_root) == []
     end)
+  end
+
+  test "encoded multipart file create reaches the same guard without parser side effects" do
+    setup = active_api_key_fixture()
+
+    with_isolated_plug_tmpdir(fn tmp_root ->
+      file_count_before = Repo.aggregate(FileRecord, :count)
+      request_count_before = Repo.aggregate(Request, :count)
+
+      conn =
+        Plug.Test.conn("POST", "/backend-api/%66iles", "invalid multipart fixture")
+        |> put_req_header("content-type", "multipart/form-data; boundary=example")
+        |> auth(setup)
+        |> @endpoint.call(@endpoint.init([]))
+
+      assert json_response(conn, 400)["error"]["code"] ==
+               "unsupported_multipart_file_create"
+
+      assert Repo.aggregate(FileRecord, :count) == file_count_before
+      assert Repo.aggregate(Request, :count) == request_count_before
+      assert tmpdir_paths(tmp_root) == []
+    end)
+  end
+
+  test "multipart guard consumes the populated canonical path view" do
+    setup = active_api_key_fixture()
+
+    conn =
+      Plug.Test.conn("POST", "/backend-api/%66iles", "invalid multipart fixture")
+      |> put_req_header("content-type", "multipart/form-data; boundary=example")
+      |> auth(setup)
+      |> IngressPath.populate()
+      |> Map.put(:path_info, ["unrelated"])
+      |> BackendFilesMultipartGuard.call([])
+
+    assert json_response(conn, 400)["error"]["code"] == "unsupported_multipart_file_create"
+  end
+
+  test "multipart guard reconstructs the canonical path when called directly" do
+    setup = active_api_key_fixture()
+
+    conn =
+      Plug.Test.conn("POST", "/backend-api/%66iles", "invalid multipart fixture")
+      |> put_req_header("content-type", "multipart/form-data; boundary=example")
+      |> auth(setup)
+      |> BackendFilesMultipartGuard.call([])
+
+    assert json_response(conn, 400)["error"]["code"] == "unsupported_multipart_file_create"
   end
 
   test "cleanup marks expired file metadata rows", %{conn: conn} do

@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.V1.UnsupportedRoutes do
   @moduledoc false
 
+  alias CodexPoolerWeb.Plugs.RuntimeIngress.Path
+
   @routes [
     %{
       method: "POST",
@@ -87,8 +89,8 @@ defmodule CodexPoolerWeb.V1.UnsupportedRoutes do
   end
 
   @spec unsupported?(Plug.Conn.t()) :: boolean()
-  def unsupported?(%Plug.Conn{method: method, path_info: path_info}) do
-    Enum.any?(@routes, &matches?(&1, method, path_info))
+  def unsupported?(%Plug.Conn{method: method} = conn) do
+    Enum.any?(@routes, &matches?(&1, method, Path.decoded_segments(conn)))
   end
 
   defp matches?(%{method: method, path_info: pattern}, method, path_info) do

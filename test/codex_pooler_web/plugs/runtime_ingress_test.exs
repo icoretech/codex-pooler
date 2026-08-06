@@ -46,6 +46,155 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
     :ok
   end
 
+  describe "unencoded ingress characterization" do
+    test "preserves runtime, MCP, multipart, usage, pruned-helper, and passthrough order", %{
+      conn: conn
+    } do
+      setup_runtime_ingress(%OperationalSettings{})
+      setup = active_api_key_fixture()
+
+      protected_runtime =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/backend-api/codex/responses", ~s({"model":))
+
+      assert json_response(protected_runtime, 401)["error"]["code"] == "api_key_missing"
+
+      mcp =
+        build_conn()
+        |> put_req_header("content-type", "multipart/form-data; boundary=example")
+        |> post("/mcp", "invalid multipart fixture")
+
+      assert json_response(mcp, 415)["error"]["code"] == -32_600
+
+      multipart =
+        build_conn()
+        |> auth(setup)
+        |> put_req_header("content-type", "multipart/form-data; boundary=example")
+        |> post("/backend-api/files", "invalid multipart fixture")
+
+      assert json_response(multipart, 400)["error"]["code"] ==
+               "unsupported_multipart_file_create"
+
+      usage = build_conn() |> auth(setup) |> get("/api/codex/usage")
+      assert json_response(usage, 200)["plan_type"] == "api_key"
+
+      pruned = post(build_conn(), "/backend-api/codex/thread/goal/get", %{})
+      assert response(pruned, 404) =~ "Not Found"
+
+      health = get(build_conn(), "/healthz")
+      assert json_response(health, 200)["status"] == "ok"
+    end
+  end
+
+  describe "canonical path classification" do
+    test "encoded runtime route families reach the same pre-parser firewall", %{conn: conn} do
+      setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
+
+      for {method, path, headers} <- [
+            {:post, "/%62ackend-api/codex/responses", []},
+            {:post, "/backend-api/%66iles", []},
+            {:post, "/backend-api/%74ranscribe", []},
+            {:get, "/api/%63odex/usage", []},
+            {:get, "/%77ham/usage", []},
+            {:get, "/backend-api/wham/%75sage", []},
+            {:get, "/%76%31/models", []},
+            {:get, "/v1/%72esponses",
+             [
+               {"connection", "upgrade"},
+               {"upgrade", "websocket"},
+               {"sec-websocket-version", "13"},
+               {"sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ=="}
+             ]}
+          ] do
+        conn =
+          headers
+          |> Enum.reduce(recycle(conn), fn {name, value}, conn ->
+            put_req_header(conn, name, value)
+          end)
+          |> remote_ip({198, 51, 100, 20})
+          |> dispatch(method, path)
+
+        assert json_response(conn, 403)["error"]["code"] == "access_denied"
+      end
+    end
+
+    test "encoded pruned helpers remain absent before the runtime firewall", %{conn: conn} do
+      setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
+
+      conn =
+        conn
+        |> remote_ip({198, 51, 100, 20})
+        |> post("/backend-api/codex/thread/%67oal/get", %{})
+
+      assert response(conn, 404) =~ "Not Found"
+    end
+
+    test "encoded protected JSON and transcription routes authenticate before parsing", %{
+      conn: conn
+    } do
+      setup_runtime_ingress(%OperationalSettings{})
+
+      for {path, content_type, body} <- [
+            {"/%62ackend-api/codex/responses", "application/json", ~s({"model":)},
+            {"/backend-api/%66iles", "application/json", ~s({"file_name":)},
+            {"/backend-api/%74ranscribe", "multipart/form-data; boundary=example",
+             "invalid multipart fixture"}
+          ] do
+        conn =
+          conn
+          |> recycle()
+          |> put_req_header("content-type", content_type)
+          |> post(path, body)
+
+        assert json_response(conn, 401)["error"]["code"] == "api_key_missing"
+      end
+    end
+
+    test "unsafe runtime candidates return only the fixed invalid-path envelope", %{conn: conn} do
+      setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
+
+      for path <- [
+            "/v1%2Fresponses",
+            "/backend-api%5Cfiles",
+            "/api/codex%00/usage"
+          ] do
+        conn = conn |> recycle() |> remote_ip({198, 51, 100, 20}) |> get(path)
+
+        assert json_response(conn, 400) == %{
+                 "error" => %{
+                   "message" => "request path is invalid",
+                   "type" => "invalid_request_error",
+                   "code" => "invalid_request",
+                   "param" => nil
+                 }
+               }
+      end
+
+      assert Repo.aggregate(Request, :count) == 0
+      assert Repo.aggregate(Attempt, :count) == 0
+    end
+
+    test "single decoding does not reject double-encoded or invalid percent text", %{conn: conn} do
+      setup_runtime_ingress(%OperationalSettings{})
+
+      for path <- ["/v1/value%252Ftail", "/v1/value%ZZtail"] do
+        conn = get(recycle(conn), path)
+        assert json_response(conn, 401)["error"]["code"] == "api_key_missing"
+      end
+    end
+
+    test "unsafe passthrough candidates retain normal router behavior", %{conn: conn} do
+      setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
+
+      for path <- ["/admin%2Fusers", "/login%00suffix", "/healthz%2Fextra"] do
+        conn = conn |> recycle() |> remote_ip({198, 51, 100, 20}) |> get(path)
+
+        assert html_response(conn, 404) =~ "Not Found"
+      end
+    end
+  end
+
   describe "JSON parser context" do
     test "stores settings and protected-backend classification before parsing" do
       setup_runtime_ingress(%OperationalSettings{})

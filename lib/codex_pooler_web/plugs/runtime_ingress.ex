@@ -7,20 +7,10 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
   alias CodexPooler.Gateway.Admission, as: GatewayAdmission
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Pools.Routing, as: PoolRouting
-  alias CodexPoolerWeb.Plugs.RuntimeIngress.{CompressedBody, Firewall}
+  alias CodexPoolerWeb.Plugs.RuntimeIngress.{CompressedBody, Firewall, Path}
   alias CodexPoolerWeb.V1.UnsupportedRoutes
   alias Plug.Conn.Query
   alias Plug.Conn.Utils
-
-  @runtime_prefixes [
-    ["backend-api", "codex"],
-    ["backend-api", "files"],
-    ["backend-api", "transcribe"],
-    ["api", "codex", "usage"],
-    ["wham", "usage"],
-    ["backend-api", "wham", "usage"],
-    ["v1"]
-  ]
 
   @json_error_type "invalid_request_error"
   @parser_settings_private_key :codex_pooler_runtime_ingress_settings
@@ -45,8 +35,17 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
   def init(opts), do: opts
 
   def call(conn, _opts) do
+    conn = Path.populate(conn)
+    path = Path.fetch(conn)
+
     cond do
-      mcp_request?(conn) ->
+      path.scope == :mcp and path.unsafe_segment? ->
+        send_mcp_error(conn, 400, -32_600, "invalid request")
+
+      path.scope == :runtime and path.unsafe_segment? ->
+        send_runtime_error(conn, 400, "invalid_request", "request path is invalid")
+
+      path.scope == :mcp ->
         settings = OperationalSettings.current()
 
         conn
@@ -58,7 +57,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
       pruned_runtime_helper_request?(conn) ->
         send_pruned_runtime_helper_absent(conn)
 
-      runtime_path?(conn.path_info) ->
+      path.scope == :runtime ->
         settings = OperationalSettings.current()
 
         conn
@@ -93,7 +92,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
   def send_mcp_parse_error(conn), do: send_mcp_error(conn, 400, -32_700, "parse error")
 
   @spec mcp_request?(Plug.Conn.t() | term()) :: boolean()
-  def mcp_request?(%Plug.Conn{path_info: ["mcp"]}), do: true
+  def mcp_request?(%Plug.Conn{} = conn), do: Path.fetch(conn).scope == :mcp
   def mcp_request?(_conn), do: false
 
   defp enforce_mcp_firewall(conn, settings) do
@@ -366,8 +365,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
 
   defp enforce_image_generation_permission(conn), do: conn
 
-  defp image_generation_request?(%Plug.Conn{method: "POST", path_info: path_info}) do
-    path_info in [
+  defp image_generation_request?(%Plug.Conn{method: "POST"} = conn) do
+    Path.decoded_segments(conn) in [
       ["backend-api", "codex", "images", "generations"],
       ["backend-api", "codex", "images", "edits"],
       ["v1", "images", "generations"],
@@ -378,7 +377,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
   defp image_generation_request?(_conn), do: false
 
   defp multipart_transcribe_request?(conn) do
-    conn.method == "POST" and conn.path_info == ["backend-api", "transcribe"] and
+    conn.method == "POST" and Path.decoded_segments(conn) == ["backend-api", "transcribe"] and
       multipart_content_type?(conn)
   end
 
@@ -396,68 +395,28 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
   end
 
   @spec protected_backend_json_request?(Plug.Conn.t() | term()) :: boolean()
-  def protected_backend_json_request?(%Plug.Conn{
-        method: "POST",
-        path_info: ["backend-api", "codex", "responses"]
-      }),
-      do: true
+  def protected_backend_json_request?(%Plug.Conn{method: "POST"} = conn) do
+    path_info = Path.decoded_segments(conn)
 
-  def protected_backend_json_request?(%Plug.Conn{
-        method: "POST",
-        path_info: ["backend-api", "codex", "v1", "responses"]
-      }),
-      do: true
-
-  def protected_backend_json_request?(%Plug.Conn{
-        method: "POST",
-        path_info: ["backend-api", "codex", "v1", "chat", "completions"]
-      }),
-      do: true
-
-  def protected_backend_json_request?(%Plug.Conn{
-        method: "POST",
-        path_info: ["backend-api", "codex", "images", "generations"]
-      }),
-      do: true
-
-  def protected_backend_json_request?(%Plug.Conn{
-        method: "POST",
-        path_info: ["backend-api", "codex", "images", "edits"]
-      }),
-      do: true
-
-  def protected_backend_json_request?(%Plug.Conn{
-        method: "POST",
-        path_info: ["backend-api", "codex", "responses", "compact"]
-      }),
-      do: true
-
-  def protected_backend_json_request?(%Plug.Conn{
-        method: "POST",
-        path_info: ["backend-api", "codex", "v1", "responses", "compact"]
-      }),
-      do: true
-
-  def protected_backend_json_request?(%Plug.Conn{
-        method: "POST",
-        path_info: ["backend-api", "files"]
-      }),
-      do: true
-
-  def protected_backend_json_request?(%Plug.Conn{
-        method: "POST",
-        path_info: ["backend-api", "files", file_id, "uploaded"]
-      })
-      when is_binary(file_id),
-      do: true
+    path_info in [
+      ["backend-api", "codex", "responses"],
+      ["backend-api", "codex", "v1", "responses"],
+      ["backend-api", "codex", "v1", "chat", "completions"],
+      ["backend-api", "codex", "images", "generations"],
+      ["backend-api", "codex", "images", "edits"],
+      ["backend-api", "codex", "responses", "compact"],
+      ["backend-api", "codex", "v1", "responses", "compact"],
+      ["backend-api", "files"]
+    ] or match?(["backend-api", "files", file_id, "uploaded"] when is_binary(file_id), path_info)
+  end
 
   def protected_backend_json_request?(_conn), do: false
 
   def protected_backend_raw_request?(_conn), do: false
 
   @spec pruned_runtime_helper_request?(Plug.Conn.t()) :: boolean()
-  defp pruned_runtime_helper_request?(%Plug.Conn{method: method, path_info: path_info}) do
-    {method, path_info} in @pruned_runtime_helper_routes
+  defp pruned_runtime_helper_request?(%Plug.Conn{method: method} = conn) do
+    {method, Path.decoded_segments(conn)} in @pruned_runtime_helper_routes
   end
 
   defp decode_or_send_compressed_body(conn, settings) do
@@ -475,11 +434,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
     |> halt()
   end
 
-  defp runtime_path?(path_info) do
-    Enum.any?(@runtime_prefixes, &List.starts_with?(path_info, &1))
-  end
-
-  defp v1_request?(conn), do: List.starts_with?(conn.path_info, ["v1"])
+  defp v1_request?(conn), do: List.starts_with?(Path.decoded_segments(conn), ["v1"])
 
   defp unsupported_v1_error do
     %{
