@@ -91,6 +91,26 @@ defmodule CodexPooler.Gateway.RequestCompression.TokenCounterTest do
     end
   end
 
+  describe "encoding_for_model/1" do
+    test "maps supported and unsupported model names to encodings" do
+      cases = [
+        {"gpt-5", {:ok, :o200k_base}},
+        {"gpt-5-mini", {:ok, :o200k_base}},
+        {"gpt-5-nano", {:ok, :o200k_base}},
+        {"GPT-5", {:ok, :o200k_base}},
+        {" GpT-5-mini ", {:ok, :o200k_base}},
+        {"GPT-4", {:ok, :cl100k_base}},
+        {"GPT-4-Turbo", {:ok, :cl100k_base}},
+        {"gpt5", {:error, :unsupported_model}},
+        {"gpt-6", {:error, :unsupported_model}}
+      ]
+
+      for {model, expected} <- cases do
+        assert TokenCounter.encoding_for_model(model) == expected
+      end
+    end
+  end
+
   describe "count_tokens/2" do
     test "keeps the release-smoke helper API stable" do
       assert TokenCounter.count_tokens("gpt-4o", "Hello, world!") ==
