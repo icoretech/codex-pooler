@@ -123,6 +123,8 @@ assigned Pools.
 - 🛡️ **Privacy-minded observability:** store request, routing, and audit metadata
   without storing prompts, file bodies, audio, images, bearer tokens, cookies,
   raw Codex account tokens, or raw API keys
+- 🧱 **Runtime ingress firewall:** optionally restrict incoming runtime traffic to
+  approved client networks for an extra deployment-level security boundary
 - ⚙️ **Configurable without code changes:** tune Pool policy, gateway defaults,
   diagnostics, model support, limits, and operational settings from the admin UI
 - 🐳 **Built for self-hosting:** run on Elixir/Erlang's fault-tolerant runtime,
