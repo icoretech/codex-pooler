@@ -1,3 +1,128 @@
+---
+name: Codex Pooler
+description: A flat, dense operator bench for routing, capacity, and redacted evidence.
+colors:
+  primary: "#ff9900"
+  primary-content: "#000000"
+  primary-border: "#e17d00"
+  primary-hover: "#f2a000"
+  primary-active: "#d87400"
+  secondary: "oklch(55% 0.027 264.364)"
+  accent: "oklch(0% 0 0)"
+  base-100: "oklch(98% 0 0)"
+  base-200: "oklch(96% 0.001 286.375)"
+  base-300: "oklch(92% 0.004 286.32)"
+  base-content: "oklch(21% 0.006 285.885)"
+  info: "oklch(62% 0.214 259.815)"
+  success: "oklch(70% 0.14 182.503)"
+  warning: "oklch(66% 0.179 58.318)"
+  error: "oklch(58% 0.253 17.585)"
+  reset-bank: "oklch(52% 0.22 295)"
+  rank-gold: "oklch(78% 0.13 85)"
+  rank-bronze: "oklch(62% 0.11 55)"
+typography:
+  page-title:
+    fontFamily: "Roboto Condensed, ui-sans-serif, system-ui, sans-serif"
+    fontSize: "1.875rem"
+    fontWeight: 700
+    lineHeight: "2.25rem"
+  eyebrow:
+    fontFamily: "Roboto Condensed, ui-sans-serif, system-ui, sans-serif"
+    fontSize: "0.875rem"
+    fontWeight: 600
+    letterSpacing: "0.025em"
+  surface-title:
+    fontFamily: "Roboto Condensed, ui-sans-serif, system-ui, sans-serif"
+    fontSize: "1rem"
+    fontWeight: 600
+    lineHeight: "1.25rem"
+  section-heading:
+    fontFamily: "Roboto Condensed, ui-sans-serif, system-ui, sans-serif"
+    fontSize: "0.75rem"
+    fontWeight: 600
+    letterSpacing: "0.025em"
+  micro-label:
+    fontFamily: "Roboto Condensed, ui-sans-serif, system-ui, sans-serif"
+    fontSize: "0.62rem"
+    fontWeight: 600
+    letterSpacing: "0.08em"
+  value:
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace"
+    fontSize: "1.25rem"
+    fontWeight: 600
+    fontFeature: "tnum"
+  body:
+    fontFamily: "Roboto Condensed, ui-sans-serif, system-ui, sans-serif"
+    fontSize: "0.875rem"
+    fontWeight: 400
+    lineHeight: "1.5rem"
+  fine-print:
+    fontFamily: "Roboto Condensed, ui-sans-serif, system-ui, sans-serif"
+    fontSize: "0.6875rem"
+    fontWeight: 400
+    lineHeight: "1rem"
+rounded:
+  selector: "0.25rem"
+  field: "0.25rem"
+  box: "0.5rem"
+  pill: "999px"
+spacing:
+  chip: "0.5rem"
+  band: "0.625rem"
+  grid: "0.75rem"
+  card: "1rem"
+  section: "1.5rem"
+components:
+  button-primary:
+    backgroundColor: "{colors.primary}"
+    textColor: "{colors.primary-content}"
+    rounded: "{rounded.field}"
+    padding: "0.5rem 0.875rem"
+    typography: "{typography.body}"
+  button-primary-hover:
+    backgroundColor: "{colors.primary-hover}"
+    textColor: "{colors.primary-content}"
+  button-primary-active:
+    backgroundColor: "{colors.primary-active}"
+    textColor: "{colors.primary-content}"
+  button-ghost:
+    backgroundColor: "transparent"
+    textColor: "{colors.base-content}"
+    rounded: "{rounded.field}"
+    padding: "0.5rem 0.875rem"
+  admin-surface:
+    backgroundColor: "{colors.base-100}"
+    textColor: "{colors.base-content}"
+    rounded: "{rounded.box}"
+    padding: "1rem"
+  metric-card:
+    backgroundColor: "{colors.base-100}"
+    textColor: "{colors.base-content}"
+    rounded: "{rounded.box}"
+    padding: "0.75rem"
+    typography: "{typography.value}"
+  chip-success:
+    backgroundColor: "{colors.success}"
+    textColor: "{colors.success}"
+    rounded: "{rounded.field}"
+    padding: "0.0625rem 0.375rem"
+    typography: "{typography.micro-label}"
+  input-field:
+    backgroundColor: "{colors.base-100}"
+    textColor: "{colors.base-content}"
+    rounded: "{rounded.field}"
+    padding: "0.375rem 0.75rem"
+    height: "2rem"
+  nav-item:
+    backgroundColor: "transparent"
+    textColor: "{colors.base-content}"
+    padding: "0.5rem 0.75rem"
+    typography: "{typography.micro-label}"
+  nav-item-active:
+    backgroundColor: "{colors.base-300}"
+    textColor: "{colors.base-content}"
+---
+
 # Design System: Codex Pooler
 
 This document is the source-linked contract for the Codex Pooler web UI. Every
@@ -8,31 +133,37 @@ wins and this file must be corrected in the same change.
 Token source of truth: [`assets/css/app.css`](assets/css/app.css) (Tailwind v4 +
 daisyUI 5 theme plugins). Verified against the live app (light and dark) on
 2026-07-17 across `/admin/upstreams`, `/admin/stats`, `/admin/api-keys`, and
-`/admin/request-logs`.
+`/admin/request-logs`; tokens re-verified against `app.css` on 2026-08-06.
+
+The frontmatter above is the machine-readable layer and carries the **light**
+theme, which is the default. Every token has a dark pair, and those pairs, the
+tonal ramps, and the shadow and motion vocabularies do not fit that schema;
+they are regenerated into a local, untracked sidecar alongside this file. The
+prose below names roles and describes where each token is used; it never
+asserts a value that contradicts the frontmatter.
 
 Contents:
 
-1. [Atmosphere](#1-atmosphere)
-2. [Color](#2-color)
-3. [Typography](#3-typography)
-4. [Spacing and layout](#4-spacing-and-layout)
-5. [Components — current admin system](#5-components--current-admin-system)
-6. [Components — API Key Observatory extension](#6-components--api-key-observatory-extension)
-7. [Motion](#7-motion)
-8. [Depth](#8-depth)
-9. [Accessibility and design rules](#9-accessibility-and-design-rules)
+1. [Overview](#overview)
+2. [Colors](#colors)
+3. [Typography](#typography)
+4. [Layout](#layout)
+5. [Elevation & Depth](#elevation--depth)
+6. [Shapes](#shapes)
+7. [Components](#components)
+8. [Do's and Don'ts](#dos-and-donts)
 
 ---
 
-## 1. Atmosphere
+## Overview
 
-**Creative north star: "The Operator Bench."** Codex Pooler is a compact
+**Creative North Star: "The Operator Bench."** Codex Pooler is a compact
 operations surface for trusted users who inspect routing, upstream capacity,
 API keys, request history, quota evidence, and maintenance state without ever
 seeing sensitive payloads. The interface should feel like a well-labeled bench
 of controls: precise, flat, readable, built for repeated use under pressure.
 
-Key characteristics, all observable in the current admin pages:
+**Key Characteristics:** (all observable in the current admin pages)
 
 - **Dense but scan-friendly.** Cards, definition lists, and zebra rows carry
   many small facts; type stays legible because labels are uppercase micro-text
@@ -53,7 +184,102 @@ Anti-goals (enforced, not aspirational): no glassmorphism, no neon/terminal
 styling, no gradient text, no decorative grid backgrounds, no oversized hero
 typography on admin screens, no equal-tile KPI boilerplate as filler.
 
-## 2. Color
+### Motion
+
+Motion belongs to the world rather than to any one component, so it is
+specified here. Motion carries state meaning or it does not exist. Current
+inventory (all in
+`app.css` or component classes, all `prefers-reduced-motion`-guarded where
+animated):
+
+- Quota meters: width 260ms / color 180ms transitions
+  (`admin-live-progress`); token-burn gloss sweep with per-card
+  `--shine-delay` stagger and burn-scaled `--shine-period` ([Upstream account card](#upstream-account-card)/[Quota progress row](#quota-progress-row-including-striped-credit-backed-state)).
+- Panel switcher: 150ms opacity ease-out with `motion-reduce:transition-none`.
+- Pool compat disclosure: 160ms slide/fade in (`pool-compat-panel-in`),
+  disabled under reduced motion.
+- Hover/focus color transitions: `transition-colors` (~200ms) on nav items,
+  chips, pills, dropdown items.
+- Flash show/hide: 200–300ms fade/scale via `CoreComponents.show/hide`;
+  reconnect spinner is `motion-safe:animate-spin`.
+- Shared admin loading indicators: `admin-loading-icon` rotates through
+  `transform` on an 800ms linear loop. Reduced-motion sessions replace the
+  rotation with a calm 1.4s opacity pulse, so loading never reads as a static
+  refresh glyph.
+- Theme toggle thumb: `transition-[left]`.
+- Observatory segmented/pause/logout controls: the semantic control motion
+  role is 150ms `ease` for border/background/text state changes; the live-dot
+  role is a 2.4s `ease-in-out` opacity pulse whose midpoint is 0.35. These map
+  to the `--observatory-motion-*` tokens in [Layout](#layout); pause makes the dot static and
+  `prefers-reduced-motion: reduce` removes the pulse and control transitions.
+
+- Observatory hold-to-launch (`admin-nav-hold-*` in `app.css`, `HoldToLaunch`
+  hook): the nav exit opens only after a ~1s press — the icon's ring fills as
+  functional progress (JS-driven stroke offset), early release drains it in
+  150ms, and the tab opens on the release gesture so popup blockers stay
+  quiet. Only the 300ms launch pop is decorative, and it is motion-gated.
+
+Rule: no looping decorative animation; the burn shine is the ceiling for
+ambient motion and it is evidence-driven (recent token burn).
+
+## Colors
+
+A near-neutral operator surface carrying exactly one warm brand voice, with the
+semantic status hues held at a saturation that reads as instrumentation rather
+than decoration.
+
+### Primary
+
+- **Operator Orange** (`{colors.primary}`): the single brand voice. Primary
+  action, active nav item, selected state, section eyebrow, focus ring. Never
+  decoration, never a second one on the same panel.
+
+### Secondary
+
+- **Bench Graphite** (`{colors.secondary}`): secondary buttons and muted chart
+  series — present, deliberately unremarkable, never competing with Primary.
+
+### Tertiary
+
+- **Banked Violet** (`{colors.reset-bank}`): the saved-reset resource. A stored
+  charge is neither a status nor an action, so it sits deliberately outside the
+  semantic vocabulary and owns its own hue.
+- **Podium Gold** (`{colors.rank-gold}`) and **Podium Bronze**
+  (`{colors.rank-bronze}`): leaderboard rank metals only. Theme-invariant, so
+  first place reads the same in both themes.
+
+### Neutral
+
+- **Paper** (`{colors.base-100}`): the card and work surface.
+- **Bench** (`{colors.base-200}`): page chrome and tonal washes.
+- **Hairline** (`{colors.base-300}`): borders, dividers, inactive fills, and
+  the active nav item's background.
+- **Ink** (`{colors.base-content}`): all text. Muted ink is this token at
+  reduced opacity, never a separate gray.
+
+### Status
+
+- **Info** (`{colors.info}`): in progress, WebSocket transport.
+- **Success** (`{colors.success}`): healthy, succeeded, eligible.
+- **Warning** (`{colors.warning}`): paused, refresh due, attention.
+- **Error** (`{colors.error}`): failed, revoked, blocked, destructive.
+
+### Named Rules
+
+**The Orange Scarcity Rule.** `--color-primary` marks the primary action, the
+active nav item, the selected state, and the section eyebrow — nothing else. If
+two things on one panel are orange, one of them is wrong.
+
+**The Text Plus Color Rule.** Every status is written out (chip label,
+`sr-only` prefix, `title` attribute) before it is colored. Color only
+reinforces a reading that already exists in text; a hue is never the only
+channel.
+
+**The One Token Store Rule.** Per-theme values live in `app.css` and nowhere
+else. No raw color literals in `lib/`, no hand-managed `dark:` pairs for custom
+hues, no second token store.
+
+### Theme pairing
 
 Both themes are daisyUI theme plugins in `assets/css/app.css`. The `dark`
 variant is selected by `data-theme="dark"` on `<html>` (a custom variant maps
@@ -96,7 +322,28 @@ theme-invariant `--codex-rank-gold`/`--codex-rank-bronze` (+`-ink`) podium
 metals. Components reference them as `text-(--color-reset-bank)`-style
 utilities; never hardcode raw violet/oklch literals in `lib/`.
 
-## 3. Typography
+## Typography
+
+**Display / Body Font:** Roboto Condensed (with `ui-sans-serif`, `system-ui`,
+`sans-serif`)
+**Label / Mono Font:** the Tailwind `font-mono` stack (`ui-monospace`, Menlo, …)
+
+**Character:** one condensed grotesque doing every job, narrow enough that a
+dense row of facts still reads at a glance, with monospace used strictly as
+data dress. There is no display face and no pairing to admire; the hierarchy is
+carried by weight, case, and opacity rather than by contrast between families.
+
+### Named Rules
+
+**The Mono-Is-Data Rule.** Monospace marks values you might copy, compare, or
+diff — IDs, prefixes, versions, tabular numbers, OTP slots, the sidebar nav
+labels. It is never reached for as personality, and never for prose.
+
+**The No-Hero-Type Rule.** No fluid or clamped hero type on admin screens. The
+largest type on any page is the `text-3xl` page title, and tracked uppercase
+appears only at micro sizes.
+
+### Family notes
 
 - **Family:** Roboto Condensed, self-hosted TTFs at weights 400–900
   (`@font-face` in `app.css`), wired as `--font-sans` and on `body`.
@@ -124,12 +371,12 @@ Observed hierarchy (all from live pages):
 Rules: no fluid hero type on admin screens; tracked uppercase only at micro
 sizes (labels, chips, nav); prose capped around 65–75ch.
 
-## 4. Spacing and layout
+## Layout
 
-Radii come from the theme: `--radius-field: 0.25rem` (controls, `rounded`,
-inputs), `--radius-box: 0.5rem` (`rounded-box`, cards, popovers), pills are
-`rounded-full`. Border width token is 1.5px for daisyUI controls; hairlines
-elsewhere are 1px `border-base-300` (often at `/70` opacity).
+The admin surface is a fixed frame with exactly one scrolling region: chrome
+never moves, and everything the operator reads scrolls inside the content
+column. Density is deliberate — the frame is sized so the widest table fits
+whole rather than so the page looks roomy.
 
 **Admin shell** (source:
 [`shell.ex`](lib/codex_pooler_web/live/admin/components/shared/components/shell.ex),
@@ -147,7 +394,7 @@ wrapped by `Layouts.app chrome={:admin}` in
 - The nav ends with the Observatory item, the one exit to the key-holder
   surface. It looks like its siblings — no arrow glyphs, separators, or
   group labels — and the protection is the interaction: it opens through the
-  hold-to-launch ring (§7) instead of a plain click, and carries "hold to
+  hold-to-launch ring ([Motion](#motion)) instead of a plain click, and carries "hold to
   open in a new tab" in its accessible name and title. Plain left-click is
   owned by the hold; modified clicks, middle-click, and keyboard Enter
   follow `target="_blank"` natively (`HoldToLaunch` hook in
@@ -200,6 +447,13 @@ Grid conventions:
 - Responsive breakpoints in active use: `sm` (640), `md` (768), `lg` (1024),
   `xl` (1280), plus one bespoke `min-[1900px]` on the stats KPI strip.
 
+### Named Rules
+
+**The Content-Column Rule.** Judge every layout change by the width left for
+content — viewport minus chrome minus padding — not by the viewport. Nav labels
+are recoverable through `title` and `aria-label`; a table column pushed off the
+screen is not.
+
 ### Observatory token extension
 
 The Observatory keeps its exact approved geometry while using the existing
@@ -210,7 +464,7 @@ Tailwind v4 utilities (`min-h-12`, the `gap-*`/`p-*`/`m*` scale, `size-*`,
 chart minimum is the existing Tailwind `--container-xl` token; compact body
 type is `--text-xs`; weights and tight leading use `--font-weight-*` and
 `--leading-tight`. Cards and field controls remain on `--radius-box` and
-`--radius-field`; colors remain on the §2 semantic theme slots.
+`--radius-field`; colors remain on the [Colors](#colors) semantic theme slots.
 
 Only values with no exact framework token receive an Observatory-local token.
 This is the complete inventory; it is not a new global scale:
@@ -257,12 +511,66 @@ them through `@variant`, and HEEx uses `observatory-split:*`. Tailwind 4 emits
 the concrete media queries during the asset build. The ordinary `sm` variant
 continues to control safe-prefix visibility at 640px.
 
-## 5. Components — current admin system
+## Elevation & Depth
+
+Flat-first. Two sanctioned separation methods, never combined on a resting
+surface:
+
+- **Content layering:** `border border-base-300` (+ `/70` for internal
+  dividers) over tonal `bg-base-200/*` washes; header bands `bg-base-200/35`,
+  footer bands `bg-base-200/20`.
+- **Overlay shadows:** `shadow-xl` for dropdown menus and flash, `shadow-2xl`
+  for dialogs, drawers, and top-bar popovers. `shadow-sm` appears only on the
+  object-inspector default shell.
+
+z-index ladder in use: dropdowns in cards `z-20`, chart/tooltip internals,
+top-bar popovers and toasts `z-50`, request-log drawer `z-[70]`.
+
+### Named Rules
+
+**The Flat-By-Default Rule.** Surfaces are flat at rest. A shadow is a response
+to elevation — an overlay leaving the page plane — never a way to make a
+resting card look important.
+
+**The One Separation Method Rule.** A resting surface separates by border or by
+tonal wash, never by both plus a shadow. Stacking separation devices is how a
+flat system turns into a soft one.
+
+## Shapes
+
+A rectilinear system with just enough softening to read as controls rather than
+as a spreadsheet. Three radii and one border weight cover every surface; there
+is no clipping, no bespoke silhouette, and no decorative geometry.
+
+- **Controls and inputs** use `--radius-field` (0.25rem, the `rounded` /
+  `rounded-field` utilities). Small enough that a dense toolbar still reads as
+  a row of discrete controls.
+- **Cards, popovers, drawers, and dialogs** use `--radius-box` (0.5rem, the
+  `rounded-box` utility). One step softer, which is what separates a container
+  from a control at a glance.
+- **Pills** — segmented controls, key chips, the live dot, the Observatory
+  minibar — are fully round (`rounded-full`, or
+  `--observatory-radius-pill: 999px` where the Observatory needs the exact
+  value).
+- **Borders** are the primary separation device. daisyUI controls carry the
+  1.5px `--border` token; hairlines everywhere else are 1px `border-base-300`,
+  frequently at `/70` opacity for internal dividers.
+- **Status stripes** are a 3px left border on an otherwise unchanged card,
+  painted from a data attribute. They are the one place a shape carries
+  meaning, and they only ever reinforce status text that is already visible.
+
+### Named Rules
+
+**The Two-Radius Rule.** A surface is a control (0.25rem) or a container
+(0.5rem). Anything fully round is a pill by intent. There is no fourth radius;
+if a new element seems to need one, it has been miscategorized.
+
+## Components
 
 Each entry: source, purpose, anatomy/API, tones and states, responsive/scroll
 ownership, accessibility, and a minimal real markup example.
 
-### 5.1 Page header
+### Page header
 
 - **Source:** `page_header/1` in
   [`components.ex`](lib/codex_pooler_web/live/admin/components/shared/components.ex)
@@ -284,7 +592,7 @@ ownership, accessibility, and a minimal real markup example.
 </AdminComponents.page_header>
 ```
 
-### 5.2 Metric strip and metric card
+### Metric strip and metric card
 
 - **Source:** `metric_strip/1`, `metric_card/1` in
   [`components.ex`](lib/codex_pooler_web/live/admin/components/shared/components.ex);
@@ -324,7 +632,7 @@ ownership, accessibility, and a minimal real markup example.
 />
 ```
 
-### 5.3 Admin surface (card with header, count, actions, toolbar, footer)
+### Admin surface (card with header, count, actions, toolbar, footer)
 
 - **Source:** `admin_surface/1` in
   [`components.ex`](lib/codex_pooler_web/live/admin/components/shared/components.ex)
@@ -341,12 +649,12 @@ ownership, accessibility, and a minimal real markup example.
 
 ```heex
 <AdminComponents.admin_surface id="stats-api-key-surface" title="Leaderboard" description="Top API keys by token usage in the last 24 hours">
-  <:header_actions>… segmented pill (§5.12) …</:header_actions>
+  <:header_actions>… segmented pill ([Segmented pill control](#segmented-pill-control)) …</:header_actions>
   <ol class="list-none divide-y divide-base-300/70">…rows…</ol>
 </AdminComponents.admin_surface>
 ```
 
-### 5.4 Upstream account card
+### Upstream account card
 
 - **Source:** `account_card/1` in
   [`account_card.ex`](lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card.ex)
@@ -373,17 +681,17 @@ border-base-300 bg-base-200/35 px-4 py-3`):
   `!px-2 !py-0.5 !text-[10px]` micro override + `max-w-48 truncate`),
   auth-expiration line (`data-role="upstream-auth-expiration"`, `text-xs
   text-base-content/55`, full timestamp in `title`).
-- Header actions cluster: saved-reset count badge (§5.6), plan badge (§5.9) or
+- Header actions cluster: saved-reset count badge ([Saved-reset badge and meter](#saved-reset-badge-and-meter)), plan badge ([Plan badge](#plan-badge--all-tones)) or
   `diagnostic_popover` when the plan is unreported, and the actions dropdown
-  (§5.10).
+  ([Dropdown action menu](#dropdown-action-menu)).
 
 **Body — panel switcher:** three stacked `<section>` panels (usage / tokens /
 pools) inside `data-role="upstream-account-panel-switcher"` with
 `data-panel-view` reflecting the open one. The hidden panels use `max-h-0
 opacity-0 pointer-events-none` plus `aria-hidden` and `inert`; the visible one
 `max-h-[28rem] opacity-100` with a 150ms opacity transition
-(`motion-reduce:transition-none`). Usage panel holds the quota rows (§5.5) and
-saved-reset meter (§5.6); tokens panel holds a model leaderboard list (§5.8);
+(`motion-reduce:transition-none`). Usage panel holds the quota rows ([Quota progress row](#quota-progress-row-including-striped-credit-backed-state)) and
+saved-reset meter ([Saved-reset badge and meter](#saved-reset-badge-and-meter)); tokens panel holds a model leaderboard list ([Compact and definition lists](#compact-and-definition-lists));
 pools panel renders per-assignment route chevrons:
 
 - Each assignment row heads with the pool label on the left and a live
@@ -414,7 +722,7 @@ pools panel renders per-assignment route chevrons:
   `bg-success/80 text-success-content` (or warning/error/neutral) and clips
   into chevrons via `clip-path` (CSS in `app.css`). The gate model lives in the shared
   [`route_path.ex`](lib/codex_pooler_web/live/admin/components/pages/upstreams/route_path.ex),
-  reused by the cockpit's routing lanes (§5.16).
+  reused by the cockpit's routing lanes ([Upstream cockpit](#upstream-cockpit-detail-page-pattern)).
 - Circuit presentation is a load/refresh-time snapshot. Persisted circuit
   lifecycle is retained across replicas, but current blocking is determined
   only by `CircuitHealth.blocked?/3` and its `blocked_reason/3`; a persisted
@@ -441,7 +749,7 @@ pools panel renders per-assignment route chevrons:
   not changed by this presentation contract.
 
 **Footer — routing readiness** (`data-role="upstream-account-card-footer"`):
-the shared card fact strip (§5.17) with three facts. The Pools and Tokens/5m
+the shared card fact strip ([Card fact strip](#card-fact-strip-shared-card-footer)) with three facts. The Pools and Tokens/5m
 cells are `interactive`: an absolutely positioned overlay `<button>`
 (`phx-click="toggle_account_pools_panel"` / `"toggle_account_tokens_panel"`,
 `aria-controls` + `aria-expanded`) sits under pointer-events-disabled text, and
@@ -463,7 +771,7 @@ Tokens/5m uses plain `{count} tokens` when usage accounting is complete,
 token-burn shine active/idle, per-panel open state, deleted/paused disabling
 of actions, lifecycle warning block via `ReconciliationStatus`.
 
-### 5.5 Quota progress row (including striped credit-backed state)
+### Quota progress row (including striped credit-backed state)
 
 - **Source:** `quota_limit_row/1` in
   [`quota_limit_row.ex`](lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_limit_row.ex);
@@ -501,7 +809,7 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
 </progress>
 ```
 
-### 5.6 Saved-reset badge and meter
+### Saved-reset badge and meter
 
 - **Source:** `saved_reset_count_badge/1` and `saved_reset_meter/1` in
   [`saved_reset_meter.ex`](lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/saved_reset_meter.ex)
@@ -510,7 +818,7 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
 - **Count badge** (`data-role="upstream-saved-reset-count-badge"`): a pill
   `<button>` in the card header (battery icon + count) that opens the policy
   dialog (`aria-haspopup="dialog"`, `aria-controls`). Tones: auto-redeem
-  enabled → success recipe; disabled → the `--color-reset-bank` token (§2).
+  enabled → success recipe; disabled → the `--color-reset-bank` token ([Colors](#colors)).
   Renders nothing when no resets are reported.
 - **Meter** (`data-role="upstream-saved-reset-meter"`): title "Banked Resets",
   `x{count}` counter, then a `role="meter"` bar of five `h-1.5 rounded-full`
@@ -518,7 +826,7 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
   `bg-base-300/70`, with `aria-valuemin/max/now` and a text label. Footer line
   states "Auto redeem active/inactive" and next expiry with a clock icon.
 
-### 5.7 Chips (status, count, metadata, severity, protocol, redacted)
+### Chips (status, count, metadata, severity, protocol, redacted)
 
 - **Source:** `chip_class/1` and helpers in
   [`badge_components.ex`](lib/codex_pooler_web/live/admin/components/shared/badge_components.ex);
@@ -567,11 +875,11 @@ counter overlay, not a status chip.
 <span class={AdminBadges.count_chip_class()}>{@count} keys</span>
 ```
 
-### 5.8 Compact and definition lists
+### Compact and definition lists
 
 Three recurring list shapes, all `text-xs`-scale and truncation-guarded:
 
-- **Definition grid (`dl`)** — labeled facts in card footers (§5.17) and the
+- **Definition grid (`dl`)** — labeled facts in card footers ([Card fact strip](#card-fact-strip-shared-card-footer)) and the
   request-log drawer rows. Drawer row (`detail_row/1` in
   [`detail_drawer.ex`](lib/codex_pooler_web/live/admin/components/pages/request_logs/detail_drawer.ex)):
 
@@ -592,20 +900,20 @@ Three recurring list shapes, all `text-xs`-scale and truncation-guarded:
   daisyUI `table` with its default row hairlines and `hover:bg-base-200/80`;
   request logs and the jobs explorer additionally compact cell padding
   through `admin-log-table.table-sm` in `app.css` and follow the record-row
-  contract in §5.18 for widths, tone, and reflow. The audit trail left this
-  family for the prose ledger (§5.22). There
+  contract in [Record row](#record-row--the-ledger-contract) for widths, tone, and reflow. The audit trail left this
+  family for the prose ledger ([Audit prose ledger](#audit-prose-ledger)). There
   is no `table-zebra` in the app — the only striping is the Observatory
   outcomes table (`nth-child(odd)` in `app.css`) and the pool serving-modes
   grid (`even:`). Row detail lives in the drawer, not in ever-wider columns.
 
-### 5.9 Plan badge — all tones
+### Plan badge — all tones
 
 - **Source:** `plan_badge/1` in
   [`badge_components.ex`](lib/codex_pooler_web/live/admin/components/shared/badge_components.ex)
 - **API:** attrs `id`, `label`, `family`, `placeholder` (default
   "Plan unknown"), `class`, global rest. Labels are canonicalized
   ("chatgpt plus" → "ChatGPT Plus"); when a family is present and differs it
-  renders as "Label (Family)". Always renders as a §5.7 pill chip.
+  renders as "Label (Family)". Always renders as a [Chips](#chips-status-count-metadata-severity-protocol-redacted) pill chip.
 - **Tone map:**
 
 | Tone | Plans | Chip |
@@ -625,7 +933,7 @@ verified live as the orange "Pro" / green "Free" pills.
 <AdminBadges.plan_badge id={"#{@dom}-plan-label"} label={@account.plan_label} aria-label={"Account plan: #{@account.plan_label}"} />
 ```
 
-### 5.10 Dropdown action menu
+### Dropdown action menu
 
 - **Source:** `dropdown_action_item/1` in shared
   [`components.ex`](lib/codex_pooler_web/live/admin/components/shared/components.ex);
@@ -641,7 +949,7 @@ verified live as the orange "Pro" / green "Free" pills.
   Items render as `<.link>` when given `href/navigate/patch`, else buttons.
   `copy_feedback?` opts into the copy-label swap hook contract.
 
-### 5.11 Object inspector and request-log drawer
+### Object inspector and request-log drawer
 
 - **Source:** `object_inspector/1` in shared
   [`components.ex`](lib/codex_pooler_web/live/admin/components/shared/components.ex);
@@ -654,11 +962,11 @@ verified live as the orange "Pro" / green "Free" pills.
 - The drawer composes it inside `drawer-side z-[70]` with a click-away
   overlay label, `role="dialog"` + `aria-modal`, `max-w-2xl`, `shadow-2xl`,
   and section groups ("Final outcome", "Attempts timeline", "Sanitized
-  metadata") each headed by the §3 section-heading recipe. Attempt cards are
+  metadata") each headed by the [Typography](#typography) section-heading recipe. Attempt cards are
   `rounded-box border border-base-300 bg-base-200/35`; transport failures use
   the error wash (`border-error/20 bg-error/5`).
 
-### 5.12 Segmented pill control
+### Segmented pill control
 
 - **Source:** the private `chart_mode_control/1` is rendered only through the
   public `traffic_charts/1` composition in
@@ -686,7 +994,7 @@ verified live as the orange "Pro" / green "Free" pills.
 </div>
 ```
 
-### 5.13 Time-series chart surface
+### Time-series chart surface
 
 - **Source:** `traffic_charts/1` in
   [`presentation_charts.ex`](lib/codex_pooler_web/live/admin/components/pages/stats/presentation_charts.ex);
@@ -700,7 +1008,7 @@ verified live as the orange "Pro" / green "Free" pills.
   consume the structured export/root/selector identities, not this human
   documentation prose.
 - **Anatomy:** an `admin_surface`-style card whose header holds the title, a
-  live `tabular-nums` total line, and a mode pill (§5.12); the plot `div`
+  live `tabular-nums` total line, and a mode pill ([Segmented pill control](#segmented-pill-control)); the plot `div`
   carries `phx-hook="ApexTimeSeriesChart" phx-update="ignore"` and a
   `data-chart-*` contract (categories/series/units/value-kinds/yaxis/colors/
   height/legend/stacked/zoom/mode-control...). Colors are CSS variables
@@ -713,7 +1021,7 @@ verified live as the orange "Pro" / green "Free" pills.
   data-chart-source="interval">` mirrors every interval value; mode changes
   announce through an `aria-live="polite"` description.
 
-### 5.14 Policy editor dialog and wizard
+### Policy editor dialog and wizard
 
 - **Source:** `policy_editor_dialog/1` in
   [`policy_editor_components.ex`](lib/codex_pooler_web/live/admin/components/shared/policy_editor_components.ex);
@@ -735,7 +1043,7 @@ verified live as the orange "Pro" / green "Free" pills.
 - **Step panels:** `role="tabpanel"` sections toggled by `block`/`hidden`
   (state lives server-side in `current_step`).
 - **Policy mode cards** (`policy_mode_card/1`, `reasoning_policy_mode/1`):
-  single-choice selection cards following the §5.19 radio-less contract
+  single-choice selection cards following the [Selection card](#selection-card-radio-less-choice-card) radio-less contract
   (sr-only radio, ✓ corner glyph while checked, `border-primary/60 +
   bg-primary/5` checked recipe, 13px/11px type scale). The checkbox flavor
   of this pattern (orange checkbox-card multi-select) is the reference
@@ -746,10 +1054,10 @@ verified live as the orange "Pro" / green "Free" pills.
 
 Every single-choice card family — the pool routing step, the saved-reset
 trigger, and the policy mode cards above — follows the radio-less selection
-card contract (§5.19). Only multi-select checkbox cards keep a visible
+card contract ([Selection card](#selection-card-radio-less-choice-card)). Only multi-select checkbox cards keep a visible
 control.
 
-### 5.15 Filters, empty state, notices, buttons, flash, theme toggle
+### Filters, empty state, notices, buttons, flash, theme toggle
 
 - **`filter_form/1`** (shared components.ex): a `.form` with
   `phx-hook="AdminFilterDropdowns"`, arbitrary-variant class surgery that
@@ -779,7 +1087,7 @@ control.
   btn-circle` trigger with `aria-describedby` pointing at a `role="tooltip"`
   card.
 - **`action_button/1`:** icon+label control; `:primary` → `btn btn-primary`
-  (custom edge/hover vars from §2), `:danger` → `btn btn-error btn-outline
+  (custom edge/hover vars from [Colors](#colors)), `:danger` → `btn btn-error btn-outline
   btn-sm`, default `btn btn-secondary btn-sm`. Renders as link when given a
   navigation attr. Primary buttons keep the inset top highlight and a
   `focus-visible` orange outline (CSS in `app.css`); disabled goes flat
@@ -800,7 +1108,7 @@ control.
   `otp_input/1` renders the grouped mono OTP slots styled by `codex-otp-*`
   CSS.
 
-### 5.16 Upstream cockpit (detail-page pattern)
+### Upstream cockpit (detail-page pattern)
 
 - **Source:**
   [`cockpit_components.ex`](lib/codex_pooler_web/live/admin/components/pages/upstreams/cockpit_components.ex)
@@ -837,7 +1145,7 @@ control.
 - **Routing lanes** (`#upstream-assignments`): a readiness verdict strip
   (status chip + reason + a calm 24h failure note — a share of failed
   upstream calls is expected and only escalates past the domain threshold),
-  then one row per Pool assignment: pool link, §5.4 four-gate route-chevron
+  then one row per Pool assignment: pool link, [Upstream account card](#upstream-account-card) four-gate route-chevron
   meter (via `RoutePath`), and the lane's share of 7-day successes. The stable
   `upstream-assignment-<assignment>-route` id and
   `data-role="upstream-assignment-route"` / `data-role="upstream-assignment-route-segment"`
@@ -845,12 +1153,12 @@ control.
   ready count, and full `Assignment → Health → Quota → Circuit` spoken text as
   the card. Cockpit labels never use the compact `Assign` form.
 - **Quota & banked resets** (`#upstream-quota`): account-level window rows
-  (reusing the index card's `quota_limit_row`, §5.5), the saved-reset meter
-  (§5.6), expiration table, and the auto-redeem policy form behind a
+  (reusing the index card's `quota_limit_row`, [Quota progress row](#quota-progress-row-including-striped-credit-backed-state)), the saved-reset meter
+  ([Saved-reset badge and meter](#saved-reset-badge-and-meter)), expiration table, and the auto-redeem policy form behind a
   `<details>` disclosure with an on/off state chip.
 - **Request health** (`#request-health-chart`): inline facts (24h/7d
   volumes, failure rate, p50 latency), the ApexTimeSeriesChart plot
-  (§5.13 contract), a 24h error-code breakdown list, and the on-demand
+  ([Time-series chart surface](#time-series-chart-surface) contract), a 24h error-code breakdown list, and the on-demand
   refresh control.
 - **Recent activity** (`#upstream-event-summary`): compact metadata-only
   event rows (timestamp · title/subtitle · source chip · "Evidence →" link)
@@ -861,13 +1169,13 @@ control.
   (error breakdown, event subtitles); no raw UUIDs in prose — deep links
   carry them instead.
 
-### 5.17 Card fact strip (shared card footer)
+### Card fact strip (shared card footer)
 
 - **Source:** `card_fact_strip/1`, `card_fact_label/1`, `card_fact_value/1` in
   [`components.ex`](lib/codex_pooler_web/live/admin/components/shared/components.ex)
 - **Purpose:** the band of two to four labeled facts that closes a card. This
   is the only sanctioned way to render a card footer strip; the upstream
-  account card (§5.4), the jobs worker card, and the operator card (§5.21)
+  account card ([Upstream account card](#upstream-account-card)), the jobs worker card, and the operator card ([Operator card](#operator-card))
   all use it.
 - **API:** strip attrs `id` (goes on the facts `dl`), `facts_role`
   (`data-role` for the `dl`), `class`, and a global `rest` that lands on the
@@ -878,7 +1186,7 @@ control.
   facts `dl` `grid min-w-0 divide-x divide-base-300/70 text-xs leading-5` with
   the column count derived from the number of facts. Divider padding is
   positional and owned by the component — first cell `pr-3`, middle cells
-  `px-3`, last cell `pl-3`. Labels are the §3 micro label
+  `px-3`, last cell `pl-3`. Labels are the [Typography](#typography) micro label
   (`text-[0.62rem] font-semibold uppercase tracking-[0.08em]`,
   `text-base-content/35` at rest); values truncate at `text-base-content/60`.
 - **Interactive cells:** `interactive` makes the cell
@@ -904,13 +1212,13 @@ control.
   classes at a call site; add a fact rather than a second strip; numeric values
   carry `tabular-nums`.
 
-### 5.18 Record row — the ledger contract
+### Record row — the ledger contract
 
 The jobs explorer and the request-log table are the two record tables. They
 share one contract, and a third record table should join it rather than invent
 a fourth shape.
 
-**One markup tree, two readings.** A record table is a real `<table>` that
+**The One-Tree Rule.** One markup tree, two readings. A record table is a real `<table>` that
 reflows below its breakpoint instead of being duplicated as a card list. Add
 `admin-ledger-table`; the CSS in `app.css` switches `display` and the template
 places cells with `max-lg:` grid utilities. The `thead` becomes `sr-only`, never
@@ -1047,7 +1355,7 @@ that gets written as an extra row. The range is what truncates when the line is
 tight; the way back to live never does. Returning to page one drops the pin, so
 live is always one click away and never something the operator has to arrange.
 
-### 5.19 Selection card (radio-less choice card)
+### Selection card (radio-less choice card)
 
 - **Source:** routing strategy cards in
   [`wizard_components.ex`](lib/codex_pooler_web/live/admin/components/pages/pools/wizard_components.ex)
@@ -1056,7 +1364,7 @@ live is always one click away and never something the operator has to arrange.
   (saved-reset policy panels), and the policy mode cards
   (`policy_mode_card/1`, `reasoning_policy_mode/1`) in the API-key
   [`wizard_components.ex`](lib/codex_pooler_web/live/admin/components/pages/api_keys/wizard_components.ex)
-  (§5.14); decision record in the "Selection cards · Radio-less ✓" artifact
+  ([Policy editor dialog and wizard](#policy-editor-dialog-and-wizard)); decision record in the "Selection cards · Radio-less ✓" artifact
   (2026-08-05).
 - **Purpose:** a single-choice option card whose border and wash carry the
   selection and whose check glyph is the non-color selected channel. There is
@@ -1071,7 +1379,7 @@ live is always one click away and never something the operator has to arrange.
   a permanent micro tag when one exists (the Bridge ring card reads
   "✓ DEFAULT" while selected; the tag alone otherwise).
 - **States:** hover `border-primary/50`; checked `border-primary/60
-  bg-primary/5` (the §5.14 wash recipe is retired for these cards); focus
+  bg-primary/5` (the [Policy editor dialog and wizard](#policy-editor-dialog-and-wizard) wash recipe is retired for these cards); focus
   ring `outline-2 outline-primary outline-offset-2` driven by the hidden
   radio's `:focus-visible`.
 - **Mechanism:** the radio input stays in the DOM as `sr-only`, so radiogroup
@@ -1107,7 +1415,7 @@ live is always one click away and never something the operator has to arrange.
 </div>
 ```
 
-### 5.20 Model info popover
+### Model info popover
 
 - **Source:** `model_info_popover/1` in
   [`components.ex`](lib/codex_pooler_web/live/admin/components/shared/components.ex),
@@ -1147,7 +1455,7 @@ live is always one click away and never something the operator has to arrange.
   `model-info-content`, and `model-info-description` hooks for LiveView tests
   and browser QA. Focus-visible uses the standard primary outline.
 
-### 5.21 Operator card
+### Operator card
 
 - **Source:** `operator_cards/1` and the private `operator_card/1` in
   [`operator_components.ex`](lib/codex_pooler_web/live/admin/components/shared/operator_components.ex);
@@ -1156,27 +1464,27 @@ live is always one click away and never something the operator has to arrange.
 - **Purpose:** `/admin/operators` renders a grid of profile cards
   (`md:grid-cols-2 xl:grid-cols-3`) instead of a table — operators are few
   and trusted, and the page's job is identity plus security posture at a
-  glance. The filtered-empty surface is the dashed `empty_state` (§5.15).
+  glance. The filtered-empty surface is the dashed `empty_state` ([Filters, empty state, notices, buttons, flash, theme toggle](#filters-empty-state-notices-buttons-flash-theme-toggle)).
 - **Anatomy:** header band (`border-b bg-base-200/35 px-4 py-3`) holding the
   Gravatar avatar with lifecycle presence dot, the display name with a
   primary "you" marker on the viewer's own card, the email, and the role as
   a quiet uppercase micro-label — the single active **instance owner** in
   primary ink, **instance admins** muted, never a second chip — plus the
-  §5.10 actions dropdown. Body is a 2×2 vitals `dl` (TOTP, Password policy,
-  Last login, Joined) using the §3 micro-label recipe, warning-toned values
+  [Dropdown action menu](#dropdown-action-menu) actions dropdown. Body is a 2×2 vitals `dl` (TOTP, Password policy,
+  Last login, Joined) using the [Typography](#typography) micro-label recipe, warning-toned values
   for "Not set up" and a pending password change.
-- **Footer:** the §5.17 fact strip with two facts. **Status** is written
+- **Footer:** the [Card fact strip](#card-fact-strip-shared-card-footer) fact strip with two facts. **Status** is written
   out (capitalized, `text-success`/`text-warning`). **Pools** is an
   interactive cell using the upstream account card's exact overlay-trigger
   contract, toggling `toggle_operator_pools_panel`; the assigned-Pools
-  panel above the strip follows the §5.4 collapse contract (`aria-hidden`
+  panel above the strip follows the [Upstream account card](#upstream-account-card) collapse contract (`aria-hidden`
   plus `inert`, 150ms opacity, reduced-motion safe). The owner's panel
   states that the role is not Pool-scoped instead of faking a list; an
   admin with no Pools says so in one muted sentence.
 - Panel open state lives server-side in `operator_panel_views` (pruned on
   reload), mirroring the upstreams page.
 
-### 5.22 Audit prose ledger
+### Audit prose ledger
 
 - **Source:** the ledger shell in
   [`components.ex`](lib/codex_pooler_web/live/admin/components/pages/audit_logs/components.ex)
@@ -1219,7 +1527,7 @@ live is always one click away and never something the operator has to arrange.
 - **Entities act on the page's own filters, never navigate away:** the
   actor, the target operator, and the Pool render as inline buttons that set
   the matching filter (`select_actor_filter`, `select_target_filter`,
-  `select_pool_filter`); the family icon (the §5.7-toned `audit_action_icon`
+  `select_pool_filter`); the family icon (the [Chips](#chips-status-count-metadata-severity-protocol-redacted)-toned `audit_action_icon`
   set, `size-4`) filters by that exact action, and the "failed" word filters
   by outcome. A target with no email filters by its id while showing its
   presentation label; an entity with nothing to filter by falls back to a
@@ -1232,7 +1540,7 @@ live is always one click away and never something the operator has to arrange.
 - The sticky `LogPagination` pager, the filters (stacked `mobile_single_column`
   on phones like the other log pages), and the detail drawer are unchanged.
 
-## 6. Components — API Key Observatory extension
+### The API Key Observatory extension
 
 The Observatory (`live /observatory`) is a **separate, key-holder-facing
 surface**. It reuses the token system, chips, metric cards, chart contract,
@@ -1240,7 +1548,7 @@ and states above, but not the admin chrome. The layout below was chosen from
 five browser-verified candidates on 2026-07-17 ("Ledger" composition with the
 "Console" facts rail) and this section is its authoritative description.
 
-### 6.1 Shell and toolbar
+#### Shell and toolbar
 
 **Sources:** [`Layouts.app`](lib/codex_pooler_web/components/layouts.ex),
 [`ObservatoryLive`](lib/codex_pooler_web/live/observatory_live.ex),
@@ -1264,7 +1572,7 @@ and [Observatory rules in `app.css`](assets/css/app.css).
      key glyph in a `primary/14` circle, the key's display name (600), and
      the safe prefix (`font-mono`, muted, e.g. `sk-cxp-8308…d412`) — never
      the raw key. Prefix hides below `sm`.
-  3. Spacer, then the time-window segmented pill (§5.12): `1h / 5h / 24h /
+  3. Spacer, then the time-window segmented pill ([Segmented pill control](#segmented-pill-control)): `1h / 5h / 24h /
      7d`, `aria-pressed` state, server-validated selection.
   4. Freshness: live dot (success tone, 2.4s opacity pulse, warning + static
      when paused, `prefers-reduced-motion` disables) + "Updated Ns ago".
@@ -1285,7 +1593,7 @@ and [Observatory rules in `app.css`](assets/css/app.css).
   Observatory copy; statuses use the holder's perspective (usage, models,
   outcomes).
 
-### 6.2 Telemetry grid
+#### Telemetry grid
 
 **Sources:** [`ObservatoryLive`](lib/codex_pooler_web/live/observatory_live.ex),
 [`Telemetry.telemetry`](lib/codex_pooler_web/live/observatory/components/telemetry.ex),
@@ -1301,7 +1609,7 @@ and [Observatory rules in `app.css`](assets/css/app.css).
   everything collapses to one column (rail first, static) and charts scroll
   inside their own `overflow-x-auto` region. No horizontal scroll of primary
   content at any width (375/768/1280 are the checked breakpoints).
-- **Left rail, card 1 — facts** (§5.2 metric-card anatomy, stacked as one
+- **Left rail, card 1 — facts** ([Metric strip and metric card](#metric-strip-and-metric-card) metric-card anatomy, stacked as one
   card with hairline row dividers, never an equal-tile KPI grid; row weight
   follows priority):
   1. *Success rate* (lead row, larger value): value + trend delta, detail
@@ -1314,33 +1622,33 @@ and [Observatory rules in `app.css`](assets/css/app.css).
   4. *Throughput*: tok/s value + delta.
   5. *Latency*: p50 as the value with a smaller p95 beside it, detail "Mean
      Ns · slowest settled Ns".
-  Values are `font-mono tabular-nums`; labels are §3 micro labels; deltas are
+  Values are `font-mono tabular-nums`; labels are [Typography](#typography) micro labels; deltas are
   small mono figures in success/error ink.
-- **Left rail, card 2 — models**: §5.8 ranked compact rows
+- **Left rail, card 2 — models**: [Compact and definition lists](#compact-and-definition-lists) ranked compact rows
   (`name | bar | tokens`), bars relative to the leader, series colors in
   fixed order primary → info → success → muted ink mixes; every row is
   direct-labeled so identity never rides on color alone.
 - **Right column — traffic** (cardless: a heading with a hairline rule, no
   bordered wrapper): the window total in the sub-line ("138.2M tokens ·
   $79.62" — total tokens and total cost, echoing the chart), an
-  Interval/Cumulative segmented pill (§5.12) beside the heading, and the
-  ApexTimeSeriesChart contract (§5.13) in a `chart-scroll` body: stacked token
+  Interval/Cumulative segmented pill ([Segmented pill control](#segmented-pill-control)) beside the heading, and the
+  ApexTimeSeriesChart contract ([Time-series chart surface](#time-series-chart-surface)) in a `chart-scroll` body: stacked token
   columns **broken down by model** (top models plus a folded "Other" so the
   stack sums to total tokens) with a settled+estimated **cost line** on a
   second (right) axis — the app's shipped "Traffic over time" pattern. Green
   is reserved for the cost line, so the model columns draw from
   primary/info/warning/accent/secondary and never collide with it. ~264px tall.
 - **Right column — recent outcomes** (cardless: heading + hairline rule): a
-  zebra table (§5.8 idiom, `table-sm` density) inside its own
+  zebra table ([Compact and definition lists](#compact-and-definition-lists) idiom, `table-sm` density) inside its own
   `overflow-x-auto`. Columns: Time (mono, muted, readable "Jul 16, 23:22:23"
   format) · Model (500 weight, truncated) · Endpoint class (muted) · Status
-  (§5.7 micro chips: ok/warn/err/neutral) · Latency · Tokens · Cost (all
+  ([Chips](#chips-status-count-metadata-severity-protocol-redacted) micro chips: ok/warn/err/neutral) · Latency · Tokens · Cost (all
   right-aligned mono). Bounded at 12 rows; only sanitized fields ever appear
   (timestamp, model, endpoint class, safe status/code, latency, settled
   tokens/cost). No per-row status stripe and no `sanitized` chip — the status
   chip and the section's "metadata only" subtext carry that.
 
-### 6.3 Window control and refresh states
+#### Window control and refresh states
 
 **Sources:** [`ObservatoryLive`](lib/codex_pooler_web/live/observatory_live.ex),
 [`States.state`](lib/codex_pooler_web/live/observatory/components/states.ex),
@@ -1350,10 +1658,10 @@ and [`Toolbar.toolbar`](lib/codex_pooler_web/live/observatory/components/toolbar
 - Windows are the allowlisted `1h / 5h / 24h / 7d` as a segmented pill;
   selection is server-validated (client ids are never authority).
 - Freshness states, each with a stable selector and visible text: `loading`,
-  `empty` (§5.15 empty-state anatomy), `stale` (paused or hidden-tab), and
+  `empty` ([Filters, empty state, notices, buttons, flash, theme toggle](#filters-empty-state-notices-buttons-flash-theme-toggle) empty-state anatomy), `stale` (paused or hidden-tab), and
   `error`. Partial (still-settling) accounting is not a banner — the dashboard
   renders normally and the settled/estimated split is carried by the Cost fact
-  (§5.2). Connection loss surfaces in the freshness pill, not a banner. Refresh
+  ([Metric strip and metric card](#metric-strip-and-metric-card)). Connection loss surfaces in the freshness pill, not a banner. Refresh
   cadence is 30s only while visible; pause/resume is explicit and reflected in
   the toolbar.
 - The named state rendering, window allowlist, and initial loading behavior are
@@ -1361,58 +1669,7 @@ and [`Toolbar.toolbar`](lib/codex_pooler_web/live/observatory/components/toolbar
   stale-result behavior are a separate runtime contract and are not claimed as
   implemented by these source links.
 
-## 7. Motion
-
-Motion carries state meaning or it does not exist. Current inventory (all in
-`app.css` or component classes, all `prefers-reduced-motion`-guarded where
-animated):
-
-- Quota meters: width 260ms / color 180ms transitions
-  (`admin-live-progress`); token-burn gloss sweep with per-card
-  `--shine-delay` stagger and burn-scaled `--shine-period` (§5.4/§5.5).
-- Panel switcher: 150ms opacity ease-out with `motion-reduce:transition-none`.
-- Pool compat disclosure: 160ms slide/fade in (`pool-compat-panel-in`),
-  disabled under reduced motion.
-- Hover/focus color transitions: `transition-colors` (~200ms) on nav items,
-  chips, pills, dropdown items.
-- Flash show/hide: 200–300ms fade/scale via `CoreComponents.show/hide`;
-  reconnect spinner is `motion-safe:animate-spin`.
-- Shared admin loading indicators: `admin-loading-icon` rotates through
-  `transform` on an 800ms linear loop. Reduced-motion sessions replace the
-  rotation with a calm 1.4s opacity pulse, so loading never reads as a static
-  refresh glyph.
-- Theme toggle thumb: `transition-[left]`.
-- Observatory segmented/pause/logout controls: the semantic control motion
-  role is 150ms `ease` for border/background/text state changes; the live-dot
-  role is a 2.4s `ease-in-out` opacity pulse whose midpoint is 0.35. These map
-  to the `--observatory-motion-*` tokens in §4; pause makes the dot static and
-  `prefers-reduced-motion: reduce` removes the pulse and control transitions.
-
-- Observatory hold-to-launch (`admin-nav-hold-*` in `app.css`, `HoldToLaunch`
-  hook): the nav exit opens only after a ~1s press — the icon's ring fills as
-  functional progress (JS-driven stroke offset), early release drains it in
-  150ms, and the tab opens on the release gesture so popup blockers stay
-  quiet. Only the 300ms launch pop is decorative, and it is motion-gated.
-
-Rule: no looping decorative animation; the burn shine is the ceiling for
-ambient motion and it is evidence-driven (recent token burn).
-
-## 8. Depth
-
-Flat-first. Two sanctioned separation methods, never combined on a resting
-surface:
-
-- **Content layering:** `border border-base-300` (+ `/70` for internal
-  dividers) over tonal `bg-base-200/*` washes; header bands `bg-base-200/35`,
-  footer bands `bg-base-200/20`.
-- **Overlay shadows:** `shadow-xl` for dropdown menus and flash, `shadow-2xl`
-  for dialogs, drawers, and top-bar popovers. `shadow-sm` appears only on the
-  object-inspector default shell.
-
-z-index ladder in use: dropdowns in cards `z-20`, chart/tooltip internals,
-top-bar popovers and toasts `z-50`, request-log drawer `z-[70]`.
-
-## 9. Accessibility and design rules
+## Do's and Don'ts
 
 ### Accessibility baseline (verified patterns to preserve)
 
@@ -1433,7 +1690,7 @@ top-bar popovers and toasts `z-50`, request-log drawer `z-[70]`.
 - Icons are decorative (`aria-hidden` spans) unless paired with `sr-only`
   text.
 
-### Do / Don't
+### Do:
 
 - **Do** keep admin surfaces dense, table long homogeneous records, drawer the
   detail, and preserve light/dark parity for every new color or state.
@@ -1443,9 +1700,17 @@ top-bar popovers and toasts `z-50`, request-log drawer `z-[70]`.
 - **Do** paint status stripes from data attributes (`data-routing-tone`,
   `data-status`) in `app.css` — domain read models never emit CSS class
   names, and a stripe always reinforces visible status text.
+- **Do** match the data shape: a table for many homogeneous records, grouped
+  cards for a small fixed set of known systems, an inspector or drawer for the
+  detail behind one of them.
+- **Do** measure the content column, not the viewport, when judging any layout
+  change (see [Layout](#layout)).
+
+### Don't:
+
 - **Don't** hardcode raw color literals (`violet-*`, bracket-escaped oklch)
   in `lib/`, hand-manage `dark:` pairs for custom hues, or introduce a second
-  token store — per-theme values live in `app.css` (§2).
+  token store — per-theme values live in `app.css` ([Colors](#colors)).
 - **Don't** render prompts, bearer tokens, raw payloads, cookies, upstream
   secrets, raw idempotency keys, or raw API keys in UI, examples, tests, or
   screenshots.
@@ -1453,3 +1718,6 @@ top-bar popovers and toasts `z-50`, request-log drawer `z-[70]`.
   reinforcement of visible status text, painted from a data attribute),
   gradient/glass/neon decoration, monospace-as-personality, or motion without
   state meaning.
+- **Don't** put a second orange on one panel, add a fourth radius, or use
+  monospace for prose — see the named rules in [Colors](#colors),
+  [Typography](#typography), and [Shapes](#shapes).
