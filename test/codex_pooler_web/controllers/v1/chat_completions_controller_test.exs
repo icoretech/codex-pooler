@@ -367,7 +367,10 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
   end
 
   @tag :prompt_cache_controls
-  test "POST /v1/chat/completions preserves prompt cache controls", %{conn: conn} do
+  @tag :prompt_cache_adaptation
+  test "POST /v1/chat/completions accepts prompt cache controls and adapts them at egress", %{
+    conn: conn
+  } do
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
@@ -404,6 +407,10 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
                 "type" => "text",
                 "text" => "fixture chat cache content",
                 "prompt_cache_breakpoint" => breakpoint
+              },
+              %{
+                "type" => "text",
+                "text" => "fixture chat cache content after the breakpoint"
               }
             ]
           }
@@ -414,15 +421,23 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
     assert captured.json["prompt_cache_key"] == "fixture-chat-cache-key"
-    assert captured.json["prompt_cache_options"] == options
+    refute Map.has_key?(captured.json, "prompt_cache_options")
 
     assert [
              %{
                "content" => [
-                 %{"prompt_cache_breakpoint" => ^breakpoint}
+                 %{"text" => "fixture chat cache content"},
+                 %{"text" => "fixture chat cache content after the breakpoint"}
                ]
              }
            ] = captured.json["input"]
+
+    refute inspect(captured.json) =~ "prompt_cache_breakpoint"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.response_metadata["prompt_cache_controls_downgraded"] == true
+    refute Map.has_key?(request.request_metadata, "prompt_cache_controls_downgraded")
   end
 
   test "POST /v1/chat/completions keeps x-session-id local without forwarding it", %{

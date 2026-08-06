@@ -30,6 +30,48 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   end
 
   describe "boundary constructors" do
+    @tag :prompt_cache_adaptation
+    test "prompt cache adaptation state is non-injectable and excluded from extra options" do
+      for opts <- [
+            %{prompt_cache_controls_downgraded: true},
+            %{"prompt_cache_controls_downgraded" => true}
+          ] do
+        options =
+          RequestOptions.build(
+            opts,
+            "/backend-api/codex/responses",
+            %{"model" => "example-model"}
+          )
+
+        refute options.runtime.prompt_cache_controls_downgraded
+        assert options.extra == %{}
+      end
+    end
+
+    @tag :prompt_cache_adaptation
+    test "prompt cache attempt metadata is exact and stays out of request compatibility metadata" do
+      options =
+        RequestOptions.build(
+          %{},
+          "/backend-api/codex/responses",
+          %{"model" => "example-model"}
+        )
+
+      assert RequestOptions.prompt_cache_controls_attempt_metadata(options) == %{}
+      assert RequestOptions.openai_compatibility_metadata(options) == %{}
+      assert RequestOptions.payload_compression_request_metadata(options) == %{}
+
+      updated =
+        RequestOptions.put_runtime_context(options, prompt_cache_controls_downgraded: true)
+
+      assert RequestOptions.prompt_cache_controls_attempt_metadata(updated) == %{
+               "prompt_cache_controls_downgraded" => true
+             }
+
+      assert RequestOptions.openai_compatibility_metadata(updated) == %{}
+      assert RequestOptions.payload_compression_request_metadata(updated) == %{}
+    end
+
     test "defaults normalized previous response state false and permits only typed internal updates" do
       options =
         RequestOptions.build(

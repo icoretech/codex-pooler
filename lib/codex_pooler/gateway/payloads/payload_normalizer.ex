@@ -14,6 +14,12 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   @backend_codex_agent_path ~r/\A(?:\/morpheus|\/root(?:\/[a-z0-9_]+)*)\z/
   @websocket_responses_lite_client_metadata_key "ws_request_header_x_openai_internal_codex_responses_lite"
 
+  @prompt_cache_adaptation_endpoints [
+    "/backend-api/codex/responses",
+    "/backend-api/codex/responses/compact"
+  ]
+  @prompt_cache_breakpoint_types ~w(input_text input_image input_file)
+
   @unsupported_upstream_fields ~w(
     max_output_tokens
     prompt_cache_retention
@@ -100,6 +106,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
       |> remove_client_supplied_responses_lite_metadata()
       |> strip_backend_codex_fields(endpoint, request_options)
 
+    {upstream_payload, prompt_cache_controls_downgraded} =
+      adapt_prompt_cache_controls(upstream_payload, request_options)
+
     debug_payload =
       maybe_record_gateway_debug_payload(endpoint, payload, upstream_payload, request_options)
 
@@ -116,6 +125,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
       |> put_upstream_previous_response_id(upstream_payload)
       |> put_gateway_debug_payload(debug_payload)
       |> put_reasoning_effort_snapshot(reasoning_effort_snapshot)
+      |> RequestOptions.put_runtime_context(
+        prompt_cache_controls_downgraded: prompt_cache_controls_downgraded
+      )
 
     with :ok <- validate(payload, request_options),
          {:ok, encoded} <- Jason.encode(upstream_payload) do
@@ -141,6 +153,42 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
       {:ok, {:multipart, [file_part | prompt_fields ++ array_fields]}, request_options}
     end
   end
+
+  defp adapt_prompt_cache_controls(
+         payload,
+         %RequestOptions{transport: %{upstream_endpoint: endpoint}}
+       )
+       when endpoint in @prompt_cache_adaptation_endpoints do
+    top_level_removed? = Map.has_key?(payload, "prompt_cache_options")
+    payload = Map.delete(payload, "prompt_cache_options")
+    {payload, breakpoint_removed?} = remove_supported_prompt_cache_breakpoints(payload)
+
+    {payload, top_level_removed? or breakpoint_removed?}
+  end
+
+  defp adapt_prompt_cache_controls(payload, %RequestOptions{}), do: {payload, false}
+
+  defp remove_supported_prompt_cache_breakpoints(value) when is_list(value) do
+    Enum.map_reduce(value, false, fn nested, removed? ->
+      {nested, nested_removed?} = remove_supported_prompt_cache_breakpoints(nested)
+      {nested, removed? or nested_removed?}
+    end)
+  end
+
+  defp remove_supported_prompt_cache_breakpoints(%{} = value) do
+    remove_here? =
+      Map.get(value, "type") in @prompt_cache_breakpoint_types and
+        Map.has_key?(value, "prompt_cache_breakpoint")
+
+    value = if remove_here?, do: Map.delete(value, "prompt_cache_breakpoint"), else: value
+
+    Enum.reduce(value, {%{}, remove_here?}, fn {key, nested}, {result, removed?} ->
+      {nested, nested_removed?} = remove_supported_prompt_cache_breakpoints(nested)
+      {Map.put(result, key, nested), removed? or nested_removed?}
+    end)
+  end
+
+  defp remove_supported_prompt_cache_breakpoints(value), do: {value, false}
 
   defp transcription_array_fields(
          payload,

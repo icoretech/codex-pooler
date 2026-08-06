@@ -59,6 +59,66 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
              public_websocket_receive_text!(nil, decoded_websocket, ref)
   end
 
+  @tag :prompt_cache_adaptation
+  test "GET /v1/responses websocket adapts prompt cache controls in response.create" do
+    upstream = start_upstream(completed_websocket_response("resp_v1_websocket_prompt_cache"))
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "prompt-cache-v1-websocket-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "prompt_cache_key" => "v1-websocket-cache-key",
+          "prompt_cache_options" => %{"mode" => "explicit", "ttl" => "30m"},
+          "input" => [
+            %{
+              "type" => "message",
+              "role" => "user",
+              "content" => [
+                %{
+                  "type" => "input_text",
+                  "text" => "v1 websocket prompt cache content",
+                  "prompt_cache_breakpoint" => %{"mode" => "explicit"}
+                }
+              ]
+            }
+          ]
+        })
+
+      {conn, _websocket, frames} = receive_websocket_until_terminal!(conn, websocket, ref, [])
+      assert Enum.map(frames, & &1["type"]) == ["response.completed"]
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.method == "WEBSOCKET"
+      assert captured.path == "/backend-api/codex/responses"
+      assert captured.json["prompt_cache_key"] == "v1-websocket-cache-key"
+      refute Map.has_key?(captured.json, "prompt_cache_options")
+      refute inspect(captured.json) =~ "prompt_cache_breakpoint"
+
+      assert_successful_websocket_lifecycle!(setup)
+
+      assert [request] =
+               Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
+
+      assert [attempt] =
+               Repo.all(from(attempt in Attempt, where: attempt.request_id == ^request.id))
+
+      assert attempt.response_metadata["prompt_cache_controls_downgraded"] == true
+      refute Map.has_key?(request.request_metadata, "prompt_cache_controls_downgraded")
+      conn
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   test "GET /v1/responses websocket relays a stateless programmatic replay and finalizes metadata-only" do
     upstream =
       start_upstream(

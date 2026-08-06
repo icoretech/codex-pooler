@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Runtime.FinalizationMetadataCompressionTest do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeDemotion, RoutingCircuitState}
+  alias CodexPooler.Gateway.Routing.{BridgeRing, RoutePlanInput}
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.Finalization
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
@@ -189,6 +190,69 @@ defmodule CodexPooler.Gateway.Runtime.FinalizationMetadataCompressionTest do
            )
 
     assert Metadata.request_metadata(not_attempted) == %{}
+  end
+
+  @tag :prompt_cache_adaptation
+  test "post-serialization dispatch failure persists only prompt cache adaptation metadata" do
+    setup = accounting_setup()
+    payload = %{"model" => setup.model.exposed_model_id}
+
+    assert {:ok, reserved} =
+             Accounting.reserve(setup.auth, setup.model, payload, %{
+               endpoint: "/backend-api/codex/responses",
+               transport: "http_json",
+               correlation_id:
+                 "prompt-cache-dispatch-error-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    request_options =
+      %{
+        transport: "http_json",
+        upstream_endpoint: "/backend-api/codex/responses"
+      }
+      |> RequestOptions.build("/backend-api/codex/responses", payload)
+      |> RequestOptions.put_runtime_context(prompt_cache_controls_downgraded: true)
+
+    context = %SelectedCandidateContext{
+      auth: setup.auth,
+      endpoint: "/backend-api/codex/responses",
+      payload: payload,
+      model: setup.model,
+      reserved: reserved,
+      request_options: request_options,
+      route_plan:
+        BridgeRing.plan_route(%{
+          auth: setup.auth,
+          model: setup.model,
+          candidates: [{setup.assignment, setup.identity}],
+          route_plan_input: RoutePlanInput.from_reserved(reserved),
+          request_options: request_options
+        }),
+      assignment: setup.assignment,
+      identity: setup.identity,
+      index: 0,
+      retry_count: 0,
+      allow_retry?: false,
+      routing_attempt_metadata: %{},
+      route_class: "proxy_http",
+      attempt: attempt,
+      started: System.monotonic_time(:millisecond)
+    }
+
+    assert {:error, %{status: 502}} =
+             Finalization.handle_dispatch_error(:synthetic_network_failure, context, 7)
+
+    attempt = Repo.get!(Attempt, attempt.id)
+
+    assert attempt.response_metadata["prompt_cache_controls_downgraded"] == true
+
+    refute Map.has_key?(
+             Repo.get!(Request, reserved.request.id).request_metadata,
+             "prompt_cache_controls_downgraded"
+           )
   end
 
   test "terminal websocket failure settles once with the sanitized local guard diagnostic" do

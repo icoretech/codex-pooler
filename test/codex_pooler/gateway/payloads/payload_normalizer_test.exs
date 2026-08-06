@@ -11,6 +11,241 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   describe "upstream_payload/4" do
+    @tag :prompt_cache_characterization
+    test "non-Responses serialization preserves prompt cache controls and unrelated JSON structure" do
+      payload = %{
+        "model" => "client-model",
+        "prompt_cache_key" => "cache-key-fixture",
+        "prompt_cache_options" => %{"mode" => "explicit", "ttl" => "30m"},
+        "input" => [
+          %{
+            "type" => "input_text",
+            "text" => "fixture-text",
+            "prompt_cache_breakpoint" => %{"mode" => "explicit"}
+          },
+          %{
+            type: "input_image",
+            image_url: "fixture-image",
+            prompt_cache_breakpoint: %{mode: "explicit"}
+          },
+          %{
+            "type" => ["input_file"],
+            "file_id" => "fixture-file",
+            "prompt_cache_breakpoint" => %{"mode" => "explicit"}
+          }
+        ],
+        "nested" => %{
+          "prompt_cache_options" => %{"mode" => "nested"},
+          "ordered" => [3, 1, 2]
+        },
+        "unrelated" => %{"enabled" => true, "nullable" => nil},
+        atom_only: %{prompt_cache_breakpoint: %{mode: "atom-key"}}
+      }
+
+      request_options = RequestOptions.build(%{}, "/v1/future-endpoint", payload)
+      model = %Model{upstream_model_id: "provider-model"}
+
+      assert {:ok, encoded, _request_options} =
+               PayloadNormalizer.prepare_upstream_payload(
+                 payload,
+                 model,
+                 "/v1/future-endpoint",
+                 request_options
+               )
+
+      assert Jason.decode!(encoded) == %{
+               "model" => "provider-model",
+               "prompt_cache_key" => "cache-key-fixture",
+               "prompt_cache_options" => %{"mode" => "explicit", "ttl" => "30m"},
+               "input" => [
+                 %{
+                   "type" => "input_text",
+                   "text" => "fixture-text",
+                   "prompt_cache_breakpoint" => %{"mode" => "explicit"}
+                 },
+                 %{
+                   "type" => "input_image",
+                   "image_url" => "fixture-image",
+                   "prompt_cache_breakpoint" => %{"mode" => "explicit"}
+                 },
+                 %{
+                   "type" => ["input_file"],
+                   "file_id" => "fixture-file",
+                   "prompt_cache_breakpoint" => %{"mode" => "explicit"}
+                 }
+               ],
+               "nested" => %{
+                 "prompt_cache_options" => %{"mode" => "nested"},
+                 "ordered" => [3, 1, 2]
+               },
+               "atom_only" => %{
+                 "prompt_cache_breakpoint" => %{"mode" => "atom-key"}
+               },
+               "unrelated" => %{"enabled" => true, "nullable" => nil}
+             }
+    end
+
+    @tag :prompt_cache_adaptation
+    test "Responses serialization removes only supported prompt cache controls" do
+      payload = %{
+        "model" => "client-model",
+        "prompt_cache_key" => "cache-key-fixture",
+        "prompt_cache_options" => %{"mode" => "explicit", "ttl" => "30m"},
+        "input" => [
+          %{
+            "type" => "message",
+            "role" => "user",
+            "content" => [
+              %{
+                "type" => "input_text",
+                "text" => "fixture-text",
+                "prompt_cache_breakpoint" => %{"mode" => "explicit"},
+                "nested" => %{
+                  "type" => "input_image",
+                  "image_url" => "fixture-image",
+                  "prompt_cache_breakpoint" => %{"mode" => "explicit"}
+                }
+              },
+              %{
+                "type" => "input_file",
+                "file_id" => "fixture-file",
+                "prompt_cache_breakpoint" => %{"mode" => "explicit"}
+              }
+            ]
+          }
+        ],
+        "nested" => %{"prompt_cache_options" => %{"mode" => "preserved"}},
+        "ordered" => [3, 1, 2],
+        "unrelated" => %{"enabled" => true, "nullable" => nil}
+      }
+
+      model = %Model{upstream_model_id: "provider-model"}
+
+      cases = [
+        {"regular", "/backend-api/codex/responses",
+         RequestOptions.build(%{}, "/backend-api/codex/responses", payload)},
+        {"compact", "/backend-api/codex/responses/compact",
+         RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload)},
+        {"websocket", "/backend-api/codex/responses",
+         %{}
+         |> RequestOptions.build("/backend-api/codex/responses", payload)
+         |> RequestOptions.for_websocket(payload)}
+      ]
+
+      for {label, endpoint, request_options} <- cases do
+        assert {:ok, encoded, updated_options} =
+                 PayloadNormalizer.prepare_upstream_payload(
+                   payload,
+                   model,
+                   endpoint,
+                   request_options
+                 )
+
+        upstream = Jason.decode!(encoded)
+
+        refute Map.has_key?(upstream, "prompt_cache_options"), message: label
+        refute prompt_cache_breakpoint_present?(upstream), message: label
+        assert upstream["prompt_cache_key"] == "cache-key-fixture", message: label
+
+        assert upstream["nested"] == %{"prompt_cache_options" => %{"mode" => "preserved"}},
+          message: label
+
+        assert upstream["ordered"] == [3, 1, 2], message: label
+        assert upstream["unrelated"] == %{"enabled" => true, "nullable" => nil}, message: label
+        assert updated_options.runtime.prompt_cache_controls_downgraded, message: label
+      end
+    end
+
+    @tag :prompt_cache_adaptation
+    test "Responses serialization preserves malformed and unsupported breakpoint shapes" do
+      payload = %{
+        "model" => "client-model",
+        "input" => [
+          %{"prompt_cache_breakpoint" => %{"case" => "missing-type"}},
+          %{
+            "type" => "future_input",
+            "prompt_cache_breakpoint" => %{"case" => "unsupported-type"}
+          },
+          %{
+            type: "input_text",
+            prompt_cache_breakpoint: %{case: "atom-keys"}
+          },
+          %{
+            "type" => %{"value" => "input_text"},
+            "prompt_cache_breakpoint" => %{"case" => "map-type"}
+          },
+          %{
+            "type" => ["input_text"],
+            "prompt_cache_breakpoint" => %{"case" => "list-type"}
+          },
+          %{
+            "type" => 42,
+            "prompt_cache_breakpoint" => %{"case" => "non-string-type"}
+          }
+        ]
+      }
+
+      request_options =
+        RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload)
+
+      assert {:ok, encoded, updated_options} =
+               PayloadNormalizer.prepare_upstream_payload(
+                 payload,
+                 %Model{upstream_model_id: "provider-model"},
+                 "/backend-api/codex/responses/compact",
+                 request_options
+               )
+
+      upstream = Jason.decode!(encoded)
+
+      assert upstream["input"] == Jason.decode!(Jason.encode!(payload))["input"]
+      refute updated_options.runtime.prompt_cache_controls_downgraded
+    end
+
+    @tag :prompt_cache_adaptation
+    test "each serialization overwrites stale prompt cache adaptation state" do
+      model = %Model{upstream_model_id: "provider-model"}
+      targeted_payload = %{"model" => "client-model", "prompt_cache_options" => %{}}
+      clean_payload = %{"model" => "client-model", "input" => []}
+
+      false_options =
+        RequestOptions.build(%{}, "/backend-api/codex/responses", targeted_payload)
+
+      assert {:ok, _encoded, true_options} =
+               PayloadNormalizer.prepare_upstream_payload(
+                 targeted_payload,
+                 model,
+                 "/backend-api/codex/responses",
+                 false_options
+               )
+
+      assert true_options.runtime.prompt_cache_controls_downgraded
+
+      websocket_options = RequestOptions.for_websocket(true_options, clean_payload)
+
+      assert {:ok, _encoded, cleared_options} =
+               PayloadNormalizer.prepare_upstream_payload(
+                 clean_payload,
+                 model,
+                 "/backend-api/codex/responses",
+                 websocket_options
+               )
+
+      refute cleared_options.runtime.prompt_cache_controls_downgraded
+
+      targeted_options = RequestOptions.for_websocket(cleared_options, targeted_payload)
+
+      assert {:ok, _encoded, reset_options} =
+               PayloadNormalizer.prepare_upstream_payload(
+                 targeted_payload,
+                 model,
+                 "/backend-api/codex/responses",
+                 targeted_options
+               )
+
+      assert reset_options.runtime.prompt_cache_controls_downgraded
+    end
+
     test "materializes present malformed reasoning aliases without lower-priority fallthrough" do
       cases = [
         %{"reasoning" => %{"effort" => 42}, "reasoning_effort" => "high"},
@@ -2550,4 +2785,14 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
   defp content_shape(nil), do: nil
   defp content_shape(value) when is_binary(value), do: :binary
   defp content_shape(value) when is_list(value), do: :list
+
+  defp prompt_cache_breakpoint_present?(%{} = value) do
+    Map.has_key?(value, "prompt_cache_breakpoint") or
+      Enum.any?(value, fn {_key, nested} -> prompt_cache_breakpoint_present?(nested) end)
+  end
+
+  defp prompt_cache_breakpoint_present?(value) when is_list(value),
+    do: Enum.any?(value, &prompt_cache_breakpoint_present?/1)
+
+  defp prompt_cache_breakpoint_present?(_value), do: false
 end

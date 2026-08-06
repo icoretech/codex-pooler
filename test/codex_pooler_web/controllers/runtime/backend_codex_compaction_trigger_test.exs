@@ -150,9 +150,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
   end
 
   @tag :client_metadata
-  test "POST /backend-api/codex/responses bridges terminal compaction_trigger to compact SSE", %{
-    conn: conn
-  } do
+  @tag :prompt_cache_adaptation
+  test "POST /backend-api/codex/responses adapts nested prompt cache breakpoints before compact dispatch",
+       %{
+         conn: conn
+       } do
     request_turn_state = "compact-bridge-request-turn-state-#{System.unique_integer([:positive])}"
 
     response_turn_state =
@@ -200,7 +202,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       )
       |> enable_priority_service_tier!()
 
-    input = visible_input("compact bridge visible fixture")
+    input = [
+      %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [
+          %{
+            "type" => "input_text",
+            "text" => "compact bridge visible fixture",
+            "prompt_cache_breakpoint" => %{"mode" => "explicit"}
+          },
+          %{"type" => "input_text", "text" => "compact bridge second content item"}
+        ]
+      }
+    ]
 
     conn =
       conn
@@ -259,7 +274,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     assert Map.new(captured.headers)["x-codex-turn-state"] == request_turn_state
     assert captured.json["model"] == setup.model.upstream_model_id
     assert captured.json["instructions"] == "compact bridge instruction"
-    assert captured.json["input"] == input
+
+    assert captured.json["input"] == [
+             %{
+               "type" => "message",
+               "role" => "user",
+               "content" => [
+                 %{"type" => "input_text", "text" => "compact bridge visible fixture"},
+                 %{"type" => "input_text", "text" => "compact bridge second content item"}
+               ]
+             }
+           ]
+
     assert captured.json["reasoning"] == %{"effort" => "low"}
     refute Map.has_key?(captured.json, "store")
     assert captured.json["service_tier"] == "priority"
@@ -277,6 +303,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "succeeded"
+    assert attempt.response_metadata["prompt_cache_controls_downgraded"] == true
 
     assert Repo.aggregate(
              from(l in LedgerEntry,

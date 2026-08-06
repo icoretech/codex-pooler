@@ -793,7 +793,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert Repo.aggregate(Request, :count) == 0
   end
 
-  test "GET /backend-api/codex/responses upgrades and dispatches through the public websocket route" do
+  @tag :prompt_cache_adaptation
+  test "GET /backend-api/codex/responses adapts prompt cache controls in a response.create frame" do
     upstream =
       start_upstream(
         FakeUpstream.json_response(%{
@@ -816,7 +817,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         Jason.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
-          "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
+          "prompt_cache_key" => "backend-websocket-cache-key",
+          "prompt_cache_options" => %{"mode" => "explicit", "ttl" => "30m"},
+          "input" => [
+            %{
+              "type" => "message",
+              "role" => "user",
+              "content" => [
+                %{
+                  "type" => "input_text",
+                  "text" => "backend websocket prompt cache content",
+                  "prompt_cache_breakpoint" => %{"mode" => "explicit"}
+                }
+              ]
+            }
+          ],
           "stream" => true,
           "generate" => true
         })
@@ -839,6 +854,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       assert request.status == "succeeded"
 
       assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.response_metadata["prompt_cache_controls_downgraded"] == true
+      refute Map.has_key?(request.request_metadata, "prompt_cache_controls_downgraded")
 
       upstream_websocket_connection = attempt.response_metadata["upstream_websocket_connection"]
 
@@ -867,6 +884,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.method == "WEBSOCKET"
       assert captured.path == "/backend-api/codex/responses"
+      assert captured.json["prompt_cache_key"] == "backend-websocket-cache-key"
+      refute Map.has_key?(captured.json, "prompt_cache_options")
+      refute inspect(captured.json) =~ "prompt_cache_breakpoint"
       refute inspect({request.request_metadata, captured.json}) =~ setup.authorization
 
       conn

@@ -93,6 +93,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     |> Map.merge(gateway_debug_attempt_metadata(opts))
     |> Map.merge(payload_compression_attempt_metadata(opts))
     |> Map.merge(reasoning_effort_attempt_metadata(opts))
+    |> Map.merge(RequestOptions.prompt_cache_controls_attempt_metadata(opts))
     |> Map.merge(upstream_websocket_bridge_attempt_metadata(opts))
     |> Map.merge(metadata)
   end
@@ -253,6 +254,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
     |> Map.merge(gateway_debug_attempt_metadata(opts))
     |> Map.merge(payload_compression_attempt_metadata(opts))
     |> Map.merge(reasoning_effort_attempt_metadata(opts))
+    |> Map.merge(RequestOptions.prompt_cache_controls_attempt_metadata(opts))
     |> Map.merge(metadata)
     |> maybe_put_websocket_frame_headers(websocket_frame_headers)
   end

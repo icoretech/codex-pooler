@@ -132,10 +132,12 @@ const { text } = await generateText({
 console.log(text);
 ```
 
-Codex Pooler validates and forwards these OpenAI cache controls independently
-from Pool routing affinity. GPT-5.6 model ids are passed through to the Pool
-catalog and assignment policy; naming one here does not guarantee that every
-Pool has an eligible account for that model.
+Codex Pooler accepts these OpenAI cache controls as public input. For
+account-backed requests, it adapts the explicit controls automatically before
+upstream dispatch while preserving `prompt_cache_key` independently from Pool
+routing affinity. GPT-5.6 model ids are passed through to the Pool catalog and
+assignment policy; naming one here does not guarantee that every Pool has an
+eligible account for that model.
 
 ### Programmatic tools and stateless replay
 

@@ -352,12 +352,25 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                "strips backend-only upstream-unsupported controls"
     end
 
+    test "characterizes accepted public prompt cache controls" do
+      fixture = CompatibilityMatrix.fixture!(:responses_chat)
+
+      assert fixture.upstream_prompt_cache_controls.request_options_field ==
+               "prompt_cache_options"
+
+      assert fixture.upstream_prompt_cache_controls.content_breakpoint_field ==
+               "prompt_cache_breakpoint"
+
+      assert fixture.upstream_prompt_cache_controls.breakpoint_mode == "explicit"
+      assert fixture.prompt_cache_routing.typed_input == "prompt_cache_key"
+    end
+
     test "documents upstream prompt cache controls separately from Pool affinity" do
       feature = CompatibilityMatrix.by_slug!(:responses_chat)
       fixture = CompatibilityMatrix.fixture!(:responses_chat)
 
-      assert feature.contract =~ "validate and preserve prompt_cache_options"
-      assert feature.contract =~ "prompt_cache_breakpoint"
+      assert feature.contract =~ "accept prompt_cache_options"
+      assert feature.contract =~ "account-backed egress omits both explicit controls"
       assert feature.contract =~ "Pool affinity remains exclusively keyed by prompt_cache_key"
 
       assert fixture.upstream_prompt_cache_controls == %{
@@ -365,7 +378,12 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                content_breakpoint_field: "prompt_cache_breakpoint",
                breakpoint_mode: "explicit",
                routing_input: false,
-               preserved_surfaces: ["/v1/responses", "/v1/chat/completions"]
+               accepted_public_surfaces: ["/v1/responses", "/v1/chat/completions"],
+               account_backed_upstream_payload: %{
+                 omitted_fields: ["prompt_cache_options", "prompt_cache_breakpoint"],
+                 preserved_fields: ["prompt_cache_key"]
+               },
+               public_response_headers: %{downgrade_marker: :absent}
              }
 
       assert fixture.prompt_cache_routing.typed_input == "prompt_cache_key"

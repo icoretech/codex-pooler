@@ -157,23 +157,28 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
       bridged_options =
         context.request_options
         |> Websocket.bridge_owner_request_options(runtime)
-        |> carry_payload_compression(ws_options)
+        |> carry_serialization_runtime_context(ws_options)
 
       {:ok, ws_payload, bridged_options}
     end
   end
 
-  # The compression pass records safe accounting metadata on the runtime
-  # context of the options it compressed; carry it onto the bridged options so
-  # bridged attempts keep the same payload_compression metadata as HTTP.
-  defp carry_payload_compression(bridged_options, %RequestOptions{
-         runtime: %{payload_compression: metadata}
-       })
-       when not is_nil(metadata) do
-    RequestOptions.put_runtime_context(bridged_options, payload_compression: metadata)
-  end
+  # The second serialization owns attempt-local runtime metadata. Carry its
+  # values onto the bridged HTTP options so stale first-pass state is replaced.
+  defp carry_serialization_runtime_context(bridged_options, %RequestOptions{
+         runtime: runtime
+       }) do
+    updates = [
+      prompt_cache_controls_downgraded: runtime.prompt_cache_controls_downgraded
+    ]
 
-  defp carry_payload_compression(bridged_options, _ws_options), do: bridged_options
+    updates =
+      if is_nil(runtime.payload_compression),
+        do: updates,
+        else: Keyword.put(updates, :payload_compression, runtime.payload_compression)
+
+    RequestOptions.put_runtime_context(bridged_options, updates)
+  end
 
   defp bridge_dispatch_request(
          %PreparedContext{context: context} = prepared_context,

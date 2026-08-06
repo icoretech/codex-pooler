@@ -6,6 +6,54 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
   alias CodexPooler.Gateway.Transports.BoundedResponseBody
   alias CodexPooler.Gateway.Transports.RejectionBody
 
+  @tag :prompt_cache_adaptation
+  test "HTTP and every websocket metadata builder project only true prompt cache adaptation" do
+    response = %Req.Response{status: 200, headers: []}
+
+    false_options =
+      RequestOptions.build(
+        %{},
+        "/backend-api/codex/responses",
+        %{"model" => "example-model"}
+      )
+
+    true_options =
+      RequestOptions.put_runtime_context(false_options,
+        prompt_cache_controls_downgraded: true
+      )
+
+    refute Map.has_key?(
+             Metadata.response_metadata(response, nil, false_options),
+             "prompt_cache_controls_downgraded"
+           )
+
+    assert Metadata.response_metadata(response, nil, true_options)[
+             "prompt_cache_controls_downgraded"
+           ] == true
+
+    websocket_metadata = [
+      Metadata.websocket_response_metadata([], nil, true_options),
+      Metadata.websocket_response_metadata([], nil, true_options, %{}),
+      Metadata.websocket_response_metadata([], nil, true_options, %{}, %{
+        lifecycle_id: Ecto.UUID.generate(),
+        generation: 1,
+        reused: false,
+        reconnected: false
+      })
+    ]
+
+    assert Enum.all?(websocket_metadata, fn metadata ->
+             metadata["prompt_cache_controls_downgraded"] == true
+           end)
+
+    refute Map.has_key?(
+             Metadata.websocket_response_metadata([], nil, false_options),
+             "prompt_cache_controls_downgraded"
+           )
+
+    assert Metadata.request_metadata(true_options) == %{}
+  end
+
   test "classifies only resolved Full ordinary Responses HTTP rejections" do
     ordinary_endpoints = [
       "/backend-api/codex/responses",

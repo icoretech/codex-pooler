@@ -1941,8 +1941,59 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert durable_accounting_counts() == counts
   end
 
+  @tag :prompt_cache_product_characterization
+  test "POST /v1/responses accepts prompt cache controls without a public marker", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_prompt_cache_product_characterization",
+               "status" => "completed",
+               "output" => [],
+               "usage" => %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "prompt_cache_key" => "characterization-cache-key",
+        "prompt_cache_options" => %{"mode" => "explicit", "ttl" => "30m"},
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{
+                "type" => "input_text",
+                "text" => "characterization content",
+                "prompt_cache_breakpoint" => %{"mode" => "explicit"}
+              }
+            ]
+          }
+        ]
+      })
+
+    assert %{"id" => "resp_prompt_cache_product_characterization", "status" => "completed"} =
+             json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.json["prompt_cache_key"] == "characterization-cache-key"
+    assert get_resp_header(conn, "x-codex-prompt-cache-mode") == []
+    refute conn.resp_body =~ "prompt_cache_controls_downgraded"
+  end
+
   @tag :prompt_cache_controls
-  test "POST /v1/responses preserves prompt cache controls without metadata leakage", %{
+  @tag :prompt_cache_adaptation
+  test "POST /v1/responses accepts prompt cache controls and adapts them only at egress", %{
     conn: conn
   } do
     upstream =
@@ -1982,30 +2033,88 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
                 "type" => "input_text",
                 "text" => raw_prompt,
                 "prompt_cache_breakpoint" => breakpoint
+              },
+              %{
+                "type" => "input_text",
+                "text" => "fixture prompt cache content after the breakpoint"
               }
             ]
           }
-        ]
+        ],
+        "stream" => false,
+        "store" => false
       })
 
     assert %{"id" => "resp_prompt_cache_controls"} = json_response(conn, 200)
+    assert get_resp_header(conn, "x-codex-prompt-cache-mode") == []
+    refute conn.resp_body =~ "prompt_cache_controls_downgraded"
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
     assert captured.json["prompt_cache_key"] == raw_cache_key
-    assert captured.json["prompt_cache_options"] == options
+    refute Map.has_key?(captured.json, "prompt_cache_options")
+    assert captured.json["store"] == false
 
     assert [
              %{
                "content" => [
-                 %{"prompt_cache_breakpoint" => ^breakpoint}
+                 %{"type" => "input_text", "text" => ^raw_prompt},
+                 %{
+                   "type" => "input_text",
+                   "text" => "fixture prompt cache content after the breakpoint"
+                 }
                ]
              }
            ] = captured.json["input"]
 
+    refute inspect(captured.json) =~ "prompt_cache_breakpoint"
+
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
-    persistence_text = inspect({request.request_metadata, RequestLogs.list(setup.pool)})
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.response_metadata["prompt_cache_controls_downgraded"] == true
+    refute Map.has_key?(request.request_metadata, "prompt_cache_controls_downgraded")
+
+    persistence_text =
+      inspect({request.request_metadata, attempt.response_metadata, RequestLogs.list(setup.pool)})
+
     refute persistence_text =~ raw_prompt
     refute persistence_text =~ raw_cache_key
+  end
+
+  @tag :prompt_cache_adaptation
+  test "POST /v1/responses omits the attempt marker when no prompt cache controls were sent", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_prompt_cache_unaffected",
+               "status" => "completed",
+               "output" => [],
+               "usage" => %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "unaffected prompt cache adaptation fixture"
+      })
+
+    assert %{"id" => "resp_prompt_cache_unaffected"} = json_response(conn, 200)
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    refute Map.has_key?(attempt.response_metadata, "prompt_cache_controls_downgraded")
+    refute Map.has_key?(request.request_metadata, "prompt_cache_controls_downgraded")
   end
 
   @tag :selected_assignment_false_reasoning_envelope

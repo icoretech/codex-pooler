@@ -2598,7 +2598,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured.json["service_tier"] == "latency_preview"
   end
 
-  test "POST /backend-api/codex/v1/responses proxies to canonical backend responses and records the canonical endpoint",
+  @tag :prompt_cache_adaptation
+  test "POST /backend-api/codex/v1/responses adapts prompt cache controls at the canonical upstream endpoint",
        %{conn: conn} do
     upstream =
       start_upstream(
@@ -2618,16 +2619,36 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/v1/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic alias response request"
+        "prompt_cache_key" => "native-alias-cache-key",
+        "prompt_cache_options" => %{"mode" => "explicit", "ttl" => "30m"},
+        "input" => [
+          %{
+            "type" => "message",
+            "role" => "user",
+            "content" => [
+              %{
+                "type" => "input_text",
+                "text" => "synthetic alias response request",
+                "prompt_cache_breakpoint" => %{"mode" => "explicit"}
+              }
+            ]
+          }
+        ]
       })
 
     assert %{"id" => "resp_backend_v1_alias"} = json_response(conn, 200)
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["prompt_cache_key"] == "native-alias-cache-key"
+    refute Map.has_key?(captured.json, "prompt_cache_options")
+    refute inspect(captured.json) =~ "prompt_cache_breakpoint"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses"
     assert request.status == "succeeded"
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.response_metadata["prompt_cache_controls_downgraded"] == true
+    refute Map.has_key?(request.request_metadata, "prompt_cache_controls_downgraded")
   end
 
   test "POST /backend-api/codex/responses preserves namespace tools and lowers ordinary functions",
@@ -4840,7 +4861,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute inspect(attempt.response_metadata) =~ "sensitive transport body"
   end
 
-  test "POST /backend-api/codex/responses finalizes reservation on upstream HTTP protocol error",
+  @tag :prompt_cache_adaptation
+  test "POST /backend-api/codex/responses records adapted controls after serialization fails at transport",
        %{conn: conn} do
     upstream =
       start_upstream(
@@ -4870,7 +4892,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
           |> auth(setup)
           |> post("/backend-api/codex/responses", %{
             "model" => setup.model.exposed_model_id,
-            "input" => "sensitive protocol body"
+            "prompt_cache_key" => "transport-failure-cache-key",
+            "prompt_cache_options" => %{"mode" => "explicit", "ttl" => "30m"},
+            "input" => [
+              %{
+                "type" => "message",
+                "role" => "user",
+                "content" => [
+                  %{
+                    "type" => "input_text",
+                    "text" => "sensitive protocol body",
+                    "prompt_cache_breakpoint" => %{"mode" => "explicit"}
+                  }
+                ]
+              }
+            ]
           })
 
         public_payload = json_response(conn, 502)
@@ -4910,6 +4946,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert attempt.network_error_code == "upstream_network_error"
     assert attempt.usage_status == "usage_unknown"
     assert attempt.response_metadata["error_code"] == "upstream_network_error"
+    assert attempt.response_metadata["prompt_cache_controls_downgraded"] == true
+    refute Map.has_key?(request.request_metadata, "prompt_cache_controls_downgraded")
 
     assert_transport_failure_metadata!(attempt, %{
       "exception" => "Req.HTTPError",
@@ -4927,7 +4965,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute inspect(attempt.response_metadata) =~ "sensitive protocol body"
   end
 
-  test "POST /backend-api/codex/responses persists retryable transport diagnostics after fallback success",
+  @tag :prompt_cache_adaptation
+  test "POST /backend-api/codex/responses recomputes adapted controls for each retry attempt",
        %{conn: conn} do
     first_upstream =
       start_upstream(
@@ -4979,25 +5018,34 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     request_id = seed_with_assignment_order([setup.assignment.id, success.assignment.id])
 
-    logs =
-      capture_log(fn ->
-        conn =
-          conn
-          |> put_req_header("x-request-id", request_id)
-          |> put_req_header("x-sensitive-header", "secret-header-value")
-          |> auth(setup)
-          |> post("/backend-api/codex/responses", %{
-            "model" => setup.model.exposed_model_id,
-            "input" => "retryable transport body token"
-          })
+    prompt_cache_key =
+      prompt_cache_key_with_assignment_order(setup, [setup.assignment.id, success.assignment.id])
 
-        assert %{"id" => "resp_transport_retry_success"} = json_response(conn, 200)
-      end)
+    conn =
+      conn
+      |> put_req_header("x-request-id", request_id)
+      |> put_req_header("x-sensitive-header", "secret-header-value")
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "prompt_cache_key" => prompt_cache_key,
+        "prompt_cache_options" => %{"mode" => "explicit", "ttl" => "30m"},
+        "input" => [
+          %{
+            "type" => "message",
+            "role" => "user",
+            "content" => [
+              %{
+                "type" => "input_text",
+                "text" => "retryable transport body token",
+                "prompt_cache_breakpoint" => %{"mode" => "explicit"}
+              }
+            ]
+          }
+        ]
+      })
 
-    assert logs =~ "gateway upstream transport failed"
-    assert logs =~ "transport=http_json"
-    refute logs =~ "retryable transport body token"
-    refute logs =~ "secret-header-value"
+    assert %{"id" => "resp_transport_retry_success"} = json_response(conn, 200)
     assert FakeUpstream.count(first_upstream) == 0
     assert FakeUpstream.count(success_upstream) == 1
 
@@ -5008,6 +5056,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert first_attempt.status == "retryable_failed"
     assert first_attempt.network_error_code == "upstream_network_error"
     assert first_attempt.response_metadata["error_code"] == "upstream_network_error"
+    assert first_attempt.response_metadata["prompt_cache_controls_downgraded"] == true
 
     assert_safe_transport_failure_metadata!(first_attempt, [
       "retryable transport body token",
@@ -5018,13 +5067,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert second_attempt.pool_upstream_assignment_id == success.assignment.id
     assert second_attempt.status == "succeeded"
+    assert second_attempt.response_metadata["prompt_cache_controls_downgraded"] == true
     refute Map.has_key?(second_attempt.response_metadata, "transport_failure")
+
+    assert [captured] = FakeUpstream.requests(success_upstream)
+    assert captured.json["prompt_cache_key"] == prompt_cache_key
+    refute Map.has_key?(captured.json, "prompt_cache_options")
+    refute inspect(captured.json) =~ "prompt_cache_breakpoint"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "succeeded"
     assert request.transport == "http_json"
     assert request.retry_count == 1
     assert request.last_error_code == nil
+    refute Map.has_key?(request.request_metadata, "prompt_cache_controls_downgraded")
     refute inspect(request.request_metadata) =~ "retryable transport body token"
     refute inspect(request.request_metadata) =~ "secret-header-value"
   end
@@ -10072,9 +10128,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert ["release", "reservation", "settlement"] == ledger_entry_kinds(request)
   end
 
-  test "POST /backend-api/codex/responses/compact maps to upstream backend compact path", %{
-    conn: conn
-  } do
+  @tag :prompt_cache_adaptation
+  test "POST /backend-api/codex/responses/compact removes top-level prompt cache options at egress",
+       %{
+         conn: conn
+       } do
     upstream =
       start_upstream(
         FakeUpstream.json_response(%{
@@ -10095,6 +10153,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "model" => setup.model.exposed_model_id,
         "input" => "compact",
         "prompt_cache_key" => raw_prompt_cache_key,
+        "prompt_cache_options" => %{"mode" => "explicit", "ttl" => "30m"},
         "max_output_tokens" => 128,
         "temperature" => 0.2,
         "top_p" => 0.9,
@@ -10108,6 +10167,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured.json["temperature"] == 0.2
     assert captured.json["top_p"] == 0.9
     assert captured.json["reasoning"] == %{"effort" => "max"}
+    assert captured.json["prompt_cache_key"] == raw_prompt_cache_key
+    refute Map.has_key?(captured.json, "prompt_cache_options")
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses/compact"
     assert request.transport == "http_compact_json"
@@ -10121,6 +10182,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute Map.has_key?(routing, "routing_locality_assignment_fingerprint")
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.response_metadata["prompt_cache_controls_downgraded"] == true
+    refute Map.has_key?(request.request_metadata, "prompt_cache_controls_downgraded")
     metadata_text = inspect({request.request_metadata, attempt.response_metadata})
     refute metadata_text =~ raw_prompt_cache_key
     refute metadata_text =~ "cache_hit"
@@ -12092,6 +12155,33 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
       if ordered_ids == assignment_ids, do: seed
     end) || raise "missing bridge ring ordered seed"
+  end
+
+  defp prompt_cache_key_with_assignment_order(setup, assignment_ids) do
+    Enum.find_value(1..500, fn index ->
+      prompt_cache_key = "retry-cache-key-#{index}"
+
+      prompt_cache_seed =
+        [
+          setup.pool.id,
+          setup.api_key.id,
+          setup.model.exposed_model_id,
+          "prompt_cache",
+          prompt_cache_key_hash(prompt_cache_key)
+        ]
+        |> Enum.join(":")
+
+      ordered_ids =
+        assignment_ids
+        |> Enum.sort_by(&rendezvous_score(prompt_cache_seed, &1), :desc)
+
+      if ordered_ids == assignment_ids, do: prompt_cache_key
+    end) || raise "missing prompt cache key with assignment order"
+  end
+
+  defp prompt_cache_key_hash(value) do
+    :crypto.hash(:sha256, value)
+    |> Base.encode16(case: :lower)
   end
 
   defp assert_http_sse_routing_metadata!(request, strategy, assignment, ring_size) do

@@ -9,7 +9,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.RuntimeContext do
     :interrupt_reason,
     :gateway_debug_payload,
     :payload_compression,
-    :reasoning_effort_snapshot
+    :reasoning_effort_snapshot,
+    :prompt_cache_controls_downgraded
   ]
 
   @type t :: %__MODULE__{
@@ -17,7 +18,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.RuntimeContext do
           interrupt_reason: String.t() | nil,
           gateway_debug_payload: map() | nil,
           payload_compression: map() | nil,
-          reasoning_effort_snapshot: map() | nil
+          reasoning_effort_snapshot: map() | nil,
+          prompt_cache_controls_downgraded: boolean()
         }
 
   @spec build(map() | keyword()) :: t()
@@ -30,7 +32,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.RuntimeContext do
       gateway_debug_payload: Map.get(opts, :gateway_debug_payload),
       payload_compression:
         RequestCompressionMetadata.runtime_metadata(Map.get(opts, :payload_compression)),
-      reasoning_effort_snapshot: Map.get(opts, :reasoning_effort_snapshot)
+      reasoning_effort_snapshot: Map.get(opts, :reasoning_effort_snapshot),
+      prompt_cache_controls_downgraded: false
     }
   end
 
@@ -42,6 +45,13 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.RuntimeContext do
       :payload_compression,
       &RequestCompressionMetadata.runtime_metadata/1
     )
+    |> Normalization.normalize_optional_update(
+      :prompt_cache_controls_downgraded,
+      &boolean/1
+    )
     |> then(&struct!(runtime, &1))
   end
+
+  defp boolean(value) when is_boolean(value), do: value
+  defp boolean(_value), do: nil
 end

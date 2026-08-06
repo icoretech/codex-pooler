@@ -442,6 +442,99 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     refute inspect(metadata) =~ "call_bridge_tool"
   end
 
+  @tag :prompt_cache_adaptation
+  test "the bridge carries second-serialization prompt cache state and compression metadata" do
+    cases = [
+      %{
+        label: "false-to-true",
+        input: [
+          %{
+            "type" => "input_text",
+            "text" => "fixture-text",
+            "content" => nil,
+            "encrypted_content" => "fixture-encrypted-content",
+            "prompt_cache_breakpoint" => %{"mode" => "explicit"}
+          }
+        ],
+        expected_websocket_input_count: 1
+      },
+      %{
+        label: "true-to-false",
+        input: [
+          %{
+            "type" => "agent_message",
+            "content" => [
+              %{
+                "type" => "input_text",
+                "text" => "fixture-text",
+                "prompt_cache_breakpoint" => %{"mode" => "explicit"}
+              },
+              %{
+                "type" => "encrypted_content",
+                "encrypted_content" => "fixture-encrypted-content"
+              }
+            ]
+          }
+        ],
+        expected_websocket_input_count: 0
+      }
+    ]
+
+    propagated_states =
+      for scenario <- cases do
+        response_id = "resp_bridge_prompt_cache_#{scenario.label}"
+        upstream = start_upstream(FakeUpstream.sse_stream([completed_event(response_id)]))
+        setup = gateway_setup(upstream)
+        enable_request_compression!(setup.pool)
+        session = "prompt-cache-#{scenario.label}-#{System.unique_integer([:positive])}"
+
+        {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+        {:ok, %{endpoint: endpoint, payload: payload, request_options: request_options}} =
+          ResponsesCompat.coerce(stream_payload(setup, "fixture turn"), %{
+            session_header: session,
+            session_header_source: "x-session-id",
+            upstream_endpoint: "/backend-api/codex/responses",
+            public_openai_responses_stream: true
+          })
+
+        payload = Map.put(payload, "input", scenario.input)
+
+        assert {:ok, %{stream: stream}} =
+                 RuntimeGateway.execute(auth, endpoint, payload, request_options)
+
+        stream_conn =
+          Phoenix.ConnTest.build_conn()
+          |> Plug.Conn.put_resp_content_type("text/event-stream")
+          |> Plug.Conn.send_chunked(200)
+
+        assert {:ok, stream_conn} = stream.(stream_conn)
+        assert completed_id(stream_conn.resp_body) == response_id
+
+        assert [captured] = FakeUpstream.requests(upstream)
+        assert captured.method == "WEBSOCKET"
+        assert length(captured.json["input"]) == scenario.expected_websocket_input_count
+        refute inspect(captured.json) =~ "prompt_cache_breakpoint"
+
+        request = latest_request(setup.pool)
+        assert [attempt] = attempts_for(request)
+        assert attempt.transport == "websocket"
+
+        assert %{
+                 "enabled" => true,
+                 "attempted" => true,
+                 "transport" => "websocket",
+                 "original_bytes" => original_bytes
+               } = attempt.response_metadata["payload_compression"]
+
+        assert original_bytes == byte_size(captured.body)
+
+        {scenario.label, attempt.response_metadata["prompt_cache_controls_downgraded"] == true}
+      end
+
+    assert propagated_states == [{"false-to-true", true}, {"true-to-false", false}]
+  end
+
   @tag :v1_websocket_bridge_usage
   test "HTTP SSE over an upstream websocket settles usage before a retained large tail", %{
     conn: conn
@@ -546,6 +639,67 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       log,
       sentinel
     )
+  end
+
+  @tag :prompt_cache_adaptation
+  test "HTTP Responses streaming bridge removes prompt cache controls before its upstream websocket serialization" do
+    upstream =
+      start_upstream(FakeUpstream.sse_stream([completed_event("resp_bridge_prompt_cache")]))
+
+    setup = gateway_setup(upstream)
+    session = "prompt-cache-http-bridge-#{System.unique_integer([:positive])}"
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, %{endpoint: endpoint, payload: payload, request_options: request_options}} =
+      ResponsesCompat.coerce(stream_payload(setup, "bridge prompt cache seed"), %{
+        session_header: session,
+        session_header_source: "x-session-id",
+        upstream_endpoint: "/backend-api/codex/responses",
+        public_openai_responses_stream: true
+      })
+
+    payload =
+      Map.merge(payload, %{
+        "prompt_cache_key" => "bridge-cache-key",
+        "prompt_cache_options" => %{"mode" => "explicit", "ttl" => "30m"},
+        "input" => [
+          %{
+            "type" => "message",
+            "role" => "user",
+            "content" => [
+              %{
+                "type" => "input_text",
+                "text" => "bridge prompt cache content",
+                "prompt_cache_breakpoint" => %{"mode" => "explicit"}
+              }
+            ]
+          }
+        ]
+      })
+
+    assert {:ok, %{stream: stream}} =
+             RuntimeGateway.execute(auth, endpoint, payload, request_options)
+
+    stream_conn =
+      Phoenix.ConnTest.build_conn()
+      |> Plug.Conn.put_resp_content_type("text/event-stream")
+      |> Plug.Conn.send_chunked(200)
+
+    assert {:ok, stream_conn} = stream.(stream_conn)
+    assert completed_id(stream_conn.resp_body) == "resp_bridge_prompt_cache"
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.method == "WEBSOCKET"
+    assert captured.json["prompt_cache_key"] == "bridge-cache-key"
+    refute Map.has_key?(captured.json, "prompt_cache_options")
+    refute inspect(captured.json) =~ "prompt_cache_breakpoint"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.transport == "websocket"
+    assert attempt.response_metadata["prompt_cache_controls_downgraded"] == true
+    refute Map.has_key?(request.request_metadata, "prompt_cache_controls_downgraded")
   end
 
   @tag :v1_websocket_bridge_usage

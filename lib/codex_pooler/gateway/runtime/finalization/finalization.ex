@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   Finalizes gateway runtime dispatch attempts after upstream transport returns.
   """
 
+  alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Dispatch.ResponseContext
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.RateLimitObserver
@@ -175,7 +176,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     code = dispatch_error_code(reason)
 
     attempt_metadata =
-      Map.merge(Metadata.route_attempt_metadata(request_options), %{
+      request_options
+      |> Metadata.route_attempt_metadata()
+      |> Map.merge(RequestOptions.prompt_cache_controls_attempt_metadata(request_options))
+      |> Map.merge(%{
         "error_code" => code,
         "message" => Metadata.safe_reason(reason)
       })

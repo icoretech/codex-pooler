@@ -112,6 +112,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :reasoning_effort_snapshot,
     :pool_upstream_assignment_id,
     :previous_response_id,
+    :prompt_cache_controls_downgraded,
     :prompt_cache_key,
     :public_openai_chat_stream,
     :public_openai_responses_stream,
@@ -156,6 +157,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :websocket_writer,
     "authorization_header",
     "chatgpt_account_id",
+    "prompt_cache_controls_downgraded",
     "prompt_cache_key",
     "request_method",
     "transport"
@@ -389,6 +391,24 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     do: reasoning_effort_metadata_envelope(snapshot)
 
   def reasoning_effort_attempt_metadata(_opts), do: %{}
+
+  @type prompt_cache_controls_attempt_metadata :: %{optional(String.t()) => true}
+
+  @spec prompt_cache_controls_attempt_metadata(t() | map() | term()) ::
+          prompt_cache_controls_attempt_metadata()
+  def prompt_cache_controls_attempt_metadata(%__MODULE__{
+        runtime: %{prompt_cache_controls_downgraded: true}
+      }) do
+    %{"prompt_cache_controls_downgraded" => true}
+  end
+
+  def prompt_cache_controls_attempt_metadata(%{
+        runtime: %{prompt_cache_controls_downgraded: true}
+      }) do
+    %{"prompt_cache_controls_downgraded" => true}
+  end
+
+  def prompt_cache_controls_attempt_metadata(_opts), do: %{}
 
   @spec payload_compression_request_metadata(t() | map() | term()) :: map()
   def payload_compression_request_metadata(opts), do: payload_compression_attempt_metadata(opts)
