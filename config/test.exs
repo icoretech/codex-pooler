@@ -92,6 +92,11 @@ config :codex_pooler, dev_features_build_enabled: true
 config :codex_pooler, dev_features_enabled: false
 config :codex_pooler, dev_seeds_enabled: true
 
+# Impeccable live state is read from disk at render time. Point the test env at
+# a directory that never exists so a helper running in the developer's checkout
+# cannot change what the development settings surface reports.
+config :codex_pooler, impeccable_live_dir: "tmp/test-no-impeccable-live"
+
 config :swoosh, :api_client, false
 
 config :logger, level: :warning

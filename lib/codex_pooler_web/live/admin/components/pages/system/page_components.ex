@@ -42,6 +42,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents do
   attr :development_action_status, :map, default: nil
   attr :smtp_test_status, :map, default: nil
   attr :development_helpers_available?, :boolean, required: true
+  attr :impeccable_live_status, :any, default: :unavailable
   attr :datetime_preferences, :map, required: true
 
   def instance_settings_panel(assigns) do
@@ -61,6 +62,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents do
         card_statuses={@card_statuses}
         development_action_status={@development_action_status}
         development_helpers_available?={@development_helpers_available?}
+        impeccable_live_status={@impeccable_live_status}
       />
       <MCP.card
         selected_tab={@selected_tab}

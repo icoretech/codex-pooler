@@ -45,6 +45,7 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
          system_tabs: system_tabs(development_helpers_available?),
          settings: settings,
          development_helpers_available?: development_helpers_available?,
+         impeccable_live_status: CodexPoolerWeb.DevFeatures.impeccable_live_status(),
          mcp_key_count: MCP.count_operator_tokens(),
          form_params: form_params,
          group_snapshots: SystemSettingsForm.group_snapshots(form_params),
@@ -66,6 +67,7 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
       {:noreply,
        socket
        |> assign(:development_helpers_available?, development_helpers_available?)
+       |> assign(:impeccable_live_status, CodexPoolerWeb.DevFeatures.impeccable_live_status())
        |> assign(:system_tabs, system_tabs(development_helpers_available?))
        |> assign(:mcp_key_count, MCP.count_operator_tokens())
        |> assign(:selected_tab, normalize_tab(params["tab"], development_helpers_available?))}
@@ -160,6 +162,19 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
            |> assign(:development_action_status, %{tone: :error, message: message})
            |> put_flash(:error, "Sample data could not be imported")}
       end
+    else
+      {:noreply, put_flash(socket, :error, "Development helpers are not available")}
+    end
+  end
+
+  def handle_event("recheck_impeccable_live", _params, socket) do
+    if socket.assigns.development_helpers_available? do
+      {:noreply,
+       assign(
+         socket,
+         :impeccable_live_status,
+         CodexPoolerWeb.DevFeatures.impeccable_live_status()
+       )}
     else
       {:noreply, put_flash(socket, :error, "Development helpers are not available")}
     end
@@ -293,6 +308,7 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
             development_action_status={@development_action_status}
             smtp_test_status={@smtp_test_status}
             development_helpers_available?={@development_helpers_available?}
+            impeccable_live_status={@impeccable_live_status}
             datetime_preferences={@datetime_preferences}
           />
         </section>
@@ -346,6 +362,7 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
          |> assign(
            settings: settings,
            development_helpers_available?: CodexPoolerWeb.DevFeatures.enabled?(),
+           impeccable_live_status: CodexPoolerWeb.DevFeatures.impeccable_live_status(),
            form_params: form_params,
            group_snapshots: group_snapshots,
            card_statuses: card_statuses,

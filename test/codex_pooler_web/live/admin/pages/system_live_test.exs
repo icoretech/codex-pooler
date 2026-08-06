@@ -227,7 +227,8 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     refute has_element?(view, "#instance-settings-account-reconciliation-paused")
     refute has_element?(view, "#instance-settings-import-sample-data")
     refute has_element?(view, "#instance-settings-import-pricing-catalog")
-    refute html =~ "http://localhost:8400/live.js"
+    refute has_element?(view, "#instance-settings-impeccable-live")
+    refute html =~ "/live.js"
   end
 
   test "renders and saves the development helper toggle only behind the dev feature gate", %{
@@ -277,7 +278,16 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     assert has_element?(
              view,
              "#instance-settings-development",
-             "Requires a local Impeccable server at http://localhost:8400."
+             "Loads the live client from the running local Impeccable helper on the next full page load."
+           )
+
+    assert has_element?(view, "#instance-settings-impeccable-live", "Impeccable live helper")
+    assert has_element?(view, "#instance-settings-impeccable-live-recheck", "Recheck Helper")
+
+    assert has_element?(
+             view,
+             "#instance-settings-impeccable-live-status",
+             "Live client off"
            )
 
     assert has_element?(
@@ -324,7 +334,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
 
     refute has_element?(view, "#instance-settings-impeccable-live-enabled[checked]")
     refute has_element?(view, "#instance-settings-account-reconciliation-paused[checked]")
-    refute html =~ "http://localhost:8400/live.js"
+    refute html =~ "/live.js"
 
     html =
       view
@@ -344,6 +354,16 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     assert has_element?(view, "#instance-settings-development-status", "Saved")
     assert has_element?(view, "#instance-settings-impeccable-live-enabled[checked]")
     assert has_element?(view, "#instance-settings-account-reconciliation-paused[checked]")
+
+    # Enabling the toggle re-resolves the helper: with no handshake file the
+    # surface says so instead of implying a live client is attached.
+    assert has_element?(
+             view,
+             "#instance-settings-impeccable-live-status",
+             "No helper detected"
+           )
+
+    assert render_click(view, "recheck_impeccable_live") =~ "No helper detected"
 
     event = Repo.get_by!(AuditEvent, action: "instance_settings.update", actor_user_id: user.id)
 

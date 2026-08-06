@@ -109,11 +109,13 @@ defmodule CodexPoolerWeb.Layouts do
 
   if @dev_features_build_enabled do
     defp impeccable_live_script(assigns) do
+      # The src carries the running helper's port and session token, so it is
+      # resolved per render rather than baked in; nil means "render nothing"
+      # (toggle off, no helper, or the injector already owns the document).
+      assigns = assign(assigns, :src, CodexPoolerWeb.DevFeatures.impeccable_live_script_src())
+
       ~H"""
-      <script
-        :if={CodexPoolerWeb.DevFeatures.impeccable_live_enabled?()}
-        src={CodexPoolerWeb.DevFeatures.impeccable_live_script_src()}
-      >
+      <script :if={@src} src={@src}>
       </script>
       """
     end

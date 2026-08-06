@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Development do
   attr :card_statuses, :map, required: true
   attr :development_action_status, :map, default: nil
   attr :development_helpers_available?, :boolean, required: true
+  attr :impeccable_live_status, :any, default: :unavailable
 
   def card(assigns) do
     ~H"""
@@ -40,7 +41,34 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Development do
               id="instance-settings-impeccable-live-enabled"
               field={development_form[:impeccable_live_enabled]}
               label="Enable Impeccable live helper"
-              hint="Requires a local Impeccable server at http://localhost:8400."
+              hint="Loads the live client from the running local Impeccable helper on the next full page load."
+            />
+          </div>
+          <div
+            id="instance-settings-impeccable-live"
+            class="grid gap-3 rounded-box border border-base-300 bg-base-200/40 p-3"
+          >
+            <div class="grid gap-1">
+              <h4 class="text-sm font-semibold text-base-content">Impeccable live helper</h4>
+              <p class="text-xs leading-5 text-base-content/55">
+                This instance reads the helper's port and session token from
+                <span class="font-mono text-[11px]">.impeccable/live/server.json</span>
+                on every full page load, so the helper can bind any port and be restarted
+                without restarting the app. Nothing is written to the layout.
+              </p>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <AdminComponents.action_button
+                id="instance-settings-impeccable-live-recheck"
+                icon="hero-arrow-path"
+                label="Recheck Helper"
+                phx-click="recheck_impeccable_live"
+                phx-disable-with="Checking..."
+              />
+            </div>
+            <.impeccable_live_notice
+              id="instance-settings-impeccable-live-status"
+              status={@impeccable_live_status}
             />
           </div>
           <div
@@ -91,6 +119,83 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Development do
       </.inputs_for>
     </FormControls.settings_card>
     """
+  end
+
+  attr :id, :string, required: true
+  attr :status, :any, required: true
+
+  defp impeccable_live_notice(assigns) do
+    assigns = assign(assigns, :notice, impeccable_live_notice_content(assigns.status))
+
+    ~H"""
+    <AdminComponents.extended_notice
+      id={@id}
+      icon={@notice.icon}
+      tone={@notice.tone}
+      title={@notice.title}
+      description={@notice.message}
+    />
+    """
+  end
+
+  defp impeccable_live_notice_content({:ready, origin}) do
+    %{
+      icon: "hero-check-circle",
+      tone: :success,
+      title: "Helper ready at #{origin}",
+      message: "Reload any admin page to attach the live client."
+    }
+  end
+
+  defp impeccable_live_notice_content({:helper_unreachable, origin}) do
+    %{
+      icon: "hero-exclamation-triangle",
+      tone: :error,
+      title: "Helper not responding",
+      message:
+        "A handshake file points at #{origin} but nothing is listening there. " <>
+          "The helper stopped without cleaning up; start it again and recheck."
+    }
+  end
+
+  defp impeccable_live_notice_content(:helper_missing) do
+    %{
+      icon: "hero-exclamation-triangle",
+      tone: :warning,
+      title: "No helper detected",
+      message:
+        "Start the Impeccable live server, then recheck. It writes its port and " <>
+          "session token to .impeccable/live/server.json when it comes up."
+    }
+  end
+
+  defp impeccable_live_notice_content(:externally_injected) do
+    %{
+      icon: "hero-exclamation-triangle",
+      tone: :warning,
+      title: "Injected script tag detected",
+      message:
+        "A live-mode injector wrote its own tag into the layout, so this instance " <>
+          "is standing down to avoid a second widget. Stop the live server to remove it."
+    }
+  end
+
+  defp impeccable_live_notice_content(:disabled) do
+    %{
+      icon: "hero-information-circle",
+      tone: :info,
+      title: "Live client off",
+      message: "Turn on the toggle above to load the live client on the next page load."
+    }
+  end
+
+  defp impeccable_live_notice_content(_status) do
+    %{
+      icon: "hero-information-circle",
+      tone: :info,
+      title: "Live client unavailable",
+      message: "Development helpers are not enabled for this build."
+    }
   end
 
   attr :id, :string, required: true
