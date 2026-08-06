@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.InstanceSettings
   alias CodexPooler.MCP
+
   alias CodexPooler.MCP.{
     OperatorMCPKey,
     OperatorMCPSettings,
@@ -18,6 +19,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
     Redaction,
     ToolRegistry
   }
+
   alias CodexPooler.Postgres.INET
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
@@ -152,6 +154,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
       assert result["isError"] == false
       assert get_in(result, ["structuredContent", "globalGate", "enabled"]) == true
       assert get_in(result, ["structuredContent", "accountGate", "enabled"]) == true
+
       assert get_in(result, ["structuredContent", "protocolVersion"]) ==
                ProtocolVersions.current()
 

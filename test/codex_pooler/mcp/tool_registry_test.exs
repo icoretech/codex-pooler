@@ -71,6 +71,7 @@ defmodule CodexPooler.MCP.ToolRegistryTest do
     assert get_in(tool.output_schema, ["properties", "globalGate", "type"]) == "object"
     assert get_in(tool.output_schema, ["properties", "accountGate", "type"]) == "object"
     assert get_in(tool.output_schema, ["properties", "actor", "type"]) == "object"
+
     assert get_in(tool.output_schema, ["properties", "protocolVersion", "const"]) ==
              ProtocolVersions.current()
 

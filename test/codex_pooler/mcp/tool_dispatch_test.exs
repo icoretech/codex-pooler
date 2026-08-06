@@ -14,6 +14,7 @@ defmodule CodexPooler.MCP.ToolDispatchTest do
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.InstanceSettings
   alias CodexPooler.MCP
+
   alias CodexPooler.MCP.{
     OperatorMCPKey,
     OperatorMCPSettings,
@@ -21,6 +22,7 @@ defmodule CodexPooler.MCP.ToolDispatchTest do
     Redaction,
     ToolDispatch
   }
+
   alias CodexPooler.MCP.Tools.{LogMetadata, OperatorMetadata, PoolMetadata, QuotaMetadata}
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
