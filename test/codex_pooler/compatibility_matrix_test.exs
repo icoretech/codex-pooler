@@ -542,8 +542,10 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert fixture.pool_gate.default_enabled == true
       assert fixture.pool_gate.disabled_behavior == "403_image_generation_disabled"
 
-      assert fixture.enforcement ==
-               "after_runtime_authentication_before_request_parsing_or_upstream_dispatch"
+      assert fixture.enforcement == %{
+               after: :runtime_authentication,
+               before: [:request_parsing, :upstream_dispatch, :body_decompression]
+             }
     end
   end
 
