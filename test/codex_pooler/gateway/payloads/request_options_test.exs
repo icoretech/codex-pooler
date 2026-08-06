@@ -870,6 +870,26 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   end
 
   describe "native image request context" do
+    test "default request option flows preserve native image context and projected metadata" do
+      payload = %{"model" => "example-model"}
+
+      options = [
+        RequestOptions.build(%{}, "/backend-api/codex/images/generations", payload),
+        RequestOptions.build(%{}, "/v1/responses", payload),
+        RequestOptions.build(%{}, "/v1/chat/completions", payload),
+        RequestOptions.build(%{}, "/backend-api/codex/responses", payload),
+        RequestOptions.for_websocket(%{}, payload)
+      ]
+
+      assert Enum.all?(options, fn option ->
+               option.payload_context.native_image_request? == false
+             end)
+
+      assert Enum.all?(options, fn option ->
+               RequestOptions.openai_compatibility_metadata(option) == %{}
+             end)
+    end
+
     test "defaults false and normalizes only literal true while consuming the option" do
       endpoint = "/backend-api/codex/images/generations"
       payload = %{"model" => "example-model"}
@@ -923,6 +943,134 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
 
         refute options.payload_context.native_image_request?
         assert options.extra == %{}
+      end
+    end
+  end
+
+  describe "image generation permission request context" do
+    test "defaults false across native v1 chat responses and websocket option flows" do
+      payload = %{"model" => "example-model"}
+
+      options = [
+        RequestOptions.build(%{}, "/backend-api/codex/images/generations", payload),
+        RequestOptions.build(%{}, "/v1/responses", payload),
+        RequestOptions.build(%{}, "/v1/chat/completions", payload),
+        RequestOptions.build(%{}, "/backend-api/codex/responses", payload),
+        RequestOptions.for_websocket(%{}, payload)
+      ]
+
+      assert Enum.all?(options, fn option ->
+               option.payload_context.image_generation_permission_required? == false
+             end)
+    end
+
+    test "accepts only the trusted server-side option as authority" do
+      endpoint = "/backend-api/codex/images/generations"
+      payload = %{"model" => "example-model"}
+
+      trusted =
+        RequestOptions.build(
+          %{image_generation_permission_required?: true},
+          endpoint,
+          payload
+        )
+
+      untrusted_options = [
+        RequestOptions.build(
+          %{},
+          endpoint,
+          Map.put(payload, "image_generation_permission_required?", true)
+        ),
+        RequestOptions.build(
+          %{},
+          endpoint <> "?image_generation_permission_required?=true",
+          payload
+        ),
+        RequestOptions.build(
+          %{forwarded_headers: [{"x-image-generation-permission-required", "true"}]},
+          endpoint,
+          payload
+        ),
+        RequestOptions.build(
+          %{extra: %{image_generation_permission_required?: true}},
+          endpoint,
+          payload
+        ),
+        RequestOptions.build(
+          %{openai_chat_payload: %{image_generation_permission_required?: true}},
+          endpoint,
+          payload
+        )
+      ]
+
+      assert trusted.payload_context.image_generation_permission_required?
+      assert trusted.extra == %{}
+
+      assert Enum.all?(untrusted_options, fn option ->
+               option.payload_context.image_generation_permission_required? == false
+             end)
+    end
+
+    test "preserves the trusted marker through payload enrichment and retargeting" do
+      options =
+        RequestOptions.build(
+          %{image_generation_permission_required?: true},
+          "/backend-api/codex/images/generations",
+          %{"model" => "example-model"}
+        )
+
+      transformed = [
+        RequestOptions.for_payload(
+          options,
+          "/backend-api/codex/responses",
+          %{"model" => "example-model", "image_generation_permission_required?" => false}
+        ),
+        RequestOptions.retarget(
+          options,
+          "/backend-api/codex/responses",
+          %{"model" => "example-model", "image_generation_permission_required?" => false}
+        )
+      ]
+
+      assert Enum.all?(transformed, fn option ->
+               option.payload_context.image_generation_permission_required?
+             end)
+    end
+
+    test "omits the trusted marker from OpenAI and accounting metadata projections" do
+      payload = %{"model" => "example-model"}
+
+      options =
+        RequestOptions.build(
+          %{image_generation_permission_required?: true},
+          "/backend-api/codex/images/generations",
+          payload
+        )
+
+      attrs =
+        AccountingReservation.attrs(
+          %{key_prefix: "sk-cxp-000000000000"},
+          payload,
+          "/backend-api/codex/images/generations",
+          options
+        )
+
+      assert options.payload_context.image_generation_permission_required?
+      assert RequestOptions.openai_compatibility_metadata(options) == %{}
+      refute Map.has_key?(attrs.request_metadata, "image_generation_permission_required?")
+      refute Map.has_key?(attrs.request_metadata, :image_generation_permission_required?)
+    end
+
+    test "permits typed marker updates and rejects unknown payload context updates" do
+      options = RequestOptions.build(%{}, "/backend-api/codex/responses", %{})
+
+      updated =
+        RequestOptions.put_payload_context(options, image_generation_permission_required?: true)
+
+      assert updated.payload_context.image_generation_permission_required?
+
+      assert_raise KeyError, fn ->
+        RequestOptions.put_payload_context(updated, unknown_image_permission_marker?: true)
       end
     end
   end

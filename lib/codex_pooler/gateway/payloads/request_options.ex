@@ -94,6 +94,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :forced_transcription_model,
     :forwarded_headers,
     :gateway_debug_payload,
+    :image_generation_permission_required?,
     :idempotency_key,
     :interrupt_reason,
     :media_upload,
