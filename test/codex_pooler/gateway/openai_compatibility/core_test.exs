@@ -3713,6 +3713,30 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       end)
     end
 
+    test "Responses names both supported namespace child types in validation errors" do
+      Enum.each([[], [%{"type" => "web_search_preview"}]], fn nested_tools ->
+        assert {:error,
+                %{
+                  status: 400,
+                  code: "invalid_request",
+                  param: "tools",
+                  message: "namespace tool requires function or custom tools"
+                }} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => "synthetic input",
+                   "tools" => [
+                     %{
+                       "type" => "namespace",
+                       "name" => "fixture",
+                       "description" => "Synthetic",
+                       "tools" => nested_tools
+                     }
+                   ]
+                 })
+      end)
+    end
+
     test "Responses rejects malformed namespace tools" do
       invalid_tools = [
         %{"type" => "namespace", "name" => "", "description" => "Synthetic", "tools" => []},

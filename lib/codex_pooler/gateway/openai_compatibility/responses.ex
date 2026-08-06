@@ -602,7 +602,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   end
 
   defp validate_namespace_tools(_tools),
-    do: {:error, Error.invalid_request("namespace tool requires function tools", "tools")}
+    do:
+      {:error, Error.invalid_request("namespace tool requires function or custom tools", "tools")}
 
   defp validate_namespace_tool(
          %{"type" => "function", "name" => name, "parameters" => parameters} = tool
@@ -614,7 +615,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   defp validate_namespace_tool(%{"type" => "custom"} = tool), do: validate_custom_tool(tool)
 
   defp validate_namespace_tool(_tool),
-    do: {:error, Error.invalid_request("namespace tool requires function tools", "tools")}
+    do:
+      {:error, Error.invalid_request("namespace tool requires function or custom tools", "tools")}
 
   defp validate_function_tool(
          %{"type" => "function", "name" => name, "parameters" => parameters} = tool
