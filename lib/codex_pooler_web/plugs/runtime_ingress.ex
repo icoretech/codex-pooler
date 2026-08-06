@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
   alias CodexPooler.Gateway.Admission, as: GatewayAdmission
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Pools.Routing, as: PoolRouting
+  alias CodexPoolerWeb.GatewayControllerHelpers
   alias CodexPoolerWeb.Plugs.RuntimeIngress.{CompressedBody, Firewall, Path}
   alias CodexPoolerWeb.V1.UnsupportedRoutes
   alias Plug.Conn.Query
@@ -249,9 +250,9 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
 
   defp authenticate_v1_request(conn) do
     if v1_request?(conn) do
-      case authenticate_runtime_api_request(conn) do
-        {:ok, conn} -> ensure_v1_compatibility(conn)
-        {:error, reason, conn} -> send_runtime_error(conn, reason)
+      case GatewayControllerHelpers.authenticate_v1(conn) do
+        {:ok, auth} -> put_private(conn, :runtime_api_auth, auth)
+        {:error, reason} -> send_runtime_error(conn, reason)
       end
     else
       conn
@@ -318,34 +319,12 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
     conn
     |> get_req_header("authorization")
     |> List.first()
-    |> authenticate_authorization_header(conn)
+    |> Access.authenticate_authorization_header()
     |> case do
       {:ok, auth} -> {:ok, put_private(conn, :runtime_api_auth, auth)}
       {:error, reason} -> {:error, Map.put(reason, :status, 401), conn}
     end
   end
-
-  defp authenticate_authorization_header(header, conn) do
-    if v1_request?(conn) do
-      Access.authenticate_v1_authorization_header(header)
-    else
-      Access.authenticate_authorization_header(header)
-    end
-  end
-
-  defp ensure_v1_compatibility(%Plug.Conn{private: %{runtime_api_auth: %{pool: pool}}} = conn) do
-    if pool.status == "active" and PoolRouting.v1_compatibility_enabled?(pool) do
-      conn
-    else
-      send_runtime_error(conn, %{
-        status: 403,
-        code: "v1_compatibility_disabled",
-        message: "OpenAI /v1 compatibility is disabled for this pool"
-      })
-    end
-  end
-
-  defp ensure_v1_compatibility(conn), do: conn
 
   defp enforce_image_generation_permission(%Plug.Conn{halted: true} = conn), do: conn
 

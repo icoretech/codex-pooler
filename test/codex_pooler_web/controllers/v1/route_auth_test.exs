@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Pools
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.GatewayControllerHelpers
   alias CodexPoolerWeb.Plugs.RuntimeIngress.Path, as: IngressPath
   alias CodexPoolerWeb.V1.UnsupportedRoutes
 
@@ -35,6 +36,94 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
   ]
 
   @unsupported_routes UnsupportedRoutes.test_routes()
+
+  describe "shared /v1 authorization characterization" do
+    test "fresh valid bearer returns the enabled pool auth context", %{conn: conn} do
+      setup = active_api_key_fixture()
+
+      assert {:ok, auth} =
+               conn
+               |> auth(setup)
+               |> GatewayControllerHelpers.authenticate_v1()
+
+      assert auth.api_key_id == setup.api_key.id
+      assert auth.pool_id == setup.pool.id
+    end
+
+    test "cached valid auth returns the enabled pool auth context", %{conn: conn} do
+      setup = active_api_key_fixture()
+
+      assert {:ok, auth} =
+               conn
+               |> auth(setup)
+               |> GatewayControllerHelpers.authenticate_v1()
+
+      assert {:ok, ^auth} =
+               conn
+               |> put_private(:runtime_api_auth, auth)
+               |> GatewayControllerHelpers.authenticate_v1()
+    end
+
+    test "invalid bearer remains a 401 before pool compatibility authorization", %{conn: conn} do
+      assert {:error, error} =
+               conn
+               |> put_req_header("authorization", "Bearer sk-cxp-invalid-fixture")
+               |> GatewayControllerHelpers.authenticate_v1()
+
+      assert error.status == 401
+      assert error.code == :api_key_missing
+    end
+  end
+
+  describe "shared /v1 compatibility authorization" do
+    test "fresh valid bearer is denied when pool compatibility is disabled", %{conn: conn} do
+      setup = active_api_key_fixture()
+      disable_v1_compatibility(setup)
+
+      assert {:error, error} =
+               conn
+               |> auth(setup)
+               |> GatewayControllerHelpers.authenticate_v1()
+
+      assert_v1_compatibility_disabled(error)
+    end
+
+    test "cached valid auth is denied when pool compatibility is disabled", %{conn: conn} do
+      setup = active_api_key_fixture()
+
+      assert {:ok, auth} =
+               conn
+               |> auth(setup)
+               |> GatewayControllerHelpers.authenticate_v1()
+
+      disable_v1_compatibility(setup)
+
+      assert {:error, error} =
+               conn
+               |> put_private(:runtime_api_auth, auth)
+               |> GatewayControllerHelpers.authenticate_v1()
+
+      assert_v1_compatibility_disabled(error)
+    end
+
+    test "cached inactive pool auth is denied", %{conn: conn} do
+      setup = active_api_key_fixture()
+
+      assert {:ok, auth} =
+               conn
+               |> auth(setup)
+               |> GatewayControllerHelpers.authenticate_v1()
+
+      inactive_auth = %{auth | pool: %{auth.pool | status: "disabled"}}
+
+      assert {:error, error} =
+               conn
+               |> put_private(:runtime_api_auth, inactive_auth)
+               |> GatewayControllerHelpers.authenticate_v1()
+
+      assert_v1_compatibility_disabled(error)
+    end
+  end
 
   describe "mandatory /v1 bearer API-key auth" do
     test "unauthenticated /v1 requests return OpenAI-shaped 401", %{conn: conn} do
@@ -193,11 +282,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
 
     test "active pools with v1 compatibility disabled return OpenAI-shaped 403", %{conn: conn} do
       setup = active_api_key_fixture()
-
-      setup.pool
-      |> Pools.ensure_routing_settings()
-      |> Ecto.Changeset.change(%{v1_compatibility_enabled: false})
-      |> Repo.update!()
+      disable_v1_compatibility(setup)
 
       conn =
         conn
@@ -210,6 +295,101 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
       )
 
       assert_no_gateway_side_effects()
+    end
+
+    test "invalid bearer stays 401 when another pool has v1 compatibility disabled", %{conn: conn} do
+      setup = active_api_key_fixture()
+      disable_v1_compatibility(setup)
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer sk-cxp-invalid-fixture")
+        |> get("/v1/models")
+
+      assert_openai_error(conn, 401,
+        code: "api_key_missing",
+        message: "api key is required"
+      )
+
+      assert_no_gateway_side_effects()
+    end
+
+    test "v1 compatibility denial precedes malformed supported JSON parsing", %{conn: conn} do
+      setup = active_api_key_fixture()
+      disable_v1_compatibility(setup)
+
+      conn =
+        conn
+        |> auth(setup)
+        |> put_req_header("content-type", "application/json")
+        |> post("/v1/responses", "{not-json")
+
+      assert_openai_error(conn, 403,
+        code: "v1_compatibility_disabled",
+        message: "OpenAI /v1 compatibility is disabled for this pool"
+      )
+
+      assert_no_gateway_side_effects()
+    end
+
+    test "v1 compatibility denial blocks supported, unsupported, multipart, and websocket work",
+         %{conn: conn} do
+      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
+      setup = gateway_setup(upstream)
+      disable_v1_compatibility(setup)
+
+      with_isolated_plug_tmpdir(fn tmp_root ->
+        supported =
+          conn
+          |> auth(setup)
+          |> post("/v1/responses", %{
+            "model" => "gpt-fixture-text",
+            "input" => "synthetic text"
+          })
+
+        assert_openai_error(supported, 403,
+          code: "v1_compatibility_disabled",
+          message: "OpenAI /v1 compatibility is disabled for this pool"
+        )
+
+        unsupported =
+          build_conn()
+          |> auth(setup)
+          |> post("/v1/embeddings", %{})
+
+        assert_openai_error(unsupported, 403,
+          code: "v1_compatibility_disabled",
+          message: "OpenAI /v1 compatibility is disabled for this pool"
+        )
+
+        multipart =
+          build_conn()
+          |> auth(setup)
+          |> put_req_header("content-type", "multipart/form-data; boundary=missing-boundary")
+          |> post("/v1/audio/transcriptions", "not a valid multipart body")
+
+        assert_openai_error(multipart, 403,
+          code: "v1_compatibility_disabled",
+          message: "OpenAI /v1 compatibility is disabled for this pool"
+        )
+
+        websocket =
+          build_conn()
+          |> auth(setup)
+          |> websocket_upgrade_headers()
+          |> get("/v1/responses")
+
+        assert_openai_error(websocket, 403,
+          code: "v1_compatibility_disabled",
+          message: "OpenAI /v1 compatibility is disabled for this pool"
+        )
+
+        assert get_resp_header(websocket, "sec-websocket-accept") == []
+        assert FakeUpstream.count(upstream) == 0
+        assert_no_gateway_side_effects()
+        assert Repo.aggregate(LedgerEntry, :count) == 0
+        assert tmpdir_paths(tmp_root) == []
+      end)
     end
   end
 
@@ -486,6 +666,21 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
   defp assert_no_gateway_side_effects do
     assert Repo.aggregate(Request, :count) == 0
     assert Repo.aggregate(Attempt, :count) == 0
+  end
+
+  defp assert_v1_compatibility_disabled(error) do
+    assert error == %{
+             status: 403,
+             code: "v1_compatibility_disabled",
+             message: "OpenAI /v1 compatibility is disabled for this pool"
+           }
+  end
+
+  defp disable_v1_compatibility(setup) do
+    setup.pool
+    |> Pools.ensure_routing_settings()
+    |> Ecto.Changeset.change(%{v1_compatibility_enabled: false})
+    |> Repo.update!()
   end
 
   defp post_malformed_content_provenance(conn) do

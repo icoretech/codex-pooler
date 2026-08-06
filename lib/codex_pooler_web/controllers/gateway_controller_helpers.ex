@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   alias CodexPooler.Gateway.Metadata
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Pools.Routing, as: PoolRouting
 
   @type conn :: Plug.Conn.t()
   @type gateway_call_result ::
@@ -48,9 +49,16 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
 
   @spec authenticate_v1(conn()) ::
           {:ok, Access.auth_context()} | {:error, Contracts.gateway_error()}
-  def authenticate_v1(%Plug.Conn{private: %{runtime_api_auth: auth}}), do: {:ok, auth}
-
   def authenticate_v1(conn) do
+    with {:ok, auth} <- authenticate_v1_auth_context(conn) do
+      authorize_v1_compatibility(auth)
+    end
+  end
+
+  defp authenticate_v1_auth_context(%Plug.Conn{private: %{runtime_api_auth: auth}}),
+    do: {:ok, auth}
+
+  defp authenticate_v1_auth_context(conn) do
     case Access.authenticate_v1_authorization_header(
            get_req_header(conn, "authorization")
            |> List.first()
@@ -59,6 +67,21 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
       {:error, reason} -> {:error, Map.put(reason, :status, 401)}
     end
   end
+
+  defp authorize_v1_compatibility(%{pool: pool} = auth) do
+    if pool.status == "active" and PoolRouting.v1_compatibility_enabled?(pool) do
+      {:ok, auth}
+    else
+      {:error,
+       %{
+         status: 403,
+         code: "v1_compatibility_disabled",
+         message: "OpenAI /v1 compatibility is disabled for this pool"
+       }}
+    end
+  end
+
+  defp authorize_v1_compatibility(auth), do: {:ok, auth}
 
   @spec read_json_body(conn()) :: body_read_result()
   def read_json_body(%Plug.Conn{private: %{runtime_json_parse_error: true}}) do
