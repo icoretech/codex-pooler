@@ -418,11 +418,28 @@ defmodule CodexPooler.CompatibilityMatrix do
       current: :runtime_route_family_allowlist,
       categories: [:route, :auth, :error, :ownership],
       routes: [
-        %{method: :get, path: "/backend-api/codex/models"},
-        %{method: :post, path: "/backend-api/codex/responses"},
-        %{method: :post, path: "/backend-api/files"},
-        %{method: :post, path: "/backend-api/files/:file_id/uploaded"},
-        %{method: :post, path: "/backend-api/transcribe"}
+        %{family: :backend_codex, method: :get, path: "/backend-api/codex/models"},
+        %{family: :backend_codex, method: :post, path: "/backend-api/codex/responses"},
+        %{
+          family: :backend_codex,
+          method: :get,
+          path: "/backend-api/codex/responses",
+          transport: :websocket
+        },
+        %{family: :backend_files, method: :post, path: "/backend-api/files"},
+        %{
+          family: :backend_files,
+          method: :post,
+          path: "/backend-api/files/:file_id/uploaded"
+        },
+        %{family: :backend_transcribe, method: :post, path: "/backend-api/transcribe"},
+        %{family: :codex_usage, method: :get, path: "/api/codex/usage"},
+        %{family: :wham_usage, method: :get, path: "/wham/usage"},
+        %{family: :backend_wham_usage, method: :get, path: "/backend-api/wham/usage"},
+        %{family: :public_v1, method: :get, path: "/v1/models"},
+        %{family: :public_v1, method: :post, path: "/v1/responses"},
+        %{family: :public_v1, method: :get, path: "/v1/responses", transport: :websocket},
+        %{family: :mcp, method: :post, path: "/mcp"}
       ],
       future_routes: [],
       fixture: :firewall,
@@ -1286,7 +1303,33 @@ defmodule CodexPooler.CompatibilityMatrix do
       }
     },
     firewall: %{
-      json: %{"path" => "/backend-api/codex/responses", "decision" => "synthetic allow"}
+      protected_route_families: [
+        :backend_codex,
+        :backend_files,
+        :backend_transcribe,
+        :codex_usage,
+        :wham_usage,
+        :backend_wham_usage,
+        :public_v1,
+        :mcp
+      ],
+      canonical_path: %{
+        decode_passes: 1,
+        decoded_segments_mutated: false,
+        candidate_separators: ["/", "\\"],
+        candidate_nul: %{classification: :truncate, runtime: :reject_invalid_path}
+      },
+      forwarded_client_ip: %{
+        trusted_peer_required_for_x_forwarded_for: true,
+        trusted_peer_required_for_x_real_ip: true,
+        x_real_ip_when_xff_absent: true,
+        x_real_ip_after_xff_present_error: false,
+        max_hops: 32,
+        max_entry_bytes: 64,
+        accepted_ports: %{ipv4: true, bracketed_ipv6: true, range: 1..65_535},
+        nonruntime_client_ip: :peer
+      },
+      allowlist: %{empty: :disabled}
     },
     compressed_request: %{encoding: "gzip", bytes: "synthetic compressed bytes"},
     bulkhead_overload: %{lane: "proxy_http", decision: "synthetic shed"},
@@ -2096,7 +2139,33 @@ defmodule CodexPooler.CompatibilityMatrix do
         default_enabled: true,
         disabled_behavior: "403_image_generation_disabled"
       },
-      enforcement: "after_runtime_authentication_before_request_parsing_or_upstream_dispatch"
+      controller_actions: [
+        %{
+          action: :image_generations,
+          controller: :backend_codex,
+          image_generation_permission_required?: true
+        },
+        %{
+          action: :image_edits,
+          controller: :backend_codex,
+          image_generation_permission_required?: true
+        },
+        %{
+          action: :generations,
+          controller: :v1_images,
+          image_generation_permission_required?: true
+        },
+        %{
+          action: :edits,
+          controller: :v1_images,
+          image_generation_permission_required?: true
+        }
+      ],
+      authoritative_gateway: :runtime_ingress,
+      enforcement: %{
+        after: :runtime_authentication,
+        before: [:request_parsing, :upstream_dispatch, :body_decompression]
+      }
     },
     v1_unsupported_public_surface: %{
       routes: [

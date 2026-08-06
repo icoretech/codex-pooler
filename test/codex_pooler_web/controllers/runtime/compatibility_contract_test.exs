@@ -97,6 +97,129 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert CompatibilityMatrix.pending_gaps() == []
     end
 
+    test "characterizes structured firewall and image permission seams" do
+      firewall = CompatibilityMatrix.by_slug!(:firewall)
+      firewall_fixture = CompatibilityMatrix.fixture!(:firewall)
+      image_permission = CompatibilityMatrix.by_slug!(:image_generation_permission)
+      image_fixture = CompatibilityMatrix.fixture!(:image_generation_permission)
+
+      assert firewall.routes == [
+               %{family: :backend_codex, method: :get, path: "/backend-api/codex/models"},
+               %{family: :backend_codex, method: :post, path: "/backend-api/codex/responses"},
+               %{
+                 family: :backend_codex,
+                 method: :get,
+                 path: "/backend-api/codex/responses",
+                 transport: :websocket
+               },
+               %{family: :backend_files, method: :post, path: "/backend-api/files"},
+               %{
+                 family: :backend_files,
+                 method: :post,
+                 path: "/backend-api/files/:file_id/uploaded"
+               },
+               %{family: :backend_transcribe, method: :post, path: "/backend-api/transcribe"},
+               %{family: :codex_usage, method: :get, path: "/api/codex/usage"},
+               %{family: :wham_usage, method: :get, path: "/wham/usage"},
+               %{family: :backend_wham_usage, method: :get, path: "/backend-api/wham/usage"},
+               %{family: :public_v1, method: :get, path: "/v1/models"},
+               %{family: :public_v1, method: :post, path: "/v1/responses"},
+               %{
+                 family: :public_v1,
+                 method: :get,
+                 path: "/v1/responses",
+                 transport: :websocket
+               },
+               %{family: :mcp, method: :post, path: "/mcp"}
+             ]
+
+      assert Map.take(firewall_fixture, [
+               :protected_route_families,
+               :canonical_path,
+               :allowlist
+             ]) == %{
+               protected_route_families: [
+                 :backend_codex,
+                 :backend_files,
+                 :backend_transcribe,
+                 :codex_usage,
+                 :wham_usage,
+                 :backend_wham_usage,
+                 :public_v1,
+                 :mcp
+               ],
+               canonical_path: %{
+                 decode_passes: 1,
+                 decoded_segments_mutated: false,
+                 candidate_separators: ["/", "\\"],
+                 candidate_nul: %{classification: :truncate, runtime: :reject_invalid_path}
+               },
+               allowlist: %{empty: :disabled}
+             }
+
+      forwarded_client_ip = firewall_fixture.forwarded_client_ip
+
+      assert Map.take(forwarded_client_ip, [
+               :trusted_peer_required_for_x_forwarded_for,
+               :trusted_peer_required_for_x_real_ip,
+               :max_hops,
+               :max_entry_bytes,
+               :accepted_ports,
+               :nonruntime_client_ip
+             ]) == %{
+               trusted_peer_required_for_x_forwarded_for: true,
+               trusted_peer_required_for_x_real_ip: true,
+               max_hops: 32,
+               max_entry_bytes: 64,
+               accepted_ports: %{ipv4: true, bracketed_ipv6: true, range: 1..65_535},
+               nonruntime_client_ip: :peer
+             }
+
+      assert forwarded_client_ip.x_real_ip_when_xff_absent
+      refute forwarded_client_ip.x_real_ip_after_xff_present_error
+
+      assert image_permission.routes == [
+               %{method: :post, path: "/backend-api/codex/images/generations"},
+               %{method: :post, path: "/backend-api/codex/images/edits"},
+               %{method: :post, path: "/v1/images/generations"},
+               %{method: :post, path: "/v1/images/edits"}
+             ]
+
+      assert Map.take(image_fixture, [
+               :controller_actions,
+               :authoritative_gateway,
+               :enforcement
+             ]) == %{
+               controller_actions: [
+                 %{
+                   action: :image_generations,
+                   controller: :backend_codex,
+                   image_generation_permission_required?: true
+                 },
+                 %{
+                   action: :image_edits,
+                   controller: :backend_codex,
+                   image_generation_permission_required?: true
+                 },
+                 %{
+                   action: :generations,
+                   controller: :v1_images,
+                   image_generation_permission_required?: true
+                 },
+                 %{
+                   action: :edits,
+                   controller: :v1_images,
+                   image_generation_permission_required?: true
+                 }
+               ],
+               authoritative_gateway: :runtime_ingress,
+               enforcement: %{
+                 after: :runtime_authentication,
+                 before: [:request_parsing, :upstream_dispatch, :body_decompression]
+               }
+             }
+    end
+
     test "locks Pool-model serving modes as a machine-readable runtime contract" do
       feature = CompatibilityMatrix.by_slug!(:pool_model_serving_modes)
       fixture = CompatibilityMatrix.fixture!(:pool_model_serving_modes)
