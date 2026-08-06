@@ -45,6 +45,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     :idle_shutdown_ms,
     :idle_shutdown_ref,
     :owner_renewal_ms,
+    :owner_renewal_delay,
     :owner_renewal_ref
   ]
 
@@ -237,6 +238,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     request_id = Keyword.get(opts, :request_id)
     idle_shutdown_ms = Keyword.get(opts, :idle_shutdown_ms, 300_000)
     owner_renewal_ms = Keyword.get(opts, :owner_renewal_ms, owner_renewal_ms())
+
+    owner_renewal_delay =
+      Keyword.get(opts, :owner_renewal_delay, &jittered_owner_renewal_delay/1)
+
     upstream = upstream_boundary(opts)
     persistence = persistence_boundary(opts)
 
@@ -255,6 +260,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          request_id: request_id,
          idle_shutdown_ms: idle_shutdown_ms,
          owner_renewal_ms: owner_renewal_ms,
+         owner_renewal_delay: owner_renewal_delay,
          draining?: false
        }
        |> schedule_owner_renewal()}
@@ -1014,10 +1020,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
      }}
   end
 
-  defp schedule_owner_renewal(%{owner_renewal_ms: timeout, codex_session_id: session_id} = state)
-       when is_integer(timeout) and timeout > 0 do
+  defp schedule_owner_renewal(
+         %{
+           owner_renewal_ms: timeout,
+           owner_renewal_delay: renewal_delay,
+           codex_session_id: session_id
+         } = state
+       )
+       when is_integer(timeout) and timeout > 0 and is_function(renewal_delay, 1) do
     if uuid?(session_id) do
-      %{state | owner_renewal_ref: Process.send_after(self(), :renew_owner_lease, timeout)}
+      delay = bounded_owner_renewal_delay(renewal_delay.(timeout), timeout)
+
+      %{state | owner_renewal_ref: Process.send_after(self(), :renew_owner_lease, delay)}
     else
       state
     end
@@ -1078,6 +1092,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   defp owner_renewal_ms do
     OperationalSettings.current().bridge_owner_lease_renewal_seconds * 1_000
   end
+
+  defp jittered_owner_renewal_delay(timeout) when is_integer(timeout) and timeout > 0 do
+    minimum = max(timeout - div(timeout, 5), 1)
+    minimum + :rand.uniform(timeout - minimum + 1) - 1
+  end
+
+  defp bounded_owner_renewal_delay(delay, timeout)
+       when is_integer(delay) and delay > 0 and delay <= timeout,
+       do: delay
+
+  defp bounded_owner_renewal_delay(_delay, timeout), do: timeout
 
   defp upstream_boundary(opts) do
     Keyword.get_lazy(opts, :upstream, fn ->

@@ -357,6 +357,39 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     refute logs =~ @sentinel
   end
 
+  test "uses the renewal delay policy for every owner lease cycle" do
+    context = db_owner_context()
+    on_exit(fn -> cleanup_owner_session(context.codex_session_id) end)
+
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+    test_pid = self()
+    delay_ref = make_ref()
+
+    owner_renewal_delay = fn timeout ->
+      send(test_pid, {:websocket_owner_renewal_delay, delay_ref, timeout})
+      45_000
+    end
+
+    assert {:ok, owner} =
+             start_owner(context,
+               upstream: upstream,
+               owner_renewal_ms: 60_000,
+               owner_renewal_delay: owner_renewal_delay
+             )
+
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+    assert_receive {:websocket_owner_renewal_delay, ^delay_ref, 60_000}
+
+    assert %{owner_renewal_ref: first_timer_ref} = :sys.get_state(owner)
+    assert is_reference(first_timer_ref)
+    assert Process.read_timer(first_timer_ref) in 0..45_000
+    cancel_owner_timer(first_timer_ref)
+
+    send(owner, :renew_owner_lease)
+
+    assert_receive {:websocket_owner_renewal_delay, ^delay_ref, 60_000}
+  end
+
   test "renews persisted owner lease while owner remains alive" do
     context = db_owner_context()
     on_exit(fn -> cleanup_owner_session(context.codex_session_id) end)
