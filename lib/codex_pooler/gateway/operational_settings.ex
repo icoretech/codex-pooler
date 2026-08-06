@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.OperationalSettings do
   """
 
   alias CodexPooler.{InstanceSettings, RouteClass}
+  alias CodexPooler.Gateway.OperationalSettings.IPRules
 
   @default_decompression_algorithms ["gzip", "deflate", "zstd"]
   @default_bulkheads RouteClass.default_bulkheads()
@@ -32,7 +33,9 @@ defmodule CodexPooler.Gateway.OperationalSettings do
           bridge_owner_lease_renewal_seconds: pos_integer(),
           expired_alias_ttl_seconds: pos_integer(),
           firewall_allowlist: [String.t()],
+          firewall_allowlist_compiled: IPRules.compiled(),
           trusted_proxies: [String.t()],
+          trusted_proxies_compiled: IPRules.compiled(),
           decompression_algorithms: [String.t()],
           zstd_supported?: boolean(),
           max_compressed_body_bytes: pos_integer(),
@@ -61,7 +64,9 @@ defmodule CodexPooler.Gateway.OperationalSettings do
             bridge_owner_lease_renewal_seconds: 15,
             expired_alias_ttl_seconds: 24 * 60 * 60,
             firewall_allowlist: [],
+            firewall_allowlist_compiled: {:ok, []},
             trusted_proxies: [],
+            trusted_proxies_compiled: {:ok, []},
             decompression_algorithms: @default_decompression_algorithms,
             zstd_supported?: true,
             max_compressed_body_bytes: 32 * 1024 * 1024,
@@ -85,7 +90,7 @@ defmodule CodexPooler.Gateway.OperationalSettings do
   @spec current() :: t()
   def current do
     case test_settings_override() do
-      %__MODULE__{} = settings -> settings
+      %__MODULE__{} = settings -> normalize_ip_rules(settings)
       nil -> InstanceSettings.current() |> from_instance_settings()
     end
   end
@@ -101,7 +106,9 @@ defmodule CodexPooler.Gateway.OperationalSettings do
       bridge_owner_lease_renewal_seconds: settings.gateway.bridge_owner_lease_renewal_seconds,
       expired_alias_ttl_seconds: settings.gateway.expired_alias_ttl_seconds,
       firewall_allowlist: settings.ingress.firewall_allowlist,
+      firewall_allowlist_compiled: IPRules.compile(settings.ingress.firewall_allowlist),
       trusted_proxies: settings.ingress.trusted_proxies,
+      trusted_proxies_compiled: IPRules.compile(settings.ingress.trusted_proxies),
       decompression_algorithms: settings.ingress.decompression_algorithms,
       zstd_supported?: true,
       max_compressed_body_bytes: settings.ingress.max_compressed_body_bytes,
@@ -195,6 +202,14 @@ defmodule CodexPooler.Gateway.OperationalSettings do
       {:ok, value} -> value
       :error -> Map.fetch!(map, Atom.to_string(key))
     end
+  end
+
+  defp normalize_ip_rules(%__MODULE__{} = settings) do
+    %{
+      settings
+      | firewall_allowlist_compiled: IPRules.compile(settings.firewall_allowlist),
+        trusted_proxies_compiled: IPRules.compile(settings.trusted_proxies)
+    }
   end
 
   defp clamp_websocket_idle_timeout(value) when is_integer(value) do

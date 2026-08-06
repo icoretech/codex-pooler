@@ -49,7 +49,9 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     assert settings.bridge_owner_lease_renewal_seconds == 15
     assert settings.expired_alias_ttl_seconds == 24 * 60 * 60
     assert settings.firewall_allowlist == []
+    assert settings.firewall_allowlist_compiled == {:ok, []}
     refute OperationalSettings.firewall_enabled?(settings)
+    assert settings.trusted_proxies_compiled == {:ok, []}
     assert settings.decompression_algorithms == ["gzip", "deflate", "zstd"]
     assert settings.zstd_supported?
     assert settings.max_compressed_body_bytes == 32 * 1024 * 1024
@@ -141,8 +143,10 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     assert settings.upload_ttl_seconds == 60
     assert settings.abandoned_upload_cleanup_interval_seconds == 15
     assert settings.firewall_allowlist == ["203.0.113.10", "203.0.113.11"]
+    assert {:ok, [_first, _second]} = settings.firewall_allowlist_compiled
     assert OperationalSettings.firewall_enabled?(settings)
     assert settings.trusted_proxies == ["10.0.0.1"]
+    assert {:ok, [_proxy]} = settings.trusted_proxies_compiled
     assert settings.max_compressed_body_bytes == 2048
     assert settings.max_decompressed_body_bytes == 4096
     assert settings.max_decompression_ratio == 12
@@ -268,6 +272,44 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
              queue_limit: 5,
              queue_timeout_ms: 750
            }
+  end
+
+  test "from_instance_settings/1 preserves valid raw ingress rules and empty firewall state" do
+    defaults = Settings.default()
+
+    configured =
+      OperationalSettings.from_instance_settings(%{
+        defaults
+        | ingress: %{
+            defaults.ingress
+            | firewall_allowlist: ["192.0.2.10", "2001:db8::/32"],
+              trusted_proxies: ["198.51.100.0/24"]
+          }
+      })
+
+    empty = OperationalSettings.from_instance_settings(defaults)
+
+    assert configured.firewall_allowlist == ["192.0.2.10", "2001:db8::/32"]
+    assert {:ok, [_exact, _cidr]} = configured.firewall_allowlist_compiled
+    assert configured.trusted_proxies == ["198.51.100.0/24"]
+    assert {:ok, [_proxy]} = configured.trusted_proxies_compiled
+    assert OperationalSettings.firewall_enabled?(configured)
+    assert empty.firewall_allowlist == []
+    assert empty.firewall_allowlist_compiled == {:ok, []}
+    refute OperationalSettings.firewall_enabled?(empty)
+  end
+
+  test "current/0 keeps an invalid nonempty raw override enabled with invalid compiled state" do
+    Application.put_env(:codex_pooler, OperationalSettings,
+      settings: %OperationalSettings{firewall_allowlist: ["invalid-rule"]}
+    )
+
+    settings = OperationalSettings.current()
+
+    assert settings.firewall_allowlist == ["invalid-rule"]
+    assert OperationalSettings.firewall_enabled?(settings)
+    assert Map.fetch!(settings, :firewall_allowlist_compiled) == {:error, :invalid_rule}
+    assert Map.fetch!(settings, :trusted_proxies_compiled) == {:ok, []}
   end
 
   test "current/0 maps cold fallback defaults into the gateway struct" do
