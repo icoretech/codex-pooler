@@ -4,7 +4,6 @@ defmodule CodexPoolerWeb.Router do
   import CodexPoolerWeb.UserAuth
   alias CodexPoolerWeb.Layouts
   alias CodexPoolerWeb.Plugs.{AdminBrowserAdmission, ObservatoryAuth}
-  alias CodexPoolerWeb.V1.UnsupportedRoutes
   require CodexPoolerWeb.DevRoutes
 
   pipeline :browser do
@@ -148,9 +147,15 @@ defmodule CodexPoolerWeb.Router do
     post "/images/generations", V1.ImagesController, :generations
     post "/images/edits", V1.ImagesController, :edits
 
-    for {method, path, action} <- UnsupportedRoutes.router_routes() do
-      match method, path, V1.UnsupportedController, action
-    end
+    post "/images/variations", V1.UnsupportedController, :unsupported_post
+    post "/content_provenance_checks", V1.UnsupportedController, :unsupported_post
+    post "/embeddings", V1.UnsupportedController, :unsupported_post
+    post "/batches", V1.UnsupportedController, :unsupported_post
+    post "/moderations", V1.UnsupportedController, :unsupported_post
+    post "/fine_tuning/jobs", V1.UnsupportedController, :unsupported_post
+    get "/responses/:response_id", V1.UnsupportedController, :unsupported_get
+    post "/responses/:response_id/cancel", V1.UnsupportedController, :unsupported_post
+    delete "/responses/:response_id", V1.UnsupportedController, :unsupported_delete
   end
 
   scope "/v1", CodexPoolerWeb do

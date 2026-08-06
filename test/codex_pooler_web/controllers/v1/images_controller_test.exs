@@ -6,8 +6,8 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [auth: 2, gateway_setup: 1, start_upstream: 1]
 
-  alias CodexPooler.Accounting.Request
   alias CodexPooler.Access
+  alias CodexPooler.Accounting.Request
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Pools
   alias CodexPooler.Repo

@@ -101,67 +101,89 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIP do
   defp resolve_xff(states, peer_ip, trusted_rules, inspected_hops) do
     inspected_hops = inspected_hops + 1
 
-    case pop_rightmost_entry(states) do
-      {:ok, entry, remaining_states} ->
-        case parse_entry(entry) do
-          {:ok, client_ip} ->
-            if IPRules.allowed?(client_ip, trusted_rules) do
-              resolve_xff(remaining_states, peer_ip, trusted_rules, inspected_hops)
-            else
-              success(peer_ip, client_ip, :x_forwarded_for, inspected_hops)
-            end
+    states
+    |> pop_rightmost_entry()
+    |> resolve_xff_entry(peer_ip, trusted_rules, inspected_hops)
+  end
 
-          {:error, reason} ->
-            error(peer_ip, reason, inspected_hops)
-        end
+  defp resolve_xff_entry({:ok, entry, remaining_states}, peer_ip, trusted_rules, inspected_hops) do
+    case parse_entry(entry) do
+      {:ok, client_ip} ->
+        resolve_xff_client(client_ip, remaining_states, peer_ip, trusted_rules, inspected_hops)
 
       {:error, reason} ->
         error(peer_ip, reason, inspected_hops)
     end
   end
 
+  defp resolve_xff_entry({:error, reason}, peer_ip, _trusted_rules, inspected_hops) do
+    error(peer_ip, reason, inspected_hops)
+  end
+
+  defp resolve_xff_client(client_ip, remaining_states, peer_ip, trusted_rules, inspected_hops) do
+    if IPRules.allowed?(client_ip, trusted_rules) do
+      resolve_xff(remaining_states, peer_ip, trusted_rules, inspected_hops)
+    else
+      success(peer_ip, client_ip, :x_forwarded_for, inspected_hops)
+    end
+  end
+
   defp pop_rightmost_entry([{value, end_index} | rest]) do
-    scan_entry_from_right(value, end_index, nil, nil, 0, 0, 0, rest, true)
+    scan_entry_from_right({value, end_index, nil, nil, 0, 0, 0}, rest, true)
   end
 
   defp read_single_entry(value) do
-    case scan_entry_from_right(value, byte_size(value) - 1, nil, nil, 0, 0, 0, [], false) do
+    state = {value, byte_size(value) - 1, nil, nil, 0, 0, 0}
+
+    case scan_entry_from_right(state, [], false) do
       {:ok, entry, []} -> {:ok, entry}
       {:error, reason} -> {:error, reason}
     end
   end
 
   defp scan_entry_from_right(
-         value,
-         index,
-         content_start,
-         content_end,
-         content_bytes,
-         pending_ows,
-         scanned_bytes,
+         {value, index, content_start, content_end, _content_bytes, _pending_ows, _scanned_bytes},
+         rest,
+         _split_on_comma?
+       )
+       when index < 0 do
+    {:ok, slice_bytes(value, content_start, content_end), rest}
+  end
+
+  defp scan_entry_from_right(
+         {_value, _index, _content_start, _content_end, _content_bytes, _pending_ows,
+          @max_entry_scan_bytes},
+         _rest,
+         _split_on_comma?
+       ) do
+    {:error, :forwarded_entry_too_long}
+  end
+
+  defp scan_entry_from_right({value, index, _, _, _, _, _} = state, rest, split_on_comma?) do
+    scan_entry_byte(state, :binary.at(value, index), rest, split_on_comma?)
+  end
+
+  defp scan_entry_byte(
+         {value, index, content_start, content_end, _content_bytes, _pending_ows, _scanned_bytes},
+         44,
+         rest,
+         true
+       ) do
+    entry = slice_bytes(value, content_start, content_end)
+    {:ok, entry, [{value, index - 1} | rest]}
+  end
+
+  defp scan_entry_byte(
+         {value, index, content_start, content_end, content_bytes, pending_ows, scanned_bytes},
+         byte,
          rest,
          split_on_comma?
        ) do
     cond do
-      index < 0 ->
-        {:ok, slice_bytes(value, content_start, content_end), rest}
-
-      scanned_bytes == @max_entry_scan_bytes ->
-        {:error, :forwarded_entry_too_long}
-
-      split_on_comma? and :binary.at(value, index) == 44 ->
-        entry = slice_bytes(value, content_start, content_end)
-        {:ok, entry, [{value, index - 1} | rest]}
-
-      ows?(:binary.at(value, index)) ->
+      ows?(byte) ->
         scan_entry_from_right(
-          value,
-          index - 1,
-          content_start,
-          content_end,
-          content_bytes,
-          if(is_nil(content_start), do: 0, else: pending_ows + 1),
-          scanned_bytes + 1,
+          {value, index - 1, content_start, content_end, content_bytes,
+           if(is_nil(content_start), do: 0, else: pending_ows + 1), scanned_bytes + 1},
           rest,
           split_on_comma?
         )
@@ -171,13 +193,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIP do
 
       true ->
         scan_entry_from_right(
-          value,
-          index - 1,
-          index,
-          content_end || index,
-          content_bytes + pending_ows + 1,
-          0,
-          scanned_bytes + 1,
+          {value, index - 1, index, content_end || index, content_bytes + pending_ows + 1, 0,
+           scanned_bytes + 1},
           rest,
           split_on_comma?
         )

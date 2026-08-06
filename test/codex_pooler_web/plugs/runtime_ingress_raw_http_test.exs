@@ -261,24 +261,34 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressRawHTTPTest do
   defp content_length(head) do
     head
     |> :binary.split("\r\n", [:global])
-    |> Enum.find_value(:error, fn header ->
-      case :binary.match(header, ":") do
-        {separator_offset, 1} ->
-          name = binary_part(header, 0, separator_offset)
-          value_offset = separator_offset + 1
-          value = binary_part(header, value_offset, byte_size(header) - value_offset)
+    |> Enum.find_value(:error, &parse_content_length_header/1)
+  end
 
-          if String.downcase(name) == "content-length" do
-            case Integer.parse(String.trim(value)) do
-              {length, ""} when length >= 0 -> {:ok, length}
-              _other -> :error
-            end
-          end
+  defp parse_content_length_header(header) do
+    case split_header(header) do
+      {"content-length", value} -> parse_content_length(value)
+      _other -> nil
+    end
+  end
 
-        :nomatch ->
-          nil
-      end
-    end)
+  defp split_header(header) do
+    case :binary.match(header, ":") do
+      {separator_offset, 1} ->
+        name = binary_part(header, 0, separator_offset)
+        value_offset = separator_offset + 1
+        value = binary_part(header, value_offset, byte_size(header) - value_offset)
+        {String.downcase(name), value}
+
+      :nomatch ->
+        :error
+    end
+  end
+
+  defp parse_content_length(value) do
+    case Integer.parse(String.trim(value)) do
+      {length, ""} when length >= 0 -> {:ok, length}
+      _other -> :error
+    end
   end
 
   defp json_field(%{body: body}, path) when byte_size(body) <= @max_json_bytes do
@@ -298,10 +308,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressRawHTTPTest do
   end
 
   defp safe_stop_listener(listener) do
-    try do
-      ThousandIsland.stop(listener)
-    catch
-      :exit, _reason -> :ok
-    end
+    ThousandIsland.stop(listener)
+  catch
+    :exit, _reason -> :ok
   end
 end

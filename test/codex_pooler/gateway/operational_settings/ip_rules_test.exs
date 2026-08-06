@@ -22,9 +22,9 @@ defmodule CodexPooler.Gateway.OperationalSettings.IPRulesTest do
     assert {:ok, rules} = IPRules.compile(["192.0.2.0/24", "2001:db8:abcd::/48"])
 
     assert IPRules.allowed?({192, 0, 2, 99}, rules)
-    assert IPRules.allowed?({8193, 3512, 43981, 0, 0, 0, 0, 99}, rules)
+    assert IPRules.allowed?({8193, 3512, 43_981, 0, 0, 0, 0, 99}, rules)
     refute IPRules.allowed?({198, 51, 100, 99}, rules)
-    refute IPRules.allowed?({8193, 3512, 57005, 0, 0, 0, 0, 99}, rules)
+    refute IPRules.allowed?({8193, 3512, 57_005, 0, 0, 0, 0, 99}, rules)
   end
 
   test "compile/1 preserves an empty compiled rule list" do

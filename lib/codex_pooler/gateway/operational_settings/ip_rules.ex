@@ -41,9 +41,8 @@ defmodule CodexPooler.Gateway.OperationalSettings.IPRules do
   defp compile_rule(rule) when is_binary(rule) do
     case String.split(rule, "/", parts: 2) do
       [address] ->
-        with {:ok, ip} <- parse_ip(address) do
-          {:ok, %Rule{network: ip, prefix: total_bits(ip)}}
-        else
+        case parse_ip(address) do
+          {:ok, ip} -> {:ok, %Rule{network: ip, prefix: total_bits(ip)}}
           {:error, _reason} -> {:error, :invalid_rule}
         end
 

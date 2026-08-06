@@ -3,8 +3,8 @@ defmodule CodexPooler.Gateway.OperationalSettings do
   Runtime-configurable gateway hardening and Codex settings.
   """
 
-  alias CodexPooler.{InstanceSettings, RouteClass}
   alias CodexPooler.Gateway.OperationalSettings.IPRules
+  alias CodexPooler.{InstanceSettings, RouteClass}
 
   @default_decompression_algorithms ["gzip", "deflate", "zstd"]
   @default_bulkheads RouteClass.default_bulkheads()

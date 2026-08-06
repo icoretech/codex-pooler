@@ -37,24 +37,29 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
 
   def call(conn, _opts) do
     conn = Path.populate(conn)
-    path = Path.fetch(conn)
+    route_request(conn, Path.fetch(conn))
+  end
 
+  defp route_request(conn, %{scope: :mcp, unsafe_segment?: true}) do
+    send_mcp_error(conn, 400, -32_600, "invalid request")
+  end
+
+  defp route_request(conn, %{scope: :runtime, unsafe_segment?: true}) do
+    send_runtime_error(conn, 400, "invalid_request", "request path is invalid")
+  end
+
+  defp route_request(conn, %{scope: :mcp}) do
+    settings = operational_settings(conn)
+
+    conn
+    |> put_json_parser_context(settings, :mcp)
+    |> enforce_mcp_firewall(settings)
+    |> admit_mcp_request()
+    |> prepare_mcp_body(settings)
+  end
+
+  defp route_request(conn, path) do
     cond do
-      path.scope == :mcp and path.unsafe_segment? ->
-        send_mcp_error(conn, 400, -32_600, "invalid request")
-
-      path.scope == :runtime and path.unsafe_segment? ->
-        send_runtime_error(conn, 400, "invalid_request", "request path is invalid")
-
-      path.scope == :mcp ->
-        settings = operational_settings(conn)
-
-        conn
-        |> put_json_parser_context(settings, :mcp)
-        |> enforce_mcp_firewall(settings)
-        |> admit_mcp_request()
-        |> prepare_mcp_body(settings)
-
       pruned_runtime_helper_request?(conn) ->
         send_pruned_runtime_helper_absent(conn)
 
