@@ -8,7 +8,7 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
   alias CodexPooler.MCP
-  alias CodexPooler.MCP.{OperatorMCPKey, OperatorMCPSettings}
+  alias CodexPooler.MCP.{OperatorMCPKey, OperatorMCPSettings, ProtocolVersions}
   alias CodexPooler.Repo
   alias CodexPoolerWeb.DateTimeDisplay
   alias CodexPoolerWeb.UserAuth
@@ -215,7 +215,8 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
     assert has_element?(view, "#settings-mcp-create-form")
     assert has_element?(view, "#settings-mcp-create-label")
     assert has_element?(view, "#settings-mcp-endpoint", "/mcp")
-    assert has_element?(view, "#settings-mcp-protocol", "2025-11-25")
+    assert has_element?(view, "#settings-mcp-panel", "Preferred protocol")
+    assert has_element?(view, "#settings-mcp-protocol", ProtocolVersions.current())
     assert has_element?(view, "#settings-mcp-auth-shape", "Authorization: Bearer <MCP token>")
 
     assert has_element?(

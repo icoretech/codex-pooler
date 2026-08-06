@@ -6,9 +6,8 @@ defmodule CodexPooler.MCP.Tools.ServiceStatus do
   alias CodexPooler.InstanceSettings
   alias CodexPooler.MCP
   alias CodexPooler.MCP.PrivacyMatrix
+  alias CodexPooler.MCP.ProtocolVersions
   alias CodexPooler.MCP.ToolRegistry
-
-  @protocol_version "2025-11-25"
 
   @spec output_schema() :: map()
   def output_schema do
@@ -19,6 +18,7 @@ defmodule CodexPooler.MCP.Tools.ServiceStatus do
         "accountGate",
         "actor",
         "protocolVersion",
+        "supportedProtocolVersions",
         "supportedToolCount"
       ],
       "additionalProperties" => false,
@@ -46,7 +46,12 @@ defmodule CodexPooler.MCP.Tools.ServiceStatus do
             "status" => %{"type" => "string"}
           }
         },
-        "protocolVersion" => %{"type" => "string", "const" => @protocol_version},
+        "protocolVersion" => %{"type" => "string", "const" => ProtocolVersions.current()},
+        "supportedProtocolVersions" => %{
+          "type" => "array",
+          "items" => %{"type" => "string"},
+          "const" => ProtocolVersions.supported()
+        },
         "supportedToolCount" => %{"type" => "integer"}
       }
     }
@@ -58,7 +63,8 @@ defmodule CodexPooler.MCP.Tools.ServiceStatus do
       "globalGate" => %{"enabled" => InstanceSettings.current().mcp.enabled},
       "accountGate" => %{"enabled" => MCP.operator_mcp_enabled?(operator)},
       "actor" => actor_summary(operator),
-      "protocolVersion" => @protocol_version,
+      "protocolVersion" => ProtocolVersions.current(),
+      "supportedProtocolVersions" => ProtocolVersions.supported(),
       "supportedToolCount" => length(ToolRegistry.all_tools())
     }
 

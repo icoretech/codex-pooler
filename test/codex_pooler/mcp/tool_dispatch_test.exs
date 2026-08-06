@@ -14,7 +14,13 @@ defmodule CodexPooler.MCP.ToolDispatchTest do
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.InstanceSettings
   alias CodexPooler.MCP
-  alias CodexPooler.MCP.{OperatorMCPKey, OperatorMCPSettings, Redaction, ToolDispatch}
+  alias CodexPooler.MCP.{
+    OperatorMCPKey,
+    OperatorMCPSettings,
+    ProtocolVersions,
+    Redaction,
+    ToolDispatch
+  }
   alias CodexPooler.MCP.Tools.{LogMetadata, OperatorMetadata, PoolMetadata, QuotaMetadata}
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
@@ -93,7 +99,8 @@ defmodule CodexPooler.MCP.ToolDispatchTest do
     assert structured["actor"]["id"] == user.id
     assert structured["actor"]["display_name"] == "MCP Operator"
     assert structured["actor"]["email"] == "op***@example.com"
-    assert structured["protocolVersion"] == "2025-11-25"
+    assert structured["protocolVersion"] == ProtocolVersions.current()
+    assert structured["supportedProtocolVersions"] == ProtocolVersions.supported()
     assert structured["supportedToolCount"] == 17
 
     refute inspect(result) =~ raw_token

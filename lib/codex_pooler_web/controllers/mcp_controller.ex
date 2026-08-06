@@ -3,11 +3,10 @@ defmodule CodexPoolerWeb.McpController do
 
   alias CodexPooler.MCP
   alias CodexPooler.MCP.{ToolDispatch, ToolRegistry}
+  alias CodexPoolerWeb.Mcp.{Envelope, Headers, Protocol}
 
-  @latest_protocol_version "2025-11-25"
-  @codex_compatible_protocol_version "2025-06-18"
-  @supported_protocol_versions [@latest_protocol_version, @codex_compatible_protocol_version]
-  @allow "POST, GET, HEAD, OPTIONS"
+  @legacy_protocol_versions Protocol.legacy_protocol_versions()
+  @allow "POST, OPTIONS"
   @server_name "codex-pooler"
 
   def get(conn, _params), do: method_not_allowed(conn)
@@ -25,16 +24,13 @@ defmodule CodexPoolerWeb.McpController do
          :ok <- ensure_accept(conn),
          {:ok, message} <- read_message(conn),
          :ok <- validate_message(message),
-         :ok <- ensure_protocol_version(conn, message),
+         {:ok, era} <- ensure_protocol_version(conn, message),
          {:ok, auth} <- authenticate(conn) do
-      dispatch_message(conn, message, auth)
+      dispatch_message(conn, message, auth, era)
     else
+      {:error, status, body} when is_map(body) -> send_json_rpc_body(conn, status, body)
       {:error, status, code, message, id} -> send_json_rpc_error(conn, status, code, message, id)
     end
-  end
-
-  def send_parse_error(conn) do
-    send_json_rpc_error(conn, 400, -32_700, "parse error", nil)
   end
 
   defp method_not_allowed(conn) do
@@ -109,14 +105,18 @@ defmodule CodexPoolerWeb.McpController do
     end
   end
 
+  defp ensure_protocol_version(_conn, %{"method" => _method} = message)
+       when not is_map_key(message, "id"),
+       do: {:ok, :legacy}
+
   defp ensure_protocol_version(conn, %{"method" => "initialize"} = message) do
     with :ok <- ensure_protocol_header(conn) do
       params = Map.get(message, "params", %{})
       request_id = id(message)
 
       case Map.get(params, "protocolVersion") do
-        version when version in @supported_protocol_versions ->
-          :ok
+        version when version in @legacy_protocol_versions ->
+          {:ok, :legacy}
 
         _version ->
           {:error, 400, -32_600, "unsupported initialize protocol version", request_id}
@@ -124,12 +124,47 @@ defmodule CodexPoolerWeb.McpController do
     end
   end
 
-  defp ensure_protocol_version(conn, _message), do: ensure_protocol_header(conn)
+  defp ensure_protocol_version(
+         conn,
+         %{"method" => method, "id" => _request_id} = message
+       ) do
+    params = Map.get(message, "params", %{})
+
+    with {:ok, protocol_header} <- Headers.protocol_version(conn),
+         {:ok, era} <- Protocol.detect_era(method, params, protocol_header),
+         :ok <- validate_modern_request(conn, era, method, params) do
+      {:ok, era}
+    else
+      {:error, :header_mismatch} ->
+        {:error, 400, Envelope.header_mismatch_error(id(message))}
+
+      {:error, :unsupported_protocol_version} ->
+        {:error, 400, Envelope.unsupported_protocol_version_error(id(message))}
+
+      {:error, :invalid_params} ->
+        {:error, 400, -32_602, "invalid params", id(message)}
+    end
+  end
+
+  defp ensure_protocol_version(conn, _message) do
+    case ensure_protocol_header(conn) do
+      :ok -> {:ok, :legacy}
+      error -> error
+    end
+  end
+
+  defp validate_modern_request(_conn, :legacy, _method, _params), do: :ok
+
+  defp validate_modern_request(conn, {:modern, _version}, method, params) do
+    with :ok <- Protocol.validate_modern_meta(params) do
+      Headers.validate_modern(conn, method, params)
+    end
+  end
 
   defp ensure_protocol_header(conn) do
     case List.first(get_req_header(conn, "mcp-protocol-version")) do
       nil -> :ok
-      version when version in @supported_protocol_versions -> :ok
+      version when version in @legacy_protocol_versions -> :ok
       _version -> {:error, 400, -32_600, "unsupported MCP protocol version", nil}
     end
   end
@@ -225,11 +260,66 @@ defmodule CodexPoolerWeb.McpController do
 
   defp dispatch_message(
          conn,
+         %{"method" => "server/discover", "id" => request_id},
+         _auth,
+         {:modern, _version}
+       ) do
+    send_json_rpc_result(conn, request_id, Envelope.discover_result(app_version()))
+  end
+
+  defp dispatch_message(
+         conn,
+         %{"method" => "tools/list", "id" => request_id} = message,
+         _auth,
+         {:modern, _version}
+       ) do
+    params = Map.get(message, "params", %{})
+
+    {:ok, %{tools: tools}} = ToolRegistry.list_tools(params)
+
+    result = Envelope.tools_list_result(%{"tools" => tools}, app_version())
+    send_json_rpc_result(conn, request_id, result)
+  end
+
+  defp dispatch_message(
+         conn,
+         %{"method" => "tools/call", "id" => request_id} = message,
+         auth,
+         {:modern, _version}
+       ) do
+    params = Map.get(message, "params", %{})
+
+    with {:ok, name, arguments} <- tool_call_params(params),
+         {:ok, result} <- ToolDispatch.call(name, arguments, %{auth: auth}) do
+      result = Envelope.tools_call_result(result, app_version())
+      send_json_rpc_result(conn, request_id, result)
+    else
+      {:error, %{code: :tool_not_found, message: message}} ->
+        send_json_rpc_error(conn, 200, -32_602, message, request_id)
+
+      {:error, message} when is_binary(message) ->
+        send_json_rpc_error(conn, 200, -32_602, message, request_id)
+    end
+  end
+
+  defp dispatch_message(
+         conn,
+         %{"method" => _method, "id" => request_id},
+         _auth,
+         {:modern, _version}
+       ) do
+    send_json_rpc_error(conn, 404, -32_601, "method not found", request_id)
+  end
+
+  defp dispatch_message(conn, message, auth, _era), do: dispatch_message(conn, message, auth)
+
+  defp dispatch_message(
+         conn,
          %{"method" => "initialize", "id" => request_id, "params" => params},
          _auth
        ) do
     case Map.get(params, "protocolVersion") do
-      version when version in @supported_protocol_versions ->
+      version when version in @legacy_protocol_versions ->
         send_json_rpc_result(conn, request_id, %{
           "protocolVersion" => version,
           "serverInfo" => %{"name" => @server_name, "version" => app_version()},
@@ -313,6 +403,13 @@ defmodule CodexPoolerWeb.McpController do
       "error" => %{"code" => code, "message" => message}
     }
 
+    conn
+    |> put_status(status)
+    |> put_resp_content_type("application/json")
+    |> json(body)
+  end
+
+  defp send_json_rpc_body(conn, status, body) do
     conn
     |> put_status(status)
     |> put_resp_content_type("application/json")

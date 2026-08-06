@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
 
   use CodexPoolerWeb, :html
 
+  alias CodexPooler.MCP.ProtocolVersions
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.DateTimeDisplay
 
@@ -110,13 +111,13 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
               </div>
               <div>
                 <p class="text-xs font-semibold uppercase tracking-wide text-base-content/45">
-                  Protocol
+                  Preferred protocol
                 </p>
                 <code
                   id="settings-mcp-protocol"
                   class="mt-1 block rounded-field bg-base-200 px-2 py-1 font-mono text-sm"
                 >
-                  2025-11-25
+                  {ProtocolVersions.current()}
                 </code>
               </div>
               <div>

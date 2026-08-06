@@ -1,6 +1,7 @@
 defmodule CodexPooler.MCP.ToolRegistryTest do
   use ExUnit.Case, async: true
 
+  alias CodexPooler.MCP.ProtocolVersions
   alias CodexPooler.MCP.ToolRegistry
   alias CodexPooler.MCP.Tools.Foundation
   alias CodexPooler.MCP.Tools.LogMetadata
@@ -70,7 +71,15 @@ defmodule CodexPooler.MCP.ToolRegistryTest do
     assert get_in(tool.output_schema, ["properties", "globalGate", "type"]) == "object"
     assert get_in(tool.output_schema, ["properties", "accountGate", "type"]) == "object"
     assert get_in(tool.output_schema, ["properties", "actor", "type"]) == "object"
-    assert get_in(tool.output_schema, ["properties", "protocolVersion", "const"]) == "2025-11-25"
+    assert get_in(tool.output_schema, ["properties", "protocolVersion", "const"]) ==
+             ProtocolVersions.current()
+
+    assert get_in(tool.output_schema, ["properties", "supportedProtocolVersions"]) == %{
+             "type" => "array",
+             "items" => %{"type" => "string"},
+             "const" => ProtocolVersions.supported()
+           }
+
     assert get_in(tool.output_schema, ["properties", "supportedToolCount", "type"]) == "integer"
 
     assert tool.annotations == %{

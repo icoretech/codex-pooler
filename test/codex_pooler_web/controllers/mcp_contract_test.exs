@@ -11,7 +11,7 @@ defmodule CodexPoolerWeb.McpContractTest do
 
   @mcp_version "2025-11-25"
   @codex_mcp_version "2025-06-18"
-  @allow "POST, GET, HEAD, OPTIONS"
+  @allow "POST, OPTIONS"
 
   setup do
     reset_bootstrap_state_fixture!()
