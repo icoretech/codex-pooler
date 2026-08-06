@@ -343,7 +343,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
               <span
                 data-role="upstream-traffic-share"
                 class={[
-                  "shrink-0 font-mono text-sm font-semibold tabular-nums text-base-content/70",
+                  "shrink-0 text-xs font-semibold tabular-nums text-base-content/70",
                   (rank == 1 and row.requests > 0) && "text-primary"
                 ]}
               >
@@ -366,12 +366,12 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
             </progress>
           </div>
 
-          <dl class="grid grid-cols-3 gap-3 text-xs sm:min-w-64">
+          <dl class="grid grid-cols-3 gap-3 text-right text-xs sm:min-w-64">
             <div class="min-w-0">
               <dt class="text-base-content/50">Requests</dt>
               <dd
                 data-role="upstream-requests"
-                class="truncate font-mono font-semibold tabular-nums text-base-content"
+                class="truncate font-semibold tabular-nums text-base-content"
               >
                 {format_integer(row.requests)}
               </dd>
@@ -380,7 +380,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
               <dt class="text-base-content/50">Tokens</dt>
               <dd
                 data-role="upstream-tokens"
-                class="truncate font-mono font-semibold tabular-nums text-base-content"
+                class="truncate font-semibold tabular-nums text-base-content"
               >
                 {Format.token_count(row.total_tokens)}
               </dd>
@@ -389,7 +389,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
               <dt class="truncate text-base-content/50">Settled cost</dt>
               <dd
                 data-role="upstream-settled-cost"
-                class="truncate font-mono font-semibold tabular-nums text-base-content"
+                class="truncate font-semibold tabular-nums text-base-content"
               >
                 {format_micros(row.settled_cost_micros)}
               </dd>
