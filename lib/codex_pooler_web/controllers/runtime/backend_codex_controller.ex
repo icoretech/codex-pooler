@@ -22,7 +22,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
       conn,
       "/backend-api/codex/images/generations",
       "/backend-api/codex/images/generations",
-      native_image_request?: true
+      native_image_request?: true,
+      image_generation_permission_required?: true
     )
   end
 
@@ -31,7 +32,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
       conn,
       "/backend-api/codex/images/edits",
       "/backend-api/codex/images/edits",
-      native_image_request?: true
+      native_image_request?: true,
+      image_generation_permission_required?: true
     )
   end
 

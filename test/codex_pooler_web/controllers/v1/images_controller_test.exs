@@ -7,8 +7,57 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
     only: [auth: 2, gateway_setup: 1, start_upstream: 1]
 
   alias CodexPooler.Accounting.Request
+  alias CodexPooler.Access
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Pools
   alias CodexPooler.Repo
+
+  test "image controller actions mark gateway execution for permission enforcement", %{conn: conn} do
+    upstream = start_upstream(image_success_stream("SHOULD_NOT_DISPATCH", nil))
+    setup = upstream |> gateway_setup() |> use_image_model!("gpt-image-1")
+    {:ok, auth_context} = Access.authenticate_authorization_header(setup.authorization)
+
+    setup.pool
+    |> Pools.ensure_routing_settings()
+    |> Ecto.Changeset.change(allow_image_generation: false)
+    |> Repo.update!()
+
+    cases = [
+      {:generations, "/v1/images/generations",
+       %{
+         "model" => setup.model.exposed_model_id,
+         "prompt" => "synthetic direct generation"
+       }},
+      {:edits, "/v1/images/edits",
+       %{
+         "model" => setup.model.exposed_model_id,
+         "prompt" => "synthetic direct edit",
+         "image" =>
+           upload_fixture(
+             "direct-source.png",
+             "image/png",
+             <<137, 80, 78, 71, 13, 10, 26, 10, 0, 1, 2, 3>>
+           )
+       }}
+    ]
+
+    for {action, path, params} <- cases do
+      response =
+        conn
+        |> recycle()
+        |> Map.put(:method, "POST")
+        |> Map.put(:request_path, path)
+        |> Map.put(:body_params, params)
+        |> Plug.Conn.put_private(:runtime_api_auth, auth_context)
+        |> then(&apply(CodexPoolerWeb.V1.ImagesController, action, [&1, params]))
+
+      assert %{"error" => %{"code" => "image_generation_disabled"}} =
+               json_response(response, 403)
+    end
+
+    assert FakeUpstream.requests(upstream) == []
+    assert Repo.aggregate(Request, :count) == 0
+  end
 
   @tag :image_generation_success
   test "POST /v1/images/generations returns OpenAI image response from Responses stream", %{

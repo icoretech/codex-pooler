@@ -1719,6 +1719,62 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :native_backend_image_routing
+  test "native image controller actions mark gateway execution for permission enforcement", %{
+    conn: conn
+  } do
+    upstream = start_upstream(FakeUpstream.json_response(%{"created" => 1, "data" => []}))
+    setup = gateway_setup(upstream)
+    {:ok, auth_context} = Access.authenticate_authorization_header(setup.authorization)
+
+    setup.pool
+    |> Pools.ensure_routing_settings()
+    |> Ecto.Changeset.change(allow_image_generation: false)
+    |> Repo.update!()
+
+    for {action, path} <- [
+          {:image_generations, "/backend-api/codex/images/generations"},
+          {:image_edits, "/backend-api/codex/images/edits"}
+        ] do
+      response =
+        conn
+        |> recycle()
+        |> Map.put(:method, "POST")
+        |> Map.put(:request_path, path)
+        |> Map.put(:body_params, %{})
+        |> Plug.Conn.put_private(:runtime_api_auth, auth_context)
+        |> then(&apply(CodexPoolerWeb.Runtime.BackendCodexController, action, [&1, %{}]))
+
+      assert %{"error" => %{"code" => "image_generation_disabled"}} =
+               json_response(response, 403)
+    end
+
+    assert_no_native_dispatch!(upstream, setup.pool.id)
+  end
+
+  test "ordinary Responses image tools are not governed by native image permission", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_image_tool_allowed"}))
+    setup = gateway_setup(upstream)
+
+    setup.pool
+    |> Pools.ensure_routing_settings()
+    |> Ecto.Changeset.change(allow_image_generation: false)
+    |> Repo.update!()
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic ordinary image tool request",
+        "tools" => [%{"type" => "image_generation"}]
+      })
+
+    assert %{"id" => "resp_image_tool_allowed"} = json_response(response, 200)
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.json["tools"] == [%{"type" => "image_generation"}]
+  end
+
+  @tag :native_backend_image_routing
   test "POST /backend-api/codex/images/generations preserves the native Codex image contract",
        %{conn: conn} do
     upstream_response = %{

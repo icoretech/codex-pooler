@@ -25,6 +25,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Gateway.Transports.Websocket.ResponseProcessed
+  alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPooler.Repo
 
   @backend_transcription_model "gpt-4o-transcribe"
@@ -142,18 +143,38 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   @spec execute(auth(), String.t(), payload(), opts()) ::
           {:ok, gateway_result()} | {:error, gateway_error()}
   def execute(auth, endpoint, payload, %RequestOptions{} = opts) when is_map(payload) do
-    case requested_model(payload) do
-      {:ok, model_name} ->
-        request_options = execute_request_options(opts, endpoint, payload, model_name)
-        execute_requested_model(auth, endpoint, payload, request_options, model_name)
+    if image_generation_permission_denied?(auth, opts) do
+      {:error,
+       error(
+         403,
+         "image_generation_disabled",
+         "Image generation is disabled for this pool"
+       )}
+    else
+      case requested_model(payload) do
+        {:ok, model_name} ->
+          request_options = execute_request_options(opts, endpoint, payload, model_name)
+          execute_requested_model(auth, endpoint, payload, request_options, model_name)
 
-      {:error, %{code: _code} = reason} ->
-        {:error, reason}
+        {:error, %{code: _code} = reason} ->
+          {:error, reason}
+      end
     end
   end
 
   def execute(_auth, _endpoint, _payload, %RequestOptions{}),
     do: {:error, error(400, "invalid_request", "request body must be a JSON object")}
+
+  defp image_generation_permission_denied?(
+         %{pool: pool},
+         %RequestOptions{
+           payload_context: %{image_generation_permission_required?: permission_required?}
+         }
+       )
+       when permission_required? == true,
+       do: not PoolRouting.allow_image_generation?(pool)
+
+  defp image_generation_permission_denied?(_auth, %RequestOptions{}), do: false
 
   defp execute_requested_model(auth, endpoint, payload, request_options, model_name) do
     case normalize_policy_or_log(auth, endpoint, payload, request_options) do
