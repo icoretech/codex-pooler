@@ -5,7 +5,6 @@ defmodule CodexPoolerWeb.McpController do
   alias CodexPooler.MCP.{ToolDispatch, ToolRegistry}
   alias CodexPoolerWeb.Mcp.{Envelope, Headers, Protocol}
 
-  @legacy_protocol_versions Protocol.legacy_protocol_versions()
   @allow "POST, OPTIONS"
   @server_name "codex-pooler"
 
@@ -114,13 +113,7 @@ defmodule CodexPoolerWeb.McpController do
       params = Map.get(message, "params", %{})
       request_id = id(message)
 
-      case Map.get(params, "protocolVersion") do
-        version when version in @legacy_protocol_versions ->
-          {:ok, :legacy}
-
-        _version ->
-          {:error, 400, -32_600, "unsupported initialize protocol version", request_id}
-      end
+      initialize_protocol_version(Map.get(params, "protocolVersion"), request_id)
     end
   end
 
@@ -163,11 +156,34 @@ defmodule CodexPoolerWeb.McpController do
 
   defp ensure_protocol_header(conn) do
     case List.first(get_req_header(conn, "mcp-protocol-version")) do
-      nil -> :ok
-      version when version in @legacy_protocol_versions -> :ok
-      _version -> {:error, 400, -32_600, "unsupported MCP protocol version", nil}
+      nil ->
+        :ok
+
+      version ->
+        if legacy_protocol_version?(version) do
+          :ok
+        else
+          {:error, 400, -32_600, "unsupported MCP protocol version", nil}
+        end
     end
   end
+
+  defp initialize_protocol_version(version, request_id) when is_binary(version) do
+    if legacy_protocol_version?(version) do
+      {:ok, :legacy}
+    else
+      initialize_protocol_error(request_id)
+    end
+  end
+
+  defp initialize_protocol_version(_version, request_id),
+    do: initialize_protocol_error(request_id)
+
+  defp initialize_protocol_error(request_id) do
+    {:error, 400, -32_600, "unsupported initialize protocol version", request_id}
+  end
+
+  defp legacy_protocol_version?(version), do: version in Protocol.legacy_protocol_versions()
 
   defp authenticate(conn) do
     conn
@@ -319,12 +335,22 @@ defmodule CodexPoolerWeb.McpController do
          _auth
        ) do
     case Map.get(params, "protocolVersion") do
-      version when version in @legacy_protocol_versions ->
-        send_json_rpc_result(conn, request_id, %{
-          "protocolVersion" => version,
-          "serverInfo" => %{"name" => @server_name, "version" => app_version()},
-          "capabilities" => %{"tools" => %{"listChanged" => false}}
-        })
+      version when is_binary(version) ->
+        if legacy_protocol_version?(version) do
+          send_json_rpc_result(conn, request_id, %{
+            "protocolVersion" => version,
+            "serverInfo" => %{"name" => @server_name, "version" => app_version()},
+            "capabilities" => %{"tools" => %{"listChanged" => false}}
+          })
+        else
+          send_json_rpc_error(
+            conn,
+            400,
+            -32_600,
+            "unsupported initialize protocol version",
+            request_id
+          )
+        end
 
       _version ->
         send_json_rpc_error(

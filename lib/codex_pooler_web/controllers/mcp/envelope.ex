@@ -66,7 +66,7 @@ defmodule CodexPoolerWeb.Mcp.Envelope do
       "id" => id,
       "error" => %{
         "code" => -32_022,
-        "message" => "unsupported protocol version",
+        "message" => "unsupported MCP protocol version",
         "data" => %{"supported" => Protocol.supported_protocol_versions()}
       }
     }
