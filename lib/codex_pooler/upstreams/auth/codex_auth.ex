@@ -536,13 +536,15 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
           403
         )
 
-    defp poll_error(_body, _state, status) when status in [403, 404],
-      do:
-        auth_error(
-          :codex_device_authorization_pending,
-          "Codex device authorization is still pending",
-          200
-        )
+    defp poll_error(_body, state, status) when status in [403, 404] do
+      {:error,
+       %{
+         code: :codex_device_authorization_pending,
+         message: "Codex device authorization is still pending",
+         retry_after_seconds: parse_interval(state["poll_interval_seconds"]),
+         status: 200
+       }}
+    end
 
     defp poll_error(_body, _state, status) when status >= 500,
       do:

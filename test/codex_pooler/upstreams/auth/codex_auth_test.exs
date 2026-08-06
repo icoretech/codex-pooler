@@ -324,6 +324,47 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
 
       assert [_request] = FakeOpenAIAuthProvider.requests(slow_down_provider)
     end
+
+    test "nested pending responses over 403 include a sanitized retry interval" do
+      raw_provider_value = "raw-nested-device-error-must-not-leak"
+
+      for {interval, expected_retry} <- [
+            {"7", 7},
+            {nil, 5},
+            {"invalid", 5},
+            {"5seconds", 5},
+            {0, 5},
+            {-1, 5}
+          ] do
+        provider =
+          start_provider!(%{
+            "/api/accounts/deviceauth/token" =>
+              {403,
+               %{
+                 "error" => %{
+                   "code" => "deviceauth_authorization_pending",
+                   "message" => raw_provider_value
+                 }
+               }}
+          })
+
+        assert {:error,
+                %{
+                  code: :codex_device_authorization_pending,
+                  message: "Codex device authorization is still pending",
+                  retry_after_seconds: ^expected_retry,
+                  status: 200
+                } = error} =
+                 CodexAuth.poll_device_authorization(%{
+                   "device_auth_id" => "device-auth-nested-pending",
+                   "user_code" => "NESTED-PENDING",
+                   "poll_interval_seconds" => interval
+                 })
+
+        refute inspect(error) =~ raw_provider_value
+        assert [_request] = FakeOpenAIAuthProvider.requests(provider)
+      end
+    end
   end
 
   describe "refresh-token OAuth protocol" do
