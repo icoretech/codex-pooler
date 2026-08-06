@@ -42,6 +42,7 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReason do
     peer_close_frame
     pooler_pong_deadline
     pooler_receive_timeout
+    request_caller_down
     session_unavailable
     unexpected_binary_frame
     upstream_terminal_event

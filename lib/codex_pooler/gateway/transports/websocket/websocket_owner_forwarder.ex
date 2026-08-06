@@ -252,6 +252,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
          request,
          opts
        ) do
+    submitter = self()
+
+    cancellation_watcher =
+      start_remote_cancellation_watcher(
+        submitter,
+        node,
+        codex_session_id,
+        downstream,
+        opts
+      )
+
     result =
       call_remote(
         node,
@@ -260,11 +271,32 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
         opts
       )
 
+    stop_remote_cancellation_watcher(cancellation_watcher, submitter)
+
     if result == {:error, :owner_forward_timeout} do
       best_effort_cancel_downstream(node, codex_session_id, downstream, opts)
     end
 
     result
+  end
+
+  defp start_remote_cancellation_watcher(submitter, node, codex_session_id, downstream, opts) do
+    spawn(fn ->
+      submitter_monitor = Process.monitor(submitter)
+
+      receive do
+        {:remote_submit_complete, ^submitter} ->
+          Process.demonitor(submitter_monitor, [:flush])
+
+        {:DOWN, ^submitter_monitor, :process, ^submitter, _reason} ->
+          best_effort_cancel_downstream(node, codex_session_id, downstream, opts)
+      end
+    end)
+  end
+
+  defp stop_remote_cancellation_watcher(watcher, submitter) do
+    send(watcher, {:remote_submit_complete, submitter})
+    :ok
   end
 
   defp dispatch_push({:local, _owner_instance_id}, codex_session_id, payload, _opts) do

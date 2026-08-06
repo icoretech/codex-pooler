@@ -597,9 +597,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream do
         Task.shutdown(task, :brutal_kill)
 
       :cancel ->
-        state
-        |> settle_task()
-        |> metadata_loop()
+        Task.shutdown(task, :brutal_kill)
+        metadata_loop(%{state | task: nil})
     end
   end
 

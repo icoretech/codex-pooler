@@ -34,6 +34,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
   alias CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
+
+  alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request,
+    as: UpstreamWebsocketRequest
+
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Pools
   alias CodexPooler.Pools.ModelServingOverride
@@ -10683,7 +10687,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert log.errors == []
   end
 
-  test "websocket terminate lets a just-completed response task finish before interrupting" do
+  test "websocket terminate lets a response task released during grace finish before interrupting" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
@@ -10706,9 +10710,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert {:ok, turn} = Gateway.start_codex_turn(session, reserved.request)
 
     parent = self()
+    release_ref = make_ref()
 
     {:ok, pid} =
       Task.start(fn ->
+        send(parent, {:task_drain_ready, self()})
+
+        receive do
+          {:finish_during_task_drain, ^release_ref} -> :ok
+        end
+
         AttemptSettlement.finalize_success(
           reserved.request,
           attempt,
@@ -10720,68 +10731,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         send(parent, {:codex_response_done, self(), :ok})
       end)
 
-    assert_receive {:task_drain_finalized, ^pid}, 1_000
-
-    assert :ok =
-             CodexResponsesSocket.terminate(:closed, %{
-               tasks: MapSet.new([pid]),
-               codex_session: session,
-               opts: %{reason: "client_disconnected", reconnect_window_seconds: 300}
-             })
-
-    assert Repo.get!(CodexTurn, turn.id).status == "succeeded"
-    assert Repo.get!(CodexTurn, turn.id).error_code == nil
-    assert Repo.get!(Request, reserved.request.id).status == "succeeded"
-    assert Repo.get!(Request, reserved.request.id).last_error_code == nil
-    assert Repo.get!(CodexSession, session.id).status == "interrupted"
-  end
-
-  test "websocket terminate waits for in-flight response task finalization after interrupting" do
-    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
-    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
-
-    {:ok, session} =
-      Gateway.start_codex_session(auth, %{accepted_turn_state: "task-finalization-drain"})
-
-    assert {:ok, reserved} =
-             Accounting.reserve(
-               auth,
-               setup.model,
-               %{"model" => setup.model.exposed_model_id, "input" => "complete after close"},
-               %{
-                 endpoint: "/backend-api/codex/responses",
-                 transport: "websocket",
-                 correlation_id:
-                   "ws-task-finalization-drain-#{System.unique_integer([:positive])}",
-                 request_metadata: %{"codex_session_id" => session.id}
-               }
-             )
-
-    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
-    assert {:ok, turn} = Gateway.start_codex_turn(session, reserved.request)
-
-    parent = self()
-
-    {:ok, pid} =
-      Task.start(fn ->
-        send(parent, {:task_finalization_waiting, self()})
-
-        receive do
-          :finish_task_finalization -> :ok
-        end
-
-        AttemptSettlement.finalize_success(
-          reserved.request,
-          attempt,
-          %{status: "usage_known", input_tokens: 1, output_tokens: 1, total_tokens: 2},
-          %{response_status_code: 200}
-        )
-
-        send(parent, {:task_finalization_finished, self()})
-        send(parent, {:codex_response_done, self(), :ok})
-      end)
-
-    assert_receive {:task_finalization_waiting, ^pid}, 1_000
+    assert_receive {:task_drain_ready, ^pid}, 1_000
 
     terminator =
       Task.async(fn ->
@@ -10792,12 +10742,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         })
       end)
 
-    refute_receive {:task_finalization_finished, ^pid}, 350
-    refute Task.yield(terminator, 0)
+    assert Task.yield(terminator, 25) == nil
+    assert Process.alive?(pid)
 
-    send(pid, :finish_task_finalization)
+    send(pid, {:finish_during_task_drain, release_ref})
 
-    assert_receive {:task_finalization_finished, ^pid}, 1_000
+    assert_receive {:task_drain_finalized, ^pid}, 1_000
     assert :ok = Task.await(terminator, 1_000)
 
     assert Repo.get!(CodexTurn, turn.id).status == "succeeded"
@@ -10805,9 +10755,133 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert Repo.get!(Request, reserved.request.id).status == "succeeded"
     assert Repo.get!(Request, reserved.request.id).last_error_code == nil
     assert Repo.get!(CodexSession, session.id).status == "interrupted"
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where:
+                 entry.request_id == ^reserved.request.id and entry.entry_kind == "settlement"
+             ),
+             :count
+           ) == 1
   end
 
-  test "websocket terminate wait preserves unrelated mailbox messages" do
+  test "websocket terminate cancels an in-flight direct-native upstream caller after grace" do
+    release_ref = make_ref()
+    created_frame = "data: " <> Jason.encode!(%{"type" => "response.created"}) <> "\n\n"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.timeout_mid_stream(created_frame,
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{accepted_turn_state: "direct-native-cancel"})
+
+    assert {:ok, reserved} =
+             Accounting.reserve(
+               auth,
+               setup.model,
+               %{
+                 "model" => setup.model.exposed_model_id,
+                 "input" => "cancel direct native request"
+               },
+               %{
+                 endpoint: "/backend-api/codex/responses",
+                 transport: "websocket",
+                 correlation_id: "ws-direct-native-cancel-#{System.unique_integer([:positive])}",
+                 request_metadata: %{"codex_session_id" => session.id}
+               }
+             )
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+    assert {:ok, turn} = Gateway.start_codex_turn(session, reserved.request)
+
+    {:ok, upstream_websocket_session} = UpstreamWebsocketSession.start_link()
+    on_exit(fn -> UpstreamWebsocketSession.close(upstream_websocket_session) end)
+
+    {:ok, task} =
+      Task.start(fn ->
+        UpstreamWebsocketSession.request(
+          upstream_websocket_session,
+          %UpstreamWebsocketRequest{
+            url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
+            headers: [],
+            payload: "{}",
+            timeouts: %{connect_timeout_ms: 1_000, receive_timeout_ms: 5_000},
+            writer: fn _frame -> :ok end,
+            message_mapper: nil
+          }
+        )
+      end)
+
+    task_monitor = Process.monitor(task)
+    upstream_session_monitor = Process.monitor(upstream_websocket_session)
+
+    assert_receive {:fake_upstream_timeout_barrier, :mid_stream, upstream_socket_pid,
+                    ^release_ref},
+                   1_000
+
+    assert FakeUpstream.await_websocket_connection_count(upstream, 1, 1_000) == 1
+    upstream_socket_monitor = Process.monitor(upstream_socket_pid)
+
+    terminator =
+      Task.async(fn ->
+        CodexResponsesSocket.terminate(:closed, %{
+          tasks: MapSet.new([task]),
+          codex_session: session,
+          upstream_websocket_session: upstream_websocket_session,
+          opts: %{reason: "client_disconnected", reconnect_window_seconds: 300}
+        })
+      end)
+
+    assert_receive {:DOWN, ^task_monitor, :process, ^task, {:shutdown, :websocket_terminated}},
+                   1_000
+
+    assert_receive {:DOWN, ^upstream_session_monitor, :process, ^upstream_websocket_session,
+                    :normal},
+                   1_000
+
+    assert_receive {:DOWN, ^upstream_socket_monitor, :process, ^upstream_socket_pid, _reason},
+                   1_000
+
+    assert :ok = Task.await(terminator, 1_000)
+
+    assert %CodexTurn{status: "interrupted", error_code: "client_disconnected"} =
+             completed_turn = Repo.get!(CodexTurn, turn.id)
+
+    assert completed_turn.final_attempt_id == attempt.id
+
+    assert %Request{
+             status: "failed",
+             response_status_code: 499,
+             last_error_code: "client_disconnected"
+           } = Repo.get!(Request, reserved.request.id)
+
+    assert %Attempt{
+             status: "failed",
+             network_error_code: "client_disconnected",
+             usage_status: "usage_unknown"
+           } = Repo.get!(Attempt, attempt.id)
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where:
+                 entry.request_id == ^reserved.request.id and entry.entry_kind == "settlement"
+             ),
+             :count
+           ) == 1
+
+    assert Repo.all(from(demotion in BridgeDemotion)) == []
+    assert Repo.all(from(circuit in RoutingCircuitState)) == []
+  end
+
+  test "websocket terminate cancellation preserves unrelated mailbox messages" do
     unrelated = {:unrelated_websocket_mailbox_message, make_ref()}
 
     task =
@@ -10816,6 +10890,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
           :stop -> :ok
         end
       end)
+
+    task_monitor = Process.monitor(task)
 
     send(self(), unrelated)
 
@@ -10826,8 +10902,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                opts: %{}
              })
 
-    assert Process.alive?(task)
-    send(task, :stop)
+    assert_receive {:DOWN, ^task_monitor, :process, ^task, {:shutdown, :websocket_terminated}}
 
     assert_receive ^unrelated
   end

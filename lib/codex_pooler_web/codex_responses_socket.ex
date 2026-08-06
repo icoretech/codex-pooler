@@ -161,6 +161,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       |> Map.get(:tasks, MapSet.new())
       |> await_response_tasks(@pre_cleanup_response_task_drain_ms)
 
+    unless owner_forwarded_socket?(state) do
+      cancel_response_tasks(remaining_tasks, :websocket_terminated)
+    end
+
     cleanup_websocket_session(reason, state)
 
     close_upstream_websocket_session(state)
@@ -795,12 +799,19 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp cancel_tracked_response_tasks(state, reason) do
     state
     |> Map.get(:tasks, MapSet.new())
+    |> cancel_response_tasks(reason)
+
+    state
+  end
+
+  defp cancel_response_tasks(tasks, reason) do
+    tasks
     |> Enum.each(fn
       pid when is_pid(pid) -> Process.exit(pid, {:shutdown, reason})
       _value -> :ok
     end)
 
-    state
+    :ok
   end
 
   defp pop_task_monitor(state, pid) do
@@ -1124,10 +1135,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         {:codex_response_done, pid, _result} ->
           do_await_response_tasks(remove_response_task(tasks, monitors, pid), monitors, deadline)
 
-        {:DOWN, _ref, :process, pid, _reason} ->
+        {:DOWN, ref, :process, pid, _reason}
+        when is_map_key(monitors, pid) and :erlang.map_get(pid, monitors) == ref ->
           do_await_response_tasks(remove_response_task(tasks, monitors, pid), monitors, deadline)
       after
         timeout ->
+          demonitor_response_tasks(monitors)
           tasks
       end
     end
@@ -1144,6 +1157,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     else
       tasks
     end
+  end
+
+  defp demonitor_response_tasks(monitors) do
+    Enum.each(monitors, fn {_pid, ref} -> Process.demonitor(ref, [:flush]) end)
   end
 
   defp close_upstream_websocket_session(state) do

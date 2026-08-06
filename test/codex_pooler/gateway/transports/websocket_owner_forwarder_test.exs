@@ -1128,6 +1128,83 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     assert FakeUpstream.websocket_connection_count(upstream) == 2
   end
 
+  test "real peer owner cancels an active turn when the local forwarding proxy dies", %{
+    auth: auth
+  } do
+    peer_node = start_current_peer!("bridge_cancel_owner")
+    %{session: session, token: token} = owner_session_fixture(auth, Atom.to_string(peer_node))
+    release_ref = make_ref()
+    created_frame = "data: " <> Jason.encode!(%{"type" => "response.created"}) <> "\n\n"
+
+    upstream =
+      start_fake_upstream(
+        FakeUpstream.timeout_mid_stream(
+          created_frame,
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    persistence =
+      :erpc.call(peer_node, WebsocketOwnerNodeHarness, :fake_persistence_boundary, [])
+
+    assert {:ok, owner_pid} =
+             :erpc.call(peer_node, WebsocketOwnerSession, :start_owner, [
+               [
+                 codex_session_id: session.id,
+                 owner_lease_token: token,
+                 owner_instance_id: Atom.to_string(peer_node),
+                 owner_renewal_ms: 60_000,
+                 persistence: persistence
+               ]
+             ])
+
+    client = WebsocketOwnerForwarder.ERPCNodeClient
+
+    assert {:ok, attached} =
+             client.call_owner(
+               peer_node,
+               WebsocketOwnerForwarder,
+               :remote_attach_downstream,
+               [session.id, downstream("corr-real-peer-cancel")],
+               @peer_detection_timeout_ms
+             )
+
+    submitter =
+      Task.async(fn ->
+        WebsocketOwnerForwarder.submit_request(
+          session,
+          token,
+          attached,
+          request("remote-cancel", FakeUpstream.url(upstream)),
+          timeout: @peer_detection_timeout_ms,
+          app_node_names: [Atom.to_string(peer_node)]
+        )
+      end)
+
+    assert_receive {:fake_upstream_timeout_barrier, :mid_stream, upstream_socket_pid,
+                    ^release_ref},
+                   @peer_detection_timeout_ms
+
+    upstream_socket_monitor = Process.monitor(upstream_socket_pid)
+
+    assert %{active_turn: %{task_pid: remote_turn_task}} =
+             :erpc.call(peer_node, :sys, :get_state, [owner_pid])
+
+    remote_turn_monitor = Process.monitor(remote_turn_task)
+
+    Task.shutdown(submitter, :brutal_kill)
+
+    assert_receive {:DOWN, ^remote_turn_monitor, :process, ^remote_turn_task, :shutdown},
+                   @peer_detection_timeout_ms
+
+    assert_receive {:DOWN, ^upstream_socket_monitor, :process, ^upstream_socket_pid, _reason},
+                   @peer_detection_timeout_ms
+
+    assert %{active_turn: nil, downstream: nil} =
+             :erpc.call(peer_node, :sys, :get_state, [owner_pid])
+  end
+
   @tag :continuation_generation_boundary
   test "real peer owner defaults a missing forwarded continuation marker to false" do
     peer_node = start_current_peer!("legacy_continuation_owner")

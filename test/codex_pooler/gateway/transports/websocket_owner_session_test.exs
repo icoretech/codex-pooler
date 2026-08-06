@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   import CodexPooler.PoolerFixtures
   import ExUnit.CaptureLog
 
+  alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession}
@@ -1990,6 +1991,74 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
                     {:data, "delta-after-submitter-exit"}}
   end
 
+  test "local bridge submitter exit cancels the default upstream websocket request", context do
+    release_ref = make_ref()
+    parent = self()
+
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        FakeUpstream.timeout_mid_stream(
+          ~s({"type":"response.created","response":{"id":"resp_detach_local_owner","status":"in_progress"}}),
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+
+    {:ok, owner} = start_owner(context, [])
+
+    submitter =
+      spawn(fn ->
+        send(parent, {:local_owner_bridge_submitter_ready, self()})
+
+        receive do
+          {:submit_local_owner_bridge, downstream, request} ->
+            result = WebsocketOwnerSession.submit_request(owner, downstream, request)
+            send(parent, {:local_owner_bridge_submitter_result, result})
+        end
+      end)
+
+    assert_receive {:local_owner_bridge_submitter_ready, ^submitter}
+
+    {:ok, downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, %{
+        pid: submitter,
+        correlation_id: "detach-local-owner"
+      })
+
+    send(
+      submitter,
+      {:submit_local_owner_bridge, downstream,
+       %{
+         websocket_request()
+         | url: FakeUpstream.url(upstream),
+           timeouts: %{connect_timeout_ms: 1_000, receive_timeout_ms: 1_000}
+       }}
+    )
+
+    submitter_ref = Process.monitor(submitter)
+
+    assert_receive {:fake_upstream_timeout_barrier, :mid_stream, socket_pid, ^release_ref},
+                   1_000
+
+    assert %{active_turn: %{task_pid: active_turn_worker_pid}} = :sys.get_state(owner)
+
+    active_turn_worker_ref = Process.monitor(active_turn_worker_pid)
+    socket_ref = Process.monitor(socket_pid)
+
+    Process.exit(submitter, :shutdown)
+
+    assert_receive {:DOWN, ^submitter_ref, :process, ^submitter, :shutdown}, 1_000
+
+    assert_receive {:DOWN, ^active_turn_worker_ref, :process, ^active_turn_worker_pid, :shutdown},
+                   1_000
+
+    assert_receive {:DOWN, ^socket_ref, :process, ^socket_pid, _reason}, 1_000
+    assert %{active_turn: nil, downstream: nil} = await_owner_cleared(owner)
+    refute_received {:local_owner_bridge_submitter_result, _result}
+  end
+
   test "active upstream request completes when downstream exits first", context do
     block_ref = make_ref()
 
@@ -2170,6 +2239,21 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   end
 
   defp await_active_turn_cleared(owner, 0), do: :sys.get_state(owner)
+
+  defp await_owner_cleared(owner, attempts \\ 100)
+
+  defp await_owner_cleared(owner, attempts) when attempts > 0 do
+    case :sys.get_state(owner) do
+      %{active_turn: nil, downstream: nil} = state ->
+        state
+
+      _state ->
+        yield_once({:await_owner_cleared, owner, attempts})
+        await_owner_cleared(owner, attempts - 1)
+    end
+  end
+
+  defp await_owner_cleared(owner, 0), do: :sys.get_state(owner)
 
   defp await_pending_terminal_result(owner) do
     deadline =

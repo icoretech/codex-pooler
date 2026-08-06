@@ -283,6 +283,12 @@ defmodule CodexPooler.Gateway.Transports.TransportFailureReasonTest do
            }
   end
 
+  test "keeps request caller down as a safe websocket termination source" do
+    assert TransportFailureReason.sanitize_transport_failure_metadata(%{
+             "termination_source" => "request_caller_down"
+           }) == %{"termination_source" => "request_caller_down"}
+  end
+
   test "drops free-form websocket termination and connection diagnostics" do
     sentinel = "private-diagnostic-sentinel-deadbeef"
 

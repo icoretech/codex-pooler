@@ -1552,6 +1552,72 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert raw_websocket_peer_connection_count(peer) == 2
   end
 
+  test "request caller exit during websocket upgrade closes before payload send and reconnects" do
+    peer = start_raw_websocket_peer(upgrade_mode: :hold)
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = %{
+      raw_websocket_request(peer.url, self())
+      | timeouts: %{connect_timeout_ms: 1_000, receive_timeout_ms: 5_000}
+    }
+
+    initial_lifecycle = lifecycle_state(session)
+    request_task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
+
+    assert_receive {:raw_upstream_websocket_connection, 1}, 1_000
+    assert Task.shutdown(request_task, :brutal_kill) == nil
+
+    assert :closed = wait_for_raw_websocket_connection_closed(1, 200)
+    refute_received {:raw_upstream_websocket_upgrade_payload, 1, _bytes}
+
+    canceled_state = :sys.get_state(session)
+    assert lifecycle_from_state(canceled_state) == initial_lifecycle
+    refute Map.has_key?(canceled_state, :conn)
+    assert canceled_state.reconnect_pending?
+
+    set_raw_websocket_peer_upgrade_mode(peer, :valid)
+
+    assert {:ok, result} = UpstreamWebsocketSession.request(session, request)
+    assert_receive {:raw_upstream_websocket_connection, 2}, 1_000
+    assert_receive {:upstream_websocket_frame, _frame}, 1_000
+
+    generation_one = %{initial_lifecycle | generation: 1}
+    assert_connection_metadata(result, generation_one, false, true)
+    assert raw_websocket_peer_connection_count(peer) == 2
+
+    cleanup = stop_raw_websocket_peer(peer)
+    assert cleanup.alive_tasks == []
+    assert cleanup.client_socket_count == 0
+  end
+
+  test "request caller exit during TLS connect closes before the connect timeout" do
+    peer = start_raw_websocket_peer(connection_mode: :hold_tcp, scheme: "https")
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = %{
+      raw_websocket_request(peer.url, self())
+      | timeouts: %{connect_timeout_ms: 5_000, receive_timeout_ms: 5_000}
+    }
+
+    request_task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
+
+    assert_receive {:raw_upstream_websocket_connection, 1}, 1_000
+    assert_receive {:raw_upstream_tls_client_hello, 1, bytes} when bytes > 0, 1_000
+    assert Task.shutdown(request_task, :brutal_kill) == nil
+
+    assert :closed = wait_for_raw_websocket_connection_closed(1, 200)
+
+    canceled_state = :sys.get_state(session)
+    refute Map.has_key?(canceled_state, :conn)
+    assert canceled_state.reconnect_pending?
+
+    cleanup = stop_raw_websocket_peer(peer)
+    assert cleanup.alive_tasks == []
+    assert cleanup.client_socket_count == 0
+  end
+
   test "receive timeout invalidates the websocket before the next request" do
     peer = start_raw_websocket_peer(response_mode: :hold)
     {:ok, session} = UpstreamWebsocketSession.start_link([])
@@ -2359,7 +2425,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     parent = self()
     start_ref = make_ref()
     release_ref = make_ref()
-    traced_mfa = {ConnectionUpgrade, :connect_state, 5}
+    traced_mfa = {ConnectionUpgrade, :connect_state, 6}
     match_spec = [{:_, [], [{:return_trace}]}]
 
     {:module, ConnectionUpgrade} = Code.ensure_loaded(ConnectionUpgrade)
@@ -2414,7 +2480,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       {:trace, ^pid, :call, {ConnectionUpgrade, :connect_state, [state | _arguments]}} ->
         collect_lifecycle_trace(pid, [lifecycle_from_state(state) | acc])
 
-      {:trace, ^pid, :return_from, {ConnectionUpgrade, :connect_state, 5}, {:ok, state}} ->
+      {:trace, ^pid, :return_from, {ConnectionUpgrade, :connect_state, 6}, {:ok, state}} ->
         collect_lifecycle_trace(pid, [lifecycle_from_state(state) | acc])
     after
       0 -> Enum.reverse(acc)
@@ -2470,6 +2536,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
              connection_count: 0,
              connection_pids: MapSet.new(),
              upgrade_mode: Keyword.get(opts, :upgrade_mode, :valid),
+             connection_mode: Keyword.get(opts, :connection_mode, :websocket),
              pong_mode: Keyword.get(opts, :pong_mode, :ignore_ping),
              response_mode: Keyword.get(opts, :response_mode, :terminal),
              stopped?: false
@@ -2478,7 +2545,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       )
 
     peer = %{
-      url: "http://127.0.0.1:#{port}/backend-api/codex/responses",
+      url:
+        "#{Keyword.get(opts, :scheme, "http")}://127.0.0.1:#{port}/backend-api/codex/responses",
       state: state,
       supervisor: supervisor
     }
@@ -2528,8 +2596,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
         {:ok, pid} =
           Task.Supervisor.start_child(supervisor, fn ->
-            raw_websocket_peer_connection_loop(state, client_socket, connection_id, owner)
+            receive do
+              {:raw_websocket_peer_socket_ready, ^client_socket} ->
+                raw_websocket_peer_connection_loop(state, client_socket, connection_id, owner)
+            end
           end)
+
+        :ok = :gen_tcp.controlling_process(client_socket, pid)
+        send(pid, {:raw_websocket_peer_socket_ready, client_socket})
 
         Agent.update(state, fn current ->
           %{current | connection_pids: MapSet.put(current.connection_pids, pid)}
@@ -2562,11 +2636,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   end
 
   defp raw_websocket_peer_connection_loop(state, socket, connection_id, owner) do
-    upgrade_mode = Agent.get(state, & &1.upgrade_mode)
+    case Agent.get(state, & &1.connection_mode) do
+      :hold_tcp ->
+        case raw_tcp_peer_hold_connection(socket, connection_id, owner, false) do
+          {:error, reason} -> send(owner, {:raw_upstream_websocket_error, connection_id, reason})
+        end
 
-    case raw_websocket_peer_upgrade(socket, upgrade_mode) do
-      :ok -> raw_websocket_peer_frame_loop(state, socket, connection_id, owner, 0, nil, 0)
-      {:error, reason} -> send(owner, {:raw_upstream_websocket_error, connection_id, reason})
+      :websocket ->
+        upgrade_mode = Agent.get(state, & &1.upgrade_mode)
+
+        case raw_websocket_peer_upgrade(socket, upgrade_mode, connection_id, owner) do
+          :ok -> raw_websocket_peer_frame_loop(state, socket, connection_id, owner, 0, nil, 0)
+          {:error, reason} -> send(owner, {:raw_upstream_websocket_error, connection_id, reason})
+        end
     end
   after
     safe_tcp_close(socket)
@@ -2584,18 +2666,54 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     send(owner, {:raw_upstream_websocket_connection_closed, connection_id})
   end
 
-  defp raw_websocket_peer_upgrade(socket, mode) do
+  defp raw_websocket_peer_upgrade(socket, mode, connection_id, owner) do
     with {:ok, headers} <- raw_websocket_peer_read_headers(socket),
          {:ok, key} <- raw_websocket_peer_header(headers, "sec-websocket-key") do
-      send_raw_websocket_upgrade(socket, key, mode)
+      send_raw_websocket_upgrade(socket, key, mode, connection_id, owner)
     end
   end
 
-  defp send_raw_websocket_upgrade(socket, _key, :malformed_response) do
+  defp raw_tcp_peer_hold_connection(socket, connection_id, owner, client_hello_seen?) do
+    :ok = :inet.setopts(socket, active: :once)
+
+    receive do
+      {:tcp, ^socket, data} ->
+        unless client_hello_seen? do
+          send(owner, {:raw_upstream_tls_client_hello, connection_id, byte_size(data)})
+        end
+
+        raw_tcp_peer_hold_connection(socket, connection_id, owner, true)
+
+      {:tcp_closed, ^socket} ->
+        {:error, :closed}
+
+      {:tcp_error, ^socket, reason} ->
+        {:error, reason}
+    after
+      5_000 -> {:error, :timeout}
+    end
+  end
+
+  defp send_raw_websocket_upgrade(socket, _key, :malformed_response, _connection_id, _owner) do
     :gen_tcp.send(socket, "not-an-http-upgrade\r\n\r\n")
   end
 
-  defp send_raw_websocket_upgrade(socket, key, mode) when mode in [:valid, :invalid_accept] do
+  defp send_raw_websocket_upgrade(socket, _key, :hold, connection_id, owner) do
+    case :gen_tcp.recv(socket, 0, 5_000) do
+      {:error, :closed} ->
+        {:error, :closed}
+
+      {:error, reason} ->
+        {:error, reason}
+
+      {:ok, data} ->
+        send(owner, {:raw_upstream_websocket_upgrade_payload, connection_id, byte_size(data)})
+        {:error, :unexpected_upgrade_payload}
+    end
+  end
+
+  defp send_raw_websocket_upgrade(socket, key, mode, _connection_id, _owner)
+       when mode in [:valid, :invalid_accept] do
     accept =
       if mode == :valid do
         :sha
@@ -2831,6 +2949,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   defp set_raw_websocket_peer_response_mode(%{state: state}, mode) do
     Agent.update(state, &%{&1 | response_mode: mode})
+  end
+
+  defp set_raw_websocket_peer_upgrade_mode(%{state: state}, mode) do
+    Agent.update(state, &%{&1 | upgrade_mode: mode})
   end
 
   defp raw_websocket_peer_connection_count(%{state: state}) do

@@ -35,7 +35,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           required(:reused) => boolean(),
           required(:reconnected) => boolean()
         }
-  @type request_caller :: {pid(), reference()} | nil
   @type upstream_websocket_connection :: %{
           required(:lifecycle_id) => Ecto.UUID.t(),
           required(:generation) => pos_integer(),
@@ -235,13 +234,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     :ok
   end
 
-  defp ensure_connection(%{key: key, conn: _conn} = state, key, _url, _headers, _timeouts),
-    do: {:ok, state}
+  defp ensure_connection(
+         %{key: key, conn: _conn} = state,
+         key,
+         _url,
+         _headers,
+         _timeouts,
+         _request_caller
+       ),
+       do: {:ok, state}
 
-  defp ensure_connection(state, key, url, headers, timeouts) do
+  defp ensure_connection(state, key, url, headers, timeouts, request_caller) do
     state = close_state(state)
 
-    ConnectionUpgrade.connect_state(state, key, url, headers, timeouts)
+    ConnectionUpgrade.connect_state(state, key, url, headers, timeouts, request_caller)
   end
 
   defp request_key(%Request{} = request), do: {request.url, request.headers}
@@ -347,7 +353,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
          receive_state,
          connection_usage
        ) do
-    case ensure_connection(state, key, url, headers, timeouts) do
+    case ensure_connection(state, key, url, headers, timeouts, request_caller(receive_state)) do
       {:ok, state} ->
         connection_use = connection_use(connection_usage)
 
@@ -358,6 +364,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           send_request_payload(state, request.payload, receive_state, connection_usage)
         end
 
+      {:error, :client_disconnected, state} ->
+        result = request_caller_down_result(state, receive_state)
+        state = invalidate_state(state)
+        {:ok, put_result_connection_metadata(result, state, connection_usage), state}
+
       {:error, reason, state} ->
         state =
           state
@@ -367,6 +378,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         {:error, reason, state}
     end
   end
+
+  defp request_caller(%ReceiveState{
+         request_caller_pid: request_caller_pid,
+         request_caller_monitor: request_caller_monitor
+       })
+       when is_pid(request_caller_pid) and is_reference(request_caller_monitor),
+       do: {request_caller_pid, request_caller_monitor}
+
+  defp request_caller(%ReceiveState{}), do: nil
 
   defp guard_connection_bound_continuation(state, receive_state, connection_usage) do
     terminal =
