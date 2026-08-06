@@ -35,6 +35,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           required(:reused) => boolean(),
           required(:reconnected) => boolean()
         }
+  @type request_caller :: {pid(), reference()} | nil
   @type upstream_websocket_connection :: %{
           required(:lifecycle_id) => Ecto.UUID.t(),
           required(:generation) => pos_integer(),
@@ -131,20 +132,31 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   @impl GenServer
-  def handle_call({:request, %Request{} = request}, _from, state) do
+  def handle_call({:request, %Request{} = request}, {caller_pid, _tag}, state)
+      when is_pid(caller_pid) do
     key = request_key(request)
+    caller_monitor = Process.monitor(caller_pid)
 
-    case request_on_connection(state, key, request) do
-      {:ok, result, state} ->
-        {:reply, result, maybe_schedule_keepalive(state)}
+    try do
+      case request_on_connection(state, key, request, {caller_pid, caller_monitor}) do
+        {:ok, result, state} ->
+          {:reply, result, maybe_schedule_keepalive(state)}
 
-      {:retry, state, previous_connection} ->
-        {:ok, result, state} =
-          state
-          |> close_state()
-          |> request_on_reconnected(key, request, previous_connection)
+        {:retry, state, previous_connection} ->
+          {:ok, result, state} =
+            state
+            |> close_state()
+            |> request_on_reconnected(
+              key,
+              request,
+              previous_connection,
+              {caller_pid, caller_monitor}
+            )
 
-        {:reply, result, maybe_schedule_keepalive(state)}
+          {:reply, result, maybe_schedule_keepalive(state)}
+      end
+    after
+      Process.demonitor(caller_monitor, [:flush])
     end
   end
 
@@ -159,8 +171,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     do: {:reply, {:error, :upstream_websocket_not_connected}, state}
 
   def handle_call(:invalidate_connection, _from, %{conn: _conn} = state) do
-    state = state |> close_state() |> Map.put(:reconnect_pending?, true)
-    {:reply, :ok, state}
+    {:reply, :ok, invalidate_state(state)}
   end
 
   def handle_call(:invalidate_connection, _from, state),
@@ -235,12 +246,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp request_key(%Request{} = request), do: {request.url, request.headers}
 
-  defp request_on_connection(state, key, %Request{} = request) do
+  defp request_on_connection(state, key, %Request{} = request, request_caller) do
     reused_connection? = reusable_connection?(state, key)
     reconnect_pending? = Map.get(state, :reconnect_pending?, false)
     connection_usage = %{reused: reused_connection?, reconnected: reconnect_pending?}
 
-    case request_once_on_connection(state, key, request, connection_usage) do
+    case request_once_on_connection(state, key, request, connection_usage, request_caller) do
       {:ok, result, state} ->
         if reused_connection? and not reset_probe?(request) and
              pre_response_reconnectable?(result) do
@@ -267,10 +278,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   defp reusable_connection?(%{key: key, conn: _conn}, key), do: true
   defp reusable_connection?(_state, _key), do: false
 
-  defp request_on_reconnected(state, key, %Request{} = request, previous_connection) do
+  defp request_on_reconnected(
+         state,
+         key,
+         %Request{} = request,
+         previous_connection,
+         request_caller
+       ) do
     connection_usage = %{reused: false, reconnected: true}
 
-    case request_once_on_connection(state, key, request, connection_usage) do
+    case request_once_on_connection(state, key, request, connection_usage, request_caller) do
       {:ok, result, state} ->
         {:ok, result, state}
 
@@ -285,12 +302,22 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     end
   end
 
-  defp request_once_on_connection(state, key, %Request{} = request, connection_usage) do
+  defp request_once_on_connection(
+         state,
+         key,
+         %Request{} = request,
+         connection_usage,
+         request_caller \\ nil
+       ) do
+    {request_caller_pid, request_caller_monitor} = request_caller || {nil, nil}
+
     receive_state = %ReceiveState{
       writer: request.writer,
       timeouts: request.timeouts,
       message_mapper: request.message_mapper,
       frame_observer: request.frame_observer,
+      request_caller_pid: request_caller_pid,
+      request_caller_monitor: request_caller_monitor,
       # Tolerant access: during a rolling deploy an owner-forwarded request may
       # have been built by a replica that predates this field. nil keeps the
       # pre-provenance classification semantics for that request instead of
@@ -373,19 +400,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     {state, receive_state} =
       begin_connection_request(state, receive_state, connection_usage)
 
-    case send_text(state, payload) do
-      {:ok, state} ->
-        {:ok, result, state} = await_sent_request(state, receive_state)
-        state = complete_connection_request(state)
-        {:ok, put_result_connection_metadata(result, state, connection_usage), state}
+    if request_caller_down?(receive_state) do
+      result = request_caller_down_result(state, receive_state)
+      state = state |> invalidate_state() |> complete_connection_request()
+      {:ok, put_result_connection_metadata(result, state, connection_usage), state}
+    else
+      case send_text(state, payload) do
+        {:ok, state} ->
+          {:ok, result, state} = await_sent_request(state, receive_state)
+          state = complete_connection_request(state)
+          {:ok, put_result_connection_metadata(result, state, connection_usage), state}
 
-      {:error, reason, state} ->
-        state =
-          state
-          |> Map.put(:transport_failure_phase, :send_payload)
-          |> Map.put(:transport_failure_source, :payload_send_error)
+        {:error, reason, state} ->
+          state =
+            state
+            |> Map.put(:transport_failure_phase, :send_payload)
+            |> Map.put(:transport_failure_source, :payload_send_error)
 
-        {:error, reason, state}
+          {:error, reason, state}
+      end
     end
   end
 
@@ -562,8 +595,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp receive_events(%{conn: conn} = state, %ReceiveState{} = receive_state) do
     socket = mint_socket(conn)
+    request_caller_pid = receive_state.request_caller_pid
+    request_caller_monitor = receive_state.request_caller_monitor
 
     receive do
+      {:DOWN, ^request_caller_monitor, :process, ^request_caller_pid, _reason}
+      when is_reference(request_caller_monitor) and is_pid(request_caller_pid) ->
+        {request_caller_down_result(state, receive_state), invalidate_state(state)}
+
       {:tcp, ^socket, _data} = message ->
         handle_event_message(state, receive_state, message)
 
@@ -586,23 +625,56 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         handle_pong_deadline_message(state, receive_state, token)
     after
       receive_state.timeouts.receive_timeout_ms ->
-        {{:error,
-          %{
-            body: receive_body(receive_state),
-            reason: :upstream_websocket_receive_timeout,
-            headers: state.headers,
-            upstream_error_param: receive_state.terminal_upstream_error_param,
-            websocket_frame_headers: receive_state.websocket_frame_headers,
-            transport_failure:
-              transport_failure_metadata(
-                :upstream_websocket_receive_timeout,
-                state,
-                receive_state,
-                phase: :receive_timeout,
-                termination_source: :pooler_receive_timeout
-              )
-          }}, state}
+        result =
+          {:error,
+           %{
+             body: receive_body(receive_state),
+             reason: :upstream_websocket_receive_timeout,
+             headers: state.headers,
+             upstream_error_param: receive_state.terminal_upstream_error_param,
+             websocket_frame_headers: receive_state.websocket_frame_headers,
+             transport_failure:
+               transport_failure_metadata(
+                 :upstream_websocket_receive_timeout,
+                 state,
+                 receive_state,
+                 phase: :receive_timeout,
+                 termination_source: :pooler_receive_timeout
+               )
+           }}
+
+        {result, invalidate_state(state)}
     end
+  end
+
+  defp request_caller_down?(%ReceiveState{
+         request_caller_pid: request_caller_pid,
+         request_caller_monitor: request_caller_monitor
+       })
+       when is_pid(request_caller_pid) and is_reference(request_caller_monitor) do
+    receive do
+      {:DOWN, ^request_caller_monitor, :process, ^request_caller_pid, _reason} -> true
+    after
+      0 -> false
+    end
+  end
+
+  defp request_caller_down?(%ReceiveState{}), do: false
+
+  defp request_caller_down_result(state, %ReceiveState{} = receive_state) do
+    {:error,
+     %{
+       body: receive_body(receive_state),
+       reason: :client_disconnected,
+       headers: Map.get(state, :headers, []),
+       upstream_error_param: receive_state.terminal_upstream_error_param,
+       websocket_frame_headers: receive_state.websocket_frame_headers,
+       transport_failure:
+         transport_failure_metadata(:client_disconnected, state, receive_state,
+           phase: :receive,
+           termination_source: :request_caller_down
+         )
+     }}
   end
 
   defp handle_event_message(
@@ -1301,6 +1373,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     |> cancel_keepalive()
     |> cancel_pong_deadline()
     |> disconnected_state()
+  end
+
+  defp invalidate_state(state) do
+    state
+    |> close_state()
+    |> Map.put(:reconnect_pending?, true)
   end
 
   defp disconnected_state(state) do

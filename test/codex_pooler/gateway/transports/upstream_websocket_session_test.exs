@@ -1522,6 +1522,72 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert connection_count == 2
   end
 
+  test "request caller exit closes the active upstream websocket before the receive timeout" do
+    peer = start_raw_websocket_peer(response_mode: :hold)
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = %{
+      raw_websocket_request(peer.url, self())
+      | timeouts: %{connect_timeout_ms: 1_000, receive_timeout_ms: 5_000}
+    }
+
+    initial_lifecycle = lifecycle_state(session)
+    request_task = Task.async(fn -> UpstreamWebsocketSession.request(session, request) end)
+
+    assert_receive {:raw_upstream_websocket_connection, 1}, 1_000
+    assert_receive {:raw_upstream_websocket_request, 1, 1}, 1_000
+
+    assert Task.shutdown(request_task, :brutal_kill) == nil
+    assert :closed = wait_for_raw_websocket_connection_closed(1, 200)
+    assert lifecycle_state(session) == %{initial_lifecycle | generation: 1}
+
+    set_raw_websocket_peer_response_mode(peer, :terminal)
+
+    assert {:ok, result} = UpstreamWebsocketSession.request(session, request)
+    assert_receive {:raw_upstream_websocket_connection, 2}, 1_000
+
+    generation_two = %{initial_lifecycle | generation: 2}
+    assert_connection_metadata(result, generation_two, false, true)
+    assert raw_websocket_peer_connection_count(peer) == 2
+  end
+
+  test "receive timeout invalidates the websocket before the next request" do
+    peer = start_raw_websocket_peer(response_mode: :hold)
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = %{
+      raw_websocket_request(peer.url, self())
+      | timeouts: %{connect_timeout_ms: 1_000, receive_timeout_ms: 100}
+    }
+
+    initial_lifecycle = lifecycle_state(session)
+
+    assert {:error,
+            %{
+              reason: :upstream_websocket_receive_timeout,
+              transport_failure: %{
+                "termination_source" => "pooler_receive_timeout",
+                "pre_visible_output" => true,
+                "terminal_seen" => false
+              }
+            }} = UpstreamWebsocketSession.request(session, request)
+
+    assert_receive {:raw_upstream_websocket_connection, 1}, 1_000
+    assert_receive {:raw_upstream_websocket_request, 1, 1}, 1_000
+    assert :closed = wait_for_raw_websocket_connection_closed(1, 200)
+
+    set_raw_websocket_peer_response_mode(peer, :terminal)
+
+    assert {:ok, result} = UpstreamWebsocketSession.request(session, request)
+    assert_receive {:raw_upstream_websocket_connection, 2}, 1_000
+
+    generation_two = %{initial_lifecycle | generation: 2}
+    assert_connection_metadata(result, generation_two, false, true)
+    assert raw_websocket_peer_connection_count(peer) == 2
+  end
+
   test "does not treat response.created as upstream websocket terminal success" do
     parent = self()
 
@@ -2594,7 +2660,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     case raw_websocket_peer_recv_frame(socket) do
       {:ok, :text, _payload} ->
         request_count = request_count + 1
-        send_raw_websocket_peer_response(state, socket, connection_id, request_count)
+        send_raw_websocket_peer_response(state, socket, connection_id, request_count, owner)
 
         raw_websocket_peer_frame_loop(
           state,
@@ -2664,20 +2730,24 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     end
   end
 
-  defp send_raw_websocket_peer_response(state, socket, connection_id, request_count) do
-    response =
-      case Agent.get(state, & &1.response_mode) do
-        :hold_after_created ->
-          %{
-            "type" => "response.created",
-            "response" => %{"id" => "resp_raw_ws_#{connection_id}_#{request_count}"}
-          }
+  defp send_raw_websocket_peer_response(state, socket, connection_id, request_count, owner) do
+    case Agent.get(state, & &1.response_mode) do
+      :hold ->
+        send(owner, {:raw_upstream_websocket_request, connection_id, request_count})
+        :ok
 
-        :terminal ->
-          %{"id" => "resp_raw_ws_#{connection_id}_#{request_count}"}
-      end
+      :hold_after_created ->
+        response = %{
+          "type" => "response.created",
+          "response" => %{"id" => "resp_raw_ws_#{connection_id}_#{request_count}"}
+        }
 
-    :ok = :gen_tcp.send(socket, raw_websocket_server_text_frame(Jason.encode!(response)))
+        :gen_tcp.send(socket, raw_websocket_server_text_frame(Jason.encode!(response)))
+
+      :terminal ->
+        response = %{"id" => "resp_raw_ws_#{connection_id}_#{request_count}"}
+        :gen_tcp.send(socket, raw_websocket_server_text_frame(Jason.encode!(response)))
+    end
   end
 
   defp maybe_send_raw_websocket_peer_pong(state, socket, payload, first_ping_payload) do
