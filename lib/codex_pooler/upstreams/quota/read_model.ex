@@ -5,8 +5,8 @@ defmodule CodexPooler.Upstreams.Quota.ReadModel do
 
   import Ecto.Query
 
-  alias CodexPooler.Repo
   alias CodexPooler.Quotas.Evidence
+  alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.WindowSelector
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}

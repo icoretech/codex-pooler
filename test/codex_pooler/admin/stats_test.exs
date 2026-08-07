@@ -15,6 +15,7 @@ defmodule CodexPooler.Admin.StatsTest do
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Jobs
   alias CodexPooler.Jobs.RuntimeStateCleanupWorker
+  alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
 
@@ -1254,7 +1255,7 @@ defmodule CodexPooler.Admin.StatsTest do
     as_of = ~U[2026-08-08 12:00:00Z]
 
     observed_at =
-      DateTime.add(as_of, -CodexPooler.Quotas.Evidence.freshness_ttl_seconds() - 1, :second)
+      DateTime.add(as_of, -Evidence.freshness_ttl_seconds() - 1, :second)
 
     pool = pool_fixture(%{slug: "stats-read-time-freshness", name: "Stats Read Time Freshness"})
     %{identity: identity} = upstream_assignment_fixture(pool)
