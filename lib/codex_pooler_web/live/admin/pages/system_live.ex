@@ -1,7 +1,7 @@
 defmodule CodexPoolerWeb.Admin.SystemLive do
   use CodexPoolerWeb, :admin_live_view
 
-  alias CodexPooler.{Catalog, Dev, InstanceSettings, MCP, Pools}
+  alias CodexPooler.{Accounts, Catalog, Dev, InstanceSettings, MCP, Pools}
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.SystemPageComponents
   alias CodexPoolerWeb.Admin.SystemSettingsForm
@@ -51,7 +51,12 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
          group_snapshots: SystemSettingsForm.group_snapshots(form_params),
          card_statuses: SystemSettingsForm.initial_card_statuses(),
          development_action_status: nil,
-         smtp_test_status: nil
+         smtp_test_status: nil,
+         current_session_ip:
+           Accounts.current_user_session_ip(
+             socket.assigns.current_scope.user,
+             socket.assigns[:user_session_id]
+           )
        )
        |> assign_forms()}
     else
@@ -70,6 +75,13 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
        |> assign(:impeccable_live_status, CodexPoolerWeb.DevFeatures.impeccable_live_status())
        |> assign(:system_tabs, system_tabs(development_helpers_available?))
        |> assign(:mcp_key_count, MCP.count_operator_tokens())
+       |> assign(
+         :current_session_ip,
+         Accounts.current_user_session_ip(
+           socket.assigns.current_scope.user,
+           socket.assigns[:user_session_id]
+         )
+       )
        |> assign(:selected_tab, normalize_tab(params["tab"], development_helpers_available?))}
     else
       {:noreply, socket}
@@ -296,6 +308,54 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
         />
 
         <section :if={@owner_authorized?} id="system-workspace" class="grid gap-4">
+          <section
+            id="system-runtime-firewall-card"
+            data-firewall-state={firewall_state(@settings)}
+            class="rounded-box border border-base-300 bg-base-100 p-4"
+          >
+            <div class="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+              <div class="min-w-0">
+                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-primary">
+                  Runtime ingress
+                </p>
+                <h2 class="mt-1 text-lg font-semibold text-base-content">Firewall visibility</h2>
+                <p class="mt-1 text-sm text-base-content/60">
+                  Current policy state and the network address recorded for this authenticated session.
+                </p>
+              </div>
+
+              <dl class="grid min-w-0 gap-3 sm:grid-cols-2 md:min-w-[22rem]">
+                <div class="rounded-field border border-base-300 bg-base-200/50 px-3 py-2">
+                  <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/50">
+                    Firewall
+                  </dt>
+                  <dd class="mt-1">
+                    <span
+                      id="system-runtime-firewall-status"
+                      data-state={firewall_state(@settings)}
+                      class={firewall_status_class(@settings)}
+                    >
+                      {firewall_label(@settings)}
+                    </span>
+                  </dd>
+                </div>
+
+                <div class="min-w-0 rounded-field border border-base-300 bg-base-200/50 px-3 py-2">
+                  <dt class="text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/50">
+                    Current session IP
+                  </dt>
+                  <dd
+                    id="system-current-session-ip"
+                    data-state={if @current_session_ip, do: "available", else: "unavailable"}
+                    class="mt-1 truncate font-mono text-sm font-semibold text-base-content"
+                  >
+                    {@current_session_ip || "Unavailable"}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          </section>
+
           <SystemPageComponents.system_tab_picker tabs={@system_tabs} selected_tab={@selected_tab} />
 
           <SystemPageComponents.instance_settings_panel
@@ -458,6 +518,22 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
 
   defp smtp_changeset_status(_changeset) do
     %{tone: :error, message: "SMTP settings need correction before testing."}
+  end
+
+  defp firewall_enabled?(settings), do: settings.ingress.firewall_allowlist != []
+
+  defp firewall_state(settings),
+    do: if(firewall_enabled?(settings), do: "enabled", else: "disabled")
+
+  defp firewall_label(settings),
+    do: if(firewall_enabled?(settings), do: "Enabled", else: "Disabled")
+
+  defp firewall_status_class(settings) do
+    if firewall_enabled?(settings) do
+      "badge badge-success badge-sm font-semibold"
+    else
+      "badge badge-ghost badge-sm border-base-300 font-semibold text-base-content/70"
+    end
   end
 
   defp operator_email_for_status(%{user: %{email: email}}) when is_binary(email) do

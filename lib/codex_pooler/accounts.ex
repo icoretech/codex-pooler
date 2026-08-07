@@ -116,6 +116,9 @@ defmodule CodexPooler.Accounts do
   @spec session_id_for_token(term()) :: Ecto.UUID.t() | nil
   defdelegate session_id_for_token(token), to: Authentication
 
+  @spec current_user_session_ip(User.t(), Ecto.UUID.t() | nil) :: String.t() | nil
+  defdelegate current_user_session_ip(user, session_id), to: Authentication
+
   @spec list_user_sessions(User.t(), binary() | nil) :: [user_session_summary()]
   defdelegate list_user_sessions(user, current_token \\ nil), to: Authentication
 

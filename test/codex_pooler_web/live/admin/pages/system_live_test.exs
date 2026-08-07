@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
   import CodexPooler.PoolerFixtures, only: [active_api_key_fixture: 0]
 
   alias CodexPooler.Accounts
+  alias CodexPooler.Accounts.{Authentication, Session}
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Catalog.PricingSnapshot
   alias CodexPooler.FakeUpstream
@@ -65,6 +66,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
            )
 
     refute has_element?(view, "#system-workspace")
+    refute has_element?(view, "#system-runtime-firewall-card")
     refute has_element?(view, "#system-settings-panel")
     refute has_element?(view, "#instance-settings-gateway-form")
     refute has_element?(view, "#admin-nav-system")
@@ -205,6 +207,129 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
 
     assert has_element?(metrics_view, "#instance-settings-metrics-token-clear[type='checkbox']")
     refute has_element?(metrics_view, "#instance-settings-gateway-form")
+  end
+
+  test "shows runtime firewall state and only the current active session IP", %{
+    conn: conn,
+    user: user
+  } do
+    now = DateTime.utc_now()
+
+    current_session =
+      Repo.one!(
+        from session in Session,
+          where: session.user_id == ^user.id,
+          where: session.status == "active",
+          where: session.expires_at > ^now
+      )
+
+    Repo.update_all(
+      from(session in Session, where: session.id == ^current_session.id),
+      set: [ip_address: "198.51.100.23"]
+    )
+
+    Repo.insert!(%Session{
+      user_id: user.id,
+      session_token_hash: :crypto.hash(:sha256, "other-system-session"),
+      status: "active",
+      expires_at: DateTime.add(now, 1, :hour),
+      ip_address: "203.0.113.91",
+      created_at: now
+    })
+
+    assert {:ok, _settings} =
+             InstanceSettings.update_system_settings(InstanceSettings.ensure_singleton!(), %{
+               "ingress" => %{"firewall_allowlist" => ["198.51.100.0/24"]}
+             })
+
+    {:ok, view, html} = live(conn, ~p"/admin/system")
+
+    assert has_element?(view, "#system-runtime-firewall-card")
+
+    assert has_element?(
+             view,
+             "#system-runtime-firewall-status[data-state='enabled']",
+             "Enabled"
+           )
+
+    assert has_element?(
+             view,
+             "#system-current-session-ip[data-state='available']",
+             "198.51.100.23"
+           )
+
+    refute html =~ "203.0.113.91"
+  end
+
+  test "shows disabled firewall and a safe fallback without a recorded session IP", %{
+    conn: conn
+  } do
+    {:ok, view, _html} = live(conn, ~p"/admin/system")
+
+    assert has_element?(
+             view,
+             "#system-runtime-firewall-status[data-state='disabled']",
+             "Disabled"
+           )
+
+    assert has_element?(
+             view,
+             "#system-current-session-ip[data-state='unavailable']",
+             "Unavailable"
+           )
+  end
+
+  test "drops an expired current-session IP on repeated LiveView refresh", %{
+    conn: conn,
+    user: user
+  } do
+    now = DateTime.utc_now()
+
+    current_session =
+      Repo.one!(
+        from session in Session,
+          where: session.user_id == ^user.id,
+          where: session.status == "active",
+          where: session.expires_at > ^now
+      )
+
+    Repo.update_all(
+      from(session in Session, where: session.id == ^current_session.id),
+      set: [ip_address: "198.51.100.44"]
+    )
+
+    {:ok, view, _html} = live(conn, ~p"/admin/system")
+
+    assert has_element?(view, "#system-current-session-ip", "198.51.100.44")
+
+    Repo.update_all(
+      from(session in Session, where: session.id == ^current_session.id),
+      set: [expires_at: DateTime.add(now, -1, :second)]
+    )
+
+    render_patch(view, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    assert has_element?(
+             view,
+             "#system-current-session-ip[data-state='unavailable']",
+             "Unavailable"
+           )
+
+    refute render(view) =~ "198.51.100.44"
+
+    render_patch(view, ~p"/admin/system?#{%{"tab" => "smtp"}}")
+
+    assert has_element?(
+             view,
+             "#system-current-session-ip[data-state='unavailable']",
+             "Unavailable"
+           )
+  end
+
+  test "normalizes stored session IPs and rejects malformed values" do
+    assert Authentication.safe_session_ip("2001:db8::7") == "2001:db8::7"
+    assert Authentication.safe_session_ip("not-an-ip") == nil
+    assert Authentication.safe_session_ip(nil) == nil
   end
 
   test "hides development helpers when dev features are disabled even if the setting is true", %{

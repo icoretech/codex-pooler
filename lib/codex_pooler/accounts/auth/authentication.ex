@@ -131,6 +131,34 @@ defmodule CodexPooler.Accounts.Authentication do
 
   def session_id_for_token(_token), do: nil
 
+  @spec current_user_session_ip(User.t(), Ecto.UUID.t() | nil) :: String.t() | nil
+  def current_user_session_ip(%User{id: user_id}, session_id) when is_binary(session_id) do
+    now = DateTime.utc_now()
+
+    Repo.one(
+      from s in Session,
+        where: s.id == ^session_id,
+        where: s.user_id == ^user_id,
+        where: s.status == "active",
+        where: s.expires_at > ^now,
+        select: s.ip_address
+    )
+    |> safe_session_ip()
+  end
+
+  def current_user_session_ip(_user, _session_id), do: nil
+
+  @doc false
+  @spec safe_session_ip(term()) :: String.t() | nil
+  def safe_session_ip(ip_address) when is_binary(ip_address) do
+    case ip_address |> String.to_charlist() |> :inet.parse_address() do
+      {:ok, address} -> address |> :inet.ntoa() |> to_string()
+      {:error, _reason} -> nil
+    end
+  end
+
+  def safe_session_ip(_ip_address), do: nil
+
   @spec list_user_sessions(User.t(), binary() | nil) :: [user_session_summary()]
   def list_user_sessions(user, current_token \\ nil)
 
