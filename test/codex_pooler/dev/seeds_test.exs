@@ -23,7 +23,6 @@ defmodule CodexPooler.Dev.SeedsTest do
   alias CodexPooler.Pools.{ModelServingOverride, OperatorPoolAssignment, Pool}
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
-  alias CodexPooler.Upstreams.Quota.Charts, as: QuotaCharts
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPooler.Upstreams.Secrets
   alias CodexPoolerWeb.Admin.PoolForm
@@ -264,15 +263,6 @@ defmodule CodexPooler.Dev.SeedsTest do
              ),
              :count
            ) == 3
-
-    quota_charts = QuotaCharts.quota_remaining_charts_by_pool_ids([active_pool.id])
-    primary_chart = get_in(quota_charts, [active_pool.id, :primary_5h])
-    weekly_chart = get_in(quota_charts, [active_pool.id, :weekly])
-
-    assert primary_chart.state == "usable"
-    assert weekly_chart.state == "usable"
-    assert Enum.any?(primary_chart.items, &(&1.label == "Dev Active Assignment"))
-    assert Enum.any?(weekly_chart.items, &(&1.label == "Dev Active Assignment"))
 
     upstream_accounts = UpstreamAccountsReadModel.list_visible_accounts(owner_scope, pools)
     quota_labels = upstream_accounts |> Enum.flat_map(& &1.quota_limits) |> Enum.map(& &1.label)

@@ -18,65 +18,6 @@ defmodule CodexPooler.Upstreams.Quota.Charts.Measurements do
     }
   end
 
-  @spec apply_weekly_cap(map(), [map()]) :: map()
-  def apply_weekly_cap(primary, weekly_items) do
-    case matching_weekly_cap(primary, weekly_items) do
-      %{remaining: weekly_remaining} when not is_nil(weekly_remaining) ->
-        capped_remaining = decimal_min(primary.remaining, weekly_remaining)
-        capacity = primary.capacity
-        used = used(capacity, capped_remaining)
-        percentages = percentages(capped_remaining, capacity)
-
-        primary
-        |> Map.merge(%{remaining: capped_remaining, used: used})
-        |> Map.merge(percentages)
-
-      _weekly ->
-        primary
-    end
-  end
-
-  @spec sum([map()], atom()) :: Decimal.t() | nil
-  def sum(items, field) do
-    sum_known(items, field)
-  end
-
-  @spec sum_known([map()], atom()) :: Decimal.t() | nil
-  def sum_known(items, field) do
-    values = items |> Enum.map(&Map.get(&1, field)) |> Enum.reject(&is_nil/1)
-
-    if values == [] or length(values) != length(items) do
-      nil
-    else
-      Enum.reduce(values, Decimal.new(0), &Decimal.add/2)
-    end
-  end
-
-  @spec items_used_percent([map()]) :: Decimal.t() | nil
-  def items_used_percent(items) do
-    capacity = sum_known(items, :capacity)
-    remaining = sum_known(items, :remaining)
-
-    if is_nil(capacity) or is_nil(remaining) or Decimal.compare(capacity, Decimal.new(0)) != :gt do
-      nil
-    else
-      used_percent(remaining, capacity, nil)
-    end
-  end
-
-  defp matching_weekly_cap(primary, weekly_items) do
-    Enum.find(weekly_items, fn weekly ->
-      not is_nil(primary.window_assignment_id) and
-        primary.window_assignment_id == item_assignment_id(weekly)
-    end) ||
-      Enum.find(weekly_items, fn weekly ->
-        weekly.upstream_identity_id == primary.upstream_identity_id
-      end)
-  end
-
-  defp item_assignment_id(item),
-    do: Map.get(item, :window_assignment_id) || item.assignment_id
-
   defp remaining(%Quota.AccountQuotaWindow{
          active_limit: active_limit,
          credits: 0,
@@ -192,13 +133,6 @@ defmodule CodexPooler.Upstreams.Quota.Charts.Measurements do
 
   defp remaining_percent(_remaining, _capacity, _used_percent), do: nil
 
-  defp percentages(remaining, capacity) do
-    %{
-      remaining_percent: remaining_percent(remaining, capacity, nil),
-      used_percent: used_percent(remaining, capacity, nil)
-    }
-  end
-
   defp decimal_non_negative(%Decimal{} = value) do
     if Decimal.compare(value, Decimal.new(0)) == :lt, do: Decimal.new(0), else: value
   end
@@ -209,11 +143,5 @@ defmodule CodexPooler.Upstreams.Quota.Charts.Measurements do
       Decimal.compare(value, Decimal.new(100)) == :gt -> Decimal.new(100)
       true -> value
     end
-  end
-
-  defp decimal_min(nil, value), do: value
-
-  defp decimal_min(%Decimal{} = left, %Decimal{} = right) do
-    if Decimal.compare(left, right) == :gt, do: right, else: left
   end
 end
