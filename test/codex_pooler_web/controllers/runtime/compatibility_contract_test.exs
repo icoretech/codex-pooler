@@ -160,23 +160,73 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       forwarded_client_ip = firewall_fixture.forwarded_client_ip
 
       assert Map.take(forwarded_client_ip, [
+               :sources,
+               :default_source,
+               :default_proxy_depth,
+               :source_depths,
                :trusted_peer_required_for_x_forwarded_for,
                :trusted_peer_required_for_x_real_ip,
+               :selected_source_fallback,
+               :xff_duplicate_fields,
+               :x_real_ip_fields,
+               :positional_depth,
                :max_hops,
                :max_entry_bytes,
                :accepted_ports,
-               :nonruntime_client_ip
+               :nonruntime_client_ip,
+               :strict_ip_cidr
              ]) == %{
+               sources: [:peer, :x_forwarded_for, :x_real_ip],
+               default_source: :x_forwarded_for,
+               default_proxy_depth: 0,
+               source_depths: %{peer: [0], x_forwarded_for: 0..16, x_real_ip: [0]},
                trusted_peer_required_for_x_forwarded_for: true,
                trusted_peer_required_for_x_real_ip: true,
+               selected_source_fallback: false,
+               xff_duplicate_fields: :combined_in_wire_order,
+               x_real_ip_fields: :exactly_one,
+               positional_depth: %{
+                 range: 1..16,
+                 selected_entry: :nth_from_right,
+                 peer_counts_as_proxy: true,
+                 peer_is_xff_entry: false
+               },
                max_hops: 32,
                max_entry_bytes: 64,
                accepted_ports: %{ipv4: true, bracketed_ipv6: true, range: 1..65_535},
-               nonruntime_client_ip: :peer
+               nonruntime_client_ip: :peer,
+               strict_ip_cidr: %{
+                 outer_whitespace: :ascii_space_or_tab,
+                 prefix: :canonical_unsigned_decimal,
+                 ipv4_mapped_ipv6: :normalized_to_ipv4,
+                 invalid_stored_rules: :fail_closed
+               }
              }
 
-      assert forwarded_client_ip.x_real_ip_when_xff_absent
-      refute forwarded_client_ip.x_real_ip_after_xff_present_error
+      assert firewall.current == :explicit_forwarded_client_policy
+
+      assert Map.take(firewall_fixture, [
+               :allowlist,
+               :cold_settings,
+               :warm_settings,
+               :revoked_websocket,
+               :denial_telemetry
+             ]) == %{
+               allowlist: %{empty: :disabled},
+               cold_settings: %{status: 503, runtime_and_mcp: :fail_closed},
+               warm_settings: :last_known_good_enforced,
+               revoked_websocket: %{
+                 close_code: 1008,
+                 admitted_work: :finishes,
+                 new_work: :refused,
+                 reason: :websocket_revoked
+               },
+               denial_telemetry: %{
+                 metric: "codex_pooler_ingress_firewall_denied_count",
+                 labels: [:scope, :reason],
+                 accounting: :before_authenticated_request_accounting
+               }
+             }
 
       assert image_permission.routes == [
                %{method: :post, path: "/backend-api/codex/images/generations"},

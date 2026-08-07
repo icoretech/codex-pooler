@@ -112,26 +112,47 @@ After the app boots, manage operational settings from the admin UI instead of ed
 
 Secret settings stay write-only in the UI. For example, metrics bearer material is stored as a keyed digest and SMTP credentials are stored encrypted for mail delivery and credential checks.
 
-### Runtime ingress limits and trusted proxies
+### Forwarded client IP policy
 
-The runtime firewall applies to the runtime API families and the operator MCP
+The runtime firewall applies to runtime API families and the operator MCP
 endpoint. An empty client allowlist disables it. When the allowlist is set, use
-exact client IPs or CIDRs. Configure `trusted_proxies` with only the immediate
-proxy IPs or CIDRs that are allowed to supply forwarded client headers.
+exact client IPs or CIDRs. `trusted_proxies` is a prerequisite for forwarding:
+list only the immediate proxy IPs or CIDRs allowed to supply a client address.
+If the directly connected peer is not trusted, every forwarded header is ignored
+and the peer address is evaluated instead.
 
-Forwarded headers are resolved conservatively:
+The policy has three sources and one default:
 
-- An untrusted immediate peer cannot change the client address; its
-  `x-forwarded-for` and `x-real-ip` values are ignored.
-- `x-forwarded-for` takes precedence over `x-real-ip`. Duplicate
-  `x-forwarded-for` headers are read in wire order and traversed from right to
-  left, stopping at the first nontrusted hop.
-- Only the first `x-real-ip` value is used when no `x-forwarded-for` header is
-  present. A malformed `x-forwarded-for` chain never falls back to it.
-- Resolution accepts IPv4, IPv6, bracketed IPv6, and optional decimal ports from
-  `1` through `65535`. Forwarded-header values are scanned within a 128-byte
-  bound; each trimmed entry is printable ASCII, capped at 64 bytes, and the
-  chain is limited to 32 hops.
+| `forwarded_client_ip_source` | Allowed `forwarded_proxy_depth` | Resolution |
+| --- | --- | --- |
+| `peer` | `0` | Ignore forwarding headers and use the directly connected peer |
+| `x_forwarded_for` | `0..16` | Use the selected XFF rule below, but only after the trusted-peer check |
+| `x_real_ip` | `0` | Ignore XFF and require exactly one X-Real-IP field after the trusted-peer check |
+
+The default is `x_forwarded_for` with depth `0` (default `x_forwarded_for` with
+depth `0`). At depth `0`, the resolver walks XFF from right to left and selects
+the first nontrusted address. At depth `1..16`, it selects the positional entry
+instead: Depth `2` selects the second XFF entry from the right. The directly
+connected peer counts toward the configured proxy depth, but is not an XFF entry.
+Duplicate XFF field occurrences are combined in wire order before this selection.
+There is no mixed-header fallback: the selected source is authoritative.
+
+Forwarded addresses accept IPv4, IPv6, bracketed IPv6, and optional decimal ports
+from `1` through `65535`. Values are bounded to 64 printable ASCII bytes after
+ASCII space or tab trimming, and XFF traversal is bounded to 32 entries. IP and
+CIDR rules use one strict grammar: only outer ASCII space or tab is accepted,
+prefixes are canonical unsigned decimal values, and IPv4-mapped IPv6 values
+normalize to IPv4. A stored allowlist or trusted-proxy list with one invalid rule
+fails closed rather than partially applying the rest.
+
+If settings are unavailable on a cold start, runtime and MCP requests return
+`503`; a warm node continues enforcing its last known good snapshot. Existing
+websocket clients are rechecked after a locally applied firewall update. New work
+is refused, already admitted work can finish, and the socket then closes with
+code `1008`.
+
+Firewall denials emit `codex_pooler_ingress_firewall_denied_count` with only
+`scope` and `reason` labels. They occur before authenticated request accounting.
 
 Paths are decoded once for classification. Unsafe decoded candidates on runtime
 and MCP routes receive fixed, sanitized invalid-path responses before

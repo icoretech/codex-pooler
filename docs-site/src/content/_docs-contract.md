@@ -236,6 +236,40 @@ Forbidden fields and examples:
 - Bearer tokens, Pool API keys, MCP tokens, cookies, access tokens, refresh tokens, `auth.json`, TOTP secrets, SMTP secrets, signing secrets, and raw idempotency keys
 - Internal incident procedures, cluster names, pod names, private hostnames, real account identifiers, raw OpenAI user subjects, raw emails, and private IP addresses
 
+## Runtime ingress firewall contract
+
+Public configuration may describe the runtime firewall only as an ingress policy
+for runtime API families and `/mcp`. It may say that an empty allowlist disables
+the policy, forwarded-client configuration has exactly `peer`,
+`x_forwarded_for`, and `x_real_ip` sources, and the defaults are
+`forwarded_client_ip_source = x_forwarded_for` with `forwarded_proxy_depth = 0`.
+It must not describe an implicit, mixed, or fallback source selection.
+
+Every forwarded source requires a trusted directly connected peer before its
+header is used. `peer` accepts depth `0` and ignores forwarding headers.
+`x_real_ip` accepts depth `0`, ignores XFF, and requires one X-Real-IP field.
+`x_forwarded_for` at depth `0` uses the bounded trusted-CIDR walk. At depth
+`1..16`, the documented position is the numbered XFF entry from the right after
+duplicate field occurrences are combined in wire order. The directly connected
+peer counts toward configured proxy depth, but is not an XFF entry.
+
+Public docs may describe strict IPv4/IPv6 and CIDR parsing, the cold settings
+`503` response, websocket revocation after a locally applied firewall update,
+and `codex_pooler_ingress_firewall_denied_count` with only `scope` and `reason`
+labels. Do not publish raw forwarded header values, client addresses, internal
+recovery steps, or unbounded reason data.
+
+The machine-readable denial reasons for those two operational outcomes are
+`settings_unavailable` and `websocket_revoked`. They are bounded diagnostic
+terms, not client-address or forwarding-header data.
+
+The source map for this claim is
+`lib/codex_pooler_web/plugs/runtime_ingress/forwarded_client_ip.ex`,
+`lib/codex_pooler_web/plugs/runtime_ingress/firewall.ex`,
+`lib/codex_pooler/gateway/operational_settings/ip_rules.ex`,
+`test/codex_pooler_web/plugs/runtime_ingress/forwarded_client_ip_test.exs`, and
+`test/codex_pooler_web/controllers/runtime/backend_codex_websocket_test.exs`.
+
 ## Source Map For Public Route Claims
 
 Use these tracked sources as the source of truth for public route claims. Do not promote claims from ignored root `docs/` material or internal runbooks unless the claim is also present in a tracked source below.

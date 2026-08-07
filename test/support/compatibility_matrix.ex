@@ -415,7 +415,7 @@ defmodule CodexPooler.CompatibilityMatrix do
     %{
       slug: :firewall,
       status: :supported,
-      current: :runtime_route_family_allowlist,
+      current: :explicit_forwarded_client_policy,
       categories: [:route, :auth, :error, :ownership],
       routes: [
         %{family: :backend_codex, method: :get, path: "/backend-api/codex/models"},
@@ -443,7 +443,8 @@ defmodule CodexPooler.CompatibilityMatrix do
       ],
       future_routes: [],
       fixture: :firewall,
-      contract: "firewall checks are path-gated to runtime compatibility routes"
+      contract:
+        "firewall checks are path-gated to runtime compatibility routes, use one explicit forwarded-client source with x_forwarded_for/depth 0 defaults, require a trusted immediate peer before any selected forwarding header, resolve duplicate XFF fields in wire order, fail cold settings with 503 while warm nodes keep last-known-good enforcement, revoke already-open websocket clients after local policy application without admitting new work, and expose one bounded denial counter with only scope and reason labels"
     },
     %{
       slug: :decompression,
@@ -1320,16 +1321,46 @@ defmodule CodexPooler.CompatibilityMatrix do
         candidate_nul: %{classification: :truncate, runtime: :reject_invalid_path}
       },
       forwarded_client_ip: %{
+        sources: [:peer, :x_forwarded_for, :x_real_ip],
+        default_source: :x_forwarded_for,
+        default_proxy_depth: 0,
+        source_depths: %{peer: [0], x_forwarded_for: 0..16, x_real_ip: [0]},
         trusted_peer_required_for_x_forwarded_for: true,
         trusted_peer_required_for_x_real_ip: true,
-        x_real_ip_when_xff_absent: true,
-        x_real_ip_after_xff_present_error: false,
+        selected_source_fallback: false,
+        xff_duplicate_fields: :combined_in_wire_order,
+        x_real_ip_fields: :exactly_one,
+        positional_depth: %{
+          range: 1..16,
+          selected_entry: :nth_from_right,
+          peer_counts_as_proxy: true,
+          peer_is_xff_entry: false
+        },
         max_hops: 32,
         max_entry_bytes: 64,
         accepted_ports: %{ipv4: true, bracketed_ipv6: true, range: 1..65_535},
-        nonruntime_client_ip: :peer
+        nonruntime_client_ip: :peer,
+        strict_ip_cidr: %{
+          outer_whitespace: :ascii_space_or_tab,
+          prefix: :canonical_unsigned_decimal,
+          ipv4_mapped_ipv6: :normalized_to_ipv4,
+          invalid_stored_rules: :fail_closed
+        }
       },
-      allowlist: %{empty: :disabled}
+      allowlist: %{empty: :disabled},
+      cold_settings: %{status: 503, runtime_and_mcp: :fail_closed},
+      warm_settings: :last_known_good_enforced,
+      revoked_websocket: %{
+        close_code: 1008,
+        admitted_work: :finishes,
+        new_work: :refused,
+        reason: :websocket_revoked
+      },
+      denial_telemetry: %{
+        metric: "codex_pooler_ingress_firewall_denied_count",
+        labels: [:scope, :reason],
+        accounting: :before_authenticated_request_accounting
+      }
     },
     compressed_request: %{encoding: "gzip", bytes: "synthetic compressed bytes"},
     bulkhead_overload: %{lane: "proxy_http", decision: "synthetic shed"},
