@@ -5,8 +5,8 @@ defmodule CodexPoolerWeb.Browser.BrowserSecurityHeadersTest do
   alias CodexPooler.InstanceSettings.Settings
   alias CodexPooler.Repo
   alias CodexPoolerWeb.BrowserSecurity
-  alias CodexPoolerWeb.Plugs.TrustedProxyRemoteIp
   alias CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIP.Resolution
+  alias CodexPoolerWeb.Plugs.TrustedProxyRemoteIp
 
   @codex_desktop_user_agent "Mozilla/5.0 Codex/26.519.81530 Chrome/148.0.7778.97 Electron/42.1.0 Safari/537.36"
   @codex_desktop_in_app_browser_user_agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"

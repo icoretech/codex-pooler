@@ -3,8 +3,8 @@ defmodule CodexPoolerWeb.RequestLogger do
 
   require Logger
 
-  alias Plug.Conn.Status
   alias CodexPoolerWeb.Plugs.TrustedProxyRemoteIp
+  alias Plug.Conn.Status
 
   @event [:phoenix, :endpoint, :stop]
   @handler_id {__MODULE__, :endpoint_stop}
