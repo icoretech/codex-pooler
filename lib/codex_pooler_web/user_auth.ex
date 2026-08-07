@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.UserAuth do
 
   alias CodexPooler.Accounts
   alias CodexPooler.Accounts.{Scope, SessionNotifier}
+  alias CodexPoolerWeb.Plugs.TrustedProxyRemoteIp
 
   @session_key :user_token
 
@@ -141,11 +142,17 @@ defmodule CodexPoolerWeb.UserAuth do
   end
 
   def request_metadata(conn) do
-    %{
-      ip_address: remote_ip(conn),
-      request_id: List.first(get_resp_header(conn, "x-request-id")),
-      user_agent: get_req_header(conn, "user-agent") |> List.first()
-    }
+    Map.merge(
+      %{
+        ip_address: remote_ip(conn),
+        request_id: List.first(get_resp_header(conn, "x-request-id")),
+        user_agent: get_req_header(conn, "user-agent") |> List.first()
+      },
+      case TrustedProxyRemoteIp.peer_provenance(conn) do
+        provenance when map_size(provenance) > 0 -> %{ingress_peer_provenance: provenance}
+        _empty -> %{}
+      end
+    )
   end
 
   defp mount_current_scope(socket, session) do

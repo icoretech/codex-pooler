@@ -108,7 +108,13 @@ defmodule CodexPooler.MCP.MetadataSanitizer do
   defp raw_email?(value),
     do: Regex.match?(~r/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/, value)
 
-  defp raw_ip?(value), do: Regex.match?(~r/^\d{1,3}(?:\.\d{1,3}){3}$/, value)
+  defp raw_ip?(value) do
+    case :inet.parse_address(:binary.bin_to_list(value)) do
+      {:ok, _address} -> true
+      {:error, _reason} -> false
+    end
+  end
+
   defp raw_url?(value), do: Regex.match?(~r/^https?:\/\//, value)
   defp bearer_or_key?(value), do: Regex.match?(~r/(?i)\bbearer\s+|sk-cxp-[a-z0-9_-]+/, value)
 

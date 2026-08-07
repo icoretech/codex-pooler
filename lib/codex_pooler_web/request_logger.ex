@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.RequestLogger do
   require Logger
 
   alias Plug.Conn.Status
+  alias CodexPoolerWeb.Plugs.TrustedProxyRemoteIp
 
   @event [:phoenix, :endpoint, :stop]
   @handler_id {__MODULE__, :endpoint_stop}
@@ -32,15 +33,16 @@ defmodule CodexPoolerWeb.RequestLogger do
 
   @spec request_log_line(Plug.Conn.t(), integer()) :: String.t()
   def request_log_line(conn, duration) do
-    [
-      "request_completed",
-      "method=#{safe_token(conn.method)}",
-      "path=#{safe_token(conn.request_path)}",
-      "status=#{safe_status(conn.status)}",
-      "duration_ms=#{duration_ms(duration)}",
-      "remote_ip=#{safe_token(remote_ip(conn.remote_ip))}",
-      "user_agent=#{inspect(sanitize_user_agent(user_agent(conn)))}"
-    ]
+    ([
+       "request_completed",
+       "method=#{safe_token(conn.method)}",
+       "path=#{safe_token(conn.request_path)}",
+       "status=#{safe_status(conn.status)}",
+       "duration_ms=#{duration_ms(duration)}",
+       "remote_ip=#{safe_token(remote_ip(conn.remote_ip))}"
+     ] ++
+       peer_provenance_fields(conn) ++
+       ["user_agent=#{inspect(sanitize_user_agent(user_agent(conn)))}"])
     |> Enum.join(" ")
   end
 
@@ -69,6 +71,24 @@ defmodule CodexPoolerWeb.RequestLogger do
   end
 
   defp remote_ip(ip), do: ip |> :inet.ntoa() |> to_string()
+
+  defp peer_provenance_fields(conn) do
+    case TrustedProxyRemoteIp.peer_provenance(conn) do
+      %{
+        immediate_peer_ip: peer_ip,
+        client_ip_source: source,
+        inspected_hops: inspected_hops
+      } ->
+        [
+          "immediate_peer_ip=#{safe_token(peer_ip)}",
+          "client_ip_source=#{safe_token(source)}",
+          "inspected_hops=#{inspected_hops}"
+        ]
+
+      _empty ->
+        []
+    end
+  end
 
   defp safe_token(value) when is_binary(value) do
     value

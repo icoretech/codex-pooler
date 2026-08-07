@@ -110,7 +110,33 @@ defmodule CodexPoolerWeb.Runtime.RequestLoggingTest do
 
     assert line =~ "path=/login"
     assert line =~ "remote_ip=203.0.113.55"
-    refute line =~ "10.42.0.50"
+    assert line =~ "immediate_peer_ip=10.42.0.50"
+    assert line =~ "client_ip_source=x_forwarded_for"
+    assert line =~ "inspected_hops=2"
+  end
+
+  test "request logging omits peer provenance from untrusted forwarding input", %{conn: conn} do
+    setup_trusted_proxies(["10.42.0.0/16"])
+
+    log =
+      capture_log([level: :info], fn ->
+        conn
+        |> Map.put(:remote_ip, {198, 51, 100, 20})
+        |> put_req_header("x-forwarded-for", "203.0.113.55")
+        |> get(~p"/login")
+        |> response(302)
+      end)
+
+    assert [line] =
+             log
+             |> String.split("\n", trim: true)
+             |> Enum.filter(&String.contains?(&1, "request_completed"))
+
+    assert line =~ "remote_ip=198.51.100.20"
+    refute line =~ "immediate_peer_ip="
+    refute line =~ "client_ip_source="
+    refute line =~ "inspected_hops="
+    refute line =~ "203.0.113.55"
   end
 
   test "healthy backend response coalesces routing request metadata writes", %{conn: conn} do

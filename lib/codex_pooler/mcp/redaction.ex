@@ -176,7 +176,8 @@ defmodule CodexPooler.MCP.Redaction do
         ] and raw_email?(value) ->
           raise_assertion("structuredContent leaked raw email at #{format_path(next_path)}")
 
-        normalized in ["ip", "ip_address", "client_ip"] and raw_ip?(value) ->
+        normalized in ["ip", "ip_address", "client_ip", "immediate_peer_ip"] and
+            raw_ip?(value) ->
           raise_assertion("structuredContent leaked raw ip_address at #{format_path(next_path)}")
 
         normalized in ["upload_url", "download_url", "signed_url", "sas_url"] and raw_url?(value) ->
@@ -230,8 +231,12 @@ defmodule CodexPooler.MCP.Redaction do
 
   defp raw_email?(_value), do: false
 
-  defp raw_ip?(value) when is_binary(value),
-    do: Regex.match?(~r/^\d{1,3}(?:\.\d{1,3}){3}$/, value)
+  defp raw_ip?(value) when is_binary(value) do
+    case :inet.parse_address(:binary.bin_to_list(value)) do
+      {:ok, _address} -> true
+      {:error, _reason} -> false
+    end
+  end
 
   defp raw_ip?(_value), do: false
 

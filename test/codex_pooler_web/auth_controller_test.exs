@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.AuthControllerTest do
 
   alias CodexPooler.Accounts
   alias CodexPooler.Accounts.{Session, User}
+  alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Repo
 
@@ -126,7 +127,8 @@ defmodule CodexPoolerWeb.AuthControllerTest do
     refute Accounts.get_user_by_session_token(token)
   end
 
-  test "browser login records the forwarded IP when the peer is a trusted proxy", %{conn: conn} do
+  test "browser login records the forwarded IP and bounded peer provenance when the peer is a trusted proxy",
+       %{conn: conn} do
     setup_trusted_proxies(["10.42.0.0/16"])
     %{user: user} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
 
@@ -140,8 +142,39 @@ defmodule CodexPoolerWeb.AuthControllerTest do
 
     assert redirected_to(conn) == ~p"/admin/pools"
     session = Repo.get!(Session, Accounts.session_id_for_token(get_session(conn, :user_token)))
+    audit = Repo.get_by!(AuditEvent, action: "auth.login", actor_user_id: user.id)
 
     assert session.ip_address == "203.0.113.55"
+    assert audit.ip_address == "203.0.113.55"
+
+    assert audit.details["ingress_peer_provenance"] == %{
+             "client_ip_source" => "x_forwarded_for",
+             "immediate_peer_ip" => "10.42.0.50",
+             "inspected_hops" => 2
+           }
+  end
+
+  test "browser login omits peer provenance when forwarding comes from an untrusted peer", %{
+    conn: conn
+  } do
+    setup_trusted_proxies(["10.42.0.0/16"])
+    %{user: user} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
+
+    conn =
+      conn
+      |> Map.put(:remote_ip, {198, 51, 100, 20})
+      |> put_req_header("x-forwarded-for", "203.0.113.55")
+      |> post(~p"/login", %{
+        "user" => %{"email" => user.email, "password" => valid_user_password()}
+      })
+
+    assert redirected_to(conn) == ~p"/admin/pools"
+    session = Repo.get!(Session, Accounts.session_id_for_token(get_session(conn, :user_token)))
+    audit = Repo.get_by!(AuditEvent, action: "auth.login", actor_user_id: user.id)
+
+    assert session.ip_address == "198.51.100.20"
+    assert audit.ip_address == "198.51.100.20"
+    refute Map.has_key?(audit.details, "ingress_peer_provenance")
   end
 
   test "browser login falls back to the peer when trusted forwarding input is malformed", %{
@@ -160,8 +193,11 @@ defmodule CodexPoolerWeb.AuthControllerTest do
 
     assert redirected_to(conn) == ~p"/admin/pools"
     session = Repo.get!(Session, Accounts.session_id_for_token(get_session(conn, :user_token)))
+    audit = Repo.get_by!(AuditEvent, action: "auth.login", actor_user_id: user.id)
 
     assert session.ip_address == "10.42.0.50"
+    assert audit.ip_address == "10.42.0.50"
+    refute Map.has_key?(audit.details, "ingress_peer_provenance")
   end
 
   test "authenticated root redirects to pools", %{conn: conn} do

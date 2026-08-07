@@ -279,6 +279,55 @@ defmodule CodexPooler.AccountsTest do
       assert event.details == %{"reason" => "manual"}
     end
 
+    test "retains only normalized bounded ingress peer provenance" do
+      %{user: user} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
+
+      assert {:ok, event} =
+               AuditLog.record_user_event(user, %{
+                 action: "auth.logout",
+                 target_type: "session",
+                 metadata: %{
+                   ingress_peer_provenance: %{
+                     immediate_peer_ip: "2001:db8::42",
+                     client_ip_source: :x_forwarded_for,
+                     inspected_hops: 500,
+                     raw_headers: %{"x-forwarded-for" => "must-not-persist"},
+                     token: "must-not-persist"
+                   }
+                 },
+                 details: %{reason: "manual"}
+               })
+
+      assert Repo.reload!(event).details == %{
+               "ingress_peer_provenance" => %{
+                 "client_ip_source" => "x_forwarded_for",
+                 "immediate_peer_ip" => "2001:db8::42",
+                 "inspected_hops" => 32
+               },
+               "reason" => "manual"
+             }
+    end
+
+    test "omits malformed ingress peer provenance without raising" do
+      %{user: user} = bootstrap_owner_fixture(%{"email" => "owner@example.com"})
+
+      assert {:ok, event} =
+               AuditLog.record_user_event(user, %{
+                 action: "auth.logout",
+                 target_type: "session",
+                 metadata: %{
+                   ingress_peer_provenance: %{
+                     immediate_peer_ip: <<255, 0, 44>>,
+                     client_ip_source: "x_forwarded_for",
+                     inspected_hops: 2
+                   }
+                 },
+                 details: %{reason: "manual"}
+               })
+
+      assert Repo.reload!(event).details == %{"reason" => "manual"}
+    end
+
     test "ignores invalid actors without writing an audit row" do
       assert {:ok, nil} =
                AuditLog.record_user_event(:not_a_user, %{

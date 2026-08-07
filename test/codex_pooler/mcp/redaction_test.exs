@@ -136,6 +136,21 @@ defmodule CodexPooler.MCP.RedactionTest do
     end
   end
 
+  test "structuredContent helper rejects raw IPv4 and IPv6 immediate peer addresses" do
+    for peer_ip <- ["192.0.2.91", "2001:db8::91"] do
+      assert_raise ExUnit.AssertionError, ~r/ip_address/, fn ->
+        Redaction.assert_structured_content_safe!(%{"immediate_peer_ip" => peer_ip})
+      end
+    end
+
+    assert :ok =
+             Redaction.assert_structured_content_safe!(%{
+               "immediate_peer_ip" => "[REDACTED]",
+               "client_ip_source" => "x_forwarded_for",
+               "inspected_hops" => 2
+             })
+  end
+
   test "text compatibility does not mirror entire structured payload into text" do
     structured = %{
       "items" => [%{"id" => "req_123", "secret_like_safe_label" => "structured-only"}]
