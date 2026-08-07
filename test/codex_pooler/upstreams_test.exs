@@ -9848,9 +9848,9 @@ defmodule CodexPooler.UpstreamsTest do
       assert evidence.quota_family == "codex_future_family"
       assert evidence.raw_limit_id == "codex_future_family"
       assert evidence.window_kind == "secondary"
+      assert Decimal.equal?(evidence.used_percent, Decimal.new("100"))
       assert evidence.observed_at == observed_at
       assert DateTime.compare(evidence.reset_at, DateTime.add(observed_at, 120, :second)) == :eq
-      refute Quotas.Evidence.routing_usable?(evidence, observed_at)
     end
 
     test "remaps weekly-duration primary header slot to the weekly secondary window" do

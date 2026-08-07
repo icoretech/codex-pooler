@@ -140,12 +140,6 @@ defmodule CodexPooler.Quotas.Evidence do
   def parse_rate_limit_error(payload, observed_at \\ now()),
     do: CodexParsers.parse_rate_limit_error(payload, observed_at)
 
-  @spec routing_usable?(t(), DateTime.t()) :: boolean()
-  def routing_usable?(%__MODULE__{} = evidence, timestamp \\ now()) do
-    current_freshness_state(evidence, timestamp) == "fresh" and not exhausted?(evidence) and
-      reset_bearing?(evidence) and not expired?(evidence, timestamp)
-  end
-
   @spec current_freshness_state(t() | map(), DateTime.t()) :: String.t()
   def current_freshness_state(evidence_or_window, timestamp \\ now())
 
@@ -369,15 +363,6 @@ defmodule CodexPooler.Quotas.Evidence do
   defp future_observed_at?(observed_at, timestamp) do
     DateTime.diff(observed_at, timestamp, :second) > future_observed_skew_seconds()
   end
-
-  defp exhausted?(%__MODULE__{used_percent: %Decimal{} = used_percent}) do
-    Decimal.compare(used_percent, Decimal.new(100)) != :lt
-  end
-
-  defp exhausted?(%__MODULE__{active_limit: 0}), do: true
-  defp exhausted?(%__MODULE__{credits: 0}), do: true
-
-  defp exhausted?(_evidence), do: false
 
   defp fetch(attrs, key), do: Map.get(attrs, key) || Map.get(attrs, Atom.to_string(key))
 
