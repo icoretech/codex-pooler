@@ -1,11 +1,159 @@
 defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   use ExUnit.Case, async: false
 
+  alias CodexPooler.Gateway.OperationalSettings.IPRules
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
+  alias CodexPooler.InstanceSettings
+  alias CodexPooler.InstanceSettings.Cache
   alias CodexPoolerWeb.CodexResponsesSocket
+
+  @applied_message_tag Cache
+  @revocation_close {1008, "client IP is no longer allowed"}
+
+  test "locally applied allowed settings are a no-op and stale versions are ignored" do
+    original = InstanceSettings.current()
+    on_exit(fn -> Cache.put(original) end)
+
+    allowed = firewall_settings(original, original.lock_version + 1, ["127.0.0.1"])
+    :ok = Cache.put(allowed)
+    state = firewall_socket_state(original.lock_version)
+
+    assert {:ok, ^state} =
+             CodexResponsesSocket.handle_info(
+               applied_message(allowed.lock_version + 1),
+               state
+             )
+
+    assert {:ok, allowed_state} =
+             CodexResponsesSocket.handle_info(applied_message(allowed.lock_version), state)
+
+    refute allowed_state.firewall_revoked?
+    assert allowed_state.firewall_applied_version == allowed.lock_version
+
+    denied = firewall_settings(allowed, allowed.lock_version + 1, ["203.0.113.10"])
+    :ok = Cache.put(denied)
+
+    assert {:ok, ^allowed_state} =
+             CodexResponsesSocket.handle_info(
+               applied_message(allowed.lock_version),
+               allowed_state
+             )
+  end
+
+  test "idle revocation closes once and later reallow cannot reopen the latch" do
+    original = InstanceSettings.current()
+    on_exit(fn -> Cache.put(original) end)
+    denied = firewall_settings(original, original.lock_version + 1, ["203.0.113.10"])
+    :ok = Cache.put(denied)
+    state = firewall_socket_state(original.lock_version)
+
+    telemetry_id = attach_firewall_telemetry()
+    on_exit(fn -> :telemetry.detach(telemetry_id) end)
+
+    {result, logs} =
+      ExUnit.CaptureLog.with_log([level: :warning], fn ->
+        CodexResponsesSocket.handle_info(applied_message(denied.lock_version), state)
+      end)
+
+    assert {:stop, :normal, @revocation_close, revoked_state} = result
+
+    assert revoked_state.firewall_revoked?
+    assert revoked_state.firewall_close_sent?
+
+    assert_receive {:firewall_denied, %{count: 1},
+                    %{scope: "runtime", reason: "websocket_revoked"}}
+
+    assert length(Regex.scan(~r/ingress firewall denied/, logs)) == 1
+    refute logs =~ "127.0.0.1"
+    refute logs =~ "not_allowed"
+
+    allowed = firewall_settings(denied, denied.lock_version + 1, ["127.0.0.1"])
+    :ok = Cache.put(allowed)
+
+    assert {:ok, ^revoked_state} =
+             CodexResponsesSocket.handle_info(
+               applied_message(allowed.lock_version),
+               revoked_state
+             )
+
+    assert {:ok, ^revoked_state} =
+             CodexResponsesSocket.handle_in({"new frame", [opcode: :text]}, revoked_state)
+
+    refute_receive {:firewall_denied, _, _}
+  end
+
+  test "busy revocation drains the admitted task, flushes its final frame, and drops queued work" do
+    original = InstanceSettings.current()
+    on_exit(fn -> Cache.put(original) end)
+    denied = firewall_settings(original, original.lock_version + 1, ["203.0.113.10"])
+    :ok = Cache.put(denied)
+
+    state =
+      firewall_socket_state(original.lock_version, %{
+        tasks: MapSet.new([self()]),
+        queued_response_payloads: :queue.from_list(["queued payload"])
+      })
+
+    assert {:ok, revoked_state} =
+             CodexResponsesSocket.handle_info(applied_message(denied.lock_version), state)
+
+    assert revoked_state.firewall_revoked?
+    refute revoked_state.firewall_close_sent?
+    assert :queue.is_empty(revoked_state.queued_response_payloads)
+
+    error = %{status: 500, code: :upstream_failed, message: "safe failure", param: nil}
+
+    assert {:stop, :normal, @revocation_close, [{:text, final_frame}], closed_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_done, self(), {:error, error}},
+               revoked_state
+             )
+
+    assert Jason.decode!(final_frame)["error"]["code"] == "upstream_failed"
+    assert closed_state.firewall_close_sent?
+    assert MapSet.size(closed_state.tasks) == 0
+    assert :queue.is_empty(closed_state.queued_response_payloads)
+  end
+
+  test "revoked task DOWN cannot start queued work or close twice" do
+    original = InstanceSettings.current()
+    on_exit(fn -> Cache.put(original) end)
+    denied = firewall_settings(original, original.lock_version + 1, ["203.0.113.10"])
+    :ok = Cache.put(denied)
+
+    task_pid = spawn(fn -> receive do: (:stop -> :ok) end)
+    on_exit(fn -> if Process.alive?(task_pid), do: send(task_pid, :stop) end)
+    monitor = Process.monitor(task_pid)
+
+    state =
+      firewall_socket_state(original.lock_version, %{
+        tasks: MapSet.new([task_pid]),
+        task_monitors: %{task_pid => monitor},
+        queued_response_payloads: :queue.from_list(["queued payload"])
+      })
+
+    assert {:ok, revoked_state} =
+             CodexResponsesSocket.handle_info(applied_message(denied.lock_version), state)
+
+    assert {:stop, :normal, @revocation_close, closed_state} =
+             CodexResponsesSocket.handle_info(
+               {:DOWN, monitor, :process, task_pid, :normal},
+               revoked_state
+             )
+
+    assert closed_state.firewall_close_sent?
+    assert MapSet.size(closed_state.tasks) == 0
+    assert :queue.is_empty(closed_state.queued_response_payloads)
+
+    assert {:ok, ^closed_state} =
+             CodexResponsesSocket.handle_info(
+               {:DOWN, monitor, :process, task_pid, :normal},
+               closed_state
+             )
+  end
 
   @tag :task_1_pin
   test "PIN-P03 backend GET websocket preserves done and legacy JSON frame bytes" do
@@ -1055,6 +1203,53 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       },
       overrides
     )
+  end
+
+  defp firewall_socket_state(applied_version, overrides \\ %{}) do
+    Map.merge(
+      %{
+        opts: RequestOptions.for_websocket(%{client_ip: "127.0.0.1"}),
+        firewall_client_ip: {127, 0, 0, 1},
+        firewall_applied_version: applied_version,
+        firewall_revoked?: false,
+        firewall_close_sent?: false,
+        tasks: MapSet.new(),
+        task_monitors: %{},
+        queued_response_payloads: :queue.new(),
+        public_response_task_pid: nil,
+        native_turn_output_task_pids: MapSet.new()
+      },
+      overrides
+    )
+  end
+
+  defp firewall_settings(settings, lock_version, allowlist) do
+    {:ok, _compiled} = IPRules.compile(allowlist)
+
+    %{
+      settings
+      | lock_version: lock_version,
+        ingress: %{settings.ingress | firewall_allowlist: allowlist}
+    }
+  end
+
+  defp applied_message(version), do: {@applied_message_tag, {:applied, version}}
+
+  defp attach_firewall_telemetry do
+    test_pid = self()
+    handler_id = "socket-firewall-revocation-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :ingress, :firewall, :denied],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {:firewall_denied, measurements, metadata})
+        end,
+        nil
+      )
+
+    handler_id
   end
 
   defp owner_turn_pid do

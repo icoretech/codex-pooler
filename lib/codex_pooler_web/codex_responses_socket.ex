@@ -3,10 +3,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   @behaviour WebSock
 
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Gateway.Websocket.Adapter
+  alias CodexPooler.InstanceSettings
+  alias CodexPooler.InstanceSettings.Cache, as: InstanceSettingsCache
+  alias CodexPoolerWeb.Plugs.RuntimeIngress.Firewall
   alias CodexPoolerWeb.WebsocketConnectionLogger
 
   require Logger
@@ -14,6 +18,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   @pre_cleanup_response_task_drain_ms 250
   @post_cleanup_owner_response_task_drain_ms 1_000
   @post_cleanup_response_task_drain_ms 5_000
+  @firewall_close_detail {1008, "client IP is no longer allowed"}
 
   @impl WebSock
   def init(state) do
@@ -26,19 +31,19 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
          websocket_owner_lease_token: _owner_lease_token,
          websocket_owner_downstream: _downstream
        } = runtime} ->
-        {:ok,
-         state
-         |> put_socket_lifecycle_state()
-         |> put_response_task_state()
-         |> Adapter.put_runtime(runtime)}
+        state
+        |> put_socket_lifecycle_state()
+        |> put_response_task_state()
+        |> Adapter.put_runtime(runtime)
+        |> initialize_firewall_state()
 
       {:ok, %{codex_session: session, upstream_websocket_session: upstream_websocket_session}} ->
-        {:ok,
-         state
-         |> put_socket_lifecycle_state()
-         |> put_response_task_state()
-         |> Map.put(:codex_session, session)
-         |> Map.put(:upstream_websocket_session, upstream_websocket_session)}
+        state
+        |> put_socket_lifecycle_state()
+        |> put_response_task_state()
+        |> Map.put(:codex_session, session)
+        |> Map.put(:upstream_websocket_session, upstream_websocket_session)
+        |> initialize_firewall_state()
 
       {:error, reason} ->
         init_error(reason, state, started_at)
@@ -46,6 +51,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   @impl WebSock
+  def handle_in({_payload, [opcode: opcode]}, %{firewall_revoked?: true} = state)
+      when opcode in [:text, :binary] do
+    {:ok, state}
+  end
+
   def handle_in({payload, [opcode: :text]}, state) when is_binary(payload) do
     {:ok, start_or_queue_response_task(payload, state)}
   end
@@ -55,6 +65,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   @impl WebSock
+  def handle_info(
+        {InstanceSettingsCache, {:applied, applied_version}},
+        state
+      )
+      when is_integer(applied_version) do
+    handle_firewall_applied(applied_version, state)
+  end
+
   # Chunks are attributed to their producing turn by pid. A chunk from a task the
   # socket no longer tracks belongs to a turn that already settled, so it is
   # dropped rather than injected into whatever turn is running now.
@@ -85,7 +103,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         {:websocket_owner_frame, _correlation_id, _epoch, _owner_turn_id, _payload} = message,
         state
       ) do
-    handle_owner_frame(message, state)
+    message
+    |> handle_owner_frame(state)
+    |> close_if_revoked_idle()
   end
 
   def handle_info(
@@ -97,20 +117,25 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   def handle_info({:websocket_owner_frame, _correlation_id, _epoch, _payload} = message, state) do
-    handle_owner_frame(message, state)
+    message
+    |> handle_owner_frame(state)
+    |> close_if_revoked_idle()
   end
 
   def handle_info({:codex_response_done, pid, result}, state) when is_pid(pid) do
-    cond do
-      active_public_turn?(state, pid) ->
-        handle_public_response_done(pid, result, state)
+    result =
+      cond do
+        active_public_turn?(state, pid) ->
+          handle_public_response_done(pid, result, state)
 
-      Adapter.public_responses_stream?(state) and not tracked_response_task?(state, pid) ->
-        {:ok, state}
+        Adapter.public_responses_stream?(state) and not tracked_response_task?(state, pid) ->
+          {:ok, state}
 
-      true ->
-        handle_non_public_response_done(pid, result, state)
-    end
+        true ->
+          handle_non_public_response_done(pid, result, state)
+      end
+
+    close_if_revoked_idle(result)
   end
 
   def handle_info({:DOWN, ref, :process, pid, reason}, %{websocket_owner_monitor: ref} = state) do
@@ -118,36 +143,39 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     case Adapter.handle_monitor_down(state, pid, reason) do
       {:ok, state} ->
-        {:ok, state}
+        close_if_revoked_idle({:ok, state})
 
       {:stop, close_detail, state} ->
-        {:stop, :normal, close_detail, state}
+        close_if_revoked_idle({:stop, :normal, close_detail, state})
     end
   end
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
-    cond do
-      active_public_task_monitor?(state, pid, ref) and public_turn_aborted?(state) ->
-        {:ok, remove_tracked_response_task(state, pid, ref)}
+    result =
+      cond do
+        active_public_task_monitor?(state, pid, ref) and public_turn_aborted?(state) ->
+          {:ok, remove_tracked_response_task(state, pid, ref)}
 
-      active_public_task_monitor?(state, pid, ref) and
-          not Map.get(state, :public_turn_task_done?, false) ->
-        state =
-          state
-          |> remove_tracked_response_task(pid, ref)
-          |> abort_public_turn(:response_task_down)
+        active_public_task_monitor?(state, pid, ref) and
+            not Map.get(state, :public_turn_task_done?, false) ->
+          state =
+            state
+            |> remove_tracked_response_task(pid, ref)
+            |> abort_public_turn(:response_task_down)
 
-        {:stop, :normal, {1011, "websocket response task failed"}, state}
+          {:stop, :normal, {1011, "websocket response task failed"}, state}
 
-      true ->
-        state =
-          state
-          |> remove_tracked_response_task(pid, ref)
-          |> remove_native_turn_output(pid)
-          |> maybe_start_queued_response_task()
+        true ->
+          state =
+            state
+            |> remove_tracked_response_task(pid, ref)
+            |> remove_native_turn_output(pid)
+            |> maybe_start_queued_response_task()
 
-        {:ok, state}
-    end
+          {:ok, state}
+      end
+
+    close_if_revoked_idle(result)
   end
 
   def handle_info(_message, state), do: {:ok, state}
@@ -241,6 +269,114 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> Map.put(:public_turn_output_committed?, false)
     |> Map.put(:native_turn_output_task_pids, MapSet.new())
   end
+
+  defp initialize_firewall_state(state) do
+    with :ok <- InstanceSettingsCache.subscribe_applied() do
+      settings = InstanceSettings.current()
+
+      state =
+        state
+        |> Map.put(:firewall_applied_version, settings.lock_version)
+        |> Map.put(:firewall_revoked?, false)
+        |> Map.put(:firewall_close_sent?, false)
+
+      settings
+      |> evaluate_firewall(state)
+      |> close_if_revoked_idle()
+    else
+      {:error, reason} -> {:stop, reason, state}
+    end
+  end
+
+  defp handle_firewall_applied(_applied_version, %{firewall_revoked?: true} = state),
+    do: {:ok, state}
+
+  defp handle_firewall_applied(applied_version, state) do
+    if applied_version <= Map.get(state, :firewall_applied_version, 0) do
+      {:ok, state}
+    else
+      settings = InstanceSettings.current()
+
+      cond do
+        settings.source == :fallback_defaults ->
+          settings
+          |> evaluate_firewall(state)
+          |> close_if_revoked_idle()
+
+        settings.lock_version >= applied_version ->
+          settings
+          |> evaluate_firewall(state)
+          |> close_if_revoked_idle()
+
+        true ->
+          {:ok, state}
+      end
+    end
+  end
+
+  defp evaluate_firewall(settings, state) do
+    operational_settings = OperationalSettings.from_instance_settings(settings)
+    client_ip = firewall_client_ip(state)
+
+    case Firewall.evaluate_client_ip(client_ip, operational_settings) do
+      %{outcome: :allow} ->
+        {:ok, Map.put(state, :firewall_applied_version, settings.lock_version)}
+
+      %{outcome: :deny} ->
+        {:ok, revoke_firewall(state, settings.lock_version)}
+    end
+  end
+
+  defp firewall_client_ip(%{firewall_client_ip: client_ip}), do: client_ip
+  defp firewall_client_ip(%{opts: %{request_metadata: %{client_ip: client_ip}}}), do: client_ip
+  defp firewall_client_ip(_state), do: nil
+
+  defp revoke_firewall(%{firewall_revoked?: true} = state, _applied_version), do: state
+
+  defp revoke_firewall(state, applied_version) do
+    :ok = Firewall.observe_denial(Firewall.denied(:websocket_revoked), :runtime)
+
+    state
+    |> Map.put(:firewall_applied_version, applied_version)
+    |> Map.put(:firewall_revoked?, true)
+    |> Map.put(:queued_response_payloads, :queue.new())
+  end
+
+  defp close_if_revoked_idle({:ok, state}) do
+    if close_revoked_socket?(state) do
+      {:stop, :normal, @firewall_close_detail, mark_firewall_closed(state)}
+    else
+      {:ok, state}
+    end
+  end
+
+  defp close_if_revoked_idle({:push, messages, state}) do
+    if close_revoked_socket?(state) do
+      {:stop, :normal, @firewall_close_detail, List.wrap(messages), mark_firewall_closed(state)}
+    else
+      {:push, messages, state}
+    end
+  end
+
+  defp close_if_revoked_idle({:stop, reason, close_detail, state}) do
+    if close_revoked_socket?(state) do
+      {:stop, :normal, @firewall_close_detail, mark_firewall_closed(state)}
+    else
+      {:stop, reason, close_detail, state}
+    end
+  end
+
+  defp close_revoked_socket?(state) do
+    Map.get(state, :firewall_revoked?, false) and
+      not Map.get(state, :firewall_close_sent?, false) and
+      not revocation_drain_active?(state)
+  end
+
+  defp revocation_drain_active?(state) do
+    active_response_task?(state) or public_turn_open?(state)
+  end
+
+  defp mark_firewall_closed(state), do: Map.put(state, :firewall_close_sent?, true)
 
   defp handle_owner_frame(message, state) do
     case Adapter.accept_downstream_message(message, state) do
@@ -592,6 +728,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp start_or_queue_response_task(payload, state) do
     cond do
+      Map.get(state, :firewall_revoked?, false) ->
+        state
+
       public_response_payload?(payload, state) and public_turn_open?(state) ->
         queue_response_payload(state, payload)
 
@@ -610,7 +749,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp maybe_start_queued_response_task(state) do
-    if active_response_task?(state) or public_turn_open?(state) do
+    if Map.get(state, :firewall_revoked?, false) or active_response_task?(state) or
+         public_turn_open?(state) do
       state
     else
       case Map.get(state, :queued_response_payloads, :queue.new()) |> :queue.out() do

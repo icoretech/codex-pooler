@@ -39,6 +39,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     as: UpstreamWebsocketRequest
 
   alias CodexPooler.Gateway.Websocket, as: Gateway
+  alias CodexPooler.InstanceSettings
+  alias CodexPooler.InstanceSettings.Cache, as: InstanceSettingsCache
   alias CodexPooler.Pools
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
@@ -146,6 +148,146 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     conn = conn |> auth(setup) |> get("/backend-api/codex/responses")
 
     assert json_response(conn, 400)["error"]["code"] == "websocket_upgrade_required"
+  end
+
+  test "an allowed locally applied firewall version keeps an open websocket usable" do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_ws_firewall_allowed",
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    port = start_public_endpoint!()
+    original = InstanceSettings.current()
+    on_exit(fn -> InstanceSettingsCache.put(original) end)
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, "ws-firewall-allowed")
+
+    try do
+      update_firewall_allowlist!(["127.0.0.1"])
+
+      payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => "allowed firewall update",
+          "stream" => true,
+          "generate" => true
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {_conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{"type" => "response.completed"} = Jason.decode!(frame)
+      assert length(FakeUpstream.requests(upstream)) == 1
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "a denying locally applied firewall version closes an idle websocket with 1008" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    port = start_public_endpoint!()
+    original = InstanceSettings.current()
+    on_exit(fn -> InstanceSettingsCache.put(original) end)
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, "ws-firewall-denied")
+
+    try do
+      update_firewall_allowlist!(["203.0.113.10"])
+
+      {_conn, _websocket, code, reason} =
+        public_websocket_receive_close!(conn, websocket, ref)
+
+      assert code == 1008
+      assert reason == "client IP is no longer allowed"
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "a busy revoked websocket flushes its admitted turn then closes without dispatching queued work" do
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        FakeUpstream.barrier_sse_stream(
+          [
+            {"response.completed",
+             %{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => "resp_ws_firewall_busy",
+                 "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+               }
+             }}
+          ],
+          barrier_after: 0,
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    port = start_public_endpoint!()
+    original = InstanceSettings.current()
+    on_exit(fn -> InstanceSettingsCache.put(original) end)
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, "ws-firewall-busy")
+
+    try do
+      first_payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => "admitted turn",
+          "stream" => true,
+          "generate" => true
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, first_payload)
+      assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref}, 1_000
+
+      queued_payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => [
+            %{
+              "type" => "function_call_output",
+              "call_id" => "call_firewall_queued",
+              "output" => "queued output"
+            }
+          ],
+          "stream" => true,
+          "generate" => true,
+          "previous_response_id" => "resp_ws_firewall_busy"
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, queued_payload)
+      update_firewall_allowlist!(["203.0.113.10"])
+      send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
+
+      {_conn, _websocket, frames} =
+        receive_public_websocket_frames_until_close!(conn, websocket, ref)
+
+      assert [{:text, final_frame}, {:close, 1008, "client IP is no longer allowed"}] = frames
+      assert %{"type" => "response.completed"} = Jason.decode!(final_frame)
+      assert FakeUpstream.count(upstream) == 1
+
+      assert Repo.aggregate(
+               from(request in Request, where: request.pool_id == ^setup.pool.id),
+               :count
+             ) == 1
+    after
+      Mint.HTTP.close(conn)
+    end
   end
 
   test "GET /backend-api/codex/responses replaces whitespace-only websocket turn state" do
@@ -11008,6 +11150,52 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     )
 
     on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
+  end
+
+  defp update_firewall_allowlist!(allowlist) do
+    settings = InstanceSettings.get!()
+
+    assert {:ok, updated} =
+             InstanceSettings.update_system_settings(settings, %{
+               "ingress" => %{"firewall_allowlist" => allowlist}
+             })
+
+    updated
+  end
+
+  defp receive_public_websocket_frames_until_close!(conn, websocket, ref, frames \\ []) do
+    receive do
+      message ->
+        case Mint.WebSocket.stream(conn, message) do
+          {:ok, conn, responses} ->
+            {websocket, frames, closed?} =
+              Enum.reduce(responses, {websocket, frames, false}, fn
+                {:data, ^ref, data}, {websocket, frames, closed?} ->
+                  {:ok, websocket, decoded} = Mint.WebSocket.decode(websocket, data)
+
+                  {websocket, frames ++ decoded,
+                   closed? or Enum.any?(decoded, &match?({:close, _, _}, &1))}
+
+                _response, acc ->
+                  acc
+              end)
+
+            if closed? do
+              {conn, websocket, frames}
+            else
+              receive_public_websocket_frames_until_close!(conn, websocket, ref, frames)
+            end
+
+          {:error, conn, reason, _responses} ->
+            Mint.HTTP.close(conn)
+            flunk("websocket frame receive failed: #{inspect(reason)}")
+
+          :unknown ->
+            receive_public_websocket_frames_until_close!(conn, websocket, ref, frames)
+        end
+    after
+      @large_websocket_frame_timeout -> flunk("timed out waiting for websocket close")
+    end
   end
 
   defp start_tiny_timeout_endpoint!(timeout_ms) do

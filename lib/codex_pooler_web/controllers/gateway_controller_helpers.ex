@@ -178,7 +178,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
         |> put_resp_header("x-codex-turn-state", turn_state)
         |> WebSockAdapter.upgrade(
           CodexPoolerWeb.CodexResponsesSocket,
-          %{auth: auth, opts: request_options},
+          %{auth: auth, opts: request_options, firewall_client_ip: conn.remote_ip},
           websocket_upgrade_opts()
         )
         |> halt()
