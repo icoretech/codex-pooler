@@ -65,25 +65,35 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.Firewall do
 
   @spec evaluate(conn(), settings()) :: {conn(), Decision.t()}
   def evaluate(conn, settings) do
-    if OperationalSettings.firewall_enabled?(settings) do
-      case settings.firewall_allowlist_compiled do
-        {:ok, allowlist} -> evaluate_resolved_client(conn, settings, allowlist)
-        {:error, :invalid_rule} -> {conn, denied(:invalid_allowlist_rules, conn.remote_ip)}
-      end
-    else
-      {conn, allowed(conn.remote_ip)}
+    cond do
+      OperationalSettings.settings_unavailable?(settings) ->
+        {conn, denied(:settings_unavailable, conn.remote_ip)}
+
+      OperationalSettings.firewall_enabled?(settings) ->
+        case settings.firewall_allowlist_compiled do
+          {:ok, allowlist} -> evaluate_resolved_client(conn, settings, allowlist)
+          {:error, :invalid_rule} -> {conn, denied(:invalid_allowlist_rules, conn.remote_ip)}
+        end
+
+      true ->
+        {conn, allowed(conn.remote_ip)}
     end
   end
 
   @spec evaluate_client_ip(:inet.ip_address(), settings()) :: Decision.t()
   def evaluate_client_ip(client_ip, settings) do
-    if OperationalSettings.firewall_enabled?(settings) do
-      case settings.firewall_allowlist_compiled do
-        {:ok, allowlist} -> evaluate_compiled_client_ip(client_ip, allowlist)
-        {:error, :invalid_rule} -> denied(:invalid_allowlist_rules, client_ip)
-      end
-    else
-      allowed(client_ip)
+    cond do
+      OperationalSettings.settings_unavailable?(settings) ->
+        denied(:settings_unavailable, client_ip)
+
+      OperationalSettings.firewall_enabled?(settings) ->
+        case settings.firewall_allowlist_compiled do
+          {:ok, allowlist} -> evaluate_compiled_client_ip(client_ip, allowlist)
+          {:error, :invalid_rule} -> denied(:invalid_allowlist_rules, client_ip)
+        end
+
+      true ->
+        allowed(client_ip)
     end
   end
 

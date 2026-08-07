@@ -26,6 +26,9 @@ defmodule CodexPooler.Gateway.OperationalSettings do
         }
 
   @type t :: %__MODULE__{
+          source: :database | :fallback_defaults,
+          db_available?: boolean(),
+          secrets_available?: boolean(),
           file_max_size_bytes: pos_integer(),
           upload_ttl_seconds: pos_integer(),
           abandoned_upload_cleanup_interval_seconds: pos_integer(),
@@ -59,7 +62,10 @@ defmodule CodexPooler.Gateway.OperationalSettings do
           model_context_window_overrides: %{String.t() => pos_integer()}
         }
 
-  defstruct file_max_size_bytes: 25 * 1024 * 1024,
+  defstruct source: :database,
+            db_available?: true,
+            secrets_available?: true,
+            file_max_size_bytes: 25 * 1024 * 1024,
             upload_ttl_seconds: 24 * 60 * 60,
             abandoned_upload_cleanup_interval_seconds: 15 * 60,
             bridge_owner_lease_ttl_seconds: 45,
@@ -102,6 +108,9 @@ defmodule CodexPooler.Gateway.OperationalSettings do
   @spec from_instance_settings(InstanceSettings.Settings.t()) :: t()
   def from_instance_settings(%InstanceSettings.Settings{} = settings) do
     %__MODULE__{
+      source: settings.source,
+      db_available?: settings.db_available?,
+      secrets_available?: settings.secrets_available?,
       file_max_size_bytes: settings.files.max_size_bytes,
       upload_ttl_seconds: settings.files.upload_ttl_seconds,
       abandoned_upload_cleanup_interval_seconds:
@@ -141,6 +150,10 @@ defmodule CodexPooler.Gateway.OperationalSettings do
 
   @spec firewall_enabled?(t()) :: boolean()
   def firewall_enabled?(%__MODULE__{firewall_allowlist: allowlist}), do: allowlist != []
+
+  @spec settings_unavailable?(t()) :: boolean()
+  def settings_unavailable?(%__MODULE__{source: :fallback_defaults}), do: true
+  def settings_unavailable?(%__MODULE__{}), do: false
 
   @spec websocket_owner_forwarding_env_name() :: String.t()
   def websocket_owner_forwarding_env_name, do: @websocket_owner_forwarding_env

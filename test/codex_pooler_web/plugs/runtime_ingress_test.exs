@@ -10,6 +10,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.OperationalSettings.IPRules
   alias CodexPooler.InstanceSettings
+  alias CodexPooler.InstanceSettings.Cache
   alias CodexPooler.InstanceSettings.Settings
   alias CodexPooler.Pools
   alias CodexPooler.Pools.RoutingSettings
@@ -246,7 +247,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       setup_runtime_ingress_override(%OperationalSettings{trusted_proxies: ["10.0.0.1"]})
 
       conn =
-        Plug.Test.conn(:get, "/healthz")
+        Plug.Test.conn(:get, "/metrics")
         |> remote_ip({10, 0, 0, 1})
         |> put_req_header("x-forwarded-for", "203.0.113.10")
 
@@ -258,6 +259,31 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
         end)
 
       assert resolver_calls == 1
+      assert %Resolution{status: :ok} = conn.private[:codex_pooler_client_ip_resolution]
+    end
+
+    test "trusted proxy resolution bypasses exactly health and readiness paths" do
+      setup_runtime_ingress_override(%OperationalSettings{trusted_proxies: ["10.0.0.1"]})
+
+      for path <- ["/healthz", "/readyz"] do
+        conn =
+          Plug.Test.conn(:get, path)
+          |> remote_ip({10, 0, 0, 1})
+          |> put_req_header("x-forwarded-for", "203.0.113.10")
+          |> TrustedProxyRemoteIp.call([])
+
+        assert conn.remote_ip == {10, 0, 0, 1}
+        refute Map.has_key?(conn.private, :codex_pooler_runtime_ingress_settings)
+        refute Map.has_key?(conn.private, :codex_pooler_client_ip_resolution)
+      end
+
+      conn =
+        Plug.Test.conn(:get, "/healthz/extra")
+        |> remote_ip({10, 0, 0, 1})
+        |> put_req_header("x-forwarded-for", "203.0.113.10")
+        |> TrustedProxyRemoteIp.call([])
+
+      assert conn.remote_ip == {203, 0, 113, 10}
       assert %Resolution{status: :ok} = conn.private[:codex_pooler_client_ip_resolution]
     end
 
@@ -332,7 +358,15 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       log =
         capture_log([metadata: [:scope, :reason, :request_id]], fn ->
           denied_conn = conn |> remote_ip({198, 51, 100, 20}) |> get("/api/codex/usage")
-          assert json_response(denied_conn, 403)["error"]["code"] == "access_denied"
+
+          assert json_response(denied_conn, 403) == %{
+                   "error" => %{
+                     "code" => "access_denied",
+                     "message" => "client IP is not allowed",
+                     "param" => nil,
+                     "type" => "invalid_request_error"
+                   }
+                 }
         end)
 
       assert_received {@firewall_denied_event, %{count: 1}, metadata}
@@ -350,6 +384,60 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
           ] do
         refute log =~ forbidden
       end
+    end
+
+    test "cold settings return the fixed unavailable runtime envelope and telemetry", %{
+      conn: conn
+    } do
+      attach_firewall_denial_handler()
+
+      conn =
+        with_cache_unregistered(fn ->
+          conn
+          |> remote_ip({198, 51, 100, 20})
+          |> get("/api/codex/usage")
+        end)
+
+      assert json_response(conn, 503) == %{
+               "error" => %{
+                 "code" => "settings_unavailable",
+                 "message" => "runtime settings are temporarily unavailable",
+                 "param" => nil,
+                 "type" => "invalid_request_error"
+               }
+             }
+
+      assert_received {@firewall_denied_event, %{count: 1},
+                       %{scope: "runtime", reason: "settings_unavailable"}}
+
+      refute_received {@firewall_denied_event, _measurements, _metadata}
+    end
+
+    test "warm database snapshots remain enforceable for allow and ordinary deny", %{conn: conn} do
+      setup_runtime_ingress_override(%OperationalSettings{
+        source: :database,
+        db_available?: false,
+        secrets_available?: false,
+        firewall_allowlist: ["203.0.113.10"]
+      })
+
+      setup = active_api_key_fixture()
+
+      allowed =
+        conn
+        |> remote_ip({203, 0, 113, 10})
+        |> put_req_header("authorization", setup.authorization)
+        |> get("/api/codex/usage")
+
+      assert %{"plan_type" => "api_key"} = json_response(allowed, 200)
+
+      denied =
+        conn
+        |> recycle()
+        |> remote_ip({198, 51, 100, 20})
+        |> get("/api/codex/usage")
+
+      assert json_response(denied, 403)["error"]["code"] == "access_denied"
     end
 
     test "reuses the stored resolution without reparsing changed forwarded headers" do
@@ -456,9 +544,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
         assert json_response(health, 200) == %{"status" => "ok"}
         assert health.remote_ip == {10, 0, 0, 1}
-
-        assert %Resolution{status: :error} =
-                 health.private[:codex_pooler_client_ip_resolution]
+        refute Map.has_key?(health.private, :codex_pooler_client_ip_resolution)
       end
     end
 
@@ -1366,6 +1452,17 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
     )
 
     on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
+  end
+
+  defp with_cache_unregistered(fun) when is_function(fun, 0) do
+    cache = Process.whereis(Cache)
+    Process.unregister(Cache)
+
+    try do
+      fun.()
+    after
+      if is_pid(cache), do: Process.register(cache, Cache)
+    end
   end
 
   defp attach_firewall_denial_handler do

@@ -42,6 +42,10 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
   test "current/0 builds the gateway struct from instance settings defaults" do
     settings = OperationalSettings.current()
 
+    assert settings.source == :database
+    assert settings.db_available? == true
+    assert settings.secrets_available? == true
+    refute OperationalSettings.settings_unavailable?(settings)
     assert settings.file_max_size_bytes == 25 * 1024 * 1024
     assert settings.upload_ttl_seconds == 24 * 60 * 60
     assert settings.abandoned_upload_cleanup_interval_seconds == 15 * 60
@@ -87,6 +91,25 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     assert settings.websocket_idle_timeout_ms == 1_800_000
     assert Map.get(settings, :websocket_owner_idle_timeout_ms) == 1_800_000
     assert settings.model_context_window_overrides == %{}
+  end
+
+  test "settings_unavailable?/1 distinguishes cold fallback from enforceable snapshots" do
+    cold = OperationalSettings.from_instance_settings(Settings.fallback_default())
+
+    warm = %OperationalSettings{
+      cold
+      | source: :database,
+        db_available?: false,
+        secrets_available?: false
+    }
+
+    assert cold.source == :fallback_defaults
+    assert cold.db_available? == false
+    assert cold.secrets_available? == false
+    assert OperationalSettings.settings_unavailable?(cold)
+
+    refute OperationalSettings.settings_unavailable?(warm)
+    refute OperationalSettings.settings_unavailable?(%OperationalSettings{})
   end
 
   test "current/0 reflects singleton updates without restart while previous snapshots stay stable" do
@@ -319,6 +342,10 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     {settings, log} = current_with_captured_log()
 
     assert log =~ "instance settings db load failed warm_cache=false"
+    assert settings.source == :fallback_defaults
+    assert settings.db_available? == false
+    assert settings.secrets_available? == false
+    assert OperationalSettings.settings_unavailable?(settings)
     assert settings.file_max_size_bytes == 25 * 1024 * 1024
     refute settings.gateway_debug?
     assert settings.decompression_algorithms == ["gzip", "deflate", "zstd"]

@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Transports.Admission
   alias CodexPooler.InstanceSettings
+  alias CodexPooler.InstanceSettings.Cache
   alias CodexPooler.InstanceSettings.Settings
   alias CodexPooler.MCP
   alias CodexPooler.Repo
@@ -66,9 +67,40 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
         |> put_req_header("content-type", "application/json")
         |> post("/mcp", Jason.encode!(initialize_request()))
 
-      assert json_rpc_error(conn, 403)["error"]["message"] == "client IP is not allowed"
+      assert json_rpc_error(conn, 403) == %{
+               "jsonrpc" => "2.0",
+               "id" => nil,
+               "error" => %{"code" => -32_600, "message" => "client IP is not allowed"}
+             }
+
       assert_received {@firewall_denied_event, %{count: 1}, metadata}
       assert metadata == %{scope: "mcp", reason: "not_allowed"}
+      refute_received {@firewall_denied_event, _measurements, _metadata}
+    end
+
+    test "cold settings return the fixed unavailable MCP envelope and telemetry", %{conn: conn} do
+      attach_firewall_denial_handler()
+
+      conn =
+        with_cache_unregistered(fn ->
+          conn
+          |> remote_ip({198, 51, 100, 20})
+          |> put_req_header("content-type", "application/json")
+          |> post("/mcp", Jason.encode!(initialize_request()))
+        end)
+
+      assert json_rpc_error(conn, 503) == %{
+               "jsonrpc" => "2.0",
+               "id" => nil,
+               "error" => %{
+                 "code" => -32_000,
+                 "message" => "runtime settings are temporarily unavailable"
+               }
+             }
+
+      assert_received {@firewall_denied_event, %{count: 1},
+                       %{scope: "mcp", reason: "settings_unavailable"}}
+
       refute_received {@firewall_denied_event, _measurements, _metadata}
     end
 
@@ -328,6 +360,17 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
       )
 
     on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
+
+  defp with_cache_unregistered(fun) when is_function(fun, 0) do
+    cache = Process.whereis(Cache)
+    Process.unregister(Cache)
+
+    try do
+      fun.()
+    after
+      if is_pid(cache), do: Process.register(cache, Cache)
+    end
   end
 
   defp authenticated_json_rpc_conn(conn, raw_token) do

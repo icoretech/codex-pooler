@@ -100,6 +100,25 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.FirewallTest do
     assert %Decision{outcome: :deny, reason: :not_allowed} = mismatch_decision
   end
 
+  test "cold settings deny before allowlist or forwarding evaluation" do
+    cold_settings = %OperationalSettings{
+      source: :fallback_defaults,
+      db_available?: false,
+      secrets_available?: false,
+      firewall_allowlist: [],
+      trusted_proxies: ["invalid rule"],
+      trusted_proxies_compiled: {:error, :invalid_rule}
+    }
+
+    conn = runtime_conn({198, 51, 100, 20})
+
+    assert {^conn, %Decision{outcome: :deny, reason: :settings_unavailable}} =
+             Firewall.evaluate(conn, cold_settings)
+
+    assert %Decision{outcome: :deny, reason: :settings_unavailable} =
+             Firewall.evaluate_client_ip({198, 51, 100, 20}, cold_settings)
+  end
+
   test "reuses client-only evaluation for later firewall checks" do
     settings = settings(["203.0.113.10"])
 

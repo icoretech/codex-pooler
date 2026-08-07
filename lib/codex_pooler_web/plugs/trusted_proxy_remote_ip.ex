@@ -10,6 +10,9 @@ defmodule CodexPoolerWeb.Plugs.TrustedProxyRemoteIp do
   def init(opts), do: opts
 
   @impl Plug
+  def call(%Plug.Conn{request_path: path} = conn, _opts) when path in ["/healthz", "/readyz"],
+    do: conn
+
   def call(conn, _opts) do
     settings = OperationalSettings.current()
     peer_ip = conn.remote_ip

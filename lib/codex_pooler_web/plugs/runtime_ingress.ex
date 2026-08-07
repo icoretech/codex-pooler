@@ -109,7 +109,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
 
       {conn, %Decision{outcome: :deny} = decision} ->
         :ok = Firewall.observe_denial(decision, :mcp)
-        send_mcp_error(conn, 403, -32_600, "client IP is not allowed")
+        send_mcp_firewall_error(conn, decision)
     end
   end
 
@@ -263,12 +263,28 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
 
       {conn, %Decision{outcome: :deny} = decision} ->
         :ok = Firewall.observe_denial(decision, :runtime)
-        send_runtime_error(conn, firewall_access_denied())
+        send_runtime_error(conn, firewall_error(decision))
     end
   end
 
-  defp firewall_access_denied do
+  defp firewall_error(%Decision{reason: :settings_unavailable}) do
+    %{
+      status: 503,
+      code: "settings_unavailable",
+      message: "runtime settings are temporarily unavailable"
+    }
+  end
+
+  defp firewall_error(%Decision{}) do
     %{status: 403, code: "access_denied", message: "client IP is not allowed"}
+  end
+
+  defp send_mcp_firewall_error(conn, %Decision{reason: :settings_unavailable}) do
+    send_mcp_error(conn, 503, -32_000, "runtime settings are temporarily unavailable")
+  end
+
+  defp send_mcp_firewall_error(conn, %Decision{}) do
+    send_mcp_error(conn, 403, -32_600, "client IP is not allowed")
   end
 
   defp authenticate_v1_request(%Plug.Conn{halted: true} = conn), do: conn

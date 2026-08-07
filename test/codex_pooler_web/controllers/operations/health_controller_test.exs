@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
   import ExUnit.CaptureLog
 
   alias CodexPooler.Accounting.Request
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.OperationalStatus
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
   alias CodexPooler.Repo
@@ -14,6 +15,7 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
 
     previous_operational_status_config = Application.get_env(:codex_pooler, OperationalStatus)
     previous_rollout_drain_config = Application.get_env(:codex_pooler, RolloutDrain)
+    previous_operational_settings = Application.get_env(:codex_pooler, OperationalSettings)
 
     on_exit(fn ->
       if previous_config do
@@ -37,6 +39,12 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
       else
         Application.delete_env(:codex_pooler, RolloutDrain)
       end
+
+      if previous_operational_settings do
+        Application.put_env(:codex_pooler, OperationalSettings, previous_operational_settings)
+      else
+        Application.delete_env(:codex_pooler, OperationalSettings)
+      end
     end)
   end
 
@@ -50,6 +58,29 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
     conn = get(conn, ~p"/readyz")
 
     assert json_response(conn, 200) == %{"status" => "ready"}
+  end
+
+  test "health and readiness retain independent behavior while runtime settings are cold", %{
+    conn: conn
+  } do
+    Application.put_env(:codex_pooler, OperationalSettings,
+      settings: %OperationalSettings{
+        source: :fallback_defaults,
+        db_available?: false,
+        secrets_available?: false
+      },
+      use_instance_settings?: false
+    )
+
+    Application.put_env(:codex_pooler, CodexPoolerWeb.Operations.HealthController,
+      readiness_probe: __MODULE__.UnavailableReadinessProbe
+    )
+
+    assert conn |> get(~p"/healthz") |> json_response(200) == %{"status" => "ok"}
+
+    assert conn |> recycle() |> get(~p"/readyz") |> json_response(503) == %{
+             "status" => "unavailable"
+           }
   end
 
   test "GET /readyz stays ready when configured drain marker is absent", %{conn: conn} do
