@@ -7,7 +7,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.InstanceSettings
-  alias CodexPooler.InstanceSettings.Cache
+  alias CodexPooler.InstanceSettings.{Cache, Settings}
   alias CodexPoolerWeb.CodexResponsesSocket
 
   @applied_message_tag Cache
@@ -41,6 +41,24 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                applied_message(allowed.lock_version),
                allowed_state
              )
+  end
+
+  test "a locally applied cold-cache snapshot revokes an existing websocket" do
+    original = InstanceSettings.current()
+    on_exit(fn -> :persistent_term.put({Cache, :current}, {1, original}) end)
+    cold = Settings.fallback_default()
+    :persistent_term.put({Cache, :current}, {1, cold})
+
+    assert %Settings{source: :fallback_defaults, db_available?: false} = cold
+
+    state = firewall_socket_state(0)
+
+    assert {:stop, :normal, @revocation_close, revoked_state} =
+             CodexResponsesSocket.handle_info(applied_message(cold.lock_version), state)
+
+    assert revoked_state.firewall_revoked?
+    assert revoked_state.firewall_close_sent?
+    assert :queue.is_empty(revoked_state.queued_response_payloads)
   end
 
   test "idle revocation closes once and later reallow cannot reopen the latch" do

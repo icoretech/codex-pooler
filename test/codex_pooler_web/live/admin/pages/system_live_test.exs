@@ -6,11 +6,13 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
 
   import Ecto.Query
   import CodexPooler.AccountsFixtures
+  import CodexPooler.PoolerFixtures, only: [active_api_key_fixture: 0]
 
   alias CodexPooler.Accounts
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Catalog.PricingSnapshot
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
   alias CodexPooler.MCP
@@ -826,6 +828,72 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     end
   end
 
+  test "saving X-Forwarded-For depth changes the next runtime request without restart", %{
+    conn: conn
+  } do
+    previous_operational_settings = Application.get_env(:codex_pooler, OperationalSettings, [])
+
+    Application.put_env(
+      :codex_pooler,
+      OperationalSettings,
+      previous_operational_settings
+      |> Keyword.delete(:settings)
+      |> Keyword.put(:use_instance_settings?, true)
+    )
+
+    on_exit(fn ->
+      Application.put_env(:codex_pooler, OperationalSettings, previous_operational_settings)
+    end)
+
+    assert {:ok, _settings} =
+             InstanceSettings.update_system_settings(InstanceSettings.ensure_singleton!(), %{
+               "ingress" => %{
+                 "firewall_allowlist" => ["198.51.100.77"],
+                 "trusted_proxies" => ["10.0.0.1"],
+                 "forwarded_client_ip_source" => "x_forwarded_for",
+                 "forwarded_proxy_depth" => 1
+               }
+             })
+
+    setup = active_api_key_fixture()
+
+    denied =
+      build_conn()
+      |> remote_ip({10, 0, 0, 1})
+      |> put_req_header("x-forwarded-for", "198.51.100.77, 203.0.113.10")
+      |> put_req_header("authorization", setup.authorization)
+      |> get("/api/codex/usage")
+
+    assert json_response(denied, 403)["error"]["code"] == "access_denied"
+
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    saved_html =
+      view
+      |> element("#instance-settings-ingress-form")
+      |> render_submit(%{
+        "instance_settings" => %{
+          "ingress" => %{
+            "forwarded_client_ip_source" => "x_forwarded_for",
+            "forwarded_proxy_depth" => "2"
+          }
+        }
+      })
+
+    assert saved_html =~ "Runtime ingress saved"
+
+    allowed =
+      build_conn()
+      |> remote_ip({10, 0, 0, 1})
+      |> put_req_header("x-forwarded-for", "198.51.100.77, 203.0.113.10")
+      |> put_req_header("x-real-ip", <<255>>)
+      |> put_req_header("authorization", setup.authorization)
+      |> get("/api/codex/usage")
+
+    assert %{"plan_type" => "api_key"} = json_response(allowed, 200)
+    assert InstanceSettings.current().ingress.forwarded_proxy_depth == 2
+  end
+
   test "rejects invalid forwarded client policy inline without mutating persisted settings", %{
     conn: conn
   } do
@@ -1603,4 +1671,6 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     :ok = :gen_tcp.close(socket)
     port
   end
+
+  defp remote_ip(conn, ip), do: %{conn | remote_ip: ip}
 end

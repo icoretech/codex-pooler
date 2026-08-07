@@ -70,10 +70,27 @@ defmodule CodexPooler.InstanceSettingsTest do
     def insert(settings, _opts), do: {:ok, settings}
 
     def get!(Settings, true) do
-      Application.fetch_env!(:codex_pooler, __MODULE__)
+      case Application.fetch_env!(:codex_pooler, __MODULE__) do
+        %{settings: settings, observer: observer, barrier_ref: barrier_ref} ->
+          send(observer, {:peer_settings_load_blocked, node(), barrier_ref})
+
+          receive do
+            {:release_peer_settings_load, ^barrier_ref} -> settings
+          end
+
+        %Settings{} = settings ->
+          settings
+      end
     end
 
-    def one(_query), do: Application.fetch_env!(:codex_pooler, __MODULE__).lock_version
+    def one(_query), do: current_settings().lock_version
+
+    defp current_settings do
+      case Application.fetch_env!(:codex_pooler, __MODULE__) do
+        %{settings: settings} -> settings
+        %Settings{} = settings -> settings
+      end
+    end
   end
 
   defmodule PeerHarness do
@@ -96,6 +113,29 @@ defmodule CodexPooler.InstanceSettingsTest do
 
     def replace_repo_settings(settings) do
       Application.put_env(:codex_pooler, PeerRepo, settings)
+    end
+
+    def block_next_repo_load(settings, observer, barrier_ref) do
+      Application.put_env(:codex_pooler, PeerRepo, %{
+        settings: settings,
+        observer: observer,
+        barrier_ref: barrier_ref
+      })
+    end
+
+    def release_repo_load(barrier_ref) do
+      send(Process.whereis(Cache), {:release_peer_settings_load, barrier_ref})
+      :ok
+    end
+
+    def firewall_decision(client_ip) do
+      settings =
+        InstanceSettings.current()
+        |> CodexPooler.Gateway.OperationalSettings.from_instance_settings()
+
+      client_ip
+      |> CodexPoolerWeb.Plugs.RuntimeIngress.Firewall.evaluate_client_ip(settings)
+      |> Map.take([:outcome, :reason])
     end
 
     def current_lock_version do
@@ -438,6 +478,29 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert updated.mcp.enabled == false
   end
 
+  test "legacy singleton settings rows backfill forwarded client policy without losing updates" do
+    legacy = InstanceSettings.ensure_singleton!()
+
+    Repo.query!(
+      "UPDATE instance_settings SET ingress = ingress - 'forwarded_client_ip_source' - 'forwarded_proxy_depth'"
+    )
+
+    InstanceSettings.reset_cache_for_test()
+
+    current = InstanceSettings.current()
+    assert current.ingress.forwarded_client_ip_source == :x_forwarded_for
+    assert current.ingress.forwarded_proxy_depth == 0
+
+    assert {:ok, updated} =
+             InstanceSettings.update_system_settings(Repo.reload!(legacy), %{
+               "files" => %{"upload_ttl_seconds" => 600}
+             })
+
+    assert updated.files.upload_ttl_seconds == 600
+    assert updated.ingress.forwarded_client_ip_source == :x_forwarded_for
+    assert updated.ingress.forwarded_proxy_depth == 0
+  end
+
   test "legacy singleton settings rows backfill the websocket idle timeout without losing updates" do
     legacy = InstanceSettings.ensure_singleton!()
 
@@ -646,6 +709,56 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert peer_node == peer.node
     assert applied_lock_version == updated.lock_version
     assert current_lock_version == updated.lock_version
+  end
+
+  @tag :distributed
+  test "a peer enforces a firewall update only after publishing its local applied snapshot" do
+    client_ip = {198, 51, 100, 20}
+    settings = InstanceSettings.current()
+    initial = %{settings | ingress: %{settings.ingress | firewall_allowlist: ["198.51.100.20"]}}
+    peer = start_instance_settings_peer!(initial)
+
+    on_exit(fn -> stop_instance_settings_peer(peer) end)
+
+    assert %{outcome: :allow, reason: nil} =
+             :erpc.call(peer.node, PeerHarness, :firewall_decision, [client_ip])
+
+    forwarder = :erpc.call(peer.node, PeerHarness, :start_applied_forwarder, [self()])
+    assert is_pid(forwarder)
+    assert_receive {:peer_applied_subscribed, peer_node}
+    assert peer_node == peer.node
+
+    updated = %{
+      initial
+      | lock_version: initial.lock_version + 1,
+        ingress: %{initial.ingress | firewall_allowlist: ["203.0.113.10"]}
+    }
+
+    barrier_ref = make_ref()
+
+    assert :ok =
+             :erpc.call(peer.node, PeerHarness, :block_next_repo_load, [
+               updated,
+               self(),
+               barrier_ref
+             ])
+
+    assert :ok = Cache.broadcast_update(updated)
+    assert_receive {:peer_settings_load_blocked, peer_node, ^barrier_ref}
+    assert peer_node == peer.node
+
+    assert %{outcome: :allow, reason: nil} =
+             :erpc.call(peer.node, PeerHarness, :firewall_decision, [client_ip])
+
+    assert :ok = :erpc.call(peer.node, PeerHarness, :release_repo_load, [barrier_ref])
+
+    assert_receive {:peer_applied, peer_node, applied_version, current_version}, 2_000
+    assert peer_node == peer.node
+    assert applied_version == updated.lock_version
+    assert current_version == updated.lock_version
+
+    assert %{outcome: :deny, reason: :not_allowed} =
+             :erpc.call(peer.node, PeerHarness, :firewall_decision, [client_ip])
   end
 
   @tag :failure_modes
@@ -1320,10 +1433,27 @@ defmodule CodexPooler.InstanceSettingsTest do
       def insert(settings, _opts), do: {:ok, settings}
 
       def get!(CodexPooler.InstanceSettings.Settings, true) do
-        Application.fetch_env!(:codex_pooler, __MODULE__)
+        case Application.fetch_env!(:codex_pooler, __MODULE__) do
+          %{settings: settings, observer: observer, barrier_ref: barrier_ref} ->
+            send(observer, {:peer_settings_load_blocked, node(), barrier_ref})
+
+            receive do
+              {:release_peer_settings_load, ^barrier_ref} -> settings
+            end
+
+          %CodexPooler.InstanceSettings.Settings{} = settings ->
+            settings
+        end
       end
 
-      def one(_query), do: Application.fetch_env!(:codex_pooler, __MODULE__).lock_version
+      def one(_query), do: current_settings().lock_version
+
+      defp current_settings do
+        case Application.fetch_env!(:codex_pooler, __MODULE__) do
+          %{settings: settings} -> settings
+          %CodexPooler.InstanceSettings.Settings{} = settings -> settings
+        end
+      end
     end
 
     defmodule #{inspect(PeerHarness)} do
@@ -1347,6 +1477,31 @@ defmodule CodexPooler.InstanceSettingsTest do
 
       def replace_repo_settings(settings) do
         Application.put_env(:codex_pooler, PeerRepo, settings)
+      end
+
+      def block_next_repo_load(settings, observer, barrier_ref) do
+        Application.put_env(:codex_pooler, PeerRepo, %{
+          settings: settings,
+          observer: observer,
+          barrier_ref: barrier_ref
+        })
+      end
+
+      def release_repo_load(barrier_ref) do
+        send(Process.whereis(Cache), {:release_peer_settings_load, barrier_ref})
+        :ok
+      end
+
+      def firewall_decision(client_ip) do
+        settings =
+          InstanceSettings.current()
+          |> CodexPooler.Gateway.OperationalSettings.from_instance_settings()
+
+        client_ip
+        |> CodexPoolerWeb.Plugs.RuntimeIngress.Firewall.evaluate_client_ip(
+          settings
+        )
+        |> Map.take([:outcome, :reason])
       end
 
       def current_lock_version do

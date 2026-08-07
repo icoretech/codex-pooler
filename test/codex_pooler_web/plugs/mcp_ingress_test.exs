@@ -202,6 +202,27 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
 
       refute_received {@firewall_denied_event, _measurements, _metadata}
     end
+
+    test "x-forwarded-for policy ignores malformed x-real-ip", %{conn: conn, user: user} do
+      raw_token = enabled_mcp_token!(user)
+
+      setup_runtime_ingress(%OperationalSettings{
+        firewall_allowlist: ["203.0.113.10"],
+        trusted_proxies: ["10.0.0.1"],
+        forwarded_client_ip_source: :x_forwarded_for,
+        forwarded_proxy_depth: 1
+      })
+
+      allowed_conn =
+        conn
+        |> remote_ip({10, 0, 0, 1})
+        |> put_req_header("x-forwarded-for", "203.0.113.10")
+        |> put_req_header("x-real-ip", <<255>>)
+        |> authenticated_json_rpc_conn(raw_token)
+        |> post("/mcp", Jason.encode!(initialize_request()))
+
+      assert json_response(allowed_conn, 200)["result"]["protocolVersion"] == @mcp_version
+    end
   end
 
   describe "MCP body parser ingress" do

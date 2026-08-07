@@ -487,6 +487,34 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
                Firewall.evaluate(conn, settings)
     end
 
+    test "invalid firewall rules loaded from a legacy row fail closed at the HTTP boundary", %{
+      conn: conn
+    } do
+      _settings = InstanceSettings.ensure_singleton!()
+
+      Repo.query!(~S"""
+      UPDATE instance_settings
+      SET ingress = jsonb_set(ingress, '{firewall_allowlist}', '["not-an-ip"]'::jsonb, true)
+      """)
+
+      InstanceSettings.reset_cache_for_test()
+      attach_firewall_denial_handler()
+      setup = active_api_key_fixture()
+
+      denied =
+        conn
+        |> remote_ip({198, 51, 100, 20})
+        |> put_req_header("authorization", setup.authorization)
+        |> get("/api/codex/usage")
+
+      assert json_response(denied, 403)["error"]["code"] == "access_denied"
+
+      assert_received {@firewall_denied_event, %{count: 1},
+                       %{scope: "runtime", reason: "invalid_allowlist_rules"}}
+
+      refute_received {@firewall_denied_event, _measurements, _metadata}
+    end
+
     test "empty raw allowlist remains disabled when client resolution failed" do
       settings = %OperationalSettings{
         firewall_allowlist: [],
