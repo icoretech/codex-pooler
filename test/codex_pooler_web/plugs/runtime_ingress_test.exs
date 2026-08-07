@@ -132,7 +132,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       end
     end
 
-    test "encoded pruned helpers remain absent before the runtime firewall", %{conn: conn} do
+    test "encoded pruned helpers reach the same runtime firewall", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
 
       conn =
@@ -140,7 +140,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
         |> remote_ip({198, 51, 100, 20})
         |> post("/backend-api/codex/thread/%67oal/get", %{})
 
-      assert response(conn, 404) =~ "Not Found"
+      assert json_response(conn, 403)["error"]["code"] == "access_denied"
     end
 
     test "encoded protected JSON and transcription routes authenticate before parsing", %{
@@ -830,6 +830,113 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
     end
   end
 
+  describe "pruned runtime helper firewall matrix" do
+    test "disabled malformed firewall settings preserve the fixed absent response", %{conn: conn} do
+      attach_firewall_denial_handler()
+
+      setup_runtime_ingress_override(%OperationalSettings{
+        firewall_allowlist: [],
+        firewall_allowlist_compiled: {:error, :invalid_rule}
+      })
+
+      {upstream, setup} = pruned_runtime_helper_setup()
+
+      conn =
+        conn
+        |> auth(setup)
+        |> remote_ip({198, 51, 100, 20})
+        |> put_req_header("content-type", "application/json")
+        |> post("/backend-api/codex/analytics-events/events", ~s({"event":))
+
+      assert_pruned_helper_absent(conn)
+      assert_pruned_helper_side_effects_absent(conn, upstream)
+      refute_received {@firewall_denied_event, _measurements, _metadata}
+    end
+
+    test "stale admitted firewall settings preserve the fixed absent response", %{conn: conn} do
+      attach_firewall_denial_handler()
+
+      setup_runtime_ingress_override(%OperationalSettings{
+        source: :database,
+        db_available?: false,
+        secrets_available?: false,
+        firewall_allowlist: ["203.0.113.10"]
+      })
+
+      {upstream, setup} = pruned_runtime_helper_setup()
+
+      conn =
+        conn
+        |> auth(setup)
+        |> remote_ip({203, 0, 113, 10})
+        |> put_req_header("content-type", "application/json")
+        |> post("/backend-api/codex/analytics-events/events", ~s({"event":))
+
+      assert_pruned_helper_absent(conn)
+      assert_pruned_helper_side_effects_absent(conn, upstream)
+      refute_received {@firewall_denied_event, _measurements, _metadata}
+    end
+
+    test "denied clients receive the normal runtime firewall envelope", %{conn: conn} do
+      attach_firewall_denial_handler()
+      setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
+      {upstream, setup} = pruned_runtime_helper_setup()
+
+      conn =
+        conn
+        |> auth(setup)
+        |> remote_ip({198, 51, 100, 20})
+        |> put_req_header("content-type", "application/json")
+        |> post("/backend-api/codex/analytics-events/events", ~s({"event":))
+
+      assert json_response(conn, 403) == %{
+               "error" => %{
+                 "code" => "access_denied",
+                 "message" => "client IP is not allowed",
+                 "param" => nil,
+                 "type" => "invalid_request_error"
+               }
+             }
+
+      assert_pruned_helper_side_effects_absent(conn, upstream)
+
+      assert_received {@firewall_denied_event, %{count: 1},
+                       %{scope: "runtime", reason: "not_allowed"}}
+
+      refute_received {@firewall_denied_event, _measurements, _metadata}
+    end
+
+    test "cold settings receive the normal runtime unavailable envelope", %{conn: conn} do
+      attach_firewall_denial_handler()
+      {upstream, setup} = pruned_runtime_helper_setup()
+
+      conn =
+        with_cache_unregistered(fn ->
+          conn
+          |> auth(setup)
+          |> remote_ip({198, 51, 100, 20})
+          |> put_req_header("content-type", "application/json")
+          |> post("/backend-api/codex/analytics-events/events", ~s({"event":))
+        end)
+
+      assert json_response(conn, 503) == %{
+               "error" => %{
+                 "code" => "settings_unavailable",
+                 "message" => "runtime settings are temporarily unavailable",
+                 "param" => nil,
+                 "type" => "invalid_request_error"
+               }
+             }
+
+      assert_pruned_helper_side_effects_absent(conn, upstream)
+
+      assert_received {@firewall_denied_event, %{count: 1},
+                       %{scope: "runtime", reason: "settings_unavailable"}}
+
+      refute_received {@firewall_denied_event, _measurements, _metadata}
+    end
+  end
+
   describe "protected backend JSON authentication order" do
     test "authenticates backend JSON runtime routes before Plug.Parsers reads malformed bodies",
          %{
@@ -858,7 +965,10 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       end
     end
 
-    test "pruned backend helper routes fall through as absent without ingress auth", %{conn: conn} do
+    test "pruned backend helper routes preserve the fixed absent response without ingress auth",
+         %{
+           conn: conn
+         } do
       setup_runtime_ingress(%OperationalSettings{})
 
       for {method, path, content_type, body} <- [
@@ -879,7 +989,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
           |> recycle()
           |> dispatch_absent_backend_helper(method, path, content_type, body)
 
-        assert response(conn, 404) =~ "Not Found"
+        assert get_resp_header(conn, "content-type") == ["text/html; charset=utf-8"]
+        assert response(conn, 404) == "Not Found"
       end
     end
 
@@ -1745,4 +1856,22 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   end
 
   defp auth(conn, setup), do: put_req_header(conn, "authorization", setup.authorization)
+
+  defp pruned_runtime_helper_setup do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
+    {upstream, gateway_setup(upstream)}
+  end
+
+  defp assert_pruned_helper_absent(conn) do
+    assert get_resp_header(conn, "content-type") == ["text/html; charset=utf-8"]
+    assert response(conn, 404) == "Not Found"
+  end
+
+  defp assert_pruned_helper_side_effects_absent(conn, upstream) do
+    refute conn.private[:runtime_api_auth]
+    assert %Plug.Conn.Unfetched{aspect: :body_params} = conn.body_params
+    assert FakeUpstream.requests(upstream) == []
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
+  end
 end

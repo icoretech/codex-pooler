@@ -61,15 +61,13 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
 
   defp route_request(conn, path) do
     cond do
-      pruned_runtime_helper_request?(conn) ->
-        send_pruned_runtime_helper_absent(conn)
-
       path.scope == :runtime ->
         settings = operational_settings(conn)
 
         conn
         |> put_json_parser_context(settings, json_parse_error_scope(conn))
         |> enforce_firewall(settings)
+        |> reject_pruned_runtime_helper()
         |> authenticate_v1_request()
         |> reject_unsupported_v1_request()
         |> authenticate_multipart_transcribe_request()
@@ -437,6 +435,16 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
   @spec pruned_runtime_helper_request?(Plug.Conn.t()) :: boolean()
   defp pruned_runtime_helper_request?(%Plug.Conn{method: method} = conn) do
     {method, Path.decoded_segments(conn)} in @pruned_runtime_helper_routes
+  end
+
+  defp reject_pruned_runtime_helper(%Plug.Conn{halted: true} = conn), do: conn
+
+  defp reject_pruned_runtime_helper(conn) do
+    if pruned_runtime_helper_request?(conn) do
+      send_pruned_runtime_helper_absent(conn)
+    else
+      conn
+    end
   end
 
   defp decode_or_send_compressed_body(conn, settings) do

@@ -447,6 +447,17 @@ defmodule CodexPooler.CompatibilityMatrix do
         "firewall checks are path-gated to runtime compatibility routes, use one explicit forwarded-client source with x_forwarded_for/depth 0 defaults, require a trusted immediate peer before any selected forwarding header, resolve duplicate XFF fields in wire order, fail cold settings with 503 while warm nodes keep last-known-good enforcement, revoke already-open websocket clients after local policy application without admitting new work, and expose one bounded denial counter with only scope and reason labels"
     },
     %{
+      slug: :pruned_runtime_helper_firewall,
+      status: :supported,
+      current: :firewall_before_fixed_absence,
+      categories: [:route, :error],
+      routes: [],
+      future_routes: [],
+      fixture: :pruned_runtime_helper_firewall,
+      contract:
+        "pruned runtime helper routes enforce runtime settings availability and firewall policy before preserving their fixed unauthenticated HTML 404 response, without body parsing, upstream dispatch, reservation, or accounting side effects"
+    },
+    %{
       slug: :decompression,
       status: :supported,
       current: :bounded_compressed_json,
@@ -1361,6 +1372,33 @@ defmodule CodexPooler.CompatibilityMatrix do
         labels: [:scope, :reason],
         accounting: :before_authenticated_request_accounting
       }
+    },
+    pruned_runtime_helper_firewall: %{
+      routes: [
+        %{method: :get, path: "/backend-api/codex/agent-identities/jwks"},
+        %{method: :get, path: "/backend-api/wham/agent-identities/jwks"},
+        %{method: :post, path: "/api/codex/rate-limit-reset-credits/consume"},
+        %{method: :post, path: "/wham/rate-limit-reset-credits/consume"},
+        %{method: :post, path: "/backend-api/wham/rate-limit-reset-credits/consume"},
+        %{method: :post, path: "/backend-api/codex/thread/goal/get"},
+        %{method: :post, path: "/backend-api/codex/thread/goal/set"},
+        %{method: :post, path: "/backend-api/codex/thread/goal/clear"},
+        %{method: :post, path: "/backend-api/codex/analytics-events/events"},
+        %{method: :post, path: "/backend-api/codex/memories/trace_summarize"},
+        %{method: :post, path: "/backend-api/codex/alpha/search"},
+        %{method: :post, path: "/backend-api/codex/realtime/calls"},
+        %{method: :post, path: "/backend-api/codex/safety/arc"}
+      ],
+      disabled: %{status: 404, content_type: "text/html; charset=utf-8", body: "Not Found"},
+      admitted: %{status: 404, content_type: "text/html; charset=utf-8", body: "Not Found"},
+      denied: %{status: 403, error_code: "access_denied"},
+      settings_unavailable: %{status: 503, error_code: "settings_unavailable"},
+      authentication: :not_attempted,
+      body_read: false,
+      upstream_dispatch: false,
+      reservation: false,
+      accounting: false,
+      denial_observation: :exactly_one_bounded_event
     },
     compressed_request: %{encoding: "gzip", bytes: "synthetic compressed bytes"},
     bulkhead_overload: %{lane: "proxy_http", decision: "synthetic shed"},

@@ -40,6 +40,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     reasoning_context
     unsupported_upstream_fields
     firewall
+    pruned_runtime_helper_firewall
     decompression
     bulkheads
     degraded_routing
@@ -95,6 +96,47 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
     test "has no pending compatibility gaps" do
       assert CompatibilityMatrix.pending_gaps() == []
+    end
+
+    test "documents the pruned runtime helper firewall matrix" do
+      feature = CompatibilityMatrix.by_slug!(:pruned_runtime_helper_firewall)
+      fixture = CompatibilityMatrix.fixture!(:pruned_runtime_helper_firewall)
+
+      assert feature.current == :firewall_before_fixed_absence
+      assert feature.categories == [:route, :error]
+      assert feature.routes == []
+
+      assert %{method: :post, path: "/backend-api/codex/analytics-events/events"} in fixture.routes
+
+      assert fixture.disabled == %{
+               status: 404,
+               content_type: "text/html; charset=utf-8",
+               body: "Not Found"
+             }
+
+      assert fixture.admitted == fixture.disabled
+      assert fixture.denied == %{status: 403, error_code: "access_denied"}
+
+      assert fixture.settings_unavailable == %{
+               status: 503,
+               error_code: "settings_unavailable"
+             }
+
+      assert Map.take(fixture, [
+               :authentication,
+               :body_read,
+               :upstream_dispatch,
+               :reservation,
+               :accounting,
+               :denial_observation
+             ]) == %{
+               authentication: :not_attempted,
+               body_read: false,
+               upstream_dispatch: false,
+               reservation: false,
+               accounting: false,
+               denial_observation: :exactly_one_bounded_event
+             }
     end
 
     test "characterizes structured firewall and image permission seams" do
@@ -1766,7 +1808,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       end
     end
 
-    test "does not list pruned control-plane or reset-credit surfaces as supported features" do
+    test "lists pruned helpers only in their fixed-absence firewall contract" do
       matrix_routes =
         CompatibilityMatrix.features()
         |> Enum.flat_map(& &1.routes)
@@ -1783,25 +1825,19 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       refute :backend_reset_credit_consume in CompatibilityMatrix.feature_slugs()
       refute :backend_alpha_search in CompatibilityMatrix.feature_slugs()
 
-      for route <- [
-            {:post, "/api/codex/rate-limit-reset-credits/consume"},
-            {:post, "/wham/rate-limit-reset-credits/consume"},
-            {:post, "/backend-api/wham/rate-limit-reset-credits/consume"},
-            {:get, "/backend-api/codex/thread/goal/get"},
-            {:post, "/backend-api/codex/thread/goal/get"},
-            {:post, "/backend-api/codex/thread/goal/set"},
-            {:post, "/backend-api/codex/thread/goal/clear"},
-            {:post, "/backend-api/codex/analytics-events/events"},
-            {:post, "/backend-api/codex/memories/trace_summarize"},
-            {:post, "/backend-api/codex/alpha/search"},
-            {:post, "/backend-api/codex/realtime/calls"},
-            {:post, "/backend-api/codex/safety/arc"},
-            {:get, "/backend-api/codex/agent-identities/jwks"},
-            {:get, "/backend-api/wham/agent-identities/jwks"}
-          ] do
+      pruned_routes =
+        CompatibilityMatrix.fixture!(:pruned_runtime_helper_firewall)
+        |> Map.fetch!(:routes)
+        |> Enum.map(&{&1.method, &1.path})
+        |> MapSet.new()
+
+      for route <- pruned_routes do
         refute MapSet.member?(matrix_routes, route)
         refute MapSet.member?(router_routes, route)
       end
+
+      refute MapSet.member?(matrix_routes, {:get, "/backend-api/codex/thread/goal/get"})
+      refute MapSet.member?(router_routes, {:get, "/backend-api/codex/thread/goal/get"})
     end
 
     test "documents unsupported v1 public surface with exact OpenAI-shaped error contract" do
