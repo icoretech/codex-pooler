@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.TelemetryTest do
   alias CodexPooler.Gateway.Routing.CircuitTelemetry
   alias CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary
   alias CodexPooler.RouteClass
+  alias CodexPoolerWeb.Plugs.RuntimeIngress.Firewall
   alias CodexPoolerWeb.Telemetry.AdmissionSampler
 
   setup do
@@ -153,6 +154,33 @@ defmodule CodexPoolerWeb.TelemetryTest do
 
     assert %{method: "unknown", route: "unknown", status_class: "unknown"} =
              route_metric.tag_values.(%{conn: %{method: "unsafe method", status: nil}, route: ""})
+  end
+
+  test "exports the bounded ingress firewall denial counter" do
+    metric =
+      CodexPoolerWeb.Telemetry.prometheus_metrics()
+      |> metric_by_name("codex_pooler.ingress.firewall.denied.count")
+
+    assert %Telemetry.Metrics.Counter{
+             event_name: [:codex_pooler, :ingress, :firewall, :denied],
+             measurement: :count,
+             tags: [:scope, :reason]
+           } = metric
+
+    for scope <- ~w(runtime mcp), reason <- Firewall.denial_reasons() do
+      assert %{scope: ^scope, reason: normalized_reason} =
+               metric.tag_values.(%{scope: scope, reason: Atom.to_string(reason)})
+
+      assert normalized_reason == Atom.to_string(reason)
+    end
+
+    assert %{scope: "unknown", reason: "unknown"} =
+             metric.tag_values.(%{
+               scope: "caller-controlled-scope",
+               reason: "caller-controlled-reason",
+               client_ip: "198.51.100.20",
+               path: "/backend-api/codex/responses"
+             })
   end
 
   test "exports gateway admission pressure metrics" do

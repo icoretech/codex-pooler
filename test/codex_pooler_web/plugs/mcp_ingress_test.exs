@@ -9,6 +9,8 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
   alias CodexPooler.Repo
   alias CodexPooler.RouteClass
 
+  @firewall_denied_event [:codex_pooler, :ingress, :firewall, :denied]
+
   setup :register_and_log_in_user
 
   @mcp_version "2025-11-25"
@@ -39,6 +41,37 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
   end
 
   describe "MCP firewall and trusted proxy ingress" do
+    test "allowed MCP requests emit no firewall denial event", %{conn: conn, user: user} do
+      attach_firewall_denial_handler()
+      setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["198.51.100.20"]})
+      raw_token = enabled_mcp_token!(user)
+
+      conn =
+        conn
+        |> remote_ip({198, 51, 100, 20})
+        |> authenticated_json_rpc_conn(raw_token)
+        |> post("/mcp", Jason.encode!(initialize_request()))
+
+      assert json_response(conn, 200)["result"]["protocolVersion"] == @mcp_version
+      refute_received {@firewall_denied_event, _measurements, _metadata}
+    end
+
+    test "denied MCP requests emit one bounded denial event", %{conn: conn} do
+      attach_firewall_denial_handler()
+      setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
+
+      conn =
+        conn
+        |> remote_ip({198, 51, 100, 20})
+        |> put_req_header("content-type", "application/json")
+        |> post("/mcp", Jason.encode!(initialize_request()))
+
+      assert json_rpc_error(conn, 403)["error"]["message"] == "client IP is not allowed"
+      assert_received {@firewall_denied_event, %{count: 1}, metadata}
+      assert metadata == %{scope: "mcp", reason: "not_allowed"}
+      refute_received {@firewall_denied_event, _measurements, _metadata}
+    end
+
     test "empty allowlist leaves MCP reachable", %{conn: conn, user: user} do
       setup_runtime_ingress(%OperationalSettings{firewall_allowlist: []})
       raw_token = enabled_mcp_token!(user)
@@ -235,6 +268,23 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
                },
                "gateway" => %{"bulkheads" => string_keyed_map(settings.bulkheads)}
              })
+  end
+
+  defp attach_firewall_denial_handler do
+    test_pid = self()
+    handler_id = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        @firewall_denied_event,
+        fn event, measurements, metadata, _config ->
+          send(test_pid, {event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
   end
 
   defp authenticated_json_rpc_conn(conn, raw_token) do

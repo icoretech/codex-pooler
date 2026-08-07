@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPoolerWeb.GatewayControllerHelpers
   alias CodexPoolerWeb.Plugs.RuntimeIngress.{CompressedBody, Firewall, Path}
+  alias CodexPoolerWeb.Plugs.RuntimeIngress.Firewall.Decision
   alias CodexPoolerWeb.V1.UnsupportedRoutes
   alias Plug.Conn.Query
   alias Plug.Conn.Utils
@@ -102,9 +103,13 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
   def mcp_request?(_conn), do: false
 
   defp enforce_mcp_firewall(conn, settings) do
-    case Firewall.enforce(conn, settings) do
-      {:ok, conn} -> conn
-      {:error, reason} -> send_mcp_error(conn, reason.status, -32_600, reason.message)
+    case Firewall.evaluate(conn, settings) do
+      {conn, %Decision{outcome: :allow}} ->
+        conn
+
+      {conn, %Decision{outcome: :deny} = decision} ->
+        :ok = Firewall.observe_denial(decision, :mcp)
+        send_mcp_error(conn, 403, -32_600, "client IP is not allowed")
     end
   end
 
@@ -252,10 +257,18 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
   defp make_empty_if_unfetched(params), do: params
 
   defp enforce_firewall(conn, settings) do
-    case Firewall.enforce(conn, settings) do
-      {:ok, conn} -> conn
-      {:error, reason} -> send_runtime_error(conn, reason)
+    case Firewall.evaluate(conn, settings) do
+      {conn, %Decision{outcome: :allow}} ->
+        conn
+
+      {conn, %Decision{outcome: :deny} = decision} ->
+        :ok = Firewall.observe_denial(decision, :runtime)
+        send_runtime_error(conn, firewall_access_denied())
     end
+  end
+
+  defp firewall_access_denied do
+    %{status: 403, code: "access_denied", message: "client IP is not allowed"}
   end
 
   defp authenticate_v1_request(%Plug.Conn{halted: true} = conn), do: conn

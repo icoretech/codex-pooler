@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Telemetry do
   alias CodexPooler.Gateway.Routing.CircuitTelemetry
   alias CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary
   alias CodexPooler.RouteClass
+  alias CodexPoolerWeb.Plugs.RuntimeIngress.Firewall
 
   @type metric :: Telemetry.Metrics.t()
   @type repo_query_tags :: %{source: String.t(), command: String.t()}
@@ -207,6 +208,13 @@ defmodule CodexPoolerWeb.Telemetry do
         tags: [:route, :method, :status_class],
         tag_values: &http_route_tag_values/1,
         description: "Total routed HTTP requests by route, method, and status class."
+      ),
+      counter("codex_pooler.ingress.firewall.denied.count",
+        event_name: [:codex_pooler, :ingress, :firewall, :denied],
+        measurement: :count,
+        tags: [:scope, :reason],
+        tag_values: &Firewall.telemetry_tag_values/1,
+        description: "Total runtime ingress firewall denials by bounded scope and reason."
       ),
       counter("codex_pooler.repo.query.count",
         event_name: [:codex_pooler, :repo, :query],

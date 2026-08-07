@@ -25,6 +25,9 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIP do
             | :invalid_forwarded_entry
             | :forwarded_hop_limit_exceeded
             | :forwarded_chain_unresolved
+            | :forwarded_header_missing
+            | :forwarded_depth_unsatisfied
+            | :duplicate_x_real_ip
 
     @type t :: %__MODULE__{
             status: status(),

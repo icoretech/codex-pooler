@@ -2,6 +2,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import CodexPooler.PoolerFixtures
+  import ExUnit.CaptureLog, only: [capture_log: 2]
 
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Catalog.PricingSnapshot
@@ -26,6 +27,9 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   }
 
   alias CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIP.Resolution
+  alias CodexPoolerWeb.Plugs.RuntimeIngress.Firewall.Decision
+
+  @firewall_denied_event [:codex_pooler, :ingress, :firewall, :denied]
 
   defp append_req_header(conn, name, value) do
     %{conn | req_headers: conn.req_headers ++ [{name, value}]}
@@ -306,6 +310,48 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   end
 
   describe "runtime API firewall" do
+    test "allowed runtime requests emit no firewall denial event", %{conn: conn} do
+      attach_firewall_denial_handler()
+      setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
+      setup = active_api_key_fixture()
+
+      conn =
+        conn
+        |> remote_ip({203, 0, 113, 10})
+        |> put_req_header("authorization", setup.authorization)
+        |> get("/api/codex/usage")
+
+      assert %{"plan_type" => "api_key"} = json_response(conn, 200)
+      refute_received {@firewall_denied_event, _measurements, _metadata}
+    end
+
+    test "denied runtime requests emit one bounded event and sanitized log", %{conn: conn} do
+      attach_firewall_denial_handler()
+      setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
+
+      log =
+        capture_log([metadata: [:scope, :reason, :request_id]], fn ->
+          denied_conn = conn |> remote_ip({198, 51, 100, 20}) |> get("/api/codex/usage")
+          assert json_response(denied_conn, 403)["error"]["code"] == "access_denied"
+        end)
+
+      assert_received {@firewall_denied_event, %{count: 1}, metadata}
+      assert metadata == %{scope: "runtime", reason: "not_allowed"}
+      refute_received {@firewall_denied_event, _measurements, _metadata}
+      assert log =~ "ingress firewall denied"
+      assert log =~ "scope=runtime"
+      assert log =~ "reason=not_allowed"
+
+      for forbidden <- [
+            "198.51.100.20",
+            "x-forwarded-for",
+            "/api/codex/usage",
+            "request_id="
+          ] do
+        refute log =~ forbidden
+      end
+    end
+
     test "reuses the stored resolution without reparsing changed forwarded headers" do
       setup_runtime_ingress_override(%OperationalSettings{
         firewall_allowlist: ["203.0.113.10"],
@@ -321,7 +367,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
       settings = conn.private[:codex_pooler_runtime_ingress_settings]
 
-      assert {:ok, allowed_conn} = Firewall.enforce(conn, settings)
+      assert {allowed_conn, %Decision{outcome: :allow}} = Firewall.evaluate(conn, settings)
       assert allowed_conn.remote_ip == {203, 0, 113, 10}
     end
 
@@ -349,8 +395,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
           }
         )
 
-      assert {:error, %{status: 403, code: "access_denied"}} =
-               Firewall.enforce(conn, settings)
+      assert {_conn, %Decision{outcome: :deny, reason: :invalid_allowlist_rules}} =
+               Firewall.evaluate(conn, settings)
     end
 
     test "empty raw allowlist remains disabled when client resolution failed" do
@@ -373,7 +419,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
           }
         )
 
-      assert {:ok, ^conn} = Firewall.enforce(conn, settings)
+      assert {^conn, %Decision{outcome: :allow}} = Firewall.evaluate(conn, settings)
     end
 
     test "malformed trusted forwarding input fails closed only on runtime routes", %{conn: conn} do
@@ -1291,6 +1337,23 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
     )
 
     on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
+  end
+
+  defp attach_firewall_denial_handler do
+    test_pid = self()
+    handler_id = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        @firewall_denied_event,
+        fn event, measurements, metadata, _config ->
+          send(test_pid, {event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
   end
 
   defp trace_call_count({module, function, arity} = traced_mfa, callback) do
