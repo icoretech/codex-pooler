@@ -18,12 +18,62 @@ defmodule CodexPooler.InstanceSettingsTest do
       do: raise(DBConnection.ConnectionError, message: "settings db unavailable")
   end
 
+  defmodule ScriptedRepo do
+    def insert(settings, _opts) do
+      notify(:insert)
+      maybe_fail!(:load)
+      {:ok, settings}
+    end
+
+    def get!(Settings, true) do
+      notify(:get)
+      maybe_fail!(:load)
+      Keyword.fetch!(config(), :settings)
+    end
+
+    def one(_query) do
+      notify(:lock_version)
+      maybe_fail!(:lock_version)
+      config() |> Keyword.fetch!(:settings) |> Map.fetch!(:lock_version)
+    end
+
+    defp maybe_fail!(operation) do
+      if Keyword.fetch!(config(), :failure) in [:all, operation] do
+        raise DBConnection.ConnectionError, message: "settings db unavailable"
+      end
+    end
+
+    defp notify(operation), do: send(Keyword.fetch!(config(), :owner), {__MODULE__, operation})
+    defp config, do: Application.fetch_env!(:codex_pooler, __MODULE__)
+  end
+
+  defmodule TestTimer do
+    def send_after(destination, message, delay) do
+      ref = make_ref()
+      send(owner(), {__MODULE__, :scheduled, ref, destination, message, delay})
+      ref
+    end
+
+    def cancel_timer(ref) do
+      send(owner(), {__MODULE__, :cancelled, ref})
+      false
+    end
+
+    defp owner do
+      :codex_pooler
+      |> Application.fetch_env!(__MODULE__)
+      |> Keyword.fetch!(:owner)
+    end
+  end
+
   defmodule PeerRepo do
     def insert(settings, _opts), do: {:ok, settings}
 
     def get!(Settings, true) do
       Application.fetch_env!(:codex_pooler, __MODULE__)
     end
+
+    def one(_query), do: Application.fetch_env!(:codex_pooler, __MODULE__).lock_version
   end
 
   defmodule PeerHarness do
@@ -55,17 +105,40 @@ defmodule CodexPooler.InstanceSettingsTest do
     def hide_cache_name do
       Process.unregister(Cache)
     end
+
+    def start_applied_forwarder(observer) do
+      spawn(fn ->
+        :ok = Cache.subscribe_applied()
+        send(observer, {:peer_applied_subscribed, node()})
+        forward_applied(observer)
+      end)
+    end
+
+    defp forward_applied(observer) do
+      receive do
+        {Cache, {:applied, lock_version}} ->
+          current_lock_version = InstanceSettings.current().lock_version
+          send(observer, {:peer_applied, node(), lock_version, current_lock_version})
+          forward_applied(observer)
+      end
+    end
   end
 
   setup do
     previous = Application.get_env(:codex_pooler, InstanceSettings, [])
+    previous_cache = Application.get_env(:codex_pooler, Cache, [])
+    previous_test_timer = Application.get_env(:codex_pooler, TestTimer)
+    previous_scripted_repo = Application.get_env(:codex_pooler, ScriptedRepo)
     Application.put_env(:codex_pooler, InstanceSettings, Keyword.delete(previous, :repo))
     Repo.delete_all(Settings)
     InstanceSettings.reset_cache_for_test()
 
     on_exit(fn ->
       Application.put_env(:codex_pooler, InstanceSettings, previous)
+      restore_application_env(Cache, previous_cache)
       InstanceSettings.reset_cache_for_test()
+      restore_application_env(TestTimer, previous_test_timer)
+      restore_application_env(ScriptedRepo, previous_scripted_repo)
     end)
 
     :ok
@@ -113,6 +186,19 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert updated.gateway.websocket_idle_timeout_ms == 444_000
     assert InstanceSettings.get!().gateway.websocket_idle_timeout_ms == 444_000
     assert InstanceSettings.current().gateway.websocket_idle_timeout_ms == 444_000
+  end
+
+  test "baseline characterization publishes a cache put before its distributed invalidation" do
+    settings = InstanceSettings.current()
+    :ok = Cache.subscribe()
+    updated = %{settings | lock_version: settings.lock_version + 1}
+
+    assert :ok = Cache.put(updated)
+    assert InstanceSettings.current().lock_version == updated.lock_version
+
+    assert :ok = Cache.broadcast_update(updated)
+    assert_receive {Cache, {:updated, lock_version}}
+    assert lock_version == updated.lock_version
   end
 
   test "duplicate singleton rows are rejected by the database and ensure_singleton!/0 is idempotent" do
@@ -481,6 +567,33 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert published.smtp.password_action == nil
   end
 
+  test "local applied events observe the published writer snapshot" do
+    settings = InstanceSettings.current()
+    updated = %{settings | lock_version: settings.lock_version + 1}
+    parent = self()
+
+    observer =
+      spawn(fn ->
+        :ok = Cache.subscribe_applied()
+        send(parent, {:applied_observer_ready, self()})
+
+        receive do
+          {Cache, {:applied, lock_version}} ->
+            send(
+              parent,
+              {:applied_observer_result, lock_version, InstanceSettings.current().lock_version}
+            )
+        end
+      end)
+
+    assert_receive {:applied_observer_ready, ^observer}
+    assert :ok = Cache.put(updated)
+
+    assert_receive {:applied_observer_result, lock_version, current_lock_version}
+    assert lock_version == updated.lock_version
+    assert current_lock_version == updated.lock_version
+  end
+
   test "cache misses and incompatible publication versions reload through the writer" do
     settings = InstanceSettings.current()
     :persistent_term.put({Cache, :current}, {0, %{settings | lock_version: 999}})
@@ -512,19 +625,27 @@ defmodule CodexPooler.InstanceSettingsTest do
   end
 
   @tag :distributed
-  test "PubSub invalidation refreshes the published read value on a peer node" do
+  test "PubSub invalidation converges a peer only after its local snapshot is applied" do
     settings = InstanceSettings.current()
     peer = start_instance_settings_peer!(settings)
 
     on_exit(fn -> stop_instance_settings_peer(peer) end)
 
-    assert true = :erpc.call(peer.node, PeerHarness, :hide_cache_name, [])
+    assert forwarder =
+             :erpc.call(peer.node, PeerHarness, :start_applied_forwarder, [self()])
+
+    assert is_pid(forwarder)
+    assert_receive {:peer_applied_subscribed, peer_node}
+    assert peer_node == peer.node
 
     updated = %{settings | lock_version: settings.lock_version + 1}
     assert :ok = :erpc.call(peer.node, PeerHarness, :replace_repo_settings, [updated])
     assert :ok = Cache.broadcast_update(updated)
 
-    assert :ok = await_peer_lock_version(peer.node, updated.lock_version)
+    assert_receive {:peer_applied, peer_node, applied_lock_version, current_lock_version}, 2_000
+    assert peer_node == peer.node
+    assert applied_lock_version == updated.lock_version
+    assert current_lock_version == updated.lock_version
   end
 
   @tag :failure_modes
@@ -541,6 +662,7 @@ defmodule CodexPooler.InstanceSettingsTest do
       assert settings.files.max_size_bytes == 25 * 1024 * 1024
       assert settings.metrics.bearer_token_status == :unavailable
       assert settings.smtp.password_status == :unavailable
+      assert :persistent_term.get({Cache, :current}) == {1, settings}
     after
       if is_pid(cache), do: Process.register(cache, Cache)
     end
@@ -548,11 +670,15 @@ defmodule CodexPooler.InstanceSettingsTest do
 
   @tag :failure_modes
   test "warm-cache DB failure returns last-known-good settings" do
+    settings = Settings.default() |> Map.put(:lock_version, 7)
+    configure_scripted_cache(settings)
     settings = InstanceSettings.current()
     assert settings.source == :database
     assert settings.mcp.enabled == false
+    assert_receive {ScriptedRepo, :insert}
+    assert_receive {ScriptedRepo, :get}
 
-    Application.put_env(:codex_pooler, InstanceSettings, repo: FailingRepo)
+    configure_scripted_repo(settings, :load)
 
     log =
       capture_log(fn ->
@@ -567,12 +693,20 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert fallback.db_available? == true
     assert fallback.files.max_size_bytes == settings.files.max_size_bytes
     assert fallback.metrics.bearer_token_status == :intentionally_unset
+
+    state = :sys.get_state(Cache)
+    assert state.health == :degraded
+    assert state.cached.lock_version == settings.lock_version
+    assert state.desired_lock_version == settings.lock_version + 1
+    assert %{attempt: 0} = state.retry_timer
+    assert_receive {TestTimer, :scheduled, _ref, _cache, {Cache, {:retry, _generation}}, 10}
   end
 
   @tag :failure_modes
-  test "cold-cache DB failure returns fallback defaults with unavailable secret statuses" do
-    Application.put_env(:codex_pooler, InstanceSettings, repo: FailingRepo)
-    InstanceSettings.reset_cache_for_test()
+  test "cold-cache DB failure publishes unavailable defaults and one retry recovers" do
+    database_settings = Settings.default() |> Map.put(:lock_version, 11)
+    configure_scripted_cache(database_settings, :load)
+    :ok = Cache.subscribe_applied()
 
     {settings, log} = capture_instance_settings_db_failure(fn -> InstanceSettings.current() end)
 
@@ -584,6 +718,137 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert settings.mcp.enabled == false
     assert settings.metrics.bearer_token_status == :unavailable
     assert settings.smtp.password_status == :unavailable
+    assert :persistent_term.get({Cache, :current}) == {1, settings}
+
+    assert_receive {TestTimer, :scheduled, _ref, cache, {Cache, {:retry, generation}}, 10}
+    assert cache == Process.whereis(Cache)
+
+    configure_scripted_repo(database_settings, :none)
+    send(Cache, {Cache, {:retry, generation}})
+
+    assert_receive {Cache, {:applied, lock_version}}
+    assert lock_version == database_settings.lock_version
+    assert InstanceSettings.current().lock_version == database_settings.lock_version
+    assert InstanceSettings.current().source == :database
+
+    state = :sys.get_state(Cache)
+    assert state.health == :ready
+    assert state.retry_timer == nil
+    assert state.retry_attempt == 0
+    assert %{generation: _generation} = state.reconciliation_timer
+  end
+
+  @tag :failure_modes
+  test "retry backoff caps, keeps one timer, and resets after success" do
+    database_settings = Settings.default() |> Map.put(:lock_version, 15)
+    configure_scripted_cache(database_settings, :load)
+
+    _fallback = InstanceSettings.current()
+
+    assert_receive {TestTimer, :scheduled, _ref1, _cache, {Cache, {:retry, generation1}}, 10}
+    assert %{attempt: 0, generation: ^generation1} = :sys.get_state(Cache).retry_timer
+
+    send(Cache, {Cache, {:retry, generation1}})
+    assert_receive {TestTimer, :scheduled, _ref2, _cache, {Cache, {:retry, generation2}}, 20}
+    assert %{attempt: 1, generation: ^generation2} = :sys.get_state(Cache).retry_timer
+
+    send(Cache, {Cache, {:retry, generation2}})
+    assert_receive {TestTimer, :scheduled, _ref3, _cache, {Cache, {:retry, generation3}}, 30}
+    assert %{attempt: 2, generation: ^generation3} = :sys.get_state(Cache).retry_timer
+
+    send(Cache, {Cache, {:retry, generation3}})
+    assert_receive {TestTimer, :scheduled, _ref4, _cache, {Cache, {:retry, generation4}}, 30}
+    assert %{attempt: 3, generation: ^generation4} = :sys.get_state(Cache).retry_timer
+
+    refute_received {TestTimer, :scheduled, _ref, _destination, {Cache, {:retry, _generation}},
+                     _delay}
+
+    configure_scripted_repo(database_settings, :none)
+    send(Cache, {Cache, {:retry, generation4}})
+    _ = :sys.get_state(Cache)
+
+    state = :sys.get_state(Cache)
+    assert state.retry_timer == nil
+    assert state.retry_attempt == 0
+    assert state.health == :ready
+    assert %{generation: _generation} = state.reconciliation_timer
+  end
+
+  @tag :failure_modes
+  test "stale retry generations cannot reload or schedule another timer" do
+    database_settings = Settings.default() |> Map.put(:lock_version, 21)
+    configure_scripted_cache(database_settings, :load)
+    _fallback = InstanceSettings.current()
+
+    assert_receive {TestTimer, :scheduled, retry_ref, _cache, {Cache, {:retry, stale_generation}},
+                    10}
+
+    send(Cache, {Cache, {:updated, database_settings.lock_version + 1}})
+    _ = :sys.get_state(Cache)
+
+    assert_receive {TestTimer, :cancelled, ^retry_ref}
+
+    assert_receive {TestTimer, :scheduled, _new_ref, _cache,
+                    {Cache, {:retry, current_generation}}, 10}
+
+    refute current_generation == stale_generation
+    flush_scripted_repo_calls()
+
+    send(Cache, {Cache, {:retry, stale_generation}})
+    _ = :sys.get_state(Cache)
+
+    refute_received {ScriptedRepo, _operation}
+
+    refute_received {TestTimer, :scheduled, _ref, _destination, {Cache, {:retry, _generation}},
+                     _delay}
+
+    assert %{generation: ^current_generation} = :sys.get_state(Cache).retry_timer
+  end
+
+  test "reconciliation repairs a missed invalidation using the persisted lock version" do
+    initial = Settings.default() |> Map.put(:lock_version, 31)
+    configure_scripted_cache(initial)
+    :ok = Cache.subscribe_applied()
+    assert InstanceSettings.current().lock_version == initial.lock_version
+    flush_scripted_repo_calls()
+    flush_applied_events()
+
+    updated = %{initial | lock_version: initial.lock_version + 1}
+    configure_scripted_repo(updated, :none)
+    %{generation: generation} = :sys.get_state(Cache).reconciliation_timer
+
+    send(Cache, {Cache, {:reconcile, generation}})
+
+    assert_receive {ScriptedRepo, :lock_version}
+    assert_receive {ScriptedRepo, :insert}
+    assert_receive {ScriptedRepo, :get}
+    assert_receive {Cache, {:applied, lock_version}}
+    assert lock_version == updated.lock_version
+    assert InstanceSettings.current().lock_version == updated.lock_version
+  end
+
+  @tag :failure_modes
+  test "cache process absence publishes cold fallback and restart recovers from the database" do
+    database_settings = Settings.default() |> Map.put(:lock_version, 41)
+    configure_scripted_cache(database_settings)
+    assert InstanceSettings.current().lock_version == database_settings.lock_version
+    :ok = Cache.subscribe_applied()
+    flush_applied_events()
+
+    assert :ok = Supervisor.terminate_child(CodexPooler.Supervisor, Cache)
+    :persistent_term.erase({Cache, :current})
+
+    fallback = InstanceSettings.current()
+    assert fallback.source == :fallback_defaults
+    assert fallback.db_available? == false
+    assert :persistent_term.get({Cache, :current}) == {1, fallback}
+
+    assert {:ok, restarted} = Supervisor.restart_child(CodexPooler.Supervisor, Cache)
+    assert is_pid(restarted)
+    assert_receive {Cache, {:applied, lock_version}}
+    assert lock_version == database_settings.lock_version
+    assert InstanceSettings.current().lock_version == database_settings.lock_version
+    assert InstanceSettings.current().source == :database
   end
 
   @tag :sensitive
@@ -906,6 +1171,63 @@ defmodule CodexPooler.InstanceSettingsTest do
     {result, log}
   end
 
+  defp configure_scripted_cache(settings, failure \\ :none) do
+    Application.put_env(:codex_pooler, InstanceSettings, repo: ScriptedRepo)
+    configure_scripted_repo(settings, failure)
+    Application.put_env(:codex_pooler, TestTimer, owner: self())
+
+    Application.put_env(:codex_pooler, Cache,
+      timer_module: TestTimer,
+      retry_initial_interval_ms: 10,
+      retry_max_interval_ms: 30,
+      reconciliation_interval_ms: 100
+    )
+
+    assert :ok = InstanceSettings.reset_cache_for_test()
+
+    assert_receive {TestTimer, :scheduled, _ref, cache, {Cache, {:reconcile, _generation}}, 100}
+    assert cache == Process.whereis(Cache)
+    flush_timer_cancellations()
+    :ok
+  end
+
+  defp configure_scripted_repo(settings, failure) do
+    Application.put_env(:codex_pooler, ScriptedRepo,
+      owner: self(),
+      settings: settings,
+      failure: failure
+    )
+  end
+
+  defp flush_scripted_repo_calls do
+    receive do
+      {ScriptedRepo, _operation} -> flush_scripted_repo_calls()
+    after
+      0 -> :ok
+    end
+  end
+
+  defp flush_applied_events do
+    receive do
+      {Cache, {:applied, _lock_version}} -> flush_applied_events()
+    after
+      0 -> :ok
+    end
+  end
+
+  defp flush_timer_cancellations do
+    receive do
+      {TestTimer, :cancelled, _ref} -> flush_timer_cancellations()
+    after
+      0 -> :ok
+    end
+  end
+
+  defp restore_application_env(module, nil), do: Application.delete_env(:codex_pooler, module)
+
+  defp restore_application_env(module, value),
+    do: Application.put_env(:codex_pooler, module, value)
+
   defp start_instance_settings_peer!(settings) do
     distribution = ensure_test_distribution_started!()
     peer_name = String.to_atom("instance_settings_peer_#{System.unique_integer([:positive])}")
@@ -1000,6 +1322,8 @@ defmodule CodexPooler.InstanceSettingsTest do
       def get!(CodexPooler.InstanceSettings.Settings, true) do
         Application.fetch_env!(:codex_pooler, __MODULE__)
       end
+
+      def one(_query), do: Application.fetch_env!(:codex_pooler, __MODULE__).lock_version
     end
 
     defmodule #{inspect(PeerHarness)} do
@@ -1032,25 +1356,25 @@ defmodule CodexPooler.InstanceSettingsTest do
       def hide_cache_name do
         Process.unregister(Cache)
       end
-    end
-    """
-  end
 
-  defp await_peer_lock_version(peer_node, lock_version, attempts \\ 100)
+      def start_applied_forwarder(observer) do
+        spawn(fn ->
+          :ok = Cache.subscribe_applied()
+          send(observer, {:peer_applied_subscribed, node()})
+          forward_applied(observer)
+        end)
+      end
 
-  defp await_peer_lock_version(peer_node, lock_version, attempts) when attempts > 0 do
-    if :erpc.call(peer_node, PeerHarness, :current_lock_version, []) == lock_version do
-      :ok
-    else
-      receive do
-      after
-        10 -> await_peer_lock_version(peer_node, lock_version, attempts - 1)
+      defp forward_applied(observer) do
+        receive do
+          {Cache, {:applied, lock_version}} ->
+            current_lock_version = InstanceSettings.current().lock_version
+            send(observer, {:peer_applied, node(), lock_version, current_lock_version})
+            forward_applied(observer)
+        end
       end
     end
-  end
-
-  defp await_peer_lock_version(_peer_node, lock_version, 0) do
-    flunk("peer cache did not publish lock version #{lock_version}")
+    """
   end
 
   defp free_port do
