@@ -11,9 +11,25 @@ defmodule CodexPoolerWeb.Plugs.TrustedProxyRemoteIp do
 
   @spec immediate_peer_ip(Plug.Conn.t()) :: :inet.ip_address() | nil
   def immediate_peer_ip(%Plug.Conn{
-        private: %{codex_pooler_peer_ip: peer_ip}
+        private: %{codex_pooler_peer_ip: {a, b, c, d} = peer_ip}
       })
-      when is_tuple(peer_ip) and tuple_size(peer_ip) in [4, 8],
+      when is_integer(a) and a >= 0 and a <= 255 and
+             is_integer(b) and b >= 0 and b <= 255 and
+             is_integer(c) and c >= 0 and c <= 255 and
+             is_integer(d) and d >= 0 and d <= 255,
+      do: peer_ip
+
+  def immediate_peer_ip(%Plug.Conn{
+        private: %{codex_pooler_peer_ip: {a, b, c, d, e, f, g, h} = peer_ip}
+      })
+      when is_integer(a) and a >= 0 and a <= 65_535 and
+             is_integer(b) and b >= 0 and b <= 65_535 and
+             is_integer(c) and c >= 0 and c <= 65_535 and
+             is_integer(d) and d >= 0 and d <= 65_535 and
+             is_integer(e) and e >= 0 and e <= 65_535 and
+             is_integer(f) and f >= 0 and f <= 65_535 and
+             is_integer(g) and g >= 0 and g <= 65_535 and
+             is_integer(h) and h >= 0 and h <= 65_535,
       do: peer_ip
 
   def immediate_peer_ip(%Plug.Conn{private: private})

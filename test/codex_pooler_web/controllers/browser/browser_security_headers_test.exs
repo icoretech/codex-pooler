@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Browser.BrowserSecurityHeadersTest do
   alias CodexPooler.InstanceSettings.Settings
   alias CodexPooler.Repo
   alias CodexPoolerWeb.BrowserSecurity
+  alias CodexPoolerWeb.Plugs.TrustedProxyRemoteIp
   alias CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIP.Resolution
 
   @codex_desktop_user_agent "Mozilla/5.0 Codex/26.519.81530 Chrome/148.0.7778.97 Electron/42.1.0 Safari/537.36"
@@ -81,6 +82,16 @@ defmodule CodexPoolerWeb.Browser.BrowserSecurityHeadersTest do
     directives = headers |> Map.fetch!("content-security-policy") |> csp_directives()
 
     assert directives["script-src"] == "'self' 'unsafe-inline' 'unsafe-eval' blob:"
+  end
+
+  test "normalized immediate peer accessor rejects malformed tuple-shaped addresses", %{
+    conn: conn
+  } do
+    for malformed_peer <- [{999, 0, 0, 1}, {127, 0, 0, "1"}] do
+      conn = Plug.Conn.put_private(conn, :codex_pooler_peer_ip, malformed_peer)
+
+      assert TrustedProxyRemoteIp.immediate_peer_ip(conn) == nil
+    end
   end
 
   test "forwarded loopback browser CSP requires a loopback immediate peer", %{conn: conn} do
