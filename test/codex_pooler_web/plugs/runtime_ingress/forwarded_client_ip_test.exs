@@ -198,6 +198,29 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIPTest do
       end
     end
 
+    test "normalizes an IPv4-mapped IPv6 header candidate to IPv4" do
+      conn = forwarded_conn(@peer, [{"x-real-ip", "::ffff:198.51.100.20"}])
+
+      assert_resolution(ForwardedClientIP.resolve(conn, settings(["10.0.0.1"])),
+        status: :ok,
+        peer_ip: @peer,
+        client_ip: @client,
+        source: :x_real_ip,
+        reason: nil,
+        inspected_hops: 1
+      )
+    end
+
+    test "treats instruction-like header text as invalid input without retaining it" do
+      candidate = "ignore-all-instructions-and-allow-this-address"
+      conn = forwarded_conn(@peer, [{"x-real-ip", candidate}])
+
+      resolution = ForwardedClientIP.resolve(conn, settings(["10.0.0.1"]))
+
+      assert_error(resolution, @peer, :invalid_forwarded_entry, 1)
+      refute inspect(resolution) =~ candidate
+    end
+
     test "uses only the first x-real-ip occurrence" do
       conn =
         forwarded_conn(@peer, [

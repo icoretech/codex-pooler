@@ -33,40 +33,138 @@ defmodule CodexPooler.Gateway.OperationalSettings.IPRules do
 
   def compile(_rules), do: {:error, :invalid_rule}
 
+  @spec parse_candidate(term()) :: {:ok, :inet.ip_address()} | {:error, :invalid_address}
+  def parse_candidate(value) when is_binary(value) do
+    with {:ok, ip, _mapped?} <- parse_address(value) do
+      {:ok, ip}
+    else
+      :error -> {:error, :invalid_address}
+    end
+  end
+
+  def parse_candidate(_value), do: {:error, :invalid_address}
+
   @spec allowed?(:inet.ip_address(), [Rule.t()]) :: boolean()
   def allowed?(ip, rules) when is_tuple(ip) and is_list(rules) do
-    Enum.any?(rules, fn %Rule{} = rule -> matches?(ip, rule) end)
+    case normalize_ip(ip) do
+      {:ok, normalized_ip, _mapped?} ->
+        Enum.any?(rules, fn %Rule{} = rule -> matches?(normalized_ip, rule) end)
+
+      :error ->
+        false
+    end
   end
 
   defp compile_rule(rule) when is_binary(rule) do
-    case String.split(rule, "/", parts: 2) do
-      [address] ->
-        case parse_ip(address) do
-          {:ok, ip} -> {:ok, %Rule{network: ip, prefix: total_bits(ip)}}
-          {:error, _reason} -> {:error, :invalid_rule}
-        end
-
-      [address, prefix] ->
-        with {:ok, ip} <- parse_ip(address),
-             {prefix, ""} <- Integer.parse(prefix),
-             true <- valid_prefix?(ip, prefix) do
-          {:ok, %Rule{network: ip, prefix: prefix}}
-        else
-          _invalid -> {:error, :invalid_rule}
-        end
+    case :binary.split(trim_ascii_ows(rule), "/", [:global]) do
+      [address] -> compile_exact_rule(address)
+      [address, prefix] -> compile_cidr_rule(address, prefix)
+      _invalid -> {:error, :invalid_rule}
     end
   end
 
   defp compile_rule(_rule), do: {:error, :invalid_rule}
 
-  defp parse_ip(value) do
-    value
-    |> String.trim()
-    |> String.to_charlist()
-    |> :inet.parse_address()
+  defp compile_exact_rule(address) do
+    with {:ok, ip, _mapped?} <- parse_address(address) do
+      {:ok, %Rule{network: ip, prefix: total_bits(ip)}}
+    else
+      :error -> {:error, :invalid_rule}
+    end
   end
 
-  defp valid_prefix?(ip, prefix), do: prefix >= 0 and prefix <= total_bits(ip)
+  defp compile_cidr_rule(address, prefix) do
+    with {:ok, ip, mapped?} <- parse_address(address),
+         {:ok, prefix} <- parse_prefix(prefix, original_total_bits(ip, mapped?)),
+         {:ok, prefix} <- normalize_prefix(prefix, mapped?) do
+      {:ok, %Rule{network: mask_network(ip, prefix), prefix: prefix}}
+    else
+      :error -> {:error, :invalid_rule}
+    end
+  end
+
+  defp parse_address(value) do
+    with {:ok, parsed} <- :inet.parse_strict_address(:binary.bin_to_list(trim_ascii_ows(value))),
+         {:ok, ip, mapped?} <- normalize_ip(parsed) do
+      {:ok, ip, mapped?}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp normalize_ip({first, second, third, fourth} = ip)
+       when first in 0..255 and second in 0..255 and third in 0..255 and fourth in 0..255,
+       do: {:ok, ip, false}
+
+  defp normalize_ip({0, 0, 0, 0, 0, 65_535, high, low})
+       when high in 0..65_535 and low in 0..65_535 do
+    {:ok, {high >>> 8, band(high, 255), low >>> 8, band(low, 255)}, true}
+  end
+
+  defp normalize_ip(ip) when tuple_size(ip) == 8 do
+    if valid_ipv6?(ip), do: {:ok, ip, false}, else: :error
+  end
+
+  defp normalize_ip(_ip), do: :error
+
+  defp valid_ipv6?(ip) do
+    ip
+    |> Tuple.to_list()
+    |> Enum.all?(&(&1 in 0..65_535))
+  end
+
+  defp parse_prefix(value, max_prefix) do
+    value
+    |> trim_ascii_ows()
+    |> parse_canonical_decimal(max_prefix)
+  end
+
+  defp parse_canonical_decimal("0", _max_prefix), do: {:ok, 0}
+
+  defp parse_canonical_decimal(<<first, rest::binary>>, max_prefix) when first in ?1..?9 do
+    parse_decimal_digits(rest, first - ?0, max_prefix)
+  end
+
+  defp parse_canonical_decimal(_value, _max_prefix), do: :error
+
+  defp parse_decimal_digits(<<>>, prefix, _max_prefix), do: {:ok, prefix}
+
+  defp parse_decimal_digits(<<digit, rest::binary>>, prefix, max_prefix) when digit in ?0..?9 do
+    prefix = prefix * 10 + digit - ?0
+
+    if prefix <= max_prefix,
+      do: parse_decimal_digits(rest, prefix, max_prefix),
+      else: :error
+  end
+
+  defp parse_decimal_digits(_value, _prefix, _max_prefix), do: :error
+
+  defp original_total_bits(_ip, true), do: 128
+  defp original_total_bits(ip, false), do: total_bits(ip)
+
+  defp normalize_prefix(prefix, true) when prefix in 96..128, do: {:ok, prefix - 96}
+  defp normalize_prefix(_prefix, true), do: :error
+  defp normalize_prefix(prefix, false), do: {:ok, prefix}
+
+  defp trim_ascii_ows(value) do
+    value
+    |> trim_ascii_ows_left()
+    |> trim_ascii_ows_right()
+  end
+
+  defp trim_ascii_ows_left(<<?\s, rest::binary>>), do: trim_ascii_ows_left(rest)
+  defp trim_ascii_ows_left(<<?\t, rest::binary>>), do: trim_ascii_ows_left(rest)
+  defp trim_ascii_ows_left(value), do: value
+
+  defp trim_ascii_ows_right(value) when byte_size(value) == 0, do: value
+
+  defp trim_ascii_ows_right(value) do
+    case :binary.last(value) do
+      ?\s -> value |> binary_part(0, byte_size(value) - 1) |> trim_ascii_ows_right()
+      ?\t -> value |> binary_part(0, byte_size(value) - 1) |> trim_ascii_ows_right()
+      _byte -> value
+    end
+  end
 
   defp matches?(ip, %Rule{network: network, prefix: prefix})
        when tuple_size(ip) == tuple_size(network) do
@@ -75,6 +173,16 @@ defmodule CodexPooler.Gateway.OperationalSettings.IPRules do
   end
 
   defp matches?(_ip, %Rule{}), do: false
+
+  defp mask_network(ip, prefix) do
+    segment_bits = segment_bits(ip)
+    masked = band(to_integer(ip), mask(total_bits(ip), prefix))
+
+    0..(tuple_size(ip) - 1)
+    |> Enum.reverse()
+    |> Enum.map(&band(masked >>> (&1 * segment_bits), (1 <<< segment_bits) - 1))
+    |> List.to_tuple()
+  end
 
   defp to_integer(ip) do
     segment_bits = segment_bits(ip)

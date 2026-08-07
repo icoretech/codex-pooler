@@ -322,9 +322,9 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIP do
   end
 
   defp parse_address(value) do
-    case :inet.parse_strict_address(:binary.bin_to_list(value)) do
+    case IPRules.parse_candidate(value) do
       {:ok, ip} -> {:ok, ip}
-      {:error, _reason} -> {:error, :invalid_forwarded_entry}
+      {:error, :invalid_address} -> {:error, :invalid_forwarded_entry}
     end
   end
 

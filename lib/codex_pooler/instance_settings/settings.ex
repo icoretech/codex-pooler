@@ -5,6 +5,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
 
   import Ecto.Changeset
 
+  alias CodexPooler.Gateway.OperationalSettings.IPRules
   alias CodexPooler.InstanceSettings.{AppSecretCrypto, Defaults, StaticDefaults}
   alias CodexPooler.RouteClass
 
@@ -567,39 +568,11 @@ defmodule CodexPooler.InstanceSettings.Settings do
     validate_number(changeset, field, greater_than: 0)
   end
 
-  defp validate_cidr_rules(field, rules) when is_list(rules) do
-    if Enum.all?(rules, &valid_ip_rule?/1),
-      do: [],
-      else: [{field, "contains an invalid IP or CIDR rule"}]
-  end
-
-  defp validate_cidr_rules(field, _rules), do: [{field, "must be a list"}]
-
-  defp valid_ip_rule?(rule) when is_binary(rule) do
-    case String.split(String.trim(rule), "/", parts: 2) do
-      [address] -> valid_ip?(address)
-      [address, prefix] -> valid_cidr?(address, prefix)
+  defp validate_cidr_rules(field, rules) do
+    case IPRules.compile(rules) do
+      {:ok, _compiled} -> []
+      {:error, :invalid_rule} -> [{field, "contains an invalid IP or CIDR rule"}]
     end
-  end
-
-  defp valid_ip_rule?(_rule), do: false
-
-  defp valid_cidr?(address, prefix) do
-    with {:ok, ip} <- parse_ip(address),
-         {prefix, ""} <- Integer.parse(prefix) do
-      prefix >= 0 and prefix <= tuple_size(ip) * if(tuple_size(ip) == 4, do: 8, else: 16)
-    else
-      _invalid -> false
-    end
-  end
-
-  defp valid_ip?(address), do: match?({:ok, _ip}, parse_ip(address))
-
-  defp parse_ip(address) do
-    address
-    |> String.trim()
-    |> String.to_charlist()
-    |> :inet.parse_address()
   end
 
   defp validate_bulkheads(:bulkheads, value) when is_map(value) do

@@ -4,6 +4,13 @@ defmodule CodexPooler.Gateway.OperationalSettings.IPRulesTest do
   alias CodexPooler.Gateway.OperationalSettings.IPRules
   alias CodexPooler.Gateway.OperationalSettings.IPRules.Rule
 
+  @mapped_client {0, 0, 0, 0, 0, 65_535, 49_152, 641}
+
+  test "compile/1 accepts ASCII space and tab around an exact IPv4 rule" do
+    assert {:ok, [%Rule{network: {192, 0, 2, 10}, prefix: 32}]} =
+             IPRules.compile([" \t192.0.2.10\t "])
+  end
+
   test "compile/1 assigns full prefixes to exact IPv4 and IPv6 rules" do
     assert {:ok, rules} = IPRules.compile(["192.0.2.10", "2001:db8::a"])
 
@@ -37,6 +44,53 @@ defmodule CodexPooler.Gateway.OperationalSettings.IPRulesTest do
     end
 
     assert IPRules.compile(:invalid) == {:error, :invalid_rule}
+  end
+
+  test "compile/1 accepts ASCII OWS around CIDR components and canonicalizes a /0 network" do
+    assert {:ok, [%Rule{network: {0, 0, 0, 0}, prefix: 0}]} =
+             IPRules.compile([" \t203.0.113.45 \t/ \t0\t "])
+  end
+
+  test "compile/1 rejects non-ASCII or control whitespace, legacy IPv4, and noncanonical prefixes" do
+    invalid_rules = [
+      "\n203.0.113.10",
+      <<0xC2, 0xA0, "203.0.113.10"::binary>>,
+      "203.0.113.10/\n24",
+      "001.002.003.004",
+      "203.113",
+      "3405803786",
+      "0xCB.0x00.0x71.0x0A",
+      "203.0.113.10/032",
+      "203.0.113.10/+32",
+      "203.0.113.10/-0"
+    ]
+
+    for rule <- invalid_rules do
+      assert IPRules.compile([rule]) == {:error, :invalid_rule}
+    end
+  end
+
+  test "compile/1 normalizes IPv4-mapped IPv6 rules and candidates to IPv4" do
+    assert {:ok, [%Rule{network: {192, 0, 2, 129}, prefix: 32}] = rules} =
+             IPRules.compile(["::ffff:192.0.2.129"])
+
+    assert IPRules.allowed?({192, 0, 2, 129}, rules)
+    assert IPRules.allowed?(@mapped_client, rules)
+    assert {:ok, {192, 0, 2, 129}} = IPRules.parse_candidate(" \t::ffff:192.0.2.129\t ")
+  end
+
+  test "compile/1 translates mapped CIDR prefixes and rejects mapped prefixes below 96" do
+    assert {:ok, [%Rule{network: {192, 0, 2, 0}, prefix: 24}] = rules} =
+             IPRules.compile(["::ffff:192.0.2.129/120"])
+
+    assert IPRules.allowed?({192, 0, 2, 200}, rules)
+    refute IPRules.allowed?({192, 0, 3, 1}, rules)
+    assert IPRules.compile(["::ffff:192.0.2.129/95"]) == {:error, :invalid_rule}
+  end
+
+  test "compile/1 rejects an entire list when one rule is invalid" do
+    assert IPRules.compile(["203.0.113.10", "203.0.113.10/032"]) ==
+             {:error, :invalid_rule}
   end
 
   test "allowed?/2 rejects raw nonempty rule lists" do
