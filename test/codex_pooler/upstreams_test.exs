@@ -3117,6 +3117,84 @@ defmodule CodexPooler.UpstreamsTest do
       assert summary.primary_5h.window_minutes == 300
     end
 
+    test "bulk account summaries derive stale freshness at the supplied as_of" do
+      as_of = ~U[2026-08-08 12:00:00Z]
+      observed_at = DateTime.add(as_of, -Quotas.Evidence.freshness_ttl_seconds() - 1, :second)
+      pool = pool_fixture(%{name: "Stale read-time quota pool"})
+      %{identity: identity} = upstream_assignment_fixture(pool)
+
+      assert {:ok, [_window]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   window_kind: "primary",
+                   window_minutes: 300,
+                   used_percent: Decimal.new("20"),
+                   reset_at: DateTime.add(as_of, 4, :hour),
+                   source: "codex_usage_api",
+                   source_precision: "observed",
+                   freshness_state: "fresh",
+                   observed_at: observed_at
+                 }
+               ])
+
+      assert [summary] = Quota.ReadModel.account_summaries_for_pool_ids([pool.id], as_of)
+      assert summary.state == :missing_evidence
+      assert summary.primary_5h.freshness_state == "stale"
+      refute summary.primary_5h.routing_usable?
+    end
+
+    test "bulk account summaries preserve fresh freshness within the supplied ttl" do
+      as_of = ~U[2026-08-08 12:00:00Z]
+      observed_at = DateTime.add(as_of, -Quotas.Evidence.freshness_ttl_seconds(), :second)
+      pool = pool_fixture(%{name: "Fresh read-time quota pool"})
+      %{identity: identity} = upstream_assignment_fixture(pool)
+
+      assert {:ok, [_window]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   window_kind: "primary",
+                   window_minutes: 300,
+                   used_percent: Decimal.new("20"),
+                   reset_at: DateTime.add(as_of, 4, :hour),
+                   source: "codex_usage_api",
+                   source_precision: "observed",
+                   freshness_state: "fresh",
+                   observed_at: observed_at
+                 }
+               ])
+
+      assert [summary] = Quota.ReadModel.account_summaries_for_pool_ids([pool.id], as_of)
+      assert summary.state == :available
+      assert summary.primary_5h.freshness_state == "fresh"
+      assert summary.primary_5h.routing_usable?
+    end
+
+    test "bulk account summaries keep current exhausted evidence fresh" do
+      as_of = ~U[2026-08-08 12:00:00Z]
+      observed_at = DateTime.add(as_of, -Quotas.Evidence.freshness_ttl_seconds(), :second)
+      pool = pool_fixture(%{name: "Exhausted read-time quota pool"})
+      %{identity: identity} = upstream_assignment_fixture(pool)
+
+      assert {:ok, [_window]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   window_kind: "primary",
+                   window_minutes: 300,
+                   used_percent: Decimal.new("100"),
+                   reset_at: DateTime.add(as_of, 4, :hour),
+                   source: "codex_usage_api",
+                   source_precision: "observed",
+                   freshness_state: "fresh",
+                   observed_at: observed_at
+                 }
+               ])
+
+      assert [summary] = Quota.ReadModel.account_summaries_for_pool_ids([pool.id], as_of)
+      assert summary.state == :exhausted
+      assert summary.primary_5h.freshness_state == "fresh"
+      assert summary.primary_5h.routing_usable?
+    end
+
     test "replaces authoritative windows and derives usable selection data" do
       identity = active_identity_fixture()
       future_reset = DateTime.add(DateTime.utc_now(), 300, :second)

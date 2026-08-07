@@ -1249,6 +1249,41 @@ defmodule CodexPooler.Admin.StatsTest do
     assert account.secondary.used_percent == 25.0
   end
 
+  test "dashboard derives quota freshness at the supplied as_of" do
+    scope = owner_scope()
+    as_of = ~U[2026-08-08 12:00:00Z]
+
+    observed_at =
+      DateTime.add(as_of, -CodexPooler.Quotas.Evidence.freshness_ttl_seconds() - 1, :second)
+
+    pool = pool_fixture(%{slug: "stats-read-time-freshness", name: "Stats Read Time Freshness"})
+    %{identity: identity} = upstream_assignment_fixture(pool)
+
+    assert {:ok, [_window]} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               %{
+                 quota_key: "account",
+                 window_kind: "primary",
+                 window_minutes: 300,
+                 used_percent: Decimal.new("20"),
+                 reset_at: DateTime.add(as_of, 4, :hour),
+                 source: "codex_usage_api",
+                 source_precision: "observed",
+                 freshness_state: "fresh",
+                 observed_at: observed_at
+               }
+             ])
+
+    assert {:ok, dashboard} =
+             Stats.build_dashboard(scope, %{pool_id: pool.id, window: "5h", as_of: as_of})
+
+    assert dashboard.quota.summary.state == :missing_evidence
+    assert dashboard.quota.summary.missing_evidence == 1
+    assert [account] = dashboard.quota.accounts
+    assert account.primary_5h.freshness_state == "stale"
+    refute account.primary_5h.routing_usable?
+  end
+
   test "monthly-only primary quota evidence is available with a separate 30d projection" do
     scope = owner_scope()
     pool = pool_fixture(%{slug: "stats-monthly-plan", name: "Stats Monthly Plan"})

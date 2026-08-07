@@ -6,6 +6,7 @@ defmodule CodexPooler.Upstreams.Quota.ReadModel do
   import Ecto.Query
 
   alias CodexPooler.Repo
+  alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.WindowSelector
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
@@ -117,7 +118,7 @@ defmodule CodexPooler.Upstreams.Quota.ReadModel do
 
   defp quota_state(%Quota.AccountQuotaWindow{} = primary, _secondary, _windows, as_of) do
     cond do
-      primary.freshness_state != "fresh" ->
+      Evidence.current_freshness_state(primary, as_of) != "fresh" ->
         :missing_evidence
 
       is_nil(primary.reset_at) ->
@@ -147,11 +148,11 @@ defmodule CodexPooler.Upstreams.Quota.ReadModel do
       window_minutes: window.window_minutes,
       used_percent: decimal_to_float(window.used_percent),
       reset_at: window.reset_at,
-      freshness_state: window.freshness_state,
+      freshness_state: Evidence.current_freshness_state(window, as_of),
       source: window.source,
       source_precision: window.source_precision,
       routing_usable?:
-        window.freshness_state == "fresh" and not is_nil(window.reset_at) and
+        Evidence.current_freshness_state(window, as_of) == "fresh" and not is_nil(window.reset_at) and
           DateTime.compare(window.reset_at, as_of) == :gt
     }
   end
