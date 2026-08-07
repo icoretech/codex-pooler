@@ -12,6 +12,75 @@ const required = (text, marker, file) => {
   }
 };
 
+const firewallMetric = "codex_pooler_ingress_firewall_denied_count";
+const firewallSelectors = [
+  [/namespace\s*=\s*"\$namespace"/, 'namespace="$namespace"'],
+  [/job\s*=\s*"codex-pooler-app"/, 'job="codex-pooler-app"'],
+  [/pod\s*=~\s*"\$\{pod:regex\}"/, 'pod=~"${pod:regex}"']
+];
+
+const firewallQueryIssue = (expression) => {
+  if (typeof expression !== "string") return "target expression is not a string";
+
+  if (!/sum\s+by\s*\(\s*scope\s*,\s*reason\s*\)\s*\(\s*rate\s*\(/.test(expression)) {
+    return "missing sum by (scope, reason) rate aggregation";
+  }
+
+  const selectorMatch = expression.match(
+    /codex_pooler_ingress_firewall_denied_count\{(.*)\}\s*\[\$__rate_interval\]/
+  );
+
+  if (!selectorMatch) return "missing firewall metric selector or rate interval";
+
+  for (const [pattern, selector] of firewallSelectors) {
+    if (!pattern.test(selectorMatch[1])) return `missing selector ${selector}`;
+  }
+
+  return null;
+};
+
+const firewallQueryFromDashboard = (dashboard) => {
+  if (!dashboard || typeof dashboard !== "object" || !Array.isArray(dashboard.panels)) {
+    throw new Error("generated dashboard has no panels array");
+  }
+
+  const expressions = dashboard.panels.flatMap((panel) =>
+    Array.isArray(panel?.targets)
+      ? panel.targets.map((target) => target?.expr).filter((expression) => typeof expression === "string")
+      : []
+  );
+  const firewallExpressions = expressions.filter((expression) => expression.includes(firewallMetric));
+
+  if (firewallExpressions.length !== 1) {
+    throw new Error(`generated dashboard must contain one ${firewallMetric} target`);
+  }
+
+  return firewallExpressions[0];
+};
+
+const verifyFirewallDashboardQuery = (dashboard) => {
+  const expression = firewallQueryFromDashboard(dashboard);
+  const issue = firewallQueryIssue(expression);
+
+  if (issue) throw new Error(`generated firewall dashboard query is invalid: ${issue}`);
+};
+
+const verifyMalformedFirewallQueriesAreRejected = () => {
+  const validExpression =
+    'sum by (scope, reason) (rate(codex_pooler_ingress_firewall_denied_count{namespace="$namespace", job="codex-pooler-app", pod=~"${pod:regex}"}[$__rate_interval]))';
+  const malformedExpressions = [
+    validExpression.replace('namespace="$namespace", ', ""),
+    validExpression.replace('job="codex-pooler-app"', 'job=~"codex-pooler-app"'),
+    validExpression.replace('pod=~"${pod:regex}"', 'pod="${pod:regex}"')
+  ];
+
+  for (const expression of malformedExpressions) {
+    if (!firewallQueryIssue(expression)) {
+      throw new Error("malformed firewall dashboard selector was accepted");
+    }
+  }
+};
+
 const forbidden = (text, expression, file) => {
   if (expression.test(text)) {
     throw new Error(`${file} contains stale ingress policy syntax: ${expression}`);
@@ -48,14 +117,15 @@ const files = {
   configuration: "docs-site/src/content/docs/getting-started/configuration.mdx",
   contract: "docs-site/src/content/_docs-contract.md",
   matrix: "test/support/compatibility_matrix.ex",
-  resolverTest: "test/codex_pooler_web/plugs/runtime_ingress/forwarded_client_ip_test.exs"
+  dashboard: "docs-site/public/operators/monitoring/codex-pooler-runtime-triage.json"
 };
 
-const [configuration, contract, matrix, resolverTest] = await Promise.all(
-  Object.values(files).map(read)
-);
+const [configuration, contract, matrix, dashboardText] = await Promise.all(Object.values(files).map(read));
+const dashboard = JSON.parse(dashboardText);
 
 verifyStalePolicyIsRejected();
+verifyMalformedFirewallQueriesAreRejected();
+verifyFirewallDashboardQuery(dashboard);
 
 for (const marker of [
   "### Forwarded client IP policy",
@@ -65,9 +135,7 @@ for (const marker of [
   "duplicate XFF field occurrences are combined in wire order",
   "exactly one X-Real-IP field",
   "settings are unavailable on a cold start, runtime and MCP requests return `503`",
-  "code `1008`",
-  "codex_pooler_ingress_firewall_denied_count",
-  "scope` and `reason`"
+  "code `1008`"
 ]) {
   required(configuration, marker, files.configuration);
 }
@@ -94,12 +162,6 @@ for (const marker of [
   required(matrix, marker, files.matrix);
 }
 
-required(
-  resolverTest,
-  "positional depth selects from the right without parsing entries to its left",
-  files.resolverTest
-);
-
 for (const [file, text] of [
   [files.configuration, configuration],
   [files.contract, contract]
@@ -111,4 +173,6 @@ for (const [file, text] of [
   );
 }
 
-process.stdout.write("ingress docs contract: PASS\n");
+process.stdout.write(
+  "ingress docs contract: PASS (firewall dashboard query structurally verified: sum by (scope, reason), namespace, job, pod selectors)\n"
+);

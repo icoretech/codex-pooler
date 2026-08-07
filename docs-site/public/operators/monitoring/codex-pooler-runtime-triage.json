@@ -2568,7 +2568,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (scope, reason) (rate(codex_pooler_ingress_firewall_denied_count[$__rate_interval]))",
+          "expr": "sum by (scope, reason) (rate(codex_pooler_ingress_firewall_denied_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
           "refId": "",
           "legendFormat": "{{scope}} {{reason}}",
           "range": true,
