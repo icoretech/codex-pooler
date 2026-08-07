@@ -275,8 +275,105 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     assert has_element?(
              view,
              "#system-current-session-ip[data-state='unavailable']",
-             "Unavailable"
+             "not recorded"
            )
+  end
+
+  test "looks up only the current user's active unexpired session IP", %{
+    scope: scope,
+    user: user
+  } do
+    now = DateTime.utc_now()
+
+    current_session =
+      Repo.one!(
+        from session in Session,
+          where: session.user_id == ^user.id,
+          where: session.status == "active",
+          where: session.expires_at > ^now
+      )
+
+    Repo.update_all(
+      from(session in Session, where: session.id == ^current_session.id),
+      set: [ip_address: "2001:db8::7"]
+    )
+
+    assert Accounts.current_user_session_ip(user, current_session.id) == "2001:db8::7"
+    assert Accounts.current_user_session_ip(user, nil) == nil
+
+    %{user: other_user} =
+      operator_fixture(scope, %{
+        "email" => "system-session-owner-check@example.com",
+        "password_change_required" => "false"
+      })
+
+    assert Accounts.current_user_session_ip(other_user, current_session.id) == nil
+
+    Repo.update_all(
+      from(session in Session, where: session.id == ^current_session.id),
+      set: [status: "revoked"]
+    )
+
+    assert Accounts.current_user_session_ip(user, current_session.id) == nil
+
+    Repo.update_all(
+      from(session in Session, where: session.id == ^current_session.id),
+      set: [status: "active", expires_at: DateTime.add(now, -1, :second)]
+    )
+
+    assert Accounts.current_user_session_ip(user, current_session.id) == nil
+  end
+
+  test "renders a normalized IPv6 address for the current session", %{conn: conn, user: user} do
+    now = DateTime.utc_now()
+
+    Repo.update_all(
+      from(session in Session,
+        where: session.user_id == ^user.id,
+        where: session.status == "active",
+        where: session.expires_at > ^now
+      ),
+      set: [ip_address: "2001:db8::7"]
+    )
+
+    {:ok, view, _html} = live(conn, ~p"/admin/system")
+
+    assert has_element?(
+             view,
+             "#system-current-session-ip[data-state='available']",
+             "2001:db8::7"
+           )
+  end
+
+  test "updates the rendered firewall state after saving ingress settings", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    assert has_element?(view, "#system-runtime-firewall-status[data-state='disabled']")
+
+    view
+    |> element("#instance-settings-ingress-form")
+    |> render_submit(%{
+      "instance_settings" => %{
+        "ingress" => %{"firewall_allowlist" => "198.51.100.0/24"}
+      }
+    })
+
+    assert has_element?(view, "#system-runtime-firewall-status[data-state='enabled']")
+
+    view
+    |> element("#instance-settings-ingress-form")
+    |> render_submit(%{"instance_settings" => %{"ingress" => %{"firewall_allowlist" => ""}}})
+
+    assert has_element?(view, "#system-runtime-firewall-status[data-state='disabled']")
+  end
+
+  test "keeps firewall session UI out of the metrics surface", %{conn: conn} do
+    metrics_conn = get(recycle(conn), ~p"/metrics")
+    body = response(metrics_conn, 200)
+
+    refute body =~ "system-runtime-firewall-card"
+    refute body =~ "system-current-session-ip"
+    refute body =~ "not recorded"
   end
 
   test "drops an expired current-session IP on repeated LiveView refresh", %{
@@ -312,7 +409,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     assert has_element?(
              view,
              "#system-current-session-ip[data-state='unavailable']",
-             "Unavailable"
+             "not recorded"
            )
 
     refute render(view) =~ "198.51.100.44"
@@ -322,7 +419,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     assert has_element?(
              view,
              "#system-current-session-ip[data-state='unavailable']",
-             "Unavailable"
+             "not recorded"
            )
   end
 

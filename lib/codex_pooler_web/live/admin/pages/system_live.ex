@@ -349,7 +349,7 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
                     data-state={if @current_session_ip, do: "available", else: "unavailable"}
                     class="mt-1 truncate font-mono text-sm font-semibold text-base-content"
                   >
-                    {@current_session_ip || "Unavailable"}
+                    {@current_session_ip || "not recorded"}
                   </dd>
                 </div>
               </dl>
