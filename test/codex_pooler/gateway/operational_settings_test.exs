@@ -322,13 +322,19 @@ defmodule CodexPooler.Gateway.OperationalSettingsTest do
     refute OperationalSettings.firewall_enabled?(empty)
   end
 
-  test "current/0 keeps an invalid nonempty raw override enabled with invalid compiled state" do
+  test "current/0 uses the Application test override before instance settings and normalizes it" do
     Application.put_env(:codex_pooler, OperationalSettings,
-      settings: %OperationalSettings{firewall_allowlist: ["invalid-rule"]}
+      settings: %OperationalSettings{
+        source: :fallback_defaults,
+        db_available?: false,
+        firewall_allowlist: ["invalid-rule"]
+      }
     )
 
     settings = OperationalSettings.current()
 
+    assert settings.source == :fallback_defaults
+    assert settings.db_available? == false
     assert settings.firewall_allowlist == ["invalid-rule"]
     assert OperationalSettings.firewall_enabled?(settings)
     assert Map.fetch!(settings, :firewall_allowlist_compiled) == {:error, :invalid_rule}

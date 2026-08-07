@@ -102,11 +102,31 @@ defmodule CodexPooler.Gateway.OperationalSettings do
   defstruct @struct_fields
 
   @spec current() :: t()
-  def current do
-    case test_settings_override() do
-      %__MODULE__{} = settings -> normalize_ip_rules(settings)
-      nil -> InstanceSettings.current() |> from_instance_settings()
+  if Mix.env() == :test do
+    def current do
+      case test_settings_override() do
+        %__MODULE__{} = settings -> normalize_ip_rules(settings)
+        nil -> InstanceSettings.current() |> from_instance_settings()
+      end
     end
+
+    defp test_settings_override do
+      config = Application.get_env(:codex_pooler, __MODULE__, [])
+
+      unless Keyword.get(config, :use_instance_settings?, false) do
+        Keyword.get(config, :settings, %__MODULE__{})
+      end
+    end
+
+    defp normalize_ip_rules(%__MODULE__{} = settings) do
+      %{
+        settings
+        | firewall_allowlist_compiled: IPRules.compile(settings.firewall_allowlist),
+          trusted_proxies_compiled: IPRules.compile(settings.trusted_proxies)
+      }
+    end
+  else
+    def current, do: InstanceSettings.current() |> from_instance_settings()
   end
 
   @spec from_instance_settings(InstanceSettings.Settings.t()) :: t()
@@ -193,16 +213,6 @@ defmodule CodexPooler.Gateway.OperationalSettings do
     end
   end
 
-  defp test_settings_override do
-    if Code.ensure_loaded?(Mix) and function_exported?(Mix, :env, 0) and Mix.env() == :test do
-      config = Application.get_env(:codex_pooler, __MODULE__, [])
-
-      unless Keyword.get(config, :use_instance_settings?, false) do
-        Keyword.get(config, :settings, %__MODULE__{})
-      end
-    end
-  end
-
   defp normalize_bulkheads(bulkheads) when is_map(bulkheads) do
     configured =
       Map.new(bulkheads, fn {route_class, config} ->
@@ -225,14 +235,6 @@ defmodule CodexPooler.Gateway.OperationalSettings do
       {:ok, value} -> value
       :error -> Map.fetch!(map, Atom.to_string(key))
     end
-  end
-
-  defp normalize_ip_rules(%__MODULE__{} = settings) do
-    %{
-      settings
-      | firewall_allowlist_compiled: IPRules.compile(settings.firewall_allowlist),
-        trusted_proxies_compiled: IPRules.compile(settings.trusted_proxies)
-    }
   end
 
   defp clamp_websocket_idle_timeout(value) when is_integer(value) do
