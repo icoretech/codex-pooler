@@ -40,6 +40,8 @@ defmodule CodexPooler.InstanceSettings.Defaults do
     %{
       "firewall_allowlist" => settings.firewall_allowlist,
       "trusted_proxies" => settings.trusted_proxies,
+      "forwarded_client_ip_source" => settings.forwarded_client_ip_source,
+      "forwarded_proxy_depth" => settings.forwarded_proxy_depth,
       "decompression_algorithms" => settings.decompression_algorithms,
       "max_compressed_body_bytes" => settings.max_compressed_body_bytes,
       "max_decompressed_body_bytes" => settings.max_decompressed_body_bytes,

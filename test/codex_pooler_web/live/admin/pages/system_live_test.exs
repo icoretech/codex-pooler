@@ -760,6 +760,11 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     refute html =~ "Operator login URL"
     assert html =~ "Public operator app URL"
     assert html =~ "Operator emails append /login to this value."
+    assert has_element?(view, "#instance-settings-forwarded-client-ip-source")
+    assert has_element?(view, "#instance-settings-forwarded-proxy-depth")
+
+    assert html =~
+             "number of proxies between the internet and the pooler, including the one connected directly; 0 uses trusted-CIDR walking."
 
     for hint <- [
           "Records sanitized request/attempt routing metadata for new gateway requests.",
@@ -778,6 +783,80 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
           "Model-specific context window sizes used when upstream metadata is missing or needs correction."
         ] do
       assert html =~ hint
+    end
+  end
+
+  test "saves and reloads every valid forwarded client policy", %{conn: conn} do
+    for {source, depth} <- [
+          {"peer", 0},
+          {"x_real_ip", 0},
+          {"x_forwarded_for", 2}
+        ] do
+      {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+      saved_html =
+        view
+        |> element("#instance-settings-ingress-form")
+        |> render_submit(%{
+          "instance_settings" => %{
+            "ingress" => %{
+              "forwarded_client_ip_source" => source,
+              "forwarded_proxy_depth" => Integer.to_string(depth)
+            }
+          }
+        })
+
+      assert saved_html =~ "Runtime ingress saved"
+
+      saved = InstanceSettings.get!()
+      assert saved.ingress.forwarded_client_ip_source == String.to_existing_atom(source)
+      assert saved.ingress.forwarded_proxy_depth == depth
+
+      {:ok, reloaded_view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+      assert has_element?(
+               reloaded_view,
+               "#instance-settings-forwarded-client-ip-source option[value='#{source}'][selected]"
+             )
+
+      assert has_element?(
+               reloaded_view,
+               "#instance-settings-forwarded-proxy-depth[value='#{depth}']"
+             )
+    end
+  end
+
+  test "rejects invalid forwarded client policy inline without mutating persisted settings", %{
+    conn: conn
+  } do
+    original = InstanceSettings.ensure_singleton!()
+
+    for {source, depth, expected_error} <- [
+          {"peer", "1", "must be 0 unless forwarded client IP source is X-Forwarded-For"},
+          {"x_real_ip", "1", "must be 0 unless forwarded client IP source is X-Forwarded-For"},
+          {"x_forwarded_for", "17", "must be less than or equal to 16"}
+        ] do
+      {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+      rejected_html =
+        view
+        |> element("#instance-settings-ingress-form")
+        |> render_submit(%{
+          "instance_settings" => %{
+            "ingress" => %{
+              "forwarded_client_ip_source" => source,
+              "forwarded_proxy_depth" => depth
+            }
+          }
+        })
+
+      assert rejected_html =~ "Runtime ingress could not be saved"
+      assert has_element?(view, "#instance-settings-ingress-errors", expected_error)
+
+      persisted = InstanceSettings.get!()
+      assert persisted.lock_version == original.lock_version
+      assert persisted.ingress.forwarded_client_ip_source == :x_forwarded_for
+      assert persisted.ingress.forwarded_proxy_depth == 0
     end
   end
 

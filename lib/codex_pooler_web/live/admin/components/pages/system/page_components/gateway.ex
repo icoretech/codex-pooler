@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
   use CodexPoolerWeb, :html
 
   alias CodexPoolerWeb.Admin.SystemPageComponents.FormControls
+  alias CodexPoolerWeb.Admin.SystemSettingsForm
 
   attr :selected_tab, :string, required: true
   attr :forms, :map, required: true
@@ -117,7 +118,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
               />
             </div>
           </div>
-          <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <FormControls.scalar_controls form={ingress_form} controls={ingress_scalar_controls()} />
           </div>
         </FormControls.settings_group>
@@ -339,6 +340,21 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
 
   defp ingress_scalar_controls do
     [
+      %{
+        type: :select,
+        id: "instance-settings-forwarded-client-ip-source",
+        field: :forwarded_client_ip_source,
+        label: "Forwarded client IP source",
+        options: SystemSettingsForm.forwarded_client_ip_source_options()
+      },
+      %{
+        type: :number,
+        id: "instance-settings-forwarded-proxy-depth",
+        field: :forwarded_proxy_depth,
+        label: "Forwarded proxy depth",
+        hint:
+          "number of proxies between the internet and the pooler, including the one connected directly; 0 uses trusted-CIDR walking."
+      },
       %{
         type: :number,
         id: "instance-settings-max-compressed-body-bytes",

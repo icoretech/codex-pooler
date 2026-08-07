@@ -26,6 +26,14 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsFormTest do
     assert %Phoenix.HTML.Form{} = SystemSettingsForm.forms(settings, params)["ingress"]
     assert get_in(params, ["gateway", "websocket_idle_timeout_ms"]) == 1_800_000
     assert get_in(params, ["gateway", "websocket_owner_idle_timeout_ms"]) == 1_800_000
+    assert get_in(params, ["ingress", "forwarded_client_ip_source"]) == :x_forwarded_for
+    assert get_in(params, ["ingress", "forwarded_proxy_depth"]) == 0
+
+    assert SystemSettingsForm.forwarded_client_ip_source_options() == [
+             {"Peer connection", "peer"},
+             {"X-Forwarded-For", "x_forwarded_for"},
+             {"X-Real-IP", "x_real_ip"}
+           ]
 
     forms = SystemSettingsForm.forms(settings, params)
     card_statuses = SystemSettingsForm.initial_card_statuses()
@@ -48,6 +56,11 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsFormTest do
     assert html =~ ~s(id="instance-settings-websocket-owner-idle-timeout-ms")
     assert html =~ "Websocket owner post-detach retention (ms)"
     assert html =~ "Running owners keep the value captured when they were created."
+    assert html =~ ~s(id="instance-settings-forwarded-client-ip-source")
+    assert html =~ ~s(id="instance-settings-forwarded-proxy-depth")
+
+    assert html =~
+             "number of proxies between the internet and the pooler, including the one connected directly; 0 uses trusted-CIDR walking."
 
     submitted_params = %{
       "_group" => "ingress",
@@ -91,5 +104,32 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsFormTest do
     }
 
     assert SystemSettingsForm.group_stale?(snapshots, latest_settings, "ingress")
+  end
+
+  test "returns inline changeset errors for invalid forwarded source and depth combinations" do
+    settings = InstanceSettings.ensure_singleton!()
+    params = SystemSettingsForm.params_from_settings(settings)
+
+    for {source, depth} <- [
+          {"peer", "1"},
+          {"x_real_ip", "1"},
+          {"x_forwarded_for", "17"},
+          {"none", "0"}
+        ] do
+      ingress_params =
+        params["ingress"]
+        |> Map.put("forwarded_client_ip_source", source)
+        |> Map.put("forwarded_proxy_depth", depth)
+
+      changeset =
+        SystemSettingsForm.group_changeset(settings, %{"ingress" => ingress_params}, "ingress")
+
+      refute changeset.valid?
+      assert errors_on(changeset).ingress != %{}
+    end
+
+    assert InstanceSettings.get!().lock_version == settings.lock_version
+    assert InstanceSettings.get!().ingress.forwarded_client_ip_source == :x_forwarded_for
+    assert InstanceSettings.get!().ingress.forwarded_proxy_depth == 0
   end
 end

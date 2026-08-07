@@ -11,10 +11,18 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsForm do
     {"ingress", "trusted_proxies"},
     {"ingress", "decompression_algorithms"}
   ]
+  @forwarded_client_ip_source_options [
+    {"Peer connection", "peer"},
+    {"X-Forwarded-For", "x_forwarded_for"},
+    {"X-Real-IP", "x_real_ip"}
+  ]
   @settings_groups ~w(gateway ingress files transcription operator catalog development mcp metrics smtp)
 
   @spec settings_groups() :: [String.t()]
   def settings_groups, do: @settings_groups
+
+  @spec forwarded_client_ip_source_options() :: [{String.t(), String.t()}]
+  def forwarded_client_ip_source_options, do: @forwarded_client_ip_source_options
 
   @spec forms(Settings.t(), map()) :: map()
   def forms(%Settings{} = settings, form_params) do

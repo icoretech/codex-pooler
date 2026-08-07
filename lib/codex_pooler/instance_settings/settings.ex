@@ -61,6 +61,12 @@ defmodule CodexPooler.InstanceSettings.Settings do
     embeds_one :ingress, Ingress, on_replace: :update, primary_key: false do
       field :firewall_allowlist, {:array, :string}
       field :trusted_proxies, {:array, :string}
+
+      field :forwarded_client_ip_source, Ecto.Enum,
+        values: [:peer, :x_forwarded_for, :x_real_ip],
+        default: :x_forwarded_for
+
+      field :forwarded_proxy_depth, :integer, default: 0
       field :decompression_algorithms, {:array, :string}
       field :max_compressed_body_bytes, :integer
       field :max_decompressed_body_bytes, :integer
@@ -282,6 +288,8 @@ defmodule CodexPooler.InstanceSettings.Settings do
     |> cast(attrs, [
       :firewall_allowlist,
       :trusted_proxies,
+      :forwarded_client_ip_source,
+      :forwarded_proxy_depth,
       :decompression_algorithms,
       :max_compressed_body_bytes,
       :max_decompressed_body_bytes,
@@ -291,6 +299,8 @@ defmodule CodexPooler.InstanceSettings.Settings do
     |> validate_required([
       :firewall_allowlist,
       :trusted_proxies,
+      :forwarded_client_ip_source,
+      :forwarded_proxy_depth,
       :max_compressed_body_bytes,
       :max_decompressed_body_bytes,
       :max_decompression_ratio,
@@ -298,11 +308,31 @@ defmodule CodexPooler.InstanceSettings.Settings do
     ])
     |> validate_change(:firewall_allowlist, &validate_cidr_rules/2)
     |> validate_change(:trusted_proxies, &validate_cidr_rules/2)
+    |> validate_number(:forwarded_proxy_depth,
+      greater_than_or_equal_to: 0,
+      less_than_or_equal_to: 16
+    )
+    |> validate_forwarded_proxy_depth()
     |> validate_subset(:decompression_algorithms, @decompression_algorithms)
     |> validate_positive_integer(:max_compressed_body_bytes)
     |> validate_positive_integer(:max_decompressed_body_bytes)
     |> validate_positive_integer(:max_decompression_ratio)
     |> validate_positive_integer(:decompression_timeout_ms)
+  end
+
+  defp validate_forwarded_proxy_depth(changeset) do
+    source = get_field(changeset, :forwarded_client_ip_source)
+    depth = get_field(changeset, :forwarded_proxy_depth)
+
+    if is_integer(depth) and depth > 0 and source != :x_forwarded_for do
+      add_error(
+        changeset,
+        :forwarded_proxy_depth,
+        "must be 0 unless forwarded client IP source is X-Forwarded-For"
+      )
+    else
+      changeset
+    end
   end
 
   defp files_changeset(files, attrs) do

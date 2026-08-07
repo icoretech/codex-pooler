@@ -387,6 +387,26 @@ defmodule CodexPooler.InstanceSettings.Classification do
       notes: "Controls whether forwarded client headers are trusted."
     },
     %{
+      key: :forwarded_client_ip_source,
+      bucket: :db_runtime_cached,
+      group: :ingress,
+      label: "Forwarded client IP source",
+      env_names: [],
+      storage: :database,
+      reloadability: :cached,
+      notes: "Selects the single trusted source used to resolve the runtime client IP."
+    },
+    %{
+      key: :forwarded_proxy_depth,
+      bucket: :db_runtime_cached,
+      group: :ingress,
+      label: "Forwarded proxy depth",
+      env_names: [],
+      storage: :database,
+      reloadability: :cached,
+      notes: "Uses a fixed X-Forwarded-For proxy depth, while zero keeps trusted-CIDR walking."
+    },
+    %{
       key: :bridge_owner_lease,
       bucket: :db_runtime_cached,
       group: :gateway,
