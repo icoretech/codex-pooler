@@ -19,6 +19,43 @@ defmodule CodexPooler.Gateway.OperationalSettings do
   @websocket_owner_idle_timeout_min_ms 60_000
   @websocket_owner_idle_timeout_max_ms 3_600_000
 
+  @struct_fields [
+    source: :database,
+    db_available?: true,
+    secrets_available?: true,
+    file_max_size_bytes: 25 * 1024 * 1024,
+    upload_ttl_seconds: 24 * 60 * 60,
+    abandoned_upload_cleanup_interval_seconds: 15 * 60,
+    bridge_owner_lease_ttl_seconds: 45,
+    bridge_owner_lease_renewal_seconds: 15,
+    expired_alias_ttl_seconds: 24 * 60 * 60,
+    firewall_allowlist: [],
+    firewall_allowlist_compiled: {:ok, []},
+    trusted_proxies: [],
+    trusted_proxies_compiled: {:ok, []},
+    forwarded_client_ip_source: :x_forwarded_for,
+    forwarded_proxy_depth: 0,
+    decompression_algorithms: @default_decompression_algorithms,
+    zstd_supported?: true,
+    max_compressed_body_bytes: 32 * 1024 * 1024,
+    max_decompressed_body_bytes: 64 * 1024 * 1024,
+    max_decompression_ratio: 200,
+    decompression_timeout_ms: 10_000,
+    gateway_debug?: false,
+    sse_keepalive_interval_ms: 10_000,
+    bulkheads: @default_bulkheads,
+    circuit_failure_threshold: 3,
+    circuit_open_seconds: 60,
+    circuit_half_open_probe_limit: 1,
+    circuit_success_threshold: 1,
+    upstream_connect_timeout_ms: :timer.seconds(15),
+    upstream_pool_timeout_ms: :timer.seconds(15),
+    upstream_receive_timeout_ms: :timer.minutes(5),
+    websocket_idle_timeout_ms: @websocket_idle_timeout_default_ms,
+    websocket_owner_idle_timeout_ms: @websocket_owner_idle_timeout_default_ms,
+    model_context_window_overrides: %{}
+  ]
+
   @type bulkhead_settings :: %{
           max_concurrency: pos_integer(),
           queue_limit: non_neg_integer(),
@@ -62,40 +99,7 @@ defmodule CodexPooler.Gateway.OperationalSettings do
           model_context_window_overrides: %{String.t() => pos_integer()}
         }
 
-  defstruct source: :database,
-            db_available?: true,
-            secrets_available?: true,
-            file_max_size_bytes: 25 * 1024 * 1024,
-            upload_ttl_seconds: 24 * 60 * 60,
-            abandoned_upload_cleanup_interval_seconds: 15 * 60,
-            bridge_owner_lease_ttl_seconds: 45,
-            bridge_owner_lease_renewal_seconds: 15,
-            expired_alias_ttl_seconds: 24 * 60 * 60,
-            firewall_allowlist: [],
-            firewall_allowlist_compiled: {:ok, []},
-            trusted_proxies: [],
-            trusted_proxies_compiled: {:ok, []},
-            forwarded_client_ip_source: :x_forwarded_for,
-            forwarded_proxy_depth: 0,
-            decompression_algorithms: @default_decompression_algorithms,
-            zstd_supported?: true,
-            max_compressed_body_bytes: 32 * 1024 * 1024,
-            max_decompressed_body_bytes: 64 * 1024 * 1024,
-            max_decompression_ratio: 200,
-            decompression_timeout_ms: 10_000,
-            gateway_debug?: false,
-            sse_keepalive_interval_ms: 10_000,
-            bulkheads: @default_bulkheads,
-            circuit_failure_threshold: 3,
-            circuit_open_seconds: 60,
-            circuit_half_open_probe_limit: 1,
-            circuit_success_threshold: 1,
-            upstream_connect_timeout_ms: :timer.seconds(15),
-            upstream_pool_timeout_ms: :timer.seconds(15),
-            upstream_receive_timeout_ms: :timer.minutes(5),
-            websocket_idle_timeout_ms: @websocket_idle_timeout_default_ms,
-            websocket_owner_idle_timeout_ms: @websocket_owner_idle_timeout_default_ms,
-            model_context_window_overrides: %{}
+  defstruct @struct_fields
 
   @spec current() :: t()
   def current do

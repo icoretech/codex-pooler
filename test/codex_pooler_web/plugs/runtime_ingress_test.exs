@@ -27,8 +27,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
     ForwardedClientIP
   }
 
-  alias CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIP.Resolution
   alias CodexPoolerWeb.Plugs.RuntimeIngress.Firewall.Decision
+  alias CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIP.Resolution
 
   @firewall_denied_event [:codex_pooler, :ingress, :firewall, :denied]
 

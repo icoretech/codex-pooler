@@ -271,20 +271,22 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp initialize_firewall_state(state) do
-    with :ok <- InstanceSettingsCache.subscribe_applied() do
-      settings = InstanceSettings.current()
+    case InstanceSettingsCache.subscribe_applied() do
+      :ok ->
+        settings = InstanceSettings.current()
 
-      state =
-        state
-        |> Map.put(:firewall_applied_version, settings.lock_version)
-        |> Map.put(:firewall_revoked?, false)
-        |> Map.put(:firewall_close_sent?, false)
+        state =
+          state
+          |> Map.put(:firewall_applied_version, settings.lock_version)
+          |> Map.put(:firewall_revoked?, false)
+          |> Map.put(:firewall_close_sent?, false)
 
-      settings
-      |> evaluate_firewall(state)
-      |> close_if_revoked_idle()
-    else
-      {:error, reason} -> {:stop, reason, state}
+        settings
+        |> evaluate_firewall(state)
+        |> close_if_revoked_idle()
+
+      {:error, reason} ->
+        {:stop, reason, state}
     end
   end
 
@@ -726,11 +728,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end)
   end
 
+  defp start_or_queue_response_task(_payload, %{firewall_revoked?: true} = state), do: state
+
   defp start_or_queue_response_task(payload, state) do
     cond do
-      Map.get(state, :firewall_revoked?, false) ->
-        state
-
       public_response_payload?(payload, state) and public_turn_open?(state) ->
         queue_response_payload(state, payload)
 

@@ -7,8 +7,10 @@ defmodule CodexPooler.InstanceSettingsTest do
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.AccountsFixtures
   alias CodexPooler.Audit.AuditEvent
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.{Cache, Settings}
+  alias CodexPoolerWeb.Plugs.RuntimeIngress.Firewall
 
   defmodule FailingRepo do
     def insert(_struct, _opts),
@@ -131,10 +133,10 @@ defmodule CodexPooler.InstanceSettingsTest do
     def firewall_decision(client_ip) do
       settings =
         InstanceSettings.current()
-        |> CodexPooler.Gateway.OperationalSettings.from_instance_settings()
+        |> OperationalSettings.from_instance_settings()
 
       client_ip
-      |> CodexPoolerWeb.Plugs.RuntimeIngress.Firewall.evaluate_client_ip(settings)
+      |> Firewall.evaluate_client_ip(settings)
       |> Map.take([:outcome, :reason])
     end
 

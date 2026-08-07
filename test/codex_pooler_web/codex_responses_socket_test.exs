@@ -1,8 +1,8 @@
 defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   use ExUnit.Case, async: false
 
-  alias CodexPooler.Gateway.OperationalSettings.IPRules
   alias CodexPooler.Gateway.Contracts
+  alias CodexPooler.Gateway.OperationalSettings.IPRules
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract

@@ -132,7 +132,14 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.FirewallTest do
   test "emits one bounded event and one sanitized structured log for a denial" do
     attach_denial_handler()
     decision = Firewall.denied(:not_allowed, {198, 51, 100, 20})
-    Logger.metadata(request_id: "request-sensitive", path: "/backend-api/codex/responses")
+
+    request_metadata = [
+      request_id: "request-sensitive",
+      path: "/backend-api/codex/responses"
+    ]
+
+    Logger.metadata(request_metadata)
+
     previous_metadata = Logger.metadata()
 
     log =

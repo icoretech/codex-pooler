@@ -35,9 +35,8 @@ defmodule CodexPooler.Gateway.OperationalSettings.IPRules do
 
   @spec parse_candidate(term()) :: {:ok, :inet.ip_address()} | {:error, :invalid_address}
   def parse_candidate(value) when is_binary(value) do
-    with {:ok, ip, _mapped?} <- parse_address(value) do
-      {:ok, ip}
-    else
+    case parse_address(value) do
+      {:ok, ip, _mapped?} -> {:ok, ip}
       :error -> {:error, :invalid_address}
     end
   end
@@ -66,9 +65,8 @@ defmodule CodexPooler.Gateway.OperationalSettings.IPRules do
   defp compile_rule(_rule), do: {:error, :invalid_rule}
 
   defp compile_exact_rule(address) do
-    with {:ok, ip, _mapped?} <- parse_address(address) do
-      {:ok, %Rule{network: ip, prefix: total_bits(ip)}}
-    else
+    case parse_address(address) do
+      {:ok, ip, _mapped?} -> {:ok, %Rule{network: ip, prefix: total_bits(ip)}}
       :error -> {:error, :invalid_rule}
     end
   end
