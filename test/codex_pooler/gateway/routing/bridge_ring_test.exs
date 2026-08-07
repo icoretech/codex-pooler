@@ -7,7 +7,8 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
 
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeAffinity, BridgeDemotion, CodexSession}
-  alias CodexPooler.Gateway.Routing.{BridgeRing, RoutePlanInput}
+  alias CodexPooler.Gateway.Routing.{BridgeRing, CandidateEligibility, RoutePlanInput}
+  alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Pool
@@ -659,6 +660,209 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
 
       assert refreshed_plan.selected_assignment_id == second_assignment.id
     end
+
+    test "quota_first scores reported-percent exhaustion as empty capacity for prepared credit-backed probes" do
+      setup = routing_setup(2)
+      seed = "bridge-ring-seed-1"
+
+      [exhausted_candidate, positive_candidate] =
+        rendezvous_ordered_candidates(setup.candidates, seed)
+
+      {exhausted_assignment, exhausted_identity} = exhausted_candidate
+      {positive_assignment, positive_identity} = positive_candidate
+      snapshot_at = ~U[2026-08-07 12:00:00.000000Z]
+
+      prime_account_quota!(setup, exhausted_assignment, Decimal.new("20"))
+
+      prime_weekly_account_quota!(setup, exhausted_assignment, Decimal.new("100"), credits: 3)
+
+      prime_account_quota!(setup, positive_assignment, Decimal.new("40"))
+
+      assert seed_preferring_assignment(
+               [positive_assignment.id, exhausted_assignment.id],
+               exhausted_assignment.id
+             ) == seed
+
+      assert {:ok, prepared_candidates, prepared_decision} =
+               quota_eligible_candidates(setup, [positive_candidate, exhausted_candidate])
+
+      assert candidate_ids(prepared_candidates) == [
+               positive_assignment.id,
+               exhausted_assignment.id
+             ]
+
+      assert prepared_decision["precise_candidate_count"] == 1
+      assert prepared_decision["credit_backed_probe_candidate_count"] == 1
+
+      assert %{routing_state: :precise} =
+               QuotaWindows.routing_quota_eligibility(
+                 positive_identity,
+                 quota_scope_opts(setup.model)
+               )
+
+      assert %{routing_state: :credit_backed_probe} =
+               QuotaWindows.routing_quota_eligibility(
+                 exhausted_identity,
+                 quota_scope_opts(setup.model)
+               )
+
+      snapshot_candidates = [positive_candidate, exhausted_candidate]
+
+      route_state =
+        RouteState.new(%{visible_model: setup.model, candidates: snapshot_candidates})
+        |> RouteState.put_quota_window_snapshot(
+          %{
+            positive_identity.id => [account_window_at(Decimal.new("40"), snapshot_at)],
+            exhausted_identity.id => [
+              account_window_at(Decimal.new("20"), snapshot_at),
+              credit_backed_weekly_window_at(snapshot_at)
+            ]
+          },
+          snapshot_at
+        )
+
+      assert {:ok, ^prepared_candidates, snapshot_decision} =
+               quota_eligible_candidates(setup, snapshot_candidates, route_state)
+
+      assert snapshot_decision["precise_candidate_count"] == 1
+      assert snapshot_decision["credit_backed_probe_candidate_count"] == 1
+
+      request =
+        request_fixture(setup.auth, %{
+          model_id: setup.model.id,
+          requested_model: setup.model.exposed_model_id,
+          correlation_id: "todo5-reported-percent-exhaustion"
+        })
+
+      route_plan_input = RoutePlanInput.from_reserved(%{request: request})
+      update_routing_settings!(setup.pool, "quota_first", 2)
+
+      live_plan = quota_first_plan(setup, prepared_candidates, route_plan_input, seed)
+
+      snapshot_plan =
+        quota_first_plan(setup, prepared_candidates, route_plan_input, seed,
+          route_state: route_state
+        )
+
+      sweep_results =
+        Enum.map(1..500, fn index ->
+          sweep_seed = "todo5-quota-first-sweep-#{index}"
+
+          live =
+            quota_first_plan(setup, prepared_candidates, route_plan_input, sweep_seed)
+            |> Map.fetch!(:selected_assignment_id)
+
+          snapshot =
+            quota_first_plan(setup, prepared_candidates, route_plan_input, sweep_seed,
+              route_state: route_state
+            )
+            |> Map.fetch!(:selected_assignment_id)
+
+          %{seed: sweep_seed, live: live, snapshot: snapshot}
+        end)
+
+      IO.puts(
+        "TODO5 fixture seed=#{seed} states=precise,credit_backed_probe " <>
+          "prepared=#{inspect(candidate_ids(prepared_candidates))} " <>
+          "live_selected=#{live_plan.selected_assignment_id} " <>
+          "snapshot_selected=#{snapshot_plan.selected_assignment_id} " <>
+          "sweep=1..500"
+      )
+
+      assert %{live: positive_assignment.id, snapshot: positive_assignment.id} == %{
+               live: live_plan.selected_assignment_id,
+               snapshot: snapshot_plan.selected_assignment_id
+             }
+
+      assert Enum.all?(sweep_results, fn result ->
+               result.live == positive_assignment.id and result.snapshot == positive_assignment.id
+             end)
+    end
+
+    test "quota_first excludes nonqualifying exhaustion reports from snapshot capacity scoring" do
+      setup = routing_setup(2)
+      [reported_assignment, positive_assignment] = setup.assignments
+      [reported_identity, positive_identity] = setup.identities
+      snapshot_at = ~U[2026-08-07 12:00:00.000000Z]
+
+      seed =
+        seed_preferring_assignment(
+          [reported_assignment.id, positive_assignment.id],
+          reported_assignment.id
+        )
+
+      request =
+        request_fixture(setup.auth, %{
+          model_id: setup.model.id,
+          requested_model: setup.model.exposed_model_id,
+          correlation_id: "todo5-quota-first-exhaustion-controls"
+        })
+
+      route_plan_input = RoutePlanInput.from_reserved(%{request: request})
+      update_routing_settings!(setup.pool, "quota_first", 2)
+
+      excluded_controls = [
+        {"stale", %{observed_at: DateTime.add(snapshot_at, -901, :second)},
+         reported_assignment.id},
+        {"resetless", %{reset_at: nil}, reported_assignment.id},
+        {"expired", %{reset_at: DateTime.add(snapshot_at, -1, :second)}, reported_assignment.id},
+        {"active_limit_zero", %{active_limit: 0}, reported_assignment.id},
+        {"used_percent_missing", %{used_percent: nil}, reported_assignment.id},
+        {"credits_zero", %{credits: 0}, reported_assignment.id}
+      ]
+
+      Enum.each(excluded_controls, fn {label, attrs, expected_assignment_id} ->
+        reported_windows = [
+          account_window_at(Decimal.new("20"), snapshot_at),
+          weekly_window_at(snapshot_at, attrs)
+        ]
+
+        route_state =
+          RouteState.new(%{visible_model: setup.model, candidates: setup.candidates})
+          |> RouteState.put_quota_window_snapshot(
+            %{
+              reported_identity.id => reported_windows,
+              positive_identity.id => [account_window_at(Decimal.new("40"), snapshot_at)]
+            },
+            snapshot_at
+          )
+
+        plan =
+          quota_first_plan(setup, setup.candidates, route_plan_input, "#{seed}-#{label}",
+            route_state: route_state
+          )
+
+        assert plan.selected_assignment_id == expected_assignment_id,
+               "#{label} must stay out of capacity scoring"
+      end)
+
+      monthly_primary =
+        quota_window_at(snapshot_at, %{
+          window_kind: "primary",
+          window_minutes: 43_200,
+          used_percent: Decimal.new("100"),
+          credits: 3
+        })
+
+      assert QuotaWindows.usable_window?(monthly_primary, snapshot_at)
+
+      monthly_route_state =
+        RouteState.new(%{visible_model: setup.model, candidates: setup.candidates})
+        |> RouteState.put_quota_window_snapshot(
+          %{
+            reported_identity.id => [monthly_primary],
+            positive_identity.id => [account_window_at(Decimal.new("40"), snapshot_at)]
+          },
+          snapshot_at
+        )
+
+      monthly_plan =
+        quota_first_plan(setup, setup.candidates, route_plan_input, "#{seed}-monthly-primary",
+          route_state: monthly_route_state
+        )
+
+      assert monthly_plan.selected_assignment_id == positive_assignment.id
+    end
   end
 
   describe "plan_route/1 affinity/demotion recovery" do
@@ -1031,6 +1235,99 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
     }
   end
 
+  defp credit_backed_weekly_window_at(observed_at) do
+    quota_window_at(observed_at, %{
+      quota_key: "account",
+      window_kind: "secondary",
+      window_minutes: 10_080,
+      used_percent: Decimal.new("100"),
+      credits: 3,
+      reset_at: DateTime.add(observed_at, 604_800, :second)
+    })
+  end
+
+  defp weekly_window_at(observed_at, attrs) do
+    quota_window_at(
+      observed_at,
+      Map.merge(
+        %{
+          quota_key: "account",
+          window_kind: "secondary",
+          window_minutes: 10_080,
+          used_percent: Decimal.new("100"),
+          credits: 3,
+          reset_at: DateTime.add(observed_at, 604_800, :second)
+        },
+        attrs
+      )
+    )
+  end
+
+  defp quota_window_at(observed_at, attrs) do
+    struct(
+      AccountQuotaWindow,
+      %{
+        quota_key: "account",
+        window_kind: "primary",
+        window_minutes: 300,
+        reset_at: DateTime.add(observed_at, 300, :second),
+        source: "codex_usage_api",
+        source_precision: "observed",
+        quota_scope: "account",
+        quota_family: "account",
+        freshness_state: "fresh",
+        observed_at: observed_at
+      }
+      |> Map.merge(attrs)
+    )
+  end
+
+  defp quota_eligible_candidates(setup, candidates, route_state \\ nil) do
+    request_options =
+      RequestOptions.build(
+        %{request_id: "todo5-quota-preparation"},
+        "/backend-api/codex/responses",
+        %{}
+      )
+
+    filter_input =
+      FilterInput.new(%{
+        model: setup.model,
+        endpoint: "/backend-api/codex/responses",
+        payload: %{},
+        request_options: request_options,
+        candidates: candidates
+      })
+
+    case route_state do
+      nil ->
+        CandidateEligibility.filter_quota_eligible_candidates(filter_input)
+
+      %RouteState{} ->
+        CandidateEligibility.filter_quota_eligible_candidates(filter_input, route_state)
+    end
+  end
+
+  defp quota_first_plan(setup, candidates, route_plan_input, seed, opts \\ []) do
+    request_options =
+      RequestOptions.build(%{request_id: seed}, "/backend-api/codex/responses", %{})
+
+    BridgeRing.plan_route(%{
+      auth: setup.auth,
+      model: setup.model,
+      candidates: candidates,
+      route_plan_input: route_plan_input,
+      request_options: request_options,
+      route_state: Keyword.get(opts, :route_state)
+    })
+  end
+
+  defp rendezvous_ordered_candidates(candidates, seed) do
+    Enum.sort_by(candidates, fn {assignment, _identity} ->
+      -rendezvous_score(seed, assignment.id)
+    end)
+  end
+
   defp seed_avoiding_assignment(candidates, assignment_id) do
     Enum.find_value(1..100, fn index ->
       seed = "session-preference-seed-#{index}"
@@ -1184,6 +1481,22 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
     })
   end
 
+  defp prime_weekly_account_quota!(setup, assignment, used_percent, opts) do
+    setup
+    |> prime_quota_window!(
+      assignment,
+      %{
+        quota_key: "account",
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        quota_scope: "account",
+        quota_family: "account",
+        used_percent: used_percent
+      }
+      |> Map.merge(Map.new(opts))
+    )
+  end
+
   defp prime_quota_window!(setup, assignment, attrs) do
     {_assignment, identity} = candidate_by_id!(setup.candidates, assignment.id)
 
@@ -1204,6 +1517,17 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       )
 
     assert {:ok, [_window]} = QuotaWindows.upsert_quota_windows(identity, [attrs])
+  end
+
+  defp quota_scope_opts(model) do
+    [
+      model: model.exposed_model_id,
+      requested_model: model.exposed_model_id,
+      catalog_model: model.exposed_model_id,
+      exposed_model_id: model.exposed_model_id,
+      upstream_model: model.upstream_model_id,
+      upstream_model_id: model.upstream_model_id
+    ]
   end
 
   defp affinity_hash(setup, kind, key_value) do

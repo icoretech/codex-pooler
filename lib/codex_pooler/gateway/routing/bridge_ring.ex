@@ -29,6 +29,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Pools.{Pool, RoutingSettings}
   alias CodexPooler.Pools.Routing, as: PoolRouting
+  alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
@@ -715,13 +716,12 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
   end
 
   defp quota_capacity_score(identity, %Model{} = model) do
+    at = now()
+
     identity
-    |> QuotaWindows.quota_window_selection_data(quota_scope_opts(model))
+    |> QuotaWindows.quota_window_selection_data(Keyword.put(quota_scope_opts(model), :at, at))
     |> Map.get(:routing_windows, [])
-    |> Enum.filter(&QuotaWindows.usable_window?/1)
-    |> Enum.map(&remaining_percent/1)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.min(fn -> 0 end)
+    |> quota_capacity_score_for_windows(at)
   end
 
   defp quota_capacity_score(
@@ -735,10 +735,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
       Keyword.put(quota_scope_opts(model), :at, snapshot_at)
     )
     |> Map.get(:routing_windows, [])
-    |> Enum.filter(&QuotaWindows.usable_window?(&1, snapshot_at))
-    |> Enum.map(&remaining_percent/1)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.min(fn -> 0 end)
+    |> quota_capacity_score_for_windows(snapshot_at)
   end
 
   defp quota_capacity_score(
@@ -755,6 +752,35 @@ defmodule CodexPooler.Gateway.Routing.BridgeRing do
 
   defp quota_capacity_score(identity, %Model{} = model, nil),
     do: quota_capacity_score(identity, model)
+
+  defp quota_capacity_score_for_windows(windows, at) do
+    windows
+    |> Enum.map(&quota_window_capacity_score(&1, at))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.min(fn -> 0 end)
+  end
+
+  defp quota_window_capacity_score(window, at) do
+    cond do
+      QuotaWindows.usable_window?(window, at) ->
+        remaining_percent(window)
+
+      reported_percent_exhausted?(window, at) ->
+        0.0
+
+      true ->
+        nil
+    end
+  end
+
+  defp reported_percent_exhausted?(%{used_percent: %Decimal{} = used_percent} = window, at) do
+    Map.get(window, :active_limit) != 0 and Map.get(window, :credits) != 0 and
+      Evidence.current_freshness_state(window, at) == "fresh" and
+      Evidence.reset_bearing?(window) and not Evidence.expired?(window, at) and
+      Decimal.gte?(used_percent, Decimal.new(100))
+  end
+
+  defp reported_percent_exhausted?(_window, _at), do: false
 
   defp routing_settings(_auth, %RouteState{routing_settings: %RoutingSettings{} = settings}),
     do: settings
