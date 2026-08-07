@@ -4,6 +4,8 @@ defmodule CodexPoolerWeb.Browser.BrowserSecurityHeadersTest do
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.BrowserSecurity
+  alias CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIP.Resolution
 
   @codex_desktop_user_agent "Mozilla/5.0 Codex/26.519.81530 Chrome/148.0.7778.97 Electron/42.1.0 Safari/537.36"
   @codex_desktop_in_app_browser_user_agent "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
@@ -65,6 +67,84 @@ defmodule CodexPoolerWeb.Browser.BrowserSecurityHeadersTest do
     directives = csp_directives(csp)
 
     assert directives["script-src"] == "'self' 'unsafe-inline' 'unsafe-eval' blob:"
+  end
+
+  test "pre-normalization direct-loopback browser CSP preserves annotation script injection", %{
+    conn: conn
+  } do
+    headers =
+      conn
+      |> local_host()
+      |> put_req_header("user-agent", @codex_desktop_user_agent)
+      |> BrowserSecurity.secure_headers()
+
+    directives = headers |> Map.fetch!("content-security-policy") |> csp_directives()
+
+    assert directives["script-src"] == "'self' 'unsafe-inline' 'unsafe-eval' blob:"
+  end
+
+  test "forwarded loopback browser CSP requires a loopback immediate peer", %{conn: conn} do
+    conn =
+      conn
+      |> local_host()
+      |> normalized_conn({203, 0, 113, 10}, {127, 0, 0, 1})
+      |> Plug.Conn.put_private(
+        :codex_pooler_client_ip_resolution,
+        resolution({127, 0, 0, 1}, {127, 0, 0, 1})
+      )
+      |> put_req_header("user-agent", @codex_desktop_user_agent)
+
+    directives = conn |> BrowserSecurity.secure_headers() |> csp_directives_from_headers()
+
+    assert directives["script-src"] == "'self' 'unsafe-inline'"
+  end
+
+  test "loopback peer browser CSP requires a loopback derived client", %{conn: conn} do
+    conn =
+      conn
+      |> local_host()
+      |> normalized_conn({127, 0, 0, 1}, {203, 0, 113, 10})
+      |> put_req_header("user-agent", @codex_desktop_user_agent)
+
+    directives = conn |> BrowserSecurity.secure_headers() |> csp_directives_from_headers()
+
+    assert directives["script-src"] == "'self' 'unsafe-inline'"
+  end
+
+  test "loopback peer and derived client browser CSP preserves annotation script injection", %{
+    conn: conn
+  } do
+    for user_agent <- [@codex_desktop_user_agent, @codex_desktop_in_app_browser_user_agent] do
+      directives =
+        conn
+        |> local_host()
+        |> normalized_conn({127, 0, 0, 1}, {127, 0, 0, 1})
+        |> put_req_header("user-agent", user_agent)
+        |> BrowserSecurity.secure_headers()
+        |> csp_directives_from_headers()
+
+      assert directives["script-src"] == "'self' 'unsafe-inline' 'unsafe-eval' blob:"
+    end
+  end
+
+  test "normalized browser CSP fails closed without a valid immediate peer", %{conn: conn} do
+    marker = resolution({127, 0, 0, 1}, {127, 0, 0, 1})
+
+    for private <- [
+          %{codex_pooler_client_ip_resolution: marker},
+          %{codex_pooler_client_ip_resolution: marker, codex_pooler_peer_ip: "127.0.0.1"}
+        ] do
+      directives =
+        conn
+        |> local_host()
+        |> Map.put(:remote_ip, {127, 0, 0, 1})
+        |> Map.update!(:private, &Map.merge(&1, private))
+        |> put_req_header("user-agent", @codex_desktop_user_agent)
+        |> BrowserSecurity.secure_headers()
+        |> csp_directives_from_headers()
+
+      assert directives["script-src"] == "'self' 'unsafe-inline'"
+    end
   end
 
   test "local Codex Desktop in-app browser CSP allows annotation script injection", %{conn: conn} do
@@ -244,6 +324,30 @@ defmodule CodexPoolerWeb.Browser.BrowserSecurityHeadersTest do
         [name] -> Map.put(acc, name, "")
       end
     end)
+  end
+
+  defp csp_directives_from_headers(headers) do
+    headers
+    |> Map.fetch!("content-security-policy")
+    |> csp_directives()
+  end
+
+  defp normalized_conn(conn, peer_ip, client_ip) do
+    conn
+    |> Map.put(:remote_ip, client_ip)
+    |> Plug.Conn.put_private(:codex_pooler_peer_ip, peer_ip)
+    |> Plug.Conn.put_private(:codex_pooler_client_ip_resolution, resolution(peer_ip, client_ip))
+  end
+
+  defp resolution(peer_ip, client_ip) do
+    %Resolution{
+      status: :ok,
+      peer_ip: peer_ip,
+      client_ip: client_ip,
+      source: :x_forwarded_for,
+      reason: nil,
+      inspected_hops: 1
+    }
   end
 
   defp restore_env(key, nil), do: Application.delete_env(:codex_pooler, key)

@@ -1,6 +1,8 @@
 defmodule CodexPoolerWeb.BrowserSecurity do
   @moduledoc false
 
+  alias CodexPoolerWeb.Plugs.TrustedProxyRemoteIp
+
   @codex_desktop_browser_script_sources ["'unsafe-eval'", "blob:"]
   @local_browser_hosts ["localhost", "127.0.0.1", "::1"]
 
@@ -76,16 +78,17 @@ defmodule CodexPoolerWeb.BrowserSecurity do
   defp browser_annotation_csp_extra_sources(_conn), do: []
 
   defp local_browser_request?(%Plug.Conn{} = conn) do
-    local_browser_host?(conn) and local_remote_ip?(conn)
+    local_browser_host?(conn) and local_ip?(conn.remote_ip) and
+      local_ip?(TrustedProxyRemoteIp.immediate_peer_ip(conn))
   end
 
   defp local_browser_host?(%Plug.Conn{host: host}) when is_binary(host) do
     host in @local_browser_hosts or String.ends_with?(host, ".localhost")
   end
 
-  defp local_remote_ip?(%Plug.Conn{remote_ip: {127, 0, 0, 1}}), do: true
-  defp local_remote_ip?(%Plug.Conn{remote_ip: {0, 0, 0, 0, 0, 0, 0, 1}}), do: true
-  defp local_remote_ip?(%Plug.Conn{}), do: false
+  defp local_ip?({127, 0, 0, 1}), do: true
+  defp local_ip?({0, 0, 0, 0, 0, 0, 0, 1}), do: true
+  defp local_ip?(_ip), do: false
 
   defp chromium_browser?(%Plug.Conn{} = conn) do
     conn
