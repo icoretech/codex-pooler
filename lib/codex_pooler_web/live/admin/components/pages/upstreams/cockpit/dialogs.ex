@@ -55,16 +55,33 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
             :if={oauth_relink_browser_flow?(@oauth_relink_flow, @oauth_relink_authorization_url)}
             class="grid gap-4 rounded-lg border border-base-300 bg-base-200/40 p-4"
           >
-            <a
-              id="oauth-relink-authorization-url"
-              href={@oauth_relink_authorization_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              class="btn btn-primary w-full justify-start gap-2 text-left"
-            >
-              <.icon name="hero-arrow-top-right-on-square" class="size-4 shrink-0" />
-              <span class="truncate">Open OpenAI authorization</span>
-            </a>
+            <div class="flex min-w-0 items-stretch gap-2">
+              <a
+                id="oauth-relink-authorization-url"
+                href={@oauth_relink_authorization_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="btn btn-primary min-w-0 flex-1 justify-start gap-2 text-left"
+              >
+                <.icon name="hero-arrow-top-right-on-square" class="size-4 shrink-0" />
+                <span class="truncate">Open OpenAI authorization</span>
+              </a>
+              <button
+                id="oauth-relink-authorization-url-copy"
+                type="button"
+                class="btn btn-square size-10 shrink-0"
+                phx-hook="ClipboardCopy"
+                data-copy-text={@oauth_relink_authorization_url}
+                data-copy-label="Copy"
+                data-copied-label="Copied"
+                aria-label="Copy OpenAI authorization URL"
+              >
+                <.icon name="hero-clipboard-document" class="copy-icon size-4" />
+                <span data-copy-label class="sr-only" aria-live="polite" aria-atomic="true">
+                  Copy
+                </span>
+              </button>
+            </div>
 
             <.form
               id="oauth-relink-callback-form"
@@ -109,19 +126,57 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
               <p class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
                 Device code
               </p>
-              <p class="font-mono text-2xl font-bold tracking-widest text-base-content">
-                {@oauth_relink_flow.device_user_code}
-              </p>
+              <div class="flex min-w-0 items-center gap-2">
+                <p class="min-w-0 flex-1 break-all font-mono text-2xl font-bold tracking-widest text-base-content">
+                  {@oauth_relink_flow.device_user_code}
+                </p>
+                <button
+                  id="oauth-relink-device-code-copy"
+                  type="button"
+                  class="btn btn-square size-10 shrink-0"
+                  phx-hook="ClipboardCopy"
+                  data-copy-text={@oauth_relink_flow.device_user_code}
+                  data-copy-label="Copy"
+                  data-copied-label="Copied"
+                  aria-label="Copy device code"
+                >
+                  <.icon name="hero-clipboard-document" class="copy-icon size-4" />
+                  <span data-copy-label class="sr-only" aria-live="polite" aria-atomic="true">
+                    Copy
+                  </span>
+                </button>
+              </div>
             </div>
-            <a
+            <div
               :if={@oauth_relink_flow.verification_uri}
-              href={@oauth_relink_flow.verification_uri}
-              target="_blank"
-              rel="noopener noreferrer"
-              class="link link-primary break-all text-sm"
+              class="flex min-w-0 items-stretch gap-2"
             >
-              {@oauth_relink_flow.verification_uri}
-            </a>
+              <a
+                id="oauth-relink-device-verification-url"
+                href={@oauth_relink_flow.verification_uri}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={@oauth_relink_flow.verification_uri}
+                class="link link-primary min-w-0 flex-1 self-center truncate text-sm"
+              >
+                {@oauth_relink_flow.verification_uri}
+              </a>
+              <button
+                id="oauth-relink-device-verification-url-copy"
+                type="button"
+                class="btn btn-square size-10 shrink-0"
+                phx-hook="ClipboardCopy"
+                data-copy-text={@oauth_relink_flow.verification_uri}
+                data-copy-label="Copy"
+                data-copied-label="Copied"
+                aria-label="Copy device verification URL"
+              >
+                <.icon name="hero-clipboard-document" class="copy-icon size-4" />
+                <span data-copy-label class="sr-only" aria-live="polite" aria-atomic="true">
+                  Copy
+                </span>
+              </button>
+            </div>
           </section>
         </div>
 

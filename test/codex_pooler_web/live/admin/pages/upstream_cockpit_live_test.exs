@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   alias CodexPooler.Audit
   alias CodexPooler.Events
   alias CodexPooler.FakeOpenAIAuthProvider
+  alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Jobs.SavedResetRedemptionWorker
   alias CodexPooler.Pools
@@ -728,6 +729,24 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(view, "#oauth-relink-submit-callback")
 
     authorization_url = oauth_relink_authorization_url_from_view(view)
+
+    assert has_element?(
+             view,
+             ~s(#oauth-relink-authorization-url[target="_blank"][rel="noopener noreferrer"])
+           )
+
+    assert has_element?(
+             view,
+             ~s(#oauth-relink-authorization-url-copy[type="button"][phx-hook="ClipboardCopy"][data-copy-text="#{authorization_url}"][aria-label="Copy OpenAI authorization URL"])
+           )
+
+    assert has_element?(
+             view,
+             "#oauth-relink-authorization-url-copy .copy-icon.hero-clipboard-document"
+           )
+
+    assert has_element?(view, "#oauth-relink-authorization-url-copy [data-copy-label].sr-only")
+
     callback_url = callback_url(authorization_state(authorization_url), "cockpit-browser-code")
 
     view
@@ -781,6 +800,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     access_token = runtime_secret("cockpit-oauth-device-access")
     refresh_token = runtime_secret("cockpit-oauth-device-refresh")
     id_token = oauth_id_token("acct_cockpit_device_ui", "workspace-cockpit-ui")
+    pending_provider_value = "raw-cockpit-device-pending-must-not-leak"
 
     provider =
       start_oauth_provider!(
@@ -794,11 +814,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
                expires_at: DateTime.add(DateTime.utc_now(), 600, :second) |> DateTime.to_iso8601()
              )},
           "/api/accounts/deviceauth/token" =>
-            {200,
-             FakeOpenAIAuthProvider.authorization_code_response(
-               authorization_code: authorization_code,
-               code_verifier: code_verifier
-             )},
+            {403,
+             %{
+               "error" => %{
+                 "code" => "deviceauth_authorization_pending",
+                 "message" => pending_provider_value
+               }
+             }},
           "/oauth/token" =>
             {200,
              FakeOpenAIAuthProvider.token_response(
@@ -821,11 +843,74 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert has_element?(
              view,
+             ~s(#oauth-relink-device-code-copy[type="button"][phx-hook="ClipboardCopy"][data-copy-text="COCKPIT-CODE"][aria-label="Copy device code"])
+           )
+
+    assert has_element?(
+             view,
+             "#oauth-relink-device-code-copy .copy-icon.hero-clipboard-document"
+           )
+
+    assert has_element?(view, "#oauth-relink-device-code-copy [data-copy-label].sr-only")
+
+    assert has_element?(
+             view,
              "#oauth-relink-device-code",
              FakeOpenAIAuthProvider.url(provider) <> "/codex/device"
            )
 
+    verification_url = FakeOpenAIAuthProvider.url(provider) <> "/codex/device"
+
+    assert has_element?(
+             view,
+             ~s(#oauth-relink-device-verification-url[href="#{verification_url}"][target="_blank"][rel="noopener noreferrer"])
+           )
+
+    assert has_element?(
+             view,
+             ~s(#oauth-relink-device-verification-url-copy[type="button"][phx-hook="ClipboardCopy"][data-copy-text="#{verification_url}"][aria-label="Copy device verification URL"])
+           )
+
+    assert has_element?(
+             view,
+             "#oauth-relink-device-verification-url-copy .copy-icon.hero-clipboard-document"
+           )
+
+    assert has_element?(
+             view,
+             "#oauth-relink-device-verification-url-copy [data-copy-label].sr-only"
+           )
+
     flow = Repo.one!(OAuthFlow)
+    send(view.pid, {:poll_oauth_relink_device, flow.id})
+    _ = :sys.get_state(view.pid)
+
+    assert has_element?(view, "#oauth-relink-device-code", "COCKPIT-CODE")
+    refute has_element?(view, "#oauth-relink-error", "OAuth token exchange failed")
+    assert Repo.get!(OAuthFlow, flow.id).status == "pending"
+    assert Repo.get!(OAuthFlow, flow.id).error_code == nil
+    assert Repo.aggregate(UpstreamIdentity, :count) == 1
+
+    FakeUpstream.set_mode(
+      provider,
+      {:path_json,
+       device_routes(%{
+         "/api/accounts/deviceauth/token" =>
+           {200,
+            FakeOpenAIAuthProvider.authorization_code_response(
+              authorization_code: authorization_code,
+              code_verifier: code_verifier
+            )},
+         "/oauth/token" =>
+           {200,
+            FakeOpenAIAuthProvider.token_response(
+              access_token: access_token,
+              refresh_token: refresh_token,
+              id_token: id_token
+            )}
+       })}
+    )
+
     send(view.pid, {:poll_oauth_relink_device, flow.id})
     _ = :sys.get_state(view.pid)
 
@@ -844,7 +929,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
           code_verifier,
           access_token,
           refresh_token,
-          id_token
+          id_token,
+          pending_provider_value
         ] do
       refute html =~ raw_value
     end

@@ -254,17 +254,37 @@ defmodule CodexPooler.Upstreams.OAuthDeviceLinkingTest do
   test "pending device flow can be resumed from database and completed by a later poll" do
     scope = fixture_owner_scope()
     pool = pool_fixture()
+    raw_provider_value = "raw-nested-device-pending-must-not-leak"
 
     provider =
       start_provider!(
         device_routes(%{
-          "/api/accounts/deviceauth/token" => {400, %{"error" => "authorization_pending"}}
+          "/api/accounts/deviceauth/token" =>
+            {403,
+             %{
+               "error" => %{
+                 "code" => "deviceauth_authorization_pending",
+                 "message" => raw_provider_value
+               }
+             }}
         })
       )
 
     assert {:ok, %{flow: flow}} = Upstreams.start_device_oauth(scope, pool)
     assert {:ok, %{status: :pending, flow: pending}} = Upstreams.poll_device_oauth(scope, flow.id)
+
     assert pending.status == "pending"
+    assert pending.interval_seconds == 5
+    assert %DateTime{} = pending.last_polled_at
+    assert DateTime.diff(pending.poll_after_at, pending.last_polled_at, :second) in 4..5
+    assert pending.error_code == nil
+    assert pending.error_message == nil
+    assert pending.completed_at == nil
+    assert pending.result_upstream_identity_id == nil
+    refute inspect(pending) =~ raw_provider_value
+    assert Repo.aggregate(UpstreamIdentity, :count) == 0
+    assert Repo.aggregate(PoolUpstreamAssignment, :count) == 0
+    assert Repo.aggregate(EncryptedSecret, :count) == 0
 
     FakeUpstream.set_mode(
       provider,
