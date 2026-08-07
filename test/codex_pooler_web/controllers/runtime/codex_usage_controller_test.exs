@@ -31,8 +31,11 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
       |> put_req_header("authorization", setup.authorization)
       |> get("/api/codex/usage")
 
-    assert %{"plan_type" => "api_key", "rate_limit" => rate_limit} = json_response(conn, 200)
+    response = json_response(conn, 200)
+
+    assert %{"plan_type" => "api_key", "rate_limit" => rate_limit} = response
     assert is_map(rate_limit)
+    refute Map.has_key?(response, "credits")
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/api/codex/usage"
@@ -350,7 +353,9 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
 
     %{identity: identity} =
       upstream_assignment_fixture(pool, %{
-        chatgpt_account_id: "chatgpt-account-1"
+        chatgpt_account_id: "chatgpt-account-1",
+        account_label: "Percent-only selected account",
+        plan_family: "pro"
       })
 
     assert {:ok, _secret} =
@@ -388,10 +393,15 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
       |> put_req_header("chatgpt-account-id", "chatgpt-account-1")
       |> get("/api/codex/usage")
 
+    response = json_response(conn, 200)
+
     assert %{
-             "plan_type" => plan_type,
-             "credits" => %{"balance" => nil, "has_credits" => true},
-             "rate_limit" => %{"primary_window" => %{"used_percent" => 67}},
+             "plan_type" => "pro",
+             "rate_limit" => %{
+               "allowed" => true,
+               "limit_reached" => false,
+               "primary_window" => %{"used_percent" => 67}
+             },
              "additional_rate_limits" => [
                %{
                  "quota_key" => "codex_spark",
@@ -400,9 +410,9 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
                  "rate_limit" => %{"primary_window" => %{"used_percent" => 55}}
                }
              ]
-           } = json_response(conn, 200)
+           } = response
 
-    assert plan_type in ["unknown", "api_key"] or is_binary(plan_type)
+    refute Map.has_key?(response, "credits")
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^pool.id))
     assert request.api_key_id == nil
@@ -495,14 +505,18 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
       upstream_assignment_fixture(pool, %{
         chatgpt_account_id: account_id,
         workspace_id: "ws_usage_free",
-        plan_family: "free"
+        account_label: "Selected token workspace account",
+        plan_family: "free",
+        plan_label: "Selected token workspace plan"
       })
 
     %{identity: pro_identity} =
       upstream_assignment_fixture(pool, %{
         chatgpt_account_id: account_id,
         workspace_id: "ws_usage_pro",
-        plan_family: "pro"
+        account_label: "Rival workspace account",
+        plan_family: "pro",
+        plan_label: "Rival workspace plan"
       })
 
     assert {:ok, _secret} =
@@ -523,6 +537,8 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
                  window_kind: "primary",
                  window_minutes: 300,
                  used_percent: Decimal.new("91"),
+                 active_limit: 100,
+                 credits: 9,
                  reset_at: DateTime.add(DateTime.utc_now(), 300, :second),
                  source: "test",
                  freshness_state: "fresh"
@@ -534,7 +550,9 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
                %{
                  window_kind: "primary",
                  window_minutes: 300,
-                 used_percent: Decimal.new("4"),
+                 used_percent: Decimal.new("53"),
+                 active_limit: 100,
+                 credits: 47,
                  reset_at: DateTime.add(DateTime.utc_now(), 300, :second),
                  source: "test",
                  freshness_state: "fresh"
@@ -548,9 +566,17 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
       |> get("/api/codex/usage")
 
     assert %{
-             "plan_type" => "free",
-             "rate_limit" => %{"primary_window" => %{"used_percent" => 91}}
+             "plan_type" => "Selected token workspace plan",
+             "rate_limit" => %{
+               "allowed" => true,
+               "limit_reached" => false,
+               "primary_window" => %{"used_percent" => 91}
+             },
+             "credits" => %{"has_credits" => true, "unlimited" => false, "balance" => "9"}
            } = json_response(conn, 200)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^pool.id))
+    assert request.upstream_account_label == free_identity.account_label
   end
 
   test "GET /api/codex/usage returns monthly-only primary window seconds without secondary synthesis",
@@ -589,20 +615,18 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
       |> put_req_header("chatgpt-account-id", account_id)
       |> get("/api/codex/usage")
 
+    response = json_response(conn, 200)
+
     assert %{
              "plan_type" => "unknown",
              "rate_limit" =>
-               %{
-                 "primary_window" =>
-                   %{
-                     "limit_window_seconds" => 2_592_000
-                   } = primary_window
-               } = rate_limit,
-             "credits" => %{"balance" => nil}
-           } = json_response(conn, 200)
+               %{"primary_window" => %{"limit_window_seconds" => 2_592_000} = primary_window} =
+                 rate_limit
+           } = response
 
     assert primary_window["used_percent"] == 43
     assert is_nil(rate_limit["secondary_window"])
+    refute Map.has_key?(response, "credits")
 
     response_text = conn.resp_body
     refute response_text =~ "1134"

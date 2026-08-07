@@ -115,14 +115,16 @@ defmodule CodexPooler.Accounting.UsageReadModel.UpstreamUsage do
     as_of = Keyword.get(opts, :as_of, now())
     {primary, secondary} = UsageResponses.account_usage_windows(windows, as_of)
     additional_rate_limits = UsageResponses.additional_codex_rate_limits(windows, as_of)
+    credits = UsageResponses.codex_credits(primary, secondary)
 
-    {:ok,
-     %{
-       plan_type: public_plan_type(identity),
-       rate_limit: UsageResponses.codex_rate_limit(primary, secondary),
-       credits: UsageResponses.codex_credits(primary, secondary),
-       additional_rate_limits: additional_rate_limits
-     }}
+    usage =
+      %{
+        plan_type: public_plan_type(identity),
+        rate_limit: UsageResponses.codex_rate_limit(primary, secondary),
+        additional_rate_limits: additional_rate_limits
+      }
+
+    {:ok, if(is_nil(credits), do: usage, else: Map.put(usage, :credits, credits))}
   end
 
   defp active_assigned_identity?(%UpstreamIdentity{id: identity_id, status: @identity_active}) do

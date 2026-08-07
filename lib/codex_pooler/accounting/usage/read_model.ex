@@ -125,12 +125,15 @@ defmodule CodexPooler.Accounting.UsageReadModel do
           &(&1.limit_type == "credits" and &1.limit_window == "daily" and is_nil(&1.model_filter))
         )
 
-      {:ok,
-       %{
-         plan_type: "api_key",
-         rate_limit: UsageResponses.codex_rate_limit(primary, nil),
-         credits: UsageResponses.codex_credits(primary, nil)
-       }}
+      credits = UsageResponses.codex_credits(primary, nil)
+
+      usage =
+        %{
+          plan_type: "api_key",
+          rate_limit: UsageResponses.codex_rate_limit(primary, nil)
+        }
+
+      {:ok, if(is_nil(credits), do: usage, else: Map.put(usage, :credits, credits))}
     end
   end
 

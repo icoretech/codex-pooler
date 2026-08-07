@@ -107,11 +107,7 @@ defmodule CodexPooler.Accounting.UsageResponses do
         }
 
       true ->
-        %{
-          has_credits: codex_limit_allowed?(preferred),
-          unlimited: false,
-          balance: nil
-        }
+        nil
     end
   end
 
