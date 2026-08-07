@@ -322,6 +322,12 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
                 <p class="mt-1 text-sm text-base-content/60">
                   Current policy state and the network address recorded for this authenticated session.
                 </p>
+                <p
+                  id="system-runtime-firewall-scope"
+                  class="mt-2 text-xs text-base-content/60"
+                >
+                  Covers compatibility routes and /mcp. /metrics uses its separate bearer boundary.
+                </p>
               </div>
 
               <dl class="grid min-w-0 gap-3 sm:grid-cols-2 md:min-w-[22rem]">

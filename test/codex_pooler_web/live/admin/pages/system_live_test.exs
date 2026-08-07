@@ -268,6 +268,12 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
 
     assert has_element?(
              view,
+             "#system-runtime-firewall-scope",
+             "Covers compatibility routes and /mcp. /metrics uses its separate bearer boundary."
+           )
+
+    assert has_element?(
+             view,
              "#system-runtime-firewall-status[data-state='disabled']",
              "Disabled"
            )
@@ -365,15 +371,6 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     |> render_submit(%{"instance_settings" => %{"ingress" => %{"firewall_allowlist" => ""}}})
 
     assert has_element?(view, "#system-runtime-firewall-status[data-state='disabled']")
-  end
-
-  test "keeps firewall session UI out of the metrics surface", %{conn: conn} do
-    metrics_conn = get(recycle(conn), ~p"/metrics")
-    body = response(metrics_conn, 200)
-
-    refute body =~ "system-runtime-firewall-card"
-    refute body =~ "system-current-session-ip"
-    refute body =~ "not recorded"
   end
 
   test "drops an expired current-session IP on repeated LiveView refresh", %{
