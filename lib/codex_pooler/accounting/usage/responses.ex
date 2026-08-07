@@ -81,11 +81,14 @@ defmodule CodexPooler.Accounting.UsageResponses do
 
   @spec codex_rate_limit(map() | nil, map() | nil) :: map()
   def codex_rate_limit(primary, secondary) do
-    preferred = secondary || primary
+    allowed =
+      [primary, secondary]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.all?(&codex_limit_allowed?/1)
 
     %{
-      allowed: is_nil(preferred) or codex_limit_allowed?(preferred),
-      limit_reached: not is_nil(preferred) and not codex_limit_allowed?(preferred),
+      allowed: allowed,
+      limit_reached: not allowed,
       primary_window: codex_window_snapshot(primary),
       secondary_window: codex_window_snapshot(secondary)
     }

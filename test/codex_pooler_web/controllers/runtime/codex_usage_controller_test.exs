@@ -428,6 +428,138 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
     assert is_nil(log.upstream_account_email)
   end
 
+  test "Codex rate-limit output keeps absent and jointly healthy windows allowed" do
+    assert %{
+             allowed: true,
+             limit_reached: false,
+             primary_window: nil,
+             secondary_window: nil
+           } = UsageResponses.codex_rate_limit(nil, nil)
+
+    primary = %{
+      remaining_value: 1,
+      max_value: nil,
+      current_value: nil,
+      used_percent: 12,
+      reset_at: nil,
+      limit_window: "5h"
+    }
+
+    secondary = %{
+      remaining_value: 1,
+      max_value: nil,
+      current_value: nil,
+      used_percent: 40,
+      reset_at: nil,
+      limit_window: "7d"
+    }
+
+    assert %{
+             allowed: true,
+             limit_reached: false,
+             primary_window: %{used_percent: 12},
+             secondary_window: %{used_percent: 40}
+           } = UsageResponses.codex_rate_limit(primary, secondary)
+  end
+
+  test "additional Codex rate limits require every emitted window to allow" do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    primary = %AccountQuotaWindow{
+      quota_key: "codex_spark",
+      window_kind: "primary",
+      window_minutes: 300,
+      used_percent: Decimal.new("100"),
+      reset_at: DateTime.add(now, 5, :hour),
+      source: "test",
+      freshness_state: "fresh",
+      observed_at: now
+    }
+
+    secondary = %AccountQuotaWindow{
+      quota_key: "codex_spark",
+      window_kind: "secondary",
+      window_minutes: 10_080,
+      used_percent: Decimal.new("40"),
+      reset_at: DateTime.add(now, 7, :day),
+      source: "test",
+      freshness_state: "fresh",
+      observed_at: now
+    }
+
+    assert [
+             %{
+               quota_key: "codex_spark",
+               rate_limit: %{
+                 allowed: false,
+                 limit_reached: true,
+                 primary_window: %{used_percent: 100},
+                 secondary_window: %{used_percent: 40}
+               }
+             }
+           ] = UsageResponses.additional_codex_rate_limits([primary, secondary], now)
+  end
+
+  test "GET /api/codex/usage requires every account rate-limit window to allow", %{conn: conn} do
+    pool = pool_fixture()
+    account_id = "two-window-account-#{System.unique_integer([:positive])}"
+    token = "two-window-token-#{System.unique_integer([:positive])}"
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        chatgpt_account_id: account_id,
+        plan_family: "pro"
+      })
+
+    assert {:ok, _secret} =
+             Upstreams.store_encrypted_secret(identity, %{
+               secret_kind: "access_token",
+               plaintext: token
+             })
+
+    assert {:ok, _windows} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               %{
+                 window_kind: "primary",
+                 window_minutes: 300,
+                 used_percent: Decimal.new("100"),
+                 reset_at: DateTime.add(now, 5, :hour),
+                 source: "codex_usage_api",
+                 source_precision: "observed",
+                 freshness_state: "fresh",
+                 last_sync_at: now,
+                 observed_at: now
+               },
+               %{
+                 window_kind: "secondary",
+                 window_minutes: 10_080,
+                 used_percent: Decimal.new("40"),
+                 reset_at: DateTime.add(now, 7, :day),
+                 source: "codex_usage_api",
+                 source_precision: "observed",
+                 freshness_state: "fresh",
+                 last_sync_at: now,
+                 observed_at: now
+               }
+             ])
+
+    conn =
+      conn
+      |> put_req_header("authorization", "Bearer #{token}")
+      |> put_req_header("chatgpt-account-id", account_id)
+      |> get("/api/codex/usage")
+
+    assert %{
+             "rate_limit" => %{
+               "allowed" => false,
+               "limit_reached" => true,
+               "primary_window" => %{"used_percent" => 100},
+               "secondary_window" => %{"used_percent" => 40}
+             }
+           } = json_response(conn, 200)
+  end
+
   test "GET /api/codex/usage ChatGPT token branch returns only that account usage", %{conn: conn} do
     pool = pool_fixture()
 
