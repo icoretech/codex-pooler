@@ -3,7 +3,18 @@ title: Monitoring and runtime triage
 description: Collect Prometheus metrics, use Grafana dashboards, and investigate Codex Pooler production runtime pressure without exposing request content.
 ---
 
-Codex Pooler exposes Prometheus metrics at `/metrics`. Metrics auth is managed from `/admin/system`; if a bearer token is configured, Prometheus must scrape with the matching Kubernetes Secret reference instead of putting the raw token in Helm values.
+Codex Pooler exposes Prometheus metrics at `/metrics`. Metrics auth is managed from `/admin/system`; when bearer protection is configured, Prometheus must use the matching Kubernetes Secret reference rather than placing the credential in Helm values. `/metrics` is not protected by the runtime firewall.
+
+## Metrics exposure states
+
+The endpoint has exactly three states:
+
+- **Open**: no metrics bearer is configured, so scrapes are allowed without it
+- **Bearer-protected**: a metrics bearer is configured, so Prometheus must provide it
+- **Unavailable**: metrics settings cannot be read, so `/metrics` fails closed
+
+Restore the previous metrics bearer state in `/admin/system` to roll back a
+metrics exposure change.
 
 Use monitoring for runtime evidence only. Dashboards, alerts, logs, tickets, and copied queries must not include prompts, response bodies, uploaded files, websocket frames, cookies, bearer tokens, upstream secrets, or raw Pool API keys.
 

@@ -114,12 +114,12 @@ Secret settings stay write-only in the UI. For example, metrics bearer material 
 
 ### Forwarded client IP policy
 
-The runtime firewall applies to runtime API families and the operator MCP
-endpoint. An empty client allowlist disables it. When the allowlist is set, use
-exact client IPs or CIDRs. `trusted_proxies` is a prerequisite for forwarding:
-list only the immediate proxy IPs or CIDRs allowed to supply a client address.
-If the directly connected peer is not trusted, every forwarded header is ignored
-and the peer address is evaluated instead.
+The runtime firewall applies only to runtime compatibility routes and `/mcp`,
+not `/metrics`. An empty client allowlist disables it. When the allowlist is
+set, use exact client IPs or CIDRs. `trusted_proxies` is a prerequisite for
+forwarding: list only the immediate proxy IPs or CIDRs allowed to supply a
+client address. If the directly connected peer is not trusted, every forwarded
+field is ignored and the peer address is evaluated instead.
 
 The policy has three sources and one default:
 
@@ -135,7 +135,8 @@ the first nontrusted address. At depth `1..16`, it selects the positional entry
 instead: Depth `2` selects the second XFF entry from the right. The directly
 connected peer counts toward the configured proxy depth, but is not an XFF entry.
 Duplicate XFF field occurrences are combined in wire order before this selection.
-There is no mixed-header fallback: the selected source is authoritative.
+There is no mixed-header fallback: the selected source is authoritative. The
+result is one bounded client identity for that request.
 
 Forwarded addresses accept IPv4, IPv6, bracketed IPv6, and optional decimal ports
 from `1` through `65535`. Values are bounded to 64 printable ASCII bytes after
@@ -153,6 +154,15 @@ code `1008`.
 
 Firewall denials emit `codex_pooler_ingress_firewall_denied_count` with only
 `scope` and `reason` labels. They occur before authenticated request accounting.
+
+Metrics uses a separate bearer boundary: it is **open** with no configured
+metrics bearer, **bearer-protected** when configured, and **unavailable**
+fail-closed when its settings cannot be read. The runtime firewall does not
+protect `/metrics`.
+
+The System page shows only the signed-in operator's current active, unexpired
+browser session IP. It is not an inventory of other sessions; use Settings to
+review those sessions.
 
 Paths are decoded once for classification. Unsafe decoded candidates on runtime
 and MCP routes receive fixed, sanitized invalid-path responses before
@@ -187,6 +197,10 @@ Both settings default to `1_800_000` ms and accept `60_000..3_600_000` ms. Each 
 A longer owner-retention window can improve the chance of reusing an upstream connection, but keeps owner processes and connections allocated longer after clients detach. A shorter window releases those resources sooner, with less opportunity for reuse. To roll back a change, restore the previous value in the admin UI. New and recovered owners use the restored value; replace existing owners as part of the rollback only when immediate convergence is required.
 
 During a mixed-release transition, owners started by the previous release retain the legacy five-minute behavior and do not provide upstream connection lifecycle metadata. Owners started or recovered by the current release use the 30-minute default. Native websocket attachment remains compatible with previous-release owners, while an HTTP-to-websocket bridge that needs the option-carrying attachment fails closed to plain HTTP when its owner is still on the previous release.
+
+To roll back an ingress policy change, restore the previous allowlist and
+trusted-proxy settings in the admin UI. New requests use the restored snapshot;
+a websocket already revoked by the prior policy must reconnect.
 
 ## Runtime URLs
 

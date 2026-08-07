@@ -42,6 +42,12 @@ compatibility. Codex Pooler is a model-provider runtime boundary, not an
 account, analytics, thread-goal, memory, search, realtime, safety, identity, or
 reset-credit proxy.
 
+Pruned app-server helper candidates are not supported routes. Do not describe
+their fixed HTML `404` as unconditional: ingress evaluates settings availability
+and the runtime firewall first. An admitted or firewall-disabled request receives
+the fixed `404`; a denial or unavailable settings state uses the corresponding
+runtime ingress response instead.
+
 ### `/v1`
 
 Use `OpenAI-compatible /v1 surface` only with the qualifier `narrow compatibility`. The `/v1` surface translates supported requests into Codex-compatible work, then sends them through the same Pool routing, limit checks, account selection, and accounting path. It is not full OpenAI API parity.
@@ -270,6 +276,18 @@ The source map for this claim is
 `test/codex_pooler_web/plugs/runtime_ingress/forwarded_client_ip_test.exs`, and
 `test/codex_pooler_web/controllers/runtime/backend_codex_websocket_test.exs`.
 
+## Metrics and operator-session boundaries
+
+`/metrics` is outside the runtime firewall. Public operator docs may describe
+only its three states: **open** when no metrics bearer is configured,
+**bearer-protected** when one is configured, and **unavailable** when settings
+cannot be read and the endpoint fails closed. Do not imply that the runtime
+firewall protects metrics.
+
+The System page may be described as showing only the signed-in operator's
+current active, unexpired browser-session IP. It is not a session inventory and
+must not expose other-session provenance.
+
 ## Source Map For Public Route Claims
 
 Use these tracked sources as the source of truth for public route claims. Do not promote claims from ignored root `docs/` material or internal runbooks unless the claim is also present in a tracked source below.
@@ -278,6 +296,8 @@ Use these tracked sources as the source of truth for public route claims. Do not
 | --- | --- | --- |
 | Root route split | `lib/codex_pooler_web/router.ex`, `test/codex_pooler_web/route_surface_test.exs` | `/backend-api`, `/v1`, `/mcp`, browser auth, admin LiveViews, usage, health, and metrics are separate route families |
 | Runtime ingress firewall and limits | `lib/codex_pooler_web/plugs/runtime_ingress.ex`, `lib/codex_pooler_web/plugs/runtime_ingress/path.ex`, `lib/codex_pooler_web/plugs/runtime_ingress/forwarded_client_ip.ex`, `lib/codex_pooler_web/plugs/runtime_ingress/firewall.ex`, `test/codex_pooler_web/plugs/runtime_ingress_test.exs`, `test/codex_pooler_web/plugs/runtime_ingress/path_test.exs`, `test/codex_pooler_web/plugs/runtime_ingress/forwarded_client_ip_test.exs` | Runtime and MCP ingress use one decoded path view, one settings snapshot, and one bounded client-IP resolution. Trusted forwarding is right-to-left and fail-closed for malformed or over-bound runtime/MCP input; non-runtime routes retain the peer. Compressed JSON and the four exact image actions are guarded before body parsing. |
+| Metrics and current-session status | `lib/codex_pooler_web/controllers/operations/metrics_controller.ex`, `lib/codex_pooler_web/live/admin/components/pages/system/page_components/metrics.ex`, `lib/codex_pooler_web/live/admin/pages/system_live.ex`, `test/codex_pooler_web/live/admin/pages/system_live_test.exs` | `/metrics` has separate open, bearer-protected, and unavailable fail-closed states outside the runtime firewall. The System page shows only the signed-in operator's current active, unexpired browser-session IP. |
+| Pruned app-server helper candidates | `lib/codex_pooler_web/plugs/runtime_ingress/path.ex`, `test/support/compatibility_matrix.ex`, `test/codex_pooler_web/plugs/runtime_ingress_test.exs` | Pruned helper candidates remain unsupported and preserve their fixed `404` only after settings and firewall admission; they never authenticate, parse a body, dispatch upstream work, reserve capacity, or create accounting. |
 | Backend Codex routes | `lib/codex_pooler_web/router.ex`, `test/support/compatibility_matrix.ex`, `test/codex_pooler_web/controllers/runtime/compatibility_contract_test.exs` | `/backend-api/codex/*` is explicit authenticated Codex backend compatibility, not wildcard proxy |
 | Native backend image routes | `lib/codex_pooler_web/router.ex`, `test/support/compatibility_matrix.ex`, `test/codex_pooler_web/controllers/runtime/compatibility_contract_test.exs`, `test/codex_pooler_web/controllers/runtime/backend_codex_controller_test.exs` | Exact native image generation and edit routes may route any policy-authorized effective image model that is genuinely absent from the Pool catalog through eligible visible host capacity while preserving that effective identifier. Catalog-present invisible targets remain invalid, and this does not change public `/v1` image translation |
 | Backend file bridge | `lib/codex_pooler_web/router.ex`, `test/support/compatibility_matrix.ex`, `test/codex_pooler_web/controllers/runtime/compatibility_contract_test.exs` | `/backend-api/files` stores metadata only and returns upstream upload or download URLs. Bytes are not stored locally |

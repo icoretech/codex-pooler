@@ -119,7 +119,7 @@ The migration hook runs database migrations and imports the vendored OpenAI pric
 
 ## Metrics collection
 
-The app role exposes Prometheus metrics on `/metrics` through the same HTTP service as `/healthz` and `/readyz`. Worker, scheduler, and migration pods don't expose the HTTP endpoint, so app-level metrics such as BEAM memory, request rate, route latency, gateway admission, stream-buffer pressure, and Ecto query pressure are scraped from app pods only. Worker and scheduler roles still run the memory sampler and VM telemetry poller, but they don't start the Prometheus reporter because unswept histogram samples are drained only by a `/metrics` scrape.
+The app role exposes Prometheus metrics on `/metrics` through the same HTTP service as `/healthz` and `/readyz`. Metrics authentication is separate from the runtime firewall: the endpoint is open with no configured bearer, bearer-protected when configured, and unavailable fail-closed when metrics settings cannot be read. Worker, scheduler, and migration pods don't expose the HTTP endpoint, so app-level metrics such as BEAM memory, request rate, route latency, gateway admission, stream-buffer pressure, and Ecto query pressure are scraped from app pods only. Worker and scheduler roles still run the memory sampler and VM telemetry poller, but they don't start the Prometheus reporter because unswept histogram samples are drained only by a `/metrics` scrape.
 
 If you run Prometheus Operator, enable the chart `ServiceMonitor`:
 
@@ -147,7 +147,7 @@ monitoring:
       key: token
 ```
 
-Don't put the raw metrics token in Helm values. The app stores only a keyed digest, so the token must be saved separately at creation time if Prometheus will authenticate with it.
+Don't put the metrics credential in Helm values. The app stores only a keyed digest, so retain the credential separately at creation time if Prometheus will authenticate with it. To roll back a metrics exposure change, restore the intended bearer state in `/admin/system` and keep the ServiceMonitor reference aligned.
 
 Render the monitoring resource before installing:
 
