@@ -604,6 +604,33 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       assert %{"plan_type" => "api_key"} = json_response(conn, 200)
     end
 
+    test "honors configured positional x-forwarded-for depth", %{conn: conn} do
+      setup_runtime_ingress(%OperationalSettings{
+        firewall_allowlist: ["203.0.113.10"],
+        trusted_proxies: ["10.0.0.1"],
+        forwarded_client_ip_source: :x_forwarded_for,
+        forwarded_proxy_depth: 2
+      })
+
+      setup = active_api_key_fixture()
+
+      conn =
+        conn
+        |> remote_ip({10, 0, 0, 1})
+        |> put_req_header("x-forwarded-for", "203.0.113.10, 10.0.0.1")
+        |> put_req_header("authorization", setup.authorization)
+        |> get("/api/codex/usage")
+
+      assert %{"plan_type" => "api_key"} = json_response(conn, 200)
+      assert conn.remote_ip == {203, 0, 113, 10}
+
+      assert %Resolution{
+               status: :ok,
+               source: :x_forwarded_for,
+               inspected_hops: 2
+             } = conn.private[:codex_pooler_client_ip_resolution]
+    end
+
     test "ignores spoof-prepended forwarded hops from trusted proxies", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{
         firewall_allowlist: ["198.51.100.77"],
@@ -1316,6 +1343,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
                "ingress" => %{
                  "firewall_allowlist" => settings.firewall_allowlist,
                  "trusted_proxies" => settings.trusted_proxies,
+                 "forwarded_client_ip_source" => settings.forwarded_client_ip_source,
+                 "forwarded_proxy_depth" => settings.forwarded_proxy_depth,
                  "decompression_algorithms" => settings.decompression_algorithms,
                  "max_compressed_body_bytes" => settings.max_compressed_body_bytes,
                  "max_decompressed_body_bytes" => settings.max_decompressed_body_bytes,

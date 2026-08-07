@@ -129,6 +129,47 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
 
       assert json_rpc_error(denied_conn, 403)["error"]["message"] == "client IP is not allowed"
     end
+
+    test "x-real-ip policy ignores x-forwarded-for and rejects duplicate selected fields", %{
+      conn: conn,
+      user: user
+    } do
+      attach_firewall_denial_handler()
+      raw_token = enabled_mcp_token!(user)
+
+      setup_runtime_ingress(%OperationalSettings{
+        firewall_allowlist: ["203.0.113.10"],
+        trusted_proxies: ["10.0.0.1"],
+        forwarded_client_ip_source: :x_real_ip
+      })
+
+      allowed_conn =
+        conn
+        |> remote_ip({10, 0, 0, 1})
+        |> put_req_header("x-forwarded-for", <<255, 0, 44>>)
+        |> put_req_header("x-real-ip", "203.0.113.10")
+        |> authenticated_json_rpc_conn(raw_token)
+        |> post("/mcp", Jason.encode!(initialize_request()))
+
+      assert json_response(allowed_conn, 200)["result"]["protocolVersion"] == @mcp_version
+      refute_received {@firewall_denied_event, _measurements, _metadata}
+
+      denied_conn =
+        conn
+        |> recycle()
+        |> remote_ip({10, 0, 0, 1})
+        |> put_req_header("x-real-ip", "203.0.113.10")
+        |> then(&%{&1 | req_headers: &1.req_headers ++ [{"x-real-ip", "198.51.100.20"}]})
+        |> json_rpc_conn()
+        |> post("/mcp", Jason.encode!(initialize_request()))
+
+      assert json_rpc_error(denied_conn, 403)["error"]["message"] == "client IP is not allowed"
+
+      assert_received {@firewall_denied_event, %{count: 1},
+                       %{scope: "mcp", reason: "duplicate_x_real_ip"}}
+
+      refute_received {@firewall_denied_event, _measurements, _metadata}
+    end
   end
 
   describe "MCP body parser ingress" do
@@ -260,6 +301,8 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
                "ingress" => %{
                  "firewall_allowlist" => settings.firewall_allowlist,
                  "trusted_proxies" => settings.trusted_proxies,
+                 "forwarded_client_ip_source" => settings.forwarded_client_ip_source,
+                 "forwarded_proxy_depth" => settings.forwarded_proxy_depth,
                  "decompression_algorithms" => settings.decompression_algorithms,
                  "max_compressed_body_bytes" => settings.max_compressed_body_bytes,
                  "max_decompressed_body_bytes" => settings.max_decompressed_body_bytes,

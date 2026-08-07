@@ -40,7 +40,16 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIP do
   end
 
   @spec resolve(Plug.Conn.t(), OperationalSettings.t()) :: Resolution.t()
+  def resolve(%Plug.Conn{remote_ip: peer_ip}, %OperationalSettings{
+        forwarded_client_ip_source: :peer,
+        forwarded_proxy_depth: 0
+      }) do
+    success(peer_ip, peer_ip, :peer, 0)
+  end
+
   def resolve(%Plug.Conn{remote_ip: peer_ip} = conn, %OperationalSettings{
+        forwarded_client_ip_source: source,
+        forwarded_proxy_depth: depth,
         trusted_proxies_compiled: compiled_rules
       }) do
     case compiled_rules do
@@ -48,35 +57,50 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIP do
         error(peer_ip, :invalid_trusted_proxy_rules, 0)
 
       {:ok, trusted_rules} ->
-        resolve_with_rules(conn, peer_ip, trusted_rules)
+        resolve_with_rules(conn, peer_ip, source, depth, trusted_rules)
     end
   end
 
-  defp resolve_with_rules(conn, peer_ip, trusted_rules) do
+  defp resolve_with_rules(conn, peer_ip, source, depth, trusted_rules) do
     if IPRules.allowed?(peer_ip, trusted_rules) do
-      resolve_forwarded(conn, peer_ip, trusted_rules)
+      resolve_forwarded(conn, peer_ip, source, depth, trusted_rules)
     else
       success(peer_ip, peer_ip, :peer, 0)
     end
   end
 
-  defp resolve_forwarded(conn, peer_ip, trusted_rules) do
+  defp resolve_forwarded(conn, peer_ip, :x_forwarded_for, 0, trusted_rules) do
     case Plug.Conn.get_req_header(conn, "x-forwarded-for") do
-      [] -> resolve_x_real_ip(conn, peer_ip)
+      [] -> error(peer_ip, :forwarded_header_missing, 0)
       values -> values |> xff_states() |> resolve_xff(peer_ip, trusted_rules, 0)
     end
+  end
+
+  defp resolve_forwarded(conn, peer_ip, :x_forwarded_for, depth, _trusted_rules)
+       when depth in 1..16 do
+    conn
+    |> Plug.Conn.get_req_header("x-forwarded-for")
+    |> xff_states()
+    |> resolve_xff_position(peer_ip, depth, 0)
+  end
+
+  defp resolve_forwarded(conn, peer_ip, :x_real_ip, 0, _trusted_rules) do
+    resolve_x_real_ip(conn, peer_ip)
   end
 
   defp resolve_x_real_ip(conn, peer_ip) do
     case Plug.Conn.get_req_header(conn, "x-real-ip") do
       [] ->
-        success(peer_ip, peer_ip, :peer, 0)
+        error(peer_ip, :forwarded_header_missing, 0)
 
-      [value | _rest] ->
+      [value] ->
         case read_single_entry(value) do
           {:ok, entry} -> resolve_x_real_ip_entry(entry, peer_ip)
           {:error, reason} -> error(peer_ip, reason, 1)
         end
+
+      _duplicates ->
+        error(peer_ip, :duplicate_x_real_ip, 0)
     end
   end
 
@@ -129,6 +153,63 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIP do
     else
       success(peer_ip, client_ip, :x_forwarded_for, inspected_hops)
     end
+  end
+
+  defp resolve_xff_position([], peer_ip, _remaining_position, inspected_hops) do
+    error(peer_ip, :forwarded_depth_unsatisfied, inspected_hops)
+  end
+
+  defp resolve_xff_position(states, peer_ip, remaining_position, inspected_hops) do
+    inspected_hops = inspected_hops + 1
+
+    case pop_rightmost_entry(states) do
+      {:ok, entry, remaining_states} ->
+        resolve_xff_position_entry(
+          parse_entry(entry),
+          remaining_states,
+          peer_ip,
+          remaining_position,
+          inspected_hops
+        )
+
+      {:error, reason} ->
+        error(peer_ip, reason, inspected_hops)
+    end
+  end
+
+  defp resolve_xff_position_entry(
+         {:ok, client_ip},
+         _remaining_states,
+         peer_ip,
+         1,
+         inspected_hops
+       ) do
+    success(peer_ip, client_ip, :x_forwarded_for, inspected_hops)
+  end
+
+  defp resolve_xff_position_entry(
+         {:ok, _skipped_ip},
+         remaining_states,
+         peer_ip,
+         remaining_position,
+         inspected_hops
+       ) do
+    resolve_xff_position(
+      remaining_states,
+      peer_ip,
+      remaining_position - 1,
+      inspected_hops
+    )
+  end
+
+  defp resolve_xff_position_entry(
+         {:error, reason},
+         _remaining_states,
+         peer_ip,
+         _remaining_position,
+         inspected_hops
+       ) do
+    error(peer_ip, reason, inspected_hops)
   end
 
   defp pop_rightmost_entry([{value, end_index} | rest]) do

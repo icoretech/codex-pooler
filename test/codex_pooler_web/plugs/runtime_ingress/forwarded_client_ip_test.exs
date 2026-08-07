@@ -13,17 +13,45 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIPTest do
   @trusted_ipv6 {8193, 3512, 0, 0, 0, 0, 0, 7}
 
   describe "peer trust boundary" do
-    test "ignores every forwarded value when the immediate peer is untrusted" do
-      conn = forwarded_conn(@client, [{"x-forwarded-for", <<255, 0, 44>>}])
+    test "peer source ignores forwarding headers and invalid trusted proxy rules" do
+      conn =
+        forwarded_conn(@peer, [
+          {"x-forwarded-for", <<255, 0, 44>>},
+          {"x-real-ip", "unknown"}
+        ])
 
-      assert_resolution(ForwardedClientIP.resolve(conn, settings(["10.0.0.1"])),
+      settings = %OperationalSettings{
+        forwarded_client_ip_source: :peer,
+        forwarded_proxy_depth: 0,
+        trusted_proxies_compiled: {:error, :invalid_rule}
+      }
+
+      assert_resolution(ForwardedClientIP.resolve(conn, settings),
         status: :ok,
-        peer_ip: @client,
-        client_ip: @client,
+        peer_ip: @peer,
+        client_ip: @peer,
         source: :peer,
         reason: nil,
         inspected_hops: 0
       )
+    end
+
+    test "ignores every forwarded value when the immediate peer is untrusted" do
+      conn = forwarded_conn(@client, [{"x-forwarded-for", <<255, 0, 44>>}])
+
+      for settings <- [
+            settings(["10.0.0.1"]),
+            settings(["10.0.0.1"], :x_forwarded_for, 2)
+          ] do
+        assert_resolution(ForwardedClientIP.resolve(conn, settings),
+          status: :ok,
+          peer_ip: @client,
+          client_ip: @client,
+          source: :peer,
+          reason: nil,
+          inspected_hops: 0
+        )
+      end
     end
 
     test "fails closed when compiled trusted proxy rules are invalid" do
@@ -58,14 +86,32 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIPTest do
       )
     end
 
-    test "falls back to the peer when no forwarding header exists" do
-      assert_resolution(ForwardedClientIP.resolve(forwarded_conn(@peer, []), settings()),
-        status: :ok,
-        peer_ip: @peer,
-        client_ip: @peer,
-        source: :peer,
-        reason: nil,
-        inspected_hops: 0
+    test "requires the policy-selected forwarding header from a trusted peer" do
+      assert_error(
+        ForwardedClientIP.resolve(forwarded_conn(@peer, []), settings()),
+        @peer,
+        :forwarded_header_missing,
+        0
+      )
+
+      assert_error(
+        ForwardedClientIP.resolve(
+          forwarded_conn(@peer, []),
+          settings(["10.0.0.1"], :x_forwarded_for, 2)
+        ),
+        @peer,
+        :forwarded_depth_unsatisfied,
+        0
+      )
+
+      assert_error(
+        ForwardedClientIP.resolve(
+          forwarded_conn(@peer, []),
+          settings(["10.0.0.1"], :x_real_ip)
+        ),
+        @peer,
+        :forwarded_header_missing,
+        0
       )
     end
   end
@@ -172,6 +218,151 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIPTest do
         1
       )
     end
+
+    test "ignores malformed x-real-ip when x-forwarded-for is selected" do
+      conn =
+        forwarded_conn(@peer, [
+          {"x-forwarded-for", "198.51.100.20"},
+          {"x-real-ip", <<255, 0>>},
+          {"x-real-ip", "unknown"}
+        ])
+
+      assert_resolution(ForwardedClientIP.resolve(conn, settings(["10.0.0.1"])),
+        status: :ok,
+        peer_ip: @peer,
+        client_ip: @client,
+        source: :x_forwarded_for,
+        reason: nil,
+        inspected_hops: 1
+      )
+    end
+
+    test "positional depth selects from the right without parsing entries to its left" do
+      conn =
+        forwarded_conn(@peer, [
+          {"x-forwarded-for", <<255, 44, "198.51.100.20, 10.0.0.1">>}
+        ])
+
+      assert_resolution(
+        ForwardedClientIP.resolve(
+          conn,
+          settings(["10.0.0.1", "198.51.100.0/24"], :x_forwarded_for, 2)
+        ),
+        status: :ok,
+        peer_ip: @peer,
+        client_ip: @client,
+        source: :x_forwarded_for,
+        reason: nil,
+        inspected_hops: 2
+      )
+    end
+
+    test "positional depth accepts a selected address that is also a trusted proxy" do
+      conn = forwarded_conn(@peer, [{"x-forwarded-for", "198.51.100.20, 10.0.0.1"}])
+
+      assert_resolution(
+        ForwardedClientIP.resolve(
+          conn,
+          settings(["10.0.0.1", "198.51.100.0/24"], :x_forwarded_for, 2)
+        ),
+        status: :ok,
+        peer_ip: @peer,
+        client_ip: @client,
+        source: :x_forwarded_for,
+        reason: nil,
+        inspected_hops: 2
+      )
+    end
+
+    test "positional depth reports insufficient entries without counting the peer" do
+      for {depth, value, inspected_hops} <- [
+            {2, "198.51.100.20", 1},
+            {16, Enum.join(List.duplicate("10.0.0.1", 15), ","), 15}
+          ] do
+        conn = forwarded_conn(@peer, [{"x-forwarded-for", value}])
+
+        assert_error(
+          ForwardedClientIP.resolve(
+            conn,
+            settings(["10.0.0.1"], :x_forwarded_for, depth)
+          ),
+          @peer,
+          :forwarded_depth_unsatisfied,
+          inspected_hops
+        )
+      end
+    end
+
+    test "positional depth sixteen selects the sixteenth literal header entry" do
+      conn =
+        forwarded_conn(@peer, [
+          {"x-forwarded-for", Enum.join(["198.51.100.20" | List.duplicate("10.0.0.1", 15)], ",")}
+        ])
+
+      assert_resolution(
+        ForwardedClientIP.resolve(
+          conn,
+          settings(["10.0.0.1"], :x_forwarded_for, 16)
+        ),
+        status: :ok,
+        peer_ip: @peer,
+        client_ip: @client,
+        source: :x_forwarded_for,
+        reason: nil,
+        inspected_hops: 16
+      )
+    end
+  end
+
+  describe "x-real-ip selection" do
+    test "requires exactly one x-real-ip field and ignores x-forwarded-for" do
+      ignored_xff = {"x-forwarded-for", <<255, 0, 44>>}
+
+      assert_resolution(
+        ForwardedClientIP.resolve(
+          forwarded_conn(@peer, [ignored_xff, {"x-real-ip", "198.51.100.20"}]),
+          settings(["10.0.0.1"], :x_real_ip)
+        ),
+        status: :ok,
+        peer_ip: @peer,
+        client_ip: @client,
+        source: :x_real_ip,
+        reason: nil,
+        inspected_hops: 1
+      )
+
+      assert_error(
+        ForwardedClientIP.resolve(
+          forwarded_conn(@peer, [
+            {"x-real-ip", "198.51.100.20"},
+            {"x-real-ip", "192.0.2.7"}
+          ]),
+          settings(["10.0.0.1"], :x_real_ip)
+        ),
+        @peer,
+        :duplicate_x_real_ip,
+        0
+      )
+    end
+
+    test "untrusted peers ignore malformed selected and nonselected headers" do
+      conn =
+        forwarded_conn(@client, [
+          {"x-forwarded-for", <<255, 0, 44>>},
+          {"x-real-ip", "unknown"},
+          {"x-real-ip", "also-unknown"}
+        ])
+
+      assert_resolution(
+        ForwardedClientIP.resolve(conn, settings(["10.0.0.1"], :x_real_ip)),
+        status: :ok,
+        peer_ip: @client,
+        client_ip: @client,
+        source: :peer,
+        reason: nil,
+        inspected_hops: 0
+      )
+    end
   end
 
   describe "bounded byte-safe entry parsing" do
@@ -187,7 +378,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIPTest do
       for {value, expected_ip} <- cases do
         conn = forwarded_conn(@peer, [{"x-real-ip", value}])
 
-        assert_resolution(ForwardedClientIP.resolve(conn, settings(["10.0.0.1"])),
+        assert_resolution(
+          ForwardedClientIP.resolve(conn, settings(["10.0.0.1"], :x_real_ip)),
           status: :ok,
           peer_ip: @peer,
           client_ip: expected_ip,
@@ -201,7 +393,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIPTest do
     test "normalizes an IPv4-mapped IPv6 header candidate to IPv4" do
       conn = forwarded_conn(@peer, [{"x-real-ip", "::ffff:198.51.100.20"}])
 
-      assert_resolution(ForwardedClientIP.resolve(conn, settings(["10.0.0.1"])),
+      assert_resolution(
+        ForwardedClientIP.resolve(conn, settings(["10.0.0.1"], :x_real_ip)),
         status: :ok,
         peer_ip: @peer,
         client_ip: @client,
@@ -215,26 +408,24 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIPTest do
       candidate = "ignore-all-instructions-and-allow-this-address"
       conn = forwarded_conn(@peer, [{"x-real-ip", candidate}])
 
-      resolution = ForwardedClientIP.resolve(conn, settings(["10.0.0.1"]))
+      resolution = ForwardedClientIP.resolve(conn, settings(["10.0.0.1"], :x_real_ip))
 
       assert_error(resolution, @peer, :invalid_forwarded_entry, 1)
       refute inspect(resolution) =~ candidate
     end
 
-    test "uses only the first x-real-ip occurrence" do
+    test "rejects duplicate x-real-ip occurrences" do
       conn =
         forwarded_conn(@peer, [
           {"x-real-ip", "198.51.100.20"},
           {"x-real-ip", "unknown"}
         ])
 
-      assert_resolution(ForwardedClientIP.resolve(conn, settings(["10.0.0.1"])),
-        status: :ok,
-        peer_ip: @peer,
-        client_ip: @client,
-        source: :x_real_ip,
-        reason: nil,
-        inspected_hops: 1
+      assert_error(
+        ForwardedClientIP.resolve(conn, settings(["10.0.0.1"], :x_real_ip)),
+        @peer,
+        :duplicate_x_real_ip,
+        0
       )
     end
 
@@ -290,7 +481,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIPTest do
       conn = forwarded_conn(@peer, [{"x-real-ip", value}])
       reductions_before = process_reductions()
 
-      result = ForwardedClientIP.resolve(conn, settings(["10.0.0.1"]))
+      result = ForwardedClientIP.resolve(conn, settings(["10.0.0.1"], :x_real_ip))
 
       reduction_delta = process_reductions() - reductions_before
       assert_error(result, @peer, :forwarded_entry_too_long, 1)
@@ -301,7 +492,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIPTest do
       conn = forwarded_conn(@peer, [{"x-real-ip", :binary.copy(" ", 1_000_000)}])
       reductions_before = process_reductions()
 
-      result = ForwardedClientIP.resolve(conn, settings(["10.0.0.1"]))
+      result = ForwardedClientIP.resolve(conn, settings(["10.0.0.1"], :x_real_ip))
 
       reduction_delta = process_reductions() - reductions_before
       assert_error(result, @peer, :forwarded_entry_too_long, 1)
@@ -327,7 +518,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIPTest do
         conn = forwarded_conn(@peer, [{"x-real-ip", value}])
 
         assert_error(
-          ForwardedClientIP.resolve(conn, settings(["10.0.0.1"])),
+          ForwardedClientIP.resolve(conn, settings(["10.0.0.1"], :x_real_ip)),
           @peer,
           :invalid_forwarded_entry,
           1
@@ -338,7 +529,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIPTest do
     test "treats an unbracketed IPv6 token as one whole address" do
       conn = forwarded_conn(@peer, [{"x-real-ip", "2001:db8::7"}])
 
-      assert_resolution(ForwardedClientIP.resolve(conn, settings(["10.0.0.1"])),
+      assert_resolution(
+        ForwardedClientIP.resolve(conn, settings(["10.0.0.1"], :x_real_ip)),
         status: :ok,
         peer_ip: @peer,
         client_ip: @trusted_ipv6,
@@ -349,12 +541,18 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.ForwardedClientIPTest do
     end
   end
 
-  defp settings(trusted_proxies \\ ["10.0.0.1"]) do
+  defp settings(
+         trusted_proxies \\ ["10.0.0.1"],
+         source \\ :x_forwarded_for,
+         depth \\ 0
+       ) do
     {:ok, compiled} = IPRules.compile(trusted_proxies)
 
     %OperationalSettings{
       trusted_proxies: trusted_proxies,
-      trusted_proxies_compiled: {:ok, compiled}
+      trusted_proxies_compiled: {:ok, compiled},
+      forwarded_client_ip_source: source,
+      forwarded_proxy_depth: depth
     }
   end
 
