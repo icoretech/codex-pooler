@@ -3320,6 +3320,71 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
            )
   end
 
+  test "renders unreported quota limits as static native progress meters", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{
+        slug: "quota-unreported-static-meter",
+        name: "Quota Unreported Static Meter"
+      })
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Quota Unreported Static Meter Codex",
+        assignment_label: "Quota unreported static meter assignment"
+      })
+
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    upsert_quota_window!(identity, %{
+      window_kind: "primary",
+      window_minutes: 300,
+      credits: 64,
+      reset_at: DateTime.add(now, 5, :hour),
+      observed_at: now
+    })
+
+    upsert_quota_window!(identity, %{
+      window_kind: "secondary",
+      window_minutes: 10_080,
+      active_limit: 100,
+      credits: 91,
+      used_percent: Decimal.new("9"),
+      reset_at: DateTime.add(now, 6, :day),
+      observed_at: now
+    })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
+    _ = render_async(view, 5_000)
+
+    primary_limit_selector = "#upstream-quota-limit-primary_5h"
+    primary_progress_selector = "#{primary_limit_selector}-progress"
+
+    assert has_element?(
+             view,
+             "#{primary_limit_selector}[data-role='upstream-limit-chart']",
+             "not reported"
+           )
+
+    assert has_element?(
+             view,
+             "#{primary_progress_selector}[data-role='upstream-limit-progress']" <>
+               ".admin-static-unknown-progress:not([value])[max='100']" <>
+               "[aria-label='5h remaining not reported']"
+           )
+
+    refute has_element?(view, "#{primary_progress_selector}[value]")
+    refute has_element?(view, "#{primary_progress_selector}.progress-striped")
+    assert has_element?(view, "#{primary_limit_selector}-reset[data-countdown-state='running']")
+
+    assert has_element?(
+             view,
+             "#upstream-quota-limit-weekly-progress[value='91'][max='100']"
+           )
+  end
+
   @tag :chart_empty_zero
   test "chart sections keep shells and explicit zero semantics for empty all-zero data", %{
     conn: conn,

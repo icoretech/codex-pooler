@@ -192,9 +192,12 @@ inventory (all in
 `app.css` or component classes, all `prefers-reduced-motion`-guarded where
 animated):
 
-- Quota meters: width 260ms / color 180ms transitions
+- Known quota meters: width 260ms / color 180ms transitions
   (`admin-live-progress`); token-burn gloss sweep with per-card
-  `--shine-delay` stagger and burn-scaled `--shine-period` ([Upstream account card](#upstream-account-card)/[Quota progress row](#quota-progress-row-including-striped-credit-backed-state)).
+  `--shine-delay` stagger and burn-scaled `--shine-period`. An unreported
+  quota uses the component-scoped `admin-static-unknown-progress` treatment:
+  native indeterminate semantics but no daisyUI gradient or animation, in
+  normal and reduced-motion sessions ([Upstream account card](#upstream-account-card)/[Quota progress row](#quota-progress-row-including-striped-credit-backed-state)).
 - Panel switcher: 150ms opacity ease-out with `motion-reduce:transition-none`.
 - Pool compat disclosure: 160ms slide/fade in (`pool-compat-panel-in`),
   disabled under reduced motion.
@@ -780,15 +783,20 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
 - **Purpose:** one reported quota window (e.g. Weekly, 30d) as label +
   remaining percent + live `<progress>` meter + optional count/reset detail.
 - **Tones:** percent ≥ 70 → `progress-success`/`text-success`; ≥ 30 →
-  warning; below → error; unreported → `progress-neutral` and muted percent.
+  warning; below → error. Unreported remains `progress-neutral` with muted
+  text and adds `admin-static-unknown-progress`; it is never presented as a
+  determinate zero-value meter.
 - **Striped state:** `credit_backed: true` appends `progress-striped` —
    45° white stripes over the tone color signal that remaining value burns
   credits rather than a percent window (visible live on credit-backed
   accounts). Stripes stay pinned during the burn shine (a second
   background-position layer in the keyframes).
-- **Motion:** width/color transitions 260/180ms; cards with recent burn run
-  the gloss sweep. Firefox falls back to a static bar; `prefers-reduced-motion`
-  disables all of it.
+- **Motion:** known values use width/color transitions 260/180ms; cards with
+  recent burn run the gloss sweep. An unreported value omits `value`, keeps
+  native indeterminate semantics, and neutralizes daisyUI's indeterminate
+  gradient/animation with `admin-static-unknown-progress`; it stays static in
+  normal and `prefers-reduced-motion` sessions. Firefox falls back to a static
+  bar for the known-value gloss; reduced motion disables known-value motion.
 - **Reset timing:** anchored reset labels use the `RelativeCountdown` hook to
   keep the compact `6d 23h` / `1h 30m` / `42m` value current without a
   LiveView round trip. Floating rolling windows remain static as
@@ -797,12 +805,24 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
   and the percent renders as text besides the bar.
 
 ```heex
+<%!-- Known / credit-backed meter: `value` is numeric and its stateful motion is allowed. --%>
 <progress
   id={"#{@id}-progress"}
   data-role="upstream-limit-progress"
   aria-label={"#{@limit.label} remaining #{@limit.percent_label}"}
   class="progress admin-live-progress progress-warning progress-striped h-1.5 w-full"
   value={@limit.percent_value}
+  max="100"
+>
+  {@limit.percent_label}
+</progress>
+
+<%!-- Unknown meter: preserve id, role, ARIA, max, and optional stripe class; omit `value`. --%>
+<progress
+  id={"#{@id}-progress"}
+  data-role="upstream-limit-progress"
+  aria-label={"#{@limit.label} remaining #{@limit.percent_label}"}
+  class="progress admin-live-progress admin-static-unknown-progress progress-neutral h-1.5 w-full"
   max="100"
 >
   {@limit.percent_label}

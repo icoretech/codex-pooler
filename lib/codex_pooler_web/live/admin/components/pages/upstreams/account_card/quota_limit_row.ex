@@ -20,7 +20,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
         data-role="upstream-limit-progress"
         aria-label={"#{@limit.label} remaining #{@limit.percent_label}"}
         class={quota_limit_progress_class(@limit)}
-        value={@limit.percent_value}
+        value={if is_nil(@limit.percent), do: nil, else: @limit.percent_value}
         max="100"
       >
         {@limit.percent_label}
@@ -101,7 +101,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
   end
 
   defp quota_limit_progress_class(limit),
-    do: "progress admin-live-progress progress-neutral#{credit_backed_class(limit)} h-1.5 w-full"
+    do:
+      "progress admin-live-progress admin-static-unknown-progress progress-neutral#{credit_backed_class(limit)} h-1.5 w-full"
 
   defp credit_backed_class(%{credit_backed: true}), do: " progress-striped"
   defp credit_backed_class(_limit), do: ""

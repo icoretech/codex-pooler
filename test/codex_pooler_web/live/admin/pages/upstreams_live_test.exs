@@ -3243,6 +3243,25 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(view, "#upstream-account-#{identity.id}-limit-primary_5h", "not reported")
 
+    primary_limit_selector = "#upstream-account-#{identity.id}-limit-primary_5h"
+    primary_progress_selector = "#{primary_limit_selector}-progress"
+
+    assert has_element?(
+             view,
+             "#{primary_limit_selector}[data-role='upstream-limit-chart']"
+           )
+
+    assert has_element?(
+             view,
+             "#{primary_progress_selector}[data-role='upstream-limit-progress']" <>
+               ".admin-static-unknown-progress:not([value])[max='100']" <>
+               "[aria-label='5h remaining not reported']"
+           )
+
+    refute has_element?(view, "#{primary_progress_selector}[value]")
+    refute has_element?(view, "#{primary_progress_selector}.progress-striped")
+    assert has_element?(view, "#{primary_limit_selector}-reset[data-countdown-state='running']")
+
     assert has_element?(
              view,
              "#upstream-account-#{identity.id}-limit-weekly [data-role='upstream-limit-title']",
@@ -3255,6 +3274,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              view,
              "#upstream-account-#{identity.id}-limit-model-codex_spark-primary-300",
              "100%"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-limit-model-codex_spark-primary-300-progress" <>
+               "[value='100'][max='100']"
            )
 
     assert has_element?(

@@ -830,6 +830,22 @@ body {
     background-color 180ms ease;
 }
 
+/* An unreported quota is not a zero-value quota or a loading operation. Keep
+   daisyUI's native indeterminate control quiet and muted, scoped to this
+   component so other progress indicators retain their stateful motion. */
+.admin-static-unknown-progress:indeterminate {
+  color: color-mix(in oklab, var(--color-base-content) 35%, transparent);
+  background-image: none;
+  background-position-x: 0;
+  background-size: auto;
+  animation: none;
+}
+
+.admin-static-unknown-progress:indeterminate::-moz-progress-bar {
+  background-image: none;
+  animation: none;
+}
+
 .admin-token-burn-active .admin-live-progress::-webkit-progress-value {
   background-image: linear-gradient(
     105deg,
@@ -874,6 +890,14 @@ body {
 /* Vendor progress pseudo-elements must stay in separate rules: a selector
    list mixing ::-webkit-* and ::-moz-* is dropped wholesale by Chromium. */
 @media (prefers-reduced-motion: reduce) {
+  .admin-static-unknown-progress:indeterminate {
+    animation: none;
+  }
+
+  .admin-static-unknown-progress:indeterminate::-moz-progress-bar {
+    animation: none;
+  }
+
   .admin-live-progress::-webkit-progress-value,
   .admin-token-burn-active .admin-live-progress::-webkit-progress-value {
     transition: none;
