@@ -30,6 +30,7 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
   alias CodexPooler.MCP.Tools.QuotaMetadata.ReadModel
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
+  alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
 
   setup do
@@ -439,6 +440,212 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
     assert window["active_limit"] == 100
     assert Enum.all?(Map.keys(account), &is_binary/1)
     assert Enum.all?(Map.keys(window), &is_binary/1)
+    assert :ok = Redaction.assert_mcp_output_safe!(result)
+  end
+
+  test "quota metadata keeps exhausted, capacity-backed, unknown-used, and zero-credit controls through tool dispatch",
+       %{auth: auth} do
+    pool = pool_fixture(%{name: "Quota remaining control pool"})
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+    reset_at = DateTime.add(observed_at, 3_600, :second)
+
+    controls = [
+      {"D8 exhausted credits", "acct-quota-d8",
+       %{active_limit: nil, credits: 3817, used_percent: Decimal.new("100")}},
+      {"D12 capacity credits", "acct-quota-d12",
+       %{active_limit: 601, credits: 601, used_percent: Decimal.new("0")}},
+      {"Unknown used credits", "acct-quota-unknown-used",
+       %{active_limit: nil, credits: 1701, used_percent: nil}},
+      {"Zero exhausted credits", "acct-quota-zero",
+       %{active_limit: nil, credits: 0, used_percent: Decimal.new("100")}}
+    ]
+
+    for {account_label, chatgpt_account_id, attrs} <- controls do
+      %{identity: identity} =
+        upstream_assignment_fixture(pool, %{
+          account_label: account_label,
+          chatgpt_account_id: chatgpt_account_id
+        })
+
+      assert {:ok, [_window]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 primary_quota_window_attrs(
+                   Map.merge(attrs, %{
+                     reset_at: reset_at,
+                     observed_at: observed_at,
+                     last_sync_at: observed_at
+                   })
+                 )
+               ])
+    end
+
+    assert {:ok, result} =
+             ToolDispatch.call(
+               "codex_pooler_list_upstream_quotas",
+               %{"limit" => 10},
+               %{auth: auth}
+             )
+
+    assert result["isError"] == false
+    assert [%{"type" => "text", "text" => text}] = result["content"]
+
+    windows_by_account =
+      result["structuredContent"]["items"]
+      |> Map.new(fn account ->
+        [window] = account["quota_windows"]
+        {account["stored_account_id"], window}
+      end)
+
+    assert windows_by_account["acct-quota-d8"]["credits"] == 3817
+    assert windows_by_account["acct-quota-d8"]["remaining_value"] == 3817
+    assert text =~ "D8 exhausted credits status active account acct-quota-d8"
+    assert text =~ "3817/unknown remaining, 100.0% used"
+
+    assert windows_by_account["acct-quota-d12"]["credits"] == 601
+    assert windows_by_account["acct-quota-d12"]["remaining_value"] == 601
+    assert windows_by_account["acct-quota-d12"]["active_limit"] == 601
+    assert text =~ "D12 capacity credits status active account acct-quota-d12"
+    assert text =~ "601/601 remaining, 0.0% used"
+
+    assert windows_by_account["acct-quota-unknown-used"]["credits"] == 1701
+    assert windows_by_account["acct-quota-unknown-used"]["remaining_value"] == 1701
+    assert text =~ "Unknown used credits status active account acct-quota-unknown-used"
+    assert text =~ "1701/unknown remaining, unknown used"
+
+    assert windows_by_account["acct-quota-zero"]["credits"] == 0
+    assert windows_by_account["acct-quota-zero"]["remaining_value"] == 0
+    assert text =~ "Zero exhausted credits status active account acct-quota-zero"
+    assert text =~ "0/unknown remaining, 100.0% used"
+
+    assert :ok = Redaction.assert_structured_content_safe!(result["structuredContent"])
+    assert :ok = Redaction.assert_text_content_safe!(text)
+    assert :ok = Redaction.assert_mcp_output_safe!(result)
+  end
+
+  test "quota metadata suppresses non-capacity remaining values while retaining raw credits", %{
+    auth: auth
+  } do
+    pool = pool_fixture(%{name: "Quota remaining unknown pool"})
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+    reset_at = DateTime.add(observed_at, 3_600, :second)
+
+    targets = [
+      {"A6 missing capacity", "acct-quota-a6-nil", nil, 412},
+      {"A6 zero capacity", "acct-quota-a6-zero-limit", 0, 413},
+      {"A6 zero credits", "acct-quota-a6-zero-credits", nil, 0}
+    ]
+
+    for {account_label, chatgpt_account_id, active_limit, credits} <- targets do
+      %{identity: identity} =
+        upstream_assignment_fixture(pool, %{
+          account_label: account_label,
+          chatgpt_account_id: chatgpt_account_id
+        })
+
+      assert {:ok, [_window]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 primary_quota_window_attrs(%{
+                   active_limit: active_limit,
+                   credits: credits,
+                   used_percent: Decimal.new("35"),
+                   reset_at: reset_at,
+                   observed_at: observed_at,
+                   last_sync_at: observed_at
+                 })
+               ])
+    end
+
+    assert {:ok, result} =
+             ToolDispatch.call(
+               "codex_pooler_list_upstream_quotas",
+               %{"limit" => 10},
+               %{auth: auth}
+             )
+
+    assert result["isError"] == false
+    assert [%{"type" => "text", "text" => text}] = result["content"]
+
+    windows_by_account =
+      result["structuredContent"]["items"]
+      |> Map.new(fn account ->
+        [window] = account["quota_windows"]
+        {account["stored_account_id"], window}
+      end)
+
+    assert windows_by_account["acct-quota-a6-nil"]["credits"] == 412
+    assert windows_by_account["acct-quota-a6-nil"]["remaining_value"] == nil
+    assert windows_by_account["acct-quota-a6-zero-limit"]["credits"] == 413
+    assert windows_by_account["acct-quota-a6-zero-limit"]["remaining_value"] == nil
+    assert windows_by_account["acct-quota-a6-zero-credits"]["credits"] == 0
+    assert windows_by_account["acct-quota-a6-zero-credits"]["remaining_value"] == nil
+
+    assert text =~ "A6 missing capacity status active account acct-quota-a6-nil"
+    assert text =~ "A6 zero capacity status active account acct-quota-a6-zero-limit"
+    assert text =~ "A6 zero credits status active account acct-quota-a6-zero-credits"
+    assert text =~ "unknown remaining, 35.0% used"
+
+    assert :ok = Redaction.assert_structured_content_safe!(result["structuredContent"])
+    assert :ok = Redaction.assert_text_content_safe!(text)
+    assert :ok = Redaction.assert_mcp_output_safe!(result)
+  end
+
+  test "read model and tool dispatch suppress integer below-full percent balances", %{auth: auth} do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+    reset_at = DateTime.add(observed_at, 3_600, :second)
+
+    integer_percent_window = %Quota.AccountQuotaWindow{
+      quota_key: "integer-percent",
+      quota_scope: "account",
+      quota_family: "account",
+      window_kind: "primary",
+      window_minutes: 300,
+      active_limit: nil,
+      credits: 7,
+      used_percent: 99,
+      reset_at: reset_at,
+      observed_at: observed_at,
+      last_sync_at: observed_at,
+      source_precision: "observed",
+      freshness_state: "fresh"
+    }
+
+    projected = ReadModel.quota_window(integer_percent_window, observed_at)
+    assert projected.credits == 7
+    assert projected.remaining_value == nil
+    assert projected.used_percent == 99.0
+
+    pool = pool_fixture(%{name: "Integer percent quota pool"})
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Integer percent quota",
+        chatgpt_account_id: "acct-quota-integer-percent"
+      })
+
+    assert {:ok, [_window]} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               primary_quota_window_attrs(%{
+                 active_limit: nil,
+                 credits: 7,
+                 used_percent: 99,
+                 reset_at: reset_at,
+                 observed_at: observed_at,
+                 last_sync_at: observed_at
+               })
+             ])
+
+    assert {:ok, result} =
+             ToolDispatch.call(
+               "codex_pooler_list_upstream_quotas",
+               %{"limit" => 10},
+               %{auth: auth}
+             )
+
+    assert [%{"type" => "text", "text" => text}] = result["content"]
+    assert [%{"quota_windows" => [window]}] = result["structuredContent"]["items"]
+    assert window["credits"] == 7
+    assert window["remaining_value"] == nil
+    assert text =~ "unknown remaining, 99.0% used"
     assert :ok = Redaction.assert_mcp_output_safe!(result)
   end
 

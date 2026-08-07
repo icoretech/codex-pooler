@@ -128,7 +128,7 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata.ReadModel do
       upstream_model: sanitized_string(window.upstream_model),
       window_minutes: integer_or_nil(window.window_minutes),
       active_limit: integer_or_nil(window.active_limit),
-      remaining_value: integer_or_nil(window.credits),
+      remaining_value: remaining_value(window),
       credits: integer_or_nil(window.credits),
       used_percent: rounded_percent(window.used_percent),
       reset_at: timestamp(window.reset_at),
@@ -309,6 +309,33 @@ defmodule CodexPooler.MCP.Tools.QuotaMetadata.ReadModel do
 
   defp integer_or_nil(value) when is_integer(value), do: value
   defp integer_or_nil(_value), do: nil
+
+  # This is intentionally narrower in purpose than the admin credit-meter
+  # predicate: MCP suppresses a remaining claim only when a below-full percent
+  # conflicts with credits that have no positive capacity; the UI's meter
+  # presentation remains independent.
+  defp remaining_value(%Quota.AccountQuotaWindow{} = window) do
+    if non_remainder_credit_balance?(window), do: nil, else: integer_or_nil(window.credits)
+  end
+
+  defp non_remainder_credit_balance?(%Quota.AccountQuotaWindow{
+         credits: credits,
+         active_limit: active_limit,
+         used_percent: used_percent
+       })
+       when is_integer(credits) and (is_nil(active_limit) or active_limit <= 0) do
+    used_percent_below_full?(used_percent)
+  end
+
+  defp non_remainder_credit_balance?(_window), do: false
+
+  defp used_percent_below_full?(%Decimal{} = used_percent),
+    do: Decimal.compare(used_percent, Decimal.new(100)) == :lt
+
+  defp used_percent_below_full?(used_percent) when is_number(used_percent),
+    do: used_percent < 100
+
+  defp used_percent_below_full?(_used_percent), do: false
 
   defp rounded_percent(nil), do: nil
 
