@@ -20,6 +20,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
   alias CodexPooler.MCP.{OperatorMCPKey, OperatorMCPSettings}
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.Admin.SystemPageComponents.Metrics, as: MetricsComponent
 
   setup :register_and_log_in_user
 
@@ -207,6 +208,102 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
 
     assert has_element?(metrics_view, "#instance-settings-metrics-token-clear[type='checkbox']")
     refute has_element?(metrics_view, "#instance-settings-gateway-form")
+  end
+
+  test "metrics card exposes open and protected endpoint states and warns before clear reopens it",
+       %{
+         conn: conn
+       } do
+    metrics_token = "metrics-exposure-state-#{System.unique_integer([:positive])}"
+    {:ok, view, html} = live(conn, ~p"/admin/system?#{%{"tab" => "metrics"}}")
+
+    assert has_element?(
+             view,
+             "#instance-settings-metrics-exposure-status[data-state='open']",
+             "Open"
+           )
+
+    assert html =~
+             "No metrics bearer token is stored, so /metrics returns 200 without Authorization."
+
+    assert html =~ "The runtime firewall does not apply to /metrics."
+
+    configured_html =
+      view
+      |> element("#instance-settings-metrics-form")
+      |> render_submit(%{
+        "instance_settings" => %{
+          "metrics" => %{"bearer_token" => metrics_token}
+        }
+      })
+
+    assert has_element?(
+             view,
+             "#instance-settings-metrics-exposure-status[data-state='protected']",
+             "Protected"
+           )
+
+    assert configured_html =~
+             "A metrics bearer token is stored, so /metrics requires the exact Bearer token."
+
+    assert has_element?(view, "#instance-settings-metrics-token-clear[type='checkbox']")
+    assert configured_html =~ "Clear stored token — reopens /metrics"
+
+    clear_html =
+      view
+      |> element("#instance-settings-metrics-form")
+      |> render_change(%{
+        "instance_settings" => %{
+          "metrics" => %{"bearer_token_action" => "clear"}
+        }
+      })
+
+    assert clear_html =~ "Clearing the stored token reopens /metrics without authentication."
+    refute clear_html =~ metrics_token
+
+    reopened_html =
+      view
+      |> element("#instance-settings-metrics-form")
+      |> render_submit(%{
+        "instance_settings" => %{
+          "metrics" => %{"bearer_token_action" => "clear"}
+        }
+      })
+
+    assert has_element?(
+             view,
+             "#instance-settings-metrics-exposure-status[data-state='open']",
+             "Open"
+           )
+
+    assert reopened_html =~ "Metrics bearer token cleared"
+    assert has_element?(view, "#instance-settings-metrics-status", "Cleared")
+  end
+
+  test "metrics card presents the fail-closed unavailable state", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "metrics"}}")
+    state = :sys.get_state(view.pid)
+    assigns = state.socket.assigns
+
+    unavailable_settings = %{
+      assigns.settings
+      | metrics: %{assigns.settings.metrics | bearer_token_status: :unavailable}
+    }
+
+    html =
+      render_component(&MetricsComponent.card/1, %{
+        selected_tab: "metrics",
+        forms: assigns.forms,
+        form_params: assigns.form_params,
+        settings: unavailable_settings,
+        card_statuses: assigns.card_statuses
+      })
+
+    assert html =~ ~s(id="instance-settings-metrics-exposure-status")
+    assert html =~ ~s(data-state="unavailable")
+    assert html =~ "Unavailable"
+    assert html =~ "Metrics settings are unavailable, so /metrics fails closed with 401."
+    assert html =~ "The runtime firewall does not apply to /metrics."
   end
 
   test "shows runtime firewall state and only the current active session IP", %{

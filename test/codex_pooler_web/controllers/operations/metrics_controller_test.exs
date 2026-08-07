@@ -14,6 +14,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
 
   import ExUnit.CaptureLog
 
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Gateway.Routing.CircuitState
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
@@ -33,12 +34,20 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
 
   setup do
     previous = Application.get_env(:codex_pooler, InstanceSettings, [])
+    previous_operational_settings = Application.get_env(:codex_pooler, OperationalSettings)
     Application.put_env(:codex_pooler, InstanceSettings, Keyword.delete(previous, :repo))
     Repo.delete_all(Settings)
     InstanceSettings.reset_cache_for_test()
 
     on_exit(fn ->
       Application.put_env(:codex_pooler, InstanceSettings, previous)
+
+      if previous_operational_settings do
+        Application.put_env(:codex_pooler, OperationalSettings, previous_operational_settings)
+      else
+        Application.delete_env(:codex_pooler, OperationalSettings)
+      end
+
       InstanceSettings.reset_cache_for_test()
     end)
 
@@ -98,6 +107,45 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
 
     assert conn.status == 200
     assert metrics_content_type?(conn)
+  end
+
+  test "runtime firewall allowlist does not affect metrics or emit a denial observation", %{
+    conn: conn
+  } do
+    event = [:codex_pooler, :ingress, :firewall, :denied]
+    handler_id = {__MODULE__, :metrics_firewall_non_interference, self()}
+    test_pid = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        event,
+        fn ^event, measurements, metadata, ^test_pid ->
+          send(test_pid, {handler_id, measurements, metadata})
+        end,
+        test_pid
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    Application.put_env(:codex_pooler, OperationalSettings,
+      settings: %OperationalSettings{firewall_allowlist: ["203.0.113.10"]},
+      use_instance_settings?: false
+    )
+
+    conn = Map.put(conn, :remote_ip, {198, 51, 100, 20})
+
+    {conn, log} =
+      capture_result_and_log(fn ->
+        conn
+        |> put_req_header("x-forwarded-for", "198.51.100.20")
+        |> get(~p"/metrics")
+      end)
+
+    assert conn.status == 200
+    assert metrics_content_type?(conn)
+    refute_received {^handler_id, _measurements, _metadata}
+    refute log =~ "ingress firewall denied"
   end
 
   test "exposes admin stats metrics through an authorized scrape without unsafe labels", %{
@@ -536,7 +584,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
     Application.put_env(:codex_pooler, InstanceSettings, repo: FailingRepo)
     InstanceSettings.reset_cache_for_test()
 
-    {conn, log} = with_instance_settings_db_failure_log(fn -> get(conn, ~p"/metrics") end)
+    {conn, log} = capture_result_and_log(fn -> get(conn, ~p"/metrics") end)
 
     assert log =~ "instance settings db load failed warm_cache=false"
     assert conn.status == 401
@@ -544,7 +592,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
     assert json_response(conn, 401)["error"]["message"] == "metrics bearer token is unavailable"
   end
 
-  defp with_instance_settings_db_failure_log(fun) do
+  defp capture_result_and_log(fun) do
     ref = make_ref()
 
     log =

@@ -421,7 +421,9 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
           SystemSettingsForm.refresh_group_snapshots(socket.assigns, saved_params, group)
 
         card_statuses =
-          SystemSettingsForm.saved_card_statuses(form_params, group_snapshots, group)
+          form_params
+          |> SystemSettingsForm.saved_card_statuses(group_snapshots, group)
+          |> maybe_put_clear_card_status(group, params)
 
         {:noreply,
          socket
@@ -436,7 +438,7 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
            smtp_test_status: nil
          )
          |> assign_forms()
-         |> maybe_put_save_feedback(group, autosave?)}
+         |> maybe_put_save_feedback(group, autosave?, save_feedback_message(group, params))}
 
       {:error, %Ecto.Changeset{} = changeset} ->
         status =
@@ -481,16 +483,31 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
   defp card_title("metrics"), do: "Metrics bearer token"
   defp card_title("smtp"), do: "SMTP delivery"
 
-  defp maybe_put_save_feedback(socket, group, true) do
+  defp maybe_put_save_feedback(socket, group, true, _message) do
     dismiss_ref = make_ref()
     Process.send_after(self(), {:clear_card_status, group, dismiss_ref}, 2_500)
 
     put_card_status(socket, group, %{tone: :success, message: "Saved", dismiss_ref: dismiss_ref})
   end
 
-  defp maybe_put_save_feedback(socket, group, false) do
-    put_flash(socket, :info, "#{card_title(group)} saved")
+  defp maybe_put_save_feedback(socket, _group, false, message) do
+    put_flash(socket, :info, message)
   end
+
+  defp save_feedback_message("metrics", %{
+         "metrics" => %{"bearer_token_action" => "clear"}
+       }),
+       do: "Metrics bearer token cleared"
+
+  defp save_feedback_message(group, _params), do: "#{card_title(group)} saved"
+
+  defp maybe_put_clear_card_status(card_statuses, "metrics", %{
+         "metrics" => %{"bearer_token_action" => "clear"}
+       }) do
+    Map.put(card_statuses, "metrics", %{tone: :success, message: "Cleared"})
+  end
+
+  defp maybe_put_clear_card_status(card_statuses, _group, _params), do: card_statuses
 
   defp import_sample_data do
     case Dev.seed_full() do
