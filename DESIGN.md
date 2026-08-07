@@ -1398,6 +1398,9 @@ live is always one click away and never something the operator has to arrange.
   text-primary` glyph rendered only while the card is checked, composing with
   a permanent micro tag when one exists (the Bridge ring card reads
   "✓ DEFAULT" while selected; the tag alone otherwise).
+  The Bridge ring description is exactly "Stable rendezvous ordering, within
+  continuity and quota." and remains within the two-line description contract
+  at the narrowest strategy-card column.
 - **States:** hover `border-primary/50`; checked `border-primary/60
   bg-primary/5` (the [Policy editor dialog and wizard](#policy-editor-dialog-and-wizard) wash recipe is retired for these cards); focus
   ring `outline-2 outline-primary outline-offset-2` driven by the hidden

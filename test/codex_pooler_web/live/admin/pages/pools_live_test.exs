@@ -988,6 +988,45 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
            )
 
     assert has_element?(view, "#pool_routing_strategy", "Bridge ring")
+
+    assert has_element?(
+             view,
+             "#pool-create-routing-controls",
+             "Stable rendezvous ordering, within continuity and quota."
+           )
+
+    refute has_element?(
+             view,
+             "#pool-create-routing-controls",
+             "Balances upstreams by continuity, cache locality, and quota evidence."
+           )
+
+    assert has_element?(
+             view,
+             "#pool_routing_strategy[role='radiogroup'][aria-label='Routing strategy']"
+           )
+
+    assert has_element?(
+             view,
+             "#pool_routing_strategy_bridge_ring.strategy-radio.strategy-bridge[type='radio'][value='bridge_ring'][checked]"
+           )
+
+    assert has_element?(
+             view,
+             "#pool_routing_strategy_deterministic_rotation.strategy-radio[type='radio'][value='deterministic_rotation']"
+           )
+
+    assert has_element?(
+             view,
+             "#pool_routing_strategy_least_recent_success.strategy-radio[type='radio'][value='least_recent_success']"
+           )
+
+    assert has_element?(
+             view,
+             "#pool_routing_strategy_quota_first.strategy-radio[type='radio'][value='quota_first']"
+           )
+
+    assert has_element?(view, "#pool_bridge_ring_size[type='number'][value='3']")
     assert has_element?(view, "#pool_routing_strategy", "Deterministic rotation")
     assert has_element?(view, "#pool_routing_strategy", "Least recent success")
     assert has_element?(view, "#pool_routing_strategy", "Quota first")
@@ -2485,6 +2524,18 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              view,
              "#pool-edit-routing-controls",
              "Shrinks eligible Responses tool outputs before upstream dispatch."
+           )
+
+    assert has_element?(
+             view,
+             "#pool-edit-routing-controls",
+             "Stable rendezvous ordering, within continuity and quota."
+           )
+
+    refute has_element?(
+             view,
+             "#pool-edit-routing-controls",
+             "Balances upstreams by continuity, cache locality, and quota evidence."
            )
 
     view |> element("#pool-edit-dialog-tab-upstreams") |> render_click()

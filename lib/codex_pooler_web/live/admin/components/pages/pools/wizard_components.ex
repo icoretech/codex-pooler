@@ -526,7 +526,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
   defp pool_step_heading(step), do: Map.fetch!(@pool_step_headings, normalize_step(step))
 
   defp pool_strategy_description("bridge_ring"),
-    do: "Balances upstreams by continuity, cache locality, and quota evidence."
+    do: "Stable rendezvous ordering, within continuity and quota."
 
   defp pool_strategy_description("deterministic_rotation"),
     do: "Rotates which upstream goes first per session, in a fixed, predictable order."
