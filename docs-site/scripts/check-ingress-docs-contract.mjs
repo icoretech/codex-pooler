@@ -87,6 +87,12 @@ const forbidden = (text, expression, file) => {
   }
 };
 
+const staleFirewallProtectsMetrics =
+  /\bruntime firewall\s+(?:protects|covers|applies to)\s+`?\/metrics\b|\b\/metrics\s+(?:is\s+)?(?:protected|covered)\s+by\s+(?:the\s+)?runtime firewall\b/i;
+
+const staleUnconditionalPrunedHelper404 =
+  /\bpruned(?:\s+(?:app-server|runtime))?\s+helper(?:\s+(?:candidate|route)s?)?[^.\n]{0,120}(?:\b(?:always|unconditional(?:ly)?)\b[^.\n]{0,120}\b404\b|\b404\b[^.\n]{0,120}\b(?:always|unconditional(?:ly)?)\b)/i;
+
 const verifyStalePolicyIsRejected = () => {
   const stalePolicies = [
     "forwarded_client_ip_source: :none",
@@ -171,6 +177,8 @@ for (const [file, text] of [
     /forwarded_client_ip_source\s*[:=]\s*:none|X-Forwarded-For takes precedence over X-Real-IP|x-forwarded-for then x-real-ip fallback/i,
     file
   );
+  forbidden(text, staleFirewallProtectsMetrics, file);
+  forbidden(text, staleUnconditionalPrunedHelper404, file);
 }
 
 process.stdout.write(
