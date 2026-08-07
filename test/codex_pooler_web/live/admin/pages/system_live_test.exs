@@ -1144,6 +1144,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     end
   end
 
+  @tag :capture_log
   test "saving X-Forwarded-For depth changes the next runtime request without restart", %{
     conn: conn
   } do

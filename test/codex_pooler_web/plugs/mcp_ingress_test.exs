@@ -57,6 +57,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
       refute_received {@firewall_denied_event, _measurements, _metadata}
     end
 
+    @tag :capture_log
     test "denied MCP requests emit one bounded denial event", %{conn: conn} do
       attach_firewall_denial_handler()
       setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
@@ -78,6 +79,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
       refute_received {@firewall_denied_event, _measurements, _metadata}
     end
 
+    @tag :capture_log
     test "cold settings return the fixed unavailable MCP envelope and telemetry", %{conn: conn} do
       attach_firewall_denial_handler()
 
@@ -117,6 +119,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
       assert json_response(conn, 200)["result"]["protocolVersion"] == @mcp_version
     end
 
+    @tag :capture_log
     test "configured allowlist denies MCP before protocol dispatch", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
 
@@ -131,6 +134,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
       refute inspect(error) =~ "198.51.100.20"
     end
 
+    @tag :capture_log
     test "trusted proxy headers are honored only from trusted immediate peers", %{
       conn: conn,
       user: user
@@ -162,6 +166,7 @@ defmodule CodexPoolerWeb.Plugs.McpIngressTest do
       assert json_rpc_error(denied_conn, 403)["error"]["message"] == "client IP is not allowed"
     end
 
+    @tag :capture_log
     test "x-real-ip policy ignores x-forwarded-for and rejects duplicate selected fields", %{
       conn: conn,
       user: user

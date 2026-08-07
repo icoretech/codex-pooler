@@ -168,15 +168,21 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.FirewallTest do
 
   test "emits each fixed denial reason with exactly one count and no extra tags" do
     attach_denial_handler()
+    denial_reasons = Firewall.denial_reasons()
 
-    for reason <- Firewall.denial_reasons() do
-      decision = Firewall.denied(reason, {198, 51, 100, 20})
-      assert :ok = Firewall.observe_denial(decision, :mcp)
+    log =
+      capture_log([level: :warning], fn ->
+        for reason <- denial_reasons do
+          decision = Firewall.denied(reason, {198, 51, 100, 20})
+          assert :ok = Firewall.observe_denial(decision, :mcp)
 
-      assert_receive {@event, %{count: 1}, metadata}
-      assert metadata == %{scope: "mcp", reason: Atom.to_string(reason)}
-      refute_received {@event, _measurements, _metadata}
-    end
+          assert_receive {@event, %{count: 1}, metadata}
+          assert metadata == %{scope: "mcp", reason: Atom.to_string(reason)}
+          refute_received {@event, _measurements, _metadata}
+        end
+      end)
+
+    assert length(Regex.scan(~r/ingress firewall denied/, log)) == length(denial_reasons)
   end
 
   defp settings(allowlist) do

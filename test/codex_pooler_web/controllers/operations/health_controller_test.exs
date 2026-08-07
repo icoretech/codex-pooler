@@ -60,6 +60,7 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
     assert json_response(conn, 200) == %{"status" => "ready"}
   end
 
+  @tag :capture_log
   test "health and readiness retain independent behavior while runtime settings are cold", %{
     conn: conn
   } do

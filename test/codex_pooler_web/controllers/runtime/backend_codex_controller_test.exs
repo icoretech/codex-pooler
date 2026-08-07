@@ -5022,6 +5022,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :prompt_cache_adaptation
+  @tag :capture_log
   test "POST /backend-api/codex/responses recomputes adapted controls for each retry attempt",
        %{conn: conn} do
     first_upstream =

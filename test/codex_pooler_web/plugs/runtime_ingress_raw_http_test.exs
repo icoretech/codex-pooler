@@ -71,6 +71,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressRawHTTPTest do
     {:ok, port: port, sockets: sockets, upstream: upstream, gateway: gateway}
   end
 
+  @tag :capture_log
   test "literal encoded v1 and encoded websocket upgrades are denied before side effects", ctx do
     for {target, headers} <- [
           {"/%76%31/responses", []},
@@ -139,6 +140,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressRawHTTPTest do
     assert_no_gateway_side_effects(ctx.upstream)
   end
 
+  @tag :capture_log
   test "trusted peers fail runtime requests closed on non-UTF8 forwarded headers", ctx do
     for header <- ["x-forwarded-for", "x-real-ip"] do
       runtime = raw_request(ctx, "GET", "/v1/models", [{header, <<0xFF>>}])

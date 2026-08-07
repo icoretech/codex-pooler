@@ -1278,6 +1278,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert Repo.aggregate(Attempt, :count) == 0
   end
 
+  @tag :capture_log
   test "GET /v1/responses blocked by runtime ingress fails before websocket upgrade", %{
     conn: conn
   } do

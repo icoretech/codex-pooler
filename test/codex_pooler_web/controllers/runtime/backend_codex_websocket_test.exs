@@ -193,6 +193,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     end
   end
 
+  @tag :capture_log
   test "a denying locally applied firewall version closes an idle websocket with 1008" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     port = start_public_endpoint!()
@@ -213,6 +214,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     end
   end
 
+  @tag :capture_log
   test "a busy revoked websocket flushes its admitted turn then closes without dispatching queued work" do
     release_ref = make_ref()
 
@@ -11153,7 +11155,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   end
 
   defp update_firewall_allowlist!(allowlist) do
-    settings = InstanceSettings.get!()
+    settings = InstanceSettings.ensure_singleton!()
 
     assert {:ok, updated} =
              InstanceSettings.update_system_settings(settings, %{

@@ -101,6 +101,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   end
 
   describe "canonical path classification" do
+    @tag :capture_log
     test "encoded runtime route families reach the same pre-parser firewall", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
 
@@ -132,6 +133,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       end
     end
 
+    @tag :capture_log
     test "encoded pruned helpers reach the same runtime firewall", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
 
@@ -386,6 +388,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       end
     end
 
+    @tag :capture_log
     test "cold settings return the fixed unavailable runtime envelope and telemetry", %{
       conn: conn
     } do
@@ -413,6 +416,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       refute_received {@firewall_denied_event, _measurements, _metadata}
     end
 
+    @tag :capture_log
     test "warm database snapshots remain enforceable for allow and ordinary deny", %{conn: conn} do
       setup_runtime_ingress_override(%OperationalSettings{
         source: :database,
@@ -487,6 +491,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
                Firewall.evaluate(conn, settings)
     end
 
+    @tag :capture_log
     test "invalid firewall rules loaded from a legacy row fail closed at the HTTP boundary", %{
       conn: conn
     } do
@@ -538,6 +543,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       assert {^conn, %Decision{outcome: :allow}} = Firewall.evaluate(conn, settings)
     end
 
+    @tag :capture_log
     test "malformed trusted forwarding input fails closed only on runtime routes", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{
         firewall_allowlist: ["203.0.113.10"],
@@ -615,6 +621,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       assert %{"plan_type" => "api_key"} = json_response(conn, 200)
     end
 
+    @tag :capture_log
     test "allows and denies IPv6 CIDR clients by 128-bit network prefix", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["2001:db8:abcd:12::/64"]})
       setup = active_api_key_fixture()
@@ -637,6 +644,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       assert json_response(denied_conn, 403)["error"]["code"] == "access_denied"
     end
 
+    @tag :capture_log
     test "denies a direct client IP outside the allowlist", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
 
@@ -648,6 +656,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       refute inspect(error) =~ "198.51.100.20"
     end
 
+    @tag :capture_log
     test "denies content provenance checks before authentication", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
 
@@ -666,6 +675,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
              } = json_response(conn, 403)
     end
 
+    @tag :capture_log
     test "applies firewall to every runtime API route family", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
 
@@ -688,6 +698,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       end
     end
 
+    @tag :capture_log
     test "ignores spoofed forwarded headers from untrusted peers", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
 
@@ -745,6 +756,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
              } = conn.private[:codex_pooler_client_ip_resolution]
     end
 
+    @tag :capture_log
     test "ignores spoof-prepended forwarded hops from trusted proxies", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{
         firewall_allowlist: ["198.51.100.77"],
@@ -763,6 +775,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       assert json_response(conn, 403)["error"]["code"] == "access_denied"
     end
 
+    @tag :capture_log
     test "combines duplicate forwarded headers before trusted proxy resolution", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{
         firewall_allowlist: ["198.51.100.77"],
@@ -782,6 +795,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       assert json_response(conn, 403)["error"]["code"] == "access_denied"
     end
 
+    @tag :capture_log
     test "applies trusted proxy updates to subsequent requests only", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
       setup = active_api_key_fixture()
@@ -821,6 +835,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       assert %{"status" => "ok"} = json_response(conn, 200)
     end
 
+    @tag :capture_log
     test "applies the same firewall semantics to the MCP route", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
 
@@ -877,6 +892,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       refute_received {@firewall_denied_event, _measurements, _metadata}
     end
 
+    @tag :capture_log
     test "denied clients receive the normal runtime firewall envelope", %{conn: conn} do
       attach_firewall_denial_handler()
       setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
@@ -906,6 +922,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       refute_received {@firewall_denied_event, _measurements, _metadata}
     end
 
+    @tag :capture_log
     test "cold settings receive the normal runtime unavailable envelope", %{conn: conn} do
       attach_firewall_denial_handler()
       {upstream, setup} = pruned_runtime_helper_setup()

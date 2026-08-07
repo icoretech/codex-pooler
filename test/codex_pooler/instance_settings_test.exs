@@ -854,6 +854,7 @@ defmodule CodexPooler.InstanceSettingsTest do
   end
 
   @tag :failure_modes
+  @tag :capture_log
   test "retry backoff caps, keeps one timer, and resets after success" do
     database_settings = Settings.default() |> Map.put(:lock_version, 15)
     configure_scripted_cache(database_settings, :load)
@@ -890,6 +891,7 @@ defmodule CodexPooler.InstanceSettingsTest do
   end
 
   @tag :failure_modes
+  @tag :capture_log
   test "stale retry generations cannot reload or schedule another timer" do
     database_settings = Settings.default() |> Map.put(:lock_version, 21)
     configure_scripted_cache(database_settings, :load)
