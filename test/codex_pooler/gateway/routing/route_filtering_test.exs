@@ -1375,13 +1375,15 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           "threshold-current-candidates"
         )
 
-      open_circuit!(pool, api_key, filter_input.model, circuit_open.assignment)
+      circuit = open_circuit!(pool, api_key, filter_input.model, circuit_open.assignment)
       route_state = route_state(filter_input)
       before_metadata = Repo.reload!(redeeming_identity).metadata
       reset_probe = filter_input.request_options.routing.reset_probe
 
-      assert {:ok, filtered_candidates, filtered_options, filtered_route_state} =
-               RouteFiltering.filter_candidates_with_route_state(filter_input, route_state)
+      {{:ok, filtered_candidates, filtered_options, filtered_route_state}, log} =
+        with_info_log(fn ->
+          RouteFiltering.filter_candidates_with_route_state(filter_input, route_state)
+        end)
 
       assert candidate_ids(filtered_candidates) == [redeeming.assignment.id]
       assert candidate_ids(filtered_route_state.candidates) == [redeeming.assignment.id]
@@ -1396,6 +1398,18 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert filtered_options.routing.reset_probe == reset_probe
       refute ResetProbe.bound?(filtered_options.routing.reset_probe)
       assert Repo.reload!(redeeming_identity).metadata == before_metadata
+      assert log =~ "trigger_kind=gateway_auto trigger_detail=threshold"
+      assert log =~ "result_code=gateway_auto_sibling_transient_exclusion applied=false"
+
+      for raw_context_value <- [
+            circuit.id,
+            circuit_open.assignment.id,
+            circuit_open.identity.id,
+            filter_input.model.exposed_model_id,
+            filter_input.route_class
+          ] do
+        refute log =~ raw_context_value
+      end
     end
 
     test "blocked exhaustion waits when a circuit-excluded sibling has usable quota" do
@@ -1433,12 +1447,15 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           "blocked-circuit-usable-sibling"
         )
 
-      open_circuit!(pool, api_key, filter_input.model, circuit_open.assignment)
+      circuit = open_circuit!(pool, api_key, filter_input.model, circuit_open.assignment)
       route_state = route_state(filter_input)
       before_metadata = Repo.reload!(redeeming_identity).metadata
       reset_probe = filter_input.request_options.routing.reset_probe
 
-      result = RouteFiltering.filter_candidates_with_route_state(filter_input, route_state)
+      {result, log} =
+        with_info_log(fn ->
+          RouteFiltering.filter_candidates_with_route_state(filter_input, route_state)
+        end)
 
       result_summary =
         case result do
@@ -1452,6 +1469,18 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert filter_input.request_options.routing.reset_probe == reset_probe
       refute ResetProbe.bound?(filter_input.request_options.routing.reset_probe)
       assert Repo.reload!(redeeming_identity).metadata == before_metadata
+      assert log =~ "trigger_kind=gateway_auto trigger_detail=exhausted"
+      assert log =~ "result_code=gateway_auto_sibling_transient_exclusion applied=false"
+
+      for raw_context_value <- [
+            circuit.id,
+            circuit_open.assignment.id,
+            circuit_open.identity.id,
+            filter_input.model.exposed_model_id,
+            filter_input.route_class
+          ] do
+        refute log =~ raw_context_value
+      end
     end
 
     test "blocked exhaustion carries circuit-excluded siblings without widening candidates" do

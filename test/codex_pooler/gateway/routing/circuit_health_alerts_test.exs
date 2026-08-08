@@ -26,7 +26,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitHealthAlertsTest do
     end)
   end
 
-  test "alert-facing blocked reasons stay inside the bounded routing vocabulary" do
+  test "alert-facing blocked reasons ignore saved-reset recovery metadata" do
     observed_at = ~U[2026-05-30 09:20:00Z]
     settings = CircuitHealth.settings()
 
@@ -38,12 +38,26 @@ defmodule CodexPooler.Gateway.Routing.CircuitHealthAlertsTest do
       {%RoutingCircuitState{status: "open", next_probe_at: nil}, "open_no_probe"},
       {%RoutingCircuitState{
          status: "half_open",
-         metadata: %{"probe_in_flight_count" => 1},
+         metadata: %{
+           "probe_in_flight_count" => 1,
+           "saved_reset_recovery" => %{
+             "version" => 1,
+             "attempted" => true,
+             "since_success_at" => "never"
+           }
+         },
          updated_at: observed_at
        }, "probe_saturated"},
       {%RoutingCircuitState{
          status: "half_open",
-         metadata: %{"probe_in_flight_count" => 0},
+         metadata: %{
+           "probe_in_flight_count" => 0,
+           "saved_reset_recovery" => %{
+             "version" => 1,
+             "attempted" => false,
+             "since_success_at" => "never"
+           }
+         },
          updated_at: observed_at
        }, nil}
     ]

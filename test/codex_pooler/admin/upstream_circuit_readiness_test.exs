@@ -99,6 +99,30 @@ defmodule CodexPooler.Admin.UpstreamCircuitReadinessTest do
            }
   end
 
+  test "saved-reset recovery metadata does not change circuit readiness projection" do
+    pool = pool_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    insert_state!(pool, assignment, "gpt-recovery-marker", "proxy_http",
+      status: "open",
+      next_probe_at: DateTime.add(@observed_at, 1, :second),
+      metadata: %{
+        "saved_reset_recovery" => %{
+          "version" => 1,
+          "attempted" => false,
+          "since_success_at" => "never"
+        }
+      }
+    )
+
+    summary = project(%{assignment.id => ["gpt-recovery-marker"]}) |> Map.fetch!(assignment.id)
+
+    assert summary.state == :blocked
+    refute summary.ready?
+    assert summary.blocked_reasons == ["open_cooldown"]
+    refute inspect(summary) =~ "saved_reset_recovery"
+  end
+
   @tag :stale_probe_ready_circuit_verdict
   test "stale probe-ready open lane is clear" do
     pool = pool_fixture()
