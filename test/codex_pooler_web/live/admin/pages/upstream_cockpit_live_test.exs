@@ -83,6 +83,134 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     refute html =~ "Usage unavailable"
   end
 
+  @tag :todo6_cross_issue
+  test "usage availability circuit recovery and reset confirmation stay independent", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{
+        slug: "todo6-cross-issue-#{System.unique_integer([:positive])}",
+        name: "Todo6 cross-issue"
+      })
+
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    consumed_at = DateTime.add(now, -2, :minute)
+
+    %{identity: identity, assignment: assignment} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Todo6 cross-issue account",
+        assignment_metadata: %{"quota_priming" => %{"status" => "known"}},
+        identity_metadata: %{
+          "saved_resets" => %{
+            "status" => "reported",
+            "available_count" => 0,
+            "observed_at" => DateTime.to_iso8601(now)
+          },
+          "saved_reset_redemption" => %{
+            "phase" => "consumed_pending_probe",
+            "consumed_at" => DateTime.to_iso8601(consumed_at),
+            "deadline_at" => DateTime.add(consumed_at, 15, :minute) |> DateTime.to_iso8601()
+          }
+        }
+      })
+
+    model_identifier = "gpt-todo6-cross-issue"
+    advertise_assignment_model!(pool, assignment, model_identifier)
+
+    insert_circuit_state!(pool, assignment, model_identifier, "proxy_http",
+      status: "open",
+      opened_at: DateTime.add(now, -30, :second),
+      next_probe_at: DateTime.add(now, -1, :second)
+    )
+
+    assert {:ok, windows} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               %{
+                 quota_key: "account",
+                 quota_scope: "account",
+                 quota_family: "account",
+                 window_kind: "secondary",
+                 window_minutes: 10_080,
+                 used_percent: Decimal.new("100"),
+                 reset_at: DateTime.add(now, 6, :day),
+                 source: "codex_usage_api",
+                 source_precision: "observed",
+                 freshness_state: "fresh",
+                 merge_precedence: 60,
+                 observed_at: DateTime.add(now, -30, :second),
+                 last_sync_at: DateTime.add(now, -30, :second),
+                 metadata: %{}
+               },
+               %{
+                 quota_key: "account",
+                 quota_scope: "account",
+                 quota_family: "account",
+                 window_kind: "secondary",
+                 window_minutes: 10_080,
+                 used_percent: Decimal.new("100"),
+                 reset_at: DateTime.add(now, 6, :day),
+                 source: "codex_response_headers",
+                 source_precision: "observed",
+                 freshness_state: "fresh",
+                 merge_precedence: 80,
+                 observed_at: now,
+                 last_sync_at: now
+               }
+             ])
+
+    windows
+    |> Enum.find(&(&1.source == "codex_usage_api"))
+    |> Ecto.Changeset.change(%{
+      metadata: todo6_candidate_metadata(DateTime.add(now, -30, :second), now)
+    })
+    |> Repo.update!()
+
+    request = request_fixture(%{pool: pool, api_key: api_key})
+
+    ledger_entry_fixture(request, %{
+      pool_upstream_assignment_id: assignment.id,
+      upstream_identity_id: identity.id,
+      occurred_at: DateTime.add(now, -30, :second),
+      usage_status: "usage_unknown",
+      total_tokens: 999_999,
+      settled_cost_micros: 999_999
+    })
+
+    [account] = UpstreamAccountsReadModel.list_visible_accounts(scope, [pool])
+    assert account.token_burn.usage_state == :unknown
+    assert account.saved_reset_confirmation.confirmation_state == :awaiting_confirmation
+    assert account.saved_reset_confirmation.challenged_evidence_state == :candidate_progressing
+    assert [%{circuit_readiness: %{state: :recovering, ready?: true}}] = account.assignments
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+    card = "#upstream-account-#{identity.id}"
+
+    assert has_element?(
+             view,
+             "#{card}-token-burn-content [data-role='upstream-token-burn-state'][data-usage-state='unknown']",
+             "Usage unavailable"
+           )
+
+    assert has_element?(
+             view,
+             "#{card}-pool-assignment-#{assignment.id}-route-circuit[title='Circuit recovery in progress']"
+           )
+
+    assert has_element?(
+             view,
+             "#{card}-saved-reset-meter-confirmation [data-role='upstream-saved-reset-challenged-evidence'][data-evidence-state='candidate_progressing']",
+             "Candidate progressing"
+           )
+
+    assert has_element?(
+             view,
+             "#{card}-saved-reset-meter-confirmation [data-role='upstream-saved-reset-routing-pause'][data-routing-paused='true']",
+             "Routing paused"
+           )
+  end
+
   test "reconciliation status renders one attention region for a blocked summary" do
     html =
       render_component(&ReconciliationStatus.reconciliation_status/1, %{
@@ -5311,6 +5439,24 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
       exposed_model_id: model_identifier,
       metadata: %{"source_assignment_models" => %{assignment.id => %{}}}
     })
+  end
+
+  defp todo6_candidate_metadata(observed_at, snapshot_at) do
+    %{
+      "__quota_confirmed_candidate_v1" => %{
+        "version" => 1,
+        "used_percent" => "0",
+        "reset_at" => DateTime.add(snapshot_at, 6, :day) |> DateTime.to_iso8601(),
+        "observed_at" => DateTime.to_iso8601(observed_at),
+        "count" => 1
+      },
+      "__quota_candidate_provider_status_v1" => %{
+        "version" => 1,
+        "allowed" => true,
+        "limit_reached" => false,
+        "observed_at" => DateTime.to_iso8601(observed_at)
+      }
+    }
   end
 
   defp insert_circuit_state!(pool, assignment, model_identifier, route_class, attrs) do

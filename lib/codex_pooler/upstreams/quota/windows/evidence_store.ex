@@ -96,6 +96,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   defp record_evidence_in_transaction(identity_or_id, attrs, observed_at, timestamp) do
     with {:ok, evidence} <- Evidence.new(attrs, observed_at),
          identity_id when is_binary(identity_id) <- evidence_identity_id(identity_or_id, attrs) do
+      lock_evidence_identity_reference(identity_id)
       advisory_lock_evidence_identity(identity_id)
 
       attrs =
@@ -118,6 +119,18 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       {:error, _errors} = error -> error
       _missing_identity -> {:error, %{upstream_identity_id: ["can't be blank"]}}
     end
+  end
+
+  defp lock_evidence_identity_reference(identity_id) do
+    _identity_id =
+      Repo.one(
+        from identity in UpstreamIdentity,
+          where: identity.id == ^identity_id,
+          select: identity.id,
+          lock: "FOR KEY SHARE"
+      )
+
+    :ok
   end
 
   defp advisory_lock_evidence_identity(identity_id) do

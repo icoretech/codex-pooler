@@ -83,7 +83,8 @@ defmodule CodexPooler.Gateway.Routing.CircuitHealthEquivalenceTest do
     end
   end
 
-  test "saved reset recovery fence locks and classifies a usable transient sibling" do
+  @tag :todo6_cross_issue
+  test "saved reset recovery fence locks and classifies a usable transient sibling without changing circuit accounting" do
     pool = pool_fixture()
     model = model_fixture(pool)
     target = upstream_assignment_fixture(pool)
@@ -94,8 +95,11 @@ defmodule CodexPooler.Gateway.Routing.CircuitHealthEquivalenceTest do
       circuit_state_fixture(pool, model, sibling.assignment, observed_at,
         status: "open",
         next_probe_at: observed_at,
-        metadata: %{}
+        metadata: %{"probe_in_flight_count" => 1}
       )
+
+    circuit_accounting =
+      Map.take(circuit, [:status, :failure_count, :success_count, :next_probe_at, :metadata])
 
     gateway_auto_context = %{
       quota_scope: %{catalog_model: model.exposed_model_id},
@@ -125,6 +129,10 @@ defmodule CodexPooler.Gateway.Routing.CircuitHealthEquivalenceTest do
                  usable_sibling_identity_ids: MapSet.new([sibling.identity.id])
                })
              end)
+
+    assert Repo.reload!(circuit)
+           |> Map.take([:status, :failure_count, :success_count, :next_probe_at, :metadata]) ==
+             circuit_accounting
   end
 
   defp circuit_state_fixture(pool, model, assignment, observed_at, attrs) do

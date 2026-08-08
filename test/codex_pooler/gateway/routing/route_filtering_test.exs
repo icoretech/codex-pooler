@@ -348,6 +348,80 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert [%{reasons: [%{"code" => "saved_reset_probe_pending"}]}] = exclusions
     end
 
+    @tag :todo6_cross_issue
+    test "usage accounting does not override recovering circuit and pending reset routing facts" do
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+      consumed_at =
+        DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:microsecond)
+
+      %{identity: identity, assignment: assignment} =
+        active_upstream_assignment_fixture(pool, %{
+          metadata:
+            "consumed_pending_probe"
+            |> reset_probe_redemption(consumed_at)
+            |> put_in(
+              ["saved_reset_redemption", "probe"],
+              %{
+                "token" => Ecto.UUID.generate(),
+                "claimed_at" => DateTime.to_iso8601(consumed_at)
+              }
+            )
+        })
+
+      upsert_primary_quota!(identity, Decimal.new("15"))
+      filter_input = filter_input(pool, api_key, assignment, identity, "todo6-independent-facts")
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      circuit =
+        %RoutingCircuitState{}
+        |> RoutingCircuitState.changeset(%{
+          pool_id: pool.id,
+          pool_upstream_assignment_id: assignment.id,
+          upstream_identity_id: identity.id,
+          model_identifier: filter_input.model.exposed_model_id,
+          route_class: filter_input.route_class,
+          status: "open",
+          reason_code: "todo6_recovering",
+          failure_count: 3,
+          success_count: 0,
+          opened_at: DateTime.add(now, -30, :second),
+          next_probe_at: DateTime.add(now, -1, :second),
+          metadata: %{"probe_in_flight_count" => 0},
+          created_at: DateTime.add(now, -30, :second),
+          updated_at: now
+        })
+        |> Repo.insert!()
+
+      request = request_fixture(%{pool: pool, api_key: api_key})
+
+      ledger_entry =
+        ledger_entry_fixture(request, %{
+          pool_upstream_assignment_id: assignment.id,
+          upstream_identity_id: identity.id,
+          occurred_at: now,
+          usage_status: "usage_unknown",
+          total_tokens: 999_999,
+          settled_cost_micros: 999_999
+        })
+
+      route_state = route_state(filter_input)
+      assert route_state.circuit_snapshots[assignment.id].eligible? == true
+
+      assert {:error,
+              %{
+                code: "quota_evidence_unavailable",
+                candidate_exclusions: [%{reasons: [%{"code" => "saved_reset_probe_pending"}]}]
+              }} =
+               RouteFiltering.filter_candidates_with_route_state(filter_input, route_state)
+
+      assert Repo.reload!(ledger_entry).usage_status == "usage_unknown"
+      assert Repo.reload!(circuit).status == "open"
+
+      assert Repo.reload!(identity).metadata["saved_reset_redemption"]["phase"] ==
+               "consumed_pending_probe"
+    end
+
     test "does not route an exhausted account whose reset-probe window has elapsed" do
       %{pool: pool, api_key: api_key} = active_api_key_fixture()
 
@@ -1328,6 +1402,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
     end
 
     @tag :saved_reset_expiry_ownership
+    @tag :todo6_cross_issue
     test "threshold redemption waits for a circuit-excluded usable sibling recovery" do
       {:ok, upstream} =
         FakeUpstream.start_link(
@@ -1412,6 +1487,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       end
     end
 
+    @tag :todo6_cross_issue
     test "blocked exhaustion waits when a circuit-excluded sibling has usable quota" do
       {:ok, upstream} =
         FakeUpstream.start_link(

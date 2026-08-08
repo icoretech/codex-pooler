@@ -5238,6 +5238,148 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       end
     end
 
+    @tag :todo6_multinode
+    test "two runtime observers and reconciliation converge one accepted lifecycle across replicas" do
+      {:ok, fake} = FakeUpstream.start_link({:path_json, %{}})
+      on_exit(fn -> FakeUpstream.stop(fake) end)
+
+      fixture = committed_convergence_race_fixture!(fake)
+      on_exit(fn -> cleanup_committed_convergence_race_fixture!(fixture) end)
+
+      parent = self()
+      barrier = make_ref()
+      convergence_event = [:codex_pooler, :saved_reset, :convergence]
+      convergence_handler = {__MODULE__, :todo6_convergence, barrier}
+      repo_handler = {__MODULE__, :todo6_repo, barrier}
+
+      :ok =
+        :telemetry.attach(
+          convergence_handler,
+          convergence_event,
+          fn ^convergence_event, measurements, metadata, ^parent ->
+            send(parent, {barrier, :convergence, measurements, metadata})
+          end,
+          parent
+        )
+
+      :ok =
+        :telemetry.attach(
+          repo_handler,
+          [:codex_pooler, :repo, :query],
+          fn _event, _measurements, metadata, _config ->
+            role = Process.get({__MODULE__, barrier, :todo6_role})
+            query = metadata[:query] || ""
+
+            if metadata[:source] == "routing_circuit_states" and
+                 (String.contains?(query, "FOR UPDATE") or
+                    String.starts_with?(String.trim_leading(query), "UPDATE")) do
+              send(parent, {barrier, :circuit_lock_or_write, role})
+            end
+          end,
+          nil
+        )
+
+      actors = [
+        start_todo6_convergence_actor(parent, barrier, :headers, fixture, fn stale_identity ->
+          RateLimitObserver.record_headers(stale_identity, %Req.Response{
+            headers: account_weekly_headers("4")
+          })
+        end),
+        start_todo6_convergence_actor(parent, barrier, :websocket, fixture, fn stale_identity ->
+          RateLimitObserver.record_websocket_frame_headers(
+            stale_identity,
+            Map.new(account_weekly_headers("4"))
+          )
+        end),
+        start_todo6_convergence_actor(parent, barrier, :reconciliation, fixture, fn _stale ->
+          PoolReconciliation.reconcile_pool_account(fixture.pool_id, fixture.assignment_id,
+            quota_windows: [fixture.canonical_window]
+          )
+        end)
+      ]
+
+      try do
+        ready =
+          Enum.map(actors, fn %{role: role, task: task} ->
+            task_pid = task.pid
+            assert_receive {^barrier, :ready, ^role, ^task_pid, backend_pid}, 5_000
+            {role, backend_pid}
+          end)
+
+        assert ready |> Enum.map(&elem(&1, 1)) |> Enum.uniq() |> length() == 3
+
+        :erlang.trace_pattern({ProbeLease, :claim, 5}, true, [:local])
+
+        Enum.each(actors, fn %{role: role, task: task} ->
+          :erlang.trace(task.pid, true, [:call])
+          send(task.pid, {barrier, :start, role})
+        end)
+
+        for role <- [:headers, :websocket, :reconciliation] do
+          assert_receive {^barrier, :started, ^role}
+        end
+
+        results =
+          Enum.map(actors, fn %{role: role, task: task} ->
+            assert {^role, result} = Task.await(task, 15_000)
+            {role, result}
+          end)
+
+        assert {:headers, :ok} in results
+        assert {:websocket, :ok} in results
+
+        assert Enum.any?(results, fn
+                 {:reconciliation, {:ok, %{quota: %{code: "quota_refreshed"}}}} -> true
+                 _result -> false
+               end)
+
+        persisted = run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end)
+        redemption = persisted.metadata["saved_reset_redemption"]
+
+        assert redemption["phase"] == "confirmed_by_quota"
+        assert redemption["status"] == "succeeded"
+
+        assert Map.take(redemption, ["attempt_id", "generation", "consumed_at", "result"]) ==
+                 Map.take(fixture.original_redemption, [
+                   "attempt_id",
+                   "generation",
+                   "consumed_at",
+                   "result"
+                 ])
+
+        refute Map.has_key?(redemption, "probe")
+        assert FakeUpstream.requests(fake) == []
+
+        sibling = run_unboxed(fn -> Repo.get!(UpstreamIdentity, fixture.sibling_identity_id) end)
+        assert sibling.metadata == fixture.sibling_metadata
+        assert sibling.saved_reset_first_seen_ledger == fixture.sibling_ledger
+
+        circuit = run_unboxed(fn -> Repo.get!(RoutingCircuitState, fixture.circuit_id) end)
+        assert circuit == fixture.circuit
+
+        assert_receive {^barrier, :convergence, %{count: 1}, %{outcome: "confirmed_by_quota"}}
+        refute_receive {^barrier, :convergence, _measurements, _metadata}
+        refute_receive {^barrier, :circuit_lock_or_write, _role}
+
+        assert Enum.sum(Enum.map(actors, &drain_probe_claim_calls(&1.task.pid))) == 0
+      after
+        Enum.each(actors, fn %{role: role, task: task} ->
+          send(task.pid, {barrier, :start, role})
+
+          if Process.alive?(task.pid) do
+            :erlang.trace(task.pid, false, [:call])
+          end
+
+          release_probe_claim_task(task)
+        end)
+
+        :erlang.trace_pattern({ProbeLease, :claim, 5}, false, [:local])
+        :telemetry.detach(repo_handler)
+        :telemetry.detach(convergence_handler)
+      end
+    end
+
+    @tag :todo6_multinode
     @tag :todo1_race_b
     @tag :todo5_metadata
     @tag :todo5_runtime
@@ -5263,6 +5405,16 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert {evidence.result.phase, evidence.persisted_phase} ==
                {"confirmed_by_quota", "confirmed_by_quota"}
 
+      assert Map.take(evidence.persisted_redemption, ["attempt_id", "generation"]) ==
+               Map.take(evidence.original_claim, ["attempt_id", "generation"])
+
+      assert Map.take(evidence.persisted_redemption["result"], ["applied", "code"]) == %{
+               "applied" => true,
+               "code" => "reset"
+             }
+
+      refute Map.has_key?(evidence.persisted_redemption, "probe")
+
       assert Map.take(evidence.persisted_redemption, [
                "confirmation_timing",
                "convergence_source",
@@ -5275,8 +5427,16 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
       assert_receive {^handler_id, %{count: 1},
                       %{source: "finalizer", outcome: "confirmed_by_quota"}}
+
+      refute_receive {^handler_id, _measurements, _metadata}
+
+      assert Enum.map(FakeUpstream.requests(evidence.fake), & &1.path) == [
+               "/api/codex/rate-limit-reset-credits/consume",
+               "/api/codex/usage"
+             ]
     end
 
+    @tag :todo6_multinode
     @tag :todo1_race_b_exhausted
     test "exhausted quota committed while the reset finalizer is pending stays guarded until later convergence" do
       evidence = run_post_consume_finalizer_race!("100")
@@ -5299,6 +5459,13 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         end)
 
       assert converged.metadata["saved_reset_redemption"]["phase"] == "reblocked"
+
+      assert Map.take(converged.metadata["saved_reset_redemption"], ["attempt_id", "generation"]) ==
+               Map.take(evidence.original_claim, ["attempt_id", "generation"])
+
+      assert converged.metadata["saved_reset_redemption"]["result"] == evidence.finalized_result
+
+      refute Map.has_key?(converged.metadata["saved_reset_redemption"], "probe")
       assert provider_consume_count(evidence.fake) == 1
     end
 
@@ -7739,6 +7906,169 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     end)
   end
 
+  defp committed_convergence_race_fixture!(fake) do
+    run_unboxed(fn ->
+      unique = System.unique_integer([:positive, :monotonic])
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      consumed_at = DateTime.add(now, -60, :second)
+      pool = pool_fixture(%{slug: "saved-reset-convergence-race-#{unique}"})
+
+      %{assignment: assignment, identity: stale_identity} =
+        active_upstream_assignment_fixture(pool, %{
+          account_label: "Saved reset convergence race #{unique}",
+          chatgpt_account_id: "acct_convergence_race_#{unique}",
+          metadata: %{
+            "usage_base_url" => FakeUpstream.url(fake),
+            "saved_resets" => %{
+              "status" => "reported",
+              "available_count" => 1,
+              "source" => "codex_usage_api",
+              "path_style" => "codex_api",
+              "observed_at" => DateTime.to_iso8601(now),
+              "usage_path" => "/api/codex/usage",
+              "reason" => nil
+            }
+          }
+        })
+
+      sibling =
+        active_upstream_assignment_fixture(pool, %{
+          account_label: "Saved reset convergence sibling #{unique}",
+          chatgpt_account_id: "acct_convergence_sibling_#{unique}",
+          metadata: %{
+            "saved_resets" => %{
+              "status" => "reported",
+              "available_count" => 2,
+              "source" => "codex_usage_api",
+              "path_style" => "codex_api",
+              "observed_at" => DateTime.to_iso8601(now),
+              "reason" => nil
+            }
+          }
+        })
+
+      original_redemption = %{
+        "status" => "failed",
+        "phase" => "reblocked",
+        "attempt_id" => Ecto.UUID.generate(),
+        "generation" => 7,
+        "trigger_kind" => "gateway_auto",
+        "started_at" => consumed_at |> DateTime.add(-30, :second) |> DateTime.to_iso8601(),
+        "consumed_at" => DateTime.to_iso8601(consumed_at),
+        "deadline_at" => consumed_at |> DateTime.add(15, :minute) |> DateTime.to_iso8601(),
+        "finished_at" => DateTime.to_iso8601(consumed_at),
+        "terminal_reason" => "converged_reblocked",
+        "result" => %{"code" => "reset", "applied" => true, "marker" => "original"}
+      }
+
+      stale_identity
+      |> Repo.reload!()
+      |> update_redemption!(original_redemption)
+
+      canonical_window =
+        weekly_quota_attrs(Decimal.new("4"),
+          observed_at: now,
+          last_sync_at: now,
+          reset_at: DateTime.add(now, 3, :day)
+        )
+
+      assert {:ok, [_canonical]} =
+               QuotaWindows.upsert_quota_windows(stale_identity, [canonical_window])
+
+      circuit =
+        %RoutingCircuitState{}
+        |> RoutingCircuitState.changeset(%{
+          pool_id: pool.id,
+          pool_upstream_assignment_id: sibling.assignment.id,
+          upstream_identity_id: sibling.identity.id,
+          model_identifier: "test-model",
+          route_class: "proxy_http",
+          status: "open",
+          reason_code: "test_circuit_open",
+          failure_count: 3,
+          success_count: 0,
+          opened_at: now,
+          next_probe_at: DateTime.add(now, 60, :second),
+          metadata: %{
+            "probe_in_flight_count" => 0,
+            "saved_reset_recovery" => %{
+              "version" => 1,
+              "attempted" => false,
+              "since_success_at" => "never"
+            }
+          },
+          created_at: now,
+          updated_at: now
+        })
+        |> Repo.insert!()
+
+      sibling = Repo.reload!(sibling.identity)
+
+      %{
+        assignment_id: assignment.id,
+        canonical_window: canonical_window,
+        circuit: circuit,
+        circuit_id: circuit.id,
+        identity_id: stale_identity.id,
+        original_redemption: original_redemption,
+        pool_id: pool.id,
+        sibling_identity_id: sibling.id,
+        sibling_ledger: sibling.saved_reset_first_seen_ledger,
+        sibling_metadata: sibling.metadata,
+        stale_identity: stale_identity
+      }
+    end)
+  end
+
+  defp cleanup_committed_convergence_race_fixture!(fixture) do
+    assert %{circuits: 1, identities: 2, pools: 1} ==
+             run_unboxed(fn ->
+               {circuit_count, _rows} =
+                 Repo.delete_all(
+                   from circuit in RoutingCircuitState,
+                     where: circuit.id == ^fixture.circuit_id
+                 )
+
+               {identity_count, _rows} =
+                 Repo.delete_all(
+                   from identity in UpstreamIdentity,
+                     where: identity.id in ^[fixture.identity_id, fixture.sibling_identity_id]
+                 )
+
+               {pool_count, _rows} =
+                 Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool_id)
+
+               %{circuits: circuit_count, identities: identity_count, pools: pool_count}
+             end)
+  end
+
+  defp start_todo6_convergence_actor(parent, barrier, role, fixture, fun) do
+    task =
+      Task.async(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          Process.put({__MODULE__, barrier, :todo6_role}, role)
+          backend_pid = backend_pid!()
+          send(parent, {barrier, :ready, role, self(), backend_pid})
+
+          receive do
+            {^barrier, :start, ^role} -> :ok
+          after
+            5_000 -> raise "timed out waiting to start Todo 6 convergence actor"
+          end
+
+          send(parent, {barrier, :started, role})
+
+          try do
+            {role, fun.(fixture.stale_identity)}
+          after
+            Process.delete({__MODULE__, barrier, :todo6_role})
+          end
+        end)
+      end)
+
+    %{role: role, task: task}
+  end
+
   defp cleanup_committed_post_consume_finalizer_fixture!(fixture) do
     assert %{identities: 1, pools: 1} ==
              run_unboxed(fn ->
@@ -8870,6 +9200,14 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
       assert provider_consume_count(fake) == 1
 
+      original_claim =
+        Sandbox.unboxed_run(Repo, fn ->
+          Repo.get!(UpstreamIdentity, fixture.identity_id).metadata["saved_reset_redemption"]
+        end)
+
+      assert original_claim["phase"] == "consuming"
+      assert original_claim["result"] == nil
+
       {evidence_backend_pid, evidence_window, phase_while_refresh_blocked} =
         Sandbox.unboxed_run(Repo, fn ->
           backend_pid = backend_pid!()
@@ -8919,6 +9257,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       %{
         fake: fake,
         fixture: fixture,
+        finalized_result: persisted.metadata["saved_reset_redemption"]["result"],
+        original_claim: original_claim,
         persisted_redemption: persisted.metadata["saved_reset_redemption"],
         persisted_phase: persisted.metadata["saved_reset_redemption"]["phase"],
         probe_claim_calls: probe_claim_calls,
