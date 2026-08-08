@@ -5,14 +5,19 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
 
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Assignments.PoolAssignments
+  alias CodexPooler.Upstreams.Lifecycle.CredentialFencing
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.SavedResets.FirstSeenLedger
+  alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection
   alias CodexPoolerWeb.DateTimeDisplay
+
+  alias Ecto.Adapters.SQL.Sandbox
 
   @saved_reset_detail_max_bytes 1_048_576
 
@@ -121,6 +126,7 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
   end
 
   @tag :todo1_scheduler_boundary
+  @tag :todo3_scheduler_boundary
   test "scheduled reconciliation accepts a pending weekly restart and confirms the reset before returning" do
     window_seconds = 10_080 * 60
     call_started_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -234,6 +240,218 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
     assert requests != []
     assert Enum.all?(requests, &(&1.method == "GET" and String.ends_with?(&1.path, "/usage")))
     refute Enum.any?(requests, &String.contains?(&1.path, "rate-limit-reset-credits"))
+  end
+
+  @tag :todo3_scheduler_boundary
+  test "scheduled reconciliation leaves a consumed lifecycle pending when usage has no account descriptor" do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    consumed_at = DateTime.add(now, -1, :minute)
+
+    {:ok, fake} = FakeUpstream.start_link({:path_json, %{}})
+
+    pool = pool_fixture()
+
+    %{identity: identity, assignment: assignment} =
+      active_upstream_assignment_fixture(pool, %{
+        metadata: %{
+          "usage_base_url" => FakeUpstream.url(fake),
+          "usage_path" => "/api/codex/usage"
+        }
+      })
+
+    canonical_at = DateTime.add(consumed_at, -5, :minute)
+
+    assert {:ok, _canonical} =
+             QuotaWindows.record_evidence(
+               identity,
+               account_weekly_evidence(
+                 "100",
+                 canonical_at,
+                 DateTime.add(canonical_at, 5, :day)
+               ),
+               canonical_at
+             )
+
+    redemption = pending_redemption(consumed_at)
+    put_redemption!(identity, redemption)
+
+    model_window = %{
+      quota_key: "codex_spark",
+      quota_scope: "model",
+      quota_family: "codex_spark",
+      model: "gpt-example",
+      upstream_model: "gpt-example",
+      window_kind: "secondary",
+      window_minutes: 10_080,
+      used_percent: Decimal.new("0"),
+      reset_at: DateTime.add(now, 5, :day),
+      source: "local_reconciliation",
+      source_precision: "observed",
+      freshness_state: "fresh"
+    }
+
+    assert {:ok, %{quota: %{code: "quota_refreshed"}}} =
+             PoolReconciliation.reconcile_pool_account(pool, assignment,
+               quota_windows: [model_window]
+             )
+
+    persisted = Repo.reload!(identity)
+    assert persisted.metadata["saved_reset_redemption"] == redemption
+
+    assert [
+             %AccountQuotaWindow{
+               quota_key: "account",
+               used_percent: used_percent,
+               observed_at: ^canonical_at
+             },
+             %AccountQuotaWindow{quota_key: "codex_spark", quota_scope: "model"}
+           ] = QuotaWindows.list_evidence(identity)
+
+    assert Decimal.equal?(used_percent, Decimal.new("100"))
+    assert FakeUpstream.requests(fake) == []
+  end
+
+  @tag :todo3_scheduler_boundary
+  test "scheduled reconciliation keeps an unconfirmed weekly restart candidate pending" do
+    assert_pending_candidate_control(:valid)
+  end
+
+  @tag :todo3_scheduler_boundary
+  test "scheduled reconciliation restarts a malformed weekly candidate without converging" do
+    assert_pending_candidate_control(:malformed)
+  end
+
+  @tag :todo3_scheduler_boundary
+  test "scheduled reconciliation reblocks an accepted exhausted account cycle before returning" do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    consumed_at = DateTime.add(now, -1, :minute)
+    window_seconds = 10_080 * 60
+
+    {:ok, fake} =
+      FakeUpstream.start_link(
+        {:path_json,
+         %{
+           "/api/codex/usage" =>
+             {200,
+              %{
+                "plan_type" => "pro",
+                "rate_limit_reset_credits" => %{"available_count" => 0},
+                "rate_limit" => %{
+                  "secondary_window" => %{
+                    "used_percent" => 100,
+                    "limit_window_seconds" => window_seconds,
+                    "reset_after_seconds" => 4 * 24 * 60 * 60
+                  }
+                }
+              }}
+         }}
+      )
+
+    pool = pool_fixture()
+
+    %{identity: identity, assignment: assignment} =
+      active_upstream_assignment_fixture(pool, %{
+        metadata: %{
+          "usage_base_url" => FakeUpstream.url(fake),
+          "usage_path" => "/api/codex/usage"
+        }
+      })
+
+    redemption = pending_redemption(consumed_at)
+    put_redemption!(identity, redemption)
+
+    assert {:ok, %{quota: %{code: "quota_refreshed"}}} =
+             PoolReconciliation.reconcile_pool_account(pool, assignment)
+
+    [canonical] = QuotaWindows.list_evidence(identity)
+    assert Decimal.equal?(canonical.used_percent, Decimal.new("100"))
+    assert DateTime.compare(canonical.observed_at, consumed_at) != :lt
+
+    persisted = Repo.reload!(identity)
+    converged = persisted.metadata["saved_reset_redemption"]
+    assert converged["phase"] == "reblocked"
+    assert converged["status"] == "failed"
+    assert converged["terminal_reason"] == "converged_reblocked"
+
+    assert converged["finished_at"] ==
+             get_in(persisted.metadata, ["saved_resets", "observed_at"])
+  end
+
+  @tag :todo3_scheduler_boundary
+  test "scheduled reconciliation fences a credential superseded after assignment loading" do
+    assert_scheduler_superseded_control(:credential)
+  end
+
+  @tag :todo3_scheduler_boundary
+  test "scheduled reconciliation fences an assignment superseded after assignment loading" do
+    assert_scheduler_superseded_control(:assignment)
+  end
+
+  @tag :todo3_scheduler_boundary
+  test "scheduled reconciliation preserves a concurrent newer lifecycle generation" do
+    {pool, identity, assignment} = committed_scheduler_fixture()
+    original = pending_redemption(DateTime.add(DateTime.utc_now(), -1, :minute))
+    put_committed_redemption!(identity, original)
+
+    parent = self()
+    release_ref = make_ref()
+    handler_id = {__MODULE__, :todo3_post_persistence_commit, release_ref}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          query = metadata[:query] |> to_string() |> String.trim() |> String.downcase()
+
+          if query == "commit" and not Process.get(handler_id, false) do
+            Process.put(handler_id, true)
+            send(parent, {:quota_commit_completed, release_ref, self()})
+
+            receive do
+              {:release_after_new_generation, ^release_ref} -> :ok
+            end
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    reconciliation =
+      Task.async(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          PoolReconciliation.reconcile_pool_account(pool, assignment,
+            quota_windows: assignment.metadata["quota_windows"]
+          )
+        end)
+      end)
+
+    assert_receive {:quota_commit_completed, ^release_ref, reconciliation_pid}
+
+    {canonical, newer} =
+      Sandbox.unboxed_run(Repo, fn ->
+        [canonical] = QuotaWindows.list_evidence(identity)
+        consumed_at = DateTime.add(canonical.observed_at, 1, :microsecond)
+
+        newer =
+          consumed_at
+          |> pending_redemption()
+          |> Map.merge(%{"attempt_id" => Ecto.UUID.generate(), "generation" => 2})
+
+        put_redemption!(Repo.get!(UpstreamIdentity, identity.id), newer)
+        {canonical, newer}
+      end)
+
+    send(reconciliation_pid, {:release_after_new_generation, release_ref})
+
+    assert {:ok, %{quota: %{code: "quota_refreshed"}}} = Task.await(reconciliation)
+    assert Decimal.equal?(canonical.used_percent, Decimal.new("0"))
+
+    persisted =
+      Sandbox.unboxed_run(Repo, fn -> Repo.get!(UpstreamIdentity, identity.id) end)
+
+    assert persisted.metadata["saved_reset_redemption"] == newer
   end
 
   test "refresh_quota_from_usage stores sanitized saved reset usage snapshot" do
@@ -1161,6 +1379,266 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
     after
       :telemetry.detach(handler_id)
     end
+  end
+
+  defp assert_pending_candidate_control(candidate_kind) do
+    window_seconds = 10_080 * 60
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    candidate_at = DateTime.add(now, -60, :second)
+    canonical_at = DateTime.add(candidate_at, -5, :minute)
+    consumed_at = DateTime.add(candidate_at, -1, :minute)
+    canonical_reset = DateTime.add(canonical_at, 5, :day)
+    candidate_reset = DateTime.add(candidate_at, window_seconds, :second)
+
+    {:ok, fake} =
+      FakeUpstream.start_link(
+        {:path_json,
+         %{
+           "/api/codex/usage" =>
+             {200,
+              %{
+                "plan_type" => "pro",
+                "rate_limit_reset_credits" => %{"available_count" => 0},
+                "rate_limit" => %{
+                  "secondary_window" => %{
+                    "used_percent" => 0,
+                    "limit_window_seconds" => window_seconds,
+                    "reset_after_seconds" => window_seconds,
+                    "resets_at" =>
+                      now
+                      |> DateTime.add(window_seconds, :second)
+                      |> DateTime.to_iso8601()
+                  }
+                }
+              }}
+         }}
+      )
+
+    pool = pool_fixture()
+
+    %{identity: identity, assignment: assignment} =
+      active_upstream_assignment_fixture(pool, %{
+        metadata: %{
+          "usage_base_url" => FakeUpstream.url(fake),
+          "usage_path" => "/api/codex/usage"
+        }
+      })
+
+    assert {:ok, _canonical} =
+             QuotaWindows.record_evidence(
+               identity,
+               account_weekly_evidence("100", canonical_at, canonical_reset),
+               canonical_at
+             )
+
+    assert {:ok, pending} =
+             QuotaWindows.record_evidence(
+               identity,
+               account_weekly_evidence("0", candidate_at, candidate_reset,
+                 reset_after_seconds: window_seconds
+               ),
+               candidate_at
+             )
+
+    pending =
+      if candidate_kind == :malformed do
+        malformed_metadata =
+          put_in(pending.metadata, ["__quota_confirmed_candidate_v1", "count"], 2)
+
+        pending
+        |> Ecto.Changeset.change(%{metadata: malformed_metadata})
+        |> Repo.update!()
+      else
+        pending
+      end
+
+    expected_candidate_observed_at =
+      case EvidenceStore.parse_candidate(pending.metadata) do
+        {:ok, candidate} -> candidate.observed_at
+        :none -> nil
+      end
+
+    redemption = pending_redemption(consumed_at)
+    put_redemption!(identity, redemption)
+
+    assert {:ok, %{quota: %{code: "quota_refreshed"}}} =
+             PoolReconciliation.reconcile_pool_account(pool, assignment)
+
+    canonical =
+      identity
+      |> QuotaWindows.list_evidence()
+      |> Enum.find(&(&1.quota_key == "account" and &1.window_kind == "secondary"))
+
+    assert Decimal.equal?(canonical.used_percent, Decimal.new("100"))
+    assert {:ok, candidate} = EvidenceStore.parse_candidate(canonical.metadata)
+
+    case {candidate_kind, expected_candidate_observed_at} do
+      {:valid, expected_at} -> assert DateTime.compare(candidate.observed_at, expected_at) == :eq
+      {:malformed, nil} -> assert DateTime.compare(candidate.observed_at, candidate_at) == :gt
+    end
+
+    assert Repo.reload!(identity).metadata["saved_reset_redemption"] == redemption
+
+    requests = FakeUpstream.requests(fake)
+    assert requests != []
+    assert Enum.all?(requests, &(&1.method == "GET" and String.ends_with?(&1.path, "/usage")))
+  end
+
+  defp assert_scheduler_superseded_control(kind) do
+    {pool, identity, assignment} = committed_scheduler_fixture()
+    redemption = pending_redemption(DateTime.add(DateTime.utc_now(), -1, :minute))
+    put_committed_redemption!(identity, redemption)
+
+    parent = self()
+    release_ref = make_ref()
+    handler_id = {__MODULE__, :todo3_assignment_load, kind, release_ref}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          query = metadata[:query] |> to_string() |> String.trim_leading()
+
+          if String.starts_with?(query, "SELECT") and
+               String.contains?(query, ~s("pool_upstream_assignments")) and
+               String.contains?(query, ~s("upstream_identities")) and
+               not Process.get(handler_id, false) do
+            Process.put(handler_id, true)
+            send(parent, {:scheduler_assignment_loaded, release_ref, self()})
+
+            receive do
+              {:release_superseded_scheduler, ^release_ref} -> :ok
+            end
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    reconciliation =
+      Task.async(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          PoolReconciliation.reconcile_pool_account(pool, assignment,
+            quota_windows: assignment.metadata["quota_windows"]
+          )
+        end)
+      end)
+
+    assert_receive {:scheduler_assignment_loaded, ^release_ref, reconciliation_pid}
+
+    Sandbox.unboxed_run(Repo, fn -> supersede_scheduler_fixture!(kind, identity, assignment) end)
+    send(reconciliation_pid, {:release_superseded_scheduler, release_ref})
+
+    assert {:ok, result} = Task.await(reconciliation)
+    assert result.quota.code == "quota_refresh_superseded"
+
+    {persisted, windows} =
+      Sandbox.unboxed_run(Repo, fn ->
+        {Repo.get!(UpstreamIdentity, identity.id), QuotaWindows.list_evidence(identity)}
+      end)
+
+    assert persisted.metadata["saved_reset_redemption"] == redemption
+    assert windows == []
+  end
+
+  defp supersede_scheduler_fixture!(:credential, identity, _assignment) do
+    current = Repo.get!(UpstreamIdentity, identity.id)
+
+    current
+    |> UpstreamIdentity.changeset(%{
+      metadata: CredentialFencing.advance_credential_epoch(current)
+    })
+    |> Repo.update!()
+  end
+
+  defp supersede_scheduler_fixture!(:assignment, _identity, assignment) do
+    assignment
+    |> then(&Repo.get!(PoolUpstreamAssignment, &1.id))
+    |> PoolAssignments.disable_pool_assignment()
+    |> then(fn result -> assert {:ok, _disabled} = result end)
+  end
+
+  defp committed_scheduler_fixture do
+    quota_windows = [
+      %{
+        "quota_key" => "account",
+        "quota_scope" => "account",
+        "quota_family" => "account",
+        "window_kind" => "secondary",
+        "window_minutes" => 10_080,
+        "used_percent" => 0,
+        "reset_at" =>
+          DateTime.utc_now()
+          |> DateTime.add(5, :day)
+          |> DateTime.truncate(:microsecond)
+          |> DateTime.to_iso8601(),
+        "source" => "local_reconciliation",
+        "source_precision" => "observed",
+        "freshness_state" => "fresh"
+      }
+    ]
+
+    fixture =
+      Sandbox.unboxed_run(Repo, fn ->
+        pool = pool_fixture()
+
+        %{identity: identity, assignment: assignment} =
+          upstream_assignment_fixture(pool, %{
+            identity_metadata: %{"quota_windows" => quota_windows},
+            assignment_metadata: %{"quota_windows" => quota_windows}
+          })
+
+        {pool, identity, assignment}
+      end)
+
+    {pool, identity, _assignment} = fixture
+
+    on_exit(fn ->
+      Sandbox.unboxed_run(Repo, fn ->
+        Repo.delete_all(
+          from(current_identity in UpstreamIdentity, where: current_identity.id == ^identity.id)
+        )
+
+        Repo.delete_all(
+          from(current_pool in CodexPooler.Pools.Pool, where: current_pool.id == ^pool.id)
+        )
+      end)
+    end)
+
+    fixture
+  end
+
+  defp put_committed_redemption!(identity, redemption) do
+    Sandbox.unboxed_run(Repo, fn ->
+      identity
+      |> then(&Repo.get!(UpstreamIdentity, &1.id))
+      |> put_redemption!(redemption)
+    end)
+  end
+
+  defp put_redemption!(identity, redemption) do
+    identity
+    |> Ecto.Changeset.change(%{
+      metadata: Map.put(identity.metadata || %{}, "saved_reset_redemption", redemption)
+    })
+    |> Repo.update!()
+  end
+
+  defp pending_redemption(consumed_at) do
+    %{
+      "status" => "redeeming",
+      "phase" => "consumed_pending_probe",
+      "attempt_id" => Ecto.UUID.generate(),
+      "generation" => 1,
+      "trigger_kind" => "scheduled_expiry_rescue",
+      "started_at" => consumed_at |> DateTime.add(-1, :minute) |> DateTime.to_iso8601(),
+      "consumed_at" => DateTime.to_iso8601(consumed_at),
+      "deadline_at" => consumed_at |> DateTime.add(15, :minute) |> DateTime.to_iso8601(),
+      "finished_at" => DateTime.to_iso8601(consumed_at),
+      "result" => %{"code" => "reset", "applied" => true}
+    }
   end
 
   defp fresh_expiration_metadata(available_count, expiration) do
