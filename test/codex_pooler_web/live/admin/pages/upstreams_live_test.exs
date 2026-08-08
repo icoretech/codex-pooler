@@ -3427,20 +3427,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     now = DateTime.utc_now() |> DateTime.add(-60, :second)
 
     assert {:ok, [_quota_primary]} =
-             QuotaWindows.upsert_quota_windows(quota_identity, [
+             QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+               quota_identity,
                %{
-                 window_kind: "primary",
-                 window_minutes: 43_200,
-                 active_limit: 601,
-                 credits: 601,
-                 used_percent: Decimal.new("3"),
-                 reset_at: DateTime.add(now, 11, :day),
-                 source: "codex_usage_api",
-                 source_precision: "observed",
-                 freshness_state: "fresh",
-                 observed_at: now
-               }
-             ])
+                 "credits" => %{"balance" => 601},
+                 "rate_limit" => %{
+                   "primary_window" => %{
+                     "used_percent" => 3,
+                     "limit_window_seconds" => 2_592_000,
+                     "reset_after_seconds" => 950_400
+                   }
+                 }
+               },
+               now
+             )
 
     assert {:ok, [_credit_primary]} =
              QuotaWindows.upsert_quota_windows(credit_identity, [
@@ -3465,7 +3465,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(view, "#{quota_selector}-progress[value='97']")
     refute has_element?(view, "#{quota_selector}-progress.progress-striped")
-    refute has_element?(view, "#{quota_selector}-count")
+    assert has_element?(view, "#{quota_selector}-count", "601 credits")
+    refute render(view) =~ "601 / 601 credits"
 
     assert has_element?(view, "#{credit_selector}-progress[value='83'].progress-striped")
     assert has_element?(view, "#{credit_selector}-count", "500 credits")

@@ -435,19 +435,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
          %Quota.AccountQuotaWindow{
            quota_key: "account",
            quota_scope: "account",
-           source: "codex_usage_api",
-           source_precision: source_precision,
-           reset_at: %DateTime{},
-           used_percent: %Decimal{} = used_percent
+           source: "codex_usage_api"
          } = window
-       )
-       when source_precision in ["observed", "authoritative"] do
-    if Decimal.compare(used_percent, Decimal.new(100)) == :lt do
-      used_percent |> remaining_percent_from_used() |> decimal_clamp_percent()
-    else
-      window |> Measurements.for_window() |> Map.get(:remaining_percent)
-    end
-  end
+       ),
+       do: Measurements.meter_remaining_percent(window)
 
   defp quota_remaining_percent(%Quota.AccountQuotaWindow{
          quota_scope: scope,
@@ -494,16 +485,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   defp quota_percent_label(%Decimal{} = percent), do: "#{quota_percent_value(percent)}%"
   defp quota_percent_label(_percent), do: "not reported"
 
-  defp quota_count_label(
-         %Quota.AccountQuotaWindow{
-           quota_key: "account",
-           quota_scope: "account",
-           source: "codex_usage_api",
-           credits: credits
-         } = window
-       )
+  defp quota_count_label(%Quota.AccountQuotaWindow{
+         quota_key: "account",
+         quota_scope: "account",
+         source: "codex_usage_api",
+         credits: credits
+       })
        when is_integer(credits) and credits > 0 do
-    if burning_credits?(window), do: "#{Formatting.format_integer(credits)} credits"
+    "#{Formatting.format_integer(credits)} credits"
   end
 
   defp quota_count_label(%Quota.AccountQuotaWindow{credits: credits, active_limit: active_limit})

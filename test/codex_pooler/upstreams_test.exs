@@ -11205,6 +11205,68 @@ defmodule CodexPooler.UpstreamsTest do
     end
 
     @tag :upstream_quota_evidence_stability
+    test "quota meter percentage preserves account credit boundary semantics" do
+      reset_at = ~U[2026-09-06 10:06:18Z]
+
+      included_quota = %Quota.AccountQuotaWindow{
+        quota_key: "account",
+        quota_scope: "account",
+        source: "codex_usage_api",
+        reset_at: reset_at,
+        active_limit: 601,
+        credits: 601,
+        used_percent: Decimal.new("3")
+      }
+
+      assert Decimal.equal?(
+               Measurements.meter_remaining_percent(included_quota),
+               Decimal.new("97")
+             )
+
+      resetless_zero = %Quota.AccountQuotaWindow{
+        included_quota
+        | reset_at: nil,
+          active_limit: 0,
+          credits: 0,
+          used_percent: Decimal.new("0")
+      }
+
+      assert Measurements.meter_remaining_percent(resetless_zero) == nil
+
+      exhausted = %Quota.AccountQuotaWindow{
+        included_quota
+        | active_limit: 601,
+          credits: 500,
+          used_percent: Decimal.new("100")
+      }
+
+      assert Decimal.equal?(
+               Decimal.round(Measurements.meter_remaining_percent(exhausted), 0),
+               Decimal.new("83")
+             )
+
+      credit_only = %Quota.AccountQuotaWindow{
+        included_quota
+        | active_limit: nil,
+          credits: 3_817,
+          used_percent: Decimal.new("100")
+      }
+
+      assert Measurements.meter_remaining_percent(credit_only) == nil
+
+      model_window = %Quota.AccountQuotaWindow{
+        included_quota
+        | quota_key: "codex_spark",
+          quota_scope: "model"
+      }
+
+      assert Decimal.equal?(
+               Measurements.meter_remaining_percent(model_window),
+               Decimal.new("100")
+             )
+    end
+
+    @tag :upstream_quota_evidence_stability
     test "credit-only monthly usage remains usable without fabricating percent capacity" do
       identity = active_identity_fixture()
       observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)

@@ -3525,6 +3525,34 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
            )
   end
 
+  @tag :quota_health
+  @tag :upstream_quota_evidence_stability
+  test "cockpit keeps provider quota percentage authoritative with an inferred reset", %{
+    scope: scope
+  } do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    cockpit =
+      quota_cockpit!(scope, "relative-reset-credit-balance", [
+        %{
+          window_kind: "primary",
+          window_minutes: 43_200,
+          active_limit: 601,
+          credits: 601,
+          used_percent: Decimal.new("3"),
+          reset_at: DateTime.add(now, 11, :day),
+          observed_at: now,
+          source: "codex_usage_api",
+          source_precision: "inferred"
+        }
+      ])
+
+    assert [item] = cockpit.charts.quota_health.items
+    assert item.remaining_percent_value == 97.0
+    assert item.bar_value == 97.0
+    assert item.primary_30d.remaining_percent_value == 97.0
+  end
+
   test "renders unreported quota limits as static native progress meters", %{
     conn: conn,
     scope: scope

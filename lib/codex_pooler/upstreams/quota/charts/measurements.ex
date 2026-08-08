@@ -18,6 +18,29 @@ defmodule CodexPooler.Upstreams.Quota.Charts.Measurements do
     }
   end
 
+  @spec meter_remaining_percent(Quota.AccountQuotaWindow.t()) :: Decimal.t() | nil
+  def meter_remaining_percent(
+        %Quota.AccountQuotaWindow{
+          quota_key: "account",
+          quota_scope: "account",
+          source: "codex_usage_api",
+          reset_at: %DateTime{},
+          used_percent: %Decimal{} = used_percent
+        } = window
+      ) do
+    if Decimal.compare(used_percent, Decimal.new(100)) == :lt do
+      Decimal.new(100)
+      |> Decimal.sub(used_percent)
+      |> decimal_clamp_percent()
+    else
+      window |> for_window() |> Map.get(:remaining_percent)
+    end
+  end
+
+  def meter_remaining_percent(%Quota.AccountQuotaWindow{} = window) do
+    window |> for_window() |> Map.get(:remaining_percent)
+  end
+
   defp remaining(%Quota.AccountQuotaWindow{
          active_limit: active_limit,
          credits: 0,

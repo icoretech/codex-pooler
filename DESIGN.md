@@ -788,8 +788,9 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
   determinate zero-value meter.
 - **Credit burn state:** a positive provider credit balance does not change the
   quota meter while included Codex quota remains. The row continues to show
-  the provider's remaining quota percentage with a solid fill and no credit
-  count. Once provider usage reaches 100%, `burning_credits: true` appends
+  the provider's remaining quota percentage with a solid fill and may show the
+  current raw credit balance as secondary detail. Once provider usage reaches
+  100%, `burning_credits: true` appends
   `progress-striped`; the fill then tracks the observed credit balance against
   the last pre-burn balance baseline and the detail shows only the current
   provider balance, such as `500 credits`. It never renders an inferred

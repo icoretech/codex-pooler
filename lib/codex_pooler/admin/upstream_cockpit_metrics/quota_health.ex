@@ -155,7 +155,10 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.QuotaHealth do
   defp quota_assignment_state(%{state: state}), do: state
 
   defp quota_measurements(%Quota.AccountQuotaWindow{} = window),
-    do: Measurements.for_window(window)
+    do:
+      window
+      |> Measurements.for_window()
+      |> Map.put(:remaining_percent, Measurements.meter_remaining_percent(window))
 
   defp quota_measurements(_window),
     do: %{remaining: nil, capacity: nil, used: nil, used_percent: nil, remaining_percent: nil}
@@ -163,7 +166,7 @@ defmodule CodexPooler.Admin.UpstreamCockpitMetrics.QuotaHealth do
   defp quota_window_contract(nil, _as_of), do: nil
 
   defp quota_window_contract(%Quota.AccountQuotaWindow{} = window, as_of) do
-    measurements = Measurements.for_window(window)
+    measurements = quota_measurements(window)
 
     %{
       window_kind: window.window_kind,
