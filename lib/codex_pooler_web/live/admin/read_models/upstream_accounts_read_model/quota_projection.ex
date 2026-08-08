@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   alias CodexPooler.Upstreams.Quota.Charts.Measurements
   alias CodexPooler.Upstreams.Quota.WindowSelector
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting
+  alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetConfirmationProjection
   alias CodexPoolerWeb.DateTimeDisplay
   alias CodexPoolerWeb.RelativeTime
 
@@ -42,6 +43,24 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
           required(:reset_label) => String.t() | nil,
           required(:reset_title) => String.t() | nil
         }
+
+  @type saved_reset_confirmation :: SavedResetConfirmationProjection.t()
+
+  @spec saved_reset_confirmation(
+          map(),
+          [Quota.AccountQuotaWindow.t()],
+          [Quota.AccountQuotaWindow.t()],
+          DateTime.t()
+        ) ::
+          saved_reset_confirmation() | nil
+  def saved_reset_confirmation(redemption, raw_windows, effective_windows, snapshot_at) do
+    SavedResetConfirmationProjection.project(
+      redemption,
+      raw_windows,
+      effective_windows,
+      snapshot_at
+    )
+  end
 
   @spec readiness([Quota.AccountQuotaWindow.t()], DateTime.t()) :: UpstreamQuotaReadiness.t()
   def readiness(windows, %DateTime{} = snapshot_at) when is_list(windows) do

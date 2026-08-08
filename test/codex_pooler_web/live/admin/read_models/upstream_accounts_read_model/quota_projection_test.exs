@@ -12,6 +12,219 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
 
   @snapshot_at ~U[2026-07-25 12:00:00Z]
 
+  @tag :todo4_projection
+  test "keeps a valid post-consume candidate visible when the effective fold selects another source" do
+    consumed_at = DateTime.add(@snapshot_at, -5, :minute)
+
+    candidate_row =
+      account_window(
+        id: "10000000-0000-4000-8000-000000000001",
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        used_percent: Decimal.new("100"),
+        reset_at: DateTime.add(@snapshot_at, 6, :day),
+        observed_at: DateTime.add(@snapshot_at, -60, :second),
+        merge_precedence: 60,
+        metadata: candidate_metadata(DateTime.add(@snapshot_at, -60, :second))
+      )
+
+    selected_row =
+      account_window(
+        id: "20000000-0000-4000-8000-000000000002",
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        used_percent: Decimal.new("100"),
+        reset_at: DateTime.add(@snapshot_at, 6, :day),
+        observed_at: @snapshot_at,
+        source: "codex_response_headers",
+        merge_precedence: 80
+      )
+
+    raw_windows = [candidate_row, selected_row]
+    effective_windows = QuotaWindows.effective_quota_windows(raw_windows, @snapshot_at)
+
+    assert [^selected_row] = effective_windows
+
+    assert QuotaProjection.saved_reset_confirmation(
+             redemption("consumed_pending_probe", consumed_at),
+             raw_windows,
+             effective_windows,
+             @snapshot_at
+           ) == %{
+             confirmation_state: :awaiting_confirmation,
+             challenged_evidence_state: :candidate_progressing,
+             additional_account_blocker_state: :none,
+             observed_at: DateTime.add(@snapshot_at, -60, :second)
+           }
+  end
+
+  @tag :todo4_projection
+  test "uses fixed additional-account blocker precedence independent of input order" do
+    consumed_at = DateTime.add(@snapshot_at, -5, :minute)
+
+    challenged =
+      account_window(
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        used_percent: Decimal.new("100"),
+        reset_at: DateTime.add(@snapshot_at, 6, :day),
+        observed_at: @snapshot_at,
+        metadata: candidate_metadata(@snapshot_at)
+      )
+
+    reset_missing =
+      account_window(
+        window_kind: "primary",
+        window_minutes: 300,
+        used_percent: Decimal.new("10"),
+        reset_at: nil,
+        observed_at: @snapshot_at
+      )
+
+    expired =
+      account_window(
+        window_kind: "primary",
+        window_minutes: 43_200,
+        used_percent: Decimal.new("10"),
+        reset_at: DateTime.add(@snapshot_at, -1, :second),
+        observed_at: @snapshot_at
+      )
+
+    for effective_windows <- [
+          [challenged, expired, reset_missing],
+          [reset_missing, challenged, expired],
+          [expired, reset_missing, challenged]
+        ] do
+      projection =
+        QuotaProjection.saved_reset_confirmation(
+          redemption("consumed_pending_probe", consumed_at),
+          [challenged],
+          effective_windows,
+          @snapshot_at
+        )
+
+      assert projection.challenged_evidence_state == :candidate_progressing
+      assert projection.additional_account_blocker_state == :reset_missing
+    end
+  end
+
+  @tag :todo4_projection
+  test "fails closed for malformed, unknown-version, and future candidate evidence" do
+    consumed_at = DateTime.add(@snapshot_at, -5, :minute)
+    raw_sentinel = "future-projection-version-private-value"
+
+    for metadata <- [
+          %{"__quota_confirmed_candidate_v1" => %{"version" => 2, "source" => raw_sentinel}},
+          %{"__quota_confirmed_candidate_v1" => %{"version" => raw_sentinel}},
+          candidate_metadata(DateTime.add(@snapshot_at, 1, :second)),
+          candidate_metadata(DateTime.add(@snapshot_at, -2, :hour)),
+          candidate_metadata(DateTime.add(consumed_at, -1, :second))
+        ] do
+      challenged =
+        account_window(
+          window_kind: "secondary",
+          window_minutes: 10_080,
+          used_percent: Decimal.new("100"),
+          reset_at: DateTime.add(@snapshot_at, 6, :day),
+          observed_at: @snapshot_at,
+          metadata: metadata
+        )
+
+      unknown_unusable =
+        account_window(
+          window_kind: "primary",
+          window_minutes: 300,
+          active_limit: 0,
+          credits: 1,
+          used_percent: nil,
+          reset_at: DateTime.add(@snapshot_at, 5, :hour),
+          source: raw_sentinel,
+          observed_at: @snapshot_at
+        )
+
+      projection =
+        QuotaProjection.saved_reset_confirmation(
+          redemption("consumed_pending_probe", consumed_at),
+          [challenged],
+          [challenged, unknown_unusable],
+          @snapshot_at
+        )
+
+      assert projection.challenged_evidence_state == :exhausted
+      assert projection.additional_account_blocker_state == :unknown_unusable
+      refute inspect(projection) =~ raw_sentinel
+    end
+  end
+
+  @tag :todo4_projection
+  test "keeps model-scoped exhaustion outside both account evidence dimensions" do
+    consumed_at = DateTime.add(@snapshot_at, -5, :minute)
+
+    challenged =
+      account_window(
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        used_percent: Decimal.new("100"),
+        reset_at: DateTime.add(@snapshot_at, 6, :day),
+        observed_at: @snapshot_at,
+        metadata: candidate_metadata(@snapshot_at)
+      )
+
+    model_window = %{
+      challenged
+      | quota_key: "codex_spark",
+        quota_scope: "model",
+        quota_family: "codex_spark",
+        model: "gpt-example-model",
+        metadata: %{}
+    }
+
+    projection =
+      QuotaProjection.saved_reset_confirmation(
+        redemption("consumed_pending_probe", consumed_at),
+        [challenged],
+        [challenged, model_window],
+        @snapshot_at
+      )
+
+    assert projection.challenged_evidence_state == :candidate_progressing
+    assert projection.additional_account_blocker_state == :none
+  end
+
+  @tag :todo4_projection
+  test "emits only the four bounded confirmation states and omits unknown phases" do
+    expected = %{
+      "consuming" => :awaiting_confirmation,
+      "consumed_pending_probe" => :awaiting_confirmation,
+      "reblocked" => :awaiting_confirmation,
+      "confirmed_by_upstream" => :confirmed,
+      "confirmed_by_quota" => :confirmed,
+      "consume_not_applied" => :not_applied,
+      "expired" => :confirmation_expired
+    }
+
+    for {phase, confirmation_state} <- expected do
+      projection =
+        QuotaProjection.saved_reset_confirmation(
+          redemption(phase, DateTime.add(@snapshot_at, -5, :minute)),
+          [],
+          [],
+          @snapshot_at
+        )
+
+      assert projection.confirmation_state == confirmation_state
+      assert projection.challenged_evidence_state == :absent
+      assert projection.additional_account_blocker_state == :none
+    end
+
+    assert QuotaProjection.saved_reset_confirmation(
+             redemption("future-private-phase", DateTime.add(@snapshot_at, -5, :minute)),
+             [],
+             [],
+             @snapshot_at
+           ) == nil
+  end
+
   test "requires one trusted snapshot timestamp for readiness and quota rows" do
     refute function_exported?(QuotaProjection, :readiness, 1)
     refute function_exported?(QuotaProjection, :quota_limit_rows, 2)
@@ -738,6 +951,32 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
         attrs
       )
     )
+  end
+
+  defp candidate_metadata(observed_at) do
+    %{
+      "__quota_confirmed_candidate_v1" => %{
+        "version" => 1,
+        "used_percent" => "0",
+        "reset_at" => DateTime.add(@snapshot_at, 6, :day) |> DateTime.to_iso8601(),
+        "observed_at" => DateTime.to_iso8601(observed_at),
+        "count" => 1
+      },
+      "__quota_candidate_provider_status_v1" => %{
+        "version" => 1,
+        "allowed" => true,
+        "limit_reached" => false,
+        "observed_at" => DateTime.to_iso8601(observed_at)
+      }
+    }
+  end
+
+  defp redemption(phase, consumed_at) do
+    %{
+      "phase" => phase,
+      "consumed_at" => DateTime.to_iso8601(consumed_at),
+      "deadline_at" => DateTime.add(consumed_at, 15, :minute) |> DateTime.to_iso8601()
+    }
   end
 
   defp identity_observability(now, assignments) do

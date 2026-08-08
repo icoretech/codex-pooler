@@ -40,6 +40,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
 
     saved_resets = saved_resets(assigns.account)
     saved_reset_policy = saved_reset_policy(assigns.account)
+    saved_reset_confirmation = Map.get(assigns.account, :saved_reset_confirmation)
     routing_readiness = routing_readiness(assigns.account)
     lifecycle_warning = lifecycle_blocker_warning(assigns.account, routing_readiness)
 
@@ -54,6 +55,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
       |> assign(:lifecycle_warning, lifecycle_warning)
       |> assign(:saved_resets, saved_resets)
       |> assign(:saved_reset_policy, saved_reset_policy)
+      |> assign(:saved_reset_confirmation, saved_reset_confirmation)
       |> assign(:token_leaderboard, token_leaderboard(assigns.account))
       |> assign(
         :panel_view,
@@ -177,11 +179,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                 limit={limit}
               />
               <SavedResetMeter.saved_reset_meter
-                :if={saved_reset_panel_available?(@saved_resets)}
+                :if={saved_reset_panel_available?(@saved_resets, @saved_reset_confirmation)}
                 id={"upstream-account-#{@account.identity.id}-saved-reset-meter"}
                 identity_id={@account.identity.id}
                 saved_resets={@saved_resets}
                 saved_reset_policy={@saved_reset_policy}
+                saved_reset_confirmation={@saved_reset_confirmation}
                 class={saved_reset_meter_grid_class(@reported_quota_limits)}
               />
             </div>
@@ -505,11 +508,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
 
   defp normalize_panel_view(_panel_view, _saved_resets, _account), do: :usage
 
-  defp saved_reset_panel_available?(%{reported?: true, available_count: count})
+  defp saved_reset_panel_available?(_saved_resets, confirmation) when is_map(confirmation),
+    do: true
+
+  defp saved_reset_panel_available?(%{reported?: true, available_count: count}, _confirmation)
        when is_integer(count) and count > 0,
        do: true
 
-  defp saved_reset_panel_available?(_saved_resets), do: false
+  defp saved_reset_panel_available?(_saved_resets, _confirmation), do: false
 
   defp pools_panel_available?(%{assignments: assignments}) when is_list(assignments),
     do: assignments != []

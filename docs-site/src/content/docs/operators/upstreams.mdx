@@ -79,7 +79,7 @@ The card body is split into status, token burn, quota windows, and footer metric
     </tr>
     <tr>
       <td>Saved resets</td>
-      <td>Compact reported saved reset count badge from sanitized usage observations. The badge appears only when at least one saved reset is available; policy editing opens from the account-card <code>Saved resets</code> dropdown action.</td>
+      <td>Compact reported saved reset count badge plus bounded post-consume confirmation when a recovery attempt is settling. The badge appears only when at least one saved reset is available; confirmation can remain visible after the count reaches zero. Policy editing opens from the account-card <code>Saved resets</code> dropdown action.</td>
     </tr>
     <tr>
       <td>Pools</td>
@@ -95,6 +95,12 @@ The card body is split into status, token burn, quota windows, and footer metric
 ## Saved Resets
 
 Account cards show a compact saved-reset count badge only when sanitized usage observations report at least one available reset. Common cockpit labels are `N saved resets`, `No saved resets`, `Saved resets unavailable`, and `Saved resets not reported`. When sanitized saved-reset observations include expiration metadata, the badge title, cockpit summary, and saved-reset dialog also show the next expiration time. The count badge and the card dropdown action `Saved resets` open the saved-reset dialog.
+
+After a saved reset is consumed, the account card and cockpit can keep a bounded confirmation panel visible even when no saved reset remains in the bank. It separates four outcomes: `Awaiting confirmation`, `Confirmed`, `Not applied`, and `Confirmation expired`. A reset that was accepted but has not yet produced usable quota remains `Awaiting confirmation`; it is not presented as not applied or expired.
+
+The confirmation panel shows only fixed operator vocabulary for challenged evidence (`Absent`, `Exhausted`, `Candidate progressing`, or `Usable`) and any additional account blocker (`None`, `Reset missing`, `Expired`, `Not fresh`, `Exhausted`, or `Unknown or unusable`). It also shows the sanitized consume time, confirmation deadline, whether confirmation routing is paused, and the guarantee that the same confirmation never consumes a second saved reset. Long detail remains available to assistive technology and pointer users through the panel's accessible label and tooltip.
+
+Malformed or unknown confirmation data fails closed as `Confirmation details unavailable` with routing paused. The surface never renders raw candidate metadata, quota percentages, quota reset timestamps, provider ids, internal ids, or unknown provider strings. `Usage unavailable` remains a separate token-accounting state and does not describe saved-reset confirmation.
 
 The saved-reset dialog explains the reported reset count in plain operator terms and edits auto-redemption policy. If expiration metadata is available, it shows the next available saved reset expiration and the number of reported expiration dates. Expiration rows are informational and are not specific targeted credits. The dialog and cockpit both require an explicit confirmation before queueing one account-level manual recovery attempt. Saving the policy never enqueues redemption work.
 

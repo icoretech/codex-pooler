@@ -29,6 +29,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
   alias CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary
   alias CodexPoolerWeb.Admin.UpstreamCockpitReadModel
+  alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMeter
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.ReconciliationStatus
   alias CodexPoolerWeb.DateTimeDisplay
 
@@ -37,6 +38,49 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   setup do
     Repo.delete_all(Oban.Job)
     :ok
+  end
+
+  @tag :todo4_operator_confirmation
+  test "saved reset confirmation remains separate from unavailable usage" do
+    html =
+      render_component(&SavedResetMeter.saved_reset_meter/1,
+        id: "todo4-usage-separation-meter",
+        saved_resets: %{
+          available_count: 0,
+          label: "0 saved resets",
+          next_expires_title: nil,
+          reset_lifecycle: %{
+            phase: "consume_not_applied",
+            label: "Reset was not applied",
+            consumed_at: nil,
+            deadline_at: nil
+          }
+        },
+        saved_reset_policy: %{enabled?: false},
+        saved_reset_confirmation: %{
+          confirmation_state: :not_applied,
+          challenged_evidence_state: :absent,
+          additional_account_blocker_state: :unknown_unusable,
+          observed_at: nil
+        }
+      )
+
+    document = LazyHTML.from_fragment(html)
+
+    assert LazyHTML.query(
+             document,
+             "[data-role='upstream-saved-reset-confirmation-state'][data-confirmation-state='not_applied']"
+           )
+           |> LazyHTML.text()
+           |> String.trim() == "Not applied"
+
+    assert LazyHTML.query(
+             document,
+             "[data-role='upstream-saved-reset-additional-blocker'][data-blocker-state='unknown_unusable']"
+           )
+           |> LazyHTML.text() =~ "Unknown or unusable"
+
+    refute html =~ "Usage unavailable"
   end
 
   test "reconciliation status renders one attention region for a blocked summary" do
@@ -1867,7 +1911,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   end
 
   @tag :saved_reset_cockpit
-  test "rides the redemption lifecycle on the first meter segment", %{
+  @tag :todo4_operator_confirmation
+  test "renders the bounded redemption confirmation on the meter", %{
     conn: conn,
     scope: scope
   } do
@@ -1903,30 +1948,49 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-quota-saved-reset-meter-segment-1[data-redemption-phase='consumed_pending_probe'].animate-pulse[title*='Reset consumed — confirming'][title*='confirmation window until']"
+             "#upstream-quota-saved-reset-meter-segment-1[data-confirmation-state='awaiting_confirmation'].animate-pulse.motion-reduce\\:animate-none[title*='Awaiting confirmation'][title*='Challenged evidence Absent'][title*='Additional blocker None']"
            )
 
     refute has_element?(
              view,
-             "#upstream-quota-saved-reset-meter-segment-2[data-redemption-phase]"
+             "#upstream-quota-saved-reset-meter-segment-2[data-confirmation-state]"
            )
 
     assert has_element?(
              view,
-             "#upstream-quota-saved-reset-meter-bar[aria-label*='Reset consumed — confirming']"
+             "#upstream-quota-saved-reset-meter-bar[aria-label*='Awaiting confirmation'][aria-label*='Routing paused'][aria-label*='never consumes a second saved reset']"
            )
 
     assert has_element?(
              view,
-             "#upstream-quota-saved-reset-meter-redemption-status",
-             "confirming reset"
+             "#upstream-quota-saved-reset-meter-confirmation[data-confirmation-state='awaiting_confirmation'][role='status'][aria-label][title]"
            )
 
     assert has_element?(
              view,
-             "#upstream-quota-saved-reset-meter-policy",
-             "Auto redeem inactive · confirming reset"
+             "#upstream-quota-saved-reset-meter-confirmation [data-role='upstream-saved-reset-challenged-evidence'][data-evidence-state='absent']",
+             "Absent"
            )
+
+    assert has_element?(
+             view,
+             "#upstream-quota-saved-reset-meter-confirmation [data-role='upstream-saved-reset-additional-blocker'][data-blocker-state='none']",
+             "None"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-quota-saved-reset-meter-confirmation [data-role='upstream-saved-reset-routing-pause'][data-routing-paused='true']",
+             "Routing paused"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-quota-saved-reset-meter-confirmation [data-role='upstream-saved-reset-single-consume']",
+             "never consumes a second saved reset"
+           )
+
+    refute render(view) =~ "still blocked"
   end
 
   @tag :saved_reset_cockpit

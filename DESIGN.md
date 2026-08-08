@@ -845,6 +845,36 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
   segments (`grid grid-cols-5 gap-1`), filled segments reset-bank-toned, empty
   `bg-base-300/70`, with `aria-valuemin/max/now` and a text label. Footer line
   states "Auto redeem active/inactive" and next expiry with a clock icon.
+- **Post-consume confirmation**
+  (`data-role="upstream-saved-reset-confirmation"`): a compact operator-bench
+  fact panel below the meter. It renders whenever the account snapshot carries
+  the bounded confirmation projection, including after the available count has
+  reached zero. The three projection dimensions are shown through stable
+  selectors and fixed vocabulary only:
+  - confirmation state: `Awaiting confirmation`, `Confirmed`, `Not applied`,
+    or `Confirmation expired`
+  - challenged evidence: `Absent`, `Exhausted`, `Candidate progressing`, or
+    `Usable`
+  - additional blocker: `None`, `Reset missing`, `Expired`, `Not fresh`,
+    `Exhausted`, or `Unknown or unusable`
+- The panel also shows the sanitized consumed time and confirmation deadline,
+  an explicit `Routing paused` / `Routing pause released` fact, and the fixed
+  guarantee `This confirmation never consumes a second saved reset.` Applied
+  but reblocked work remains `Awaiting confirmation`; it never collapses into
+  `Not applied` or `Confirmation expired`. The old visible `still blocked`
+  lifecycle chip is not part of the component vocabulary.
+- Long confirmation detail remains accessible through matching `title` and
+  `aria-label` text on the panel even when individual facts truncate. The
+  opener remains a keyboard-operable button, the bar remains `role="meter"`,
+  and awaiting-confirmation segment motion includes
+  `motion-reduce:animate-none`.
+- The component accepts only the projection's bounded atoms. A malformed or
+  unknown map renders `Confirmation details unavailable` with the conservative
+  routing pause and never interpolates the input. Raw candidate metadata,
+  percentages, quota reset timestamps, ids, provider strings, or unknown
+  values never reach visible copy, tooltips, ARIA, or data attributes. Token
+  accounting's separate `Usage unavailable` state remains owned by the token
+  burn surface and is never reused as saved-reset confirmation copy.
 
 ### Chips (status, count, metadata, severity, protocol, redacted)
 

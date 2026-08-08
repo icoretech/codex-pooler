@@ -71,6 +71,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Charts do
             id="upstream-quota-saved-reset-meter"
             saved_resets={@cockpit.saved_resets}
             saved_reset_policy={@cockpit.saved_reset_policy}
+            saved_reset_confirmation={@cockpit.saved_reset_confirmation}
           />
         </summary>
         <div class="grid gap-3 px-4 pb-3">

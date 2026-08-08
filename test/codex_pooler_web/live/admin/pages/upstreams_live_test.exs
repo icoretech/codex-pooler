@@ -6198,6 +6198,156 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   end
 
   @tag :relative_countdown_contract
+  @tag :todo4_operator_confirmation
+  test "saved reset meter renders only the bounded post-consume confirmation contract" do
+    saved_resets = %{
+      available_count: 0,
+      label: "0 saved resets",
+      next_expires_title: nil,
+      reset_lifecycle: %{
+        phase: "reblocked",
+        label: "raw-lifecycle-label-must-not-render",
+        consumed_at: "August 8, 2026 at 10:14 AM",
+        deadline_at: "August 8, 2026 at 10:29 AM"
+      }
+    }
+
+    awaiting_html =
+      render_component(&SavedResetMeter.saved_reset_meter/1,
+        id: "todo4-awaiting-meter",
+        saved_resets: saved_resets,
+        saved_reset_policy: %{enabled?: true},
+        saved_reset_confirmation: %{
+          confirmation_state: :awaiting_confirmation,
+          challenged_evidence_state: :candidate_progressing,
+          additional_account_blocker_state: :exhausted,
+          observed_at: ~U[2026-08-08 10:18:00Z]
+        }
+      )
+
+    awaiting_document = LazyHTML.from_fragment(awaiting_html)
+
+    confirmation =
+      LazyHTML.query(
+        awaiting_document,
+        "#todo4-awaiting-meter-confirmation[data-role='upstream-saved-reset-confirmation']"
+      )
+
+    assert Enum.count(confirmation) == 1
+
+    assert [confirmation_title] = LazyHTML.attribute(confirmation, "title")
+
+    assert confirmation_title ==
+             "Awaiting confirmation. Consumed August 8, 2026 at 10:14 AM. Deadline August 8, 2026 at 10:29 AM. Challenged evidence Candidate progressing. Additional blocker Exhausted. Routing paused. This confirmation never consumes a second saved reset."
+
+    assert LazyHTML.query(
+             awaiting_document,
+             "#todo4-awaiting-meter-confirmation[aria-label='#{confirmation_title}']"
+           )
+           |> Enum.count() == 1
+
+    assert LazyHTML.query(
+             awaiting_document,
+             "[data-role='upstream-saved-reset-confirmation-state'][data-confirmation-state='awaiting_confirmation']"
+           )
+           |> LazyHTML.text()
+           |> String.trim() == "Awaiting confirmation"
+
+    assert LazyHTML.query(
+             awaiting_document,
+             "[data-role='upstream-saved-reset-challenged-evidence'][data-evidence-state='candidate_progressing']"
+           )
+           |> LazyHTML.text() =~ "Candidate progressing"
+
+    assert LazyHTML.query(
+             awaiting_document,
+             "[data-role='upstream-saved-reset-additional-blocker'][data-blocker-state='exhausted']"
+           )
+           |> LazyHTML.text() =~ "Exhausted"
+
+    assert LazyHTML.query(
+             awaiting_document,
+             "[data-role='upstream-saved-reset-routing-pause'][data-routing-paused='true']"
+           )
+           |> LazyHTML.text() =~ "Routing paused"
+
+    assert LazyHTML.query(awaiting_document, "[data-role='upstream-saved-reset-consumed-at']")
+           |> LazyHTML.text() =~ "August 8, 2026 at 10:14 AM"
+
+    assert LazyHTML.query(awaiting_document, "[data-role='upstream-saved-reset-deadline']")
+           |> LazyHTML.text() =~ "August 8, 2026 at 10:29 AM"
+
+    assert LazyHTML.query(awaiting_document, "[data-role='upstream-saved-reset-single-consume']")
+           |> LazyHTML.text() =~ "never consumes a second saved reset"
+
+    refute awaiting_html =~ "still blocked"
+    refute awaiting_html =~ "raw-lifecycle-label-must-not-render"
+
+    state_labels = [
+      {:confirmed, "Confirmed"},
+      {:not_applied, "Not applied"},
+      {:confirmation_expired, "Confirmation expired"}
+    ]
+
+    rendered_states =
+      for {state, label} <- state_labels, into: %{} do
+        html =
+          render_component(&SavedResetMeter.saved_reset_meter/1,
+            id: "todo4-#{state}-meter",
+            saved_resets: saved_resets,
+            saved_reset_policy: %{enabled?: false},
+            saved_reset_confirmation: %{
+              confirmation_state: state,
+              challenged_evidence_state: :usable,
+              additional_account_blocker_state: :none,
+              observed_at: nil
+            }
+          )
+
+        assert html =~ label
+        {state, html}
+      end
+
+    refute rendered_states.confirmed =~ "Confirmation expired"
+    refute rendered_states.not_applied =~ "Confirmation expired"
+    refute rendered_states.confirmation_expired =~ "Not applied"
+  end
+
+  @tag :todo4_operator_confirmation
+  test "saved reset confirmation fails closed for malformed projection input" do
+    sentinel = "todo4-raw-confirmation-sentinel"
+
+    html =
+      render_component(&SavedResetMeter.saved_reset_meter/1,
+        id: "todo4-malformed-meter",
+        saved_resets: %{
+          available_count: 1,
+          label: "1 saved reset",
+          next_expires_title: nil,
+          reset_lifecycle: nil
+        },
+        saved_reset_policy: %{enabled?: false},
+        saved_reset_confirmation: %{
+          confirmation_state: sentinel,
+          challenged_evidence_state: sentinel,
+          additional_account_blocker_state: sentinel,
+          observed_at: sentinel
+        }
+      )
+
+    document = LazyHTML.from_fragment(html)
+
+    assert LazyHTML.query(
+             document,
+             "#todo4-malformed-meter-confirmation[data-confirmation-state='unavailable']"
+           )
+           |> LazyHTML.text() =~ "Confirmation details unavailable"
+
+    refute html =~ sentinel
+    refute html =~ "Usage unavailable"
+  end
+
+  @tag :relative_countdown_contract
   test "saved reset countdown components preserve future, due, expired, and malformed states" do
     now = ~U[2026-07-31 12:00:00.000000Z]
     subsecond_future = ~U[2026-07-31 12:00:00.999999Z]

@@ -646,6 +646,71 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
     assert_sentinels_absent(projection, [hidden_model, hidden_route, hidden_reason])
   end
 
+  @tag :todo4_projection
+  test "restricted account projection loads one raw quota view, folds once, and excludes hidden Pools",
+       %{scope: owner_scope} do
+    visible_pool = pool_fixture(%{name: "Projection-visible Pool"})
+    hidden_pool = pool_fixture(%{name: "Projection-hidden Pool"})
+    %{identity: visible_identity} = upstream_assignment_fixture(visible_pool)
+    %{identity: hidden_identity} = upstream_assignment_fixture(hidden_pool)
+
+    hidden_sentinel = "hidden-quota-projection-#{System.unique_integer([:positive])}"
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    for identity <- [visible_identity, hidden_identity] do
+      identity
+      |> Ecto.Changeset.change(%{
+        metadata: %{
+          "saved_reset_redemption" => %{
+            "phase" => "consumed_pending_probe",
+            "consumed_at" => DateTime.add(observed_at, -60, :second) |> DateTime.to_iso8601(),
+            "deadline_at" => DateTime.add(observed_at, 14, :minute) |> DateTime.to_iso8601()
+          }
+        }
+      })
+      |> Repo.update!()
+    end
+
+    assert {:ok, [_visible_window]} =
+             CodexPooler.Upstreams.Quota.Windows.upsert_quota_windows(visible_identity, [
+               quota_projection_window_attrs(observed_at, "visible")
+             ])
+
+    assert {:ok, [_hidden_window]} =
+             CodexPooler.Upstreams.Quota.Windows.upsert_quota_windows(hidden_identity, [
+               quota_projection_window_attrs(observed_at, hidden_sentinel)
+             ])
+
+    %{user: admin} =
+      operator_fixture(owner_scope, %{
+        "email" => unique_user_email(),
+        "role" => "instance_admin",
+        "password_change_required" => "false"
+      })
+
+    operator_pool_assignment_fixture(admin, visible_pool, created_by_user_id: owner_scope.user.id)
+    admin_scope = Scope.for_user(admin)
+
+    {fold_count, {accounts, queries}} =
+      count_effective_quota_folds(fn ->
+        count_repo_sources(fn ->
+          UpstreamAccountsReadModel.list_visible_accounts(admin_scope, [visible_pool, hidden_pool])
+        end)
+      end)
+
+    assert [%{identity: %{id: visible_identity_id}, saved_reset_confirmation: confirmation}] =
+             accounts
+
+    assert visible_identity_id == visible_identity.id
+    assert confirmation.confirmation_state == :awaiting_confirmation
+    assert Map.get(queries, "account_quota_windows", 0) == 1
+    assert fold_count == 1
+
+    projection = inspect(accounts)
+    refute projection =~ hidden_identity.id
+    refute projection =~ hidden_sentinel
+  end
+
   test "identity filter narrows the account snapshot after fleet model inventory", %{scope: scope} do
     target_pool = pool_fixture(%{name: "Target identity Pool"})
     sibling_pool = pool_fixture(%{name: "Sibling identity Pool"})
@@ -1061,6 +1126,24 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
     {result, Enum.frequencies_by(query_events, & &1.source)}
   end
 
+  defp count_effective_quota_folds(fun) do
+    target = {CodexPooler.Upstreams.Quota.Windows, :effective_quota_windows, 2}
+
+    :erlang.trace_pattern(
+      target,
+      true,
+      [:call_count]
+    )
+
+    try do
+      result = fun.()
+      {:call_count, count} = :erlang.trace_info(target, :call_count)
+      {count, result}
+    after
+      :erlang.trace_pattern(target, false, [:call_count])
+    end
+  end
+
   defp capture_repo_queries(fun, parameter_probes \\ []) do
     parent = self()
     handler_id = "upstream-read-model-query-count-#{System.unique_integer([:positive])}"
@@ -1197,6 +1280,24 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
     DateTime.utc_now()
     |> DateTime.add(offset_seconds, :second)
     |> DateTime.truncate(:microsecond)
+  end
+
+  defp quota_projection_window_attrs(observed_at, label) do
+    %{
+      quota_key: "account",
+      quota_scope: "account",
+      quota_family: "account",
+      window_kind: "secondary",
+      window_minutes: 10_080,
+      used_percent: Decimal.new("100"),
+      reset_at: DateTime.add(observed_at, 6, :day),
+      source: "codex_usage_api",
+      source_precision: "observed",
+      freshness_state: "fresh",
+      last_sync_at: observed_at,
+      observed_at: observed_at,
+      display_label: label
+    }
   end
 
   defp insert_circuit_state!(pool, assignment, model_identifier, route_class, attrs) do

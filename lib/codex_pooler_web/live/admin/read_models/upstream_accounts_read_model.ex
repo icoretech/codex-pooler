@@ -107,6 +107,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
           required(:saved_resets) => saved_reset_snapshot(),
           required(:saved_reset_policy) => SavedResets.auto_policy_projection(),
           required(:saved_reset_redemption_action) => action(),
+          required(:saved_reset_confirmation) => QuotaProjection.saved_reset_confirmation() | nil,
           required(:token_burn) => token_burn(),
           required(:assignments) => [assignment_snapshot()],
           required(:quota_readiness) => quota_readiness(),
@@ -355,7 +356,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     # one explicit snapshot instant for the effective window load so the
     # readiness and card projections below reason about the same view
     snapshot_at = DateTime.utc_now()
-    quota_windows = QuotaWindows.list_quota_windows(identity, snapshot_at)
+    raw_quota_windows = QuotaWindows.list_evidence(identity)
+    quota_windows = QuotaWindows.effective_quota_windows(raw_quota_windows, snapshot_at)
     quota_readiness = QuotaProjection.readiness(quota_windows, snapshot_at)
     token_burn = Map.fetch!(token_burns, identity.id)
 
@@ -417,6 +419,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
       reauth_reason_message: reauth_reason_message(identity),
       saved_resets: SavedResetProjection.snapshot(identity, datetime_preferences),
       saved_reset_policy: SavedResetProjection.policy(identity),
+      saved_reset_confirmation:
+        QuotaProjection.saved_reset_confirmation(
+          (identity.metadata || %{})["saved_reset_redemption"] || %{},
+          raw_quota_windows,
+          quota_windows,
+          snapshot_at
+        ),
       token_burn: token_burn,
       assignments: identity_assignments,
       quota_readiness: quota_readiness,

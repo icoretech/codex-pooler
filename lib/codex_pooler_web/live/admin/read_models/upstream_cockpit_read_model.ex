@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
+  alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection
   alias CodexPoolerWeb.DateTimeDisplay
 
   @reactivatable_statuses ~w(paused refresh_due refresh_failed)
@@ -147,6 +148,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
           required(:sections) => sections(),
           required(:saved_resets) => SavedResets.snapshot_projection(),
           required(:saved_reset_policy) => SavedResets.auto_policy_projection(),
+          required(:saved_reset_confirmation) => QuotaProjection.saved_reset_confirmation() | nil,
           required(:quota_limits) => [UpstreamAccountsReadModel.quota_limit_row()],
           required(:flags) => flags()
         }
@@ -240,6 +242,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
     actions = actions(account)
     saved_resets = saved_resets(account)
     saved_reset_policy = saved_reset_policy(account)
+    saved_reset_confirmation = Map.get(account, :saved_reset_confirmation)
     sections = sections(flags, assignments, charts, recent_events, actions)
 
     %{
@@ -251,6 +254,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitReadModel do
       actions: actions,
       saved_resets: saved_resets,
       saved_reset_policy: saved_reset_policy,
+      saved_reset_confirmation: saved_reset_confirmation,
       quota_limits: quota_limits(account),
       oauth_flows: oauth_flows,
       sections: sections,
