@@ -3,10 +3,13 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
   import CodexPooler.PoolerFixtures
 
+  alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Runtime.RateLimitObserver
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Gateway.Routing.CircuitState
+  alias CodexPooler.Jobs.UpstreamEnqueue
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
@@ -5221,6 +5224,39 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       end
     end
 
+    @tag :todo1_race_b
+    test "usable quota committed while the reset finalizer is pending wins in that finalizer" do
+      evidence = run_post_consume_finalizer_race!("4")
+
+      assert {evidence.result.phase, evidence.persisted_phase} ==
+               {"confirmed_by_quota", "confirmed_by_quota"}
+    end
+
+    @tag :todo1_race_b_exhausted
+    test "exhausted quota committed while the reset finalizer is pending stays guarded until later convergence" do
+      evidence = run_post_consume_finalizer_race!("100")
+
+      assert evidence.result.phase == "consumed_pending_probe"
+      assert evidence.persisted_phase == "consumed_pending_probe"
+
+      assert :ok =
+               run_unboxed(fn ->
+                 identity = Repo.get!(UpstreamIdentity, evidence.fixture.identity_id)
+
+                 RateLimitObserver.record_headers(identity, %Req.Response{
+                   headers: account_weekly_headers("100")
+                 })
+               end)
+
+      converged =
+        run_unboxed(fn ->
+          Repo.get!(UpstreamIdentity, evidence.fixture.identity_id)
+        end)
+
+      assert converged.metadata["saved_reset_redemption"]["phase"] == "reblocked"
+      assert provider_consume_count(evidence.fake) == 1
+    end
+
     @tag :separate_connection_probe_reassignment_race
     test "probe claim validates assignment ownership after locking the identity" do
       {:ok, fake} =
@@ -7607,6 +7643,52 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     end)
   end
 
+  defp committed_post_consume_finalizer_fixture!(fake) do
+    run_unboxed(fn ->
+      unique = Ecto.UUID.generate()
+      pool = pool_fixture(%{slug: "saved-reset-finalizer-race-#{unique}"})
+
+      %{assignment: assignment, identity: identity} =
+        active_upstream_assignment_fixture(pool, %{
+          account_label: "Saved reset finalizer race #{unique}",
+          chatgpt_account_id: "acct_finalizer_race_#{unique}",
+          metadata: %{
+            "usage_base_url" => FakeUpstream.url(fake),
+            "saved_resets" => %{
+              "status" => "reported",
+              "available_count" => 1,
+              "source" => "codex_usage_api",
+              "path_style" => "codex_api",
+              "observed_at" =>
+                DateTime.utc_now()
+                |> DateTime.truncate(:microsecond)
+                |> DateTime.to_iso8601(),
+              "usage_path" => "/api/codex/usage",
+              "reason" => nil
+            }
+          }
+        })
+
+      %{assignment_id: assignment.id, identity_id: identity.id, pool_id: pool.id}
+    end)
+  end
+
+  defp cleanup_committed_post_consume_finalizer_fixture!(fixture) do
+    assert %{identities: 1, pools: 1} ==
+             run_unboxed(fn ->
+               {identity_count, _rows} =
+                 Repo.delete_all(
+                   from identity in UpstreamIdentity,
+                     where: identity.id == ^fixture.identity_id
+                 )
+
+               {pool_count, _rows} =
+                 Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool_id)
+
+               %{identities: identity_count, pools: pool_count}
+             end)
+  end
+
   defp committed_scheduled_expiry_race_fixture!(fake) do
     run_unboxed(fn ->
       unique = System.unique_integer([:positive])
@@ -8599,6 +8681,241 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     |> FakeUpstream.requests()
     |> Enum.count(&(&1.path == "/api/codex/rate-limit-reset-credits/consume"))
   end
+
+  defp run_post_consume_finalizer_race!(used_percent) do
+    parent = self()
+    release_ref = make_ref()
+
+    {:ok, fake} =
+      FakeUpstream.start_link(
+        {:path_json,
+         %{
+           "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+           "/api/codex/usage" =>
+             FakeUpstream.barrier_json_response(
+               %{"error" => "synthetic post-reset usage failure"},
+               status: 500,
+               notify: parent,
+               release_ref: release_ref
+             )
+         }}
+      )
+
+    on_exit(fn -> FakeUpstream.stop(fake) end)
+
+    fixture = committed_post_consume_finalizer_fixture!(fake)
+    on_exit(fn -> cleanup_committed_post_consume_finalizer_fixture!(fixture) end)
+
+    assert :ok = Events.subscribe_pool(fixture.pool_id, "upstreams")
+    assert :ok = UpstreamEnqueue.claim_gateway_reconciliation_gate(fixture.identity_id)
+
+    on_exit(fn ->
+      Events.unsubscribe_pool(fixture.pool_id, "upstreams")
+      UpstreamEnqueue.release_gateway_reconciliation_gate(fixture.identity_id)
+    end)
+
+    handler_id =
+      "saved-reset-post-consume-finalizer-#{System.unique_integer([:positive, :monotonic])}"
+
+    identity_id = fixture.identity_id
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          query = metadata[:query] |> to_string() |> String.trim_leading()
+
+          if metadata[:repo] == Repo and metadata[:source] == "upstream_identities" and
+               String.starts_with?(query, "UPDATE") and
+               query_metadata_contains?(metadata, identity_id) do
+            update_count = Process.get({__MODULE__, handler_id, :identity_updates}, 0) + 1
+            Process.put({__MODULE__, handler_id, :identity_updates}, update_count)
+
+            if update_count == 2 do
+              Process.put({__MODULE__, handler_id, :dispatch_update}, true)
+            end
+          end
+
+          if Process.get({__MODULE__, handler_id, :dispatch_update}) == true and
+               String.downcase(String.trim(query)) == "commit" do
+            Process.delete({__MODULE__, handler_id, :dispatch_update})
+            send(parent, {handler_id, :dispatch_commit, self()})
+          end
+
+          if metadata[:repo] == Repo and metadata[:source] == "account_quota_windows" and
+               (String.starts_with?(query, "INSERT") or String.starts_with?(query, "UPDATE")) and
+               query_metadata_contains?(metadata, identity_id) do
+            send(parent, {handler_id, :evidence_write, self()})
+          end
+        end,
+        nil
+      )
+
+    redemption_task =
+      Task.async(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          backend_pid = backend_pid!()
+          send(parent, {handler_id, :redemption_backend, self(), backend_pid})
+          SavedResetRedemption.redeem(fixture.assignment_id)
+        end)
+      end)
+
+    try do
+      assert_receive {^handler_id, :redemption_backend, redeem_owner, redemption_backend_pid},
+                     5_000
+
+      assert redeem_owner == redemption_task.pid
+
+      assert_receive {^handler_id, :dispatch_commit, ^redeem_owner}, 5_000
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid,
+                      ^release_ref},
+                     5_000
+
+      Process.put({__MODULE__, handler_id, :fake_request_pid}, fake_request_pid)
+
+      assert Process.alive?(redemption_task.pid)
+
+      assert Enum.map(FakeUpstream.requests(fake), & &1.path) == [
+               "/api/codex/rate-limit-reset-credits/consume",
+               "/api/codex/usage"
+             ]
+
+      assert provider_consume_count(fake) == 1
+
+      {evidence_backend_pid, evidence_window, phase_while_refresh_blocked} =
+        Sandbox.unboxed_run(Repo, fn ->
+          backend_pid = backend_pid!()
+          identity = Repo.get!(UpstreamIdentity, fixture.identity_id)
+          phase = identity.metadata["saved_reset_redemption"]["phase"]
+
+          assert phase == "consuming"
+
+          assert :ok =
+                   RateLimitObserver.record_headers(identity, %Req.Response{
+                     headers: account_weekly_headers(used_percent)
+                   })
+
+          persisted = Repo.get!(UpstreamIdentity, fixture.identity_id)
+          assert persisted.metadata["saved_reset_redemption"]["phase"] == "consuming"
+
+          window =
+            fixture.identity_id
+            |> QuotaWindows.list_evidence()
+            |> Enum.find(&(&1.quota_key == "account" and &1.window_kind == "secondary"))
+
+          {backend_pid, window, phase}
+        end)
+
+      assert evidence_backend_pid != redemption_backend_pid
+      assert phase_while_refresh_blocked == "consuming"
+      assert %AccountQuotaWindow{} = evidence_window
+      assert_receive {^handler_id, :evidence_write, evidence_owner}, 5_000
+      assert evidence_owner != redemption_task.pid
+
+      send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
+
+      assert {:ok, result} = Task.await(redemption_task, 15_000)
+      assert_saved_reset_redemption_broadcast!(fixture)
+
+      persisted =
+        Sandbox.unboxed_run(Repo, fn ->
+          Repo.get!(UpstreamIdentity, fixture.identity_id)
+        end)
+
+      assert provider_consume_count(fake) == 1
+      assert drain_evidence_writes(handler_id) == 0
+      assert DateTime.compare(evidence_window.observed_at, result.consumed_at) != :lt
+
+      %{
+        fake: fake,
+        fixture: fixture,
+        persisted_phase: persisted.metadata["saved_reset_redemption"]["phase"],
+        result: result
+      }
+    after
+      if fake_request_pid = Process.delete({__MODULE__, handler_id, :fake_request_pid}) do
+        send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
+      end
+
+      if Process.alive?(redemption_task.pid) do
+        Task.shutdown(redemption_task, :brutal_kill)
+      end
+
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp account_weekly_headers(used_percent) do
+    reset_at =
+      DateTime.utc_now()
+      |> DateTime.add(3, :day)
+      |> DateTime.truncate(:second)
+
+    [
+      {"x-codex-secondary-used-percent", [used_percent]},
+      {"x-codex-secondary-window-minutes", ["10080"]},
+      {"x-codex-secondary-reset-at", [DateTime.to_iso8601(reset_at)]}
+    ]
+  end
+
+  defp assert_saved_reset_redemption_broadcast!(fixture) do
+    receive do
+      {Events,
+       %CodexPooler.Events.Event{
+         reason: "upstream_account_saved_reset_redeemed",
+         payload: %{
+           "assignment_id" => assignment_id,
+           "upstream_identity_id" => identity_id
+         }
+       }} ->
+        assert assignment_id == fixture.assignment_id
+        assert identity_id == fixture.identity_id
+
+      {Events, %CodexPooler.Events.Event{}} ->
+        assert_saved_reset_redemption_broadcast!(fixture)
+    after
+      5_000 -> flunk("saved-reset finalizer did not broadcast its committed lifecycle")
+    end
+  end
+
+  defp drain_evidence_writes(handler_id, count \\ 0) do
+    receive do
+      {^handler_id, :evidence_write, _owner} -> drain_evidence_writes(handler_id, count + 1)
+    after
+      0 -> count
+    end
+  end
+
+  defp query_metadata_contains?(metadata, expected) do
+    metadata
+    |> Map.get(:params, [])
+    |> query_value_contains?(expected)
+  end
+
+  defp query_value_contains?(value, expected) when is_binary(value) do
+    dumped_expected =
+      case Ecto.UUID.dump(expected) do
+        {:ok, dumped} -> dumped
+        :error -> nil
+      end
+
+    value == expected or value == dumped_expected or
+      (String.valid?(value) and String.contains?(value, expected))
+  end
+
+  defp query_value_contains?(value, expected) when is_list(value) do
+    Enum.any?(value, &query_value_contains?(&1, expected))
+  end
+
+  defp query_value_contains?(%{} = value, expected) when not is_struct(value) do
+    Enum.any?(value, fn {key, nested} ->
+      query_value_contains?(key, expected) or query_value_contains?(nested, expected)
+    end)
+  end
+
+  defp query_value_contains?(_value, _expected), do: false
 
   defp provider_credit_consume_count(fake) do
     fake

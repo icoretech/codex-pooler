@@ -268,6 +268,107 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
 
       assert redemption_phase(identity) == "reblocked"
     end
+
+    @tag :saved_reset_stale_snapshot_contract
+    test "usable synchronous headers converge a DB-authoritative applied reblock" do
+      stale_identity = stale_snapshot_after_applied_reblock()
+
+      assert redemption_phase(stale_identity) == "reblocked"
+
+      assert :ok =
+               RateLimitObserver.record_headers(stale_identity, %Req.Response{
+                 headers: weekly_headers("4")
+               })
+
+      assert redemption_phase(stale_identity) == "confirmed_by_quota"
+    end
+
+    @tag :saved_reset_stale_snapshot_contract
+    test "usable websocket upgrade headers converge a DB-authoritative applied reblock" do
+      stale_identity = stale_snapshot_after_applied_reblock()
+
+      assert redemption_phase(stale_identity) == "reblocked"
+
+      assert :ok =
+               RateLimitObserver.record_websocket_upgrade_headers(
+                 stale_identity,
+                 weekly_headers("4")
+               )
+
+      assert redemption_phase(stale_identity) == "confirmed_by_quota"
+    end
+
+    @tag :saved_reset_stale_snapshot_contract
+    test "usable websocket frame headers converge a DB-authoritative applied reblock" do
+      stale_identity = stale_snapshot_after_applied_reblock()
+
+      assert redemption_phase(stale_identity) == "reblocked"
+
+      assert :ok =
+               RateLimitObserver.record_websocket_frame_headers(
+                 stale_identity,
+                 Map.new(weekly_headers("4"))
+               )
+
+      assert redemption_phase(stale_identity) == "confirmed_by_quota"
+    end
+
+    @tag :saved_reset_stale_snapshot_contract
+    test "usable async codex.rate_limits evidence converges a DB-authoritative applied reblock" do
+      stale_identity = stale_snapshot_after_applied_reblock()
+      reset_at = DateTime.add(DateTime.utc_now(), 3, :minute) |> DateTime.truncate(:second)
+
+      assert redemption_phase(stale_identity) == "reblocked"
+
+      assert :ok =
+               await_rate_limit_event_commit(stale_identity.id, fn ->
+                 RateLimitObserver.record_complete_event(
+                   stale_identity,
+                   codex_rate_limits_payload(4, reset_at)
+                 )
+               end)
+
+      assert redemption_phase(stale_identity) == "confirmed_by_quota"
+    end
+
+    @tag :saved_reset_stale_snapshot_contract
+    test "exhausted rate-limit error evidence keeps a DB-authoritative applied reblock" do
+      stale_identity = stale_snapshot_after_applied_reblock()
+
+      assert :ok =
+               RateLimitObserver.record_error(
+                 stale_identity,
+                 Jason.encode!(exhausted_account_rate_limit_error())
+               )
+
+      assert redemption_phase(stale_identity) == "reblocked"
+
+      assert Enum.any?(QuotaWindows.list_quota_windows(stale_identity), fn window ->
+               window.source == "codex_rate_limit_error" and window.quota_key == "account" and
+                 Decimal.equal?(window.used_percent, Decimal.new("100"))
+             end)
+    end
+
+    @tag :saved_reset_stale_snapshot_contract
+    test "malformed and non-account errors do not falsely confirm an applied reblock" do
+      stale_identity = stale_snapshot_after_applied_reblock()
+
+      assert :ok = RateLimitObserver.record_error(stale_identity, "not-json")
+
+      assert :ok =
+               RateLimitObserver.record_error(
+                 stale_identity,
+                 Jason.encode!(%{
+                   "limit_id" => "codex_future_family",
+                   "window_kind" => "secondary",
+                   "window_minutes" => "10080",
+                   "used_percent" => "4",
+                   "reset_after_seconds" => "180"
+                 })
+               )
+
+      assert redemption_phase(stale_identity) == "reblocked"
+    end
   end
 
   describe "observer failure logging" do
@@ -426,6 +527,46 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
     }).identity
   end
 
+  defp stale_snapshot_after_applied_reblock do
+    stale_identity = active_upstream_assignment_fixture().identity
+    persisted_identity = Repo.reload!(stale_identity)
+
+    consumed_at =
+      DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:microsecond)
+
+    redemption = %{
+      "status" => "failed",
+      "phase" => "reblocked",
+      "attempt_id" => Ecto.UUID.generate(),
+      "generation" => 3,
+      "trigger_kind" => "gateway_auto",
+      "consumed_at" => DateTime.to_iso8601(consumed_at),
+      "deadline_at" => consumed_at |> DateTime.add(15, :minute) |> DateTime.to_iso8601(),
+      "result" => %{"code" => "reset", "applied" => true}
+    }
+
+    persisted_identity
+    |> UpstreamIdentity.changeset(%{
+      metadata: Map.put(persisted_identity.metadata || %{}, "saved_reset_redemption", redemption)
+    })
+    |> Repo.update!()
+
+    stale_identity
+  end
+
+  defp exhausted_account_rate_limit_error do
+    %{
+      "error" => %{
+        "code" => "rate_limit_exceeded",
+        "limit_id" => "codex",
+        "window_kind" => "secondary",
+        "window_minutes" => "10080",
+        "used_percent" => "100",
+        "reset_after_seconds" => "180"
+      }
+    }
+  end
+
   defp redemption_phase(identity) do
     identity
     |> Repo.reload!()
@@ -530,6 +671,84 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
       {^handler_id, source} -> drain_repo_query_events(handler_id, [source | events])
     after
       0 -> Enum.reverse(events)
+    end
+  end
+
+  defp await_rate_limit_event_commit(identity_id, fun) when is_function(fun, 0) do
+    parent = self()
+    handler_id = {__MODULE__, self(), System.unique_integer([:positive])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo do
+            send(parent, {
+              handler_id,
+              self(),
+              metadata[:source],
+              metadata[:query] || "",
+              metadata[:params] || []
+            })
+          end
+        end,
+        nil
+      )
+
+    try do
+      result = fun.()
+      task_pid = await_identity_quota_write(handler_id, identity_id)
+      await_task_commit(handler_id, task_pid)
+      monitor_ref = Process.monitor(task_pid)
+      assert_receive {:DOWN, ^monitor_ref, :process, ^task_pid, :normal}, 1_000
+      result
+    after
+      :telemetry.detach(handler_id)
+      drain_tagged_repo_events(handler_id)
+    end
+  end
+
+  defp await_identity_quota_write(handler_id, identity_id) do
+    dumped_identity_id = Ecto.UUID.dump!(identity_id)
+
+    receive do
+      {^handler_id, task_pid, "account_quota_windows", query, params} ->
+        if String.starts_with?(String.upcase(String.trim_leading(query)), "INSERT") and
+             Enum.any?(params, &(&1 in [identity_id, dumped_identity_id])) do
+          task_pid
+        else
+          await_identity_quota_write(handler_id, identity_id)
+        end
+
+      {^handler_id, _pid, _source, _query, _params} ->
+        await_identity_quota_write(handler_id, identity_id)
+    after
+      1_000 -> flunk("expected async codex.rate_limits quota write for fixture identity")
+    end
+  end
+
+  defp await_task_commit(handler_id, task_pid) do
+    receive do
+      {^handler_id, ^task_pid, _source, query, _params} ->
+        if String.upcase(String.trim(query)) == "COMMIT" do
+          :ok
+        else
+          await_task_commit(handler_id, task_pid)
+        end
+
+      {^handler_id, _other_pid, _source, _query, _params} ->
+        await_task_commit(handler_id, task_pid)
+    after
+      1_000 -> flunk("expected async codex.rate_limits Repo COMMIT")
+    end
+  end
+
+  defp drain_tagged_repo_events(handler_id) do
+    receive do
+      {^handler_id, _pid, _source, _query, _params} -> drain_tagged_repo_events(handler_id)
+    after
+      0 -> :ok
     end
   end
 end
