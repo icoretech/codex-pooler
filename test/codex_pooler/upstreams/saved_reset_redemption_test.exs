@@ -5951,7 +5951,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         |> Repo.insert!()
 
       request_snapshot = %{
-        circuit_row_id: circuit.id,
+        routing_circuit_state_id: circuit.id,
         upstream_identity_id: sibling.identity.id,
         pool_upstream_assignment_id: sibling.assignment.id,
         model_identifier: circuit.model_identifier,
@@ -5996,7 +5996,126 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                {:ok, :noop, false, "gateway_auto_sibling_transient_exclusion"}
 
       assert [] = FakeUpstream.requests(fake)
-      refute Map.has_key?(Repo.reload!(target_identity).metadata, "saved_reset_redemption")
+      persisted = Repo.reload!(target_identity)
+      assert get_in(persisted.metadata, ["saved_resets", "available_count"]) == 1
+      refute Map.has_key?(persisted.metadata, "saved_reset_redemption")
+    end
+
+    test "gateway auto fails closed when a referenced circuit row is missing" do
+      %{fake: fake, target: target, target_identity: target_identity, context: context} =
+        transient_circuit_claim_fixture!(false,
+          routing_circuit_state_id: Ecto.UUID.generate()
+        )
+
+      assert {:ok, %{status: :noop, applied?: false, code: "gateway_auto_context_mismatch"}} =
+               SavedResetRedemption.redeem(target.assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+      persisted = Repo.reload!(target_identity)
+      assert get_in(persisted.metadata, ["saved_resets", "available_count"]) == 1
+      refute Map.has_key?(persisted.metadata, "saved_reset_redemption")
+    end
+
+    test "gateway auto fails closed when a locked circuit row key mismatches its snapshot" do
+      %{fake: fake, target: target, target_identity: target_identity, context: context} =
+        transient_circuit_claim_fixture!(false,
+          pool_upstream_assignment_id: Ecto.UUID.generate()
+        )
+
+      assert {:ok, %{status: :noop, applied?: false, code: "gateway_auto_context_mismatch"}} =
+               SavedResetRedemption.redeem(target.assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+      persisted = Repo.reload!(target_identity)
+      assert get_in(persisted.metadata, ["saved_resets", "available_count"]) == 1
+      refute Map.has_key?(persisted.metadata, "saved_reset_redemption")
+    end
+
+    test "gateway auto defers a claim before a usable sibling's first recovery attempt" do
+      %{fake: fake, target: target, target_identity: target_identity, context: context} =
+        transient_circuit_claim_fixture!(false)
+
+      assert {:ok,
+              %{
+                status: :noop,
+                applied?: false,
+                code: "gateway_auto_sibling_transient_exclusion"
+              }} =
+               SavedResetRedemption.redeem(target.assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+      persisted = Repo.reload!(target_identity)
+      assert get_in(persisted.metadata, ["saved_resets", "available_count"]) == 1
+      refute Map.has_key?(persisted.metadata, "saved_reset_redemption")
+    end
+
+    test "gateway auto locks a failed-recovery sibling before existing spend policy proceeds" do
+      %{fake: fake, target: target, target_identity: target_identity, context: context} =
+        transient_circuit_claim_fixture!(true, [], 2)
+
+      test_pid = self()
+      handler_id = {__MODULE__, System.unique_integer([:positive, :monotonic])}
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:codex_pooler, :repo, :query],
+          fn _event, _measurements, metadata, _config ->
+            query = metadata[:query]
+
+            if metadata[:repo] == Repo and is_binary(query) and
+                 String.contains?(query, "FOR UPDATE") do
+              case metadata[:source] do
+                "upstream_identities" ->
+                  if String.contains?(query, "ANY("), do: send(test_pid, {:claim_lock, :cohort})
+
+                "pool_upstream_assignments" ->
+                  send(test_pid, {:claim_lock, :assignment})
+
+                "routing_circuit_states" ->
+                  if String.contains?(query, "ANY("),
+                    do: send(test_pid, {:claim_lock, :circuits, query, metadata[:params]})
+
+                _source ->
+                  :ok
+              end
+            end
+          end,
+          nil
+        )
+
+      try do
+        assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+                 SavedResetRedemption.redeem(target.assignment,
+                   trigger_kind: "gateway_auto",
+                   gateway_auto_context: context
+                 )
+
+        assert_receive {:claim_lock, :cohort}, 1_000
+        assert_receive {:claim_lock, :assignment}, 1_000
+        assert_receive {:claim_lock, :circuits, query, [locked_ids]}, 1_000
+        assert query =~ ~r/ORDER BY .*\."id" FOR UPDATE/
+        assert length(locked_ids) == 2
+
+        {:messages, remaining_messages} = Process.info(self(), :messages)
+        refute Enum.any?(remaining_messages, &match?({:claim_lock, :circuits, _, _}, &1))
+        assert provider_consume_count(fake) == 1
+
+        persisted = Repo.reload!(target_identity)
+        assert get_in(persisted.metadata, ["saved_resets", "available_count"]) == 0
+        assert get_in(persisted.metadata, ["saved_reset_redemption", "result", "code"]) == "reset"
+      after
+        :telemetry.detach(handler_id)
+      end
     end
 
     test "a manual applied consume latches the following automatic attempt" do
@@ -6545,6 +6664,95 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       },
       overrides
     )
+  end
+
+  defp transient_circuit_claim_fixture!(
+         recovery_attempted?,
+         snapshot_overrides \\ [],
+         sibling_count \\ 1
+       ) do
+    {:ok, fake} = codex_reset_fake(0)
+
+    %{identity: target_identity, assignment: target_assignment} =
+      assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+    pool = Repo.get!(Pool, target_assignment.pool_id)
+
+    siblings =
+      Enum.map(1..sibling_count, fn _index -> active_upstream_assignment_fixture(pool) end)
+
+    target_identity = enable_saved_reset_auto_redeem!(target_identity)
+    upsert_weekly_exhausted_quota!(target_identity)
+
+    Enum.each(siblings, fn sibling ->
+      upsert_weekly_pressure_quota!(sibling.identity, Decimal.new("20"))
+    end)
+
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    circuits =
+      Enum.map(siblings, fn sibling ->
+        %RoutingCircuitState{}
+        |> RoutingCircuitState.changeset(%{
+          pool_id: pool.id,
+          pool_upstream_assignment_id: sibling.assignment.id,
+          upstream_identity_id: sibling.identity.id,
+          model_identifier: "test-model",
+          route_class: "proxy_http",
+          status: "open",
+          reason_code: "test_circuit_open",
+          failure_count: 3,
+          success_count: 0,
+          opened_at: now,
+          next_probe_at: DateTime.add(now, 60, :second),
+          metadata: %{
+            "probe_in_flight_count" => 0,
+            "saved_reset_recovery" => %{
+              "version" => 1,
+              "attempted" => recovery_attempted?,
+              "since_success_at" => "never"
+            }
+          },
+          created_at: now,
+          updated_at: now
+        })
+        |> Repo.insert!()
+      end)
+
+    request_snapshots =
+      circuits
+      |> Enum.zip(siblings)
+      |> Enum.with_index()
+      |> Enum.map(fn {{circuit, sibling}, index} ->
+        snapshot = %{
+          routing_circuit_state_id: circuit.id,
+          upstream_identity_id: sibling.identity.id,
+          pool_upstream_assignment_id: sibling.assignment.id,
+          model_identifier: circuit.model_identifier,
+          route_class: circuit.route_class
+        }
+
+        if index == 0, do: Map.merge(snapshot, Map.new(snapshot_overrides)), else: snapshot
+      end)
+
+    context =
+      gateway_auto_context(
+        target_assignment,
+        target_identity,
+        :blocked_weekly_exhaustion,
+        %{
+          cohort_identity_ids: [target_identity.id | Enum.map(siblings, & &1.identity.id)],
+          routable_identity_ids: [target_identity.id],
+          transient_circuit_exclusions: request_snapshots
+        }
+      )
+
+    %{
+      fake: fake,
+      target: %{assignment: target_assignment},
+      target_identity: target_identity,
+      context: context
+    }
   end
 
   defp test_quota_scope do
