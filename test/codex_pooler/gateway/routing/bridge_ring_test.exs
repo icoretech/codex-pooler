@@ -761,14 +761,6 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
           %{seed: sweep_seed, live: live, snapshot: snapshot}
         end)
 
-      IO.puts(
-        "TODO5 fixture seed=#{seed} states=precise,credit_backed_probe " <>
-          "prepared=#{inspect(candidate_ids(prepared_candidates))} " <>
-          "live_selected=#{live_plan.selected_assignment_id} " <>
-          "snapshot_selected=#{snapshot_plan.selected_assignment_id} " <>
-          "sweep=1..500"
-      )
-
       assert %{live: positive_assignment.id, snapshot: positive_assignment.id} == %{
                live: live_plan.selected_assignment_id,
                snapshot: snapshot_plan.selected_assignment_id
