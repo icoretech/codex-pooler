@@ -6014,13 +6014,6 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       persisted = Repo.reload!(target_identity)
       assert get_in(persisted.metadata, ["saved_resets", "available_count"]) == 1
       refute Map.has_key?(persisted.metadata, "saved_reset_redemption")
-
-      if System.get_env("TASK9_XREF_MANUAL_QA") == "1" do
-        IO.puts(
-          "TASK9_XREF_MANUAL_QA marker=false result_code=gateway_auto_sibling_transient_exclusion " <>
-            "applied=false bank_count=1 provider_count=0"
-        )
-      end
     end
 
     @tag :saved_reset_circuit_context_fail_closed
@@ -8209,13 +8202,6 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       IO.puts(
         "TASK7_MANUAL_QA backend_pids_distinct=true blocked_on_probe_backend=true " <>
           "release_event=probe_failure_committed fresh_locked_marker=true consume_count=1"
-      )
-    end
-
-    if System.get_env("TASK9_XREF_MANUAL_QA") == "1" do
-      IO.puts(
-        "TASK9_XREF_MANUAL_QA marker=true result_code=reset applied=true bank_count=0 " <>
-          "provider_count=1"
       )
     end
   end
