@@ -5762,7 +5762,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                run_unboxed(fn ->
                  redeem_gateway_auto_target!(fixture, 2, fixture.identity_ids,
                    trigger: :threshold_pressure,
-                   candidate_identity_ids: [target_id]
+                   candidate_identity_ids: [target_id],
+                   routable_identity_ids: fixture.identity_ids
                  )
                end)
 
@@ -5847,59 +5848,72 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       end)
     end
 
-    test "hard exhaustion and hard-pinned continuity bypass sibling usable capacity" do
+    test "hard exhaustion defers for a real circuit-excluded sibling with usable quota" do
+      %{
+        fake: fake,
+        target: target,
+        target_identity: target_identity,
+        context: context
+      } = transient_circuit_claim_fixture!(false)
+
+      before_metadata = target_identity.metadata
+
+      assert {:ok,
+              %{
+                status: :noop,
+                applied?: false,
+                code: "gateway_auto_sibling_transient_exclusion"
+              }} =
+               SavedResetRedemption.redeem(target.assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert provider_consume_count(fake) == 0
+      assert Repo.reload!(target_identity).metadata == before_metadata
+    end
+
+    test "true all-account hard exhaustion consumes exactly once" do
       {:ok, fake} = codex_reset_fake(0)
       on_exit(fn -> FakeUpstream.stop(fake) end)
 
-      for {trigger, context_overrides, target_percent, expected_consume_count} <- [
-            {:blocked_weekly_exhaustion, %{}, Decimal.new("100"), 1},
-            {:threshold_pressure, %{hard_pinned_continuity?: true}, Decimal.new("96"), 2}
-          ] do
-        fixture = committed_gateway_auto_cohort_fixture!(fake, :same_pool, 2)
-        on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(fixture) end)
-        [sibling_id, target_id] = fixture.identity_ids
+      fixture = committed_gateway_auto_cohort_fixture!(fake, :same_pool, 2)
+      on_exit(fn -> cleanup_committed_gateway_auto_cohort_fixture!(fixture) end)
 
-        run_unboxed(fn ->
-          sibling_id
+      run_unboxed(fn ->
+        Enum.each(fixture.identity_ids, fn identity_id ->
+          identity_id
           |> then(&Repo.get!(UpstreamIdentity, &1))
-          |> upsert_weekly_pressure_quota!(Decimal.new("10"),
-            observed_at: fixture.as_of,
-            last_sync_at: fixture.as_of,
-            reset_at: DateTime.add(fixture.as_of, 2, :hour)
-          )
-
-          target = Repo.get!(UpstreamIdentity, target_id)
-
-          target =
-            if trigger == :threshold_pressure do
-              enable_saved_reset_auto_redeem!(target, %{
-                saved_reset_auto_redeem_trigger_mode: "threshold",
-                saved_reset_auto_redeem_quota_threshold_percent: 95
-              })
-            else
-              target
-            end
-
-          upsert_weekly_pressure_quota!(target, target_percent,
+          |> upsert_weekly_pressure_quota!(Decimal.new("100"),
             observed_at: fixture.as_of,
             last_sync_at: fixture.as_of,
             reset_at: DateTime.add(fixture.as_of, 2, :hour)
           )
         end)
+      end)
 
-        assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
-                 run_unboxed(fn ->
-                   redeem_gateway_auto_target!(
-                     fixture,
-                     1,
-                     fixture.identity_ids,
-                     [trigger: trigger, candidate_identity_ids: [target_id]] ++
-                       Map.to_list(context_overrides)
-                   )
-                 end)
+      assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+               run_unboxed(fn ->
+                 redeem_gateway_auto_target!(fixture, 1, fixture.identity_ids)
+               end)
 
-        assert provider_consume_count(fake) == expected_consume_count
-      end
+      assert provider_consume_count(fake) == 1
+    end
+
+    test "threshold hard-pin bypass remains unchanged for a circuit-excluded usable sibling" do
+      %{fake: fake, target: target, context: context} =
+        transient_circuit_claim_fixture!(false, [], 1,
+          trigger: :threshold_pressure,
+          hard_pinned_continuity?: true
+        )
+
+      assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+               SavedResetRedemption.redeem(target.assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert provider_consume_count(fake) == 1
     end
 
     test "saved reset claim revalidates a circuit that closed after the request snapshot" do
@@ -6056,6 +6070,238 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       persisted = Repo.reload!(target_identity)
       assert get_in(persisted.metadata, ["saved_resets", "available_count"]) == 1
       refute Map.has_key?(persisted.metadata, "saved_reset_redemption")
+    end
+
+    test "transient circuit recovery fence honors exact, stale, nil, and marker boundaries" do
+      cases = [
+        {:exact_probe_boundary, true, [next_probe_offset_seconds: 0], :noop},
+        {:stale_probe_boundary, true, [next_probe_offset_seconds: -1], :noop},
+        {:future_after_failed_probe, true, [next_probe_offset_seconds: 60], :consume},
+        {:open_no_probe, false, [next_probe_at: nil], :consume},
+        {:half_open_pending, true, [circuit_status: "half_open"], :noop},
+        {:closed_revalidated, true, [circuit_status: "closed", next_probe_at: nil], :noop},
+        {:probe_in_flight, true,
+         [
+           circuit_metadata: %{
+             "probe_in_flight_count" => 1,
+             "saved_reset_recovery" => %{
+               "version" => 1,
+               "attempted" => true,
+               "since_success_at" => "never"
+             }
+           }
+         ], :noop},
+        {:malformed_marker, true,
+         [circuit_metadata: %{"saved_reset_recovery" => %{"attempted" => true}}], :noop},
+        {:future_marker_version, true,
+         [
+           circuit_metadata: %{
+             "saved_reset_recovery" => %{
+               "version" => 2,
+               "attempted" => true,
+               "since_success_at" => "never"
+             }
+           }
+         ], :noop}
+      ]
+
+      Enum.each(cases, fn {scenario, recovery_attempted?, opts, expected} ->
+        %{
+          fake: fake,
+          target: target,
+          target_identity: target_identity,
+          context: context,
+          now: now
+        } = transient_circuit_claim_fixture!(recovery_attempted?, [], 1, opts)
+
+        before_metadata = target_identity.metadata
+
+        result =
+          SavedResetRedemption.redeem(target.assignment,
+            trigger_kind: "gateway_auto",
+            gateway_auto_context: context,
+            started_at: now
+          )
+
+        case expected do
+          :noop ->
+            assert {:ok,
+                    %{
+                      status: :noop,
+                      applied?: false,
+                      code: "gateway_auto_sibling_transient_exclusion"
+                    }} = result,
+                   "scenario=#{scenario}"
+
+            assert provider_consume_count(fake) == 0, "scenario=#{scenario}"
+
+            assert Repo.reload!(target_identity).metadata == before_metadata,
+                   "scenario=#{scenario}"
+
+          :consume ->
+            assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} = result,
+                   "scenario=#{scenario}"
+
+            assert provider_consume_count(fake) == 1, "scenario=#{scenario}"
+        end
+      end)
+    end
+
+    test "a stale recovery marker success stamp remains pending" do
+      last_success_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      %{
+        fake: fake,
+        target: target,
+        target_identity: target_identity,
+        context: context
+      } =
+        transient_circuit_claim_fixture!(true, [], 1,
+          last_success_at: last_success_at,
+          circuit_metadata: %{
+            "saved_reset_recovery" => %{
+              "version" => 1,
+              "attempted" => true,
+              "since_success_at" => "never"
+            }
+          }
+        )
+
+      before_metadata = target_identity.metadata
+
+      assert {:ok,
+              %{
+                status: :noop,
+                applied?: false,
+                code: "gateway_auto_sibling_transient_exclusion"
+              }} =
+               SavedResetRedemption.redeem(target.assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert provider_consume_count(fake) == 0
+      assert Repo.reload!(target_identity).metadata == before_metadata
+    end
+
+    test "circuit-excluded quota controls do not create false vetoes" do
+      cases = [
+        {:quota_exhausted, Decimal.new("100"), []},
+        {:stale, Decimal.new("20"),
+         [
+           observed_at: DateTime.add(DateTime.utc_now(), -2, :hour),
+           last_sync_at: DateTime.add(DateTime.utc_now(), -2, :hour)
+         ]},
+        {:malformed_missing_reset, Decimal.new("20"), [reset_at: nil]},
+        {:unknown_precision, Decimal.new("20"), [source_precision: "unknown"]},
+        {:incompatible_model, Decimal.new("20"),
+         [quota_key: "other-model", quota_scope: "model", quota_family: "codex_model"]},
+        {:model_only, Decimal.new("20"),
+         [
+           quota_key: "test-model",
+           quota_scope: "model",
+           quota_family: "codex_model",
+           model: "test-model"
+         ]}
+      ]
+
+      Enum.each(cases, fn {scenario, used_percent, quota_attrs} ->
+        %{fake: fake, target: target, context: context} =
+          transient_circuit_claim_fixture!(false, [], 1,
+            sibling_used_percent: used_percent,
+            sibling_quota_attrs: quota_attrs
+          )
+
+        assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+                 SavedResetRedemption.redeem(target.assignment,
+                   trigger_kind: "gateway_auto",
+                   gateway_auto_context: context
+                 ),
+               "scenario=#{scenario}"
+
+        assert provider_consume_count(fake) == 1, "scenario=#{scenario}"
+      end)
+    end
+
+    test "disabled and deleted circuit-excluded siblings do not veto" do
+      Enum.each(
+        [UpstreamIdentity.disabled_status(), UpstreamIdentity.deleted_status()],
+        fn status ->
+          %{fake: fake, target: target, context: context, siblings: [sibling]} =
+            transient_circuit_claim_fixture!(false)
+
+          update_identity!(sibling.identity, %{status: status})
+
+          assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+                   SavedResetRedemption.redeem(target.assignment,
+                     trigger_kind: "gateway_auto",
+                     gateway_auto_context: context
+                   )
+
+          assert provider_consume_count(fake) == 1
+        end
+      )
+    end
+
+    test "canonical partition, health, cooldown, and no-snapshot controls do not veto" do
+      Enum.each([:canonical_partition, :health_status, :cooldown, :no_snapshot], fn scenario ->
+        %{
+          fake: fake,
+          target: target,
+          target_identity: target_identity,
+          context: context,
+          siblings: [sibling]
+        } = transient_circuit_claim_fixture!(false)
+
+        context =
+          case scenario do
+            :canonical_partition ->
+              %{
+                context
+                | cohort_identity_ids: [target_identity.id],
+                  transient_circuit_exclusions: []
+              }
+
+            :health_status ->
+              sibling.assignment
+              |> PoolUpstreamAssignment.changeset(%{
+                health_status: PoolUpstreamAssignment.disabled_health_status()
+              })
+              |> Repo.update!()
+
+              %{
+                context
+                | cohort_identity_ids: [target_identity.id],
+                  transient_circuit_exclusions: []
+              }
+
+            :cooldown ->
+              sibling.assignment
+              |> PoolUpstreamAssignment.changeset(%{
+                health_status: PoolUpstreamAssignment.cooldown_health_status(),
+                cooldown_until: DateTime.utc_now() |> DateTime.add(60, :second)
+              })
+              |> Repo.update!()
+
+              %{
+                context
+                | cohort_identity_ids: [target_identity.id],
+                  transient_circuit_exclusions: []
+              }
+
+            :no_snapshot ->
+              %{context | transient_circuit_exclusions: []}
+          end
+
+        assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} =
+                 SavedResetRedemption.redeem(target.assignment,
+                   trigger_kind: "gateway_auto",
+                   gateway_auto_context: context
+                 ),
+               "scenario=#{scenario}"
+
+        assert provider_consume_count(fake) == 1, "scenario=#{scenario}"
+      end)
     end
 
     test "gateway auto locks a failed-recovery sibling before existing spend policy proceeds" do
@@ -6669,7 +6915,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   defp transient_circuit_claim_fixture!(
          recovery_attempted?,
          snapshot_overrides \\ [],
-         sibling_count \\ 1
+         sibling_count \\ 1,
+         opts \\ []
        ) do
     {:ok, fake} = codex_reset_fake(0)
 
@@ -6681,14 +6928,50 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     siblings =
       Enum.map(1..sibling_count, fn _index -> active_upstream_assignment_fixture(pool) end)
 
-    target_identity = enable_saved_reset_auto_redeem!(target_identity)
-    upsert_weekly_exhausted_quota!(target_identity)
+    trigger = Keyword.get(opts, :trigger, :blocked_weekly_exhaustion)
+
+    target_identity =
+      if trigger == :threshold_pressure do
+        enable_saved_reset_auto_redeem!(target_identity, %{
+          saved_reset_auto_redeem_trigger_mode: "threshold",
+          saved_reset_auto_redeem_quota_threshold_percent: 95
+        })
+      else
+        enable_saved_reset_auto_redeem!(target_identity)
+      end
+
+    target_percent =
+      if trigger == :threshold_pressure, do: Decimal.new("96"), else: Decimal.new("100")
+
+    upsert_weekly_pressure_quota!(target_identity, target_percent)
 
     Enum.each(siblings, fn sibling ->
-      upsert_weekly_pressure_quota!(sibling.identity, Decimal.new("20"))
+      upsert_weekly_pressure_quota!(
+        sibling.identity,
+        Keyword.get(opts, :sibling_used_percent, Decimal.new("20")),
+        Keyword.get(opts, :sibling_quota_attrs, [])
+      )
     end)
 
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    circuit_status = Keyword.get(opts, :circuit_status, "open")
+
+    next_probe_at =
+      case Keyword.fetch(opts, :next_probe_at) do
+        {:ok, next_probe_at} -> next_probe_at
+        :error -> DateTime.add(now, Keyword.get(opts, :next_probe_offset_seconds, 60), :second)
+      end
+
+    circuit_metadata =
+      Keyword.get(opts, :circuit_metadata, %{
+        "probe_in_flight_count" => 0,
+        "saved_reset_recovery" => %{
+          "version" => 1,
+          "attempted" => recovery_attempted?,
+          "since_success_at" => "never"
+        }
+      })
 
     circuits =
       Enum.map(siblings, fn sibling ->
@@ -6699,20 +6982,14 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           upstream_identity_id: sibling.identity.id,
           model_identifier: "test-model",
           route_class: "proxy_http",
-          status: "open",
+          status: circuit_status,
           reason_code: "test_circuit_open",
           failure_count: 3,
           success_count: 0,
           opened_at: now,
-          next_probe_at: DateTime.add(now, 60, :second),
-          metadata: %{
-            "probe_in_flight_count" => 0,
-            "saved_reset_recovery" => %{
-              "version" => 1,
-              "attempted" => recovery_attempted?,
-              "since_success_at" => "never"
-            }
-          },
+          last_success_at: Keyword.get(opts, :last_success_at),
+          next_probe_at: next_probe_at,
+          metadata: circuit_metadata,
           created_at: now,
           updated_at: now
         })
@@ -6739,16 +7016,20 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       gateway_auto_context(
         target_assignment,
         target_identity,
-        :blocked_weekly_exhaustion,
+        trigger,
         %{
           cohort_identity_ids: [target_identity.id | Enum.map(siblings, & &1.identity.id)],
           routable_identity_ids: [target_identity.id],
-          transient_circuit_exclusions: request_snapshots
+          transient_circuit_exclusions: request_snapshots,
+          hard_pinned_continuity?: Keyword.get(opts, :hard_pinned_continuity?, false)
         }
       )
 
     %{
       fake: fake,
+      circuits: circuits,
+      now: now,
+      siblings: siblings,
       target: %{assignment: target_assignment},
       target_identity: target_identity,
       context: context
@@ -7081,7 +7362,12 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       opts
       |> Keyword.drop([:trigger])
       |> Map.new()
-      |> Map.put_new(:routable_identity_ids, cohort_identity_ids)
+
+    candidate_identity_ids =
+      Map.get(context_overrides, :candidate_identity_ids, [identity.id])
+
+    context_overrides =
+      Map.put_new(context_overrides, :routable_identity_ids, candidate_identity_ids)
 
     context =
       assignment

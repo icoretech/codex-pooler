@@ -530,11 +530,16 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       {result, log} = with_info_log(fn -> RouteFiltering.filter_candidates(filter_input) end)
 
       # The successful threshold routing result is preserved; the burn is vetoed.
-      assert {:ok, [_sibling_candidate, _target_candidate], _request_options} = result
+      assert {:ok, [_sibling_candidate, _target_candidate], request_options} = result
 
       assert log =~ "result_code=gateway_auto_sibling_usable_capacity"
       assert log =~ "applied=false"
       refute log =~ "result_code=reset"
+
+      assert request_options.routing.reset_probe ==
+               filter_input.request_options.routing.reset_probe
+
+      refute ResetProbe.bound?(request_options.routing.reset_probe)
 
       assert FakeUpstream.requests(upstream) == []
       assert Repo.reload!(target_identity).metadata == before_target
@@ -587,6 +592,43 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
         |> Enum.filter(&(&1 == "/api/codex/rate-limit-reset-credits/consume"))
 
       assert consume_paths == ["/api/codex/rate-limit-reset-credits/consume"]
+
+      redemption = Repo.reload!(target_identity).metadata["saved_reset_redemption"]
+      assert redemption["result"]["applied"] == true
+      assert redemption["trigger_detail"] == "threshold"
+    end
+
+    test "a file-affinity hard pin retains its threshold capacity bypass" do
+      %{
+        upstream: upstream,
+        filter_input: filter_input,
+        target_assignment: target_assignment,
+        target_identity: target_identity
+      } = first_turn_capacity_arrangement("file-affinity-capacity")
+
+      request_options =
+        RequestOptions.put_routing(filter_input.request_options,
+          file_affinity_assignment_id: target_assignment.id
+        )
+
+      assert SessionContinuity.hard_pinned_continuity?(
+               request_options,
+               filter_input.model
+             )
+
+      {result, log} =
+        with_info_log(fn ->
+          RouteFiltering.filter_candidates(%{filter_input | request_options: request_options})
+        end)
+
+      assert {:ok, _candidates, _request_options} = result
+      assert log =~ "result_code=reset"
+      assert log =~ "applied=true"
+
+      assert Enum.count(
+               FakeUpstream.requests(upstream),
+               &(&1.path == "/api/codex/rate-limit-reset-credits/consume")
+             ) == 1
 
       redemption = Repo.reload!(target_identity).metadata["saved_reset_redemption"]
       assert redemption["result"]["applied"] == true
@@ -746,7 +788,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert Repo.reload!(sibling_identity).metadata == before_sibling
     end
 
-    test "a websocket-shaped pin does not bypass the capacity veto" do
+    test "a live-websocket hard pin retains its non-bypass threshold policy" do
       %{
         upstream: upstream,
         filter_input: filter_input,
@@ -808,11 +850,13 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
 
       {result, log} = with_info_log(fn -> RouteFiltering.filter_candidates(filter_input) end)
 
-      assert {:ok, _candidates, _request_options} = result
+      assert {:ok, _candidates, returned_options} = result
 
       assert log =~ "result_code=gateway_auto_sibling_usable_capacity"
       assert log =~ "applied=false"
       refute log =~ "result_code=reset"
+      assert returned_options.routing.reset_probe == request_options.routing.reset_probe
+      refute ResetProbe.bound?(returned_options.routing.reset_probe)
 
       assert FakeUpstream.requests(upstream) == []
       assert Repo.reload!(target_identity).metadata == before_target
@@ -1333,8 +1377,10 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
 
       open_circuit!(pool, api_key, filter_input.model, circuit_open.assignment)
       route_state = route_state(filter_input)
+      before_metadata = Repo.reload!(redeeming_identity).metadata
+      reset_probe = filter_input.request_options.routing.reset_probe
 
-      assert {:ok, filtered_candidates, _filtered_options, filtered_route_state} =
+      assert {:ok, filtered_candidates, filtered_options, filtered_route_state} =
                RouteFiltering.filter_candidates_with_route_state(filter_input, route_state)
 
       assert candidate_ids(filtered_candidates) == [redeeming.assignment.id]
@@ -1346,8 +1392,10 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
                routable.assignment.id
              ]
 
-      assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == []
-      refute Map.has_key?(Repo.reload!(redeeming_identity).metadata, "saved_reset_redemption")
+      assert FakeUpstream.requests(upstream) == []
+      assert filtered_options.routing.reset_probe == reset_probe
+      refute ResetProbe.bound?(filtered_options.routing.reset_probe)
+      assert Repo.reload!(redeeming_identity).metadata == before_metadata
     end
 
     test "blocked exhaustion waits when a circuit-excluded sibling has usable quota" do
@@ -1387,6 +1435,8 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
 
       open_circuit!(pool, api_key, filter_input.model, circuit_open.assignment)
       route_state = route_state(filter_input)
+      before_metadata = Repo.reload!(redeeming_identity).metadata
+      reset_probe = filter_input.request_options.routing.reset_probe
 
       result = RouteFiltering.filter_candidates_with_route_state(filter_input, route_state)
 
@@ -1398,8 +1448,10 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
 
       assert result_summary == {:error, "quota_exhausted"}
 
-      assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == []
-      refute Map.has_key?(Repo.reload!(redeeming_identity).metadata, "saved_reset_redemption")
+      assert FakeUpstream.requests(upstream) == []
+      assert filter_input.request_options.routing.reset_probe == reset_probe
+      refute ResetProbe.bound?(filter_input.request_options.routing.reset_probe)
+      assert Repo.reload!(redeeming_identity).metadata == before_metadata
     end
 
     test "blocked exhaustion carries circuit-excluded siblings without widening candidates" do
