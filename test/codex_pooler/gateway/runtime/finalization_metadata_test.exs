@@ -313,6 +313,7 @@ defmodule CodexPooler.Gateway.Runtime.FinalizationMetadataCompressionTest do
       routing_attempt_metadata: %{},
       route_class: "proxy_websocket",
       routing_circuit_state: circuit,
+      routing_circuit_admission: :probe,
       attempt: attempt,
       started: System.monotonic_time(:millisecond)
     }

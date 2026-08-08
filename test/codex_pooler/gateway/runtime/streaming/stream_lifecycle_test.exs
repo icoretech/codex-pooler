@@ -1669,7 +1669,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
       retry_context(setup, auth, request_options, reserved.request,
         candidates: [{setup.assignment, setup.identity}],
         attempt: attempt,
-        routing_circuit_state: circuit
+        routing_circuit_state: circuit,
+        routing_circuit_admission: :probe
       )
 
     response_context = %ResponseContext{context: context, response: %Req.Response{status: 200}}
@@ -1831,7 +1832,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
         retry_context(setup, auth, request_options, reserved.request,
           candidates: [{setup.assignment, setup.identity}],
           attempt: attempt,
-          routing_circuit_state: circuit
+          routing_circuit_state: circuit,
+          routing_circuit_admission: :probe
         )
 
       response_context = %ResponseContext{context: context, response: %Req.Response{status: 200}}
@@ -1901,6 +1903,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
       routing_attempt_metadata: %{},
       route_class: request_options.transport.route_class,
       routing_circuit_state: Keyword.get(opts, :routing_circuit_state),
+      routing_circuit_admission: Keyword.get(opts, :routing_circuit_admission),
       attempt: Keyword.get(opts, :attempt),
       started: System.monotonic_time(:millisecond)
     }
