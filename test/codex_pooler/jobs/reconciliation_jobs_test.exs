@@ -2309,7 +2309,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
           end)
         end)
 
-      assert_receive {:stale_cleanup_connection_ready, ^release_ref, cleanup_backend}
+      assert_receive {:stale_cleanup_connection_ready, ^release_ref, cleanup_backend}, 5_000
       assert_backend_waiting_on_db_lock!(cleanup_backend)
 
       send(query_pid, {:release_assignment_update, release_ref})
