@@ -7,10 +7,12 @@ defmodule CodexPooler.Gateway.Routing.CircuitHealth do
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Gateway.Persistence.StatusVocabulary.Circuit, as: CircuitStatus
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   @circuit_probe_in_flight_key "probe_in_flight_count"
   @saved_reset_recovery_key "saved_reset_recovery"
   @saved_reset_recovery_version 1
+  @closed_status CircuitStatus.closed_status()
   @open_status CircuitStatus.open_status()
   @half_open_status CircuitStatus.half_open_status()
 
@@ -75,6 +77,66 @@ defmodule CodexPooler.Gateway.Routing.CircuitHealth do
           asc: state.route_class
         ]
     )
+  end
+
+  @spec lock_saved_reset_recovery_fence(map()) :: :pending | :clear | :context_mismatch
+  def lock_saved_reset_recovery_fence(%{
+        gateway_auto_context:
+          %{
+            transient_circuit_exclusions: exclusions
+          } = gateway_auto_context,
+        locked_assignment: %PoolUpstreamAssignment{} = locked_assignment,
+        locked_cohort: locked_cohort,
+        locked_identity: %UpstreamIdentity{} = locked_identity,
+        timestamp: %DateTime{} = timestamp,
+        usable_sibling_identity_ids: %MapSet{} = usable_sibling_identity_ids
+      })
+      when is_list(exclusions) and is_map(locked_cohort) do
+    circuit_ids =
+      exclusions
+      |> Enum.map(& &1.routing_circuit_state_id)
+      |> Enum.sort()
+
+    locked_circuits =
+      Repo.all(
+        from circuit in RoutingCircuitState,
+          where:
+            fragment(
+              "? = ANY(?::uuid[])",
+              circuit.id,
+              ^Enum.map(circuit_ids, &Ecto.UUID.dump!/1)
+            ),
+          order_by: [asc: circuit.id],
+          lock: "FOR UPDATE"
+      )
+
+    exclusions_by_circuit_id = Map.new(exclusions, &{&1.routing_circuit_state_id, &1})
+
+    with true <- Enum.map(locked_circuits, & &1.id) == circuit_ids,
+         {:ok, locked_siblings} <-
+           pair_locked_saved_reset_circuits(
+             locked_circuits,
+             exclusions_by_circuit_id,
+             locked_identity,
+             locked_cohort,
+             locked_assignment,
+             gateway_auto_context
+           ) do
+      if Enum.any?(
+           locked_siblings,
+           &saved_reset_recovery_pending_for_usable_sibling?(
+             &1,
+             usable_sibling_identity_ids,
+             timestamp
+           )
+         ) do
+        :pending
+      else
+        :clear
+      end
+    else
+      _mismatch -> :context_mismatch
+    end
   end
 
   @spec settings() :: OperationalSettings.t()
@@ -163,6 +225,96 @@ defmodule CodexPooler.Gateway.Routing.CircuitHealth do
   @spec clear_saved_reset_recovery(map()) :: map()
   def clear_saved_reset_recovery(metadata) when is_map(metadata),
     do: Map.delete(metadata, @saved_reset_recovery_key)
+
+  defp pair_locked_saved_reset_circuits(
+         locked_circuits,
+         exclusions_by_circuit_id,
+         locked_identity,
+         locked_cohort,
+         locked_assignment,
+         gateway_auto_context
+       ) do
+    Enum.reduce_while(locked_circuits, {:ok, []}, fn circuit, {:ok, pairs} ->
+      exclusion = Map.get(exclusions_by_circuit_id, circuit.id)
+      sibling = Map.get(locked_cohort, circuit.upstream_identity_id)
+
+      if locked_saved_reset_circuit_context_matches?(
+           circuit,
+           exclusion,
+           sibling,
+           locked_identity,
+           locked_assignment,
+           gateway_auto_context
+         ) do
+        {:cont, {:ok, [{circuit, sibling} | pairs]}}
+      else
+        {:halt, :error}
+      end
+    end)
+  end
+
+  defp locked_saved_reset_circuit_context_matches?(
+         %RoutingCircuitState{} = circuit,
+         exclusion,
+         %UpstreamIdentity{} = sibling,
+         %UpstreamIdentity{} = locked_identity,
+         %PoolUpstreamAssignment{} = locked_assignment,
+         gateway_auto_context
+       )
+       when is_map(exclusion) do
+    circuit.upstream_identity_id == exclusion.upstream_identity_id and
+      circuit.upstream_identity_id == sibling.id and
+      circuit.upstream_identity_id != locked_identity.id and
+      circuit.pool_upstream_assignment_id == exclusion.pool_upstream_assignment_id and
+      circuit.pool_id == locked_assignment.pool_id and
+      circuit.model_identifier == exclusion.model_identifier and
+      circuit.model_identifier == gateway_auto_context.quota_scope.catalog_model and
+      circuit.route_class == exclusion.route_class and
+      circuit.route_class == gateway_auto_context.route_class
+  end
+
+  defp locked_saved_reset_circuit_context_matches?(
+         _circuit,
+         _exclusion,
+         _sibling,
+         _locked_identity,
+         _locked_assignment,
+         _gateway_auto_context
+       ),
+       do: false
+
+  defp saved_reset_recovery_pending?(
+         %RoutingCircuitState{status: status},
+         _timestamp
+       )
+       when status in [@closed_status, @half_open_status],
+       do: true
+
+  defp saved_reset_recovery_pending?(
+         %RoutingCircuitState{status: @open_status, next_probe_at: nil},
+         _timestamp
+       ),
+       do: false
+
+  defp saved_reset_recovery_pending?(
+         %RoutingCircuitState{status: @open_status, next_probe_at: next_probe_at} = circuit,
+         timestamp
+       ) do
+    DateTime.compare(next_probe_at, timestamp) != :gt or
+      not saved_reset_recovery_attempted?(circuit) or
+      probe_in_flight_count(circuit) > 0
+  end
+
+  defp saved_reset_recovery_pending?(%RoutingCircuitState{}, _timestamp), do: true
+
+  defp saved_reset_recovery_pending_for_usable_sibling?(
+         {circuit, sibling},
+         usable_sibling_identity_ids,
+         timestamp
+       ) do
+    MapSet.member?(usable_sibling_identity_ids, sibling.id) and
+      saved_reset_recovery_pending?(circuit, timestamp)
+  end
 
   defp success_stamp(%RoutingCircuitState{last_success_at: %DateTime{} = last_success_at}),
     do: DateTime.to_iso8601(last_success_at)

@@ -6,7 +6,6 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   import Ecto.Query
 
   alias CodexPooler.Events
-  alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Gateway.Routing.CircuitHealth
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
@@ -27,9 +26,6 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   alias CodexPooler.Upstreams.StatusVocabulary.Identity, as: IdentityStatus
 
   @assignment_active AssignmentStatus.active_status()
-  @circuit_closed RoutingCircuitState.closed_status()
-  @circuit_half_open RoutingCircuitState.half_open_status()
-  @circuit_open RoutingCircuitState.open_status()
   @identity_active IdentityStatus.active_status()
   @identity_deleted IdentityStatus.deleted_status()
   @identity_disabled IdentityStatus.disabled_status()
@@ -1784,37 +1780,31 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
          timestamp
        ) do
     if transient_exclusion_fence_applies?(gateway_auto_context) do
-      with {:ok, locked_circuit_siblings} <-
-             lock_transient_circuit_siblings(
-               locked_identity,
-               locked_cohort,
-               locked_assignment,
-               gateway_auto_context
-             ) do
-        transient_circuit_sibling_decision(
-          locked_circuit_siblings,
-          gateway_auto_context,
-          timestamp
-        )
-      end
-    else
-      :ok
-    end
-  end
+      usable_sibling_identity_ids =
+        locked_cohort
+        |> Enum.filter(fn {identity_id, sibling} ->
+          identity_id != locked_identity.id and
+            AutoEligibility.locked_sibling_usable_capacity?(
+              sibling,
+              gateway_auto_context,
+              timestamp
+            )
+        end)
+        |> Enum.map(fn {identity_id, _sibling} -> identity_id end)
+        |> MapSet.new()
 
-  defp transient_circuit_sibling_decision(
-         locked_circuit_siblings,
-         gateway_auto_context,
-         timestamp
-       ) do
-    if Enum.any?(locked_circuit_siblings, fn {circuit, sibling} ->
-         AutoEligibility.locked_sibling_usable_capacity?(
-           sibling,
-           gateway_auto_context,
-           timestamp
-         ) and transient_circuit_recovery_pending?(circuit, timestamp)
-       end) do
-      {:noop, "gateway_auto_sibling_transient_exclusion"}
+      case CircuitHealth.lock_saved_reset_recovery_fence(%{
+             gateway_auto_context: gateway_auto_context,
+             locked_assignment: locked_assignment,
+             locked_cohort: locked_cohort,
+             locked_identity: locked_identity,
+             timestamp: timestamp,
+             usable_sibling_identity_ids: usable_sibling_identity_ids
+           }) do
+        :pending -> {:noop, "gateway_auto_sibling_transient_exclusion"}
+        :clear -> :ok
+        :context_mismatch -> {:noop, "gateway_auto_context_mismatch"}
+      end
     else
       :ok
     end
@@ -1828,129 +1818,6 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
 
   defp transient_exclusion_fence_applies?(%{trigger: :blocked_weekly_exhaustion}), do: true
   defp transient_exclusion_fence_applies?(_context), do: false
-
-  defp lock_transient_circuit_siblings(
-         locked_identity,
-         locked_cohort,
-         locked_assignment,
-         %{transient_circuit_exclusions: exclusions} = gateway_auto_context
-       ) do
-    circuit_ids =
-      exclusions
-      |> Enum.map(& &1.routing_circuit_state_id)
-      |> Enum.sort()
-
-    locked_circuits =
-      Repo.all(
-        from circuit in RoutingCircuitState,
-          where:
-            fragment(
-              "? = ANY(?::uuid[])",
-              circuit.id,
-              ^Enum.map(circuit_ids, &Ecto.UUID.dump!/1)
-            ),
-          order_by: [asc: circuit.id],
-          lock: "FOR UPDATE"
-      )
-
-    exclusions_by_circuit_id = Map.new(exclusions, &{&1.routing_circuit_state_id, &1})
-
-    with true <- Enum.map(locked_circuits, & &1.id) == circuit_ids,
-         {:ok, locked_circuit_siblings} <-
-           pair_locked_circuit_siblings(
-             locked_circuits,
-             exclusions_by_circuit_id,
-             locked_identity,
-             locked_cohort,
-             locked_assignment,
-             gateway_auto_context
-           ) do
-      {:ok, locked_circuit_siblings}
-    else
-      _mismatch -> {:noop, "gateway_auto_context_mismatch"}
-    end
-  end
-
-  defp pair_locked_circuit_siblings(
-         locked_circuits,
-         exclusions_by_circuit_id,
-         locked_identity,
-         locked_cohort,
-         locked_assignment,
-         gateway_auto_context
-       ) do
-    Enum.reduce_while(locked_circuits, {:ok, []}, fn circuit, {:ok, pairs} ->
-      exclusion = Map.get(exclusions_by_circuit_id, circuit.id)
-      sibling = Map.get(locked_cohort, circuit.upstream_identity_id)
-
-      if locked_circuit_context_matches?(
-           circuit,
-           exclusion,
-           sibling,
-           locked_identity,
-           locked_assignment,
-           gateway_auto_context
-         ) do
-        {:cont, {:ok, [{circuit, sibling} | pairs]}}
-      else
-        {:halt, {:noop, "gateway_auto_context_mismatch"}}
-      end
-    end)
-  end
-
-  defp locked_circuit_context_matches?(
-         %RoutingCircuitState{} = circuit,
-         exclusion,
-         %UpstreamIdentity{} = sibling,
-         %UpstreamIdentity{} = locked_identity,
-         %PoolUpstreamAssignment{} = locked_assignment,
-         gateway_auto_context
-       )
-       when is_map(exclusion) do
-    circuit.upstream_identity_id == exclusion.upstream_identity_id and
-      circuit.upstream_identity_id == sibling.id and
-      circuit.upstream_identity_id != locked_identity.id and
-      circuit.pool_upstream_assignment_id == exclusion.pool_upstream_assignment_id and
-      circuit.pool_id == locked_assignment.pool_id and
-      circuit.model_identifier == exclusion.model_identifier and
-      circuit.model_identifier == gateway_auto_context.quota_scope.catalog_model and
-      circuit.route_class == exclusion.route_class and
-      circuit.route_class == gateway_auto_context.route_class
-  end
-
-  defp locked_circuit_context_matches?(
-         _circuit,
-         _exclusion,
-         _sibling,
-         _locked_identity,
-         _locked_assignment,
-         _gateway_auto_context
-       ),
-       do: false
-
-  defp transient_circuit_recovery_pending?(
-         %RoutingCircuitState{status: status},
-         _timestamp
-       )
-       when status in [@circuit_closed, @circuit_half_open],
-       do: true
-
-  defp transient_circuit_recovery_pending?(
-         %RoutingCircuitState{status: @circuit_open, next_probe_at: nil},
-         _timestamp
-       ),
-       do: false
-
-  defp transient_circuit_recovery_pending?(
-         %RoutingCircuitState{status: @circuit_open, next_probe_at: next_probe_at} = circuit,
-         timestamp
-       ) do
-    DateTime.compare(next_probe_at, timestamp) != :gt or
-      not CircuitHealth.saved_reset_recovery_attempted?(circuit) or
-      CircuitHealth.probe_in_flight_count(circuit) > 0
-  end
-
-  defp transient_circuit_recovery_pending?(%RoutingCircuitState{}, _timestamp), do: true
 
   defp sibling_usable_capacity_fence(_locked_identity, _locked_cohort, nil, _timestamp), do: :ok
 

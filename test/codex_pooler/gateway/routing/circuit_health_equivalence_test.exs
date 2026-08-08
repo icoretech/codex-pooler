@@ -83,6 +83,50 @@ defmodule CodexPooler.Gateway.Routing.CircuitHealthEquivalenceTest do
     end
   end
 
+  test "saved reset recovery fence locks and classifies a usable transient sibling" do
+    pool = pool_fixture()
+    model = model_fixture(pool)
+    target = upstream_assignment_fixture(pool)
+    sibling = upstream_assignment_fixture(pool)
+    observed_at = now()
+
+    circuit =
+      circuit_state_fixture(pool, model, sibling.assignment, observed_at,
+        status: "open",
+        next_probe_at: observed_at,
+        metadata: %{}
+      )
+
+    gateway_auto_context = %{
+      quota_scope: %{catalog_model: model.exposed_model_id},
+      route_class: @route_class,
+      transient_circuit_exclusions: [
+        %{
+          routing_circuit_state_id: circuit.id,
+          upstream_identity_id: sibling.identity.id,
+          pool_upstream_assignment_id: sibling.assignment.id,
+          model_identifier: model.exposed_model_id,
+          route_class: @route_class
+        }
+      ]
+    }
+
+    assert {:ok, :pending} =
+             Repo.transaction(fn ->
+               CircuitHealth.lock_saved_reset_recovery_fence(%{
+                 gateway_auto_context: gateway_auto_context,
+                 locked_assignment: target.assignment,
+                 locked_cohort: %{
+                   target.identity.id => target.identity,
+                   sibling.identity.id => sibling.identity
+                 },
+                 locked_identity: target.identity,
+                 timestamp: observed_at,
+                 usable_sibling_identity_ids: MapSet.new([sibling.identity.id])
+               })
+             end)
+  end
+
   defp circuit_state_fixture(pool, model, assignment, observed_at, attrs) do
     defaults = [
       status: "closed",
