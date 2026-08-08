@@ -5,7 +5,7 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
 
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
-  alias CodexPooler.Gateway.Routing.CircuitState
+  alias CodexPooler.Gateway.Routing.{CircuitHealth, CircuitState}
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
   alias CodexPooler.Pools.Pool
@@ -227,6 +227,7 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
 
     assert first.status == "closed"
     assert first.failure_count == 1
+    assert first.metadata["saved_reset_recovery"] == recovery_marker(false, nil)
 
     update_circuit_settings(%{"circuit_failure_threshold" => 2})
 
@@ -243,6 +244,84 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
     assert opened.status == "open"
     assert opened.failure_count == 2
     assert %DateTime{} = opened.next_probe_at
+  end
+
+  test "closed-to-open recovery marker uses the current last-success stamp" do
+    {auth, model, assignment} = routing_fixture()
+    update_circuit_settings(%{"circuit_failure_threshold" => 1})
+
+    assert {:ok, %RoutingCircuitState{status: "open"} = initially_opened} =
+             CircuitState.record_failure(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               :initial_failure
+             )
+
+    assert {:ok, %RoutingCircuitState{status: "closed"} = recovered} =
+             CircuitState.record_success(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               :normal
+             )
+
+    assert recovered.id == initially_opened.id
+    refute Map.has_key?(recovered.metadata, "saved_reset_recovery")
+
+    assert {:ok, %RoutingCircuitState{status: "open"} = reopened} =
+             CircuitState.record_failure(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               :post_success_failure
+             )
+
+    assert reopened.metadata["saved_reset_recovery"] ==
+             recovery_marker(false, recovered.last_success_at)
+
+    refute CircuitHealth.saved_reset_recovery_attempted?(reopened)
+  end
+
+  test "threshold opening persists a current unattempted saved-reset recovery marker" do
+    {auth, model, assignment} = routing_fixture()
+    update_circuit_settings(%{"circuit_failure_threshold" => 1})
+
+    assert {:ok, %RoutingCircuitState{status: "open"} = opened} =
+             CircuitState.record_failure(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               :threshold_failure
+             )
+
+    persisted = Repo.get!(RoutingCircuitState, opened.id)
+
+    assert persisted.metadata["saved_reset_recovery"] == %{
+             "version" => 1,
+             "attempted" => false,
+             "since_success_at" => "never"
+           }
+
+    refute CircuitHealth.saved_reset_recovery_attempted?(persisted)
+
+    assert {:ok, %RoutingCircuitState{status: "open"} = after_in_flight_failure} =
+             CircuitState.record_failure(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               :additional_in_flight_failure
+             )
+
+    assert after_in_flight_failure.failure_count == 2
+
+    assert after_in_flight_failure.metadata["saved_reset_recovery"] ==
+             persisted.metadata["saved_reset_recovery"]
   end
 
   test "open-window updates change half-open probe decisions without resetting circuit rows" do
@@ -271,7 +350,13 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
 
   test "neutral completions release half-open probes without counting success or failure" do
     {auth, model, assignment} = routing_fixture()
-    state = half_open_circuit!(auth, model, assignment, updated_at: now(), probe_count: 1)
+
+    state =
+      half_open_circuit!(auth, model, assignment,
+        updated_at: now(),
+        probe_count: 1,
+        recovery_marker: recovery_marker(false, nil)
+      )
 
     assert {:ok, %RoutingCircuitState{} = updated} =
              CircuitState.record_neutral_completion(
@@ -288,14 +373,27 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
     assert updated.failure_count == state.failure_count
     assert updated.success_count == state.success_count
     assert updated.metadata["probe_in_flight_count"] == 0
+    assert updated.metadata["saved_reset_recovery"] == recovery_marker(false, nil)
+    refute CircuitHealth.saved_reset_recovery_attempted?(updated)
     assert CircuitState.eligible?(auth, model, assignment, "proxy_websocket")
   end
 
   test "an old normal failure cannot consume another request's half-open probe slot" do
     {auth, model, assignment} = routing_fixture()
+    update_circuit_settings(%{"circuit_failure_threshold" => 1})
 
-    state =
-      open_circuit!(auth, model, assignment, next_probe_at: DateTime.add(now(), -1, :second))
+    assert {:ok, %RoutingCircuitState{status: "open"} = state} =
+             CircuitState.record_failure(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               :initial_failure
+             )
+
+    state
+    |> Ecto.Changeset.change(%{next_probe_at: DateTime.add(now(), -1, :second)})
+    |> Repo.update!()
 
     normal_snapshot = %{
       eligible?: true,
@@ -326,6 +424,8 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
 
     assert probe.id == state.id
     assert probe.metadata["probe_in_flight_count"] == 1
+    assert probe.metadata["saved_reset_recovery"] == recovery_marker(false, nil)
+    refute CircuitHealth.saved_reset_recovery_attempted?(probe)
 
     assert {:ok, %RoutingCircuitState{} = after_old_failure} =
              CircuitState.record_failure(
@@ -338,7 +438,169 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
              )
 
     assert after_old_failure.metadata["probe_in_flight_count"] == 1
+    assert after_old_failure.metadata["saved_reset_recovery"] == recovery_marker(false, nil)
+    refute CircuitHealth.saved_reset_recovery_attempted?(after_old_failure)
     assert after_old_failure.status == "half_open"
+  end
+
+  test "probe admission preserves false and probe failure records the attempt across reopen" do
+    {auth, model, assignment} = routing_fixture()
+    update_circuit_settings(%{"circuit_failure_threshold" => 1})
+
+    assert {:ok, %RoutingCircuitState{status: "open"} = opened} =
+             CircuitState.record_failure(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               :initial_failure
+             )
+
+    opened
+    |> Ecto.Changeset.change(%{next_probe_at: DateTime.add(now(), -1, :second)})
+    |> Repo.update!()
+
+    assert {:ok, %{admission: :probe, state: %RoutingCircuitState{} = probe}} =
+             CircuitState.begin_attempt(auth, model, assignment, "proxy_websocket")
+
+    assert probe.metadata["saved_reset_recovery"] == recovery_marker(false, nil)
+    refute CircuitHealth.saved_reset_recovery_attempted?(probe)
+
+    assert {:ok, %RoutingCircuitState{status: "open"} = reopened} =
+             CircuitState.record_failure(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               :probe_failure,
+               :probe
+             )
+
+    assert reopened.metadata["probe_in_flight_count"] == 0
+    assert reopened.metadata["saved_reset_recovery"] == recovery_marker(true, nil)
+    assert CircuitHealth.saved_reset_recovery_attempted?(reopened)
+
+    assert {:ok, %RoutingCircuitState{status: "open"} = still_open} =
+             CircuitState.record_failure(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               :additional_failure,
+               :normal
+             )
+
+    assert still_open.metadata["saved_reset_recovery"] == recovery_marker(true, nil)
+    assert CircuitHealth.saved_reset_recovery_attempted?(still_open)
+  end
+
+  test "success clears a current recovery marker and invalidates stale replicas" do
+    {auth, model, assignment} = routing_fixture()
+    update_circuit_settings(%{"circuit_success_threshold" => 1})
+
+    last_success_at = DateTime.add(now(), -300, :second)
+
+    state =
+      half_open_circuit!(auth, model, assignment,
+        updated_at: now(),
+        probe_count: 1,
+        last_success_at: last_success_at,
+        recovery_marker: recovery_marker(true, last_success_at)
+      )
+
+    assert CircuitHealth.saved_reset_recovery_attempted?(state)
+
+    assert {:ok, %RoutingCircuitState{status: "closed"} = recovered} =
+             CircuitState.record_success(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               :probe
+             )
+
+    refute Map.has_key?(recovered.metadata, "saved_reset_recovery")
+    refute CircuitHealth.saved_reset_recovery_attempted?(recovered)
+
+    stale_metadata =
+      Map.put(
+        recovered.metadata,
+        "saved_reset_recovery",
+        recovery_marker(true, state.last_success_at)
+      )
+
+    stale_replica =
+      recovered |> Ecto.Changeset.change(%{metadata: stale_metadata}) |> Repo.update!()
+
+    refute CircuitHealth.saved_reset_recovery_attempted?(stale_replica)
+  end
+
+  test "non-closing success invalidates a preserved marker with its new success stamp" do
+    {auth, model, assignment} = routing_fixture()
+    update_circuit_settings(%{"circuit_success_threshold" => 2})
+
+    last_success_at = DateTime.add(now(), -300, :second)
+
+    state =
+      half_open_circuit!(auth, model, assignment,
+        updated_at: now(),
+        probe_count: 1,
+        last_success_at: last_success_at,
+        recovery_marker: recovery_marker(true, last_success_at)
+      )
+
+    assert {:ok, %RoutingCircuitState{status: "half_open"} = partial_success} =
+             CircuitState.record_success(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               :probe
+             )
+
+    assert partial_success.metadata["saved_reset_recovery"] ==
+             recovery_marker(true, state.last_success_at)
+
+    refute CircuitHealth.saved_reset_recovery_attempted?(partial_success)
+  end
+
+  test "only exact current saved-reset recovery markers read attempted" do
+    {auth, model, assignment} = routing_fixture()
+    last_success_at = DateTime.add(now(), -60, :second)
+
+    state =
+      half_open_circuit!(auth, model, assignment,
+        updated_at: now(),
+        probe_count: 0,
+        last_success_at: last_success_at,
+        recovery_marker: recovery_marker(true, last_success_at)
+      )
+
+    assert CircuitHealth.saved_reset_recovery(state) == recovery_marker(true, last_success_at)
+    assert CircuitHealth.valid_saved_reset_recovery?(state)
+    assert CircuitHealth.saved_reset_recovery_attempted?(state)
+
+    invalid_markers = [
+      :missing,
+      %{"version" => 1, "attempted" => "true", "since_success_at" => "never"},
+      %{"version" => 2, "attempted" => true, "since_success_at" => "never"},
+      Map.put(recovery_marker(true, last_success_at), "unexpected", true),
+      recovery_marker(true, DateTime.add(last_success_at, -1, :second))
+    ]
+
+    Enum.each(invalid_markers, fn marker ->
+      metadata =
+        case marker do
+          :missing -> Map.delete(state.metadata, "saved_reset_recovery")
+          marker -> Map.put(state.metadata, "saved_reset_recovery", marker)
+        end
+
+      persisted = state |> Ecto.Changeset.change(%{metadata: metadata}) |> Repo.update!()
+
+      assert CircuitHealth.saved_reset_recovery(persisted) == nil
+      refute CircuitHealth.valid_saved_reset_recovery?(persisted)
+      refute CircuitHealth.saved_reset_recovery_attempted?(persisted)
+    end)
   end
 
   test "probe failure releases its admitted slot while normal and none failures preserve it" do
@@ -797,6 +1059,10 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
     updated_at = Keyword.fetch!(attrs, :updated_at)
     probe_count = Keyword.fetch!(attrs, :probe_count)
 
+    metadata =
+      %{"probe_in_flight_count" => probe_count}
+      |> maybe_put_recovery_marker(Keyword.get(attrs, :recovery_marker))
+
     %RoutingCircuitState{
       pool_id: auth.pool.id,
       pool_upstream_assignment_id: assignment.id,
@@ -809,12 +1075,30 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
       success_count: 0,
       opened_at: DateTime.add(now, -120, :second),
       half_opened_at: updated_at,
-      metadata: %{"probe_in_flight_count" => probe_count},
+      last_success_at: Keyword.get(attrs, :last_success_at),
+      metadata: metadata,
       created_at: DateTime.add(now, -120, :second),
       updated_at: updated_at
     }
     |> Repo.insert!()
   end
+
+  defp recovery_marker(attempted, nil) do
+    %{"version" => 1, "attempted" => attempted, "since_success_at" => "never"}
+  end
+
+  defp recovery_marker(attempted, %DateTime{} = last_success_at) do
+    %{
+      "version" => 1,
+      "attempted" => attempted,
+      "since_success_at" => DateTime.to_iso8601(last_success_at)
+    }
+  end
+
+  defp maybe_put_recovery_marker(metadata, nil), do: metadata
+
+  defp maybe_put_recovery_marker(metadata, marker),
+    do: Map.put(metadata, "saved_reset_recovery", marker)
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:microsecond)
 

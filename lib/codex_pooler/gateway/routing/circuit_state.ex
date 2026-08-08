@@ -535,15 +535,27 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
        ) do
     success_count = state.success_count + 1
     probe_count = probe_count_after_completion(state, admission)
+    closed? = success_count >= settings.circuit_success_threshold
+
+    metadata =
+      state
+      |> CircuitHealth.probe_metadata(probe_count)
+      |> then(fn metadata ->
+        if closed? do
+          CircuitHealth.clear_saved_reset_recovery(metadata)
+        else
+          CircuitHealth.preserve_saved_reset_recovery(state, metadata)
+        end
+      end)
 
     attrs = %{
       success_count: success_count,
       last_success_at: now,
-      metadata: CircuitHealth.probe_metadata(state, probe_count),
+      metadata: metadata,
       updated_at: now
     }
 
-    if success_count >= settings.circuit_success_threshold do
+    if closed? do
       Map.merge(attrs, %{
         status: @closed_status,
         reason_code: nil,
@@ -557,6 +569,11 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
   end
 
   defp success_attrs(%RoutingCircuitState{} = state, admission, _settings, now) do
+    metadata =
+      state
+      |> CircuitHealth.probe_metadata(probe_count_after_completion(state, admission))
+      |> CircuitHealth.clear_saved_reset_recovery()
+
     %{
       status: @closed_status,
       reason_code: nil,
@@ -565,8 +582,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
       closed_at: now,
       next_probe_at: nil,
       last_success_at: now,
-      metadata:
-        CircuitHealth.probe_metadata(state, probe_count_after_completion(state, admission)),
+      metadata: metadata,
       updated_at: now
     }
   end
@@ -577,6 +593,11 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
     status = status_after_failure(state, admission, failure_count, settings)
     open? = status == @open_status
     half_open? = status == @half_open_status
+
+    metadata =
+      state
+      |> CircuitHealth.probe_metadata(probe_count_after_completion(state, admission))
+      |> saved_reset_recovery_after_failure(state, admission, status)
 
     %{
       pool_id: auth.pool.id,
@@ -604,11 +625,32 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
           true -> nil
         end,
       last_failure_at: now,
-      metadata:
-        CircuitHealth.probe_metadata(state, probe_count_after_completion(state, admission)),
+      metadata: metadata,
       updated_at: now
     }
   end
+
+  defp saved_reset_recovery_after_failure(metadata, nil, _admission, _status),
+    do: CircuitHealth.put_saved_reset_recovery(nil, false, metadata)
+
+  defp saved_reset_recovery_after_failure(
+         metadata,
+         %RoutingCircuitState{status: @closed_status} = state,
+         _admission,
+         @open_status
+       ),
+       do: CircuitHealth.put_saved_reset_recovery(state, false, metadata)
+
+  defp saved_reset_recovery_after_failure(
+         metadata,
+         %RoutingCircuitState{status: @half_open_status} = state,
+         :probe,
+         _status
+       ),
+       do: CircuitHealth.put_saved_reset_recovery(state, true, metadata)
+
+  defp saved_reset_recovery_after_failure(metadata, %RoutingCircuitState{} = state, _, _),
+    do: CircuitHealth.preserve_saved_reset_recovery(state, metadata)
 
   defp failure_count(nil), do: 1
   defp failure_count(state), do: state.failure_count + 1
