@@ -296,32 +296,51 @@ defmodule CodexPooler.Upstreams.CloudflareCookies do
   end
 
   defp parse_http_date(value) do
-    case String.split(value, ~r/\s+/, trim: true) do
-      [weekday, first, second, third, fourth | _timezone] ->
-        cond do
-          byte_size(weekday) == 4 and String.ends_with?(weekday, ",") ->
-            parse_http_date_components(first, second, third, fourth, [2])
+    value
+    |> String.split(~r/\s+/, trim: true)
+    |> parse_http_date_parts()
+  end
 
-          byte_size(weekday) == 3 ->
-            parse_http_date_components(second, first, fourth, third, [1, 2])
+  defp parse_http_date_parts([weekday, day, month, year, time | _timezone]) do
+    parse_http_date_with_weekday(weekday, day, month, year, time)
+  end
 
-          true ->
-            :error
-        end
+  defp parse_http_date_parts([weekday, date, time | _timezone]) do
+    parse_rfc850_http_date(weekday, date, time)
+  end
 
-      [weekday, date, time | _timezone] ->
-        if String.ends_with?(weekday, ",") do
-          case String.split(date, "-", parts: 3) do
-            [day, month, year]
-            when byte_size(day) == 2 and byte_size(month) == 3 and byte_size(year) == 2 ->
-              parse_http_date_components(day, month, "20" <> year, time, [2])
+  defp parse_http_date_parts(_parts), do: :error
 
-            _invalid ->
-              :error
-          end
-        else
-          :error
-        end
+  defp parse_http_date_with_weekday(weekday, day, month, year, time)
+       when byte_size(weekday) == 4 do
+    if String.ends_with?(weekday, ",") do
+      parse_http_date_components(day, month, year, time, [2])
+    else
+      :error
+    end
+  end
+
+  defp parse_http_date_with_weekday(weekday, day, month, year, time)
+       when byte_size(weekday) == 3 do
+    parse_http_date_components(month, day, time, year, [1, 2])
+  end
+
+  defp parse_http_date_with_weekday(_weekday, _day, _month, _year, _time), do: :error
+
+  defp parse_rfc850_http_date(weekday, date, time) do
+    with true <- String.ends_with?(weekday, ","),
+         {:ok, day, month, year} <- parse_rfc850_date(date) do
+      parse_http_date_components(day, month, "20" <> year, time, [2])
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp parse_rfc850_date(date) do
+    case String.split(date, "-", parts: 3) do
+      [day, month, year]
+      when byte_size(day) == 2 and byte_size(month) == 3 and byte_size(year) == 2 ->
+        {:ok, day, month, year}
 
       _invalid ->
         :error
@@ -345,24 +364,23 @@ defmodule CodexPooler.Upstreams.CloudflareCookies do
   end
 
   defp parse_http_date_time(value) do
-    case String.split(value, ":", parts: 3) do
-      [hour, minute, second] ->
-        if Enum.all?([hour, minute, second], &(byte_size(&1) == 2)) do
-          with {:ok, hour} <- parse_http_date_number(hour),
-               {:ok, minute} <- parse_http_date_number(minute),
-               {:ok, second} <- parse_http_date_number(second) do
-            {:ok, hour, minute, second}
-          else
-            _invalid -> :error
-          end
-        else
-          :error
-        end
+    value
+    |> String.split(":", parts: 3)
+    |> parse_http_time_parts()
+  end
 
-      _invalid ->
-        :error
+  defp parse_http_time_parts([hour, minute, second])
+       when byte_size(hour) == 2 and byte_size(minute) == 2 and byte_size(second) == 2 do
+    with {:ok, hour} <- parse_http_date_number(hour),
+         {:ok, minute} <- parse_http_date_number(minute),
+         {:ok, second} <- parse_http_date_number(second) do
+      {:ok, hour, minute, second}
+    else
+      _invalid -> :error
     end
   end
+
+  defp parse_http_time_parts(_parts), do: :error
 
   defp parse_http_date_number(value) do
     case Integer.parse(value) do
