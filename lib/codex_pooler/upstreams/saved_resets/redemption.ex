@@ -2658,13 +2658,30 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
       if finalization_matches_claim?(redemption, claim) do
         finished_at = claim[:finished_at] || now()
 
+        finalized_result =
+          if result.applied? == true and
+               result[:phase] == RedemptionLifecycle.consumed_pending_probe() and
+               match?(%DateTime{}, result[:consumed_at]) do
+            phase = post_reset_phase(identity, result.consumed_at, finished_at)
+
+            result
+            |> Map.put(:phase, phase)
+            |> then(fn finalized_result ->
+              if phase == RedemptionLifecycle.confirmed_by_quota(),
+                do: Map.delete(finalized_result, :reason),
+                else: finalized_result
+            end)
+          else
+            result
+          end
+
         base = %{
           "attempt_id" => claim.attempt_id,
           "generation" => claim.generation,
           "trigger_kind" => claim.trigger_kind,
           "started_at" => DateTime.to_iso8601(claim.started_at),
           "finished_at" => DateTime.to_iso8601(finished_at),
-          "result" => metadata_result(result)
+          "result" => metadata_result(finalized_result)
         }
 
         base =
@@ -2674,7 +2691,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           |> put_carried_applied_consume(redemption)
           |> put_provider_replay_history(redemption)
 
-        redemption = Map.merge(base, redemption_lifecycle_fields(result))
+        redemption = Map.merge(base, redemption_lifecycle_fields(finalized_result))
 
         metadata = Map.delete(metadata, @redemption_target_key)
 
@@ -2688,17 +2705,17 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
         updated_identity =
           persist_finalized_attempt!(identity, metadata, ledger, redemption, finished_at)
 
-        updated_identity
+        {updated_identity, finalized_result}
       else
-        resolve_finalizer_cas_loss(identity, claim)
+        {resolve_finalizer_cas_loss(identity, claim), result}
       end
     end)
     |> case do
-      {:ok, updated_identity} ->
+      {:ok, {updated_identity, finalized_result}} ->
         broadcast_redemption(updated_identity)
 
         {:ok,
-         result
+         finalized_result
          |> Map.delete(:saved_reset_observation)
          |> Map.put(:identity, updated_identity)
          |> Map.put(:assignment, claim.assignment)}

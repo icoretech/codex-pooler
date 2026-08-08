@@ -248,10 +248,15 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
     test "identities without a pending lifecycle are untouched" do
       identity = active_upstream_assignment_fixture().identity
 
-      assert :ok =
-               RateLimitObserver.record_headers(identity, %Req.Response{
-                 headers: weekly_headers("100")
-               })
+      {result, repo_events} =
+        collect_repo_query_events(fn ->
+          RateLimitObserver.record_headers(identity, %Req.Response{
+            headers: weekly_headers("100")
+          })
+        end)
+
+      assert :ok = result
+      assert Enum.any?(repo_events, &convergence_lock_query?/1)
 
       persisted = Repo.reload!(identity)
       refute Map.has_key?(persisted.metadata || %{}, "saved_reset_redemption")
@@ -353,20 +358,24 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
     test "malformed and non-account errors do not falsely confirm an applied reblock" do
       stale_identity = stale_snapshot_after_applied_reblock()
 
-      assert :ok = RateLimitObserver.record_error(stale_identity, "not-json")
+      {result, repo_events} =
+        collect_repo_query_events(fn ->
+          assert :ok = RateLimitObserver.record_error(stale_identity, "not-json")
 
-      assert :ok =
-               RateLimitObserver.record_error(
-                 stale_identity,
-                 Jason.encode!(%{
-                   "limit_id" => "codex_future_family",
-                   "window_kind" => "secondary",
-                   "window_minutes" => "10080",
-                   "used_percent" => "4",
-                   "reset_after_seconds" => "180"
-                 })
-               )
+          RateLimitObserver.record_error(
+            stale_identity,
+            Jason.encode!(%{
+              "limit_id" => "codex_future_family",
+              "window_kind" => "secondary",
+              "window_minutes" => "10080",
+              "used_percent" => "4",
+              "reset_after_seconds" => "180"
+            })
+          )
+        end)
 
+      assert :ok = result
+      refute Enum.any?(repo_events, &convergence_lock_query?/1)
       assert redemption_phase(stale_identity) == "reblocked"
     end
   end
@@ -652,7 +661,10 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
         [:codex_pooler, :repo, :query],
         fn _event, _measurements, metadata, _config ->
           if metadata[:repo] == Repo do
-            send(parent, {handler_id, metadata[:source] || "unknown"})
+            send(
+              parent,
+              {handler_id, metadata[:source] || "unknown", metadata[:query] || ""}
+            )
           end
         end,
         nil
@@ -668,11 +680,20 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
 
   defp drain_repo_query_events(handler_id, events) do
     receive do
-      {^handler_id, source} -> drain_repo_query_events(handler_id, [source | events])
+      {^handler_id, source, query} ->
+        drain_repo_query_events(handler_id, [{source, query} | events])
     after
       0 -> Enum.reverse(events)
     end
   end
+
+  defp convergence_lock_query?({"upstream_identities", query}) do
+    query
+    |> String.upcase()
+    |> String.contains?("FOR UPDATE")
+  end
+
+  defp convergence_lock_query?(_event), do: false
 
   defp await_rate_limit_event_commit(identity_id, fun) when is_function(fun, 0) do
     parent = self()

@@ -127,8 +127,8 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
   defp persist_events_async(_identity, []), do: :ok
 
   defp persist_events_async(%UpstreamIdentity{} = identity, events) do
-    # Metadata rides along so the async task can run the cheap saved-reset
-    # convergence pre-filter without a reload.
+    # Keep the async task input bounded. Saved-reset convergence reloads the
+    # authoritative lifecycle under its database lock after evidence commits.
     identity_snapshot = %UpstreamIdentity{
       id: identity.id,
       status: identity.status,
@@ -163,8 +163,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
   end
 
   defp maybe_converge_saved_reset(%UpstreamIdentity{} = identity, persisted_windows) do
-    if persisted_account_evidence?(persisted_windows) and
-         Convergence.convergeable_lifecycle?(identity) do
+    if persisted_account_evidence?(persisted_windows) do
       case Convergence.converge(identity) do
         {:ok, _outcome} ->
           :ok

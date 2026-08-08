@@ -5,10 +5,14 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.RateLimitObserver
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
+  alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
   alias CodexPooler.Gateway.Routing.CircuitState
+  alias CodexPooler.Gateway.Routing.RouteFiltering
+  alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Jobs.UpstreamEnqueue
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Quotas.Evidence
@@ -5257,6 +5261,27 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert provider_consume_count(evidence.fake) == 1
     end
 
+    @tag :todo2_side_b_gateway_auto
+    test "gateway auto directly refilters when the locked finalizer confirms committed quota" do
+      evidence =
+        run_post_consume_finalizer_race!("4",
+          prepare_redemption: &prepare_gateway_auto_finalizer_race!/1,
+          trace_probe_claim?: true
+        )
+
+      assert evidence.result.phase == "confirmed_by_quota"
+      assert evidence.persisted_phase == "confirmed_by_quota"
+      assert evidence.probe_claim_calls == 0
+
+      assert_receive {:todo2_side_b_direct_refilter, identity_id}
+      assert identity_id == evidence.fixture.identity_id
+
+      assert {:error, %{code: "quota_exhausted"}} = evidence.result.routing_result
+
+      persisted = Repo.get!(UpstreamIdentity, evidence.fixture.identity_id)
+      refute Map.has_key?(persisted.metadata["saved_reset_redemption"], "probe")
+    end
+
     @tag :separate_connection_probe_reassignment_race
     test "probe claim validates assignment ownership after locking the identity" do
       {:ok, fake} =
@@ -8682,7 +8707,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     |> Enum.count(&(&1.path == "/api/codex/rate-limit-reset-credits/consume"))
   end
 
-  defp run_post_consume_finalizer_race!(used_percent) do
+  defp run_post_consume_finalizer_race!(used_percent, opts \\ []) do
     parent = self()
     release_ref = make_ref()
 
@@ -8705,6 +8730,14 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
     fixture = committed_post_consume_finalizer_fixture!(fake)
     on_exit(fn -> cleanup_committed_post_consume_finalizer_fixture!(fixture) end)
+
+    prepare_redemption =
+      Keyword.get(opts, :prepare_redemption, fn fixture ->
+        fn -> SavedResetRedemption.redeem(fixture.assignment_id) end
+      end)
+
+    redeem = prepare_redemption.(fixture)
+    trace_probe_claim? = Keyword.get(opts, :trace_probe_claim?, false)
 
     assert :ok = Events.subscribe_pool(fixture.pool_id, "upstreams")
     assert :ok = UpstreamEnqueue.claim_gateway_reconciliation_gate(fixture.identity_id)
@@ -8757,7 +8790,12 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         Sandbox.unboxed_run(Repo, fn ->
           backend_pid = backend_pid!()
           send(parent, {handler_id, :redemption_backend, self(), backend_pid})
-          SavedResetRedemption.redeem(fixture.assignment_id)
+
+          receive do
+            {^handler_id, :start_redemption} -> redeem.()
+          after
+            5_000 -> raise "timed out waiting to start saved-reset finalizer race"
+          end
         end)
       end)
 
@@ -8766,6 +8804,13 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
                      5_000
 
       assert redeem_owner == redemption_task.pid
+
+      if trace_probe_claim? do
+        :erlang.trace_pattern({ProbeLease, :claim, 5}, true, [:local])
+        :erlang.trace(redemption_task.pid, true, [:call])
+      end
+
+      send(redemption_task.pid, {handler_id, :start_redemption})
 
       assert_receive {^handler_id, :dispatch_commit, ^redeem_owner}, 5_000
 
@@ -8828,13 +8873,25 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert drain_evidence_writes(handler_id) == 0
       assert DateTime.compare(evidence_window.observed_at, result.consumed_at) != :lt
 
+      probe_claim_calls = drain_probe_claim_calls(redemption_task.pid)
+
       %{
         fake: fake,
         fixture: fixture,
         persisted_phase: persisted.metadata["saved_reset_redemption"]["phase"],
+        probe_claim_calls: probe_claim_calls,
         result: result
       }
     after
+      send(redemption_task.pid, {handler_id, :start_redemption})
+
+      if trace_probe_claim? do
+        if Process.alive?(redemption_task.pid),
+          do: :erlang.trace(redemption_task.pid, false, [:call])
+
+        :erlang.trace_pattern({ProbeLease, :claim, 5}, false, [:local])
+      end
+
       if fake_request_pid = Process.delete({__MODULE__, handler_id, :fake_request_pid}) do
         send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
       end
@@ -8844,6 +8901,87 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       end
 
       :telemetry.detach(handler_id)
+    end
+  end
+
+  defp prepare_gateway_auto_finalizer_race!(fixture) do
+    parent = self()
+
+    run_unboxed(fn ->
+      pool = Repo.get!(Pool, fixture.pool_id)
+      assignment = Repo.get!(PoolUpstreamAssignment, fixture.assignment_id)
+      identity = Repo.get!(UpstreamIdentity, fixture.identity_id)
+      %{api_key: api_key} = active_api_key_fixture(pool)
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
+
+      model =
+        model_fixture(pool, %{
+          exposed_model_id: "gpt-finalizer-race-#{System.unique_integer([:positive])}",
+          metadata: %{"source_assignment_ids" => [assignment.id]}
+        })
+
+      payload = %{"model" => model.exposed_model_id, "input" => "saved reset finalizer race"}
+
+      request_options =
+        %{}
+        |> RequestOptions.build("/backend-api/codex/responses", payload)
+        |> RequestOptions.put_routing(reset_probe: ResetProbe.new())
+
+      filter_input =
+        FilterInput.new(%{
+          auth: %{pool: pool, api_key: api_key},
+          model: model,
+          endpoint: "/backend-api/codex/responses",
+          payload: payload,
+          request_options: request_options,
+          candidates: [{assignment, identity}]
+        })
+
+      route_state =
+        %{visible_model: model, candidates: filter_input.candidates}
+        |> RouteState.new()
+        |> RouteState.preload_routing_snapshots(
+          filter_input.auth,
+          model,
+          request_options
+        )
+
+      fn ->
+        routing_result =
+          RouteFiltering.filter_candidates_with_route_state(filter_input, route_state,
+            saved_reset_refilter_clock: fn ->
+              send(parent, {:todo2_side_b_direct_refilter, fixture.identity_id})
+
+              fixture.identity_id
+              |> QuotaWindows.list_evidence()
+              |> Enum.max_by(& &1.observed_at, DateTime)
+              |> Map.fetch!(:observed_at)
+              |> DateTime.add(1, :microsecond)
+            end
+          )
+
+        persisted = Repo.get!(UpstreamIdentity, fixture.identity_id)
+        redemption = persisted.metadata["saved_reset_redemption"]
+        {:ok, consumed_at, 0} = DateTime.from_iso8601(redemption["consumed_at"])
+
+        {:ok,
+         %{
+           consumed_at: consumed_at,
+           phase: redemption["phase"],
+           routing_result: routing_result
+         }}
+      end
+    end)
+  end
+
+  defp drain_probe_claim_calls(task_pid, count \\ 0) do
+    receive do
+      {:trace, ^task_pid, :call, {ProbeLease, :claim, _arguments}} ->
+        drain_probe_claim_calls(task_pid, count + 1)
+    after
+      0 -> count
     end
   end
 
