@@ -7,7 +7,7 @@ defmodule CodexPooler.MixProject do
       # x-release-please-start-version
       version: "0.5.18",
       # x-release-please-end
-      elixir: "~> 1.16",
+      elixir: "~> 1.20",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       test_coverage: [tool: Six, minimum_coverage: 85.0, threshold: 85],
@@ -55,7 +55,7 @@ defmodule CodexPooler.MixProject do
       {:phoenix, "== 1.8.9"},
       {:phoenix_ecto, "== 4.7.0"},
       {:ecto_sql, "== 3.14.0"},
-      {:postgrex, "== 0.22.3"},
+      {:postgrex, "== 0.22.4"},
       {:phoenix_html, "== 4.3.0"},
       {:phoenix_live_reload, "== 1.7.0", only: :dev},
       {:phoenix_live_view, "== 1.2.8"},

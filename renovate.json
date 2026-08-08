@@ -16,7 +16,7 @@
     "npm"
   ],
   "constraints": {
-    "elixir": "1.19.5",
+    "elixir": "1.20.2",
     "erlang": "28.5.0.2"
   },
   "labels": [
@@ -72,7 +72,7 @@
       "rangeStrategy": "pin"
     },
     {
-      "description": "Keep Erlang/Elixir runtime and toolchain updates together",
+      "description": "Create Elixir toolchain PRs only when Dockerfile, Drone, mise, and Mix lockfile runtimes can update together",
       "matchManagers": [
         "custom.regex",
         "dockerfile",
@@ -87,10 +87,10 @@
       ],
       "groupName": "Elixir/Erlang toolchain",
       "groupSlug": "elixir-erlang-toolchain",
-      "minimumGroupSize": 2
+      "minimumGroupSize": 4
     },
     {
-      "description": "Use Docker-compatible custom updates for mise Elixir pins",
+      "description": "Use Docker-tag-compatible custom updates for mise Elixir OTP 28 pins",
       "matchManagers": [
         "mise"
       ],
@@ -100,14 +100,26 @@
       "enabled": false
     },
     {
-      "description": "Keep Renovate Mix artifacts on Elixir releases installable by containerbase",
+      "description": "Hold Elixir at the latest official OTP 28 Docker tag until the next matching image is published",
       "matchManagers": [
-        "custom.regex"
+        "custom.regex",
+        "dockerfile",
+        "mise"
       ],
       "matchPackageNames": [
+        "elixir",
         "elixir-lang/elixir"
       ],
-      "allowedVersions": "<1.20.0"
+      "allowedVersions": "<1.20.3"
+    },
+    {
+      "description": "Keep the project on Erlang/OTP 28",
+      "matchPackageNames": [
+        "containerbase/erlang-prebuild",
+        "erlang",
+        "erlang/otp"
+      ],
+      "allowedVersions": "<29"
     },
     {
       "description": "Keep Node runtime image updates together",
