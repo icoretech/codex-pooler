@@ -20,7 +20,8 @@ defmodule CodexPooler.Gateway.Routing.RoutingSelection do
     :selected_metadata,
     :attempt_metadata,
     :route_metadata,
-    :circuit_state
+    :circuit_state,
+    :circuit_admission
   ]
 
   @type candidate :: {PoolUpstreamAssignment.t(), UpstreamIdentity.t()}
@@ -44,7 +45,8 @@ defmodule CodexPooler.Gateway.Routing.RoutingSelection do
           selected_metadata: map(),
           attempt_metadata: map(),
           route_metadata: map(),
-          circuit_state: RoutingCircuitState.t() | nil
+          circuit_state: RoutingCircuitState.t() | nil,
+          circuit_admission: CircuitState.admission() | nil
         }
 
   @spec select_and_begin_circuit(input()) :: {:ok, t()} | {:error, map()}
@@ -144,8 +146,11 @@ defmodule CodexPooler.Gateway.Routing.RoutingSelection do
            selection.route_class,
            snapshot
          ) do
-      {:ok, circuit_state} -> {:ok, %{selection | circuit_state: circuit_state}}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{admission: admission, state: circuit_state}} ->
+        {:ok, %{selection | circuit_state: circuit_state, circuit_admission: admission}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

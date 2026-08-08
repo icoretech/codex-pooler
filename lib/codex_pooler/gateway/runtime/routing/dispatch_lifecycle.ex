@@ -75,7 +75,8 @@ defmodule CodexPooler.Gateway.Runtime.Routing.DispatchLifecycle do
       selected_metadata: %{},
       attempt_metadata: context.routing_attempt_metadata,
       route_metadata: %{},
-      circuit_state: context.routing_circuit_state
+      circuit_state: context.routing_circuit_state,
+      circuit_admission: context.routing_circuit_admission
     }
   end
 end

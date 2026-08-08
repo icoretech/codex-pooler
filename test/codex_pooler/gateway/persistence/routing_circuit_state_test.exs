@@ -55,7 +55,7 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
 
     assert CircuitState.eligible?(auth, model, assignment, "proxy_websocket")
 
-    assert {:ok, %RoutingCircuitState{} = updated} =
+    assert {:ok, %{admission: :probe, state: %RoutingCircuitState{} = updated}} =
              CircuitState.begin_attempt(auth, model, assignment, "proxy_websocket")
 
     assert updated.id == state.id
@@ -99,7 +99,7 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
     assert snapshot.eligible?
     assert snapshot.requires_lock?
 
-    assert {:ok, %RoutingCircuitState{} = updated} =
+    assert {:ok, %{admission: :probe, state: %RoutingCircuitState{} = updated}} =
              CircuitState.begin_attempt(auth, model, assignment, "proxy_websocket", snapshot)
 
     assert updated.id == state.id
@@ -117,8 +117,97 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
 
     {_result, commands} =
       count_repo_commands(fn ->
-        assert {:ok, nil} =
+        assert {:ok, %{admission: :none, state: nil}} =
                  CircuitState.begin_attempt(auth, model, assignment, "proxy_websocket", snapshot)
+      end)
+
+    assert command_count(commands, "routing_circuit_states", "SELECT") == 0
+  end
+
+  test "attempt admission distinguishes probe normal and absent circuit rows" do
+    {auth, model, assignment} = routing_fixture()
+
+    assert {:ok, %{admission: :none, state: nil}} =
+             CircuitState.begin_attempt(auth, model, assignment, "proxy_websocket")
+
+    assert {:ok, %RoutingCircuitState{} = closed} =
+             CircuitState.record_failure(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               :characterization_failure
+             )
+
+    closed_snapshot = circuit_snapshot(auth, model, assignment)
+    refute closed_snapshot.requires_lock?
+
+    assert {:ok, %{admission: :normal, state: %RoutingCircuitState{id: closed_id}}} =
+             CircuitState.begin_attempt(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               closed_snapshot
+             )
+
+    assert closed_id == closed.id
+
+    opened =
+      closed
+      |> Ecto.Changeset.change(%{
+        status: "open",
+        next_probe_at: DateTime.add(now(), -1, :second)
+      })
+      |> Repo.update!()
+
+    assert {:ok, %{admission: :probe, state: %RoutingCircuitState{id: opened_id} = probe}} =
+             CircuitState.begin_attempt(auth, model, assignment, "proxy_websocket")
+
+    assert opened_id == opened.id
+    assert probe.metadata["probe_in_flight_count"] == 1
+  end
+
+  test "snapshot reuse preserves none and normal admissions without circuit rereads" do
+    {auth, model, assignment} = routing_fixture()
+
+    no_row_snapshot = circuit_snapshot(auth, model, assignment)
+
+    {_result, commands} =
+      count_repo_commands(fn ->
+        assert {:ok, %{admission: :none, state: nil}} =
+                 CircuitState.begin_attempt(
+                   auth,
+                   model,
+                   assignment,
+                   "proxy_websocket",
+                   no_row_snapshot
+                 )
+      end)
+
+    assert command_count(commands, "routing_circuit_states", "SELECT") == 0
+
+    assert {:ok, %RoutingCircuitState{}} =
+             CircuitState.record_failure(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               :characterization_failure
+             )
+
+    closed_snapshot = circuit_snapshot(auth, model, assignment)
+
+    {_result, commands} =
+      count_repo_commands(fn ->
+        assert {:ok, %{admission: :normal, state: %RoutingCircuitState{}}} =
+                 CircuitState.begin_attempt(
+                   auth,
+                   model,
+                   assignment,
+                   "proxy_websocket",
+                   closed_snapshot
+                 )
       end)
 
     assert command_count(commands, "routing_circuit_states", "SELECT") == 0
@@ -172,7 +261,7 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
 
     assert CircuitState.eligible?(auth, model, assignment, "proxy_websocket")
 
-    assert {:ok, %RoutingCircuitState{} = resumed} =
+    assert {:ok, %{admission: :probe, state: %RoutingCircuitState{} = resumed}} =
              CircuitState.begin_attempt(auth, model, assignment, "proxy_websocket")
 
     assert resumed.id == state.id
@@ -185,7 +274,13 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
     state = half_open_circuit!(auth, model, assignment, updated_at: now(), probe_count: 1)
 
     assert {:ok, %RoutingCircuitState{} = updated} =
-             CircuitState.record_neutral_completion(auth, model, assignment, "proxy_websocket")
+             CircuitState.record_neutral_completion(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               :probe
+             )
 
     assert updated.id == state.id
     assert updated.status == "half_open"
@@ -209,7 +304,7 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
       state: nil
     }
 
-    assert {:ok, nil} =
+    assert {:ok, %{admission: normal_admission, state: nil}} =
              CircuitState.begin_attempt(
                auth,
                model,
@@ -218,8 +313,16 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
                normal_snapshot
              )
 
-    assert {:ok, %RoutingCircuitState{status: "half_open"} = probe} =
+    assert normal_admission == :normal
+
+    assert {:ok,
+            %{
+              admission: probe_admission,
+              state: %RoutingCircuitState{status: "half_open"} = probe
+            }} =
              CircuitState.begin_attempt(auth, model, assignment, "proxy_websocket")
+
+    assert probe_admission == :probe
 
     assert probe.id == state.id
     assert probe.metadata["probe_in_flight_count"] == 1
@@ -230,11 +333,153 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
                model,
                assignment,
                "proxy_websocket",
-               :old_normal_request_failed
+               :old_normal_request_failed,
+               normal_admission
              )
 
     assert after_old_failure.metadata["probe_in_flight_count"] == 1
     assert after_old_failure.status == "half_open"
+  end
+
+  test "probe failure releases its admitted slot while normal and none failures preserve it" do
+    {auth, model, assignment} = routing_fixture()
+
+    for admission <- [:probe, :normal, :none] do
+      Repo.delete_all(RoutingCircuitState)
+      half_open_circuit!(auth, model, assignment, updated_at: now(), probe_count: 1)
+
+      assert {:ok, %RoutingCircuitState{} = updated} =
+               CircuitState.record_failure(
+                 auth,
+                 model,
+                 assignment,
+                 "proxy_websocket",
+                 :attempt_failure,
+                 admission
+               )
+
+      expected_count = if admission == :probe, do: 0, else: 1
+      assert updated.metadata["probe_in_flight_count"] == expected_count
+    end
+  end
+
+  test "normal failure keeps the existing reopen policy when no probe slot is active" do
+    {auth, model, assignment} = routing_fixture()
+    half_open_circuit!(auth, model, assignment, updated_at: now(), probe_count: 0)
+
+    assert {:ok, %RoutingCircuitState{} = updated} =
+             CircuitState.record_failure(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               :late_normal_failure,
+               :normal
+             )
+
+    assert updated.status == "open"
+    assert updated.metadata["probe_in_flight_count"] == 0
+  end
+
+  test "only probe neutral completion releases an admitted slot" do
+    {auth, model, assignment} = routing_fixture()
+
+    for admission <- [:probe, :normal, :none] do
+      Repo.delete_all(RoutingCircuitState)
+      half_open_circuit!(auth, model, assignment, updated_at: now(), probe_count: 1)
+
+      assert {:ok, %RoutingCircuitState{} = updated} =
+               CircuitState.record_neutral_completion(
+                 auth,
+                 model,
+                 assignment,
+                 "proxy_websocket",
+                 admission
+               )
+
+      expected_count = if admission == :probe, do: 0, else: 1
+      assert updated.metadata["probe_in_flight_count"] == expected_count
+    end
+  end
+
+  test "only probe success releases an admitted slot" do
+    {auth, model, assignment} = routing_fixture()
+    update_circuit_settings(%{"circuit_success_threshold" => 2})
+
+    for admission <- [:probe, :normal, :none] do
+      Repo.delete_all(RoutingCircuitState)
+      half_open_circuit!(auth, model, assignment, updated_at: now(), probe_count: 1)
+
+      assert {:ok, %RoutingCircuitState{} = updated} =
+               CircuitState.record_success(
+                 auth,
+                 model,
+                 assignment,
+                 "proxy_websocket",
+                 admission
+               )
+
+      expected_count = if admission == :probe, do: 0, else: 1
+      assert updated.metadata["probe_in_flight_count"] == expected_count
+    end
+  end
+
+  test "normal success follows the close threshold without releasing another probe slot" do
+    {auth, model, assignment} = routing_fixture()
+    update_circuit_settings(%{"circuit_success_threshold" => 1})
+    half_open_circuit!(auth, model, assignment, updated_at: now(), probe_count: 1)
+
+    assert {:ok, %RoutingCircuitState{} = updated} =
+             CircuitState.record_success(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               :normal
+             )
+
+    assert updated.status == "closed"
+    assert updated.metadata["probe_in_flight_count"] == 1
+  end
+
+  test "invalid admission is rejected without changing the active probe slot" do
+    {auth, model, assignment} = routing_fixture()
+    state = half_open_circuit!(auth, model, assignment, updated_at: now(), probe_count: 1)
+
+    assert {:error, :invalid_circuit_admission} =
+             CircuitState.record_neutral_completion(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               :malformed
+             )
+
+    assert Repo.get!(RoutingCircuitState, state.id).metadata["probe_in_flight_count"] == 1
+  end
+
+  test "none completion is safe when no circuit row exists" do
+    {auth, model, assignment} = routing_fixture()
+
+    assert {:ok, :ok} =
+             CircuitState.record_neutral_completion(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               :none
+             )
+
+    assert {:ok, :ok} =
+             CircuitState.record_success(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               :none
+             )
+
+    assert Repo.aggregate(RoutingCircuitState, :count) == 0
   end
 
   test "a failure observed from another process opens only its exact assignment model route lane" do
@@ -339,7 +584,8 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
       |> Repo.update!()
     end)
 
-    assert {:ok, %RoutingCircuitState{status: "half_open"} = first_probe} =
+    assert {:ok,
+            %{admission: :probe, state: %RoutingCircuitState{status: "half_open"} = first_probe}} =
              in_db_observer(fn ->
                CircuitState.begin_attempt(auth, model, assignment, "proxy_stream")
              end)
@@ -353,20 +599,20 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
 
     assert {:ok, %RoutingCircuitState{status: "half_open", success_count: 1} = first_success} =
              in_db_observer(fn ->
-               CircuitState.record_success(auth, model, assignment, "proxy_stream")
+               CircuitState.record_success(auth, model, assignment, "proxy_stream", :probe)
              end)
 
     assert first_success.failure_count == 2
     assert first_success.metadata["probe_in_flight_count"] == 0
 
-    assert {:ok, %RoutingCircuitState{status: "half_open"}} =
+    assert {:ok, %{admission: :probe, state: %RoutingCircuitState{status: "half_open"}}} =
              in_db_observer(fn ->
                CircuitState.begin_attempt(auth, model, assignment, "proxy_stream")
              end)
 
     assert {:ok, %RoutingCircuitState{status: "closed", success_count: 2} = recovered} =
              in_db_observer(fn ->
-               CircuitState.record_success(auth, model, assignment, "proxy_stream")
+               CircuitState.record_success(auth, model, assignment, "proxy_stream", :probe)
              end)
 
     assert recovered.failure_count == 0
@@ -446,7 +692,13 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
 
     results = Enum.map(attempts, &Task.await(&1, 5_000))
 
-    assert Enum.count(results, &match?({:ok, %RoutingCircuitState{status: "half_open"}}, &1)) == 1
+    assert Enum.count(
+             results,
+             &match?(
+               {:ok, %{admission: :probe, state: %RoutingCircuitState{status: "half_open"}}},
+               &1
+             )
+           ) == 1
 
     assert Enum.count(results, &(&1 == {:error, :routing_circuit_probe_in_flight})) == 1
 

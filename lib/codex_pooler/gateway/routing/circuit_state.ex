@@ -21,6 +21,16 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
   @half_open_status CircuitStatus.half_open_status()
 
   @type auth :: CodexPooler.Access.auth_context()
+  @type admission :: :probe | :normal | :none
+  @type admission_result :: %{
+          required(:admission) => admission(),
+          required(:state) => RoutingCircuitState.t() | nil
+        }
+  @type failure_context :: %{
+          required(:admission) => admission(),
+          required(:now) => DateTime.t(),
+          required(:settings) => OperationalSettings.t()
+        }
   @type eligibility_snapshot :: %{
           required(:eligible?) => boolean(),
           required(:requires_lock?) => boolean(),
@@ -82,7 +92,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
   end
 
   @spec begin_attempt(auth(), Model.t(), PoolUpstreamAssignment.t(), String.t()) ::
-          {:ok, RoutingCircuitState.t() | nil} | {:error, term()}
+          {:ok, admission_result()} | {:error, term()}
   def begin_attempt(
         %{pool: %Pool{}, api_key: %APIKey{}} = auth,
         %Model{} = model,
@@ -108,7 +118,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
           String.t(),
           eligibility_snapshot() | boolean() | nil
         ) ::
-          {:ok, RoutingCircuitState.t() | nil} | {:error, term()}
+          {:ok, admission_result()} | {:error, term()}
   def begin_attempt(
         %{pool: %Pool{}, api_key: %APIKey{}} = auth,
         %Model{} = model,
@@ -142,13 +152,25 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
 
   @spec record_success(auth(), Model.t(), PoolUpstreamAssignment.t(), String.t()) ::
           {:ok, :ok | RoutingCircuitState.t()} | {:error, term()}
+  def record_success(auth, model, assignment, route_class),
+    do: record_success(auth, model, assignment, route_class, :none)
+
+  @spec record_success(
+          auth(),
+          Model.t(),
+          PoolUpstreamAssignment.t(),
+          String.t(),
+          admission()
+        ) :: {:ok, :ok | RoutingCircuitState.t()} | {:error, term()}
   def record_success(
         %{pool: %Pool{}, api_key: %APIKey{}} = auth,
         %Model{} = model,
         %PoolUpstreamAssignment{} = assignment,
-        route_class
+        route_class,
+        admission
       )
-      when is_binary(route_class) and route_class != "" do
+      when is_binary(route_class) and route_class != "" and
+             admission in [:probe, :normal, :none] do
     now = now()
     settings = OperationalSettings.current()
 
@@ -157,7 +179,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
         %RoutingCircuitState{} = state ->
           updated =
             state
-            |> RoutingCircuitState.changeset(success_attrs(state, settings, now))
+            |> RoutingCircuitState.changeset(success_attrs(state, admission, settings, now))
             |> persist_or_rollback(:update)
 
           {updated, transition(state, updated, reason_code: nil)}
@@ -174,23 +196,51 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
         %{pool: %Pool{}, api_key: %APIKey{}},
         %Model{},
         %PoolUpstreamAssignment{},
-        _route_class
-      ),
+        route_class,
+        _admission
+      )
+      when not is_binary(route_class) or route_class == "",
       do: {:error, :invalid_route_class}
+
+  def record_success(
+        %{pool: %Pool{}, api_key: %APIKey{}},
+        %Model{},
+        %PoolUpstreamAssignment{},
+        _route_class,
+        _admission
+      ),
+      do: {:error, :invalid_circuit_admission}
 
   @spec record_failure(auth(), Model.t(), PoolUpstreamAssignment.t(), String.t(), term()) ::
           {:ok, RoutingCircuitState.t() | :skipped} | {:error, term()}
+  def record_failure(auth, model, assignment, route_class, reason_code),
+    do: record_failure(auth, model, assignment, route_class, reason_code, :none)
+
+  @spec record_failure(
+          auth(),
+          Model.t(),
+          PoolUpstreamAssignment.t(),
+          String.t(),
+          term(),
+          admission()
+        ) :: {:ok, RoutingCircuitState.t() | :skipped} | {:error, term()}
   def record_failure(
         %{pool: %Pool{}, api_key: %APIKey{}} = auth,
         %Model{} = model,
         %PoolUpstreamAssignment{} = assignment,
         route_class,
-        reason_code
+        reason_code,
+        admission
       )
-      when is_binary(route_class) and route_class != "" do
+      when is_binary(route_class) and route_class != "" and
+             admission in [:probe, :normal, :none] do
     reason_code = sanitize_reason_code(reason_code)
-    now = now()
-    settings = OperationalSettings.current()
+
+    failure_context = %{
+      admission: admission,
+      now: now(),
+      settings: OperationalSettings.current()
+    }
 
     run_failure_transaction(
       auth,
@@ -198,8 +248,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
       assignment,
       route_class,
       reason_code,
-      settings,
-      now,
+      failure_context,
       _retry_left = 1
     )
   end
@@ -208,10 +257,22 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
         %{pool: %Pool{}, api_key: %APIKey{}},
         %Model{},
         %PoolUpstreamAssignment{},
-        _route_class,
-        _reason_code
-      ),
+        route_class,
+        _reason_code,
+        _admission
+      )
+      when not is_binary(route_class) or route_class == "",
       do: {:error, :invalid_route_class}
+
+  def record_failure(
+        %{pool: %Pool{}, api_key: %APIKey{}},
+        %Model{},
+        %PoolUpstreamAssignment{},
+        _route_class,
+        _reason_code,
+        _admission
+      ),
+      do: {:error, :invalid_circuit_admission}
 
   # Same degrade/retry policy as the BridgeRing side-effect writers: a
   # reference-lock rollback (missing or reassigned pair) and a residual
@@ -224,8 +285,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
          assignment,
          route_class,
          reason_code,
-         settings,
-         now,
+         failure_context,
          retry_left
        ) do
     Repo.transaction(fn ->
@@ -239,8 +299,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
           route_class,
           reason_code,
           state,
-          settings,
-          now
+          failure_context
         )
 
       case state do
@@ -261,7 +320,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
 
           updated =
             %RoutingCircuitState{}
-            |> RoutingCircuitState.changeset(Map.put(attrs, :created_at, now))
+            |> RoutingCircuitState.changeset(Map.put(attrs, :created_at, failure_context.now))
             |> persist_or_rollback(:insert)
 
           {updated, transition(nil, updated, reason_code: reason_code)}
@@ -282,8 +341,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
                 assignment,
                 route_class,
                 reason_code,
-                settings,
-                now,
+                failure_context,
                 retry_left - 1
               )
 
@@ -325,18 +383,30 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
 
   @spec record_neutral_completion(auth(), Model.t(), PoolUpstreamAssignment.t(), String.t()) ::
           {:ok, :ok | RoutingCircuitState.t()} | {:error, term()}
+  def record_neutral_completion(auth, model, assignment, route_class),
+    do: record_neutral_completion(auth, model, assignment, route_class, :none)
+
+  @spec record_neutral_completion(
+          auth(),
+          Model.t(),
+          PoolUpstreamAssignment.t(),
+          String.t(),
+          admission()
+        ) :: {:ok, :ok | RoutingCircuitState.t()} | {:error, term()}
   def record_neutral_completion(
         %{pool: %Pool{}, api_key: %APIKey{}} = auth,
         %Model{} = model,
         %PoolUpstreamAssignment{} = assignment,
-        route_class
+        route_class,
+        admission
       )
-      when is_binary(route_class) and route_class != "" do
+      when is_binary(route_class) and route_class != "" and
+             admission in [:probe, :normal, :none] do
     now = now()
 
     Repo.transaction(fn ->
       case latest_for_update(auth, model, assignment, route_class) do
-        %RoutingCircuitState{status: @half_open_status} = state ->
+        %RoutingCircuitState{status: @half_open_status} = state when admission == :probe ->
           updated =
             state
             |> RoutingCircuitState.changeset(%{
@@ -366,9 +436,20 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
         %{pool: %Pool{}, api_key: %APIKey{}},
         %Model{},
         %PoolUpstreamAssignment{},
-        _route_class
-      ),
+        route_class,
+        _admission
+      )
+      when not is_binary(route_class) or route_class == "",
       do: {:error, :invalid_route_class}
+
+  def record_neutral_completion(
+        %{pool: %Pool{}, api_key: %APIKey{}},
+        %Model{},
+        %PoolUpstreamAssignment{},
+        _route_class,
+        _admission
+      ),
+      do: {:error, :invalid_circuit_admission}
 
   defp begin_attempt_with_snapshot(
          _auth,
@@ -377,7 +458,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
          _route_class,
          %{requires_lock?: false} = snapshot
        ),
-       do: {:ok, snapshot.state}
+       do: {:ok, %{admission: snapshot_admission(snapshot), state: snapshot.state}}
 
   defp begin_attempt_with_snapshot(auth, model, assignment, route_class, _snapshot) do
     now = now()
@@ -385,8 +466,8 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
 
     Repo.transaction(fn ->
       state = latest_for_update(auth, model, assignment, route_class)
-      updated = begin_state(state, settings, now)
-      {updated, transition(state, updated, reason_code: nil)}
+      {updated, admission} = begin_state(state, settings, now)
+      {%{admission: admission, state: updated}, transition(state, updated, reason_code: nil)}
     end)
     |> unwrap_transaction()
     |> emit_committed_transition()
@@ -410,6 +491,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
         updated_at: now
       })
       |> persist_or_rollback(:update)
+      |> then(&{&1, :probe})
     end
   end
 
@@ -438,14 +520,21 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
       state
       |> RoutingCircuitState.changeset(attrs)
       |> persist_or_rollback(:update)
+      |> then(&{&1, :probe})
     end
   end
 
-  defp begin_state(state, _settings, _now), do: state
+  defp begin_state(%RoutingCircuitState{} = state, _settings, _now), do: {state, :normal}
+  defp begin_state(nil, _settings, _now), do: {nil, :none}
 
-  defp success_attrs(%RoutingCircuitState{status: @half_open_status} = state, settings, now) do
+  defp success_attrs(
+         %RoutingCircuitState{status: @half_open_status} = state,
+         admission,
+         settings,
+         now
+       ) do
     success_count = state.success_count + 1
-    probe_count = max(CircuitHealth.probe_in_flight_count(state) - 1, 0)
+    probe_count = probe_count_after_completion(state, admission)
 
     attrs = %{
       success_count: success_count,
@@ -467,7 +556,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
     end
   end
 
-  defp success_attrs(%RoutingCircuitState{} = state, _settings, now) do
+  defp success_attrs(%RoutingCircuitState{} = state, admission, _settings, now) do
     %{
       status: @closed_status,
       reason_code: nil,
@@ -476,14 +565,18 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
       closed_at: now,
       next_probe_at: nil,
       last_success_at: now,
-      metadata: CircuitHealth.probe_metadata(state, 0),
+      metadata:
+        CircuitHealth.probe_metadata(state, probe_count_after_completion(state, admission)),
       updated_at: now
     }
   end
 
-  defp failure_attrs(auth, model, assignment, route_class, reason_code, state, settings, now) do
+  defp failure_attrs(auth, model, assignment, route_class, reason_code, state, failure_context) do
+    %{admission: admission, now: now, settings: settings} = failure_context
     failure_count = failure_count(state)
-    open? = open_after_failure?(state, failure_count, settings)
+    status = status_after_failure(state, admission, failure_count, settings)
+    open? = status == @open_status
+    half_open? = status == @half_open_status
 
     %{
       pool_id: auth.pool.id,
@@ -492,16 +585,27 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
       upstream_identity_id: assignment.upstream_identity_id,
       model_identifier: model.exposed_model_id,
       route_class: route_class,
-      status: if(open?, do: @open_status, else: @closed_status),
+      status: status,
       reason_code: reason_code,
       failure_count: failure_count,
       success_count: 0,
-      opened_at: if(open?, do: now),
-      half_opened_at: nil,
-      closed_at: if(open?, do: nil, else: now),
-      next_probe_at: if(open?, do: DateTime.add(now, settings.circuit_open_seconds, :second)),
+      opened_at:
+        cond do
+          open? -> now
+          half_open? -> state_value(state, :opened_at)
+          true -> nil
+        end,
+      half_opened_at: if(half_open?, do: state_value(state, :half_opened_at)),
+      closed_at: if(status == @closed_status, do: now),
+      next_probe_at:
+        cond do
+          open? -> DateTime.add(now, settings.circuit_open_seconds, :second)
+          half_open? -> state_value(state, :next_probe_at)
+          true -> nil
+        end,
       last_failure_at: now,
-      metadata: CircuitHealth.probe_metadata(state, probe_count_after_failure(state)),
+      metadata:
+        CircuitHealth.probe_metadata(state, probe_count_after_completion(state, admission)),
       updated_at: now
     }
   end
@@ -509,10 +613,30 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
   defp failure_count(nil), do: 1
   defp failure_count(state), do: state.failure_count + 1
 
-  defp probe_count_after_failure(nil), do: 0
+  defp probe_count_after_completion(nil, _admission), do: 0
 
-  defp probe_count_after_failure(state),
+  defp probe_count_after_completion(state, :probe),
     do: max(CircuitHealth.probe_in_flight_count(state) - 1, 0)
+
+  defp probe_count_after_completion(state, admission) when admission in [:normal, :none],
+    do: CircuitHealth.probe_in_flight_count(state)
+
+  defp status_after_failure(
+         %RoutingCircuitState{status: @half_open_status} = state,
+         admission,
+         _failure_count,
+         _settings
+       )
+       when admission in [:normal, :none] do
+    if CircuitHealth.probe_in_flight_count(state) > 0, do: @half_open_status, else: @open_status
+  end
+
+  defp status_after_failure(state, _admission, failure_count, settings) do
+    if open_after_failure?(state, failure_count, settings), do: @open_status, else: @closed_status
+  end
+
+  defp state_value(%RoutingCircuitState{} = state, field), do: Map.get(state, field)
+  defp state_value(nil, _field), do: nil
 
   defp open_after_failure?(state, failure_count, settings) do
     failure_count >= settings.circuit_failure_threshold or
@@ -587,6 +711,9 @@ defmodule CodexPooler.Gateway.Routing.CircuitState do
   end
 
   defp normalize_snapshot(_snapshot), do: nil
+
+  defp snapshot_admission(%{status: nil, state: nil}), do: :none
+  defp snapshot_admission(_snapshot), do: :normal
 
   defp active_state?(%RoutingCircuitState{status: status}),
     do: status in [@open_status, @half_open_status]

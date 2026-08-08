@@ -115,8 +115,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
          %RoutingSelection{} = selection
        ) do
     case RoutingSelection.begin_circuit(selection, context.auth, context.model) do
-      {:ok, %{circuit_state: circuit_state}} ->
-        {:ok, put_routing_circuit_state(context, circuit_state)}
+      {:ok, %RoutingSelection{} = selection} ->
+        {:ok, put_routing_circuit_admission(context, selection)}
 
       {:error, reason}
       when reason in [:routing_circuit_open, :routing_circuit_probe_in_flight] ->
@@ -197,9 +197,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
     |> ModelMetadata.supports_reasoning_summary_parameter?()
   end
 
-  defp put_routing_circuit_state(
+  defp put_routing_circuit_admission(
          %SelectedCandidateContext{} = context,
-         %RoutingCircuitState{} = state
+         %RoutingSelection{circuit_state: %RoutingCircuitState{} = state} = selection
        ) do
     request_options =
       RequestOptions.put_routing(context.request_options, routing_circuit_state: state)
@@ -207,9 +207,15 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
     context
     |> refresh_request_options(request_options)
     |> Map.put(:routing_circuit_state, state)
+    |> Map.put(:routing_circuit_admission, selection.circuit_admission)
   end
 
-  defp put_routing_circuit_state(%SelectedCandidateContext{} = context, nil), do: context
+  defp put_routing_circuit_admission(
+         %SelectedCandidateContext{} = context,
+         %RoutingSelection{} = selection
+       ) do
+    Map.put(context, :routing_circuit_admission, selection.circuit_admission)
+  end
 
   defp persist_route_metadata(%SelectedCandidateContext{} = context) do
     case Accounting.persist_request_metadata(context.reserved.request,
@@ -335,7 +341,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
   # neutrally: it would otherwise strand probe_in_flight_count until the
   # staleness self-heal.
   defp release_unstarted_attempt_circuit(context, %RoutingSelection{} = selection, operation) do
-    selection = %{selection | circuit_state: context.routing_circuit_state}
+    selection = %{
+      selection
+      | circuit_state: context.routing_circuit_state,
+        circuit_admission: context.routing_circuit_admission
+    }
 
     RouteLifecycle.log_optional_result(
       operation,

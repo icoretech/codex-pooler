@@ -11,10 +11,18 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
 
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Routing.CandidateEligibility
+  alias CodexPooler.Gateway.Persistence.RoutingCircuitState
+
+  alias CodexPooler.Gateway.Routing.{
+    BridgeRing,
+    CandidateEligibility,
+    RoutePlanInput,
+    RoutingSelection
+  }
+
   alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
-  alias CodexPooler.Gateway.Routing.{RoutePlanInput, RoutingSelection}
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
+  alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
@@ -669,6 +677,73 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
                })
 
       assert selection.assignment.id == second.assignment.id
+      assert selection.circuit_admission == :none
+    end
+
+    test "selected route retains the admitted half-open probe ownership" do
+      pool = pool_fixture()
+      %{api_key: api_key} = active_api_key_fixture(pool)
+      %{assignment: assignment, identity: identity} = upstream_assignment_fixture(pool, %{})
+
+      model =
+        model_fixture(pool, %{
+          exposed_model_id: unique_model_id("gpt-probe-selection"),
+          metadata: %{"source_assignment_ids" => [assignment.id]}
+        })
+
+      request_options = request_options()
+
+      route_plan =
+        BridgeRing.plan_route(%{
+          auth: %{pool: pool, api_key: api_key},
+          model: model,
+          candidates: [{assignment, identity}],
+          route_plan_input: RoutePlanInput.from_request_opts(request_options),
+          request_options: request_options
+        })
+
+      selection =
+        RoutingSelection.prepare_candidate(%{
+          route_plan: route_plan,
+          assignment: assignment,
+          identity: identity,
+          index: 0,
+          route_class: RequestOptions.route_class(request_options)
+        })
+
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      circuit =
+        %RoutingCircuitState{
+          pool_id: pool.id,
+          pool_upstream_assignment_id: assignment.id,
+          upstream_identity_id: identity.id,
+          model_identifier: model.exposed_model_id,
+          route_class: RequestOptions.route_class(request_options),
+          status: "open",
+          reason_code: "test_open",
+          failure_count: 3,
+          success_count: 0,
+          opened_at: DateTime.add(now, -120, :second),
+          next_probe_at: DateTime.add(now, -1, :second),
+          metadata: %{"probe_in_flight_count" => 0},
+          created_at: DateTime.add(now, -120, :second),
+          updated_at: now
+        }
+        |> Repo.insert!()
+
+      assert {:ok,
+              %RoutingSelection{
+                circuit_admission: :probe,
+                circuit_state: %RoutingCircuitState{id: circuit_id}
+              }} =
+               RoutingSelection.begin_circuit(
+                 selection,
+                 %{pool: pool, api_key: api_key},
+                 model
+               )
+
+      assert circuit_id == circuit.id
     end
 
     test "circuit eligibility consumes route-state snapshots without live circuit reads" do

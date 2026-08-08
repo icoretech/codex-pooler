@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Gateway.Routing.BridgeRing
+  alias CodexPooler.Gateway.Routing.CircuitState
   alias CodexPooler.Gateway.Routing.RoutingSelection
   alias CodexPooler.Gateway.Runtime.Dispatch.Context
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
@@ -29,6 +30,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext do
     :routing_attempt_metadata,
     :route_class,
     :routing_circuit_state,
+    :routing_circuit_admission,
     :attempt,
     :started,
     :auth_refresh_retry_attempted?
@@ -51,6 +53,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext do
           routing_attempt_metadata: map(),
           route_class: String.t(),
           routing_circuit_state: RoutingCircuitState.t() | nil,
+          routing_circuit_admission: CircuitState.admission() | nil,
           attempt: Attempt.t() | nil,
           started: integer() | nil,
           auth_refresh_retry_attempted?: boolean() | nil
@@ -73,7 +76,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext do
       retry_count: selection.index,
       allow_retry?: allow_retry?,
       routing_attempt_metadata: selection.attempt_metadata,
-      route_class: selection.route_class
+      route_class: selection.route_class,
+      routing_circuit_admission: selection.circuit_admission
     }
   end
 end
