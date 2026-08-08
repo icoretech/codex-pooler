@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
+  alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.QuotaRefresh.{Executor, Plan}
   alias CodexPooler.Gateway.Routing.SessionContinuity
@@ -410,7 +411,14 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
 
   defp candidate_key(_candidate), do: nil
 
-  defp gateway_auto_context(refresh_plan, assignment, identity, trigger) do
+  @doc false
+  @spec gateway_auto_context(
+          map(),
+          PoolUpstreamAssignment.t(),
+          UpstreamIdentity.t(),
+          AutoEligibility.trigger()
+        ) :: map()
+  def gateway_auto_context(refresh_plan, assignment, identity, trigger) do
     candidates = candidate_order(refresh_plan)
     cohort = cohort_order(refresh_plan)
 
@@ -435,10 +443,50 @@ defmodule CodexPooler.Gateway.Routing.SavedResetAutoRedeem do
           candidate_identity.id
         end),
       route_class: route_class(refresh_plan),
+      transient_circuit_exclusions: transient_circuit_exclusions(refresh_plan),
       quota_scope: quota_scope(refresh_plan),
       hard_pinned_continuity?: hard_pinned_continuity?(refresh_plan)
     }
   end
+
+  defp transient_circuit_exclusions(%{route_state: %RouteState{} = route_state} = refresh_plan) do
+    candidate_assignment_ids =
+      refresh_plan
+      |> candidate_order()
+      |> MapSet.new(fn {assignment, _identity} -> assignment.id end)
+
+    refresh_plan
+    |> cohort_order()
+    |> Enum.reject(fn {assignment, _identity} -> assignment.id in candidate_assignment_ids end)
+    |> Enum.flat_map(fn {assignment, _identity} ->
+      case RouteState.circuit_snapshot(route_state, assignment.id) do
+        %{
+          eligible?: false,
+          state: %RoutingCircuitState{
+            id: circuit_id,
+            upstream_identity_id: identity_id,
+            pool_upstream_assignment_id: assignment_id,
+            model_identifier: model_identifier,
+            route_class: route_class
+          }
+        } ->
+          [
+            %{
+              upstream_identity_id: identity_id,
+              pool_upstream_assignment_id: assignment_id,
+              routing_circuit_state_id: circuit_id,
+              model_identifier: model_identifier,
+              route_class: route_class
+            }
+          ]
+
+        _eligible_or_unkeyed_snapshot ->
+          []
+      end
+    end)
+  end
+
+  defp transient_circuit_exclusions(_refresh_plan), do: []
 
   defp quota_scope(%{filter_input: %{model: model}}) do
     %{

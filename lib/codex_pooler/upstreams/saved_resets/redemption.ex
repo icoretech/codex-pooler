@@ -1467,6 +1467,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     case AutoEligibility.normalize_context(context) do
       {:ok, context} -> {:ok, context}
       {:error, :invalid_gateway_auto_context} -> {:noop, "gateway_auto_context_invalid"}
+      {:error, :gateway_auto_context_mismatch} -> {:noop, "gateway_auto_context_mismatch"}
     end
   end
 

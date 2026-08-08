@@ -38,7 +38,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility do
           | {:noop, String.t()}
           | {:error, :redemption_in_progress}
 
-  @spec normalize_context(term()) :: {:ok, context()} | {:error, :invalid_gateway_auto_context}
+  @spec normalize_context(term()) :: {:ok, context()} | {:error, Context.normalize_error()}
   defdelegate normalize_context(context), to: Context, as: :normalize
 
   @spec validate_locked_gateway_auto(

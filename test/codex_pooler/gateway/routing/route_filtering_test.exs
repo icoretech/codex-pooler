@@ -14,11 +14,13 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
   alias CodexPooler.Gateway.Persistence.SessionContinuity, as: ContinuityStore
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
+  alias CodexPooler.Gateway.Routing.SavedResetAutoRedeem
   alias CodexPooler.Gateway.Routing.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
+  alias CodexPooler.Upstreams.SavedResets.AutoEligibility
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   defmodule RouteFiltering do
@@ -1398,6 +1400,76 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
 
       assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == []
       refute Map.has_key?(Repo.reload!(redeeming_identity).metadata, "saved_reset_redemption")
+    end
+
+    test "blocked exhaustion carries circuit-excluded siblings without widening candidates" do
+      {:ok, upstream} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/api/codex/rate-limit-reset-credits/consume" =>
+               {200, %{"code" => "nothing_to_reset"}}
+           }}
+        )
+
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+      redeeming =
+        active_upstream_assignment_fixture(pool, %{metadata: saved_reset_metadata(upstream, 1)})
+
+      exhausted = active_upstream_assignment_fixture(pool)
+      circuit_open = active_upstream_assignment_fixture(pool)
+
+      redeeming_identity = enable_saved_reset_auto_redeem!(redeeming.identity)
+      upsert_weekly_exhausted_quota!(redeeming_identity)
+      upsert_weekly_exhausted_quota!(exhausted.identity)
+      upsert_weekly_pressure_quota!(circuit_open.identity, Decimal.new("20"))
+
+      filter_input =
+        filter_input(
+          pool,
+          api_key,
+          [
+            {redeeming.assignment, redeeming_identity},
+            {exhausted.assignment, exhausted.identity},
+            {circuit_open.assignment, circuit_open.identity}
+          ],
+          "blocked-circuit-context"
+        )
+
+      circuit = open_circuit!(pool, api_key, filter_input.model, circuit_open.assignment)
+      route_state = route_state(filter_input)
+
+      assert {:ok, circuit_survivors} =
+               CandidateEligibility.filter_circuit_eligible_candidates(filter_input, route_state)
+
+      filtered_input = FilterInput.put_candidates(filter_input, circuit_survivors)
+      filtered_route_state = RouteState.put_candidates(route_state, circuit_survivors)
+
+      context =
+        SavedResetAutoRedeem.gateway_auto_context(
+          %{filter_input: filtered_input, route_state: filtered_route_state},
+          redeeming.assignment,
+          redeeming_identity,
+          :blocked_weekly_exhaustion
+        )
+
+      assert {:ok, normalized_context} = AutoEligibility.normalize_context(context)
+      assert context.routable_identity_ids == context.candidate_identity_ids
+
+      assert MapSet.new(normalized_context.routable_identity_ids) ==
+               MapSet.new(normalized_context.candidate_identity_ids)
+
+      assert [exclusion] = normalized_context.transient_circuit_exclusions
+      assert exclusion.upstream_identity_id == circuit_open.identity.id
+      assert exclusion.pool_upstream_assignment_id == circuit_open.assignment.id
+      assert exclusion.routing_circuit_state_id == circuit.id
+      assert exclusion.model_identifier == filter_input.model.exposed_model_id
+      assert exclusion.route_class == filter_input.route_class
+      refute exclusion.upstream_identity_id in normalized_context.candidate_identity_ids
+      assert exclusion.upstream_identity_id in normalized_context.cohort_identity_ids
+      assert filtered_route_state.candidates == circuit_survivors
+      assert FakeUpstream.requests(upstream) == []
     end
 
     @tag :saved_reset_redemption_cause

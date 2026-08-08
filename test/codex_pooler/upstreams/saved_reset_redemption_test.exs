@@ -2967,6 +2967,64 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       end
     end
 
+    test "gateway auto rejects malformed transient circuit context before provider I/O" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
+      sibling_identity_id = Ecto.UUID.generate()
+      duplicate_circuit_id = Ecto.UUID.generate()
+
+      context =
+        gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion, %{
+          cohort_identity_ids: [identity.id, sibling_identity_id],
+          transient_circuit_exclusions: [
+            transient_circuit_exclusion(sibling_identity_id, duplicate_circuit_id),
+            transient_circuit_exclusion(Ecto.UUID.generate(), duplicate_circuit_id)
+          ]
+        })
+
+      assert {:ok, %{status: :noop, applied?: false, code: "gateway_auto_context_invalid"}} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+    end
+
+    test "gateway auto rejects transient circuit request mismatch before provider I/O" do
+      {:ok, fake} = codex_reset_fake(0)
+
+      %{identity: identity, assignment: assignment} =
+        assignment_with_fake(fake, "/api/codex/usage", "codex_api")
+
+      identity = enable_saved_reset_auto_redeem!(identity)
+      upsert_weekly_exhausted_quota!(identity)
+      sibling_identity_id = Ecto.UUID.generate()
+
+      context =
+        gateway_auto_context(assignment, identity, :blocked_weekly_exhaustion, %{
+          cohort_identity_ids: [identity.id, sibling_identity_id],
+          transient_circuit_exclusions: [
+            transient_circuit_exclusion(sibling_identity_id, Ecto.UUID.generate(), %{
+              model_identifier: "wrong-request-model"
+            })
+          ]
+        })
+
+      assert {:ok, %{status: :noop, applied?: false, code: "gateway_auto_context_mismatch"}} =
+               SavedResetRedemption.redeem(assignment,
+                 trigger_kind: "gateway_auto",
+                 gateway_auto_context: context
+               )
+
+      assert [] = FakeUpstream.requests(fake)
+    end
+
     test "gateway auto does not consume when persisted identity has fresh in-progress redemption" do
       {:ok, fake} = codex_reset_fake(0)
 
@@ -6473,6 +6531,19 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         hard_pinned_continuity?: false
       },
       Map.new(overrides)
+    )
+  end
+
+  defp transient_circuit_exclusion(identity_id, circuit_id, overrides \\ %{}) do
+    Map.merge(
+      %{
+        upstream_identity_id: identity_id,
+        pool_upstream_assignment_id: Ecto.UUID.generate(),
+        routing_circuit_state_id: circuit_id,
+        model_identifier: "test-model",
+        route_class: "proxy_http"
+      },
+      overrides
     )
   end
 

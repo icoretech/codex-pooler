@@ -4,6 +4,13 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
   @triggers [:blocked_weekly_exhaustion, :threshold_pressure]
 
   @type trigger :: :blocked_weekly_exhaustion | :threshold_pressure
+  @type transient_circuit_exclusion :: %{
+          required(:upstream_identity_id) => Ecto.UUID.t(),
+          required(:pool_upstream_assignment_id) => Ecto.UUID.t(),
+          required(:routing_circuit_state_id) => Ecto.UUID.t(),
+          required(:model_identifier) => String.t(),
+          required(:route_class) => String.t()
+        }
   @type t :: %{
           required(:trigger) => trigger(),
           required(:pool_upstream_assignment_id) => Ecto.UUID.t(),
@@ -13,6 +20,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
           required(:cohort_identity_ids) => [Ecto.UUID.t()],
           required(:routable_identity_ids) => [Ecto.UUID.t()],
           required(:route_class) => String.t(),
+          required(:transient_circuit_exclusions) => [transient_circuit_exclusion()],
           optional(:quota_scope) => quota_scope() | nil,
           optional(:hard_pinned_continuity?) => boolean()
         }
@@ -25,7 +33,9 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
           required(:upstream_model_id) => String.t()
         }
 
-  @spec normalize(term()) :: {:ok, t()} | {:error, :invalid_gateway_auto_context}
+  @type normalize_error :: :invalid_gateway_auto_context | :gateway_auto_context_mismatch
+
+  @spec normalize(term()) :: {:ok, t()} | {:error, normalize_error()}
   def normalize(context) when is_list(context) do
     if keyword_context?(context) do
       context |> Map.new() |> normalize()
@@ -56,7 +66,20 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
            context_value(context, :route_class),
          {:ok, quota_scope} <- normalize_quota_scope(context_value(context, :quota_scope)),
          {:ok, hard_pinned_continuity?} <-
-           normalize_boolean(context_value(context, :hard_pinned_continuity?), false) do
+           normalize_boolean(context_value(context, :hard_pinned_continuity?), false),
+         {:ok, transient_circuit_exclusions} <-
+           normalize_transient_circuit_exclusions(
+             context_value(context, :transient_circuit_exclusions),
+             length(cohort_identity_ids)
+           ),
+         :ok <-
+           validate_transient_circuit_exclusions(
+             transient_circuit_exclusions,
+             cohort_identity_ids,
+             candidate_identity_ids,
+             quota_scope,
+             route_class
+           ) do
       {:ok,
        %{
          trigger: trigger,
@@ -67,10 +90,12 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
          cohort_identity_ids: cohort_identity_ids,
          routable_identity_ids: routable_identity_ids,
          route_class: route_class,
+         transient_circuit_exclusions: transient_circuit_exclusions,
          quota_scope: quota_scope,
          hard_pinned_continuity?: hard_pinned_continuity?
        }}
     else
+      {:error, :gateway_auto_context_mismatch} = error -> error
       _invalid -> {:error, :invalid_gateway_auto_context}
     end
   end
@@ -123,6 +148,101 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.Context do
   defp normalize_boolean(nil, default), do: {:ok, default}
   defp normalize_boolean(value, _default) when is_boolean(value), do: {:ok, value}
   defp normalize_boolean(_value, _default), do: :error
+
+  defp normalize_transient_circuit_exclusions(nil, _cohort_size), do: {:ok, []}
+
+  defp normalize_transient_circuit_exclusions(exclusions, cohort_size)
+       when is_list(exclusions) and length(exclusions) <= cohort_size do
+    with {:ok, normalized} <- normalize_transient_circuit_exclusion_entries(exclusions),
+         true <- unique_transient_circuit_ids?(normalized) do
+      {:ok, normalized}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp normalize_transient_circuit_exclusions(_exclusions, _cohort_size), do: :error
+
+  defp normalize_transient_circuit_exclusion_entries(exclusions) do
+    Enum.reduce_while(exclusions, {:ok, []}, fn exclusion, {:ok, normalized} ->
+      case normalize_transient_circuit_exclusion(exclusion) do
+        {:ok, entry} -> {:cont, {:ok, [entry | normalized]}}
+        :error -> {:halt, :error}
+      end
+    end)
+    |> case do
+      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+      :error -> :error
+    end
+  end
+
+  defp normalize_transient_circuit_exclusion(exclusion) when is_map(exclusion) do
+    with {:ok, identity_id} <-
+           normalize_uuid(context_value(exclusion, :upstream_identity_id)),
+         {:ok, assignment_id} <-
+           normalize_uuid(context_value(exclusion, :pool_upstream_assignment_id)),
+         {:ok, circuit_id} <-
+           normalize_uuid(context_value(exclusion, :routing_circuit_state_id)),
+         {:ok, model_identifier} <-
+           normalize_nonempty_binary(context_value(exclusion, :model_identifier)),
+         {:ok, route_class} <-
+           normalize_nonempty_binary(context_value(exclusion, :route_class)) do
+      {:ok,
+       %{
+         upstream_identity_id: identity_id,
+         pool_upstream_assignment_id: assignment_id,
+         routing_circuit_state_id: circuit_id,
+         model_identifier: model_identifier,
+         route_class: route_class
+       }}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp normalize_transient_circuit_exclusion(_exclusion), do: :error
+
+  defp normalize_nonempty_binary(value) when is_binary(value) do
+    if String.trim(value) == "", do: :error, else: {:ok, value}
+  end
+
+  defp normalize_nonempty_binary(_value), do: :error
+
+  defp unique_transient_circuit_ids?(exclusions) do
+    unique_by?(exclusions, :upstream_identity_id) and
+      unique_by?(exclusions, :pool_upstream_assignment_id) and
+      unique_by?(exclusions, :routing_circuit_state_id)
+  end
+
+  defp unique_by?(entries, key) do
+    entries
+    |> Enum.map(&Map.fetch!(&1, key))
+    |> then(&(length(&1) == length(Enum.uniq(&1))))
+  end
+
+  defp validate_transient_circuit_exclusions(
+         exclusions,
+         cohort_identity_ids,
+         candidate_identity_ids,
+         quota_scope,
+         route_class
+       ) do
+    request_model_identifier = request_model_identifier(quota_scope)
+
+    if Enum.all?(exclusions, fn exclusion ->
+         exclusion.upstream_identity_id in cohort_identity_ids and
+           exclusion.upstream_identity_id not in candidate_identity_ids and
+           exclusion.route_class == route_class and
+           exclusion.model_identifier == request_model_identifier
+       end) do
+      :ok
+    else
+      {:error, :gateway_auto_context_mismatch}
+    end
+  end
+
+  defp request_model_identifier(%{catalog_model: model_identifier}), do: model_identifier
+  defp request_model_identifier(_quota_scope), do: nil
 
   defp keyword_context?([]), do: true
   defp keyword_context?([{key, _value} | rest]) when is_atom(key), do: keyword_context?(rest)
