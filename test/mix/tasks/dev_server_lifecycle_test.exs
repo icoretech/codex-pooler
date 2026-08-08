@@ -5,9 +5,14 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
 
   test "start accepts the Makefile PORT assignment command and records the owned process" do
     fixture = mix_server_fixture!()
+    login_home = temp_dir!("login-home")
+    File.write!(Path.join(login_home, ".bash_profile"), "PATH=/usr/bin:/bin\nexport PATH\n")
 
     {output, code} =
-      lifecycle("start", fixture, [{"PATH", "#{fixture.bin_dir}:#{System.fetch_env!("PATH")}"}])
+      lifecycle("start", fixture, [
+        {"HOME", login_home},
+        {"PATH", "#{fixture.bin_dir}:#{System.fetch_env!("PATH")}"}
+      ])
 
     log = File.read!(fixture.log_path)
     assert code == 0, "lifecycle start failed: #{output}#{log}"
@@ -264,15 +269,14 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
   defp stop_fixture(_fixture), do: :ok
 
   defp process_alive?(pid) do
-    {_output, code} =
-      System.cmd("/bin/kill", ["-0", Integer.to_string(pid)], stderr_to_stdout: true)
+    {_output, code} = signal_os_pid(pid, "-0")
 
     code == 0
   end
 
   defp stop_os_pid(pid) do
     if process_alive?(pid) do
-      _ = System.cmd("/bin/kill", ["-TERM", Integer.to_string(pid)], stderr_to_stdout: true)
+      _ = signal_os_pid(pid, "-TERM")
     end
 
     await_process_exit(pid, 100)
@@ -287,6 +291,11 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
     else
       :ok
     end
+  end
+
+  defp signal_os_pid(pid, signal) do
+    executable = System.find_executable("kill") || raise "missing kill executable"
+    System.cmd(executable, [signal, Integer.to_string(pid)], stderr_to_stdout: true)
   end
 
   defp await_listener!(port, attempts \\ 100)

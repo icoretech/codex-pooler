@@ -132,7 +132,7 @@ start_server() {
 
   (
     cd "$server_cwd"
-    nohup /bin/bash -lc "exec /usr/bin/env ${server_command}" > "$log_path" 2>&1 < /dev/null &
+    nohup /bin/bash -c "exec /usr/bin/env ${server_command}" > "$log_path" 2>&1 < /dev/null &
     printf '%s\n' "$!" > "${receipt_path}.pid"
   )
   pid="$(cat "${receipt_path}.pid")"
