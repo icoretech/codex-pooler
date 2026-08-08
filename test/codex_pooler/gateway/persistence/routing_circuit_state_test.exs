@@ -1020,6 +1020,12 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
           backend_pid = backend_pid!()
           send(parent, {barrier, :old_failure_started, backend_pid})
 
+          receive do
+            {^barrier, :release_old_failure} -> :ok
+          after
+            5_000 -> raise "timed out waiting to start old normal failure"
+          end
+
           {backend_pid,
            CircuitState.record_failure(
              auth,
@@ -1036,6 +1042,7 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
       assert_receive {^barrier, :probe_active, probe_backend_pid, 1}, 5_000
       assert_receive {^barrier, :old_failure_started, failure_backend_pid}, 5_000
       assert probe_backend_pid != failure_backend_pid
+      send(old_failure.pid, {barrier, :release_old_failure})
       observation = observe_blocked_backend!(failure_backend_pid, probe_backend_pid)
       assert observation.wait_event_type == "Lock"
       assert probe_backend_pid in observation.blocking_pids
