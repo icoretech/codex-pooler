@@ -1306,7 +1306,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
         :existing
 
       same_cycle_reset?(evidence, existing) and
-        relative_reset_metadata?(evidence.metadata) and
+        relative_reset_timing_present?(evidence.metadata) and
         not weak_zero_percent_evidence?(evidence) and
           not stale_same_cycle_exhausted_snapshot?(evidence, existing, timestamp) ->
         :same_cycle
@@ -1332,6 +1332,10 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
       forward_reset_cycle?(evidence, existing) ->
         :incoming
+
+      stale_same_cycle_exhausted_snapshot?(evidence, existing, timestamp) and
+          relative_reset_timing_present?(evidence.metadata) ->
+        :existing
 
       stale_same_cycle_exhausted_snapshot?(evidence, existing, timestamp) ->
         lower_snapshot_decision(evidence, existing, timestamp)
@@ -1712,7 +1716,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
     if Map.get(attrs, :source_precision) in ["observed", "authoritative"] and
          match?(%DateTime{}, Map.get(attrs, :reset_at)) and
-         not relative_reset_metadata?(incoming_metadata) do
+         not relative_reset_timing_present?(incoming_metadata) do
       Map.delete(metadata, "reset_after_seconds")
     else
       metadata
@@ -2195,9 +2199,11 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
   defp relative_reset_metadata?(%{} = metadata),
     do:
-      not is_nil(
-        Map.get(metadata, "reset_after_seconds") || Map.get(metadata, :reset_after_seconds)
-      )
+      Map.get(metadata, "reset_at_source") != "explicit" and
+        Map.get(metadata, :reset_at_source) != "explicit" and
+        not is_nil(
+          Map.get(metadata, "reset_after_seconds") || Map.get(metadata, :reset_after_seconds)
+        )
 
   defp relative_reset_metadata?(_metadata), do: false
 

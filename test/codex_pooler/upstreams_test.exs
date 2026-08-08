@@ -3340,6 +3340,63 @@ defmodule CodexPooler.UpstreamsTest do
              }
     end
 
+    test "marks explicit usage resets even when the provider also sends a countdown" do
+      synced_at = ~U[2026-08-08 16:58:06Z]
+      reset_at = ~U[2026-09-06 10:06:17Z]
+
+      assert {:ok, [account_primary]} =
+               QuotaWindows.codex_usage_quota_windows_from_payload(
+                 %{
+                   "rate_limit" => %{
+                     "primary_window" => %{
+                       "used_percent" => 3,
+                       "limit_window_seconds" => 2_592_000,
+                       "reset_at" => DateTime.to_unix(reset_at),
+                       "reset_after_seconds" => DateTime.diff(reset_at, synced_at, :second)
+                     }
+                   }
+                 },
+                 synced_at
+               )
+
+      assert account_primary.source_precision == "observed"
+      assert account_primary.metadata["reset_at_source"] == "explicit"
+      assert DateTime.compare(account_primary.reset_at, reset_at) == :eq
+    end
+
+    test "keeps model weekly reset provenance relative when both reset fields are present" do
+      synced_at = ~U[2026-08-08 16:58:06Z]
+      reset_at = ~U[2026-08-15 10:06:17Z]
+
+      assert {:ok, [model_weekly]} =
+               QuotaWindows.codex_usage_quota_windows_from_payload(
+                 %{
+                   "additional_rate_limits" => [
+                     %{
+                       "limit_name" => "Example model weekly",
+                       "metered_feature" => "example_model_weekly",
+                       "rate_limit" => %{
+                         "primary_window" => %{
+                           "used_percent" => 21,
+                           "limit_window_seconds" => 604_800,
+                           "reset_at" => DateTime.to_unix(reset_at),
+                           "reset_after_seconds" => DateTime.diff(reset_at, synced_at, :second)
+                         }
+                       }
+                     }
+                   ]
+                 },
+                 synced_at
+               )
+
+      assert model_weekly.quota_scope == "model"
+      assert model_weekly.window_kind == "secondary"
+      assert model_weekly.metadata["reset_at_source"] == nil
+
+      assert model_weekly.metadata["reset_after_seconds"] ==
+               DateTime.diff(reset_at, synced_at, :second)
+    end
+
     test "preserves exact provider allow status on account windows only" do
       synced_at = ~U[2026-04-27 10:00:00Z]
 
@@ -10645,6 +10702,115 @@ defmodule CodexPooler.UpstreamsTest do
         assert merged_window.credits == 3_521
         assert Decimal.equal?(merged_window.used_percent, Decimal.new("16.007"))
       end
+    end
+
+    @tag :upstream_quota_evidence_stability
+    test "explicit monthly usage repairs a row frozen to an older relative reset" do
+      identity = active_identity_fixture()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      stale_reset_at = DateTime.add(observed_at, 25, :day)
+      provider_reset_at = DateTime.add(observed_at, 28, :day)
+      incoming_at = DateTime.add(observed_at, 60, :second)
+
+      assert {:ok, [_stale_window]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   quota_key: "account",
+                   quota_scope: "account",
+                   quota_family: "account",
+                   window_kind: "primary",
+                   window_minutes: 43_200,
+                   active_limit: 601,
+                   credits: 601,
+                   used_percent: Decimal.new(3),
+                   reset_at: stale_reset_at,
+                   source: "codex_usage_api",
+                   source_precision: "observed",
+                   freshness_state: "fresh",
+                   observed_at: observed_at,
+                   metadata: %{
+                     "limit_window_seconds" => 2_592_000,
+                     "reset_after_seconds" => 2_592_000
+                   }
+                 }
+               ])
+
+      assert {:ok, [repaired_window]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 %{
+                   "credits" => nil,
+                   "rate_limit" => %{
+                     "primary_window" => %{
+                       "used_percent" => 3,
+                       "limit_window_seconds" => 2_592_000,
+                       "reset_at" => DateTime.to_unix(provider_reset_at),
+                       "reset_after_seconds" =>
+                         DateTime.diff(provider_reset_at, incoming_at, :second)
+                     }
+                   }
+                 },
+                 incoming_at
+               )
+
+      assert repaired_window.active_limit == 601
+      assert repaired_window.credits == 601
+      assert Decimal.equal?(repaired_window.used_percent, Decimal.new(3))
+      assert DateTime.compare(repaired_window.reset_at, provider_reset_at) == :eq
+      assert repaired_window.metadata["reset_at_source"] == "explicit"
+
+      assert repaired_window.metadata["reset_after_seconds"] ==
+               DateTime.diff(provider_reset_at, incoming_at, :second)
+    end
+
+    @tag :upstream_quota_evidence_stability
+    test "relative monthly usage cannot erase explicit reset provenance" do
+      identity = active_identity_fixture()
+      observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      explicit_reset_at = DateTime.add(observed_at, 28, :day)
+      relative_at = DateTime.add(observed_at, 120, :second)
+
+      assert {:ok, [explicit_window]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 %{
+                   "rate_limit" => %{
+                     "primary_window" => %{
+                       "used_percent" => 3,
+                       "limit_window_seconds" => 2_592_000,
+                       "reset_at" => DateTime.to_unix(explicit_reset_at),
+                       "reset_after_seconds" =>
+                         DateTime.diff(explicit_reset_at, observed_at, :second)
+                     }
+                   }
+                 },
+                 observed_at
+               )
+
+      assert explicit_window.metadata["reset_at_source"] == "explicit"
+
+      assert {:ok, [relative_window]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 %{
+                   "rate_limit" => %{
+                     "primary_window" => %{
+                       "used_percent" => 3,
+                       "limit_window_seconds" => 2_592_000,
+                       "reset_after_seconds" => 2_592_000
+                     }
+                   }
+                 },
+                 relative_at
+               )
+
+      assert relative_window.id == explicit_window.id
+      assert Decimal.equal?(relative_window.used_percent, Decimal.new(3))
+      assert DateTime.compare(relative_window.reset_at, explicit_reset_at) == :eq
+      assert relative_window.metadata["reset_at_source"] == "explicit"
+
+      assert relative_window.metadata["reset_after_seconds"] ==
+               explicit_window.metadata["reset_after_seconds"]
     end
 
     @tag :upstream_quota_evidence_stability

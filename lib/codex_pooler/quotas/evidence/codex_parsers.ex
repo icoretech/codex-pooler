@@ -194,11 +194,22 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
         metadata:
           compact_metadata(%{
             "limit_window_seconds" => integer_or_nil(window["limit_window_seconds"]),
-            "reset_after_seconds" => integer_or_nil(window["reset_after_seconds"])
+            "reset_after_seconds" => integer_or_nil(window["reset_after_seconds"]),
+            "reset_at_source" => explicit_account_reset_source(window, descriptor)
           })
       })
     else
       _invalid -> nil
+    end
+  end
+
+  # Account windows treat an absolute reset as canonical even when the provider
+  # includes a matching countdown. Model weekly windows deliberately keep the
+  # countdown semantics because their floating/anchored proof uses both fields.
+  defp explicit_account_reset_source(window, descriptor) do
+    if Map.get(descriptor, :quota_scope) == "account" and
+         ResetTimes.explicit_reset_at_from(window) do
+      "explicit"
     end
   end
 
