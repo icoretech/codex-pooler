@@ -1671,7 +1671,10 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       |> clear_candidate()
 
     attrs
-    |> Map.put(:active_limit, preserved_active_limit(existing, Map.get(attrs, :active_limit)))
+    |> Map.put(
+      :active_limit,
+      preserved_active_limit(existing, Map.get(attrs, :active_limit), attrs)
+    )
     |> Map.put(:credits, preserved_credits(existing, Map.get(attrs, :credits)))
     |> Map.put(:metadata, metadata)
     |> Map.put_new(:created_at, existing.created_at || timestamp)
@@ -2432,14 +2435,13 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
          %Evidence{} = evidence,
          timestamp
        ) do
-    active_limit = canonical_active_limit(existing, Map.get(attrs, :active_limit))
+    active_limit = canonical_active_limit(existing, Map.get(attrs, :active_limit), evidence)
     credits = usage_credits(existing, evidence, active_limit, Map.get(attrs, :credits))
 
     existing
     |> accepted_snapshot_attrs(attrs, timestamp)
     |> Map.put(:active_limit, active_limit)
     |> Map.put(:credits, credits)
-    |> maybe_put_used_percent_from_credits(evidence, active_limit, credits)
   end
 
   defp merge_usage_with_existing_capacity_attrs(
@@ -2448,14 +2450,13 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
          %Evidence{} = evidence,
          timestamp
        ) do
-    active_limit = preserved_active_limit(existing, Map.get(attrs, :active_limit))
+    active_limit = preserved_active_limit(existing, Map.get(attrs, :active_limit), evidence)
     credits = usage_credits(existing, evidence, active_limit, Map.get(attrs, :credits))
 
     attrs
     |> Map.put(:active_limit, active_limit)
     |> Map.put(:credits, credits)
     |> Map.put(:reset_at, latest_reset_at(existing.reset_at, Map.get(attrs, :reset_at)))
-    |> maybe_put_used_percent_from_credits(evidence, active_limit, credits)
     |> Map.put_new(:created_at, existing.created_at || timestamp)
     |> Map.put(:updated_at, timestamp)
   end
@@ -2466,7 +2467,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
          %Evidence{} = evidence,
          timestamp
        ) do
-    active_limit = canonical_active_limit(existing, Map.get(attrs, :active_limit))
+    active_limit = canonical_active_limit(existing, Map.get(attrs, :active_limit), evidence)
     credits = usage_credits(existing, evidence, active_limit, Map.get(attrs, :credits))
 
     existing
@@ -2481,7 +2482,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
       metadata: Map.merge(existing.metadata || %{}, Map.get(attrs, :metadata, %{})),
       updated_at: timestamp
     })
-    |> maybe_put_used_percent_from_credits(evidence, active_limit, credits)
     |> preserve_existing_relative_reset_metadata(existing)
   end
 
@@ -2490,7 +2490,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
          attrs,
          timestamp
        ) do
-    active_limit = preserved_active_limit(existing, Map.get(attrs, :active_limit))
+    active_limit = preserved_active_limit(existing, Map.get(attrs, :active_limit), attrs)
     credits = preserved_credits(existing, Map.get(attrs, :credits))
 
     existing
@@ -2512,7 +2512,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
          attrs,
          timestamp
        ) do
-    active_limit = preserved_active_limit(existing, Map.get(attrs, :active_limit))
+    active_limit = preserved_active_limit(existing, Map.get(attrs, :active_limit), attrs)
     credits = preserved_credits(existing, Map.get(attrs, :credits))
 
     attrs
@@ -2579,17 +2579,55 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     is_integer(active_limit) and active_limit > 0
   end
 
+  defp preserved_active_limit(existing, incoming, evidence_or_attrs) do
+    if codex_usage_account_evidence?(evidence_or_attrs) do
+      codex_usage_active_limit(existing, incoming, Map.get(evidence_or_attrs, :used_percent))
+    else
+      preserved_active_limit(existing, incoming)
+    end
+  end
+
   defp preserved_active_limit(%Quota.AccountQuotaWindow{active_limit: existing}, incoming)
        when incoming in [nil, 0] and is_integer(existing) and existing > 0,
        do: existing
 
   defp preserved_active_limit(_existing, incoming), do: incoming
 
+  defp canonical_active_limit(existing, incoming, evidence) do
+    if codex_usage_account_evidence?(evidence) do
+      codex_usage_active_limit(existing, incoming, Map.get(evidence, :used_percent))
+    else
+      canonical_active_limit(existing, incoming)
+    end
+  end
+
   defp canonical_active_limit(%Quota.AccountQuotaWindow{active_limit: existing}, _incoming)
        when is_integer(existing) and existing > 0,
        do: existing
 
   defp canonical_active_limit(existing, incoming), do: preserved_active_limit(existing, incoming)
+
+  defp codex_usage_active_limit(existing, incoming, %Decimal{} = used_percent) do
+    if Decimal.compare(used_percent, Decimal.new(100)) == :lt do
+      if is_integer(incoming) and incoming > 0 do
+        incoming
+      else
+        preserved_active_limit(existing, incoming)
+      end
+    else
+      max_positive_integer(Map.get(existing, :active_limit), incoming)
+    end
+  end
+
+  defp codex_usage_active_limit(_existing, incoming, _used_percent), do: incoming
+
+  defp max_positive_integer(left, right)
+       when is_integer(left) and left > 0 and is_integer(right) and right > 0,
+       do: max(left, right)
+
+  defp max_positive_integer(left, _right) when is_integer(left) and left > 0, do: left
+  defp max_positive_integer(_left, right) when is_integer(right) and right > 0, do: right
+  defp max_positive_integer(_left, _right), do: nil
 
   defp preserved_credits(%Quota.AccountQuotaWindow{credits: existing}, incoming)
        when incoming in [nil, 0] and is_integer(existing) and existing > 0,
@@ -2636,32 +2674,14 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
 
   defp valid_existing_credits(_credits, _active_limit), do: nil
 
-  defp maybe_put_used_percent_from_credits(
-         attrs,
-         %Evidence{source: "codex_usage_api"} = evidence,
-         active_limit,
-         credits
-       )
-       when is_integer(active_limit) and active_limit > 0 and is_integer(credits) and credits >= 0 do
-    if account_quota_identity?(evidence) do
-      Map.put(attrs, :used_percent, used_percent_from_remaining_credits(active_limit, credits))
-    else
-      attrs
-    end
-  end
+  defp codex_usage_account_evidence?(%{
+         source: "codex_usage_api",
+         quota_key: "account",
+         quota_scope: "account"
+       }),
+       do: true
 
-  defp maybe_put_used_percent_from_credits(attrs, _evidence, _active_limit, _credits),
-    do: attrs
-
-  defp used_percent_from_remaining_credits(active_limit, credits) do
-    active_limit
-    |> Decimal.new()
-    |> Decimal.sub(Decimal.new(credits))
-    |> decimal_non_negative()
-    |> Decimal.mult(Decimal.new(100))
-    |> Decimal.div(Decimal.new(active_limit))
-    |> decimal_clamp_percent()
-  end
+  defp codex_usage_account_evidence?(_evidence_or_attrs), do: false
 
   defp zero_percent?(%Decimal{} = percent), do: Decimal.compare(percent, Decimal.new(0)) == :eq
   defp zero_percent?(_percent), do: false
@@ -2738,18 +2758,6 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
   end
 
   defp information_quality_rank(_evidence_or_window), do: 0
-
-  defp decimal_non_negative(%Decimal{} = value) do
-    if Decimal.compare(value, Decimal.new(0)) == :lt, do: Decimal.new(0), else: value
-  end
-
-  defp decimal_clamp_percent(%Decimal{} = value) do
-    cond do
-      Decimal.compare(value, Decimal.new(0)) == :lt -> Decimal.new(0)
-      Decimal.compare(value, Decimal.new(100)) == :gt -> Decimal.new(100)
-      true -> value
-    end
-  end
 
   defp evidence_identity_id(%UpstreamIdentity{id: id}, _attrs), do: id
   defp evidence_identity_id(id, _attrs) when is_binary(id), do: id

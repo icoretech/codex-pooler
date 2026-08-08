@@ -3402,43 +3402,55 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
   @tag :upstream_quota_evidence_stability
   @tag :quota_runtime_source_transition
-  test "credit-backed quota rows render striped progress bars", %{
+  test "account quota stays solid until included quota is exhausted, then stripes credit burn", %{
     conn: conn,
     scope: scope
   } do
     {:ok, pool} =
       Pools.create_pool(scope, %{
-        slug: "credit-backed-striped",
-        name: "Credit Backed Striped"
+        slug: "credit-burn-meter",
+        name: "Credit Burn Meter"
       })
 
-    %{identity: identity} =
+    %{identity: quota_identity} =
       upstream_assignment_fixture(pool, %{
-        account_label: "Credit Backed Striped Codex",
-        assignment_label: "Credit backed striped assignment"
+        account_label: "Included Quota Codex",
+        assignment_label: "Included quota assignment"
+      })
+
+    %{identity: credit_identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Credit Burn Codex",
+        assignment_label: "Credit burn assignment"
       })
 
     now = DateTime.utc_now() |> DateTime.add(-60, :second)
 
-    assert {:ok, [_credit_primary, _percent_weekly]} =
-             QuotaWindows.upsert_quota_windows(identity, [
+    assert {:ok, [_quota_primary]} =
+             QuotaWindows.upsert_quota_windows(quota_identity, [
                %{
                  window_kind: "primary",
                  window_minutes: 43_200,
-                 active_limit: 4_192,
-                 credits: 3_414,
-                 used_percent: Decimal.new("18.5"),
+                 active_limit: 601,
+                 credits: 601,
+                 used_percent: Decimal.new("3"),
                  reset_at: DateTime.add(now, 11, :day),
                  source: "codex_usage_api",
                  source_precision: "observed",
                  freshness_state: "fresh",
                  observed_at: now
-               },
+               }
+             ])
+
+    assert {:ok, [_credit_primary]} =
+             QuotaWindows.upsert_quota_windows(credit_identity, [
                %{
-                 window_kind: "secondary",
-                 window_minutes: 10_080,
-                 used_percent: Decimal.new("10"),
-                 reset_at: DateTime.add(now, 6, :day),
+                 window_kind: "primary",
+                 window_minutes: 43_200,
+                 active_limit: 601,
+                 credits: 500,
+                 used_percent: Decimal.new("100"),
+                 reset_at: DateTime.add(now, 11, :day),
                  source: "codex_usage_api",
                  source_precision: "observed",
                  freshness_state: "fresh",
@@ -3448,12 +3460,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
 
-    monthly_selector = "#upstream-account-#{identity.id}-limit-primary_30d"
-    weekly_selector = "#upstream-account-#{identity.id}-limit-weekly"
+    quota_selector = "#upstream-account-#{quota_identity.id}-limit-primary_30d"
+    credit_selector = "#upstream-account-#{credit_identity.id}-limit-primary_30d"
 
-    assert has_element?(view, "#{monthly_selector}-progress.progress-striped")
-    assert has_element?(view, "#{weekly_selector}-progress")
-    refute has_element?(view, "#{weekly_selector}-progress.progress-striped")
+    assert has_element?(view, "#{quota_selector}-progress[value='97']")
+    refute has_element?(view, "#{quota_selector}-progress.progress-striped")
+    refute has_element?(view, "#{quota_selector}-count")
+
+    assert has_element?(view, "#{credit_selector}-progress[value='83'].progress-striped")
+    assert has_element?(view, "#{credit_selector}-count", "500 credits")
+    refute render(view) =~ "500 / 601 credits"
   end
 
   test "Spark zero-use quota stays visible while evidence sources change", %{
@@ -6280,11 +6296,54 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert LazyHTML.query(awaiting_document, "[data-role='upstream-saved-reset-single-consume']")
            |> LazyHTML.text() =~ "never consumes a second saved reset"
 
+    assert LazyHTML.query(
+             awaiting_document,
+             "#todo4-awaiting-meter-bar[aria-valuenow='0']"
+           )
+           |> Enum.count() == 1
+
+    for index <- 1..5 do
+      segment =
+        LazyHTML.query(
+          awaiting_document,
+          "#todo4-awaiting-meter-segment-#{index}"
+        )
+
+      assert LazyHTML.attribute(segment, "class") |> List.first() =~ "bg-base-300/70"
+      assert LazyHTML.attribute(segment, "data-confirmation-state") == []
+      assert LazyHTML.attribute(segment, "title") == []
+    end
+
     refute awaiting_html =~ "still blocked"
     refute awaiting_html =~ "raw-lifecycle-label-must-not-render"
 
+    confirmed_html =
+      render_component(&SavedResetMeter.saved_reset_meter/1,
+        id: "todo4-confirmed-meter",
+        saved_resets: saved_resets,
+        saved_reset_policy: %{enabled?: false},
+        saved_reset_confirmation: %{
+          confirmation_state: :confirmed,
+          challenged_evidence_state: :usable,
+          additional_account_blocker_state: :none,
+          observed_at: nil
+        }
+      )
+
+    confirmed_document = LazyHTML.from_fragment(confirmed_html)
+
+    assert LazyHTML.query(confirmed_document, "#todo4-confirmed-meter-bar[aria-valuenow='0']")
+           |> Enum.count() == 1
+
+    refute LazyHTML.query(
+             confirmed_document,
+             "[data-role='upstream-saved-reset-confirmation']"
+           )
+           |> Enum.any?()
+
+    refute confirmed_html =~ "Confirmed"
+
     state_labels = [
-      {:confirmed, "Confirmed"},
       {:not_applied, "Not applied"},
       {:confirmation_expired, "Confirmation expired"}
     ]
@@ -6308,7 +6367,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         {state, html}
       end
 
-    refute rendered_states.confirmed =~ "Confirmation expired"
     refute rendered_states.not_applied =~ "Confirmation expired"
     refute rendered_states.confirmation_expired =~ "Not applied"
   end

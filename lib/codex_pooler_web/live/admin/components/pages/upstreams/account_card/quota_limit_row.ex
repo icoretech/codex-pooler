@@ -97,13 +97,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
         true -> "progress-error"
       end
 
-    "progress admin-live-progress #{tone_class}#{credit_backed_class(limit)} h-1.5 w-full"
+    "progress admin-live-progress #{tone_class}#{credit_burning_class(limit)} h-1.5 w-full"
   end
 
   defp quota_limit_progress_class(limit),
     do:
-      "progress admin-live-progress admin-static-unknown-progress progress-neutral#{credit_backed_class(limit)} h-1.5 w-full"
+      "progress admin-live-progress admin-static-unknown-progress progress-neutral#{credit_burning_class(limit)} h-1.5 w-full"
 
-  defp credit_backed_class(%{credit_backed: true}), do: " progress-striped"
-  defp credit_backed_class(_limit), do: ""
+  defp credit_burning_class(%{burning_credits: true}), do: " progress-striped"
+  defp credit_burning_class(_limit), do: ""
 end

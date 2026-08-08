@@ -2074,15 +2074,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     refute has_element?(view, "#cockpit-saved-reset-lifecycle")
 
-    assert has_element?(
-             view,
-             "#upstream-quota-saved-reset-meter-segment-1[data-confirmation-state='awaiting_confirmation'].animate-pulse.motion-reduce\\:animate-none[title*='Awaiting confirmation'][title*='Challenged evidence Absent'][title*='Additional blocker None']"
-           )
+    for index <- 1..2 do
+      assert has_element?(
+               view,
+               "#upstream-quota-saved-reset-meter-segment-#{index}.bg-\\(--color-reset-bank\\)\\/80:not([data-confirmation-state]):not([title])"
+             )
+    end
 
-    refute has_element?(
-             view,
-             "#upstream-quota-saved-reset-meter-segment-2[data-confirmation-state]"
-           )
+    for index <- 3..5 do
+      assert has_element?(
+               view,
+               "#upstream-quota-saved-reset-meter-segment-#{index}.bg-base-300\\/70:not([data-confirmation-state]):not([title])"
+             )
+    end
 
     assert has_element?(
              view,

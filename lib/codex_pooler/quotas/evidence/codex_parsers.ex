@@ -182,7 +182,7 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
       |> Map.merge(%{
         window_kind: kind,
         window_minutes: window_minutes,
-        active_limit: infer_active_limit(credits, used_percent),
+        active_limit: credit_balance_baseline(credits),
         credits: credits,
         reset_at: reset_at,
         used_percent: Decimal.from_float(used_percent),
@@ -299,13 +299,11 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
 
   defp codex_credit_balance(_balance), do: nil
 
-  defp infer_active_limit(nil, _used_percent), do: nil
-  defp infer_active_limit(credits, used_percent) when used_percent <= 0, do: credits
-  defp infer_active_limit(_credits, used_percent) when used_percent >= 100, do: nil
-
-  defp infer_active_limit(credits, used_percent) do
-    max(round(credits / (1.0 - used_percent / 100.0)), credits)
-  end
+  # The usage payload reports a current balance, not a total credit capacity.
+  # Evidence merging keeps this first balance as the burn-meter baseline once
+  # included quota reaches 100% and the balance starts decreasing.
+  defp credit_balance_baseline(credits) when is_integer(credits) and credits >= 0, do: credits
+  defp credit_balance_baseline(_credits), do: nil
 
   defp provider_status_metadata(%{"allowed" => allowed, "limit_reached" => limit_reached})
        when is_boolean(allowed) and is_boolean(limit_reached) and allowed == not limit_reached do

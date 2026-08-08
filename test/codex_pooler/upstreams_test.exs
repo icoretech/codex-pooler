@@ -3694,6 +3694,29 @@ defmodule CodexPooler.UpstreamsTest do
       end
     end
 
+    test "uses the reported credit balance as a baseline without rewriting provider usage" do
+      synced_at = ~U[2026-08-08 16:58:06Z]
+
+      assert {:ok, [account_primary]} =
+               QuotaWindows.codex_usage_quota_windows_from_payload(
+                 %{
+                   "credits" => %{"balance" => 601},
+                   "rate_limit" => %{
+                     "primary_window" => %{
+                       "used_percent" => 3,
+                       "limit_window_seconds" => 2_592_000,
+                       "reset_after_seconds" => 2_480_891
+                     }
+                   }
+                 },
+                 synced_at
+               )
+
+      assert account_primary.active_limit == 601
+      assert account_primary.credits == 601
+      assert Decimal.equal?(account_primary.used_percent, Decimal.new(3))
+    end
+
     test "leaves missing and malformed credit balances unknown" do
       synced_at = ~U[2026-04-27 10:00:00Z]
 
@@ -4278,7 +4301,7 @@ defmodule CodexPooler.UpstreamsTest do
       refute Map.has_key?(stored.metadata, "reset_after_seconds")
     end
 
-    test "explicit usage reset corrects capacity-bearing rows derived from relative countdowns" do
+    test "explicit usage reset preserves provider exhaustion on capacity-bearing rows" do
       identity = active_identity_fixture()
       observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
       bad_relative_reset_at = DateTime.add(observed_at, 28, :day)
@@ -4330,7 +4353,7 @@ defmodule CodexPooler.UpstreamsTest do
       assert corrected.active_limit == 4_192
       assert corrected.credits == 3_521
       assert corrected.source_precision == "observed"
-      assert_in_delta Decimal.to_float(corrected.used_percent), 16.006_679, 0.000_001
+      assert Decimal.equal?(corrected.used_percent, Decimal.new(100))
       assert DateTime.compare(corrected.reset_at, explicit_reset_at) == :eq
       refute Map.has_key?(corrected.metadata, "reset_after_seconds")
     end
@@ -7371,12 +7394,11 @@ defmodule CodexPooler.UpstreamsTest do
     end
 
     @tag :quota_confirmed_convergence
-    test "credit-only backward re-anchor adopts the reset while keeping credit-derived percent" do
-      # the free-plan shape observed live: canonical capacity-bearing monthly
-      # (18.5% = credits/capacity, reset in 27d) while the provider reports
-      # 100% used with the reset re-anchored 16 days earlier and only a credit
-      # balance. values must stay credit-derived on every observation; the
-      # earlier reset is adopted only after two matching observations
+    test "credit-only backward re-anchor adopts the reset while keeping provider exhaustion" do
+      # The provider reports 100% included-quota usage with the reset
+      # re-anchored 16 days earlier and only a current credit balance. The
+      # provider percent stays authoritative on every observation; the earlier
+      # reset is adopted only after two matching observations.
       identity = active_identity_fixture()
 
       canonical_at =
@@ -7415,12 +7437,6 @@ defmodule CodexPooler.UpstreamsTest do
                  canonical_at
                )
 
-      expected_percent =
-        Decimal.new(4_192)
-        |> Decimal.sub(Decimal.new(3_416))
-        |> Decimal.mult(Decimal.new(100))
-        |> Decimal.div(Decimal.new(4_192))
-
       first_at = DateTime.add(canonical_at, 60, :second)
 
       assert {:ok, first} =
@@ -7435,10 +7451,7 @@ defmodule CodexPooler.UpstreamsTest do
       assert first.credits == 3_416
       assert DateTime.compare(first.reset_at, canonical_reset) == :eq
 
-      assert Decimal.equal?(
-               Decimal.round(first.used_percent, 6),
-               Decimal.round(expected_percent, 6)
-             )
+      assert Decimal.equal?(first.used_percent, Decimal.new(100))
 
       confirm_at = DateTime.add(canonical_at, 120, :second)
 
@@ -7454,10 +7467,7 @@ defmodule CodexPooler.UpstreamsTest do
       assert confirmed.credits == 3_416
       assert DateTime.compare(confirmed.reset_at, reanchored_reset) == :eq
 
-      assert Decimal.equal?(
-               Decimal.round(confirmed.used_percent, 6),
-               Decimal.round(expected_percent, 6)
-             )
+      assert Decimal.equal?(confirmed.used_percent, Decimal.new(100))
     end
 
     @tag :quota_confirmed_convergence
@@ -10437,7 +10447,54 @@ defmodule CodexPooler.UpstreamsTest do
     end
 
     @tag :upstream_quota_evidence_stability
-    test "incomplete free-plan usage cannot split percent from preserved credit capacity" do
+    test "a fresh usage snapshot repairs a legacy inferred denominator" do
+      identity = active_identity_fixture()
+      observed_at = DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:second)
+      incoming_at = DateTime.add(observed_at, 60, :second)
+      reset_at = DateTime.add(observed_at, 29, :day)
+
+      assert {:ok, [_legacy_window]} =
+               QuotaWindows.upsert_quota_windows(identity, [
+                 %{
+                   quota_key: "account",
+                   quota_scope: "account",
+                   quota_family: "account",
+                   window_kind: "primary",
+                   window_minutes: 43_200,
+                   active_limit: 607,
+                   credits: 601,
+                   used_percent: Decimal.new("0.988"),
+                   reset_at: reset_at,
+                   source: "codex_usage_api",
+                   source_precision: "observed",
+                   freshness_state: "fresh",
+                   observed_at: observed_at
+                 }
+               ])
+
+      assert {:ok, [repaired_window]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 %{
+                   "credits" => %{"balance" => 601},
+                   "rate_limit" => %{
+                     "primary_window" => %{
+                       "used_percent" => 3,
+                       "limit_window_seconds" => 2_592_000,
+                       "reset_at" => DateTime.to_unix(reset_at)
+                     }
+                   }
+                 },
+                 incoming_at
+               )
+
+      assert repaired_window.active_limit == 601
+      assert repaired_window.credits == 601
+      assert Decimal.equal?(repaired_window.used_percent, Decimal.new(3))
+    end
+
+    @tag :upstream_quota_evidence_stability
+    test "an unconfirmed backward reset keeps the prior provider snapshot intact" do
       identity = active_identity_fixture()
       observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
       reset_at = DateTime.add(observed_at, 28, :day)
@@ -10465,7 +10522,7 @@ defmodule CodexPooler.UpstreamsTest do
                  observed_at
                )
 
-      assert complete_window.active_limit == 4_192
+      assert complete_window.active_limit == 3_521
       assert complete_window.credits == 3_521
       assert Decimal.equal?(complete_window.used_percent, Decimal.new("16.007"))
 
@@ -10477,9 +10534,9 @@ defmodule CodexPooler.UpstreamsTest do
                )
 
       assert after_incomplete.id == complete_window.id
-      assert after_incomplete.active_limit == 4_192
+      assert after_incomplete.active_limit == 3_521
       assert after_incomplete.credits == 3_521
-      assert_in_delta Decimal.to_float(after_incomplete.used_percent), 16.006_679, 0.000_001
+      assert Decimal.equal?(after_incomplete.used_percent, Decimal.new("16.007"))
 
       assert DateTime.compare(after_incomplete.reset_at, reset_at) == :eq
     end
@@ -10531,9 +10588,9 @@ defmodule CodexPooler.UpstreamsTest do
       assert merged_window.metadata["reset_after_seconds"] ==
                complete_window.metadata["reset_after_seconds"]
 
-      assert merged_window.active_limit == 4_192
+      assert merged_window.active_limit == 3_521
       assert merged_window.credits == 3_521
-      assert_in_delta Decimal.to_float(merged_window.used_percent), 16.006_679, 0.000_001
+      assert Decimal.equal?(merged_window.used_percent, Decimal.new(100))
     end
 
     for incoming_percent <- [16.007, 8] do
@@ -10584,9 +10641,9 @@ defmodule CodexPooler.UpstreamsTest do
         assert merged_window.metadata["reset_after_seconds"] ==
                  complete_window.metadata["reset_after_seconds"]
 
-        assert merged_window.active_limit == 4_192
+        assert merged_window.active_limit == 3_521
         assert merged_window.credits == 3_521
-        assert_in_delta Decimal.to_float(merged_window.used_percent), 16.006_679, 0.000_001
+        assert Decimal.equal?(merged_window.used_percent, Decimal.new("16.007"))
       end
     end
 
@@ -10626,7 +10683,7 @@ defmodule CodexPooler.UpstreamsTest do
                  incoming_at
                )
 
-      assert exhausted_window.active_limit == 4_192
+      assert exhausted_window.active_limit == 3_521
       assert exhausted_window.credits == 0
       assert Decimal.equal?(exhausted_window.used_percent, Decimal.new(100))
       assert DateTime.compare(exhausted_window.reset_at, reset_at) == :eq
@@ -10670,14 +10727,14 @@ defmodule CodexPooler.UpstreamsTest do
                  incoming_at
                )
 
-      assert merged_window.active_limit == 4_192
+      assert merged_window.active_limit == 3_521
       assert merged_window.credits == 3_521
-      assert_in_delta Decimal.to_float(merged_window.used_percent), 16.006_679, 0.000_001
+      assert Decimal.equal?(merged_window.used_percent, Decimal.new(100))
       assert DateTime.compare(merged_window.reset_at, reset_at) == :eq
     end
 
     @tag :upstream_quota_evidence_stability
-    test "free-plan credit balance above known capacity preserves the last known balance" do
+    test "a larger observed credit balance expands the burn baseline" do
       identity = active_identity_fixture()
       observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
       reset_at = DateTime.add(observed_at, 28, :day)
@@ -10710,9 +10767,9 @@ defmodule CodexPooler.UpstreamsTest do
                  incoming_at
                )
 
-      assert merged_window.active_limit == 4_192
-      assert merged_window.credits == 3_521
-      assert_in_delta Decimal.to_float(merged_window.used_percent), 16.006_679, 0.000_001
+      assert merged_window.active_limit == 5_000
+      assert merged_window.credits == 5_000
+      assert Decimal.equal?(merged_window.used_percent, Decimal.new(100))
       assert DateTime.compare(merged_window.reset_at, reset_at) == :eq
     end
 
@@ -11184,7 +11241,7 @@ defmodule CodexPooler.UpstreamsTest do
     end
 
     @tag :upstream_quota_evidence_stability
-    test "credit-only monthly usage refresh keeps existing capacity and recalculates used percent" do
+    test "credit-burning monthly usage keeps its balance baseline and provider percent" do
       identity = active_identity_fixture()
       observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
       reset_at = DateTime.add(observed_at, 30, :day)
@@ -11228,12 +11285,6 @@ defmodule CodexPooler.UpstreamsTest do
                  }
                ])
 
-      expected_used_percent =
-        Decimal.new(4018)
-        |> Decimal.sub(Decimal.new(3817))
-        |> Decimal.mult(Decimal.new(100))
-        |> Decimal.div(Decimal.new(4018))
-
       measurements = Measurements.for_window(merged_window)
 
       assert merged_window.id == known_window.id
@@ -11241,10 +11292,7 @@ defmodule CodexPooler.UpstreamsTest do
       assert merged_window.credits == 3817
       assert DateTime.compare(merged_window.reset_at, reset_at) == :eq
 
-      assert Decimal.equal?(
-               Decimal.round(merged_window.used_percent, 6),
-               Decimal.round(expected_used_percent, 6)
-             )
+      assert Decimal.equal?(merged_window.used_percent, Decimal.new(100))
 
       assert Decimal.equal?(Decimal.round(measurements.remaining_percent, 0), Decimal.new("95"))
       assert QuotaWindows.usable_window?(merged_window, weak_observed_at)

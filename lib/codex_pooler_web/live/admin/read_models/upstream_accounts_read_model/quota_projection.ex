@@ -38,6 +38,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
           required(:percent_value) => number(),
           required(:percent_label) => String.t(),
           required(:count_label) => String.t() | nil,
+          required(:burning_credits) => boolean(),
           required(:reset_semantics) => :anchored | :floating | :unknown,
           required(:reset_at) => DateTime.t() | nil,
           required(:reset_label) => String.t() | nil,
@@ -406,7 +407,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       percent_value: quota_percent_value(remaining_percent),
       percent_label: quota_percent_label(remaining_percent),
       count_label: quota_count_label(window),
-      credit_backed: credit_backed_window?(window),
+      burning_credits: burning_credits?(window),
       reset_semantics: reset_semantics,
       reset_at: reset_at,
       reset_label: reset_label,
@@ -422,7 +423,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       percent_value: 0,
       percent_label: "not reported",
       count_label: nil,
-      credit_backed: false,
+      burning_credits: false,
       reset_semantics: :unknown,
       reset_at: nil,
       reset_label: nil,
@@ -430,17 +431,23 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     }
   end
 
-  # A limit is credit-backed when credits with a known capacity drive its
-  # meter (remaining = credits / capacity, the free-plan and dev-seed shape):
-  # the card renders its progress bar striped to signal the value burns
-  # credits. A bare credit balance beside a percent-based window (Pro weekly
-  # rows carry the account balance too) does not make the meter
-  # credit-backed.
-  defp credit_backed_window?(%Quota.AccountQuotaWindow{
-         credits: credits,
-         active_limit: active_limit
-       }),
-       do: is_integer(credits) and is_integer(active_limit) and active_limit > 0
+  defp quota_remaining_percent(
+         %Quota.AccountQuotaWindow{
+           quota_key: "account",
+           quota_scope: "account",
+           source: "codex_usage_api",
+           source_precision: source_precision,
+           reset_at: %DateTime{},
+           used_percent: %Decimal{} = used_percent
+         } = window
+       )
+       when source_precision in ["observed", "authoritative"] do
+    if Decimal.compare(used_percent, Decimal.new(100)) == :lt do
+      used_percent |> remaining_percent_from_used() |> decimal_clamp_percent()
+    else
+      window |> Measurements.for_window() |> Map.get(:remaining_percent)
+    end
+  end
 
   defp quota_remaining_percent(%Quota.AccountQuotaWindow{
          quota_scope: scope,
@@ -487,6 +494,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   defp quota_percent_label(%Decimal{} = percent), do: "#{quota_percent_value(percent)}%"
   defp quota_percent_label(_percent), do: "not reported"
 
+  defp quota_count_label(
+         %Quota.AccountQuotaWindow{
+           quota_key: "account",
+           quota_scope: "account",
+           source: "codex_usage_api",
+           credits: credits
+         } = window
+       )
+       when is_integer(credits) and credits > 0 do
+    if burning_credits?(window), do: "#{Formatting.format_integer(credits)} credits"
+  end
+
   defp quota_count_label(%Quota.AccountQuotaWindow{credits: credits, active_limit: active_limit})
        when is_integer(credits) and is_integer(active_limit) and active_limit > 0 do
     "#{Formatting.format_integer(credits)} / #{Formatting.format_integer(active_limit)} credits"
@@ -517,6 +536,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   defp quota_count_label(%Quota.AccountQuotaWindow{used_percent: %Decimal{}}), do: nil
 
   defp quota_count_label(%Quota.AccountQuotaWindow{}), do: nil
+
+  defp burning_credits?(%Quota.AccountQuotaWindow{
+         quota_key: "account",
+         quota_scope: "account",
+         source: "codex_usage_api",
+         credits: credits,
+         used_percent: %Decimal{} = used_percent
+       })
+       when is_integer(credits) and credits > 0,
+       do: Decimal.compare(used_percent, Decimal.new(100)) != :lt
+
+  defp burning_credits?(_window), do: false
 
   defp quota_reset_presentation(window, datetime_preferences, snapshot_at) do
     case ModelWeeklyResetSemantics.classify(window) do

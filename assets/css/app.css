@@ -988,9 +988,9 @@ body {
   }
 }
 
-/* Credit-backed quota meters keep their tone color but render striped so
-   operators can tell at a glance that the remaining value burns credits
-   rather than a percent-based window. */
+/* Once included Codex quota is exhausted, keep the credit-balance meter tone
+   but stripe its filled portion so operators can see that requests now burn
+   paid credits. A positive balance alone never activates this treatment. */
 .progress-striped::-webkit-progress-value {
   background-image: repeating-linear-gradient(
     45deg,

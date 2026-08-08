@@ -774,11 +774,11 @@ Tokens/5m uses plain `{count} tokens` when usage accounting is complete,
 token-burn shine active/idle, per-panel open state, deleted/paused disabling
 of actions, lifecycle warning block via `ReconciliationStatus`.
 
-### Quota progress row (including striped credit-backed state)
+### Quota progress row (including active credit burn)
 
 - **Source:** `quota_limit_row/1` in
   [`quota_limit_row.ex`](lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card/quota_limit_row.ex);
-  meter CSS (`admin-live-progress`, `progress-striped`, shine keyframes) in
+  meter CSS (`admin-live-progress`, `progress-striped`, and shine keyframes) in
   `app.css`.
 - **Purpose:** one reported quota window (e.g. Weekly, 30d) as label +
   remaining percent + live `<progress>` meter + optional count/reset detail.
@@ -786,11 +786,14 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
   warning; below → error. Unreported remains `progress-neutral` with muted
   text and adds `admin-static-unknown-progress`; it is never presented as a
   determinate zero-value meter.
-- **Striped state:** `credit_backed: true` appends `progress-striped` —
-   45° white stripes over the tone color signal that remaining value burns
-  credits rather than a percent window (visible live on credit-backed
-  accounts). Stripes stay pinned during the burn shine (a second
-  background-position layer in the keyframes).
+- **Credit burn state:** a positive provider credit balance does not change the
+  quota meter while included Codex quota remains. The row continues to show
+  the provider's remaining quota percentage with a solid fill and no credit
+  count. Once provider usage reaches 100%, `burning_credits: true` appends
+  `progress-striped`; the fill then tracks the observed credit balance against
+  the last pre-burn balance baseline and the detail shows only the current
+  provider balance, such as `500 credits`. It never renders an inferred
+  `balance / capacity` denominator.
 - **Motion:** known values use width/color transitions 260/180ms; cards with
   recent burn run the gloss sweep. An unreported value omits `value`, keeps
   native indeterminate semantics, and neutralizes daisyUI's indeterminate
@@ -805,7 +808,7 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
   and the percent renders as text besides the bar.
 
 ```heex
-<%!-- Known / credit-backed meter: `value` is numeric and its stateful motion is allowed. --%>
+<%!-- Known credit-burn meter: numeric fill plus stripes, with current balance in details. --%>
 <progress
   id={"#{@id}-progress"}
   data-role="upstream-limit-progress"
@@ -817,7 +820,7 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
   {@limit.percent_label}
 </progress>
 
-<%!-- Unknown meter: preserve id, role, ARIA, max, and optional stripe class; omit `value`. --%>
+<%!-- Unknown meter: preserve id, role, ARIA, max, and any burn stripe; omit `value`. --%>
 <progress
   id={"#{@id}-progress"}
   data-role="upstream-limit-progress"
@@ -847,16 +850,19 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
   states "Auto redeem active/inactive" and next expiry with a clock icon.
 - **Post-consume confirmation**
   (`data-role="upstream-saved-reset-confirmation"`): a compact operator-bench
-  fact panel below the meter. It renders whenever the account snapshot carries
-  the bounded confirmation projection, including after the available count has
-  reached zero. The three projection dimensions are shown through stable
-  selectors and fixed vocabulary only:
-  - confirmation state: `Awaiting confirmation`, `Confirmed`, `Not applied`,
-    or `Confirmation expired`
+  fact panel below the meter. It renders while confirmation is pending, or when
+  the attempt ended as not applied or expired, including after the available
+  count has reached zero. A healthy `Confirmed` terminal state is omitted from
+  the card. The three projection dimensions are shown through stable selectors
+  and fixed vocabulary only:
+  - visible confirmation state: `Awaiting confirmation`, `Not applied`, or
+    `Confirmation expired`
   - challenged evidence: `Absent`, `Exhausted`, `Candidate progressing`, or
     `Usable`
   - additional blocker: `None`, `Reset missing`, `Expired`, `Not fresh`,
     `Exhausted`, or `Unknown or unusable`
+- The five meter segments always represent current bank inventory only. Saved
+  reset lifecycle state never recolors, animates, or annotates a segment.
 - The panel also shows the sanitized consumed time and confirmation deadline,
   an explicit `Routing paused` / `Routing pause released` fact, and the fixed
   guarantee `This confirmation never consumes a second saved reset.` Applied

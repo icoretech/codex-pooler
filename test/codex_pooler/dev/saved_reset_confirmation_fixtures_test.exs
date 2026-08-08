@@ -200,7 +200,7 @@ defmodule CodexPooler.Dev.SavedResetConfirmationFixturesTest do
     assert File.exists?(receipt.journal_path)
   end
 
-  test "fixture scenarios render canonical confirmation states through the operator projection" do
+  test "fixture scenarios render actionable confirmation states and hide healthy completion" do
     root = temp_journal_root!()
 
     assert {:ok, receipt} = Fixtures.seed("all", fixture_opts(root, browser_auth: true))
@@ -212,12 +212,7 @@ defmodule CodexPooler.Dev.SavedResetConfirmationFixturesTest do
       blocker_label: "None"
     )
 
-    assert_scenario_confirmation!(receipt, "confirmed", :confirmed,
-      state_label: "Confirmed",
-      routing_label: "Routing pause released",
-      blocker_state: :none,
-      blocker_label: "None"
-    )
+    assert_confirmed_scenario_hidden!(receipt)
 
     assert_scenario_confirmation!(receipt, "expired", :confirmation_expired,
       state_label: "Confirmation expired",
@@ -315,6 +310,32 @@ defmodule CodexPooler.Dev.SavedResetConfirmationFixturesTest do
     assert LazyHTML.query(document, "[data-role='upstream-saved-reset-confirmation-summary']")
            |> LazyHTML.text()
            |> String.trim() != ""
+  end
+
+  defp assert_confirmed_scenario_hidden!(receipt) do
+    account = scenario_account!(receipt, "confirmed")
+
+    assert %{confirmation_state: :confirmed} = account.saved_reset_confirmation
+
+    html =
+      render_component(&SavedResetMeter.saved_reset_meter/1,
+        id: "fixture-confirmed",
+        saved_resets: account.saved_resets,
+        saved_reset_policy: account.saved_reset_policy,
+        saved_reset_confirmation: account.saved_reset_confirmation
+      )
+
+    document = LazyHTML.from_fragment(html)
+
+    refute LazyHTML.query(document, "[data-role='upstream-saved-reset-confirmation']")
+           |> Enum.any?()
+
+    for index <- 1..5 do
+      segment = LazyHTML.query(document, "#fixture-confirmed-segment-#{index}")
+
+      assert LazyHTML.attribute(segment, "data-confirmation-state") == []
+      assert LazyHTML.attribute(segment, "title") == []
+    end
   end
 
   defp scenario_account!(receipt, scenario) do

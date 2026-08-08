@@ -71,7 +71,7 @@ The card body is split into status, token burn, quota windows, and footer metric
     </tr>
     <tr>
       <td>Quota bars</td>
-      <td>Observed window fullness for account-level and model-specific quota windows. Green windows have usable room; red or exhausted windows can keep the account out of routing.</td>
+      <td>Observed window fullness for account-level and model-specific quota windows. Green windows have usable room; red or exhausted windows can keep the account out of routing. A solid account bar means included Codex quota remains. A striped account bar appears only after that quota is exhausted and requests are consuming the provider-reported credit balance.</td>
     </tr>
     <tr>
       <td>Routing</td>
@@ -79,7 +79,7 @@ The card body is split into status, token burn, quota windows, and footer metric
     </tr>
     <tr>
       <td>Saved resets</td>
-      <td>Compact reported saved reset count badge plus bounded post-consume confirmation when a recovery attempt is settling. The badge appears only when at least one saved reset is available; confirmation can remain visible after the count reaches zero. Policy editing opens from the account-card <code>Saved resets</code> dropdown action.</td>
+      <td>Compact reported saved reset count badge plus bounded post-consume confirmation while a recovery attempt is settling or ends unsuccessfully. The badge appears only when at least one saved reset is available; pending, not-applied, or expired confirmation can remain visible after the count reaches zero. Policy editing opens from the account-card <code>Saved resets</code> dropdown action.</td>
     </tr>
     <tr>
       <td>Pools</td>
@@ -92,11 +92,13 @@ The card body is split into status, token burn, quota windows, and footer metric
   </tbody>
 </table>
 
+The account quota percentage always follows the provider's reported usage window while included Codex quota remains. A separate positive credit balance does not make the bar striped and is not presented as a fabricated `balance / capacity` total. When the provider reports the included window at 100% and a positive balance remains, the bar becomes striped and its detail shows only the current raw credit balance. Provider credit units are not a currency amount, so they should not be compared directly with the monetary balance shown in ChatGPT billing.
+
 ## Saved Resets
 
 Account cards show a compact saved-reset count badge only when sanitized usage observations report at least one available reset. Common cockpit labels are `N saved resets`, `No saved resets`, `Saved resets unavailable`, and `Saved resets not reported`. When sanitized saved-reset observations include expiration metadata, the badge title, cockpit summary, and saved-reset dialog also show the next expiration time. The count badge and the card dropdown action `Saved resets` open the saved-reset dialog.
 
-After a saved reset is consumed, the account card and cockpit can keep a bounded confirmation panel visible even when no saved reset remains in the bank. It separates four outcomes: `Awaiting confirmation`, `Confirmed`, `Not applied`, and `Confirmation expired`. A reset that was accepted but has not yet produced usable quota remains `Awaiting confirmation`; it is not presented as not applied or expired.
+After a saved reset is consumed, the account card and cockpit can keep a bounded confirmation panel visible even when no saved reset remains in the bank. It shows `Awaiting confirmation`, `Not applied`, or `Confirmation expired`. A reset that was accepted but has not yet produced usable quota remains `Awaiting confirmation`; it is not presented as not applied or expired. Once usable quota confirms a healthy completion, the panel disappears. The five bank segments always represent the current saved-reset count and are never recolored by confirmation history.
 
 The confirmation panel shows only fixed operator vocabulary for challenged evidence (`Absent`, `Exhausted`, `Candidate progressing`, or `Usable`) and any additional account blocker (`None`, `Reset missing`, `Expired`, `Not fresh`, `Exhausted`, or `Unknown or unusable`). It also shows the sanitized consume time, confirmation deadline, whether confirmation routing is paused, and the guarantee that the same confirmation never consumes a second saved reset. Long detail remains available to assistive technology and pointer users through the panel's accessible label and tooltip.
 

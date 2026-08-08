@@ -204,11 +204,19 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseData do
 
   def quota_limits do
     [
-      quota_limit("success", "Weekly", "82%", "82", Decimal.new("82"), false),
-      quota_limit("warning", "Five hour", "48%", "48", Decimal.new("48"), false),
-      quota_limit("error", "Burst", "18%", "18", Decimal.new("18"), false),
-      quota_limit("neutral", "Unreported", "–", "0", nil, false),
-      quota_limit("credit", "Credit backed", "64%", "64", Decimal.new("64"), true)
+      quota_limit("success", "Weekly", "82%", "82", Decimal.new("82"), nil, false),
+      quota_limit("warning", "Five hour", "48%", "48", Decimal.new("48"), nil, false),
+      quota_limit("error", "Burst", "18%", "18", Decimal.new("18"), nil, false),
+      quota_limit("neutral", "Unreported", "–", "0", nil, nil, false),
+      quota_limit(
+        "credit",
+        "Credits in use",
+        "64%",
+        "64",
+        Decimal.new("64"),
+        "64 credits",
+        true
+      )
     ]
   end
 
@@ -264,7 +272,15 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseData do
     }
   end
 
-  defp quota_limit(id, label, percent_label, percent_value, percent, credit_backed) do
+  defp quota_limit(
+         id,
+         label,
+         percent_label,
+         percent_value,
+         percent,
+         count_label,
+         burning_credits
+       ) do
     %{
       id: id,
       key: id,
@@ -272,8 +288,8 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseData do
       percent_label: percent_label,
       percent_value: percent_value,
       percent: percent,
-      credit_backed: credit_backed,
-      count_label: nil,
+      count_label: count_label,
+      burning_credits: burning_credits,
       reset_label: nil,
       reset_title: nil
     }

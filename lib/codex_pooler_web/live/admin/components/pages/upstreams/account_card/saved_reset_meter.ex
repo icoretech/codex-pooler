@@ -117,14 +117,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
           :for={segment <- @segments}
           id={"#{@id}-segment-#{segment.index}"}
           data-role="upstream-saved-reset-meter-segment"
-          data-confirmation-state={segment.index == 1 && @confirmation && @confirmation.state}
           aria-hidden="true"
-          title={segment.index == 1 && @confirmation && @confirmation.title}
-          class={[
-            saved_reset_meter_segment_class(segment, @saved_reset_policy),
-            segment.index == 1 && @confirmation &&
-              saved_reset_confirmation_segment_class(@confirmation)
-          ]}
+          class={saved_reset_meter_segment_class(segment, @saved_reset_policy)}
         ></span>
       </div>
       <div class="flex items-center justify-between gap-3 text-[11px] text-base-content/60">
@@ -282,6 +276,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
     do: "#{saved_reset_meter_value(saved_resets)} saved resets"
 
   defp saved_reset_confirmation(
+         %{confirmation_state: :confirmed},
+         _saved_resets
+       ),
+       do: nil
+
+  defp saved_reset_confirmation(
          %{
            confirmation_state: confirmation_state,
            challenged_evidence_state: evidence_state,
@@ -291,7 +291,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
        )
        when confirmation_state in [
               :awaiting_confirmation,
-              :confirmed,
               :not_applied,
               :confirmation_expired
             ] and
@@ -379,14 +378,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
   end
 
   defp confirmation_state_label(:awaiting_confirmation), do: "Awaiting confirmation"
-  defp confirmation_state_label(:confirmed), do: "Confirmed"
   defp confirmation_state_label(:not_applied), do: "Not applied"
   defp confirmation_state_label(:confirmation_expired), do: "Confirmation expired"
 
   defp confirmation_state_summary(:awaiting_confirmation),
     do: "Reset consumed; confirmation is still pending."
 
-  defp confirmation_state_summary(:confirmed), do: "Reset application confirmed."
   defp confirmation_state_summary(:not_applied), do: "The saved reset was not applied."
 
   defp confirmation_state_summary(:confirmation_expired),
@@ -417,21 +414,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.SavedResetMete
       "#{routing_label}. This confirmation never consumes a second saved reset."
   end
 
-  defp saved_reset_confirmation_segment_class(%{state: :awaiting_confirmation}),
-    do: "animate-pulse !bg-(--color-reset-bank)/80 motion-reduce:animate-none"
-
-  defp saved_reset_confirmation_segment_class(%{state: :confirmed}),
-    do: "!bg-success/80"
-
-  defp saved_reset_confirmation_segment_class(%{state: :not_applied}),
-    do: "!bg-error/70"
-
-  defp saved_reset_confirmation_segment_class(%{state: :confirmation_expired}),
-    do: "!bg-warning/70"
-
-  defp saved_reset_confirmation_segment_class(_confirmation), do: "!bg-base-300/70"
-
-  defp saved_reset_confirmation_state_class(%{state: :confirmed}), do: "text-success"
   defp saved_reset_confirmation_state_class(%{state: :not_applied}), do: "text-error"
 
   defp saved_reset_confirmation_state_class(%{state: :confirmation_expired}),
