@@ -2203,8 +2203,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     scope: scope
   } do
     long_account_label =
-      "Very long upstream account label for operational review " <>
-        "#{String.duplicate("segment-", 12)}"
+      "Saved reset candidate progression " <> String.duplicate("unbrokenaccountlabel", 12)
 
     long_pool_name =
       "Very long Pool label for assignment readability " <>
@@ -2263,7 +2262,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
     rendered = render(view)
 
-    assert has_element?(view, "#upstream-cockpit-header", long_account_label)
+    assert has_element?(
+             view,
+             "#upstream-cockpit-title[data-role='upstream-cockpit-title'].min-w-0.break-words",
+             long_account_label
+           )
+
+    title_html = view |> element("#upstream-cockpit-title") |> render()
+
+    refute title_html =~ "truncate"
+    refute title_html =~ "text-ellipsis"
+    refute title_html =~ "whitespace-nowrap"
     assert has_element?(view, "#upstream-cockpit-safe-account-id", "sha256:")
 
     assert has_element?(

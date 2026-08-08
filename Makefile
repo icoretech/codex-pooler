@@ -7,8 +7,9 @@ POSTGRES_WAIT_ATTEMPTS ?= 30
 DEV_POSTGRES_DB := codex_pooler_dev
 DEV_POSTGRES_USER := postgres
 DEV_POSTGRES_PASSWORD := postgres
-DEV_PID := tmp/dev-server.pid
 DEV_LOG := tmp/dev-server.log
+DEV_SERVER_STATE_DIR ?= tmp/dev-server
+DEV_SERVER_LIFECYCLE := dev_support/bin/dev-server-lifecycle
 DEV_COMPOSE := POSTGRES_PORT=$(POSTGRES_PORT) docker compose -f docker-compose.dev.yml
 DEV_DB_ENV := POSTGRES_HOST=localhost POSTGRES_PORT=$(POSTGRES_PORT) POSTGRES_DB=$(DEV_POSTGRES_DB) POSTGRES_USER=$(DEV_POSTGRES_USER) POSTGRES_PASSWORD=$(DEV_POSTGRES_PASSWORD)
 DEV_SECRET_ENV := if [ -f .env ]; then while IFS= read -r line; do case "$$line" in CODEX_POOLER_UPSTREAM_SECRET_KEY=*|CODEX_POOLER_UPSTREAM_SECRET_KEY_VERSION=*) export "$$line";; esac; done < .env; fi;
@@ -19,12 +20,8 @@ TEST_FAST_DROP_COMMAND ?= mix ecto.drop --quiet
 
 .PHONY: dev dev-db dev-compile dev-migrate dev-pricing dev-stop dev-status dev-logs precommit smoke test-fast
 
-dev: dev-db dev-compile dev-migrate dev-pricing dev-stop
-	@mkdir -p tmp
-	@echo "starting Phoenix dev server on http://localhost:$(PORT)"
-	@$(DEV_SECRET_ENV) PORT=$(PORT) $(DEV_DB_ENV) nohup mix phx.server > $(DEV_LOG) 2>&1 < /dev/null & echo $$! > $(DEV_PID)
-	@sleep 2
-	@$(MAKE) --no-print-directory dev-status
+dev: dev-db dev-compile dev-migrate dev-pricing
+	@$(DEV_SECRET_ENV) $(DEV_DB_ENV) DEV_SERVER_PORT=$(PORT) DEV_SERVER_STATE_DIR=$(DEV_SERVER_STATE_DIR) DEV_SERVER_LOG=$(DEV_LOG) DEV_SERVER_CWD=$(CURDIR) DEV_SERVER_COMMAND='PORT=$(PORT) mix phx.server' $(DEV_SERVER_LIFECYCLE) start
 
 dev-db:
 	@$(DEV_COMPOSE) up -d --wait --wait-timeout $(POSTGRES_WAIT_TIMEOUT) db
@@ -56,33 +53,10 @@ dev-pricing:
 	@$(DEV_SECRET_ENV) $(DEV_DB_ENV) mix pricing.import_openai
 
 dev-stop:
-	@if [ -f $(DEV_PID) ]; then \
-		pid=$$(cat $(DEV_PID)); \
-		if kill -0 $$pid >/dev/null 2>&1; then \
-			echo "stopping Phoenix dev server pid $$pid"; \
-			kill $$pid; \
-			for _ in 1 2 3 4 5; do \
-				kill -0 $$pid >/dev/null 2>&1 || break; \
-				sleep 1; \
-			done; \
-			kill -9 $$pid >/dev/null 2>&1 || true; \
-		fi; \
-		rm -f $(DEV_PID); \
-	fi
-	@for pid in $$(lsof -tiTCP:$(PORT) -sTCP:LISTEN 2>/dev/null); do \
-		echo "stopping process listening on port $(PORT): $$pid"; \
-		kill $$pid >/dev/null 2>&1 || true; \
-	done
+	@DEV_SERVER_PORT=$(PORT) DEV_SERVER_STATE_DIR=$(DEV_SERVER_STATE_DIR) DEV_SERVER_LOG=$(DEV_LOG) DEV_SERVER_CWD=$(CURDIR) $(DEV_SERVER_LIFECYCLE) stop
 
 dev-status:
-	@if [ -f $(DEV_PID) ] && kill -0 $$(cat $(DEV_PID)) >/dev/null 2>&1; then \
-		echo "Phoenix dev server running pid $$(cat $(DEV_PID))"; \
-		curl -fsS "http://localhost:$(PORT)/healthz" >/dev/null && echo "healthz ok"; \
-	else \
-		echo "Phoenix dev server is not running"; \
-		if [ -f $(DEV_LOG) ]; then tail -n 80 $(DEV_LOG); fi; \
-		exit 1; \
-	fi
+	@DEV_SERVER_PORT=$(PORT) DEV_SERVER_STATE_DIR=$(DEV_SERVER_STATE_DIR) DEV_SERVER_LOG=$(DEV_LOG) DEV_SERVER_CWD=$(CURDIR) $(DEV_SERVER_LIFECYCLE) status
 
 dev-logs:
 	@tail -f $(DEV_LOG)
