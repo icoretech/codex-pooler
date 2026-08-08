@@ -196,6 +196,47 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
     assert CircuitState.eligible?(auth, model, assignment, "proxy_websocket")
   end
 
+  test "an old normal failure cannot consume another request's half-open probe slot" do
+    {auth, model, assignment} = routing_fixture()
+
+    state =
+      open_circuit!(auth, model, assignment, next_probe_at: DateTime.add(now(), -1, :second))
+
+    normal_snapshot = %{
+      eligible?: true,
+      requires_lock?: false,
+      status: "closed",
+      state: nil
+    }
+
+    assert {:ok, nil} =
+             CircuitState.begin_attempt(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               normal_snapshot
+             )
+
+    assert {:ok, %RoutingCircuitState{status: "half_open"} = probe} =
+             CircuitState.begin_attempt(auth, model, assignment, "proxy_websocket")
+
+    assert probe.id == state.id
+    assert probe.metadata["probe_in_flight_count"] == 1
+
+    assert {:ok, %RoutingCircuitState{} = after_old_failure} =
+             CircuitState.record_failure(
+               auth,
+               model,
+               assignment,
+               "proxy_websocket",
+               :old_normal_request_failed
+             )
+
+    assert after_old_failure.metadata["probe_in_flight_count"] == 1
+    assert after_old_failure.status == "half_open"
+  end
+
   test "a failure observed from another process opens only its exact assignment model route lane" do
     {auth, model, assignment, sibling_assignment, sibling_model} =
       in_db_observer(fn ->

@@ -5,6 +5,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
+  alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
@@ -5841,6 +5842,103 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
         assert provider_consume_count(fake) == expected_consume_count
       end
+    end
+
+    test "saved reset claim revalidates a circuit that closed after the request snapshot" do
+      {:ok, fake} = codex_reset_fake(0)
+      %{pool: pool} = active_api_key_fixture()
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      saved_resets = %{
+        "status" => "reported",
+        "available_count" => 1,
+        "source" => "codex_usage_api",
+        "path_style" => "codex_api",
+        "observed_at" => DateTime.to_iso8601(now),
+        "usage_path" => "/api/codex/usage",
+        "reason" => nil
+      }
+
+      target =
+        active_upstream_assignment_fixture(pool, %{
+          metadata: %{
+            "usage_base_url" => FakeUpstream.url(fake),
+            "saved_resets" => saved_resets
+          }
+        })
+
+      sibling = active_upstream_assignment_fixture(pool)
+      target_identity = enable_saved_reset_auto_redeem!(target.identity)
+      upsert_weekly_exhausted_quota!(target_identity)
+      upsert_weekly_pressure_quota!(sibling.identity, Decimal.new("20"))
+
+      circuit =
+        %RoutingCircuitState{}
+        |> RoutingCircuitState.changeset(%{
+          pool_id: pool.id,
+          pool_upstream_assignment_id: sibling.assignment.id,
+          upstream_identity_id: sibling.identity.id,
+          model_identifier: "test-model",
+          route_class: "proxy_http",
+          status: "open",
+          reason_code: "test_circuit_open",
+          failure_count: 3,
+          success_count: 0,
+          opened_at: now,
+          next_probe_at: DateTime.add(now, 60, :second),
+          metadata: %{},
+          created_at: now,
+          updated_at: now
+        })
+        |> Repo.insert!()
+
+      request_snapshot = %{
+        circuit_row_id: circuit.id,
+        upstream_identity_id: sibling.identity.id,
+        pool_upstream_assignment_id: sibling.assignment.id,
+        model_identifier: circuit.model_identifier,
+        route_class: circuit.route_class
+      }
+
+      circuit
+      |> RoutingCircuitState.changeset(%{
+        status: "closed",
+        reason_code: nil,
+        failure_count: 0,
+        closed_at: DateTime.add(now, 1, :second),
+        next_probe_at: nil,
+        updated_at: DateTime.add(now, 1, :second)
+      })
+      |> Repo.update!()
+
+      context =
+        gateway_auto_context(target.assignment, target_identity, :blocked_weekly_exhaustion, %{
+          cohort_identity_ids: [target_identity.id, sibling.identity.id],
+          routable_identity_ids: [target_identity.id],
+          transient_circuit_exclusions: [request_snapshot]
+        })
+
+      result =
+        SavedResetRedemption.redeem(target.assignment,
+          trigger_kind: "gateway_auto",
+          gateway_auto_context: context,
+          started_at: DateTime.add(now, 2, :second)
+        )
+
+      result_summary =
+        case result do
+          {:ok, %{status: status, applied?: applied?, code: code}} ->
+            {:ok, status, applied?, code}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      assert result_summary ==
+               {:ok, :noop, false, "gateway_auto_sibling_transient_exclusion"}
+
+      assert [] = FakeUpstream.requests(fake)
+      refute Map.has_key?(Repo.reload!(target_identity).metadata, "saved_reset_redemption")
     end
 
     test "a manual applied consume latches the following automatic attempt" do

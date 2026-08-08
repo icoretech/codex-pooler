@@ -1282,7 +1282,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
     end
 
     @tag :saved_reset_expiry_ownership
-    test "threshold locked recheck is scoped to circuit-eligible candidate identities" do
+    test "threshold redemption waits for a circuit-excluded usable sibling recovery" do
       {:ok, upstream} =
         FakeUpstream.start_link(
           {:path_json,
@@ -1344,9 +1344,60 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
                routable.assignment.id
              ]
 
-      [consume_request, usage_request] = assert_auto_redeem_usage_requests(upstream)
-      assert consume_request.path == "/api/codex/rate-limit-reset-credits/consume"
-      assert usage_request.path == "/api/codex/usage"
+      assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == []
+      refute Map.has_key?(Repo.reload!(redeeming_identity).metadata, "saved_reset_redemption")
+    end
+
+    test "blocked exhaustion waits when a circuit-excluded sibling has usable quota" do
+      {:ok, upstream} =
+        FakeUpstream.start_link(
+          {:path_json,
+           %{
+             "/api/codex/rate-limit-reset-credits/consume" => {200, %{"code" => "reset"}},
+             "/api/codex/usage" => {200, usage_payload(0)}
+           }}
+        )
+
+      %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+      redeeming =
+        active_upstream_assignment_fixture(pool, %{metadata: saved_reset_metadata(upstream, 1)})
+
+      exhausted = active_upstream_assignment_fixture(pool)
+      circuit_open = active_upstream_assignment_fixture(pool)
+
+      redeeming_identity = enable_saved_reset_auto_redeem!(redeeming.identity)
+      upsert_weekly_exhausted_quota!(redeeming_identity)
+      upsert_weekly_exhausted_quota!(exhausted.identity)
+      upsert_weekly_pressure_quota!(circuit_open.identity, Decimal.new("20"))
+
+      filter_input =
+        filter_input(
+          pool,
+          api_key,
+          [
+            {redeeming.assignment, redeeming_identity},
+            {exhausted.assignment, exhausted.identity},
+            {circuit_open.assignment, circuit_open.identity}
+          ],
+          "blocked-circuit-usable-sibling"
+        )
+
+      open_circuit!(pool, api_key, filter_input.model, circuit_open.assignment)
+      route_state = route_state(filter_input)
+
+      result = RouteFiltering.filter_candidates_with_route_state(filter_input, route_state)
+
+      result_summary =
+        case result do
+          {:error, %{code: code}} -> {:error, code}
+          {:ok, _candidates, _request_options, _route_state} -> {:ok, :routed}
+        end
+
+      assert result_summary == {:error, "quota_exhausted"}
+
+      assert Enum.map(FakeUpstream.requests(upstream), & &1.path) == []
+      refute Map.has_key?(Repo.reload!(redeeming_identity).metadata, "saved_reset_redemption")
     end
 
     @tag :saved_reset_redemption_cause
