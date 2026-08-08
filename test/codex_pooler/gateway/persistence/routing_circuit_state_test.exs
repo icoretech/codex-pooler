@@ -970,6 +970,92 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
     assert metadata["probe_in_flight_count"] == 1
   end
 
+  @tag :routing_old_normal_failure_during_probe
+  test "an old normal failure waits behind an active probe and preserves its slot" do
+    {auth, model, assignment} = in_db_observer(&routing_fixture/0)
+    cleanup_unboxed_fixture(auth.pool.id, [assignment.upstream_identity_id])
+
+    circuit =
+      in_db_observer(fn ->
+        half_open_circuit!(auth, model, assignment,
+          updated_at: now(),
+          probe_count: 1,
+          recovery_marker: recovery_marker(false, nil)
+        )
+      end)
+
+    parent = self()
+    barrier = make_ref()
+
+    probe_holder =
+      Task.async(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          Repo.transaction(fn ->
+            backend_pid = backend_pid!()
+
+            locked =
+              Repo.one!(
+                from state in RoutingCircuitState,
+                  where: state.id == ^circuit.id,
+                  lock: "FOR UPDATE"
+              )
+
+            send(
+              parent,
+              {barrier, :probe_active, backend_pid, locked.metadata["probe_in_flight_count"]}
+            )
+
+            receive do
+              {^barrier, :release_probe} -> :ok
+            after
+              10_000 -> raise "timed out waiting to release active probe holder"
+            end
+          end)
+        end)
+      end)
+
+    old_failure =
+      Task.async(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          backend_pid = backend_pid!()
+          send(parent, {barrier, :old_failure_started, backend_pid})
+
+          {backend_pid,
+           CircuitState.record_failure(
+             auth,
+             model,
+             assignment,
+             "proxy_websocket",
+             :old_normal_failure,
+             :normal
+           )}
+        end)
+      end)
+
+    try do
+      assert_receive {^barrier, :probe_active, probe_backend_pid, 1}, 5_000
+      assert_receive {^barrier, :old_failure_started, failure_backend_pid}, 5_000
+      assert probe_backend_pid != failure_backend_pid
+      observation = observe_blocked_backend!(failure_backend_pid, probe_backend_pid)
+      assert observation.wait_event_type == "Lock"
+      assert probe_backend_pid in observation.blocking_pids
+      send(probe_holder.pid, {barrier, :release_probe})
+      assert {:ok, _transaction_result} = Task.await(probe_holder, 10_000)
+
+      assert {^failure_backend_pid, {:ok, %RoutingCircuitState{}}} =
+               Task.await(old_failure, 10_000)
+
+      persisted = in_db_observer(fn -> Repo.get!(RoutingCircuitState, circuit.id) end)
+      assert persisted.status == "half_open"
+      assert persisted.failure_count == 4
+      assert persisted.metadata["probe_in_flight_count"] == 1
+      assert get_in(persisted.metadata, ["saved_reset_recovery", "attempted"]) == false
+    after
+      send(probe_holder.pid, {barrier, :release_probe})
+      Enum.each([probe_holder, old_failure], &finish_task/1)
+    end
+  end
+
   defp open_circuit!(auth, model, assignment, attrs) do
     now = now()
     next_probe_at = Keyword.fetch!(attrs, :next_probe_at)
@@ -1120,6 +1206,53 @@ defmodule CodexPooler.Gateway.Persistence.RoutingCircuitStateTest do
       %{rows: [[backend_pid]]} = SQL.query!(Repo, "SELECT pg_backend_pid()", [])
       {backend_pid, callback.()}
     end)
+  end
+
+  defp backend_pid! do
+    %{rows: [[backend_pid]]} = SQL.query!(Repo, "SELECT pg_backend_pid()", [])
+    backend_pid
+  end
+
+  defp observe_blocked_backend!(waiter_pid, blocker_pid) do
+    deadline = System.monotonic_time(:millisecond) + 4_000
+    do_observe_blocked_backend!(waiter_pid, blocker_pid, deadline)
+  end
+
+  defp do_observe_blocked_backend!(waiter_pid, blocker_pid, deadline) do
+    %{rows: rows} =
+      SQL.query!(
+        Repo,
+        "SELECT pg_blocking_pids($1), wait_event_type FROM pg_stat_activity WHERE pid = $1",
+        [waiter_pid]
+      )
+
+    case rows do
+      [[blocking_pids, "Lock"]] ->
+        if blocker_pid in blocking_pids do
+          %{blocking_pids: blocking_pids, wait_event_type: "Lock"}
+        else
+          retry_blocked_backend!(waiter_pid, blocker_pid, deadline)
+        end
+
+      _rows ->
+        retry_blocked_backend!(waiter_pid, blocker_pid, deadline)
+    end
+  end
+
+  defp retry_blocked_backend!(waiter_pid, blocker_pid, deadline) do
+    if System.monotonic_time(:millisecond) < deadline do
+      do_observe_blocked_backend!(waiter_pid, blocker_pid, deadline)
+    else
+      flunk("old normal failure never waited on the active probe PostgreSQL backend")
+    end
+  end
+
+  defp finish_task(task) do
+    case Task.yield(task, 5_000) do
+      {:ok, _result} -> :ok
+      {:exit, _reason} -> :ok
+      nil -> Task.shutdown(task, :brutal_kill)
+    end
   end
 
   defp cleanup_unboxed_fixture(pool_id, upstream_identity_ids) do

@@ -6,6 +6,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
+  alias CodexPooler.Gateway.Routing.CircuitState
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
@@ -6015,38 +6016,56 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       refute Map.has_key?(persisted.metadata, "saved_reset_redemption")
     end
 
+    @tag :saved_reset_circuit_context_fail_closed
     test "gateway auto fails closed when a referenced circuit row is missing" do
       %{fake: fake, target: target, target_identity: target_identity, context: context} =
-        transient_circuit_claim_fixture!(false,
+        committed_transient_circuit_claim_fixture!(false,
           routing_circuit_state_id: Ecto.UUID.generate()
         )
 
+      {backend_pid, result} =
+        run_unboxed(fn ->
+          {backend_pid!(),
+           SavedResetRedemption.redeem(target.assignment,
+             trigger_kind: "gateway_auto",
+             gateway_auto_context: context
+           )}
+        end)
+
+      assert is_integer(backend_pid)
+
       assert {:ok, %{status: :noop, applied?: false, code: "gateway_auto_context_mismatch"}} =
-               SavedResetRedemption.redeem(target.assignment,
-                 trigger_kind: "gateway_auto",
-                 gateway_auto_context: context
-               )
+               result
 
       assert [] = FakeUpstream.requests(fake)
-      persisted = Repo.reload!(target_identity)
+      persisted = run_unboxed(fn -> Repo.get!(UpstreamIdentity, target_identity.id) end)
       assert get_in(persisted.metadata, ["saved_resets", "available_count"]) == 1
       refute Map.has_key?(persisted.metadata, "saved_reset_redemption")
     end
 
+    @tag :saved_reset_circuit_context_fail_closed
     test "gateway auto fails closed when a locked circuit row key mismatches its snapshot" do
       %{fake: fake, target: target, target_identity: target_identity, context: context} =
-        transient_circuit_claim_fixture!(false,
+        committed_transient_circuit_claim_fixture!(false,
           pool_upstream_assignment_id: Ecto.UUID.generate()
         )
 
+      {backend_pid, result} =
+        run_unboxed(fn ->
+          {backend_pid!(),
+           SavedResetRedemption.redeem(target.assignment,
+             trigger_kind: "gateway_auto",
+             gateway_auto_context: context
+           )}
+        end)
+
+      assert is_integer(backend_pid)
+
       assert {:ok, %{status: :noop, applied?: false, code: "gateway_auto_context_mismatch"}} =
-               SavedResetRedemption.redeem(target.assignment,
-                 trigger_kind: "gateway_auto",
-                 gateway_auto_context: context
-               )
+               result
 
       assert [] = FakeUpstream.requests(fake)
-      persisted = Repo.reload!(target_identity)
+      persisted = run_unboxed(fn -> Repo.get!(UpstreamIdentity, target_identity.id) end)
       assert get_in(persisted.metadata, ["saved_resets", "available_count"]) == 1
       refute Map.has_key?(persisted.metadata, "saved_reset_redemption")
     end
@@ -6912,6 +6931,388 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     )
   end
 
+  defp committed_transient_circuit_claim_fixture!(
+         recovery_attempted?,
+         snapshot_overrides \\ [],
+         sibling_count \\ 1,
+         opts \\ []
+       ) do
+    fixture =
+      Sandbox.unboxed_run(Repo, fn ->
+        transient_circuit_claim_fixture!(
+          recovery_attempted?,
+          snapshot_overrides,
+          sibling_count,
+          opts
+        )
+      end)
+
+    identity_ids = [fixture.target_identity.id | Enum.map(fixture.siblings, & &1.identity.id)]
+
+    on_exit(fn -> cleanup_committed_transient_fixture!(fixture.pool.id, identity_ids) end)
+
+    fixture
+  end
+
+  defp run_claim_behind_probe_completion!(fixture, outcome) do
+    [circuit] = fixture.circuits
+    [sibling] = fixture.siblings
+
+    {auth, model} =
+      run_unboxed(fn ->
+        {routing_auth!(fixture.pool),
+         model_fixture(fixture.pool, %{exposed_model_id: "test-model"})}
+      end)
+
+    run_unboxed(fn ->
+      circuit
+      |> RoutingCircuitState.changeset(%{
+        status: "half_open",
+        metadata: %{
+          "probe_in_flight_count" => 1,
+          "saved_reset_recovery" => %{
+            "version" => 1,
+            "attempted" => false,
+            "since_success_at" => "never"
+          }
+        }
+      })
+      |> Repo.update!()
+    end)
+
+    parent = self()
+    barrier = make_ref()
+
+    probe_task =
+      start_probe_completion_task(parent, barrier, outcome, auth, model, sibling.assignment)
+
+    claim_task =
+      Task.async(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          backend_pid = backend_pid!()
+
+          receive do
+            {^barrier, :start_claim} -> :ok
+          after
+            5_000 -> raise "timed out waiting to start claim behind probe completion"
+          end
+
+          send(parent, {barrier, :claim_started, backend_pid})
+
+          result =
+            SavedResetRedemption.redeem(fixture.target.assignment,
+              trigger_kind: "gateway_auto",
+              gateway_auto_context: fixture.context
+            )
+
+          {backend_pid, result}
+        end)
+      end)
+
+    handler_id = {__MODULE__, :probe_completion, System.unique_integer([:positive, :monotonic])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          handle_probe_completion_lock(metadata, parent, barrier)
+        end,
+        nil
+      )
+
+    try do
+      assert_receive {^barrier, :probe_ready, probe_backend_pid}, 5_000
+      assert_receive {^barrier, :probe_locked, probe_pid}, 5_000
+      send(claim_task.pid, {barrier, :start_claim})
+      assert_receive {^barrier, :claim_started, claim_backend_pid}, 5_000
+      observation = observe_blocked_probe_claim!(claim_backend_pid, probe_backend_pid)
+      send(probe_pid, {barrier, :release_probe})
+      {^probe_backend_pid, probe_result} = Task.await(probe_task, 10_000)
+      {^claim_backend_pid, claim_result} = Task.await(claim_task, 10_000)
+
+      %{
+        blocking_pids: observation.blocking_pids,
+        claim_backend_pid: claim_backend_pid,
+        claim_result: claim_result,
+        persisted_circuit: run_unboxed(fn -> Repo.get!(RoutingCircuitState, circuit.id) end),
+        probe_backend_pid: probe_backend_pid,
+        probe_result: probe_result,
+        wait_event_type: observation.wait_event_type
+      }
+    after
+      send(probe_task.pid, {barrier, :release_probe})
+      send(claim_task.pid, {barrier, :start_claim})
+      :telemetry.detach(handler_id)
+      release_probe_claim_task(probe_task)
+      release_probe_claim_task(claim_task)
+    end
+  end
+
+  defp run_transient_claim_race!(fixture, winner_context, loser_context) do
+    parent = self()
+    barrier = make_ref()
+
+    tasks =
+      Enum.map([winner: winner_context, loser: loser_context], fn {role, context} ->
+        start_transient_claim_task(parent, barrier, role, fixture.target.assignment, context)
+      end)
+
+    [winner_task, loser_task] = tasks
+
+    handler_id =
+      {__MODULE__, :transient_claim_race, System.unique_integer([:positive, :monotonic])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          handle_transient_claim_lock(metadata, parent, barrier)
+        end,
+        nil
+      )
+
+    try do
+      assert_receive {^barrier, :claim_ready, :winner, winner_backend_pid}, 5_000
+      assert_receive {^barrier, :claim_ready, :loser, loser_backend_pid}, 5_000
+      send(winner_task.pid, {barrier, :start_claim})
+
+      assert_receive {^barrier, :circuit_lock, :winner, winner_lock, winner_pid}, 5_000
+      send(loser_task.pid, {barrier, :start_claim})
+      observation = observe_blocked_probe_claim!(loser_backend_pid, winner_backend_pid)
+      send(winner_pid, {barrier, :release_winner})
+      {:winner, ^winner_backend_pid, winner_result} = Task.await(winner_task, 10_000)
+
+      {:loser, ^loser_backend_pid, loser_result} = Task.await(loser_task, 10_000)
+
+      loser_lock =
+        receive do
+          {^barrier, :circuit_lock, :loser, lock, _loser_pid} -> lock
+        after
+          0 -> nil
+        end
+
+      %{
+        blocking_pids: observation.blocking_pids,
+        loser_backend_pid: loser_backend_pid,
+        loser_circuit_lock_ids: loser_lock && loser_lock.lock_ids,
+        loser_circuit_query: loser_lock && loser_lock.query,
+        results: [winner_result, loser_result],
+        wait_event_type: observation.wait_event_type,
+        winner_backend_pid: winner_backend_pid,
+        winner_circuit_lock_ids: winner_lock.lock_ids,
+        winner_circuit_query: winner_lock.query
+      }
+    after
+      send(winner_task.pid, {barrier, :start_claim})
+      send(winner_task.pid, {barrier, :release_winner})
+      send(loser_task.pid, {barrier, :start_claim})
+      :telemetry.detach(handler_id)
+      Enum.each(tasks, &release_probe_claim_task/1)
+    end
+  end
+
+  defp run_first_circuit_insert_behind_claim!(fixture, auth, model, assignment) do
+    parent = self()
+    barrier = make_ref()
+
+    claim_task =
+      Task.async(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          backend_pid = backend_pid!()
+          Process.put({__MODULE__, barrier, :insert_claim}, true)
+          send(parent, {barrier, :claim_ready, backend_pid})
+
+          result =
+            SavedResetRedemption.redeem(fixture.target.assignment,
+              trigger_kind: "gateway_auto",
+              gateway_auto_context: fixture.context
+            )
+
+          Process.delete({__MODULE__, barrier, :insert_claim})
+          {backend_pid, result}
+        end)
+      end)
+
+    insert_task =
+      Task.async(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          backend_pid = backend_pid!()
+
+          receive do
+            {^barrier, :start_insert} -> :ok
+          after
+            5_000 -> raise "timed out waiting to start first circuit insert"
+          end
+
+          send(parent, {barrier, :insert_started, backend_pid})
+
+          {backend_pid,
+           CircuitState.record_failure(auth, model, assignment, "proxy_http", :first)}
+        end)
+      end)
+
+    handler_id = {__MODULE__, :first_insert, System.unique_integer([:positive, :monotonic])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if Process.get({__MODULE__, barrier, :insert_claim}) == true and
+               cohort_identity_lock_query?(metadata) do
+            send(parent, {barrier, :claim_cohort_locked, self()})
+
+            receive do
+              {^barrier, :release_claim} -> :ok
+            after
+              10_000 -> raise "timed out waiting to release claim before first circuit insert"
+            end
+          end
+        end,
+        nil
+      )
+
+    try do
+      assert_receive {^barrier, :claim_ready, claim_backend_pid}, 5_000
+      assert_receive {^barrier, :claim_cohort_locked, claim_pid}, 5_000
+      send(insert_task.pid, {barrier, :start_insert})
+      assert_receive {^barrier, :insert_started, insert_backend_pid}, 5_000
+      observation = observe_blocked_probe_claim!(insert_backend_pid, claim_backend_pid)
+      send(claim_pid, {barrier, :release_claim})
+      {^claim_backend_pid, claim_result} = Task.await(claim_task, 10_000)
+      {^insert_backend_pid, insert_result} = Task.await(insert_task, 10_000)
+
+      %{
+        blocking_pids: observation.blocking_pids,
+        claim_backend_pid: claim_backend_pid,
+        claim_result: claim_result,
+        insert_backend_pid: insert_backend_pid,
+        insert_result: insert_result,
+        wait_event_type: observation.wait_event_type
+      }
+    after
+      send(claim_task.pid, {barrier, :release_claim})
+      send(insert_task.pid, {barrier, :start_insert})
+      :telemetry.detach(handler_id)
+      release_probe_claim_task(claim_task)
+      release_probe_claim_task(insert_task)
+    end
+  end
+
+  defp routing_auth!(pool) do
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{pool: pool, api_key: api_key}
+  end
+
+  defp start_probe_completion_task(parent, barrier, outcome, auth, model, assignment) do
+    Task.async(fn ->
+      Sandbox.unboxed_run(Repo, fn ->
+        backend_pid = backend_pid!()
+        Process.put({__MODULE__, barrier, :probe_completion}, true)
+        send(parent, {barrier, :probe_ready, backend_pid})
+        result = complete_probe(outcome, auth, model, assignment)
+        Process.delete({__MODULE__, barrier, :probe_completion})
+        {backend_pid, result}
+      end)
+    end)
+  end
+
+  defp complete_probe(:success, auth, model, assignment),
+    do: CircuitState.record_success(auth, model, assignment, "proxy_http", :probe)
+
+  defp complete_probe(:failure, auth, model, assignment) do
+    CircuitState.record_failure(
+      auth,
+      model,
+      assignment,
+      "proxy_http",
+      :probe_failed,
+      :probe
+    )
+  end
+
+  defp start_transient_claim_task(parent, barrier, role, assignment, context) do
+    Task.async(fn ->
+      Sandbox.unboxed_run(Repo, fn ->
+        backend_pid = backend_pid!()
+        Process.put({__MODULE__, barrier, :claim_role}, role)
+        send(parent, {barrier, :claim_ready, role, backend_pid})
+        await_barrier_release!(barrier, :start_claim, "transient claim race start")
+
+        result =
+          SavedResetRedemption.redeem(assignment,
+            trigger_kind: "gateway_auto",
+            gateway_auto_context: context
+          )
+
+        Process.delete({__MODULE__, barrier, :claim_role})
+        {role, backend_pid, result}
+      end)
+    end)
+  end
+
+  defp cleanup_committed_transient_fixture!(pool_id, identity_ids) do
+    Sandbox.unboxed_run(Repo, fn ->
+      delete_pool_if_present!(pool_id)
+
+      Repo.delete_all(
+        from identity in UpstreamIdentity,
+          where: identity.id in ^identity_ids
+      )
+    end)
+  end
+
+  defp delete_pool_if_present!(pool_id) do
+    case Repo.get(Pool, pool_id) do
+      %Pool{} = pool -> Repo.delete!(pool)
+      nil -> :ok
+    end
+  end
+
+  defp handle_probe_completion_lock(metadata, parent, barrier) do
+    if Process.get({__MODULE__, barrier, :probe_completion}) == true and
+         circuit_lock_query?(metadata) do
+      send(parent, {barrier, :probe_locked, self()})
+      await_barrier_release!(barrier, :release_probe, "probe completion")
+    end
+  end
+
+  defp handle_transient_claim_lock(metadata, parent, barrier) do
+    role = Process.get({__MODULE__, barrier, :claim_role})
+
+    if role in [:winner, :loser] and circuit_lock_query?(metadata) do
+      send(parent, {barrier, :circuit_lock, role, circuit_lock_event(metadata), self()})
+      maybe_await_transient_winner_release!(role, barrier)
+    end
+  end
+
+  defp maybe_await_transient_winner_release!(:winner, barrier),
+    do: await_barrier_release!(barrier, :release_winner, "transient claim winner")
+
+  defp maybe_await_transient_winner_release!(:loser, _barrier), do: :ok
+
+  defp await_barrier_release!(barrier, message, label) do
+    receive do
+      {^barrier, ^message} -> :ok
+    after
+      10_000 -> raise "timed out waiting to release #{label}"
+    end
+  end
+
+  defp circuit_lock_query?(metadata) do
+    metadata[:repo] == Repo and metadata[:source] == "routing_circuit_states" and
+      is_binary(metadata[:query]) and String.contains?(metadata[:query], "FOR UPDATE")
+  end
+
+  defp circuit_lock_event(metadata) do
+    %{
+      lock_ids: lock_query_ids(metadata[:params]),
+      query: metadata[:query]
+    }
+  end
+
   defp transient_circuit_claim_fixture!(
          recovery_attempted?,
          snapshot_overrides \\ [],
@@ -6919,6 +7320,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
          opts \\ []
        ) do
     {:ok, fake} = codex_reset_fake(0)
+    on_exit(fn -> FakeUpstream.stop(fake) end)
 
     %{identity: target_identity, assignment: target_assignment} =
       assignment_with_fake(fake, "/api/codex/usage", "codex_api")
@@ -7029,6 +7431,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       fake: fake,
       circuits: circuits,
       now: now,
+      pool: pool,
       siblings: siblings,
       target: %{assignment: target_assignment},
       target_identity: target_identity,
@@ -7675,6 +8078,191 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           :ok
       end
     end
+  end
+
+  @tag :saved_reset_circuit_initial_failure_burst
+  test "initial failures above threshold leave both redeemers fenced before any probe" do
+    fixture = committed_transient_circuit_claim_fixture!(false)
+    [circuit] = fixture.circuits
+    [sibling] = fixture.siblings
+
+    {auth, model} =
+      run_unboxed(fn ->
+        {routing_auth!(fixture.pool),
+         model_fixture(fixture.pool, %{exposed_model_id: "test-model"})}
+      end)
+
+    failure_tasks =
+      Enum.map([:first, :second], fn role ->
+        Task.async(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            backend_pid = backend_pid!()
+
+            result =
+              CircuitState.record_failure(
+                auth,
+                model,
+                sibling.assignment,
+                "proxy_http",
+                role,
+                :normal
+              )
+
+            {backend_pid, result}
+          end)
+        end)
+      end)
+
+    failures = Enum.map(failure_tasks, &Task.await(&1, 10_000))
+    assert failures |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> length() == 2
+    assert Enum.all?(failures, &match?({_pid, {:ok, %RoutingCircuitState{}}}, &1))
+
+    persisted = run_unboxed(fn -> Repo.get!(RoutingCircuitState, circuit.id) end)
+    assert persisted.failure_count == 5
+    assert persisted.status == "open"
+    assert persisted.metadata["probe_in_flight_count"] == 0
+    assert get_in(persisted.metadata, ["saved_reset_recovery", "attempted"]) == false
+
+    redeemers =
+      Enum.map([:first, :second], fn _role ->
+        Task.async(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            {backend_pid!(),
+             SavedResetRedemption.redeem(fixture.target.assignment,
+               trigger_kind: "gateway_auto",
+               gateway_auto_context: fixture.context
+             )}
+          end)
+        end)
+      end)
+
+    results = Enum.map(redeemers, &Task.await(&1, 10_000))
+    assert results |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> length() == 2
+
+    assert Enum.all?(results, fn {_pid, result} ->
+             match?(
+               {:ok,
+                %{
+                  status: :noop,
+                  applied?: false,
+                  code: "gateway_auto_sibling_transient_exclusion"
+                }},
+               result
+             )
+           end)
+
+    assert provider_consume_count(fixture.fake) == 0
+  end
+
+  @tag :saved_reset_claim_behind_probe_success
+  test "claim waits behind probe success then rereads closed and noops" do
+    fixture =
+      committed_transient_circuit_claim_fixture!(false, [], 1, circuit_status: "half_open")
+
+    evidence = run_claim_behind_probe_completion!(fixture, :success)
+
+    assert evidence.probe_backend_pid != evidence.claim_backend_pid
+    assert evidence.probe_backend_pid in evidence.blocking_pids
+    assert evidence.wait_event_type == "Lock"
+    assert {:ok, %RoutingCircuitState{status: "closed"}} = evidence.probe_result
+
+    assert {:ok,
+            %{
+              status: :noop,
+              applied?: false,
+              code: "gateway_auto_sibling_transient_exclusion"
+            }} = evidence.claim_result
+
+    assert evidence.persisted_circuit.status == "closed"
+    assert evidence.persisted_circuit.metadata["probe_in_flight_count"] == 0
+    assert provider_consume_count(fixture.fake) == 0
+  end
+
+  @tag :saved_reset_claim_behind_probe_failure
+  test "claim waits behind probe failure then rereads attempted and consumes once" do
+    fixture =
+      committed_transient_circuit_claim_fixture!(false, [], 1, circuit_status: "half_open")
+
+    evidence = run_claim_behind_probe_completion!(fixture, :failure)
+
+    assert evidence.probe_backend_pid != evidence.claim_backend_pid
+    assert evidence.probe_backend_pid in evidence.blocking_pids
+    assert evidence.wait_event_type == "Lock"
+    assert {:ok, %RoutingCircuitState{status: "open"}} = evidence.probe_result
+    assert {:ok, %{status: :succeeded, applied?: true, code: "reset"}} = evidence.claim_result
+    assert evidence.persisted_circuit.status == "open"
+
+    assert get_in(evidence.persisted_circuit.metadata, ["saved_reset_recovery", "attempted"]) ==
+             true
+
+    assert evidence.persisted_circuit.metadata["probe_in_flight_count"] == 0
+    assert provider_consume_count(fixture.fake) == 1
+
+    if System.get_env("TASK7_MANUAL_QA") == "1" do
+      IO.puts(
+        "TASK7_MANUAL_QA backend_pids_distinct=true blocked_on_probe_backend=true " <>
+          "release_event=probe_failure_committed fresh_locked_marker=true consume_count=1"
+      )
+    end
+  end
+
+  @tag :saved_reset_two_redeemers_after_failed_recovery
+  test "two redeemers after failed recovery still consume exactly once" do
+    fixture = committed_transient_circuit_claim_fixture!(true)
+    evidence = run_transient_claim_race!(fixture, fixture.context, fixture.context)
+
+    assert evidence.winner_backend_pid != evidence.loser_backend_pid
+    assert evidence.winner_backend_pid in evidence.blocking_pids
+    assert evidence.wait_event_type == "Lock"
+    assert Enum.count(evidence.results, &match?({:ok, %{applied?: true}}, &1)) == 1
+    assert length(evidence.results) == 2
+    assert provider_consume_count(fixture.fake) == 1
+  end
+
+  @tag :saved_reset_transient_circuit_reversed_order
+  test "reversed transient context order uses the same ordered circuit lock without deadlock" do
+    fixture = committed_transient_circuit_claim_fixture!(false, [], 2)
+
+    reversed = %{
+      fixture.context
+      | transient_circuit_exclusions: Enum.reverse(fixture.context.transient_circuit_exclusions)
+    }
+
+    evidence = run_transient_claim_race!(fixture, reversed, fixture.context)
+    expected_ids = fixture.circuits |> Enum.map(& &1.id) |> Enum.sort()
+
+    assert evidence.winner_backend_pid in evidence.blocking_pids
+    assert evidence.winner_circuit_lock_ids == expected_ids
+    assert evidence.loser_circuit_lock_ids == expected_ids
+    assert evidence.winner_circuit_query == evidence.loser_circuit_query
+    assert Enum.all?(evidence.results, &match?({:ok, %{applied?: false}}, &1))
+    assert provider_consume_count(fixture.fake) == 0
+  end
+
+  @tag :saved_reset_first_circuit_insert_lock_order
+  test "first circuit insert queues behind the saved-reset cohort lock without a cycle" do
+    fixture = committed_transient_circuit_claim_fixture!(false)
+    [circuit] = fixture.circuits
+    [sibling] = fixture.siblings
+    run_unboxed(fn -> Repo.delete!(Repo.get!(RoutingCircuitState, circuit.id)) end)
+
+    {auth, model} =
+      run_unboxed(fn ->
+        {routing_auth!(fixture.pool),
+         model_fixture(fixture.pool, %{exposed_model_id: "test-model"})}
+      end)
+
+    evidence = run_first_circuit_insert_behind_claim!(fixture, auth, model, sibling.assignment)
+
+    assert evidence.claim_backend_pid != evidence.insert_backend_pid
+    assert evidence.claim_backend_pid in evidence.blocking_pids
+    assert evidence.wait_event_type == "Lock"
+
+    assert {:ok, %{status: :noop, code: "gateway_auto_context_mismatch"}} =
+             evidence.claim_result
+
+    assert {:ok, %RoutingCircuitState{failure_count: 1}} = evidence.insert_result
+    assert provider_consume_count(fixture.fake) == 0
   end
 
   defp capture_gateway_auto_claim_locks_until_identity_update!(fixture, target_index, cohort_ids) do
