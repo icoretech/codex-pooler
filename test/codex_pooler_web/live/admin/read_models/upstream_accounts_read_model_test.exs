@@ -10,6 +10,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
   alias CodexPooler.Admin.UpstreamCircuitReadiness
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.TokenBurnProjection
@@ -672,12 +673,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
     end
 
     assert {:ok, [_visible_window]} =
-             CodexPooler.Upstreams.Quota.Windows.upsert_quota_windows(visible_identity, [
+             Windows.upsert_quota_windows(visible_identity, [
                quota_projection_window_attrs(observed_at, "visible")
              ])
 
     assert {:ok, [_hidden_window]} =
-             CodexPooler.Upstreams.Quota.Windows.upsert_quota_windows(hidden_identity, [
+             Windows.upsert_quota_windows(hidden_identity, [
                quota_projection_window_attrs(observed_at, hidden_sentinel)
              ])
 

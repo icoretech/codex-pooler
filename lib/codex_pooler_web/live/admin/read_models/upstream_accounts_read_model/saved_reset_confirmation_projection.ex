@@ -1,11 +1,8 @@
 defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetConfirmationProjection do
   @moduledoc false
 
-  alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
-  alias CodexPooler.Upstreams.Quota.WindowSelector
-  alias CodexPooler.Upstreams.Quota.Windows
-  alias CodexPooler.Upstreams.Quota.Windows.CycleConfirmation
-  alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
+  alias CodexPooler.Upstreams.Quota.{AccountQuotaWindow, Windows, WindowSelector}
+  alias CodexPooler.Upstreams.Quota.Windows.{CycleConfirmation, EvidenceStore}
 
   @known_sources ~w(
     codex_usage_api
@@ -32,44 +29,58 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetConfirmationP
           t() | nil
   def project(redemption, raw_windows, effective_windows, %DateTime{} = snapshot_at)
       when is_map(redemption) and is_list(raw_windows) and is_list(effective_windows) do
-    with {:ok, confirmation_state} <- confirmation_state(redemption["phase"]) do
-      consumed_at = nonfuture_datetime(redemption["consumed_at"], snapshot_at)
-
-      {challenged_key, candidate_observed_at} =
-        challenged_candidate(raw_windows, consumed_at, snapshot_at)
-
-      {challenged_key, accepted_observed_at} =
-        preserve_challenge(
-          challenged_key,
-          accepted_challenge(effective_windows, consumed_at, snapshot_at)
+    case confirmation_state(redemption["phase"]) do
+      {:ok, confirmation_state} ->
+        project_confirmation(
+          confirmation_state,
+          redemption,
+          raw_windows,
+          effective_windows,
+          snapshot_at
         )
 
-      {challenged_key, fallback_observed_at} =
-        preserve_challenge(challenged_key, fallback_challenge(effective_windows, snapshot_at))
-
-      %{
-        confirmation_state: confirmation_state,
-        challenged_evidence_state:
-          challenged_evidence_state(
-            challenged_key,
-            candidate_observed_at,
-            effective_windows,
-            snapshot_at
-          ),
-        additional_account_blocker_state:
-          additional_account_blocker_state(
-            challenged_key,
-            effective_windows,
-            snapshot_at
-          ),
-        observed_at: candidate_observed_at || accepted_observed_at || fallback_observed_at
-      }
-    else
-      :none -> nil
+      :none ->
+        nil
     end
   end
 
   def project(_redemption, _raw_windows, _effective_windows, _snapshot_at), do: nil
+
+  defp project_confirmation(
+         confirmation_state,
+         redemption,
+         raw_windows,
+         effective_windows,
+         snapshot_at
+       ) do
+    consumed_at = nonfuture_datetime(redemption["consumed_at"], snapshot_at)
+
+    {challenged_key, candidate_observed_at} =
+      challenged_candidate(raw_windows, consumed_at, snapshot_at)
+
+    {challenged_key, accepted_observed_at} =
+      preserve_challenge(
+        challenged_key,
+        accepted_challenge(effective_windows, consumed_at, snapshot_at)
+      )
+
+    {challenged_key, fallback_observed_at} =
+      preserve_challenge(challenged_key, fallback_challenge(effective_windows, snapshot_at))
+
+    %{
+      confirmation_state: confirmation_state,
+      challenged_evidence_state:
+        challenged_evidence_state(
+          challenged_key,
+          candidate_observed_at,
+          effective_windows,
+          snapshot_at
+        ),
+      additional_account_blocker_state:
+        additional_account_blocker_state(challenged_key, effective_windows, snapshot_at),
+      observed_at: candidate_observed_at || accepted_observed_at || fallback_observed_at
+    }
+  end
 
   defp confirmation_state(phase)
        when phase in ["consuming", "consumed_pending_probe", "reblocked"],

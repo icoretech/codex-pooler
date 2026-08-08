@@ -2654,83 +2654,89 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   defp finalize_attempt(result, claim) do
     emit_after_commit? = not Repo.in_transaction?()
 
-    Repo.transaction(fn ->
-      identity = lock_identity!(claim.identity.id)
-      metadata = identity.metadata || %{}
-      redemption = metadata["saved_reset_redemption"] || %{}
+    fn -> finalize_locked_attempt(result, claim) end
+    |> Repo.transaction()
+    |> finalize_attempt_result(claim, emit_after_commit?)
+  end
 
-      if finalization_matches_claim?(redemption, claim) do
-        finished_at = claim[:finished_at] || now()
+  defp finalize_locked_attempt(result, claim) do
+    identity = lock_identity!(claim.identity.id)
+    metadata = identity.metadata || %{}
+    redemption = metadata["saved_reset_redemption"] || %{}
 
-        {finalized_result, confirmation_evidence, decision_at} =
-          finalize_confirmation(identity, result, finished_at)
-
-        base = %{
-          "attempt_id" => claim.attempt_id,
-          "generation" => claim.generation,
-          "trigger_kind" => claim.trigger_kind,
-          "started_at" => DateTime.to_iso8601(claim.started_at),
-          "finished_at" => DateTime.to_iso8601(finished_at),
-          "result" => metadata_result(finalized_result)
-        }
-
-        base =
-          base
-          |> put_trigger_detail(claim[:trigger_detail])
-          |> put_scheduled_decision_evidence(claim[:scheduled_decision_evidence])
-          |> put_carried_applied_consume(redemption)
-          |> put_provider_replay_history(redemption)
-
-        redemption =
-          base
-          |> Map.merge(redemption_lifecycle_fields(finalized_result))
-          |> put_finalizer_confirmation_metadata(
-            finalized_result,
-            confirmation_evidence,
-            decision_at
-          )
-
-        metadata = Map.delete(metadata, @redemption_target_key)
-
-        {metadata, ledger} =
-          apply_saved_reset_observation(
-            identity,
-            metadata,
-            result[:saved_reset_observation]
-          )
-
-        updated_identity =
-          persist_finalized_attempt!(identity, metadata, ledger, redemption, finished_at)
-
-        telemetry_redemption =
-          if redemption["convergence_source"] == "finalizer", do: redemption, else: nil
-
-        {updated_identity, finalized_result, telemetry_redemption}
-      else
-        {resolve_finalizer_cas_loss(identity, claim), result, nil}
-      end
-    end)
-    |> case do
-      {:ok, {updated_identity, finalized_result, telemetry_redemption}} ->
-        if emit_after_commit? and is_map(telemetry_redemption),
-          do: ConvergenceTelemetry.emit(telemetry_redemption)
-
-        broadcast_redemption(updated_identity)
-
-        {:ok,
-         finalized_result
-         |> Map.delete(:saved_reset_observation)
-         |> Map.put(:identity, updated_identity)
-         |> Map.put(:assignment, claim.assignment)}
-
-      {:error, reason} ->
-        if claim_has_reserved_dispatch?(claim) do
-          {:error, :saved_reset_consume_outcome_ambiguous}
-        else
-          {:error, reason}
-        end
+    if finalization_matches_claim?(redemption, claim) do
+      persist_matching_finalization(identity, metadata, redemption, result, claim)
+    else
+      {resolve_finalizer_cas_loss(identity, claim), result, nil}
     end
   end
+
+  defp persist_matching_finalization(identity, metadata, redemption, result, claim) do
+    finished_at = claim[:finished_at] || now()
+
+    {finalized_result, confirmation_evidence, decision_at} =
+      finalize_confirmation(identity, result, finished_at)
+
+    base = %{
+      "attempt_id" => claim.attempt_id,
+      "generation" => claim.generation,
+      "trigger_kind" => claim.trigger_kind,
+      "started_at" => DateTime.to_iso8601(claim.started_at),
+      "finished_at" => DateTime.to_iso8601(finished_at),
+      "result" => metadata_result(finalized_result)
+    }
+
+    redemption =
+      base
+      |> put_trigger_detail(claim[:trigger_detail])
+      |> put_scheduled_decision_evidence(claim[:scheduled_decision_evidence])
+      |> put_carried_applied_consume(redemption)
+      |> put_provider_replay_history(redemption)
+      |> Map.merge(redemption_lifecycle_fields(finalized_result))
+      |> put_finalizer_confirmation_metadata(
+        finalized_result,
+        confirmation_evidence,
+        decision_at
+      )
+
+    metadata = Map.delete(metadata, @redemption_target_key)
+
+    {metadata, ledger} =
+      apply_saved_reset_observation(identity, metadata, result[:saved_reset_observation])
+
+    updated_identity =
+      persist_finalized_attempt!(identity, metadata, ledger, redemption, finished_at)
+
+    {updated_identity, finalized_result, finalizer_telemetry_redemption(redemption)}
+  end
+
+  defp finalize_attempt_result(
+         {:ok, {updated_identity, finalized_result, telemetry_redemption}},
+         claim,
+         emit_after_commit?
+       ) do
+    if emit_after_commit? and is_map(telemetry_redemption),
+      do: ConvergenceTelemetry.emit(telemetry_redemption)
+
+    broadcast_redemption(updated_identity)
+
+    {:ok,
+     finalized_result
+     |> Map.delete(:saved_reset_observation)
+     |> Map.put(:identity, updated_identity)
+     |> Map.put(:assignment, claim.assignment)}
+  end
+
+  defp finalize_attempt_result({:error, reason}, claim, _emit_after_commit?) do
+    if claim_has_reserved_dispatch?(claim),
+      do: {:error, :saved_reset_consume_outcome_ambiguous},
+      else: {:error, reason}
+  end
+
+  defp finalizer_telemetry_redemption(%{"convergence_source" => "finalizer"} = redemption),
+    do: redemption
+
+  defp finalizer_telemetry_redemption(_redemption), do: nil
 
   defp resolve_finalizer_cas_loss(identity, claim) do
     if claim_has_reserved_dispatch?(claim),
@@ -2814,35 +2820,36 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
     end
   end
 
-  defp finalize_confirmation(identity, result, finished_at) do
-    if result.applied? == true and match?(%DateTime{}, result[:consumed_at]) and
-         result[:phase] in [
-           RedemptionLifecycle.consumed_pending_probe(),
-           RedemptionLifecycle.confirmed_by_quota()
-         ] do
-      decision_at = later_datetime(finished_at, now())
-      evidence = Windows.list_evidence(identity)
+  defp finalize_confirmation(
+         identity,
+         %{applied?: true, consumed_at: %DateTime{}, phase: phase} = result,
+         finished_at
+       )
+       when phase in ["consumed_pending_probe", "confirmed_by_quota"] do
+    decision_at = later_datetime(finished_at, now())
+    evidence = Windows.list_evidence(identity)
 
-      finalized_result =
-        if result[:phase] == RedemptionLifecycle.consumed_pending_probe() do
-          phase = post_reset_phase(evidence, result.consumed_at, decision_at)
-
-          result
-          |> Map.put(:phase, phase)
-          |> then(fn updated_result ->
-            if phase == RedemptionLifecycle.confirmed_by_quota(),
-              do: Map.delete(updated_result, :reason),
-              else: updated_result
-          end)
-        else
-          result
-        end
-
-      {finalized_result, evidence, decision_at}
-    else
-      {result, [], nil}
-    end
+    {finalize_confirmation_phase(result, evidence, decision_at), evidence, decision_at}
   end
+
+  defp finalize_confirmation(_identity, result, _finished_at), do: {result, [], nil}
+
+  defp finalize_confirmation_phase(
+         %{phase: "consumed_pending_probe", consumed_at: consumed_at} = result,
+         evidence,
+         decision_at
+       ) do
+    phase = post_reset_phase(evidence, consumed_at, decision_at)
+
+    result
+    |> Map.put(:phase, phase)
+    |> maybe_delete_pending_reason(phase)
+  end
+
+  defp finalize_confirmation_phase(result, _evidence, _decision_at), do: result
+
+  defp maybe_delete_pending_reason(result, "confirmed_by_quota"), do: Map.delete(result, :reason)
+  defp maybe_delete_pending_reason(result, _phase), do: result
 
   defp put_finalizer_confirmation_metadata(
          redemption,

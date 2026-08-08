@@ -6,13 +6,13 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Runtime.RateLimitObserver
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
   alias CodexPooler.Gateway.Routing.CircuitState
   alias CodexPooler.Gateway.Routing.RouteFiltering
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
+  alias CodexPooler.Gateway.Runtime.RateLimitObserver
   alias CodexPooler.Jobs.UpstreamEnqueue
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Quotas.Evidence
@@ -9081,7 +9081,47 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
   defp run_post_consume_finalizer_race!(used_percent, opts \\ []) do
     parent = self()
     release_ref = make_ref()
+    fake = start_post_consume_finalizer_fake!(parent, release_ref)
+    on_exit(fn -> FakeUpstream.stop(fake) end)
 
+    fixture = committed_post_consume_finalizer_fixture!(fake)
+    on_exit(fn -> cleanup_committed_post_consume_finalizer_fixture!(fixture) end)
+
+    redeem = prepare_post_consume_redemption(opts, fixture)
+    trace_probe_claim? = Keyword.get(opts, :trace_probe_claim?, false)
+
+    assert :ok = Events.subscribe_pool(fixture.pool_id, "upstreams")
+    assert :ok = UpstreamEnqueue.claim_gateway_reconciliation_gate(fixture.identity_id)
+
+    on_exit(fn ->
+      Events.unsubscribe_pool(fixture.pool_id, "upstreams")
+      UpstreamEnqueue.release_gateway_reconciliation_gate(fixture.identity_id)
+    end)
+
+    handler_id = attach_post_consume_finalizer_handler!(parent, fixture.identity_id)
+    redemption_task = start_post_consume_redemption_task(parent, handler_id, redeem)
+
+    try do
+      exercise_post_consume_finalizer_race!(%{
+        fake: fake,
+        fixture: fixture,
+        handler_id: handler_id,
+        redemption_task: redemption_task,
+        release_ref: release_ref,
+        trace_probe_claim?: trace_probe_claim?,
+        used_percent: used_percent
+      })
+    after
+      cleanup_post_consume_finalizer_race!(
+        redemption_task,
+        handler_id,
+        release_ref,
+        trace_probe_claim?
+      )
+    end
+  end
+
+  defp start_post_consume_finalizer_fake!(parent, release_ref) do
     {:ok, fake} =
       FakeUpstream.start_link(
         {:path_json,
@@ -9097,192 +9137,278 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
          }}
       )
 
-    on_exit(fn -> FakeUpstream.stop(fake) end)
+    fake
+  end
 
-    fixture = committed_post_consume_finalizer_fixture!(fake)
-    on_exit(fn -> cleanup_committed_post_consume_finalizer_fixture!(fixture) end)
-
-    prepare_redemption =
-      Keyword.get(opts, :prepare_redemption, fn fixture ->
-        fn -> SavedResetRedemption.redeem(fixture.assignment_id) end
-      end)
-
-    redeem = prepare_redemption.(fixture)
-    trace_probe_claim? = Keyword.get(opts, :trace_probe_claim?, false)
-
-    assert :ok = Events.subscribe_pool(fixture.pool_id, "upstreams")
-    assert :ok = UpstreamEnqueue.claim_gateway_reconciliation_gate(fixture.identity_id)
-
-    on_exit(fn ->
-      Events.unsubscribe_pool(fixture.pool_id, "upstreams")
-      UpstreamEnqueue.release_gateway_reconciliation_gate(fixture.identity_id)
+  defp prepare_post_consume_redemption(opts, fixture) do
+    opts
+    |> Keyword.get(:prepare_redemption, fn fixture ->
+      fn -> SavedResetRedemption.redeem(fixture.assignment_id) end
     end)
+    |> then(& &1.(fixture))
+  end
 
+  defp attach_post_consume_finalizer_handler!(parent, identity_id) do
     handler_id =
       "saved-reset-post-consume-finalizer-#{System.unique_integer([:positive, :monotonic])}"
-
-    identity_id = fixture.identity_id
 
     :ok =
       :telemetry.attach(
         handler_id,
         [:codex_pooler, :repo, :query],
         fn _event, _measurements, metadata, _config ->
-          query = metadata[:query] |> to_string() |> String.trim_leading()
-
-          if metadata[:repo] == Repo and metadata[:source] == "upstream_identities" and
-               String.starts_with?(query, "UPDATE") and
-               query_metadata_contains?(metadata, identity_id) do
-            update_count = Process.get({__MODULE__, handler_id, :identity_updates}, 0) + 1
-            Process.put({__MODULE__, handler_id, :identity_updates}, update_count)
-
-            if update_count == 2 do
-              Process.put({__MODULE__, handler_id, :dispatch_update}, true)
-            end
-          end
-
-          if Process.get({__MODULE__, handler_id, :dispatch_update}) == true and
-               String.downcase(String.trim(query)) == "commit" do
-            Process.delete({__MODULE__, handler_id, :dispatch_update})
-            send(parent, {handler_id, :dispatch_commit, self()})
-          end
-
-          if metadata[:repo] == Repo and metadata[:source] == "account_quota_windows" and
-               (String.starts_with?(query, "INSERT") or String.starts_with?(query, "UPDATE")) and
-               query_metadata_contains?(metadata, identity_id) do
-            send(parent, {handler_id, :evidence_write, self()})
-          end
+          handle_post_consume_query(metadata, parent, handler_id, identity_id)
         end,
         nil
       )
 
-    redemption_task =
-      Task.async(fn ->
-        Sandbox.unboxed_run(Repo, fn ->
-          backend_pid = backend_pid!()
-          send(parent, {handler_id, :redemption_backend, self(), backend_pid})
+    handler_id
+  end
 
-          receive do
-            {^handler_id, :start_redemption} -> redeem.()
-          after
-            5_000 -> raise "timed out waiting to start saved-reset finalizer race"
-          end
-        end)
+  defp handle_post_consume_query(metadata, parent, handler_id, identity_id) do
+    query = metadata[:query] |> to_string() |> String.trim_leading()
+
+    track_post_consume_identity_update(metadata, query, handler_id, identity_id)
+    notify_post_consume_dispatch_commit(query, parent, handler_id)
+    notify_post_consume_evidence_write(metadata, query, parent, handler_id, identity_id)
+  end
+
+  defp track_post_consume_identity_update(metadata, query, handler_id, identity_id) do
+    if metadata[:repo] == Repo and metadata[:source] == "upstream_identities" and
+         String.starts_with?(query, "UPDATE") and
+         query_metadata_contains?(metadata, identity_id) do
+      update_count = Process.get({__MODULE__, handler_id, :identity_updates}, 0) + 1
+      Process.put({__MODULE__, handler_id, :identity_updates}, update_count)
+      mark_post_consume_dispatch_update(update_count, handler_id)
+    end
+  end
+
+  defp mark_post_consume_dispatch_update(2, handler_id),
+    do: Process.put({__MODULE__, handler_id, :dispatch_update}, true)
+
+  defp mark_post_consume_dispatch_update(_update_count, _handler_id), do: :ok
+
+  defp notify_post_consume_dispatch_commit(query, parent, handler_id) do
+    if Process.get({__MODULE__, handler_id, :dispatch_update}) == true and
+         String.downcase(String.trim(query)) == "commit" do
+      Process.delete({__MODULE__, handler_id, :dispatch_update})
+      send(parent, {handler_id, :dispatch_commit, self()})
+    end
+  end
+
+  defp notify_post_consume_evidence_write(metadata, query, parent, handler_id, identity_id) do
+    if metadata[:repo] == Repo and metadata[:source] == "account_quota_windows" and
+         (String.starts_with?(query, "INSERT") or String.starts_with?(query, "UPDATE")) and
+         query_metadata_contains?(metadata, identity_id) do
+      send(parent, {handler_id, :evidence_write, self()})
+    end
+  end
+
+  defp start_post_consume_redemption_task(parent, handler_id, redeem) do
+    Task.async(fn ->
+      Sandbox.unboxed_run(Repo, fn ->
+        backend_pid = backend_pid!()
+        send(parent, {handler_id, :redemption_backend, self(), backend_pid})
+
+        receive do
+          {^handler_id, :start_redemption} -> redeem.()
+        after
+          5_000 -> raise "timed out waiting to start saved-reset finalizer race"
+        end
+      end)
+    end)
+  end
+
+  defp exercise_post_consume_finalizer_race!(context) do
+    %{
+      fake: fake,
+      fixture: fixture,
+      handler_id: handler_id,
+      redemption_task: redemption_task,
+      release_ref: release_ref,
+      trace_probe_claim?: trace_probe_claim?,
+      used_percent: used_percent
+    } = context
+
+    {redeem_owner, redemption_backend_pid} =
+      await_post_consume_redemption_start!(handler_id, redemption_task, trace_probe_claim?)
+
+    fake_request_pid =
+      await_post_consume_usage_barrier!(handler_id, redeem_owner, release_ref, redemption_task)
+
+    assert_post_consume_provider_requests!(fake)
+    original_claim = load_post_consume_original_claim!(fixture)
+
+    evidence_window =
+      record_post_consume_evidence!(
+        fixture,
+        used_percent,
+        redemption_backend_pid,
+        redemption_task,
+        handler_id
+      )
+
+    finalize_post_consume_race!(
+      fake,
+      fixture,
+      handler_id,
+      redemption_task,
+      release_ref,
+      fake_request_pid,
+      evidence_window,
+      original_claim
+    )
+  end
+
+  defp await_post_consume_redemption_start!(handler_id, redemption_task, trace_probe_claim?) do
+    assert_receive {^handler_id, :redemption_backend, redeem_owner, redemption_backend_pid}, 5_000
+    assert redeem_owner == redemption_task.pid
+    start_probe_claim_trace(redemption_task, trace_probe_claim?)
+    send(redemption_task.pid, {handler_id, :start_redemption})
+    {redeem_owner, redemption_backend_pid}
+  end
+
+  defp start_probe_claim_trace(_redemption_task, false), do: :ok
+
+  defp start_probe_claim_trace(redemption_task, true) do
+    :erlang.trace_pattern({ProbeLease, :claim, 5}, true, [:local])
+    :erlang.trace(redemption_task.pid, true, [:call])
+  end
+
+  defp await_post_consume_usage_barrier!(
+         handler_id,
+         redeem_owner,
+         release_ref,
+         redemption_task
+       ) do
+    assert_receive {^handler_id, :dispatch_commit, ^redeem_owner}, 5_000
+
+    assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid,
+                    ^release_ref},
+                   5_000
+
+    Process.put({__MODULE__, handler_id, :fake_request_pid}, fake_request_pid)
+    assert Process.alive?(redemption_task.pid)
+    fake_request_pid
+  end
+
+  defp assert_post_consume_provider_requests!(fake) do
+    assert Enum.map(FakeUpstream.requests(fake), & &1.path) == [
+             "/api/codex/rate-limit-reset-credits/consume",
+             "/api/codex/usage"
+           ]
+
+    assert provider_consume_count(fake) == 1
+  end
+
+  defp load_post_consume_original_claim!(fixture) do
+    original_claim =
+      Sandbox.unboxed_run(Repo, fn ->
+        Repo.get!(UpstreamIdentity, fixture.identity_id).metadata["saved_reset_redemption"]
       end)
 
-    try do
-      assert_receive {^handler_id, :redemption_backend, redeem_owner, redemption_backend_pid},
-                     5_000
+    assert original_claim["phase"] == "consuming"
+    assert original_claim["result"] == nil
+    original_claim
+  end
 
-      assert redeem_owner == redemption_task.pid
+  defp record_post_consume_evidence!(
+         fixture,
+         used_percent,
+         redemption_backend_pid,
+         redemption_task,
+         handler_id
+       ) do
+    {evidence_backend_pid, evidence_window, phase_while_refresh_blocked} =
+      Sandbox.unboxed_run(Repo, fn ->
+        backend_pid = backend_pid!()
+        identity = Repo.get!(UpstreamIdentity, fixture.identity_id)
+        phase = identity.metadata["saved_reset_redemption"]["phase"]
 
-      if trace_probe_claim? do
-        :erlang.trace_pattern({ProbeLease, :claim, 5}, true, [:local])
-        :erlang.trace(redemption_task.pid, true, [:call])
-      end
+        assert phase == "consuming"
 
-      send(redemption_task.pid, {handler_id, :start_redemption})
+        assert :ok =
+                 RateLimitObserver.record_headers(identity, %Req.Response{
+                   headers: account_weekly_headers(used_percent)
+                 })
 
-      assert_receive {^handler_id, :dispatch_commit, ^redeem_owner}, 5_000
+        persisted = Repo.get!(UpstreamIdentity, fixture.identity_id)
+        assert persisted.metadata["saved_reset_redemption"]["phase"] == "consuming"
 
-      assert_receive {:fake_upstream_timeout_barrier, :before_headers, fake_request_pid,
-                      ^release_ref},
-                     5_000
+        window =
+          fixture.identity_id
+          |> QuotaWindows.list_evidence()
+          |> Enum.find(&(&1.quota_key == "account" and &1.window_kind == "secondary"))
 
-      Process.put({__MODULE__, handler_id, :fake_request_pid}, fake_request_pid)
+        {backend_pid, window, phase}
+      end)
 
-      assert Process.alive?(redemption_task.pid)
+    assert evidence_backend_pid != redemption_backend_pid
+    assert phase_while_refresh_blocked == "consuming"
+    assert %AccountQuotaWindow{} = evidence_window
+    assert_receive {^handler_id, :evidence_write, evidence_owner}, 5_000
+    assert evidence_owner != redemption_task.pid
+    evidence_window
+  end
 
-      assert Enum.map(FakeUpstream.requests(fake), & &1.path) == [
-               "/api/codex/rate-limit-reset-credits/consume",
-               "/api/codex/usage"
-             ]
+  defp finalize_post_consume_race!(
+         fake,
+         fixture,
+         handler_id,
+         redemption_task,
+         release_ref,
+         fake_request_pid,
+         evidence_window,
+         original_claim
+       ) do
+    send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
+    assert {:ok, result} = Task.await(redemption_task, 15_000)
+    assert_saved_reset_redemption_broadcast!(fixture)
 
-      assert provider_consume_count(fake) == 1
+    persisted =
+      Sandbox.unboxed_run(Repo, fn -> Repo.get!(UpstreamIdentity, fixture.identity_id) end)
 
-      original_claim =
-        Sandbox.unboxed_run(Repo, fn ->
-          Repo.get!(UpstreamIdentity, fixture.identity_id).metadata["saved_reset_redemption"]
-        end)
+    assert provider_consume_count(fake) == 1
+    assert drain_evidence_writes(handler_id) == 0
+    assert DateTime.compare(evidence_window.observed_at, result.consumed_at) != :lt
 
-      assert original_claim["phase"] == "consuming"
-      assert original_claim["result"] == nil
+    %{
+      fake: fake,
+      fixture: fixture,
+      finalized_result: persisted.metadata["saved_reset_redemption"]["result"],
+      original_claim: original_claim,
+      persisted_redemption: persisted.metadata["saved_reset_redemption"],
+      persisted_phase: persisted.metadata["saved_reset_redemption"]["phase"],
+      probe_claim_calls: drain_probe_claim_calls(redemption_task.pid),
+      result: result
+    }
+  end
 
-      {evidence_backend_pid, evidence_window, phase_while_refresh_blocked} =
-        Sandbox.unboxed_run(Repo, fn ->
-          backend_pid = backend_pid!()
-          identity = Repo.get!(UpstreamIdentity, fixture.identity_id)
-          phase = identity.metadata["saved_reset_redemption"]["phase"]
+  defp cleanup_post_consume_finalizer_race!(
+         redemption_task,
+         handler_id,
+         release_ref,
+         trace_probe_claim?
+       ) do
+    send(redemption_task.pid, {handler_id, :start_redemption})
+    stop_probe_claim_trace(redemption_task, trace_probe_claim?)
+    release_post_consume_fake_request(handler_id, release_ref)
 
-          assert phase == "consuming"
+    if Process.alive?(redemption_task.pid), do: Task.shutdown(redemption_task, :brutal_kill)
+    :telemetry.detach(handler_id)
+  end
 
-          assert :ok =
-                   RateLimitObserver.record_headers(identity, %Req.Response{
-                     headers: account_weekly_headers(used_percent)
-                   })
+  defp stop_probe_claim_trace(_redemption_task, false), do: :ok
 
-          persisted = Repo.get!(UpstreamIdentity, fixture.identity_id)
-          assert persisted.metadata["saved_reset_redemption"]["phase"] == "consuming"
+  defp stop_probe_claim_trace(redemption_task, true) do
+    if Process.alive?(redemption_task.pid), do: :erlang.trace(redemption_task.pid, false, [:call])
+    :erlang.trace_pattern({ProbeLease, :claim, 5}, false, [:local])
+  end
 
-          window =
-            fixture.identity_id
-            |> QuotaWindows.list_evidence()
-            |> Enum.find(&(&1.quota_key == "account" and &1.window_kind == "secondary"))
-
-          {backend_pid, window, phase}
-        end)
-
-      assert evidence_backend_pid != redemption_backend_pid
-      assert phase_while_refresh_blocked == "consuming"
-      assert %AccountQuotaWindow{} = evidence_window
-      assert_receive {^handler_id, :evidence_write, evidence_owner}, 5_000
-      assert evidence_owner != redemption_task.pid
-
-      send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
-
-      assert {:ok, result} = Task.await(redemption_task, 15_000)
-      assert_saved_reset_redemption_broadcast!(fixture)
-
-      persisted =
-        Sandbox.unboxed_run(Repo, fn ->
-          Repo.get!(UpstreamIdentity, fixture.identity_id)
-        end)
-
-      assert provider_consume_count(fake) == 1
-      assert drain_evidence_writes(handler_id) == 0
-      assert DateTime.compare(evidence_window.observed_at, result.consumed_at) != :lt
-
-      probe_claim_calls = drain_probe_claim_calls(redemption_task.pid)
-
-      %{
-        fake: fake,
-        fixture: fixture,
-        finalized_result: persisted.metadata["saved_reset_redemption"]["result"],
-        original_claim: original_claim,
-        persisted_redemption: persisted.metadata["saved_reset_redemption"],
-        persisted_phase: persisted.metadata["saved_reset_redemption"]["phase"],
-        probe_claim_calls: probe_claim_calls,
-        result: result
-      }
-    after
-      send(redemption_task.pid, {handler_id, :start_redemption})
-
-      if trace_probe_claim? do
-        if Process.alive?(redemption_task.pid),
-          do: :erlang.trace(redemption_task.pid, false, [:call])
-
-        :erlang.trace_pattern({ProbeLease, :claim, 5}, false, [:local])
-      end
-
-      if fake_request_pid = Process.delete({__MODULE__, handler_id, :fake_request_pid}) do
-        send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
-      end
-
-      if Process.alive?(redemption_task.pid) do
-        Task.shutdown(redemption_task, :brutal_kill)
-      end
-
-      :telemetry.detach(handler_id)
+  defp release_post_consume_fake_request(handler_id, release_ref) do
+    case Process.delete({__MODULE__, handler_id, :fake_request_pid}) do
+      nil -> :ok
+      fake_request_pid -> send(fake_request_pid, {:fake_upstream_release_timeout, release_ref})
     end
   end
 

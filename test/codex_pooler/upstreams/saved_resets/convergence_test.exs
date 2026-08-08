@@ -8,6 +8,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
   alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
   alias CodexPooler.Upstreams.SavedResets.ConfirmationMetadata
   alias CodexPooler.Upstreams.SavedResets.Convergence
+  alias CodexPooler.Upstreams.SavedResets.ConvergenceTelemetry
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias Ecto.Adapters.SQL.Sandbox
@@ -294,7 +295,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
       }
     }
 
-    :ok = CodexPooler.Upstreams.SavedResets.ConvergenceTelemetry.emit(malformed)
+    :ok = ConvergenceTelemetry.emit(malformed)
 
     assert_receive {^handler_id, %{count: 1}, %{source: "unknown", outcome: "unknown"}}
     refute_received {^handler_id, %{applied_to_canonical_ms: _value}, _metadata}
@@ -332,7 +333,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
     timestamp = DateTime.add(DateTime.utc_now(), -1, :second) |> DateTime.truncate(:microsecond)
 
     :ok =
-      CodexPooler.Upstreams.SavedResets.ConvergenceTelemetry.emit(
+      ConvergenceTelemetry.emit(
         %{
           "consumed_at" => DateTime.to_iso8601(timestamp),
           "finished_at" => DateTime.to_iso8601(timestamp),

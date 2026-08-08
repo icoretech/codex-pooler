@@ -73,16 +73,20 @@ defmodule CodexPooler.Upstreams.SavedResets.Convergence do
         {:ok, :unchanged}
 
       id ->
-        case Repo.transaction(fn -> converge_locked(id, now, source) end) do
-          {:ok, {outcome, redemption}} ->
-            if emit_after_commit? and is_map(redemption),
-              do: ConvergenceTelemetry.emit(redemption)
+        converge_transaction(id, now, source, emit_after_commit?)
+    end
+  end
 
-            {:ok, outcome}
+  defp converge_transaction(id, now, source, emit_after_commit?) do
+    case Repo.transaction(fn -> converge_locked(id, now, source) end) do
+      {:ok, {outcome, redemption}} ->
+        if emit_after_commit? and is_map(redemption),
+          do: ConvergenceTelemetry.emit(redemption)
 
-          {:error, reason} ->
-            {:error, reason}
-        end
+        {:ok, outcome}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
