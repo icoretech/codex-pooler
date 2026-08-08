@@ -75,6 +75,51 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
     stop_fixture(fixture)
   end
 
+  test "stop clears a stale legacy pidfile without requiring an ownership receipt" do
+    fixture = server_fixture!(start?: false, cwd: File.cwd!())
+    File.mkdir_p!(fixture.state_dir)
+    legacy_pid_path = Path.join(fixture.state_dir, "legacy.pid")
+    File.write!(legacy_pid_path, "999999\n")
+
+    assert {output, 0} = lifecycle("stop", fixture)
+    assert output =~ "removed stale legacy PID file"
+    refute File.exists?(legacy_pid_path)
+  end
+
+  test "stop succeeds when no lifecycle state exists" do
+    fixture = server_fixture!(start?: false, cwd: File.cwd!())
+
+    assert {output, 0} = lifecycle("stop", fixture)
+    assert output =~ "no owned dev server to stop"
+  end
+
+  test "stop adopts and stops a verified legacy listener without requiring an ownership receipt" do
+    fixture = server_fixture!(healthy?: true, cwd: File.cwd!())
+    File.mkdir_p!(fixture.state_dir)
+    legacy_pid_path = Path.join(fixture.state_dir, "legacy.pid")
+    File.write!(legacy_pid_path, "#{fixture.listener_pid}\n")
+
+    assert {output, 0} = lifecycle("stop", fixture)
+    assert output =~ "adopted verified legacy dev server"
+    assert output =~ "owned dev server stopped"
+    refute process_alive?(fixture.listener_pid)
+    refute File.exists?(legacy_pid_path)
+  end
+
+  test "stop refuses a legacy listener from another checkout" do
+    fixture = server_fixture!(healthy?: true, cwd: temp_dir!("legacy-other-checkout"))
+    File.mkdir_p!(fixture.state_dir)
+    legacy_pid_path = Path.join(fixture.state_dir, "legacy.pid")
+    File.write!(legacy_pid_path, "#{fixture.listener_pid}\n")
+
+    assert {output, code} = lifecycle("stop", fixture)
+    assert code != 0
+    assert output =~ "refusing legacy PID from another checkout"
+    assert process_alive?(fixture.listener_pid)
+
+    stop_fixture(fixture)
+  end
+
   test "stop refuses a stale or reused pid receipt without stopping that process" do
     fixture = server_fixture!(healthy?: false, cwd: File.cwd!())
     File.mkdir_p!(fixture.state_dir)

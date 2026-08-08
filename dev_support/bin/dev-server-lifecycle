@@ -72,6 +72,53 @@ load_active_receipt() {
   [ -f "$receipt_path" ] || fail "refusing missing ownership receipt"
 }
 
+prepare_stop_receipt() {
+  if [ -e "$active_path" ]; then
+    load_active_receipt
+    return 0
+  fi
+
+  [ -e "$legacy_pid_path" ] || {
+    printf 'dev-server: no owned dev server to stop\n'
+    return 1
+  }
+
+  adopt_legacy_receipt
+}
+
+adopt_legacy_receipt() {
+  local legacy_pid current_start current_command current_cwd run_id
+  legacy_pid="$(tr -d '\n' < "$legacy_pid_path")"
+  [[ "$legacy_pid" =~ ^[1-9][0-9]*$ ]] || fail "refusing invalid legacy PID file"
+
+  if ! process_alive "$legacy_pid"; then
+    rm -f -- "$legacy_pid_path"
+    printf 'dev-server: removed stale legacy PID file\n'
+    return 1
+  fi
+
+  current_start="$(process_start "$legacy_pid")"
+  current_command="$(process_command "$legacy_pid")"
+  current_cwd="$(process_cwd "$legacy_pid")"
+
+  [ "$current_cwd" = "$server_cwd" ] || fail "refusing legacy PID from another checkout"
+  [[ "$current_command" == *"mix phx.server"* ]] ||
+    fail "refusing legacy PID without Phoenix/Mix command identity"
+  pid_listens "$legacy_pid" || fail "refusing legacy PID that does not own the configured listener"
+  curl -fsS "$health_url" >/dev/null || fail "refusing legacy listener that failed health validation"
+
+  mkdir -p "$state_dir"
+  chmod 700 "$state_dir"
+  run_id="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
+  [[ "$run_id" =~ ^[0-9a-f]{24}$ ]] || fail "could not generate legacy run id"
+  receipt_path="${state_dir}/${run_id}.receipt"
+  write_receipt "$receipt_path" "running" "$legacy_pid" "$current_start" "$current_command" "$current_cwd"
+  printf '%s\n' "$run_id" > "${active_path}.tmp.$$"
+  chmod 600 "${active_path}.tmp.$$"
+  mv -f -- "${active_path}.tmp.$$" "$active_path"
+  printf 'dev-server: adopted verified legacy dev server pid %s\n' "$legacy_pid"
+}
+
 validate_owned_process() {
   local recorded_state recorded_pid recorded_start recorded_command recorded_cwd recorded_port
   recorded_state="$(receipt_value "$receipt_path" state)" || fail "refusing malformed ownership receipt"
@@ -165,7 +212,9 @@ start_server() {
 
 stop_server() {
   server_cwd="$(cd "$server_cwd" && pwd -P)"
-  load_active_receipt
+  if ! prepare_stop_receipt; then
+    return 0
+  fi
   validate_owned_process
 
   printf 'dev-server: stopping owned dev server pid %s\n' "$owned_pid"
@@ -187,7 +236,7 @@ stop_server() {
   done
   process_alive "$owned_pid" && fail "owned process survived KILL"
 
-  rm -f -- "$receipt_path" "$active_path"
+  rm -f -- "$receipt_path" "$active_path" "$legacy_pid_path"
   printf 'dev-server: owned dev server stopped\n'
 }
 
