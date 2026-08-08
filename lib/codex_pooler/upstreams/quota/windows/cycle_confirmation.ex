@@ -99,6 +99,16 @@ defmodule CodexPooler.Upstreams.Quota.Windows.CycleConfirmation do
     end
   end
 
+  @spec confirmed_at(AccountQuotaWindow.t()) :: {:ok, DateTime.t()} | :none
+  def confirmed_at(%AccountQuotaWindow{} = window) do
+    with {:ok, marker} <- valid_marker(window),
+         {:ok, confirmed_at} <- parse_datetime(marker["confirmed_at"]) do
+      {:ok, confirmed_at}
+    else
+      _invalid -> :none
+    end
+  end
+
   defp marker(evidence, provider_observed_at, confirmed_at) do
     %{
       "version" => @version,

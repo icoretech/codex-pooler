@@ -198,6 +198,64 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
   end
 
   describe "saved reset convergence from runtime evidence" do
+    @tag :todo5_runtime
+    test "threads each runtime evidence source into committed convergence telemetry" do
+      scenarios = [
+        {"runtime_headers",
+         fn identity ->
+           RateLimitObserver.record_headers(identity, %Req.Response{headers: weekly_headers("4")})
+         end},
+        {"runtime_websocket_upgrade_headers",
+         fn identity ->
+           RateLimitObserver.record_websocket_upgrade_headers(identity, weekly_headers("4"))
+         end},
+        {"runtime_websocket_frame_headers",
+         fn identity ->
+           RateLimitObserver.record_websocket_frame_headers(
+             identity,
+             Map.new(weekly_headers("4"))
+           )
+         end},
+        {"runtime_error",
+         fn identity ->
+           RateLimitObserver.record_error(
+             identity,
+             Jason.encode!(usable_account_rate_limit_error())
+           )
+         end},
+        {"runtime_event",
+         fn identity ->
+           reset_at = DateTime.add(DateTime.utc_now(), 3, :minute) |> DateTime.truncate(:second)
+
+           await_rate_limit_event_commit(identity.id, fn ->
+             RateLimitObserver.record_complete_event(
+               identity,
+               codex_rate_limits_payload(4, reset_at)
+             )
+           end)
+         end}
+      ]
+
+      handler_id = attach_convergence_handler!()
+
+      for {source, observe} <- scenarios do
+        identity = pending_reset_identity()
+
+        assert :ok = observe.(identity)
+
+        assert_receive {^handler_id, %{count: 1},
+                        %{source: ^source, outcome: "confirmed_by_quota"}},
+                       1_000
+
+        redemption = persisted_redemption(identity)
+        assert redemption["convergence_source"] == source
+        assert redemption["convergence_outcome"] == "confirmed_by_quota"
+      end
+
+      refute_received {^handler_id, _measurements, _metadata}
+      wait_for_rate_limit_event_tasks()
+    end
+
     test "exhausted weekly headers reblock a pending reset immediately" do
       identity = pending_reset_identity()
 
@@ -574,6 +632,37 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
         "reset_after_seconds" => "180"
       }
     }
+  end
+
+  defp usable_account_rate_limit_error do
+    put_in(exhausted_account_rate_limit_error(), ["error", "used_percent"], "4")
+  end
+
+  defp persisted_redemption(identity) do
+    identity
+    |> Repo.reload!()
+    |> Map.get(:metadata)
+    |> Kernel.||(%{})
+    |> Map.fetch!("saved_reset_redemption")
+  end
+
+  defp attach_convergence_handler! do
+    test_pid = self()
+    handler_id = {__MODULE__, :todo5_convergence, System.unique_integer([:positive])}
+    event = [:codex_pooler, :saved_reset, :convergence]
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        event,
+        fn ^event, measurements, metadata, ^test_pid ->
+          send(test_pid, {handler_id, measurements, metadata})
+        end,
+        test_pid
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+    handler_id
   end
 
   defp redemption_phase(identity) do

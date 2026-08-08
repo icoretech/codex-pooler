@@ -562,7 +562,7 @@ defmodule CodexPooler.Upstreams.Reconciliation.PoolReconciliation do
   # for identities without a pending lifecycle, but a genuine convergence error
   # must not stay invisible.
   defp converge_refreshed_identity(identity, observed_at) do
-    case Convergence.converge(identity, observed_at) do
+    case Convergence.converge(identity, observed_at, "reconciliation") do
       {:ok, _outcome} ->
         :ok
 

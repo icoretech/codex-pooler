@@ -16,6 +16,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   alias CodexPooler.Upstreams.Reconciliation.PoolReconciliation
   alias CodexPooler.Upstreams.SavedResets
   alias CodexPooler.Upstreams.SavedResets.AutoEligibility
+  alias CodexPooler.Upstreams.SavedResets.ConfirmationMetadata
+  alias CodexPooler.Upstreams.SavedResets.ConvergenceTelemetry
   alias CodexPooler.Upstreams.SavedResets.CreditLocator
   alias CodexPooler.Upstreams.SavedResets.ObservationOrdering
   alias CodexPooler.Upstreams.SavedResets.PostResetEvidence
@@ -2650,6 +2652,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   defp bounded_recovery_code(_code), do: "provider_failed"
 
   defp finalize_attempt(result, claim) do
+    emit_after_commit? = not Repo.in_transaction?()
+
     Repo.transaction(fn ->
       identity = lock_identity!(claim.identity.id)
       metadata = identity.metadata || %{}
@@ -2658,22 +2662,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
       if finalization_matches_claim?(redemption, claim) do
         finished_at = claim[:finished_at] || now()
 
-        finalized_result =
-          if result.applied? == true and
-               result[:phase] == RedemptionLifecycle.consumed_pending_probe() and
-               match?(%DateTime{}, result[:consumed_at]) do
-            phase = post_reset_phase(identity, result.consumed_at, finished_at)
-
-            result
-            |> Map.put(:phase, phase)
-            |> then(fn finalized_result ->
-              if phase == RedemptionLifecycle.confirmed_by_quota(),
-                do: Map.delete(finalized_result, :reason),
-                else: finalized_result
-            end)
-          else
-            result
-          end
+        {finalized_result, confirmation_evidence, decision_at} =
+          finalize_confirmation(identity, result, finished_at)
 
         base = %{
           "attempt_id" => claim.attempt_id,
@@ -2691,7 +2681,14 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
           |> put_carried_applied_consume(redemption)
           |> put_provider_replay_history(redemption)
 
-        redemption = Map.merge(base, redemption_lifecycle_fields(finalized_result))
+        redemption =
+          base
+          |> Map.merge(redemption_lifecycle_fields(finalized_result))
+          |> put_finalizer_confirmation_metadata(
+            finalized_result,
+            confirmation_evidence,
+            decision_at
+          )
 
         metadata = Map.delete(metadata, @redemption_target_key)
 
@@ -2705,13 +2702,19 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
         updated_identity =
           persist_finalized_attempt!(identity, metadata, ledger, redemption, finished_at)
 
-        {updated_identity, finalized_result}
+        telemetry_redemption =
+          if redemption["convergence_source"] == "finalizer", do: redemption, else: nil
+
+        {updated_identity, finalized_result, telemetry_redemption}
       else
-        {resolve_finalizer_cas_loss(identity, claim), result}
+        {resolve_finalizer_cas_loss(identity, claim), result, nil}
       end
     end)
     |> case do
-      {:ok, {updated_identity, finalized_result}} ->
+      {:ok, {updated_identity, finalized_result, telemetry_redemption}} ->
+        if emit_after_commit? and is_map(telemetry_redemption),
+          do: ConvergenceTelemetry.emit(telemetry_redemption)
+
         broadcast_redemption(updated_identity)
 
         {:ok,
@@ -2796,16 +2799,66 @@ defmodule CodexPooler.Upstreams.SavedResetRedemption do
   # evaluates the canonical effective view at its clock, so a caller timestamp
   # captured before the post-consume refresh persisted its rows must be advanced
   # to the present or that fresh evidence would be invisible.
-  defp post_reset_phase(refreshed_identity, consumed_at, timestamp) do
-    case PostResetEvidence.classify(
-           Windows.list_evidence(refreshed_identity),
-           consumed_at,
-           later_datetime(timestamp, now())
-         ) do
+  defp post_reset_phase(%UpstreamIdentity{} = refreshed_identity, consumed_at, timestamp) do
+    post_reset_phase(
+      Windows.list_evidence(refreshed_identity),
+      consumed_at,
+      later_datetime(timestamp, now())
+    )
+  end
+
+  defp post_reset_phase(evidence, consumed_at, timestamp) when is_list(evidence) do
+    case PostResetEvidence.classify(evidence, consumed_at, timestamp) do
       :confirmed -> RedemptionLifecycle.confirmed_by_quota()
       _pending_or_reblocked -> RedemptionLifecycle.consumed_pending_probe()
     end
   end
+
+  defp finalize_confirmation(identity, result, finished_at) do
+    if result.applied? == true and match?(%DateTime{}, result[:consumed_at]) and
+         result[:phase] in [
+           RedemptionLifecycle.consumed_pending_probe(),
+           RedemptionLifecycle.confirmed_by_quota()
+         ] do
+      decision_at = later_datetime(finished_at, now())
+      evidence = Windows.list_evidence(identity)
+
+      finalized_result =
+        if result[:phase] == RedemptionLifecycle.consumed_pending_probe() do
+          phase = post_reset_phase(evidence, result.consumed_at, decision_at)
+
+          result
+          |> Map.put(:phase, phase)
+          |> then(fn updated_result ->
+            if phase == RedemptionLifecycle.confirmed_by_quota(),
+              do: Map.delete(updated_result, :reason),
+              else: updated_result
+          end)
+        else
+          result
+        end
+
+      {finalized_result, evidence, decision_at}
+    else
+      {result, [], nil}
+    end
+  end
+
+  defp put_finalizer_confirmation_metadata(
+         redemption,
+         %{applied?: true, phase: phase, consumed_at: %DateTime{} = consumed_at},
+         evidence,
+         %DateTime{} = decision_at
+       )
+       when phase == "confirmed_by_quota" do
+    Map.merge(
+      redemption,
+      ConfirmationMetadata.build("finalizer", phase, evidence, consumed_at, decision_at)
+    )
+  end
+
+  defp put_finalizer_confirmation_metadata(redemption, _result, _evidence, _decision_at),
+    do: redemption
 
   # The provider idempotency key is derived deterministically from the persisted
   # attempt id and generation, so a retry of the same claim reproduces the same

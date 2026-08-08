@@ -2480,6 +2480,139 @@
       }
     },
     {
+      "type": "row",
+      "collapsed": false,
+      "id": 0,
+      "panels": [],
+      "title": "Saved-reset Post-consume Convergence",
+      "gridPos": {
+        "x": 0,
+        "y": 128,
+        "h": 1,
+        "w": 24
+      }
+    },
+    {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Saved-reset Convergence Rate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Committed post-consume transitions observed by scraped web nodes only. Bounded source and outcome labels contain no identity, pool, account, request, or payload identifiers; this best-effort view is not a cluster-wide persisted-state inventory.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (source, outcome) (rate(codex_pooler_saved_reset_convergence_count{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval]))",
+          "refId": "",
+          "legendFormat": "{{source}} {{outcome}}",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 129
+      }
+    },
+    {
+      "type": "timeseries",
+      "transparent": false,
+      "repeatDirection": "h",
+      "title": "Saved-reset Convergence p95",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Best-effort web-node timing for committed transitions. Labels stay bounded to source and outcome; missing or invalid timing is omitted and does not indicate cross-role persistence latency.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, source, outcome) (rate(codex_pooler_saved_reset_convergence_applied_to_canonical_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
+          "refId": "",
+          "legendFormat": "{{source}} {{outcome}} applied to canonical",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, source, outcome) (rate(codex_pooler_saved_reset_convergence_canonical_to_lifecycle_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
+          "refId": "",
+          "legendFormat": "{{source}} {{outcome}} canonical to lifecycle",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, source, outcome) (rate(codex_pooler_saved_reset_convergence_applied_to_lifecycle_seconds_bucket{namespace=\"$namespace\", job=\"codex-pooler-app\", pod=~\"${pod:regex}\"}[$__rate_interval])))",
+          "refId": "",
+          "legendFormat": "{{source}} {{outcome}} applied to lifecycle",
+          "range": true,
+          "instant": false,
+          "editorMode": "code"
+        }
+      ],
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 129
+      }
+    },
+    {
       "type": "timeseries",
       "transparent": false,
       "repeatDirection": "h",
@@ -2528,7 +2661,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 128
+        "y": 138
       }
     },
     {
@@ -2580,7 +2713,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 128
+        "y": 138
       }
     }
   ]

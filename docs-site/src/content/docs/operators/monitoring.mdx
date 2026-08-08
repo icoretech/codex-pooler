@@ -47,6 +47,7 @@ Build your Grafana or Prometheus dashboard around the signals needed to correlat
 7. bounded stream outcomes, websocket bridge fallbacks, and stream-buffer oversized or truncated events
 8. Ecto query rate, queries per request, hot query sources by safe source and SQL command, unknown query rate, and DB queue p95
 9. routing circuit transition rate by transition, route class, and bounded reason class
+10. saved-reset post-consume convergence rate by bounded source and outcome, plus p95 timing from application to canonical evidence, canonical evidence to lifecycle finish, and application to lifecycle finish
 
 Read the dashboard as a correlation view. If cgroup memory climbs while BEAM total stays flat, look outside normal BEAM heap attribution. If `vm_memory_binary_bytes` climbs with cgroup memory, inspect streaming response retention, file bodies, and upstream transport buffering. If process count, ports, or run queue climb, inspect stuck request processes, websocket ownership, and overloaded route classes.
 
@@ -55,6 +56,14 @@ Admission saturation is local to each app pod. `codex_pooler_gateway_admission_r
 The new gateway metrics are bounded at the source. Stream outcomes are `succeeded`, `failed`, `settlement_failed`, or `interrupted`; invalid values become `unknown`. Their downstream and upstream transport labels are `http_sse`, `websocket`, or `unknown`, giving at most 45 series per app pod across five effective outcomes and two three-value transport vocabularies. `settlement_failed` is attempt-scoped, so concurrent failed terminal settlement attempts can each emit it. Websocket bridge fallbacks have at most 20 reason series per app pod, while precommit buffer overflow is a separate untagged counter. Together with the admission gauges and circuit additions, this work adds approximately 266 bounded time series per app pod.
 
 Oversized stream-buffer histogram observations saturate at 128 MiB for Prometheus export, so p95 remains finite. The runtime's raw telemetry event and stream-buffer behavior are unchanged.
+
+### Saved-reset post-consume convergence
+
+`codex_pooler_saved_reset_convergence_count` is a best-effort view of committed post-consume saved-reset transitions observed by scraped **web nodes**. It is not a cluster-wide inventory and does not prove that every persisted transition has been exported: worker and scheduler roles do not run the Prometheus reporter. A convergence performed on another role can still persist its lifecycle metadata for later cross-role reconciliation without appearing in this metric.
+
+The metric and its three timing histograms use only the bounded `source` and `outcome` labels. `source` is one of `reconciliation`, `runtime_headers`, `runtime_websocket_upgrade_headers`, `runtime_websocket_frame_headers`, `runtime_event`, `runtime_error`, `finalizer`, or `unknown`; `outcome` is `confirmed_by_quota`, `reblocked`, `expired`, or `unknown`. No Pool, upstream, account, identity, request, payload, or credit identifier is exported. Missing or malformed source and outcome values become `unknown`; absent, malformed, or time-inconsistent timestamps omit the corresponding timing observation rather than inventing a duration.
+
+The bounded histograms are `codex_pooler_saved_reset_convergence_applied_to_canonical_seconds`, `codex_pooler_saved_reset_convergence_canonical_to_lifecycle_seconds`, and `codex_pooler_saved_reset_convergence_applied_to_lifecycle_seconds`. They describe the observed event timeline on a reporting web node, not delay for the persisted cross-role lifecycle metadata to become visible. Use the rate panel to see which bounded transition category occurred, then read the p95 panels only for categories with observations.
 
 The downloadable starter dashboard includes these queries now. Apply the application release, then add the matching panels to your live dashboard and refresh the published screenshot. Don't treat the screenshot above or any existing deployed dashboard as evidence that these new panels are already live.
 
@@ -221,6 +230,42 @@ sum by (transition, route_class, reason_class) (
     namespace="codex-pooler",
     job="codex-pooler-app"
   }[5m])
+)
+```
+
+```text
+sum by (source, outcome) (
+  rate(codex_pooler_saved_reset_convergence_count{
+    namespace="codex-pooler",
+    job="codex-pooler-app"
+  }[5m])
+)
+```
+
+```text
+histogram_quantile(0.95,
+  sum by (le, source, outcome) (
+    rate(codex_pooler_saved_reset_convergence_applied_to_canonical_seconds_bucket{
+      namespace="codex-pooler",
+      job="codex-pooler-app"
+    }[5m])
+  )
+)
+histogram_quantile(0.95,
+  sum by (le, source, outcome) (
+    rate(codex_pooler_saved_reset_convergence_canonical_to_lifecycle_seconds_bucket{
+      namespace="codex-pooler",
+      job="codex-pooler-app"
+    }[5m])
+  )
+)
+histogram_quantile(0.95,
+  sum by (le, source, outcome) (
+    rate(codex_pooler_saved_reset_convergence_applied_to_lifecycle_seconds_bucket{
+      namespace="codex-pooler",
+      job="codex-pooler-app"
+    }[5m])
+  )
 )
 ```
 

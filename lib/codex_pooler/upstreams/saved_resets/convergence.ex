@@ -24,6 +24,8 @@ defmodule CodexPooler.Upstreams.SavedResets.Convergence do
 
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows
+  alias CodexPooler.Upstreams.SavedResets.ConfirmationMetadata
+  alias CodexPooler.Upstreams.SavedResets.ConvergenceTelemetry
   alias CodexPooler.Upstreams.SavedResets.PostResetEvidence
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -57,33 +59,54 @@ defmodule CodexPooler.Upstreams.SavedResets.Convergence do
   @spec converge(UpstreamIdentity.t() | Ecto.UUID.t()) :: {:ok, outcome()} | {:error, term()}
   @spec converge(UpstreamIdentity.t() | Ecto.UUID.t(), DateTime.t()) ::
           {:ok, outcome()} | {:error, term()}
+  @spec converge(UpstreamIdentity.t() | Ecto.UUID.t(), DateTime.t(), String.t()) ::
+          {:ok, outcome()} | {:error, term()}
   def converge(identity_or_id, now \\ now()) do
+    converge(identity_or_id, now, "unknown")
+  end
+
+  def converge(identity_or_id, now, source) when is_binary(source) do
+    emit_after_commit? = not Repo.in_transaction?()
+
     case identity_id(identity_or_id) do
       nil ->
         {:ok, :unchanged}
 
       id ->
-        Repo.transaction(fn -> converge_locked(id, now) end)
+        case Repo.transaction(fn -> converge_locked(id, now, source) end) do
+          {:ok, {outcome, redemption}} ->
+            if emit_after_commit? and is_map(redemption),
+              do: ConvergenceTelemetry.emit(redemption)
+
+            {:ok, outcome}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
     end
   end
 
-  defp converge_locked(id, now) do
+  defp converge_locked(id, now, source) do
     identity = lock_identity!(id)
     redemption = (identity.metadata || %{})["saved_reset_redemption"]
 
-    case target_phase(identity, redemption, now) do
-      nil -> :unchanged
-      target -> apply_transition!(identity, redemption, target, now)
+    case target_transition(identity, redemption, now) do
+      nil -> {:unchanged, nil}
+      {target, windows} -> apply_transition!(identity, redemption, target, windows, now, source)
     end
   end
 
-  defp target_phase(identity, redemption, now) do
+  defp target_transition(identity, redemption, now) do
     with true <- convergeable_redemption?(redemption),
          %DateTime{} = consumed_at <- consumed_at(redemption) do
-      identity
-      |> Windows.list_evidence()
-      |> PostResetEvidence.classify(consumed_at, now)
-      |> phase_for_classification(redemption, now)
+      windows = Windows.list_evidence(identity)
+
+      case windows
+           |> PostResetEvidence.classify(consumed_at, now)
+           |> phase_for_classification(redemption, now) do
+        nil -> nil
+        target -> {target, windows}
+      end
     else
       _not_convergeable -> nil
     end
@@ -112,29 +135,36 @@ defmodule CodexPooler.Upstreams.SavedResets.Convergence do
       RedemptionLifecycle.applied_reblocked?(redemption)
   end
 
-  defp apply_transition!(identity, redemption, target, now) do
+  defp apply_transition!(identity, redemption, target, windows, now, source) do
     generation = Map.get(redemption, "generation")
     attempt_id = Map.get(redemption, "attempt_id")
 
     if RedemptionLifecycle.can_transition?(redemption, target, generation, attempt_id) do
+      outcome = outcome_for(target)
+
       updated =
-        Map.merge(redemption, %{
+        redemption
+        |> Map.merge(%{
           "phase" => target,
           "status" => RedemptionLifecycle.legacy_status_for(target),
           "finished_at" => DateTime.to_iso8601(now),
           "terminal_reason" => terminal_reason(target)
         })
+        |> Map.merge(
+          ConfirmationMetadata.build(source, outcome, windows, consumed_at(redemption), now)
+        )
 
-      identity
-      |> UpstreamIdentity.changeset(%{
-        metadata: Map.put(identity.metadata || %{}, "saved_reset_redemption", updated),
-        updated_at: now
-      })
-      |> Repo.update!()
+      _updated_identity =
+        identity
+        |> UpstreamIdentity.changeset(%{
+          metadata: Map.put(identity.metadata || %{}, "saved_reset_redemption", updated),
+          updated_at: now
+        })
+        |> Repo.update!()
 
-      outcome_for(target)
+      {outcome, updated}
     else
-      :unchanged
+      {:unchanged, nil}
     end
   end
 

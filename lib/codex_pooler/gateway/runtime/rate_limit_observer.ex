@@ -19,21 +19,26 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
 
   @spec record_headers(UpstreamIdentity.t(), Req.Response.t()) :: observer_result()
   def record_headers(%UpstreamIdentity{} = identity, response) do
-    record_header_evidence(identity, response.headers, "rate_limit_headers")
+    record_header_evidence(identity, response.headers, "rate_limit_headers", "runtime_headers")
   end
 
   @spec record_websocket_upgrade_headers(UpstreamIdentity.t() | term(), term()) ::
           observer_result()
   def record_websocket_upgrade_headers(%UpstreamIdentity{} = identity, headers) do
-    record_header_evidence(identity, headers, "rate_limit_websocket_upgrade_headers")
+    record_header_evidence(
+      identity,
+      headers,
+      "rate_limit_websocket_upgrade_headers",
+      "runtime_websocket_upgrade_headers"
+    )
   end
 
   def record_websocket_upgrade_headers(_identity, _headers), do: :ok
 
-  defp record_header_evidence(%UpstreamIdentity{} = identity, headers, operation) do
+  defp record_header_evidence(%UpstreamIdentity{} = identity, headers, operation, source) do
     case QuotaWindows.upsert_quota_windows_from_codex_headers(identity, headers) do
       {:ok, windows} ->
-        maybe_converge_saved_reset(identity, windows)
+        maybe_converge_saved_reset(identity, windows, source)
 
       {:error, reason} ->
         log_failure(operation, identity_metadata(identity), reason)
@@ -46,7 +51,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
       when is_map(headers) and map_size(headers) > 0 do
     case QuotaWindows.upsert_quota_windows_from_codex_headers(identity, headers) do
       {:ok, windows} ->
-        maybe_converge_saved_reset(identity, windows)
+        maybe_converge_saved_reset(identity, windows, "runtime_websocket_frame_headers")
 
       {:error, reason} ->
         log_failure("rate_limit_websocket_frame_headers", identity_metadata(identity), reason)
@@ -109,7 +114,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
         end
       end)
 
-    maybe_converge_saved_reset(identity, persisted)
+    maybe_converge_saved_reset(identity, persisted, "runtime_error")
   end
 
   def record_error(_identity, _body), do: :ok
@@ -155,16 +160,16 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
            event
          ) do
       {:ok, windows} ->
-        maybe_converge_saved_reset(identity, windows)
+        maybe_converge_saved_reset(identity, windows, "runtime_event")
 
       {:error, reason} ->
         log_failure("rate_limit_event", identity_metadata(identity), reason)
     end
   end
 
-  defp maybe_converge_saved_reset(%UpstreamIdentity{} = identity, persisted_windows) do
+  defp maybe_converge_saved_reset(%UpstreamIdentity{} = identity, persisted_windows, source) do
     if persisted_account_evidence?(persisted_windows) do
-      case Convergence.converge(identity) do
+      case Convergence.converge(identity, DateTime.utc_now(), source) do
         {:ok, _outcome} ->
           :ok
 

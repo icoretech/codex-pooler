@@ -5,6 +5,8 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
 
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows
+  alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
+  alias CodexPooler.Upstreams.SavedResets.ConfirmationMetadata
   alias CodexPooler.Upstreams.SavedResets.Convergence
   alias CodexPooler.Upstreams.SavedResets.RedemptionLifecycle
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -61,7 +63,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
   defp upsert_source_window!(identity, used_percent, opts) do
     observed_at = Keyword.fetch!(opts, :observed_at)
 
-    assert {:ok, [_window]} =
+    assert {:ok, [window]} =
              Windows.upsert_quota_windows(identity, [
                %{
                  quota_key: "account",
@@ -75,12 +77,312 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
                  source_precision: "observed",
                  quota_scope: "account",
                  quota_family: "account",
-                 freshness_state: "fresh"
+                 freshness_state: "fresh",
+                 metadata: Keyword.get(opts, :metadata, %{})
                }
              ])
+
+    window
+  end
+
+  defp put_confirmation_marker!(window, confirmed_at) do
+    marker = %{
+      "version" => 1,
+      "scope" => window.quota_scope,
+      "family" => window.quota_family,
+      "key" => window.quota_key,
+      "kind" => window.window_kind,
+      "minutes" => window.window_minutes,
+      "model" => window.model,
+      "upstream_model" => window.upstream_model,
+      "reset_at" => DateTime.to_iso8601(window.reset_at),
+      "provider_observed_at" => DateTime.to_iso8601(window.observed_at),
+      "confirmed_at" => confirmed_at,
+      "source_class" => "provider_usage"
+    }
+
+    window
+    |> Ecto.Changeset.change(%{
+      metadata:
+        window.metadata
+        |> Map.put("reset_state", "anchored")
+        |> Map.put("__quota_cycle_confirmation_v1", marker)
+    })
+    |> Repo.update!()
   end
 
   defp redemption(identity), do: Repo.reload!(identity).metadata["saved_reset_redemption"]
+
+  @tag :todo5_metadata
+  test "persists bounded source outcome and accepted canonical timing at convergence" do
+    decision_at = ~U[2026-08-08 10:10:00Z]
+    consumed_at = DateTime.add(decision_at, -60, :second)
+    confirmed_at = DateTime.add(decision_at, -30, :second)
+
+    identity =
+      identity_with_pending(consumed_at,
+        redemption_overrides: %{
+          "confirmation_timing" => %{"version" => 99, "raw" => "not-trusted"},
+          "convergence_source" => "not-trusted",
+          "convergence_outcome" => "not-trusted"
+        }
+      )
+
+    identity
+    |> upsert_source_window!(Decimal.new("0"),
+      source: "codex_usage_api",
+      observed_at: decision_at
+    )
+    |> put_confirmation_marker!(DateTime.to_iso8601(confirmed_at))
+
+    assert {:ok, :confirmed_by_quota} =
+             Convergence.converge(identity, decision_at, "runtime_headers")
+
+    assert Map.take(redemption(identity), [
+             "confirmation_timing",
+             "convergence_source",
+             "convergence_outcome"
+           ]) == %{
+             "confirmation_timing" => %{
+               "version" => 1,
+               "canonical_confirmed_at" => DateTime.to_iso8601(confirmed_at)
+             },
+             "convergence_source" => "runtime_headers",
+             "convergence_outcome" => "confirmed_by_quota"
+           }
+  end
+
+  @tag :todo5_metadata
+  test "leaves canonical timing absent for pre-consume future and malformed markers" do
+    decision_at = ~U[2026-08-08 10:10:00Z]
+    consumed_at = DateTime.add(decision_at, -60, :second)
+
+    marker_values = [
+      DateTime.to_iso8601(DateTime.add(consumed_at, -1, :microsecond)),
+      DateTime.to_iso8601(DateTime.add(decision_at, 1, :microsecond)),
+      "not-a-timestamp"
+    ]
+
+    for marker_value <- marker_values do
+      identity = identity_with_pending(consumed_at)
+
+      identity
+      |> upsert_source_window!(Decimal.new("0"),
+        source: "codex_usage_api",
+        observed_at: decision_at
+      )
+      |> put_confirmation_marker!(marker_value)
+
+      assert {:ok, :confirmed_by_quota} =
+               Convergence.converge(identity, decision_at, "reconciliation")
+
+      assert redemption(identity)["confirmation_timing"] == %{"version" => 1}
+    end
+  end
+
+  @tag :todo5_metadata
+  test "candidate clearing preserves the canonical confirmation marker" do
+    marker = %{"version" => 1, "confirmed_at" => "synthetic-bounded-marker"}
+
+    metadata = %{
+      "__quota_confirmed_candidate_v1" => %{"count" => 1},
+      "__quota_candidate_provider_status_v1" => %{"status" => "present"},
+      "__quota_cycle_confirmation_v1" => marker
+    }
+
+    assert EvidenceStore.clear_candidate(metadata)["__quota_cycle_confirmation_v1"] == marker
+  end
+
+  @tag :todo5_metadata
+  test "unknown persisted source outcome and timing versions read fail closed" do
+    assert ConfirmationMetadata.read(%{
+             "convergence_source" => "unbounded-source",
+             "convergence_outcome" => "unbounded-outcome",
+             "confirmation_timing" => %{
+               "version" => 2,
+               "canonical_confirmed_at" => "2026-08-08T10:09:30Z"
+             }
+           }) == %{
+             source: "unknown",
+             outcome: "unknown",
+             canonical_confirmed_at: nil
+           }
+  end
+
+  @tag :todo5_metadata
+  test "repeated convergence after settlement performs no steady-state write" do
+    decision_at = ~U[2026-08-08 10:10:00Z]
+    consumed_at = DateTime.add(decision_at, -60, :second)
+    identity = identity_with_pending(consumed_at)
+
+    upsert_source_window!(identity, Decimal.new("0"),
+      source: "codex_usage_api",
+      observed_at: decision_at
+    )
+
+    assert {:ok, :confirmed_by_quota} =
+             Convergence.converge(identity, decision_at, "runtime_event")
+
+    settled = Repo.reload!(identity)
+
+    assert {:ok, :unchanged} =
+             Convergence.converge(identity, decision_at, "runtime_error")
+
+    unchanged = Repo.reload!(identity)
+    assert unchanged.metadata == settled.metadata
+    assert DateTime.compare(unchanged.updated_at, settled.updated_at) == :eq
+  end
+
+  @tag :todo5_runtime
+  test "emits only after a committed transition and stays silent for rollback and unchanged" do
+    event = [:codex_pooler, :saved_reset, :convergence]
+    handler_id = attach_convergence_handler!(event)
+    decision_at = ~U[2026-08-08 10:10:00Z]
+    identity = convergable_identity_with_usable_evidence!(decision_at)
+
+    assert {:ok, :confirmed_by_quota} =
+             Convergence.converge(identity, decision_at, "runtime_headers")
+
+    assert_receive {^handler_id, %{count: 1} = measurements,
+                    %{source: "runtime_headers", outcome: "confirmed_by_quota"}}
+
+    assert is_integer(measurements.applied_to_lifecycle_ms)
+    assert measurements.applied_to_lifecycle_ms >= 0
+
+    assert {:ok, :unchanged} =
+             Convergence.converge(identity, decision_at, "runtime_event")
+
+    refute_received {^handler_id, _measurements, _metadata}
+
+    rolled_back = convergable_identity_with_usable_evidence!(decision_at)
+
+    assert {:error, :forced_rollback} =
+             Repo.transaction(fn ->
+               assert {:ok, :confirmed_by_quota} =
+                        Convergence.converge(rolled_back, decision_at, "runtime_error")
+
+               Repo.rollback(:forced_rollback)
+             end)
+
+    refute_received {^handler_id, _measurements, _metadata}
+    assert redemption(rolled_back)["phase"] == "consumed_pending_probe"
+  end
+
+  @tag :todo5_runtime
+  test "accepts all bounded sources and normalizes malformed source outcome and timing" do
+    event = [:codex_pooler, :saved_reset, :convergence]
+    handler_id = attach_convergence_handler!(event)
+    decision_at = ~U[2026-08-08 10:10:00Z]
+
+    for source <-
+          ~w(reconciliation runtime_headers runtime_websocket_upgrade_headers runtime_websocket_frame_headers runtime_event runtime_error finalizer) do
+      identity = convergable_identity_with_usable_evidence!(decision_at)
+
+      assert {:ok, :confirmed_by_quota} = Convergence.converge(identity, decision_at, source)
+
+      assert_receive {^handler_id, %{count: 1}, %{source: ^source, outcome: "confirmed_by_quota"}}
+    end
+
+    malformed = %{
+      "consumed_at" => "2030-01-01T00:00:00Z",
+      "finished_at" => "not-a-time",
+      "convergence_source" => "identity-#{Ecto.UUID.generate()}",
+      "convergence_outcome" => "provider-specific-outcome",
+      "confirmation_timing" => %{
+        "version" => 99,
+        "canonical_confirmed_at" => "2030-01-01T00:00:00Z"
+      }
+    }
+
+    :ok = CodexPooler.Upstreams.SavedResets.ConvergenceTelemetry.emit(malformed)
+
+    assert_receive {^handler_id, %{count: 1}, %{source: "unknown", outcome: "unknown"}}
+    refute_received {^handler_id, %{applied_to_canonical_ms: _value}, _metadata}
+    refute_received {^handler_id, %{canonical_to_lifecycle_ms: _value}, _metadata}
+    refute_received {^handler_id, %{applied_to_lifecycle_ms: _value}, _metadata}
+  end
+
+  @tag :todo5_runtime
+  test "emits canonical latency measurements and accepts zero-length intervals" do
+    event = [:codex_pooler, :saved_reset, :convergence]
+    handler_id = attach_convergence_handler!(event)
+    decision_at = ~U[2026-08-08 10:10:00Z]
+    consumed_at = DateTime.add(decision_at, -60, :second)
+    confirmed_at = DateTime.add(decision_at, -30, :second)
+    identity = identity_with_pending(consumed_at)
+
+    identity
+    |> upsert_source_window!(Decimal.new("0"),
+      source: "codex_usage_api",
+      observed_at: decision_at
+    )
+    |> put_confirmation_marker!(DateTime.to_iso8601(confirmed_at))
+
+    assert {:ok, :confirmed_by_quota} =
+             Convergence.converge(identity, decision_at, "runtime_headers")
+
+    assert_receive {^handler_id,
+                    %{
+                      count: 1,
+                      applied_to_canonical_ms: 30_000,
+                      canonical_to_lifecycle_ms: 30_000,
+                      applied_to_lifecycle_ms: 60_000
+                    }, %{source: "runtime_headers", outcome: "confirmed_by_quota"}}
+
+    timestamp = DateTime.add(DateTime.utc_now(), -1, :second) |> DateTime.truncate(:microsecond)
+
+    :ok =
+      CodexPooler.Upstreams.SavedResets.ConvergenceTelemetry.emit(
+        %{
+          "consumed_at" => DateTime.to_iso8601(timestamp),
+          "finished_at" => DateTime.to_iso8601(timestamp),
+          "convergence_source" => "finalizer",
+          "convergence_outcome" => "confirmed_by_quota",
+          "confirmation_timing" => %{
+            "version" => 1,
+            "canonical_confirmed_at" => DateTime.to_iso8601(timestamp)
+          }
+        },
+        timestamp
+      )
+
+    assert_receive {^handler_id,
+                    %{
+                      count: 1,
+                      applied_to_canonical_ms: 0,
+                      canonical_to_lifecycle_ms: 0,
+                      applied_to_lifecycle_ms: 0
+                    }, %{source: "finalizer", outcome: "confirmed_by_quota"}}
+  end
+
+  defp attach_convergence_handler!(event) do
+    test_pid = self()
+    handler_id = {__MODULE__, :todo5_convergence, System.unique_integer([:positive])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        event,
+        fn ^event, measurements, metadata, ^test_pid ->
+          send(test_pid, {handler_id, measurements, metadata})
+        end,
+        test_pid
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+    handler_id
+  end
+
+  defp convergable_identity_with_usable_evidence!(decision_at) do
+    identity = identity_with_pending(DateTime.add(decision_at, -60, :second))
+
+    upsert_source_window!(identity, Decimal.new("0"),
+      source: "codex_usage_api",
+      observed_at: decision_at
+    )
+
+    identity
+  end
 
   test "fresh usable evidence confirms a pending reset" do
     consumed_at =

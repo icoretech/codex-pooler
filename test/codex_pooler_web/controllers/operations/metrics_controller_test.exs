@@ -328,6 +328,91 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
     end
   end
 
+  @tag :todo5_runtime
+  test "exports web-node saved-reset convergence metrics with bounded labels only", %{conn: conn} do
+    event = [:codex_pooler, :saved_reset, :convergence]
+    unsafe_id = Ecto.UUID.generate()
+
+    baseline = get(conn, ~p"/metrics").resp_body
+
+    :telemetry.execute(
+      event,
+      %{
+        count: 1,
+        applied_to_canonical_ms: 30_000,
+        canonical_to_lifecycle_ms: 30_000,
+        applied_to_lifecycle_ms: 60_000
+      },
+      %{
+        source: "runtime_headers",
+        outcome: "confirmed_by_quota",
+        upstream_identity_id: unsafe_id,
+        request_id: "must-not-be-a-label"
+      }
+    )
+
+    :telemetry.execute(
+      event,
+      %{count: 1},
+      %{source: "unbounded-source", outcome: "unbounded-outcome", account_id: unsafe_id}
+    )
+
+    body = get(build_conn(), ~p"/metrics").resp_body
+
+    assert metric_sample(
+             body,
+             ~s(codex_pooler_saved_reset_convergence_count{outcome="confirmed_by_quota",source="runtime_headers"})
+           ) ==
+             metric_sample(
+               baseline,
+               ~s(codex_pooler_saved_reset_convergence_count{outcome="confirmed_by_quota",source="runtime_headers"})
+             ) + 1
+
+    assert metric_sample(
+             body,
+             ~s(codex_pooler_saved_reset_convergence_count{outcome="unknown",source="unknown"})
+           ) ==
+             metric_sample(
+               baseline,
+               ~s(codex_pooler_saved_reset_convergence_count{outcome="unknown",source="unknown"})
+             ) + 1
+
+    for metric <- ~w(applied_to_canonical canonical_to_lifecycle applied_to_lifecycle) do
+      assert body =~ "codex_pooler_saved_reset_convergence_#{metric}_seconds_bucket"
+    end
+
+    convergence_lines =
+      body
+      |> String.split("\n", trim: true)
+      |> Enum.filter(&String.starts_with?(&1, "codex_pooler_saved_reset_convergence_"))
+
+    for line <- convergence_lines do
+      refute line =~ unsafe_id
+      refute line =~ "upstream_identity_id"
+      refute line =~ "account_id"
+      refute line =~ "request_id"
+      refute line =~ "must-not-be-a-label"
+      refute line =~ "unbounded-source"
+      refute line =~ "unbounded-outcome"
+    end
+
+    original_oban_mode = System.get_env("OBAN_MODE")
+
+    on_exit(fn ->
+      if original_oban_mode,
+        do: System.put_env("OBAN_MODE", original_oban_mode),
+        else: System.delete_env("OBAN_MODE")
+    end)
+
+    for role <- ~w(worker scheduler) do
+      System.put_env("OBAN_MODE", role)
+      refute CodexPoolerWeb.Telemetry.prometheus_reporter_enabled?()
+    end
+
+    System.put_env("OBAN_MODE", "web")
+    assert CodexPoolerWeb.Telemetry.prometheus_reporter_enabled?()
+  end
+
   test "exposes sampler-driven admission saturation with only route class labels", %{
     conn: conn
   } do

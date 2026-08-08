@@ -2100,7 +2100,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert Repo.reload!(identity).metadata["saved_reset_redemption"] == before_redemption
     end
 
-    test "an unconsumed persisted lifecycle record permits a fresh ordinary claim" do
+    @tag :todo5_metadata
+    test "a new attempt generation does not inherit prior convergence metadata" do
       {:ok, fake} =
         FakeUpstream.start_link(
           {:path_json,
@@ -2126,7 +2127,13 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
             "started_at" => DateTime.to_iso8601(started_at),
             "finished_at" => DateTime.to_iso8601(started_at),
             "result" => %{"code" => "transport_error", "applied" => false},
-            "provider_replay" => %{"version" => 1, "provider_dispatches" => 0}
+            "provider_replay" => %{"version" => 1, "provider_dispatches" => 0},
+            "confirmation_timing" => %{
+              "version" => 1,
+              "canonical_confirmed_at" => DateTime.to_iso8601(started_at)
+            },
+            "convergence_source" => "reconciliation",
+            "convergence_outcome" => "expired"
           }
         )
 
@@ -2143,6 +2150,9 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       refute redemption["attempt_id"] == previous_attempt_id
       assert redemption["result"]["code"] == "reset"
       assert redemption["result"]["applied"] == true
+      refute Map.has_key?(redemption, "confirmation_timing")
+      refute Map.has_key?(redemption, "convergence_source")
+      refute Map.has_key?(redemption, "convergence_outcome")
     end
 
     test "a consumed pending reset blocks a second credit even after the stale window" do
@@ -5229,11 +5239,42 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
     end
 
     @tag :todo1_race_b
+    @tag :todo5_metadata
+    @tag :todo5_runtime
     test "usable quota committed while the reset finalizer is pending wins in that finalizer" do
+      event = [:codex_pooler, :saved_reset, :convergence]
+      handler_id = {__MODULE__, :todo5_finalizer, self()}
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          event,
+          fn ^event, measurements, metadata, ^test_pid ->
+            send(test_pid, {handler_id, measurements, metadata})
+          end,
+          test_pid
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
       evidence = run_post_consume_finalizer_race!("4")
 
       assert {evidence.result.phase, evidence.persisted_phase} ==
                {"confirmed_by_quota", "confirmed_by_quota"}
+
+      assert Map.take(evidence.persisted_redemption, [
+               "confirmation_timing",
+               "convergence_source",
+               "convergence_outcome"
+             ]) == %{
+               "confirmation_timing" => %{"version" => 1},
+               "convergence_source" => "finalizer",
+               "convergence_outcome" => "confirmed_by_quota"
+             }
+
+      assert_receive {^handler_id, %{count: 1},
+                      %{source: "finalizer", outcome: "confirmed_by_quota"}}
     end
 
     @tag :todo1_race_b_exhausted
@@ -8878,6 +8919,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       %{
         fake: fake,
         fixture: fixture,
+        persisted_redemption: persisted.metadata["saved_reset_redemption"],
         persisted_phase: persisted.metadata["saved_reset_redemption"]["phase"],
         probe_claim_calls: probe_claim_calls,
         result: result

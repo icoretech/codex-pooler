@@ -225,6 +225,11 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
     assert converged["status"] == "succeeded"
     assert converged["terminal_reason"] == "converged_confirmed_by_quota"
 
+    persisted_identity = Repo.reload!(identity)
+
+    assert converged["finished_at"] ==
+             get_in(persisted_identity.metadata, ["saved_resets", "observed_at"])
+
     requests = FakeUpstream.requests(fake)
     assert requests != []
     assert Enum.all?(requests, &(&1.method == "GET" and String.ends_with?(&1.path, "/usage")))

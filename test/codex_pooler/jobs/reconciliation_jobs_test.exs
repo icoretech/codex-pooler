@@ -5135,6 +5135,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
     end
 
     @tag :scheduled_expiry_zero_traffic
+    @tag :todo5_runtime
     test "scheduled pending redemption converges from later reconciliation without a request probe" do
       %{pool: pool, assignment: assignment, identity: identity, upstream: upstream} =
         scheduled_expiry_reconciliation_fixture()
@@ -5187,11 +5188,30 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
 
       Repo.delete_all(Oban.Job)
 
+      convergence_event = [:codex_pooler, :saved_reset, :convergence]
+      convergence_handler = {__MODULE__, :todo5_reconciliation, self()}
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          convergence_handler,
+          convergence_event,
+          fn ^convergence_event, measurements, metadata, ^test_pid ->
+            send(test_pid, {convergence_handler, measurements, metadata})
+          end,
+          test_pid
+        )
+
+      on_exit(fn -> :telemetry.detach(convergence_handler) end)
+
       assert {:ok, second_reconciliation} =
                AccountReconciliation.run(pool.id, assignment.id, "scheduled")
 
       assert second_reconciliation.status == :succeeded, inspect(second_reconciliation)
       assert second_reconciliation.quota.code == "quota_refreshed", inspect(second_reconciliation)
+
+      assert_receive {^convergence_handler, %{count: 1},
+                      %{source: "reconciliation", outcome: "reblocked"}}
 
       converged =
         Repo.get!(UpstreamIdentity, identity.id).metadata["saved_reset_redemption"]
@@ -5227,6 +5247,8 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
              ) == :reblocked
 
       assert converged["phase"] == "reblocked"
+      assert converged["convergence_source"] == "reconciliation"
+      assert converged["convergence_outcome"] == "reblocked"
       refute Map.has_key?(converged, "probe")
       assert Repo.aggregate(Request, :count) == 0
       assert scheduled_consume_count(upstream) == 1

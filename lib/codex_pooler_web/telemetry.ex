@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Telemetry do
   alias CodexPooler.Gateway.Routing.CircuitTelemetry
   alias CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary
   alias CodexPooler.RouteClass
+  alias CodexPooler.Upstreams.SavedResets.ConvergenceTelemetry
   alias CodexPoolerWeb.Plugs.RuntimeIngress.Firewall
 
   @type metric :: Telemetry.Metrics.t()
@@ -38,6 +39,7 @@ defmodule CodexPoolerWeb.Telemetry do
           reason_class: String.t()
         }
   @type bridge_fallback_tags :: %{reason: String.t()}
+  @type saved_reset_convergence_tags :: %{source: String.t(), outcome: String.t()}
 
   @repo_query_buckets [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]
   @admission_queue_buckets [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]
@@ -77,6 +79,7 @@ defmodule CodexPoolerWeb.Telemetry do
     superseded_primary_rejected
   )
   @quota_cycle_sources ~w(provider_usage runtime unknown)
+  @saved_reset_convergence_buckets [0, 1, 5, 15, 30, 60, 120, 300, 600, 900]
   @prometheus_reporter_disabled_oban_modes ~w(worker scheduler)
   @repo_source_pattern ~r/\A[a-zA-Z0-9_.-]+\z/
   @safe_route_pattern ~r/\A[a-zA-Z0-9_.*:\/{}-]+\z/
@@ -501,6 +504,41 @@ defmodule CodexPoolerWeb.Telemetry do
         tags: [:scope, :decision, :source],
         tag_values: &quota_cycle_decision_tag_values/1,
         description: "Quota cycle decisions by bounded scope, decision, and source class."
+      ),
+      counter("codex_pooler.saved_reset.convergence.count",
+        event_name: [:codex_pooler, :saved_reset, :convergence],
+        measurement: :count,
+        tags: [:source, :outcome],
+        tag_values: &ConvergenceTelemetry.tag_values/1,
+        description:
+          "Committed saved-reset convergence transitions observed on scraped web nodes."
+      ),
+      distribution("codex_pooler.saved_reset.convergence.applied_to_canonical.seconds",
+        event_name: [:codex_pooler, :saved_reset, :convergence],
+        measurement: :applied_to_canonical_ms,
+        unit: {:millisecond, :second},
+        tags: [:source, :outcome],
+        tag_values: &ConvergenceTelemetry.tag_values/1,
+        description: "Applied-to-canonical saved-reset latency observed on scraped web nodes.",
+        reporter_options: [buckets: @saved_reset_convergence_buckets]
+      ),
+      distribution("codex_pooler.saved_reset.convergence.canonical_to_lifecycle.seconds",
+        event_name: [:codex_pooler, :saved_reset, :convergence],
+        measurement: :canonical_to_lifecycle_ms,
+        unit: {:millisecond, :second},
+        tags: [:source, :outcome],
+        tag_values: &ConvergenceTelemetry.tag_values/1,
+        description: "Canonical-to-lifecycle saved-reset latency observed on scraped web nodes.",
+        reporter_options: [buckets: @saved_reset_convergence_buckets]
+      ),
+      distribution("codex_pooler.saved_reset.convergence.applied_to_lifecycle.seconds",
+        event_name: [:codex_pooler, :saved_reset, :convergence],
+        measurement: :applied_to_lifecycle_ms,
+        unit: {:millisecond, :second},
+        tags: [:source, :outcome],
+        tag_values: &ConvergenceTelemetry.tag_values/1,
+        description: "Applied-to-lifecycle saved-reset latency observed on scraped web nodes.",
+        reporter_options: [buckets: @saved_reset_convergence_buckets]
       ),
       counter("codex_pooler.gateway.routing.circuit.transition.count",
         event_name: [:codex_pooler, :gateway, :routing, :circuit, :transition],
