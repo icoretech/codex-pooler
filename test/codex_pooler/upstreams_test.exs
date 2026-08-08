@@ -6001,6 +6001,40 @@ defmodule CodexPooler.UpstreamsTest do
              |> Map.has_key?("cookie")
     end
 
+    test "Cloudflare cookie jar accepts RFC 2616 Expires date formats" do
+      url =
+        "https://cookie-expiry-formats-#{System.unique_integer([:positive])}.chatgpt.com/backend-api/codex/usage"
+
+      for {name, expires} <- [
+            {"cf_chl_rfc1123", "Wed, 21 Oct 2099 07:28:00 GMT"},
+            {"cf_chl_rfc850", "Wednesday, 21-Oct-99 07:28:00 GMT"},
+            {"cf_chl_asctime", "Wed Oct 21 07:28:00 2099"}
+          ] do
+        assert CloudflareCookies.store_from_headers(url, [
+                 {"set-cookie", "#{name}=live; Expires=#{expires}; Path=/; HttpOnly; Secure"}
+               ])
+      end
+
+      cookie = CloudflareCookies.request_headers(url, []) |> Map.new() |> Map.fetch!("cookie")
+
+      assert cookie =~ "cf_chl_rfc1123=live"
+      assert cookie =~ "cf_chl_rfc850=live"
+      assert cookie =~ "cf_chl_asctime=live"
+    end
+
+    test "Cloudflare cookie jar treats invalid Expires dates as session cookies" do
+      url =
+        "https://cookie-invalid-expiry-#{System.unique_integer([:positive])}.chatgpt.com/backend-api/codex/usage"
+
+      assert CloudflareCookies.store_from_headers(url, [
+               {"set-cookie",
+                "cf_chl_invalid=live; Expires=Wed, 32 Oct 2015 07:28:00 GMT; Path=/; HttpOnly; Secure"}
+             ])
+
+      assert CloudflareCookies.request_headers(url, []) |> Map.new() |> Map.fetch!("cookie") =~
+               "cf_chl_invalid=live"
+    end
+
     test "Cloudflare cookie jar is owned by the supervised process" do
       url =
         "https://cookie-owner-#{System.unique_integer([:positive])}.chatgpt.com/backend-api/codex/usage"
