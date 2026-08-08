@@ -5082,13 +5082,6 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert {:ok, %{status: :succeeded, applied?: true}} = scheduled_result
       assert {:error, :redemption_in_progress} = gateway_result
       assert provider_consume_count(fake) == 1
-
-      if System.get_env("TASK5_MANUAL_QA") == "1" do
-        IO.puts(
-          "TASK5_AUTO_RACE backend_pids=#{scheduled_backend_pid},#{gateway_backend_pid} " <>
-            "consume_count=#{provider_consume_count(fake)}"
-        )
-      end
     end
 
     @tag :separate_connection_probe_race
@@ -5220,25 +5213,6 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
           persisted_probe_after_retry = persisted_probe!(fixture.identity_id)
           assert persisted_probe_after_retry == persisted_probe
-
-          if System.get_env("TASK3_MANUAL_QA") == "1" do
-            result_labels =
-              Enum.map_join([winner_result, loser_result], ",", fn
-                {_role, _backend_pid, {:ok, :claimed}} -> "claimed"
-                {_role, _backend_pid, {:error, :unavailable}} -> "unavailable"
-              end)
-
-            persisted_probe_holder_count =
-              if is_binary(persisted_probe_after_retry["token"]), do: 1, else: 0
-
-            IO.puts(
-              "TASK3_MANUAL_QA backend_pids=#{winner_backend_pid},#{loser_backend_pid} " <>
-                "results=#{result_labels} " <>
-                "provider_consume_count=#{length(consume_requests)} " <>
-                "persisted_probe_holder_count=#{persisted_probe_holder_count} " <>
-                "immutable=#{persisted_probe_after_retry == persisted_probe}"
-            )
-          end
         after
           :telemetry.detach(handler_id)
         end
@@ -8197,13 +8171,6 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
 
     assert evidence.persisted_circuit.metadata["probe_in_flight_count"] == 0
     assert provider_consume_count(fixture.fake) == 1
-
-    if System.get_env("TASK7_MANUAL_QA") == "1" do
-      IO.puts(
-        "TASK7_MANUAL_QA backend_pids_distinct=true blocked_on_probe_backend=true " <>
-          "release_event=probe_failure_committed fresh_locked_marker=true consume_count=1"
-      )
-    end
   end
 
   @tag :saved_reset_two_redeemers_after_failed_recovery
