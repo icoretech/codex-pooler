@@ -18,7 +18,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
       <progress
         id={"#{@id}-progress"}
         data-role="upstream-limit-progress"
-        aria-label={"#{@limit.label} remaining #{@limit.percent_label}"}
+        aria-label={quota_limit_progress_label(@limit)}
+        title={quota_limit_progress_title(@limit)}
         class={quota_limit_progress_class(@limit)}
         value={if is_nil(@limit.percent), do: nil, else: @limit.percent_value}
         max="100"
@@ -29,7 +30,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
         :if={quota_limit_details?(@limit)}
         class="flex items-center justify-between gap-3 text-[11px] text-base-content/60"
       >
-        <span :if={@limit.count_label} id={"#{@id}-count"} class="tabular-nums">
+        <span
+          :if={@limit.count_label}
+          id={"#{@id}-count"}
+          class="tabular-nums"
+          aria-label={Map.get(@limit, :count_title)}
+          title={Map.get(@limit, :count_title)}
+        >
           {@limit.count_label}
         </span>
         <span :if={is_nil(@limit.count_label)} aria-hidden="true"></span>
@@ -106,4 +113,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
 
   defp credit_burning_class(%{burning_credits: true}), do: " progress-striped"
   defp credit_burning_class(_limit), do: ""
+
+  defp quota_limit_progress_label(%{burning_credits: true} = limit),
+    do: "#{limit.label} credit balance remaining #{limit.percent_label}; credits in use"
+
+  defp quota_limit_progress_label(%{count_title: count_title} = limit)
+       when is_binary(count_title),
+       do: "#{limit.label} included Codex quota remaining #{limit.percent_label}"
+
+  defp quota_limit_progress_label(limit),
+    do: "#{limit.label} remaining #{limit.percent_label}"
+
+  defp quota_limit_progress_title(%{burning_credits: true}),
+    do: "Striped while credits are being consumed after included Codex quota is exhausted."
+
+  defp quota_limit_progress_title(_limit), do: nil
 end

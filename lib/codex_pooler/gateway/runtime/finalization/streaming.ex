@@ -474,13 +474,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
 
   defp health_neutral_terminal_failure?(code, headers) do
     health_neutral_error_code?(code) or
-      workspace_usage_limit_reached?(code) or
-      workspace_usage_limit_reached?(RateLimitReachedType.parse_header(headers))
+      workspace_quota_depleted?(code) or
+      workspace_quota_depleted?(RateLimitReachedType.parse_header(headers))
   end
 
-  defp workspace_usage_limit_reached?(code) do
+  defp workspace_quota_depleted?(code) do
     code in [
+      "workspace_member_credits_depleted",
       "workspace_member_usage_limit_reached",
+      "workspace_owner_credits_depleted",
       "workspace_owner_usage_limit_reached"
     ]
   end

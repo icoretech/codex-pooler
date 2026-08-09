@@ -24,16 +24,21 @@ defmodule CodexPooler.Upstreams.Quota.Charts.Measurements do
           quota_key: "account",
           quota_scope: "account",
           source: "codex_usage_api",
-          reset_at: %DateTime{},
+          reset_at: reset_at,
           used_percent: %Decimal{} = used_percent
         } = window
       ) do
-    if Decimal.compare(used_percent, Decimal.new(100)) == :lt do
-      Decimal.new(100)
-      |> Decimal.sub(used_percent)
-      |> decimal_clamp_percent()
-    else
-      window |> for_window() |> Map.get(:remaining_percent)
+    cond do
+      is_nil(reset_at) and Decimal.compare(used_percent, Decimal.new(0)) == :eq ->
+        nil
+
+      Decimal.compare(used_percent, Decimal.new(100)) == :lt ->
+        Decimal.new(100)
+        |> Decimal.sub(used_percent)
+        |> decimal_clamp_percent()
+
+      true ->
+        window |> for_window() |> Map.get(:remaining_percent)
     end
   end
 

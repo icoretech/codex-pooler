@@ -38,6 +38,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
           required(:percent_value) => number(),
           required(:percent_label) => String.t(),
           required(:count_label) => String.t() | nil,
+          required(:count_title) => String.t() | nil,
           required(:burning_credits) => boolean(),
           required(:reset_semantics) => :anchored | :floating | :unknown,
           required(:reset_at) => DateTime.t() | nil,
@@ -400,14 +401,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     {reset_semantics, reset_at, reset_label, reset_title} =
       quota_reset_presentation(window, datetime_preferences, snapshot_at)
 
+    count_label = quota_count_label(window)
+    burning_credits = burning_credits?(window)
+
     %{
       key: key,
       label: label,
       percent: remaining_percent,
       percent_value: quota_percent_value(remaining_percent),
       percent_label: quota_percent_label(remaining_percent),
-      count_label: quota_count_label(window),
-      burning_credits: burning_credits?(window),
+      count_label: count_label,
+      count_title: quota_count_title(window, count_label, burning_credits),
+      burning_credits: burning_credits,
       reset_semantics: reset_semantics,
       reset_at: reset_at,
       reset_label: reset_label,
@@ -423,6 +428,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       percent_value: 0,
       percent_label: "not reported",
       count_label: nil,
+      count_title: nil,
       burning_credits: false,
       reset_semantics: :unknown,
       reset_at: nil,
@@ -491,9 +497,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
          source: "codex_usage_api",
          credits: credits
        })
-       when is_integer(credits) and credits > 0 do
+       when is_integer(credits) and credits >= 0 do
     "#{Formatting.format_integer(credits)} credits"
   end
+
+  defp quota_count_label(%Quota.AccountQuotaWindow{
+         quota_key: "account",
+         quota_scope: "account",
+         source: "codex_usage_api",
+         credits: nil
+       }),
+       do: "credits not reported"
 
   defp quota_count_label(%Quota.AccountQuotaWindow{credits: credits, active_limit: active_limit})
        when is_integer(credits) and is_integer(active_limit) and active_limit > 0 do
@@ -525,6 +539,43 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   defp quota_count_label(%Quota.AccountQuotaWindow{used_percent: %Decimal{}}), do: nil
 
   defp quota_count_label(%Quota.AccountQuotaWindow{}), do: nil
+
+  defp quota_count_title(
+         %Quota.AccountQuotaWindow{
+           quota_key: "account",
+           quota_scope: "account",
+           source: "codex_usage_api",
+           credits: nil
+         },
+         "credits not reported",
+         false
+       ),
+       do: "Credit balance was not reported for this quota sample."
+
+  defp quota_count_title(
+         %Quota.AccountQuotaWindow{
+           quota_key: "account",
+           quota_scope: "account",
+           source: "codex_usage_api",
+           credits: credits
+         },
+         count_label,
+         burning_credits
+       )
+       when is_integer(credits) and is_binary(count_label) do
+    cond do
+      burning_credits ->
+        "#{count_label}. Credit balance currently being consumed because included Codex quota is exhausted; it is not a currency amount."
+
+      credits == 0 ->
+        "#{count_label}. Credit balance is depleted; it is not a currency amount or a total capacity."
+
+      true ->
+        "#{count_label}. Credit balance is separate from included Codex quota remaining; it is not a currency amount."
+    end
+  end
+
+  defp quota_count_title(_window, _count_label, _burning_credits), do: nil
 
   defp burning_credits?(%Quota.AccountQuotaWindow{
          quota_key: "account",

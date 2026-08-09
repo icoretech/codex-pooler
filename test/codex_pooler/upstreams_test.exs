@@ -10856,6 +10856,78 @@ defmodule CodexPooler.UpstreamsTest do
     end
 
     @tag :upstream_quota_evidence_stability
+    test "explicit zero credits upgrade a same-cycle weekly snapshot that omitted the balance" do
+      identity = active_identity_fixture()
+
+      observed_at =
+        DateTime.utc_now() |> DateTime.add(-300, :second) |> DateTime.truncate(:microsecond)
+
+      rejected_at = DateTime.add(observed_at, 60, :second)
+      incoming_at = DateTime.add(rejected_at, 60, :second)
+      reset_at = observed_at |> DateTime.add(7, :day) |> DateTime.truncate(:second)
+
+      quota_payload = %{
+        "rate_limit" => %{
+          "primary_window" => %{
+            "used_percent" => 0,
+            "limit_window_seconds" => 604_800,
+            "reset_after_seconds" => 604_800,
+            "reset_at" => DateTime.to_unix(reset_at)
+          }
+        }
+      }
+
+      assert {:ok, [missing_balance_window]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 quota_payload,
+                 observed_at
+               )
+
+      assert missing_balance_window.window_kind == "secondary"
+      assert missing_balance_window.active_limit == nil
+      assert missing_balance_window.credits == nil
+
+      assert {:ok, [rejected_resetless_window]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 %{
+                   "credits" => %{"balance" => 0},
+                   "rate_limit" => %{
+                     "primary_window" => %{
+                       "used_percent" => 0,
+                       "limit_window_seconds" => 604_800,
+                       "reset_after_seconds" => 604_800
+                     }
+                   }
+                 },
+                 rejected_at
+               )
+
+      assert rejected_resetless_window.active_limit == nil
+      assert rejected_resetless_window.credits == nil
+
+      assert {:ok, [zero_balance_window]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 quota_payload
+                 |> Map.put("credits", %{"balance" => 0})
+                 |> put_in(
+                   ["rate_limit", "primary_window", "reset_after_seconds"],
+                   604_680
+                 ),
+                 incoming_at
+               )
+
+      assert zero_balance_window.id == missing_balance_window.id
+      assert zero_balance_window.active_limit == 0
+      assert zero_balance_window.credits == 0
+      assert Decimal.equal?(zero_balance_window.used_percent, Decimal.new(0))
+      assert DateTime.compare(zero_balance_window.reset_at, reset_at) == :eq
+      assert DateTime.compare(zero_balance_window.observed_at, incoming_at) == :eq
+    end
+
+    @tag :upstream_quota_evidence_stability
     test "missing free-plan credit balance preserves the last known balance" do
       identity = active_identity_fixture()
       observed_at = DateTime.utc_now() |> DateTime.truncate(:second)
@@ -11389,6 +11461,11 @@ defmodule CodexPooler.UpstreamsTest do
                Decimal.new("97")
              )
 
+      assert Decimal.equal?(
+               Measurements.meter_remaining_percent(%{included_quota | reset_at: nil}),
+               Decimal.new("97")
+             )
+
       resetless_zero = %Quota.AccountQuotaWindow{
         included_quota
         | reset_at: nil,
@@ -11398,6 +11475,12 @@ defmodule CodexPooler.UpstreamsTest do
       }
 
       assert Measurements.meter_remaining_percent(resetless_zero) == nil
+
+      assert Measurements.meter_remaining_percent(%{
+               resetless_zero
+               | active_limit: 601,
+                 credits: 601
+             }) == nil
 
       exhausted = %Quota.AccountQuotaWindow{
         included_quota
@@ -11527,6 +11610,89 @@ defmodule CodexPooler.UpstreamsTest do
 
       assert %{eligible?: true, routing_state: :precise, exclusions: []} =
                QuotaWindows.routing_quota_eligibility(identity, at: weak_observed_at)
+    end
+
+    @tag :upstream_quota_evidence_stability
+    test "parser-shaped credit burn preserves the last pre-burn balance as its baseline" do
+      identity = active_identity_fixture()
+
+      observed_at =
+        DateTime.utc_now() |> DateTime.add(-300, :second) |> DateTime.truncate(:microsecond)
+
+      burn_observed_at = DateTime.add(observed_at, 60, :second)
+      reset_at = DateTime.add(observed_at, 30, :day)
+
+      assert {:ok, [included_window]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 %{
+                   "credits" => %{"balance" => 601},
+                   "rate_limit" => %{
+                     "primary_window" => %{
+                       "used_percent" => 3,
+                       "limit_window_seconds" => 2_592_000,
+                       "reset_at" => DateTime.to_unix(reset_at)
+                     }
+                   }
+                 },
+                 observed_at
+               )
+
+      assert included_window.active_limit == 601
+      assert included_window.credits == 601
+
+      assert {:ok, [burning_window]} =
+               QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                 identity,
+                 %{
+                   "credits" => %{"balance" => 500},
+                   "rate_limit" => %{
+                     "primary_window" => %{
+                       "used_percent" => 100,
+                       "limit_window_seconds" => 2_592_000,
+                       "reset_at" => DateTime.to_unix(reset_at)
+                     }
+                   }
+                 },
+                 burn_observed_at
+               )
+
+      assert burning_window.id == included_window.id
+      assert burning_window.active_limit == 601
+      assert burning_window.credits == 500
+      assert Decimal.equal?(burning_window.used_percent, Decimal.new("100"))
+
+      assert Decimal.equal?(
+               Decimal.round(Measurements.meter_remaining_percent(burning_window), 0),
+               Decimal.new("83")
+             )
+
+      for {balance, seconds_after, expected_percent} <- [{300, 120, "50"}, {0, 180, "0"}] do
+        assert {:ok, [later_window]} =
+                 QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+                   identity,
+                   %{
+                     "credits" => %{"balance" => balance},
+                     "rate_limit" => %{
+                       "primary_window" => %{
+                         "used_percent" => 100,
+                         "limit_window_seconds" => 2_592_000,
+                         "reset_at" => DateTime.to_unix(reset_at)
+                       }
+                     }
+                   },
+                   DateTime.add(observed_at, seconds_after, :second)
+                 )
+
+        assert later_window.id == included_window.id
+        assert later_window.active_limit == 601
+        assert later_window.credits == balance
+
+        assert Decimal.equal?(
+                 Decimal.round(Measurements.meter_remaining_percent(later_window), 0),
+                 Decimal.new(expected_percent)
+               )
+      end
     end
 
     test "headers cannot roll back a reset advanced by usage evidence" do

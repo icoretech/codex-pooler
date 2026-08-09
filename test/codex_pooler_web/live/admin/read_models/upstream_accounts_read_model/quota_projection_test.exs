@@ -722,6 +722,103 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
     assert primary.reset_label == nil
   end
 
+  @tag :quota_account_projection
+  test "resetless provider account usage keeps its reported included-quota percent" do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    row =
+      account_window(
+        window_kind: "primary",
+        window_minutes: 43_200,
+        active_limit: 601,
+        credits: 601,
+        used_percent: Decimal.new("3"),
+        reset_at: nil,
+        source: "codex_usage_api",
+        source_precision: "observed",
+        observed_at: observed_at
+      )
+
+    primary =
+      [row]
+      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil), observed_at)
+      |> Enum.find(&(&1.key == :primary_30d))
+
+    assert Decimal.equal?(primary.percent, Decimal.new("97"))
+    assert primary.percent_value == 97
+    assert primary.percent_label == "97%"
+    assert primary.count_label == "601 credits"
+
+    assert primary.count_title ==
+             "601 credits. Credit balance is separate from included Codex quota remaining; it is not a currency amount."
+
+    refute primary.burning_credits
+    assert primary.reset_label == nil
+  end
+
+  @tag :quota_account_projection
+  test "depleted provider credits never fabricate a balance capacity fraction" do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    row =
+      account_window(
+        window_kind: "primary",
+        window_minutes: 43_200,
+        active_limit: 601,
+        credits: 0,
+        used_percent: Decimal.new("100"),
+        reset_at: DateTime.add(observed_at, 20, :day),
+        source: "codex_usage_api",
+        source_precision: "observed",
+        observed_at: observed_at
+      )
+
+    primary =
+      [row]
+      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil), observed_at)
+      |> Enum.find(&(&1.key == :primary_30d))
+
+    assert Decimal.equal?(primary.percent, Decimal.new("0"))
+    assert primary.percent_value == 0
+    assert primary.percent_label == "0%"
+    assert primary.count_label == "0 credits"
+
+    assert primary.count_title ==
+             "0 credits. Credit balance is depleted; it is not a currency amount or a total capacity."
+
+    refute primary.burning_credits
+  end
+
+  @tag :quota_account_projection
+  test "omitted provider credits render an explicit unavailable label" do
+    observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    row =
+      account_window(
+        window_kind: "secondary",
+        window_minutes: 10_080,
+        active_limit: nil,
+        credits: nil,
+        used_percent: Decimal.new("12"),
+        reset_at: DateTime.add(observed_at, 6, :day),
+        source: "codex_usage_api",
+        source_precision: "observed",
+        observed_at: observed_at
+      )
+
+    secondary =
+      [row]
+      |> QuotaProjection.quota_limit_rows(DateTimeDisplay.preferences_for_user(nil), observed_at)
+      |> Enum.find(&(&1.key == :weekly))
+
+    assert secondary.count_label == "credits not reported"
+
+    assert secondary.count_title ==
+             "Credit balance was not reported for this quota sample."
+
+    refute secondary.burning_credits
+  end
+
   @tag :quota_spark_projection
   test "provider-observed zero-use Spark limits remain visible" do
     observed_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)

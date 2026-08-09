@@ -391,7 +391,19 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
           merge_attrs_by_decision(existing, attrs, evidence, timestamp)
       end
 
-    put_accepted_positive_weekly_barrier(merged_attrs, evidence, existing, timestamp)
+    merged_attrs
+    |> maybe_upgrade_explicit_zero_capacity(evidence, existing, timestamp)
+    |> put_accepted_positive_weekly_barrier(evidence, existing, timestamp)
+  end
+
+  defp maybe_upgrade_explicit_zero_capacity(attrs, evidence, existing, timestamp) do
+    if explicit_zero_capacity_upgrade?(evidence, existing, timestamp) do
+      attrs
+      |> Map.put(:active_limit, 0)
+      |> Map.put(:credits, 0)
+    else
+      attrs
+    end
   end
 
   defp put_accepted_positive_weekly_barrier(attrs, evidence, existing, timestamp) do
@@ -2346,6 +2358,30 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
     end
   end
 
+  defp explicit_zero_capacity_upgrade?(
+         %Evidence{
+           source: "codex_usage_api",
+           active_limit: 0,
+           credits: 0,
+           observed_at: %DateTime{} = observed_at
+         } = evidence,
+         %Quota.AccountQuotaWindow{
+           source: "codex_usage_api",
+           active_limit: existing_active_limit,
+           credits: existing_credits,
+           observed_at: %DateTime{} = existing_observed_at
+         } = existing,
+         timestamp
+       ) do
+    account_weekly_zero_observation?(evidence) and same_evidence_identity?(evidence, existing) and
+      existing_active_limit in [nil, 0] and existing_credits in [nil, 0] and
+      (is_nil(existing_active_limit) or is_nil(existing_credits)) and
+      newer_observation?(observed_at, existing_observed_at) and
+      same_cycle_sync_refresh?(evidence, existing, timestamp)
+  end
+
+  defp explicit_zero_capacity_upgrade?(_evidence, _existing, _timestamp), do: false
+
   defp relative_snapshot_decision(evidence, existing) do
     if account_quota_identity?(evidence) do
       if later_reset?(evidence.reset_at, existing.reset_at), do: :incoming, else: :existing
@@ -2387,7 +2423,8 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStore do
          %Quota.AccountQuotaWindow{} = existing
        ) do
     same_evidence_identity?(evidence, existing) and positive_percent?(used_percent) and
-      missing_active_limit?(evidence) and active_limit_bearing?(existing) and
+      (missing_active_limit?(evidence) or codex_usage_account_evidence?(evidence)) and
+      active_limit_bearing?(existing) and
       (weak_capacity?(evidence) or positive_credits?(evidence))
   end
 

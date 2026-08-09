@@ -711,6 +711,103 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
     assert request.upstream_account_label == free_identity.account_label
   end
 
+  test "GET /api/codex/usage preserves provider percent for a credit-bearing usage payload", %{
+    conn: conn
+  } do
+    pool = pool_fixture()
+    account_id = "credit-percent-account-#{System.unique_integer([:positive])}"
+    token = "credit-percent-token-#{System.unique_integer([:positive])}"
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        chatgpt_account_id: account_id,
+        account_label: "Credit percent account",
+        plan_family: "pro"
+      })
+
+    assert {:ok, _secret} =
+             Upstreams.store_encrypted_secret(identity, %{
+               secret_kind: "access_token",
+               plaintext: token
+             })
+
+    observed_at =
+      DateTime.utc_now() |> DateTime.add(-120, :second) |> DateTime.truncate(:microsecond)
+
+    reset_at = DateTime.add(observed_at, 20, :day)
+
+    assert {:ok, [window]} =
+             QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+               identity,
+               %{
+                 "credits" => %{"balance" => 601},
+                 "rate_limit" => %{
+                   "primary_window" => %{
+                     "used_percent" => 3,
+                     "limit_window_seconds" => 2_592_000,
+                     "reset_at" => DateTime.to_unix(reset_at)
+                   }
+                 }
+               },
+               observed_at
+             )
+
+    assert window.active_limit == 601
+    assert window.credits == 601
+    assert Decimal.equal?(window.used_percent, Decimal.new("3"))
+
+    conn =
+      conn
+      |> put_req_header("authorization", "Bearer #{token}")
+      |> put_req_header("chatgpt-account-id", account_id)
+      |> get("/api/codex/usage")
+
+    assert %{
+             "rate_limit" => %{
+               "allowed" => true,
+               "limit_reached" => false,
+               "primary_window" => %{"used_percent" => 3}
+             },
+             "credits" => %{"has_credits" => true, "unlimited" => false, "balance" => "601"}
+           } = json_response(conn, 200)
+
+    burn_observed_at = DateTime.add(observed_at, 60, :second)
+
+    assert {:ok, [burning_window]} =
+             QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+               identity,
+               %{
+                 "credits" => %{"balance" => 500},
+                 "rate_limit" => %{
+                   "primary_window" => %{
+                     "used_percent" => 100,
+                     "limit_window_seconds" => 2_592_000,
+                     "reset_at" => DateTime.to_unix(reset_at)
+                   }
+                 }
+               },
+               burn_observed_at
+             )
+
+    assert burning_window.active_limit == 601
+    assert burning_window.credits == 500
+
+    burn_conn =
+      build_conn()
+      |> put_req_header("authorization", "Bearer #{token}")
+      |> put_req_header("chatgpt-account-id", account_id)
+      |> get("/api/codex/usage")
+
+    assert %{
+             "rate_limit" => %{
+               "allowed" => true,
+               "limit_reached" => false,
+               "primary_window" => %{"used_percent" => 100}
+             },
+             "credits" => %{"has_credits" => true, "unlimited" => false, "balance" => "500"}
+           } = json_response(burn_conn, 200)
+  end
+
   test "GET /api/codex/usage returns monthly-only primary window seconds without secondary synthesis",
        %{
          conn: conn

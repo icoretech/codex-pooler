@@ -1781,10 +1781,24 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     assert updated.metadata["probe_in_flight_count"] == 0
   end
 
-  for health_neutral_code <- ["server_error", "overloaded_error", "server_is_overloaded"] do
-    @health_neutral_code health_neutral_code
-    test "health-neutral terminal SSE failure #{health_neutral_code} releases half-open route probe" do
-      health_neutral_code = @health_neutral_code
+  for {case_name, health_neutral_code, health_headers} <- [
+        {"server_error", "server_error", %{}},
+        {"overloaded_error", "overloaded_error", %{}},
+        {"server_is_overloaded", "server_is_overloaded", %{}},
+        {"workspace_owner_credits_depleted", "workspace_owner_credits_depleted", %{}},
+        {"workspace_member_credits_depleted", "workspace_member_credits_depleted", %{}},
+        {"workspace_owner_credits_depleted header", "upstream_stream_error",
+         %{
+           "x-codex-rate-limit-reached-type" => ["workspace_owner_credits_depleted"]
+         }},
+        {"workspace_member_credits_depleted header", "upstream_stream_error",
+         %{
+           "x-codex-rate-limit-reached-type" => ["workspace_member_credits_depleted"]
+         }}
+      ] do
+    @health_neutral_case {health_neutral_code, health_headers}
+    test "health-neutral terminal SSE failure #{case_name} releases half-open route probe" do
+      {health_neutral_code, health_headers} = @health_neutral_case
 
       {setup, _first_upstream, _second_upstream} =
         stream_retry_setup(
@@ -1836,7 +1850,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
           routing_circuit_admission: :probe
         )
 
-      response_context = %ResponseContext{context: context, response: %Req.Response{status: 200}}
+      response_context = %ResponseContext{
+        context: context,
+        response: %Req.Response{status: 200, headers: health_headers}
+      }
 
       assert {:ok, _finalized} =
                Streaming.finalize_failure(

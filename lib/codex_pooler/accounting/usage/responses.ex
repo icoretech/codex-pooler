@@ -238,17 +238,23 @@ defmodule CodexPooler.Accounting.UsageResponses do
         end
 
     %{
-      used_percent:
-        if(is_integer(limit.max_value) and limit.max_value > 0,
-          do: div(limit.current_value * 100 + div(limit.max_value, 2), limit.max_value),
-          else: limit.used_percent || 0
-        ),
+      used_percent: snapshot_used_percent(limit),
       limit_window_seconds: window_seconds(limit.limit_window),
       reset_after_seconds:
         if(reset_at, do: max(DateTime.diff(reset_at, now(), :second), 0), else: nil),
       reset_at: if(reset_at, do: DateTime.to_unix(reset_at), else: nil)
     }
   end
+
+  @spec snapshot_used_percent(map()) :: non_neg_integer()
+  defp snapshot_used_percent(%{used_percent: used_percent}) when is_integer(used_percent),
+    do: used_percent
+
+  defp snapshot_used_percent(%{max_value: max_value, current_value: current_value})
+       when is_integer(max_value) and max_value > 0 and is_integer(current_value),
+       do: div(current_value * 100 + div(max_value, 2), max_value)
+
+  defp snapshot_used_percent(_limit), do: 0
 
   defp limit_window_label(%Quota.AccountQuotaWindow{} = window) do
     case WindowClassifier.classify(window) do

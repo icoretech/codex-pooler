@@ -67,6 +67,29 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       assert data["error"]["code"] == "context_length_exceeded"
       assert data["response"]["error"]["code"] == "context_length_exceeded"
     end
+
+    test "classifies workspace credit depletion response.incomplete as failed" do
+      for code <- [
+            "workspace_owner_credits_depleted",
+            "workspace_member_credits_depleted"
+          ] do
+        frame =
+          sse_event("response.incomplete", %{
+            "type" => "response.incomplete",
+            "response" => %{
+              "id" => "resp_#{code}",
+              "status" => "incomplete",
+              "incomplete_details" => %{"reason" => code}
+            }
+          })
+
+        assert {:ok, %{kind: :failed, failure: failure}} =
+                 StreamProtocol.terminal_outcome(frame)
+
+        assert failure.code == code
+        assert failure.event_type == "response.incomplete"
+      end
+    end
   end
 
   @tag :task_1_pin

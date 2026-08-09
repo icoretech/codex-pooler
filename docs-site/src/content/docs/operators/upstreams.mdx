@@ -92,7 +92,7 @@ The card body is split into status, token burn, quota windows, and footer metric
   </tbody>
 </table>
 
-The account quota percentage always follows the provider's reported usage window while included Codex quota remains. A separate positive credit balance may still appear as a raw balance beside the solid bar, but it does not make the bar striped and is never presented as a fabricated `balance / capacity` total. When the provider reports the included window at 100% and a positive balance remains, the bar becomes striped and continues to show only the current raw credit balance. Provider credit units are not a currency amount, so they should not be compared directly with the monetary balance shown in ChatGPT billing.
+The account quota percentage always follows the provider's reported usage window while included Codex quota remains. A provider-reported credit balance may still appear as a raw balance beside the solid bar, but a positive balance does not make the bar striped before included quota is exhausted and the balance is never presented as a fabricated `balance / capacity` total. When the provider reports the included window at 100% and a positive balance remains, the bar becomes striped and continues to show only the current raw credit balance. An explicit depleted balance is shown as `0 credits` without stripes. If the provider omits the balance, the card says `credits not reported` instead of leaving the detail blank. Provider credit units are not a currency amount, so they should not be compared directly with the monetary balance shown in ChatGPT billing.
 
 ## Saved Resets
 

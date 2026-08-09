@@ -786,15 +786,17 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
   warning; below → error. Unreported remains `progress-neutral` with muted
   text and adds `admin-static-unknown-progress`; it is never presented as a
   determinate zero-value meter.
-- **Credit burn state:** a positive provider credit balance does not change the
+- **Credit burn state:** a positive credit balance does not change the
   quota meter while included Codex quota remains. The row continues to show
   the provider's remaining quota percentage with a solid fill and may show the
   current raw credit balance as secondary detail. Once provider usage reaches
   100%, `burning_credits: true` appends
   `progress-striped`; the fill then tracks the observed credit balance against
   the last pre-burn balance baseline and the detail shows only the current
-  provider balance, such as `500 credits`. It never renders an inferred
-  `balance / capacity` denominator.
+  provider balance, such as `500 credits`. An explicit depleted balance remains
+  visible as `0 credits` without stripes; an omitted provider balance reads
+  `credits not reported` instead of leaving an unexplained blank. The UI never
+  renders an inferred `balance / capacity` denominator.
 - **Motion:** known values use width/color transitions 260/180ms; cards with
   recent burn run the gloss sweep. An unreported value omits `value`, keeps
   native indeterminate semantics, and neutralizes daisyUI's indeterminate
@@ -805,15 +807,22 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
   keep the compact `6d 23h` / `1h 30m` / `42m` value current without a
   LiveView round trip. Floating rolling windows remain static as
   `starts on use` until provider evidence anchors their reset.
-- **A11y:** the `<progress>` carries `aria-label` "{label} remaining {pct}"
-  and the percent renders as text besides the bar.
+- **A11y:** a solid included-quota `<progress>` carries `aria-label`
+  "{label} included Codex quota remaining {pct}". A striped burn meter carries
+  "{label} credit balance remaining {pct}; credits in use" and a
+  title explaining that stripes mean included quota is exhausted and credits
+  are being consumed. When a credit count is present, its `aria-label` and
+  title explain that the value is a credit balance, separate from
+  included Codex quota and not a currency amount. The visible percent remains
+  text beside the bar.
 
 ```heex
 <%!-- Known credit-burn meter: numeric fill plus stripes, with current balance in details. --%>
 <progress
   id={"#{@id}-progress"}
   data-role="upstream-limit-progress"
-  aria-label={"#{@limit.label} remaining #{@limit.percent_label}"}
+  aria-label={"#{@limit.label} credit balance remaining #{@limit.percent_label}; credits in use"}
+  title="Striped while credits are being consumed after included Codex quota is exhausted."
   class="progress admin-live-progress progress-warning progress-striped h-1.5 w-full"
   value={@limit.percent_value}
   max="100"
@@ -825,7 +834,7 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
 <progress
   id={"#{@id}-progress"}
   data-role="upstream-limit-progress"
-  aria-label={"#{@limit.label} remaining #{@limit.percent_label}"}
+  aria-label={"#{@limit.label} included Codex quota remaining #{@limit.percent_label}"}
   class="progress admin-live-progress admin-static-unknown-progress progress-neutral h-1.5 w-full"
   max="100"
 >

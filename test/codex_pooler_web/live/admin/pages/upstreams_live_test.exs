@@ -3424,6 +3424,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
         assignment_label: "Credit burn assignment"
       })
 
+    %{identity: depleted_identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Depleted Credits Codex",
+        assignment_label: "Depleted credits assignment"
+      })
+
+    %{identity: unreported_identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "Unreported Credits Codex",
+        assignment_label: "Unreported credits assignment"
+      })
+
     now = DateTime.utc_now() |> DateTime.add(-60, :second)
 
     assert {:ok, [_quota_primary]} =
@@ -3458,19 +3470,88 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
                }
              ])
 
+    assert {:ok, [_depleted_primary]} =
+             QuotaWindows.upsert_quota_windows(depleted_identity, [
+               %{
+                 window_kind: "primary",
+                 window_minutes: 43_200,
+                 active_limit: 601,
+                 credits: 0,
+                 used_percent: Decimal.new("100"),
+                 reset_at: DateTime.add(now, 11, :day),
+                 source: "codex_usage_api",
+                 source_precision: "observed",
+                 freshness_state: "fresh",
+                 observed_at: now
+               }
+             ])
+
+    assert {:ok, [_unreported_secondary]} =
+             QuotaWindows.upsert_quota_windows_from_codex_usage_payload(
+               unreported_identity,
+               %{
+                 "rate_limit" => %{
+                   "primary_window" => %{
+                     "used_percent" => 12,
+                     "limit_window_seconds" => 604_800,
+                     "reset_after_seconds" => 518_400
+                   }
+                 }
+               },
+               now
+             )
+
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
 
     quota_selector = "#upstream-account-#{quota_identity.id}-limit-primary_30d"
     credit_selector = "#upstream-account-#{credit_identity.id}-limit-primary_30d"
+    depleted_selector = "#upstream-account-#{depleted_identity.id}-limit-primary_30d"
+
+    unreported_selector = "#upstream-account-#{unreported_identity.id}-limit-weekly"
 
     assert has_element?(view, "#{quota_selector}-progress[value='97']")
     refute has_element?(view, "#{quota_selector}-progress.progress-striped")
     assert has_element?(view, "#{quota_selector}-count", "601 credits")
+
+    assert has_element?(
+             view,
+             "#{quota_selector}-count[title*='separate from included Codex quota remaining'][title*='not a currency amount'][aria-label*='separate from included Codex quota remaining'][aria-label*='not a currency amount']"
+           )
+
     refute render(view) =~ "601 / 601 credits"
 
     assert has_element?(view, "#{credit_selector}-progress[value='83'].progress-striped")
     assert has_element?(view, "#{credit_selector}-count", "500 credits")
+
+    assert has_element?(
+             view,
+             "#{credit_selector}-count[aria-label*='currently being consumed because included Codex quota is exhausted'][aria-label*='not a currency amount']"
+           )
+
+    assert has_element?(
+             view,
+             "#{credit_selector}-progress[aria-label*='credit balance'][aria-label*='credits in use'][title*='Striped while credits are being consumed']"
+           )
+
     refute render(view) =~ "500 / 601 credits"
+
+    assert has_element?(view, "#{depleted_selector}-progress[value='0']")
+    refute has_element?(view, "#{depleted_selector}-progress.progress-striped")
+    assert has_element?(view, "#{depleted_selector}-count", "0 credits")
+
+    assert has_element?(
+             view,
+             "#{depleted_selector}-count[title*='balance is depleted'][title*='not a currency amount or a total capacity'][aria-label*='balance is depleted'][aria-label*='not a currency amount or a total capacity']"
+           )
+
+    refute render(view) =~ "0 / 601 credits"
+
+    assert has_element?(view, "#{unreported_selector}-count", "credits not reported")
+
+    assert has_element?(
+             view,
+             "#{unreported_selector}-count[title='Credit balance was not reported for this quota sample.'][aria-label='Credit balance was not reported for this quota sample.']"
+           )
   end
 
   test "Spark zero-use quota stays visible while evidence sources change", %{
