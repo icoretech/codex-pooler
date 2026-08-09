@@ -236,6 +236,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   alias Ecto.Adapters.SQL.Sandbox
 
   @websocket_frame_timeout 1_000
+  # Detection budget for a server-side connection teardown the test only
+  # observes, never a scenario timeout.
+  @connection_shutdown_timeout_ms 15_000
   @ttfh_threshold_ms 9_500
   @timing_observation_timeout_ms 1_000
   @failure_observation_timeout_ms 2_000
@@ -7772,7 +7775,10 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
             public_websocket_send_text!(conn, websocket, ref, String.duplicate("x", 1_000))
 
           result = public_websocket_receive_close!(conn, websocket, ref)
-          assert_receive {:DOWN, ^monitor_ref, :process, ^connection_pid, _reason}
+
+          assert_receive {:DOWN, ^monitor_ref, :process, ^connection_pid, _reason},
+                         @connection_shutdown_timeout_ms
+
           Logger.flush()
           result
         end)

@@ -17,6 +17,10 @@ defmodule CodexPooler.Alerts.SavedResetDedupeTest do
 
   @rule_kind "upstream_saved_reset_banked_first_seen"
   @expires_at "2026-06-01T00:00:00Z"
+  @detection_timeout_ms 5_000
+  # Six workers are collected one at a time, so the release budget has to clear
+  # the whole collection loop, not a single @detection_timeout_ms wait.
+  @release_timeout_ms 60_000
 
   @tag :saved_reset_banked_first_seen
   test "records one incident and one delayed channel delivery for first-seen saved resets" do
@@ -239,18 +243,21 @@ defmodule CodexPooler.Alerts.SavedResetDedupeTest do
     |> MapSet.new()
   end
 
+  # The racing workers park here until every one of them has reported ready, so
+  # this budget has to outlast the collection loop below rather than race it: a
+  # worker that gave up first would collapse the race the test is proving.
   defp await_go(parent, attrs) do
     send(parent, {:ready, self()})
 
     receive do
       :go -> Alerts.record_incident_once(attrs)
     after
-      2_000 -> flunk("concurrent saved-reset lifecycle task did not start")
+      @release_timeout_ms -> flunk("concurrent saved-reset lifecycle task did not start")
     end
   end
 
   defp receive_ready_pid! do
-    assert_receive {:ready, pid}, 2_000
+    assert_receive {:ready, pid}, @detection_timeout_ms
     pid
   end
 end

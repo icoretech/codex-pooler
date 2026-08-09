@@ -40,6 +40,9 @@ defmodule CodexPooler.Dev.SavedResetConfirmationFixturesTest do
     assert {:ok, :ok} = Task.await(first)
   end
 
+  # Pointing the lock at a dead port is the scenario, so Postgrex's connect
+  # retries are expected output rather than a symptom worth printing.
+  @tag :capture_log
   test "fails closed when the advisory lock database is unavailable" do
     unavailable_config =
       Repo.config() |> Keyword.put(:hostname, "127.0.0.1") |> Keyword.put(:port, 1)

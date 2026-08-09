@@ -11,6 +11,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
   @epoch 1
   @detection_timeout_ms 15_000
 
+  # Scenario budget for a submit the relay releases, never a detection budget.
+  # It must outlast every @detection_timeout_ms wait in the same test: a helper
+  # that gave up first would hand the relay a *successful* settlement, so the
+  # stream closes with :done and a merely slow run fails as a wrong outcome
+  # instead of a timeout. Healthy runs never reach it — the relay kills the
+  # submit task on cancellation, on settlement, and when the test process dies.
+  @submit_hold_timeout_ms 60_000
+
   defp start_armed(submit_fun, opts \\ []) do
     correlation_id = "bridge-stream-#{System.unique_integer([:positive])}"
     stream = WebsocketBridgeStream.start(correlation_id, opts)
@@ -27,7 +35,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
       receive do
         :unblock -> :ok
       after
-        5_000 -> :ok
+        @submit_hold_timeout_ms -> {:error, :submit_never_unblocked}
       end
     end
   end
@@ -39,7 +47,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
       receive do
         {:return, value} -> value
       after
-        5_000 -> :ok
+        @submit_hold_timeout_ms -> {:error, :submit_never_released}
       end
     end
   end
@@ -948,7 +956,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
   end
 
   test "precommit overflow after submit success retains the successful settlement" do
-    stream = start_armed(registered_submit(self()), settle_timeout_ms: 50)
+    # The submit settles before any frame, so the relay is already counting
+    # down its pre-content fallback while the test is still delivering frames.
+    # The window has to outlast that delivery and still expire inside the
+    # detection budget, since the closing :done is the settle timeout firing.
+    stream = start_armed(registered_submit(self()), settle_timeout_ms: 2_000)
     ref = stream.ref
     relay = stream.relay
 

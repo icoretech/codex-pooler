@@ -3,6 +3,11 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
 
   alias CodexPooler.Dev.GatewayPerfFakeUpstream
 
+  # Detection budget for a loopback socket round trip. The websocket helpers
+  # below only ever drive "short-ok", whose paced delays are two orders of
+  # magnitude smaller, so this bounds a stalled run rather than the scenario.
+  @detection_timeout_ms 5_000
+
   @manifest_keys [
     "name",
     "first_event_delay_ms",
@@ -362,7 +367,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
             await_websocket_upgrade(conn, ref, status, headers)
         end
     after
-      1_000 -> flunk("timed out waiting for websocket upgrade")
+      @detection_timeout_ms -> flunk("timed out waiting for websocket upgrade")
     end
   end
 
@@ -404,7 +409,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
             websocket_receive_text!(conn, websocket, ref)
         end
     after
-      1_500 -> flunk("timed out waiting for websocket frame")
+      @detection_timeout_ms -> flunk("timed out waiting for websocket frame")
     end
   end
 

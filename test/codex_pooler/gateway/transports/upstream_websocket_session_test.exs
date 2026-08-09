@@ -15,6 +15,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   @timeouts %{connect_timeout_ms: 1_000, receive_timeout_ms: 1_000}
 
+  # Detection budget for observing a call the session itself already bounds by
+  # @timeouts. It has to stay above those scenario timeouts, or a loaded run
+  # gives up on a request that was still allowed to be in flight.
+  @detection_timeout_ms 5_000
+
   @tag :task_1_pin
   test "PIN-P02 exact legacy typeless binary id remains terminal without status or object" do
     frame = ~s({"id":"resp_pin_legacy_typeless"})
@@ -2453,15 +2458,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         receive do
           {:request_once_complete, pid, result} when pid == task.pid -> result
         after
-          1_000 -> flunk("request_once did not complete")
+          @detection_timeout_ms -> flunk("request_once did not complete")
         end
 
       delivered_ref = :erlang.trace_delivered(task.pid)
-      assert_receive {:trace_delivered, pid, ^delivered_ref} when pid == task.pid, 1_000
+
+      assert_receive {:trace_delivered, pid, ^delivered_ref} when pid == task.pid,
+                     @detection_timeout_ms
 
       trace = collect_lifecycle_trace(task.pid, [])
       send(task.pid, {:release_request_once, release_ref})
-      assert Task.await(task, 1_000) == result
+      assert Task.await(task, @detection_timeout_ms) == result
 
       {result, trace}
     after

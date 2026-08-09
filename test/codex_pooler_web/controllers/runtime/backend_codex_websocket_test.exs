@@ -57,6 +57,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
   @websocket_frame_timeout 1_000
   @large_websocket_frame_timeout 5_000
+  # Detection budget for a server-side connection teardown the test only
+  # observes, never a scenario timeout.
+  @connection_shutdown_timeout_ms 15_000
   @reasoning_denial_message "reasoning effort is not available for this API key"
   @responses_lite_client_metadata_key "ws_request_header_x_openai_internal_codex_responses_lite"
   @model_serving_metadata_keys ~w(
@@ -1220,18 +1223,32 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "unused_oversized_frame"}))
     setup = gateway_setup(upstream)
-    port = start_public_endpoint!()
+    {server, port} = start_public_endpoint_with_server!()
     turn_state = "public-ws-oversized-frame-#{System.unique_integer([:positive])}"
 
     {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
 
     try do
+      assert {:ok, [connection_pid]} = ThousandIsland.connection_pids(server)
+      monitor_ref = Process.monitor(connection_pid)
+
+      # Bandit logs the protocol error only after it has written the close
+      # frame, so the capture has to stay open until the connection process is
+      # gone: releasing it on the close frame alone leaks the expected
+      # "** (exit) {:deserializing, :max_frame_size_exceeded}" line to the
+      # console on a loaded run.
       {{conn, _websocket, code, reason}, _logs} =
         with_log(fn ->
           {conn, websocket} =
             public_websocket_send_text!(conn, websocket, ref, String.duplicate("x", 1_000))
 
-          public_websocket_receive_close!(conn, websocket, ref)
+          result = public_websocket_receive_close!(conn, websocket, ref)
+
+          assert_receive {:DOWN, ^monitor_ref, :process, ^connection_pid, _reason},
+                         @connection_shutdown_timeout_ms
+
+          Logger.flush()
+          result
         end)
 
       assert code == 1009
@@ -1253,12 +1270,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "unused_fragmented_frame"}))
     setup = gateway_setup(upstream)
-    port = start_public_endpoint!()
+    {server, port} = start_public_endpoint_with_server!()
     turn_state = "public-ws-fragmented-frame-#{System.unique_integer([:positive])}"
 
     {conn, websocket, ref} = public_websocket_connect!(port, setup, turn_state)
 
     try do
+      assert {:ok, [connection_pid]} = ThousandIsland.connection_pids(server)
+      monitor_ref = Process.monitor(connection_pid)
+
       {{conn, _websocket, code, reason}, _logs} =
         with_log(fn ->
           {conn, websocket} =
@@ -1270,7 +1290,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
               String.duplicate("x", 400)
             )
 
-          public_websocket_receive_close!(conn, websocket, ref)
+          result = public_websocket_receive_close!(conn, websocket, ref)
+
+          assert_receive {:DOWN, ^monitor_ref, :process, ^connection_pid, _reason},
+                         @connection_shutdown_timeout_ms
+
+          Logger.flush()
+          result
         end)
 
       assert code == 1009
