@@ -484,6 +484,36 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     assert {:ok, %{inserted: 0}} = OpenAIPricingImporter.import_file(write_json!(child))
   end
 
+  test "identical re-import verifies persisted rows without issuing snapshot inserts" do
+    unique = System.unique_integer([:positive])
+    identifiers = ["reimport-first-#{unique}", "reimport-second-#{unique}"]
+    path = write_json!(payload_with_models("2026-07-28T00:00:00Z", identifiers))
+
+    assert {:ok, %{inserted: 2}} = OpenAIPricingImporter.import_file(path)
+
+    handler_id = "pricing-import-idempotence-#{unique}"
+    insert_count = :counters.new(1, [])
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and pricing_snapshot_insert?(metadata) do
+            :counters.add(insert_count, 1, 1)
+          end
+        end,
+        nil
+      )
+
+    try do
+      assert {:ok, %{inserted: 0}} = OpenAIPricingImporter.import_file(path)
+      assert :counters.get(insert_count, 1) == 0
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
   test "identical unique-index winner reload is idempotent while divergent winner is bounded and rolls back" do
     payload =
       valid_payload("winner-model", %{

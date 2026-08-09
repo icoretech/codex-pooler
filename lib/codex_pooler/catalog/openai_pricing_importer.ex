@@ -122,15 +122,47 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
   end
 
   defp insert_rows(rows) do
-    Enum.reduce(rows, 0, fn attrs, inserted ->
-      case Repo.insert(PricingSnapshot.insert_changeset(attrs), mode: :savepoint) do
-        {:ok, _snapshot} ->
-          inserted + 1
+    persisted = persisted_identity_index(rows)
 
-        {:error, changeset} ->
-          resolve_unique_conflict(changeset, attrs, inserted)
+    Enum.reduce(rows, 0, fn attrs, inserted ->
+      case Map.fetch(persisted, identity_key(attrs)) do
+        {:ok, snapshot} ->
+          resolve_reloaded_identity([snapshot], attrs, inserted)
+
+        :error ->
+          insert_candidate(attrs, inserted)
       end
     end)
+  end
+
+  defp persisted_identity_index([]), do: %{}
+
+  defp persisted_identity_index([%{price_version: price_version} | _rows]) do
+    PricingSnapshot
+    |> where([snapshot], snapshot.price_version == ^price_version)
+    |> Repo.all()
+    |> Map.new(&{identity_key(&1), &1})
+  end
+
+  defp identity_key(%{
+         model_identifier: model_identifier,
+         price_version: price_version,
+         config: config
+       }) do
+    {
+      String.downcase(model_identifier),
+      price_version,
+      config["service_tier"] || "",
+      config["price_bucket"] || "",
+      config["importer_format_revision"] || ""
+    }
+  end
+
+  defp insert_candidate(attrs, inserted) do
+    case Repo.insert(PricingSnapshot.insert_changeset(attrs), mode: :savepoint) do
+      {:ok, _snapshot} -> inserted + 1
+      {:error, changeset} -> resolve_unique_conflict(changeset, attrs, inserted)
+    end
   end
 
   defp resolve_unique_conflict(changeset, attrs, inserted) do
