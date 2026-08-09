@@ -99,7 +99,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
         )
       end)
 
-    Repo.transaction(fn -> insert_rows(rows) end)
+    Repo.transaction(fn -> insert_rows(rows, price_version) end)
     |> case do
       {:ok, inserted} ->
         skipped = classified.summary.skipped_models + classified.summary.skipped_price_buckets
@@ -121,8 +121,8 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
     end
   end
 
-  defp insert_rows(rows) do
-    persisted = persisted_identity_index(rows)
+  defp insert_rows(rows, price_version) do
+    persisted = persisted_identity_index(price_version)
 
     Enum.reduce(rows, 0, fn attrs, inserted ->
       case Map.fetch(persisted, identity_key(attrs)) do
@@ -135,9 +135,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
     end)
   end
 
-  defp persisted_identity_index([]), do: %{}
-
-  defp persisted_identity_index([%{price_version: price_version} | _rows]) do
+  defp persisted_identity_index(price_version) do
     PricingSnapshot
     |> where([snapshot], snapshot.price_version == ^price_version)
     |> Repo.all()
@@ -184,8 +182,8 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporter do
   defp reload_identity(attrs) do
     model_identifier = String.downcase(attrs.model_identifier)
     price_version = attrs.price_version
-    service_tier = attrs.config["service_tier"]
-    price_bucket = attrs.config["price_bucket"]
+    service_tier = attrs.config["service_tier"] || ""
+    price_bucket = attrs.config["price_bucket"] || ""
 
     Repo.all(
       from snapshot in PricingSnapshot,

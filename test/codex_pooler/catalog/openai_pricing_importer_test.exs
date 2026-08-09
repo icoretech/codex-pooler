@@ -489,8 +489,6 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     identifiers = ["reimport-first-#{unique}", "reimport-second-#{unique}"]
     path = write_json!(payload_with_models("2026-07-28T00:00:00Z", identifiers))
 
-    assert {:ok, %{inserted: 2}} = OpenAIPricingImporter.import_file(path)
-
     handler_id = "pricing-import-idempotence-#{unique}"
     insert_count = :counters.new(1, [])
 
@@ -507,6 +505,10 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
       )
 
     try do
+      assert {:ok, %{inserted: 2}} = OpenAIPricingImporter.import_file(path)
+      assert :counters.get(insert_count, 1) > 0
+      :counters.put(insert_count, 1, 0)
+
       assert {:ok, %{inserted: 0}} = OpenAIPricingImporter.import_file(path)
       assert :counters.get(insert_count, 1) == 0
     after
