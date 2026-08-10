@@ -1,6 +1,6 @@
 {
   "dependencies": {
-    "apexcharts": "6.7.0",
+    "apexcharts": "6.7.1",
     "cally": "0.9.2",
     "daisyui": "5.7.16",
     "topbar": "3.0.1",
