@@ -447,7 +447,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitTransitionTest do
       RETURNS trigger AS $$
       BEGIN
         IF #{condition} THEN
-          RAISE EXCEPTION 'forced routing circuit deadlock' USING ERRCODE = '40P01';
+          RAISE EXCEPTION 'forced routing circuit transition failure' USING ERRCODE = '40P01';
         END IF;
 
         RETURN NEW;
