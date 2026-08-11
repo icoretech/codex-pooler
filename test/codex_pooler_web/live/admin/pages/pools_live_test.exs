@@ -1671,7 +1671,12 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => model.exposed_model_id,
-        "input" => "synthetic task 15 red input",
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [%{"type" => "input_text", "text" => "synthetic task 15 red input"}]
+          }
+        ],
         "parallel_tool_calls" => true
       })
 
@@ -1728,16 +1733,37 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     full_payloads = [
       %{
         "model" => model.exposed_model_id,
-        "input" => "synthetic task 15 full absent input"
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{"type" => "input_text", "text" => "synthetic task 15 full absent input"}
+            ]
+          }
+        ]
       },
       %{
         "model" => model.exposed_model_id,
-        "input" => "synthetic task 15 full true input",
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{"type" => "input_text", "text" => "synthetic task 15 full true input"}
+            ]
+          }
+        ],
         "parallel_tool_calls" => true
       },
       %{
         "model" => model.exposed_model_id,
-        "input" => "synthetic task 15 full false input",
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{"type" => "input_text", "text" => "synthetic task 15 full false input"}
+            ]
+          }
+        ],
         "parallel_tool_calls" => false
       }
     ]
@@ -1809,7 +1835,14 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => model.exposed_model_id,
-        "input" => "synthetic task 15 invalid full input"
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{"type" => "input_text", "text" => "synthetic task 15 invalid full input"}
+            ]
+          }
+        ]
       })
 
     assert %{"error" => %{"code" => "server_error"}} = json_response(invalid_response, 500)
@@ -1855,7 +1888,14 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => model.exposed_model_id,
-        "input" => "synthetic task 15 retained full input"
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{"type" => "input_text", "text" => "synthetic task 15 retained full input"}
+            ]
+          }
+        ]
       })
 
     assert %{"id" => "resp_task_15_after_full_failure"} =
@@ -2433,7 +2473,12 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => model.exposed_model_id,
-        "input" => "synthetic Auto routability input"
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [%{"type" => "input_text", "text" => "synthetic Auto routability input"}]
+          }
+        ]
       })
 
     assert %{"id" => "resp_auto_routability"} = json_response(response, 200)
