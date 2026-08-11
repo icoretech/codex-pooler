@@ -1539,6 +1539,11 @@ defmodule CodexPooler.CompatibilityMatrix do
       author_recipient_shape: "absolute_agent_paths",
       protocol_bindings: %{task_name: "recipient", sender: "author"},
       encrypted_content: "nonempty",
+      fixture_source: "c9c6c0daa994109cec50fddcb57d076fdf9e738c",
+      v1_ordinary_user_role_handoff: "preserved",
+      v2_collaboration_namespace: "byte_exact_passthrough",
+      plaintext_encrypted_function_args_empty: "preserved",
+      plaintext_final_answer: "preserved",
       other_encrypted_agent_messages: "removed",
       assistant_encrypted_replay: "preserved",
       durable_metadata: "encrypted_content_omitted"

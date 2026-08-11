@@ -673,12 +673,16 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       new_task_handoff = AgentV2ContractFixture.handoff!(:spawn_agent)
       message_handoff = AgentV2ContractFixture.handoff!(:send_message)
       followup_handoff = AgentV2ContractFixture.handoff!(:followup_task)
+      v1_handoff = AgentV2ContractFixture.v1_handoff!()
+      plaintext_handoff = AgentV2ContractFixture.plaintext_handoff!()
 
       payload = %{
         "input" => [
           new_task_handoff,
           message_handoff,
           followup_handoff,
+          v1_handoff,
+          plaintext_handoff,
           %{
             "type" => "agent_message",
             "author" => "/root",
@@ -746,6 +750,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                   ^new_task_handoff,
                   ^message_handoff,
                   ^followup_handoff,
+                  ^v1_handoff,
+                  ^plaintext_handoff,
                   %{
                     "type" => "agent_message",
                     "content" => [%{"type" => "input_text", "text" => "plain keeper only"}]
@@ -756,18 +762,78 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       assert {:ok, ^malformed_payload} = PayloadNormalizer.normalize(malformed_payload)
     end
 
-    test "pins the Codex 0.146.0 agent v2 protocol fixture" do
+    test "pins the current source-derived agent handoff contract" do
       fixture = AgentV2ContractFixture.load!()
 
-      assert fixture["codex_version"] == "0.146.0"
-      assert get_in(fixture, ["source", "tag"]) == "rust-v0.146.0"
+      assert fixture["contract_version"] == 2
 
-      assert get_in(fixture, ["handoffs", "spawn_agent", "message_type"]) == "NEW_TASK"
-      assert get_in(fixture, ["handoffs", "send_message", "message_type"]) == "MESSAGE"
-      assert get_in(fixture, ["handoffs", "followup_task", "message_type"]) == "NEW_TASK"
+      assert get_in(fixture, ["source", "commit"]) ==
+               "c9c6c0daa994109cec50fddcb57d076fdf9e738c"
+
+      assert get_in(fixture, ["v2", "handoffs", "spawn_agent", "message_type"]) == "NEW_TASK"
+
+      assert get_in(fixture, ["v2", "handoffs", "send_message", "message_type"]) ==
+               "MESSAGE"
+
+      assert get_in(fixture, ["v2", "handoffs", "followup_task", "message_type"]) ==
+               "NEW_TASK"
+
+      assert AgentV2ContractFixture.plaintext_function_call!()["encrypted_function_args"] == []
 
       assert AgentV2ContractFixture.final_answer!() ==
                "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\nSYNTHETIC_FINAL_ANSWER_SENTINEL"
+    end
+
+    test "preserves source-derived collaboration namespace definitions byte-for-byte" do
+      namespace_tools = AgentV2ContractFixture.namespace_tools!()
+
+      payload = %{
+        "model" => "gpt-5.5",
+        "input" => [%{"role" => "user", "content" => "hello"}],
+        "tools" => namespace_tools
+      }
+
+      request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+      model = %Model{upstream_model_id: "provider-model"}
+
+      compact_options =
+        RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload)
+
+      websocket_options = RequestOptions.for_websocket(request_options, payload)
+
+      for {endpoint, options} <- [
+            {"/backend-api/codex/responses", request_options},
+            {"/backend-api/codex/responses/compact", compact_options},
+            {"/backend-api/codex/responses", websocket_options}
+          ] do
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(payload, model, endpoint, options)
+
+        assert Jason.decode!(encoded)["tools"] == namespace_tools
+      end
+    end
+
+    @tag :schema_position_aware
+    test "keeps the v1 handoff unchanged through each ordinary flat-function normalization lane" do
+      v1_handoff = AgentV2ContractFixture.v1_handoff!()
+      payload = schema_position_aware_tool_payload() |> Map.put("input", [v1_handoff])
+      model = %Model{upstream_model_id: "provider-model"}
+
+      for {endpoint, request_options} <- [
+            {"/backend-api/codex/responses",
+             RequestOptions.build(%{}, "/backend-api/codex/responses", payload)},
+            {"/backend-api/codex/responses/compact",
+             RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload)},
+            {"/backend-api/codex/responses",
+             %{}
+             |> RequestOptions.build("/backend-api/codex/responses", payload)
+             |> RequestOptions.for_websocket(payload)}
+          ] do
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(payload, model, endpoint, request_options)
+
+        assert Jason.decode!(encoded)["input"] == [v1_handoff]
+      end
     end
 
     test "omits neutral tiers, canonicalizes binary fast, and preserves other backend tiers" do
@@ -2487,6 +2553,61 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
               "required" => ["target", "message"],
               "additionalProperties" => false
             }
+          }
+        }
+      ]
+    }
+  end
+
+  defp schema_position_aware_tool_payload do
+    %{
+      "model" => "gpt-5.5",
+      "input" => [%{"role" => "user", "content" => "hello"}],
+      "tools" => [
+        %{
+          "type" => "function",
+          "name" => "schema_position_fixture",
+          "strict" => false,
+          "parameters" => %{
+            "type" => "object",
+            "encrypted" => true,
+            "properties" => %{
+              "encrypted" => %{
+                "type" => "object",
+                "encrypted" => true,
+                "properties" => %{"encrypted" => %{"type" => "string", "encrypted" => true}},
+                "required" => ["encrypted"]
+              },
+              "nested" => %{
+                "type" => "object",
+                "properties" => %{"value" => %{"type" => "string", "encrypted" => true}}
+              }
+            },
+            "required" => ["encrypted", "nested"],
+            "$defs" => %{"encrypted" => %{"type" => "string", "encrypted" => true}},
+            "definitions" => %{"encrypted" => %{"type" => "number", "encrypted" => true}},
+            "items" => %{
+              "type" => "object",
+              "properties" => %{"encrypted" => %{"type" => "boolean", "encrypted" => true}}
+            },
+            "anyOf" => [
+              %{
+                "type" => "object",
+                "properties" => %{"encrypted" => %{"type" => "string", "encrypted" => true}}
+              }
+            ],
+            "oneOf" => [
+              %{
+                "type" => "object",
+                "properties" => %{"encrypted" => %{"type" => "integer", "encrypted" => true}}
+              }
+            ],
+            "allOf" => [
+              %{
+                "type" => "object",
+                "properties" => %{"encrypted" => %{"type" => "null", "encrypted" => true}}
+              }
+            ]
           }
         }
       ]
