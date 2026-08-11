@@ -280,6 +280,8 @@ The edit Routing step uses the same routing controls as create. Changes apply to
 
 The edit-only `Models` step controls the serving mode for each model available to the Pool. A saved choice belongs to one Pool-model pair. The same model can therefore use different modes in different Pools, while each Pool continues to expose one client-visible model id.
 
+For what Lite and Full actually change on the outgoing request, and what they deliberately leave alone, see [Responses Lite and Full](/reference/responses-lite-vs-full/).
+
 ![Edit Pool model serving modes step](/operators/pools/pools-edit-dialog-models.png)
 
 Use `Auto` unless a provider-specific requirement calls for an override:

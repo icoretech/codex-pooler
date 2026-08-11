@@ -483,7 +483,9 @@ Full mode preserves that typed choice. Lite mode rejects every map-shaped
 `param: "tool_choice"`; use automatic or explicit Full mode when a client needs
 forced typed selection. That rejection follows the model's serving mode rather
 than the endpoint, so any map-shaped `tool_choice` is rejected on a Lite-served
-model, including a Chat Completions named-function choice. String choices such
+model, including a Chat Completions named-function choice. See
+[Responses Lite and Full](/reference/responses-lite-vs-full/) for what the two
+serving modes change on the outgoing request. String choices such
 as `auto` are accepted in both modes. This is separate from accepted
 `custom_tool_call` replay input. Chat Completions does not accept executable
 custom definitions or custom choices, and actual execution availability still
