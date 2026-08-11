@@ -96,7 +96,14 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => model.exposed_model_id,
-        "input" => "synthetic serving mode failover input"
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{"type" => "input_text", "text" => "synthetic serving mode failover input"}
+            ]
+          }
+        ]
       })
 
     assert %{"id" => "resp_serving_mode_failover_success"} = json_response(conn, 200)

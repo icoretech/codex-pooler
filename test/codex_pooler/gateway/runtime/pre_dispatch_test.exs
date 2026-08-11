@@ -829,6 +829,79 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert candidate_ids(prepared.candidates) == [setup.assignment.id]
   end
 
+  test "prepare snapshots an authorized absent image model on its visible host before candidates" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    absent_model = "future-image-model-#{System.unique_integer([:positive])}"
+
+    %{assignment: fallback_assignment} =
+      active_upstream_assignment_fixture(setup.pool, %{
+        account_label: "Visible image host fallback upstream"
+      })
+
+    model =
+      put_assignment_lite_flags!(setup.model, %{
+        setup.assignment.id => false,
+        fallback_assignment.id => true
+      })
+
+    api_key =
+      setup.api_key
+      |> Ecto.Changeset.change(allowed_model_identifiers: [absent_model])
+      |> Repo.update!()
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    auth = %{auth | api_key: api_key}
+    payload = %{"model" => absent_model, "input" => "image host fallback"}
+
+    options =
+      request_options(auth, payload,
+        requested_model: absent_model,
+        effective_model: absent_model,
+        collect_openai_image_stream: true,
+        openai_source_endpoint: "/v1/images/generations",
+        openai_translated_endpoint: "/backend-api/codex/responses"
+      )
+
+    hydration = CandidateEligibility.hydrate_model_visibility(setup.pool)
+
+    context =
+      Map.merge(hydration, %{
+        requested_model: absent_model,
+        effective_model: absent_model,
+        visible_model: model,
+        candidate_snapshots: Map.get(hydration.candidates_by_model_id, model.id, [])
+      })
+
+    assert {:ok, prepared} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, options, model, context)
+
+    assert RequestOptions.model_serving_mode_snapshot(prepared.request_options) == %{
+             configured_mode: "auto",
+             effective_mode: "lite",
+             source: "catalog"
+           }
+
+    assert prepared.route_state.effective_model_serving_modes == %{}
+
+    assert Enum.sort(candidate_ids(prepared.candidates)) ==
+             Enum.sort([setup.assignment.id, fallback_assignment.id])
+
+    for {assignment, _identity} <- prepared.candidates do
+      selected_options =
+        RequestOptions.put_routing(prepared.request_options,
+          routing_attempt_metadata: %{pool_upstream_assignment_id: assignment.id}
+        )
+
+      assert RequestOptions.model_serving_mode_snapshot(selected_options) == %{
+               configured_mode: "auto",
+               effective_mode: "lite",
+               source: "catalog"
+             }
+
+      assert RequestOptions.use_responses_lite?(selected_options)
+    end
+  end
+
   test "a visible model without a runtime candidate returns the canonical backend error" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
