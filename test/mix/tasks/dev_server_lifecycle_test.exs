@@ -120,7 +120,7 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
     stop_fixture(fixture)
   end
 
-  test "stop refuses a stale or reused pid receipt without stopping that process" do
+  test "stop refuses a broken ownership pointer and cleans a reused-pid receipt without stopping that process" do
     fixture = server_fixture!(healthy?: false, cwd: File.cwd!())
     File.mkdir_p!(fixture.state_dir)
 
@@ -134,7 +134,9 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
     reused_run = "0123456789abcdef01234567"
     File.write!(Path.join(fixture.state_dir, "active"), "#{reused_run}\n")
 
-    File.write!(Path.join(fixture.state_dir, "#{reused_run}.receipt"), """
+    reused_receipt_path = Path.join(fixture.state_dir, "#{reused_run}.receipt")
+
+    File.write!(reused_receipt_path, """
     version\t1
     state\trunning
     pid\t#{fixture.listener_pid}
@@ -144,12 +146,83 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
     port\t#{fixture.port}
     """)
 
-    assert {output, code} = lifecycle("stop", fixture)
-    assert code != 0
-    assert output =~ "process identity changed"
+    # The recorded start signature proves the owned process is gone and the
+    # pid now belongs to someone else: the receipt is cleaned, the reused
+    # process is never signalled.
+    assert {output, 0} = lifecycle("stop", fixture)
+    assert output =~ "cleared stale ownership receipt"
+    assert output =~ "no live owned dev server to stop"
     assert process_alive?(fixture.listener_pid)
+    refute File.exists?(reused_receipt_path)
+    refute File.exists?(Path.join(fixture.state_dir, "active"))
 
     stop_fixture(fixture)
+  end
+
+  test "status reports a stale ownership receipt for a dead owned pid" do
+    fixture = server_fixture!(start?: false, cwd: File.cwd!())
+    write_stale_receipt!(fixture, pid: 999_999)
+
+    assert {output, code} = lifecycle("status", fixture)
+    assert code != 0
+    assert output =~ "stale ownership receipt"
+    assert output =~ "999999"
+    assert output =~ "no longer exists"
+    assert output =~ "start or stop will clean it"
+  end
+
+  test "stop cleans a stale dead-pid receipt without touching other processes" do
+    sentinel = server_fixture!(healthy?: false, cwd: temp_dir!("stale-sentinel"))
+    fixture = server_fixture!(start?: false, cwd: File.cwd!())
+    %{receipt_path: receipt_path} = write_stale_receipt!(fixture, pid: 999_999)
+
+    assert {output, 0} = lifecycle("stop", fixture)
+    assert output =~ "cleared stale ownership receipt"
+    assert output =~ "no live owned dev server to stop"
+    refute File.exists?(receipt_path)
+    refute File.exists?(Path.join(fixture.state_dir, "active"))
+    assert process_alive?(sentinel.listener_pid)
+
+    stop_fixture(sentinel)
+  end
+
+  test "start recovers from a stale dead-pid receipt and then stops cleanly" do
+    fixture = mix_server_fixture!()
+    login_home = temp_dir!("stale-login-home")
+    File.write!(Path.join(login_home, ".bash_profile"), "PATH=/usr/bin:/bin\nexport PATH\n")
+    %{receipt_path: receipt_path, run_id: stale_run} = write_stale_receipt!(fixture, pid: 999_999)
+
+    {output, code} =
+      lifecycle("start", fixture, [
+        {"HOME", login_home},
+        {"PATH", "#{fixture.bin_dir}:#{System.fetch_env!("PATH")}"}
+      ])
+
+    assert code == 0, "lifecycle start failed: #{output}"
+    assert output =~ "cleared stale ownership receipt"
+    assert output =~ "owned dev server started"
+    refute File.exists?(receipt_path)
+
+    active_run = fixture.state_dir |> Path.join("active") |> File.read!() |> String.trim()
+    refute active_run == stale_run
+
+    assert {stop_output, 0} =
+             lifecycle("stop", fixture, [
+               {"PATH", "#{fixture.bin_dir}:#{System.fetch_env!("PATH")}"}
+             ])
+
+    assert stop_output =~ "owned dev server stopped"
+    refute File.exists?(Path.join(fixture.state_dir, "active"))
+  end
+
+  test "start still refuses a stale receipt recorded by another checkout" do
+    fixture = server_fixture!(start?: false, cwd: File.cwd!())
+    write_stale_receipt!(fixture, pid: 999_999, cwd: temp_dir!("foreign-checkout"))
+
+    assert {output, code} = lifecycle("start", fixture)
+    assert code != 0
+    assert output =~ "another checkout"
+    assert File.exists?(Path.join(fixture.state_dir, "active"))
   end
 
   test "start records ownership and stop terminates only the revalidated owned listener" do
@@ -190,6 +263,28 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
     assert code != 0
     assert output =~ "invalid server command"
     refute File.exists?(Path.join(fixture.state_dir, "active"))
+  end
+
+  defp write_stale_receipt!(fixture, opts) do
+    pid = Keyword.fetch!(opts, :pid)
+    cwd = Keyword.get(opts, :cwd, File.cwd!())
+    run_id = "feedfacefeedfacefeedface"
+    File.mkdir_p!(fixture.state_dir)
+    File.chmod!(fixture.state_dir, 0o700)
+    receipt_path = Path.join(fixture.state_dir, "#{run_id}.receipt")
+
+    File.write!(receipt_path, """
+    version\t1
+    state\trunning
+    pid\t#{pid}
+    start_signature\tTue Aug 11 14:51:05 2026
+    command\tmix phx.server
+    cwd\t#{cwd}
+    port\t#{fixture.port}
+    """)
+
+    File.write!(Path.join(fixture.state_dir, "active"), "#{run_id}\n")
+    %{receipt_path: receipt_path, run_id: run_id}
   end
 
   defp lifecycle(action, fixture, extra_env \\ []) do
