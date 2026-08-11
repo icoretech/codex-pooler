@@ -86,3 +86,4 @@ output/imagegen/
 .claude/
 graphify-out/
 .planning/
+.worktrees/
