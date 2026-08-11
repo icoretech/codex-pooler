@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   alias __MODULE__.Normalization
   alias __MODULE__.OpenAICompatibility
   alias __MODULE__.PayloadContext
+  alias __MODULE__.Persona
   alias __MODULE__.RequestMetadata
   alias __MODULE__.ResetProbe
   alias __MODULE__.Routing
@@ -39,6 +40,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
             openai_compatibility: nil,
             usage_authentication: nil,
             file_bridge: nil,
+            persona: nil,
             extra: %{}
 
   @type t :: %__MODULE__{
@@ -52,6 +54,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
           openai_compatibility: OpenAICompatibility.t(),
           usage_authentication: UsageAuthentication.t(),
           file_bridge: FileBridgeContext.t(),
+          persona: Persona.t() | nil,
           extra: map()
         }
 
@@ -107,6 +110,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :openai_translated_endpoint,
     :openai_chat_payload,
     :owner_instance_id,
+    :persona,
     :payload_compression,
     :pool_timeout,
     :pool_timeout_ms,
@@ -183,6 +187,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
       openai_compatibility: OpenAICompatibility.build(opts),
       usage_authentication: usage_authentication(opts),
       file_bridge: FileBridgeContext.build(opts),
+      persona: persona(opts),
       extra: extra(opts)
     }
   end
@@ -244,6 +249,20 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   @spec put_request_metadata(t(), keyword()) :: t()
   def put_request_metadata(%__MODULE__{} = options, updates) when is_list(updates) do
     %{options | request_metadata: struct!(options.request_metadata, updates)}
+  end
+
+  @spec put_persona(t(), Persona.t()) :: t()
+  def put_persona(%__MODULE__{persona: nil} = options, %Persona{} = persona) do
+    %{options | persona: persona}
+  end
+
+  def put_persona(%__MODULE__{persona: current} = options, %Persona{} = persona)
+      when current == persona do
+    options
+  end
+
+  def put_persona(%__MODULE__{}, _persona) do
+    raise ArgumentError, "facade persona is immutable"
   end
 
   @spec server_correlation_id(t()) :: Ecto.UUID.t()
@@ -513,6 +532,14 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
       chatgpt_account_id:
         Map.get(opts, :chatgpt_account_id) || Map.get(opts, "chatgpt_account_id")
     }
+  end
+
+  defp persona(opts) do
+    case Map.get(opts, :persona) do
+      nil -> nil
+      %Persona{} = persona -> persona
+      _value -> raise ArgumentError, "invalid facade persona"
+    end
   end
 
   defp extra(opts) do

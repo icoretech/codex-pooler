@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.Continuity
   alias CodexPooler.Gateway.Payloads.RequestOptions.OpenAICompatibility
+  alias CodexPooler.Gateway.Payloads.RequestOptions.Persona
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request
@@ -30,6 +31,31 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   end
 
   describe "boundary constructors" do
+    test "keeps a typed facade persona out of extras and through retargeting" do
+      persona = Persona.fixed(:openai_responses)
+
+      options =
+        RequestOptions.build(
+          %{persona: persona},
+          "/v1/responses",
+          %{"model" => "client-value"}
+        )
+
+      assert options.persona == persona
+      assert options.extra == %{}
+
+      assert RequestOptions.for_payload(options, "/v1/responses", %{}).persona == persona
+
+      assert RequestOptions.retarget(options, "/backend-api/codex/responses", %{}).persona ==
+               persona
+    end
+
+    test "rejects untyped facade persona values" do
+      assert_raise ArgumentError, ~r/invalid facade persona/, fn ->
+        RequestOptions.build(%{persona: %{protocol: :ollama_chat}}, "/api/chat", %{})
+      end
+    end
+
     @tag :prompt_cache_adaptation
     test "prompt cache adaptation state is non-injectable and excluded from extra options" do
       for opts <- [
