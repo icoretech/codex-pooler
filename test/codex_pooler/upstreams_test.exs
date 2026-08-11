@@ -810,6 +810,7 @@ defmodule CodexPooler.UpstreamsTest do
       assert identity.account_label == "fixture-user@example.com"
       assert identity.onboarding_method == "import"
       assert identity.plan_label == "pro"
+      assert identity.credential_provenance == "codex_chatgpt_oauth"
       assert identity.auth_verified_at
       assert identity.auth_fresh_at
       assert identity.metadata["account_email"] == "fixture-user@example.com"
@@ -1238,6 +1239,7 @@ defmodule CodexPooler.UpstreamsTest do
       assert identity.seat_type == "team-seat"
       assert identity.onboarding_method == "import"
       assert identity.plan_label == "team"
+      assert identity.credential_provenance == nil
       assert identity.metadata["auth_json_imported"] == true
       assert identity.metadata["credential_epoch"] == 1
       assert identity.metadata["usage_probe_sequence"] == 0

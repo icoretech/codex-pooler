@@ -1136,6 +1136,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       assert frame == Jason.encode!(provider_payload)
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.json["service_tier"] == "priority"
+
+      assert Map.new(captured.headers)["x-codex-routing-hint"] ==
+               "model=#{setup.model.upstream_model_id};tier=priority"
+
       conn
     after
       Mint.HTTP.close(conn)

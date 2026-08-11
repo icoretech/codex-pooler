@@ -498,6 +498,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses/compact"
     assert Map.new(captured.headers)["x-codex-turn-state"] == request_turn_state
+
+    assert Map.new(captured.headers)["x-codex-routing-hint"] ==
+             "model=#{setup.model.upstream_model_id};tier=priority"
+
     assert captured.json["model"] == setup.model.upstream_model_id
     assert captured.json["instructions"] == "compact bridge instruction"
 

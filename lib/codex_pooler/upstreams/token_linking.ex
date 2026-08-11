@@ -141,6 +141,7 @@ defmodule CodexPooler.Upstreams.TokenLinking do
       |> incoming_identity_attrs()
       |> Map.merge(%{
         onboarding_method: attrs.onboarding_method,
+        credential_provenance: attrs.credential_provenance,
         auth_verified_at: timestamp,
         auth_fresh_at: timestamp,
         disabled_at: nil,
@@ -244,6 +245,7 @@ defmodule CodexPooler.Upstreams.TokenLinking do
     |> put_default(:created_at, now)
     |> put_default(:updated_at, now)
     |> then(&UpstreamIdentity.changeset(%UpstreamIdentity{}, &1))
+    |> UpstreamIdentity.put_credential_provenance(attrs.credential_provenance)
     |> Repo.insert()
   end
 
@@ -262,6 +264,7 @@ defmodule CodexPooler.Upstreams.TokenLinking do
 
     identity
     |> UpstreamIdentity.changeset(attrs)
+    |> UpstreamIdentity.put_credential_provenance(attrs.credential_provenance)
     |> Repo.update()
   end
 
@@ -438,6 +441,11 @@ defmodule CodexPooler.Upstreams.TokenLinking do
       access_token_expires_at: Map.get(attrs, :access_token_expires_at),
       identity_metadata:
         Map.get(attrs, :import_metadata) || Map.get(attrs, :identity_metadata) || %{},
+      credential_provenance:
+        case Keyword.get(opts, :credential_provenance) do
+          :codex_chatgpt -> :codex_chatgpt
+          _other -> :unclassified
+        end,
       onboarding_method:
         Keyword.get(opts, :onboarding_method, Map.get(attrs, :onboarding_method, "import")),
       actor_metadata_key: Keyword.get(opts, :actor_metadata_key, "imported_by_user_id"),

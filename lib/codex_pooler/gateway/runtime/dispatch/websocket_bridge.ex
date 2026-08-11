@@ -191,6 +191,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge do
       upstream_payload: ws_payload,
       original_payload: nil,
       identity: context.identity,
+      routing_hint_authorized?: prepared_context.routing_hint_authorized?,
       accounting_request: context.reserved.request,
       writer: nil,
       assignment_advertised?: assignment_advertised?(context),

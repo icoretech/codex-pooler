@@ -5376,6 +5376,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       conn
       |> auth(setup)
       |> with_public_metadata_headers()
+      |> put_req_header("x-codex-routing-hint", "model=forged")
       |> post("/v1/responses", %{
         "model" => setup.model.exposed_model_id,
         "input" => "synthetic v1 response with public metadata headers"
@@ -5394,6 +5395,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute Map.has_key?(captured_headers, "x-openai-subagent")
     refute Map.has_key?(captured_headers, "x-codex-extra")
     refute Map.has_key?(captured_headers, "x-openai-extra")
+    refute Map.has_key?(captured_headers, "x-codex-routing-hint")
     refute Map.has_key?(captured_headers, "cookie")
     refute Map.has_key?(captured_headers, "idempotency-key")
 

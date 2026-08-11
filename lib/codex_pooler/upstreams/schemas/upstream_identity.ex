@@ -16,6 +16,7 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
   @onboarding_methods ~w(browser device import invite)
   @saved_reset_auto_redeem_trigger_modes ~w(blocked threshold)
   @plan_family_format ~r/^[a-z0-9]+(?:-[a-z0-9]+)*$/
+  @codex_chatgpt_oauth "codex_chatgpt_oauth"
 
   @type t :: %__MODULE__{}
   @type attrs :: map()
@@ -37,6 +38,7 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
     field :auth_fresh_at, :utc_datetime_usec
     field :auth_verified_at, :utc_datetime_usec
     field :headers_profile_version, :integer
+    field :credential_provenance, :string
     field :last_successful_refresh_at, :utc_datetime_usec
     field :last_successful_sync_at, :utc_datetime_usec
     field :saved_reset_auto_redeem_enabled, :boolean, default: false
@@ -132,6 +134,22 @@ defmodule CodexPooler.Upstreams.Schemas.UpstreamIdentity do
 
   @spec statuses() :: [status()]
   defdelegate statuses(), to: IdentityStatus
+
+  @spec authenticated_codex_chatgpt?(t()) :: boolean()
+  def authenticated_codex_chatgpt?(%__MODULE__{
+        credential_provenance: @codex_chatgpt_oauth
+      }),
+      do: true
+
+  def authenticated_codex_chatgpt?(%__MODULE__{}), do: false
+
+  @spec put_credential_provenance(Ecto.Changeset.t(), :codex_chatgpt | :unclassified) ::
+          Ecto.Changeset.t()
+  def put_credential_provenance(changeset, :codex_chatgpt),
+    do: put_change(changeset, :credential_provenance, @codex_chatgpt_oauth)
+
+  def put_credential_provenance(changeset, :unclassified),
+    do: put_change(changeset, :credential_provenance, nil)
 
   @spec onboarding_methods() :: [onboarding_method()]
   def onboarding_methods, do: @onboarding_methods

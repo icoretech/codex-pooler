@@ -111,6 +111,7 @@ defmodule CodexPooler.Upstreams.Import do
   defp do_import_codex_auth_json_account(%Scope{} = scope, %Pool{} = pool, attrs) do
     TokenLinking.link_tokens(scope, pool, attrs,
       onboarding_method: "import",
+      credential_provenance: :codex_chatgpt,
       audit_action: "upstream_account.import",
       broadcast_reason: "upstream_account_imported",
       quota_trigger_kind: "account_link",

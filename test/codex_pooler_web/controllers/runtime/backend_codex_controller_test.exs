@@ -1774,6 +1774,30 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert %{"id" => "resp_image_tool_allowed"} = json_response(response, 200)
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.json["tools"] == [%{"type" => "image_generation"}]
+
+    assert Map.new(captured.headers)["x-codex-routing-hint"] ==
+             "model=#{setup.model.upstream_model_id}"
+  end
+
+  test "ordinary native Responses omit routing hints for unclassified selected credentials", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(FakeUpstream.json_response(%{"id" => "resp_unclassified_credential"}))
+
+    setup = gateway_setup(upstream, credential_provenance: :unclassified)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic unclassified native credential request"
+      })
+
+    assert %{"id" => "resp_unclassified_credential"} = json_response(response, 200)
+    assert [captured] = FakeUpstream.requests(upstream)
+    refute Map.has_key?(Map.new(captured.headers), "x-codex-routing-hint")
   end
 
   @tag :native_backend_image_routing

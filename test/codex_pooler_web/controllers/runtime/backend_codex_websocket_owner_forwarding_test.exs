@@ -5851,6 +5851,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert [request] = await_upstream_requests(upstream, 1)
       assert request.json["input"] |> List.first() |> Map.get("content") == "dispatch takeover"
 
+      assert Map.new(request.headers)["x-codex-routing-hint"] ==
+               "model=#{setup.model.upstream_model_id}"
+
       assert [request_log] = request_logs(setup.pool.id)
       assert request_log.status == "succeeded"
       assert request_log.response_status_code == 200

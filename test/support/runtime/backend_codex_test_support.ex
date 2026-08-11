@@ -34,6 +34,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.CodexResponsesSocket
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -482,7 +483,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     key = active_api_key_fixture()
     pool = key.pool
     compact? = Keyword.get(opts, :compact?, false)
-    upstream = gateway_upstream(pool, upstream, "upstream-token", compact?: compact?)
+
+    upstream =
+      gateway_upstream(pool, upstream, "upstream-token",
+        compact?: compact?,
+        credential_provenance: Keyword.get(opts, :credential_provenance, :codex_chatgpt)
+      )
 
     if Keyword.get(opts, :quota?, true) do
       prime_routing_quota!(upstream.identity)
@@ -886,6 +892,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
 
     assert {:ok, identity} =
              IdentityLifecycle.activate_upstream_identity(identity)
+
+    identity =
+      identity
+      |> Ecto.Changeset.change()
+      |> UpstreamIdentity.put_credential_provenance(
+        Keyword.get(opts, :credential_provenance, :codex_chatgpt)
+      )
+      |> Repo.update!()
 
     assert {:ok, _secret} =
              Upstreams.store_encrypted_secret(identity, %{
