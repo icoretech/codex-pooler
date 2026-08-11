@@ -315,6 +315,8 @@ Use `Auto` unless a provider-specific requirement calls for an override:
   </tbody>
 </table>
 
+If a catalog refresh no longer returns a model, an existing Lite or Full override stays visible as an unavailable row and is marked `Saved setting retained`. Selecting Auto changes that row to `Selecting Auto removes this saved override when you save.` Saving removes only that explicit override; sibling model overrides, catalog rows, and upstream assignments remain unchanged. Reopen the Models panel after saving to see the refreshed set of retained and available rows.
+
 Codex, OpenCode, and other supported public OpenAI-compatible clients keep their existing Pool API key, base URL, configuration, and model id. Codex Pooler changes only the backend request selected for that Pool-model pair. `GET /v1/models` remains unchanged and does not expose serving-mode fields; public `POST /v1/responses/compact` remains unsupported.
 
 Backend compact routes use the same Lite body rewrite as ordinary backend Responses routes before compact-specific projection. In Lite, top-level `tools` and non-blank `instructions` move into `input`; compact-only controls are still removed. In Full, compact keeps its narrow projection without the Lite rewrite.

@@ -14,6 +14,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
   alias CodexPooler.Accounts
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Catalog
+  alias CodexPooler.Catalog.Model, as: CatalogModel
   alias CodexPooler.Catalog.SyncRun
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
@@ -2143,8 +2144,166 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(
              view,
              "##{unavailable_row_id}-availability-warning",
-             "Will be removed on save"
+             "Selecting Auto removes this saved override when you save"
            )
+  end
+
+  test "removes only an unavailable model override when Auto is saved", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "override-lifecycle", name: "Override Lifecycle"})
+
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    unavailable_model =
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-lifecycle-unavailable",
+        display_name: "Lifecycle unavailable",
+        metadata: %{"source_assignment_ids" => [assignment.id]}
+      })
+
+    sibling_model =
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-lifecycle-sibling",
+        display_name: "Lifecycle sibling",
+        metadata: %{"source_assignment_ids" => [assignment.id]}
+      })
+
+    assert {:ok, initial} = Pools.model_serving_modes_snapshot(scope, pool)
+
+    assert {:ok, configured} =
+             Pools.update_model_serving_modes(
+               scope,
+               pool,
+               [
+                 %{exposed_model_id: unavailable_model.exposed_model_id, mode: "full"},
+                 %{exposed_model_id: sibling_model.exposed_model_id, mode: "lite"}
+               ],
+               initial.revision
+             )
+
+    assert {:ok, _retired_model} = Catalog.retire_model(unavailable_model)
+    _sync_run = catalog_sync_run_fixture(pool, "succeeded")
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+    open_edit_models(view, pool)
+    _ = render_async(view)
+
+    unavailable_row_id = PoolForm.model_serving_dom_id(unavailable_model.exposed_model_id)
+    sibling_row_id = PoolForm.model_serving_dom_id(sibling_model.exposed_model_id)
+
+    assert has_element?(
+             view,
+             "##{unavailable_row_id}[data-availability='saved-unavailable']"
+           )
+
+    assert has_element?(
+             view,
+             "##{unavailable_row_id}-availability-warning",
+             "Saved setting retained"
+           )
+
+    assert has_element?(view, "##{sibling_row_id}[data-availability='available']")
+
+    audit_count_before =
+      Repo.aggregate(
+        from(event in AuditEvent, where: event.action == "pool.model_serving_modes_update"),
+        :count
+      )
+
+    view
+    |> element("#pool-model-serving-form")
+    |> render_change(%{
+      "pool_model_serving" => %{
+        "revision" => model_serving_revision(view),
+        "rows" => %{
+          "0" => %{
+            "exposed_model_id" => unavailable_model.exposed_model_id,
+            "mode" => "auto"
+          },
+          "1" => %{
+            "exposed_model_id" => sibling_model.exposed_model_id,
+            "mode" => "lite"
+          }
+        }
+      }
+    })
+
+    assert has_element?(
+             view,
+             "##{unavailable_row_id}-availability-warning",
+             "Selecting Auto removes this saved override when you save"
+           )
+
+    view
+    |> element("#pool-model-serving-form")
+    |> render_submit(%{
+      "pool_model_serving" => %{
+        "revision" => model_serving_revision(view),
+        "rows" => %{
+          "0" => %{
+            "exposed_model_id" => unavailable_model.exposed_model_id,
+            "mode" => "auto"
+          },
+          "1" => %{
+            "exposed_model_id" => sibling_model.exposed_model_id,
+            "mode" => "lite"
+          }
+        }
+      }
+    })
+
+    _ = render_async(view)
+
+    refute Repo.get_by(ModelServingOverride,
+             pool_id: pool.id,
+             exposed_model_id: unavailable_model.exposed_model_id
+           )
+
+    assert %ModelServingOverride{mode: "lite"} =
+             Repo.get_by!(ModelServingOverride,
+               pool_id: pool.id,
+               exposed_model_id: sibling_model.exposed_model_id
+             )
+
+    assert Repo.get!(CatalogModel, sibling_model.id).retired_at == nil
+    assert Repo.get!(PoolUpstreamAssignment, assignment.id).pool_id == pool.id
+
+    assert Repo.aggregate(
+             from(event in AuditEvent, where: event.action == "pool.model_serving_modes_update"),
+             :count
+           ) == audit_count_before + 1
+
+    assert %AuditEvent{
+             details: %{
+               "changed_count" => 1,
+               "transitions" => [
+                 %{
+                   "exposed_model_id" => "gpt-lifecycle-unavailable",
+                   "from_mode" => "full",
+                   "to_mode" => "auto"
+                 }
+               ]
+             }
+           } =
+             Repo.one!(
+               from event in AuditEvent,
+                 where: event.action == "pool.model_serving_modes_update",
+                 order_by: [desc: event.occurred_at],
+                 limit: 1
+             )
+
+    view |> element("#pool-edit-cancel") |> render_click()
+    open_edit_models(view, pool)
+    _ = render_async(view)
+
+    refute has_element?(view, "##{unavailable_row_id}[data-availability='saved-unavailable']")
+    assert has_element?(view, "##{sibling_row_id}[data-availability='available']")
+    assert has_element?(view, "##{sibling_row_id}-effective[data-effective-mode='lite']")
+    assert configured.revision != model_serving_revision(view)
   end
 
   test "saving Pool fields keeps unsaved model-mode choices in the open dialog", %{
