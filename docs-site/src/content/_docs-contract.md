@@ -8,6 +8,11 @@ Write public docs for operators and client integrators who are setting up Codex 
 
 Root static files in `docs-site/public`, such as `llms.txt`, `answers.md`, `pricing.md`, and `robots.txt`, are public docs too. Keep them short, extractable, public-safe, and consistent with the same route, credential, host, and privacy boundaries as the Starlight pages.
 
+Use sentence case for H2 headings across public pages unless a proper noun or
+fixed product name requires capitalization. Keep `llms.txt` as a deliberate
+curated index: add a page only when it belongs in the declared primary or
+discovery scope, then update its inventory check and matching review date.
+
 ## Allowed Hosts
 
 Use only these hosts in public examples:

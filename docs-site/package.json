@@ -5,10 +5,11 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "check": "astro check && npm run check:dashboard && npm run check:ingress-docs",
+    "check": "astro check && npm run check:dashboard && npm run check:ingress-docs && npm run check:llms",
     "build:dashboard": "node dashboards/build.mjs",
     "check:dashboard": "node dashboards/build.mjs --check",
-    "check:ingress-docs": "node scripts/check-ingress-docs-contract.mjs"
+    "check:ingress-docs": "node scripts/check-ingress-docs-contract.mjs",
+    "check:llms": "node scripts/check-llms-inventory.mjs"
   },
   "dependencies": {
     "@astrojs/starlight": "0.41.7",

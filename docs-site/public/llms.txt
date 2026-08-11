@@ -2,13 +2,14 @@
 
 Last reviewed: 2026-08-11
 
+Inventory scope: curated primary and discovery pages listed below; this index intentionally excludes other rendered pages.
+
 Canonical docs base: https://docs.codex-pooler.com/
 Canonical llms index: https://docs.codex-pooler.com/llms.txt
 Short answer reference: https://docs.codex-pooler.com/answers.md
 Pricing and availability: https://docs.codex-pooler.com/pricing.md
 
 Primary public docs:
-- https://docs.codex-pooler.com/
 - https://docs.codex-pooler.com/getting-started/quick-start/
 - https://docs.codex-pooler.com/getting-started/configuration/
 - https://docs.codex-pooler.com/clients/codex-cli/
