@@ -148,11 +148,21 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         refute prompt_cache_breakpoint_present?(upstream), message: label
         assert upstream["prompt_cache_key"] == "cache-key-fixture", message: label
 
-        assert upstream["nested"] == %{"prompt_cache_options" => %{"mode" => "preserved"}},
-          message: label
+        if label == "compact" do
+          assert MapSet.new(Map.keys(upstream)) == MapSet.new(~w(model input prompt_cache_key)),
+            message: label
 
-        assert upstream["ordered"] == [3, 1, 2], message: label
-        assert upstream["unrelated"] == %{"enabled" => true, "nullable" => nil}, message: label
+          refute Map.has_key?(upstream, "nested"), message: label
+          refute Map.has_key?(upstream, "ordered"), message: label
+          refute Map.has_key?(upstream, "unrelated"), message: label
+        else
+          assert upstream["nested"] == %{"prompt_cache_options" => %{"mode" => "preserved"}},
+            message: label
+
+          assert upstream["ordered"] == [3, 1, 2], message: label
+          assert upstream["unrelated"] == %{"enabled" => true, "nullable" => nil}, message: label
+        end
+
         assert updated_options.runtime.prompt_cache_controls_downgraded, message: label
       end
     end
@@ -1689,7 +1699,12 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         assert upstream["tools"] == payload["tools"], label
         assert upstream["input"] == payload["input"], label
         assert get_in(upstream, ["reasoning", "context"]) == "current_turn", label
-        assert upstream["client_metadata"] == %{"trace" => "safe-test-value"}, label
+
+        if endpoint == "/backend-api/codex/responses/compact" do
+          refute Map.has_key?(upstream, "client_metadata"), label
+        else
+          assert upstream["client_metadata"] == %{"trace" => "safe-test-value"}, label
+        end
       end
     end
 
@@ -2139,7 +2154,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       end
     end
 
-    test "does not expand compact Responses Lite tools instructions include or image details" do
+    test "keeps allowed compact Lite fields without forwarding include or rewriting images" do
       payload = %{
         "model" => "gpt-5.6-terra",
         "instructions" => "compact instructions",
@@ -2165,7 +2180,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
       assert second == first
       assert first["instructions"] == payload["instructions"]
-      assert first["include"] == payload["include"]
+      refute Map.has_key?(first, "include")
       assert first["tools"] == payload["tools"]
       assert first["input"] == payload["input"]
       assert first["parallel_tool_calls"] == false

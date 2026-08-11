@@ -3193,7 +3193,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.path == unquote(canonical_upstream_path)
       assert_code_mode_turn_metadata_header_projected!(captured, metadata)
-      assert_code_mode_client_metadata_preserved!(captured, metadata)
+
+      if unquote(compact?) do
+        refute Map.has_key?(captured.json, "client_metadata")
+      else
+        assert_code_mode_client_metadata_preserved!(captured, metadata)
+      end
+
       assert_approved_lineage_headers_except_turn_metadata_forwarded!(captured, metadata)
       assert_disallowed_client_headers_not_forwarded!(captured, setup)
 
@@ -5357,7 +5363,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_pre_first_stream_idle_timeout!(setup)
   end
 
-  test "unsupported upstream field stripping is scoped to local backend responses route" do
+  test "direct compact projection applies even when the transport is retargeted" do
     upstream =
       start_upstream(
         FakeUpstream.json_response(%{
@@ -5390,9 +5396,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert %{"id" => "resp_openai_compat"} = Jason.decode!(body)
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
-    assert captured.json["max_output_tokens"] == 128
-    assert captured.json["temperature"] == 0.2
-    assert captured.json["top_p"] == 0.9
+    refute Map.has_key?(captured.json, "max_output_tokens")
+    refute Map.has_key?(captured.json, "temperature")
+    refute Map.has_key?(captured.json, "top_p")
   end
 
   test "gateway service receives typed request options from the boundary" do
@@ -10263,7 +10269,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :prompt_cache_adaptation
-  test "POST /backend-api/codex/responses/compact removes top-level prompt cache options at egress",
+  test "POST /backend-api/codex/responses/compact projects compact fields at egress",
        %{
          conn: conn
        } do
@@ -10297,9 +10303,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert %{"object" => "response.compaction"} = json_response(conn, 200)
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses/compact"
-    assert captured.json["max_output_tokens"] == 128
-    assert captured.json["temperature"] == 0.2
-    assert captured.json["top_p"] == 0.9
+    refute Map.has_key?(captured.json, "max_output_tokens")
+    refute Map.has_key?(captured.json, "temperature")
+    refute Map.has_key?(captured.json, "top_p")
     assert captured.json["reasoning"] == %{"effort" => "max"}
     assert captured.json["prompt_cache_key"] == raw_prompt_cache_key
     refute Map.has_key?(captured.json, "prompt_cache_options")

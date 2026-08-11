@@ -182,7 +182,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
       compact_endpoint,
       compact_payload,
       admission_endpoint: local_endpoint,
-      request_opts: opts
+      request_opts: Map.put(opts, :compaction_trigger_bridge?, true)
     )
     |> CompactionTrigger.adapt_gateway_result()
   end

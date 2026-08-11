@@ -78,6 +78,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :collect_openai_image_stream,
     :collect_openai_response_stream,
     :chatgpt_account_id,
+    :compaction_trigger_bridge?,
     :conversation_key,
     :connect_timeout,
     :connect_timeout_ms,

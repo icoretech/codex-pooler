@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   alias CodexPooler.Access.APIKeys.ReasoningEffortPolicy.Decision
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.OpenAICompatibility.Error
+  alias CodexPooler.Gateway.Payloads.CompactionTrigger
   alias CodexPooler.Gateway.Payloads.ContinuityPayload
   alias CodexPooler.Gateway.Payloads.DebugPayloadSummary
   alias CodexPooler.Gateway.Payloads.ReasoningEffort
@@ -72,17 +73,50 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   end
 
   @spec validate(map(), RequestOptions.t()) :: :ok | {:error, Error.reason()}
-  def validate(
-        %{"tool_choice" => tool_choice},
-        %RequestOptions{} = request_options
-      )
-      when is_map(tool_choice) do
+  def validate(payload, %RequestOptions{} = request_options) do
+    case validate_compact_projection(payload, request_options) do
+      :ok -> validate_tool_choice(payload, request_options)
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp validate_compact_projection(
+         payload,
+         %RequestOptions{transport: %{upstream_endpoint: "/backend-api/codex/responses/compact"}} =
+           request_options
+       ) do
+    case validate_compact_input(payload, request_options) do
+      :ok -> CompactionTrigger.validate_projection(payload)
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp validate_compact_projection(_payload, %RequestOptions{}), do: :ok
+
+  defp validate_compact_input(
+         %{"input" => []},
+         %RequestOptions{payload_context: %{compaction_trigger_bridge?: true}}
+       ),
+       do: :ok
+
+  defp validate_compact_input(%{"input" => []}, request_options) do
+    if RequestOptions.use_responses_lite?(request_options) do
+      :ok
+    else
+      {:error, Error.invalid_request("input must be a non-empty array", "input")}
+    end
+  end
+
+  defp validate_compact_input(_payload, _request_options), do: :ok
+
+  defp validate_tool_choice(%{"tool_choice" => tool_choice}, request_options)
+       when is_map(tool_choice) do
     if RequestOptions.use_responses_lite?(request_options),
       do: {:error, Error.unsupported_parameter("tool_choice")},
       else: :ok
   end
 
-  def validate(_payload, %RequestOptions{}), do: :ok
+  defp validate_tool_choice(_payload, _request_options), do: :ok
 
   defp json_payload(payload, model, endpoint, %RequestOptions{} = request_options) do
     payload =
@@ -111,6 +145,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
     {upstream_payload, prompt_cache_controls_downgraded} =
       adapt_prompt_cache_controls(upstream_payload, request_options)
+
+    upstream_payload =
+      maybe_project_compact_payload(upstream_payload, endpoint, request_options)
 
     debug_payload =
       maybe_record_gateway_debug_payload(endpoint, payload, upstream_payload, request_options)
@@ -387,6 +424,24 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
       payload
     end
   end
+
+  defp maybe_project_compact_payload(
+         payload,
+         "/backend-api/codex/responses/compact",
+         %RequestOptions{}
+       ) do
+    CompactionTrigger.project_payload(payload)
+  end
+
+  defp maybe_project_compact_payload(
+         payload,
+         _endpoint,
+         %RequestOptions{transport: %{upstream_endpoint: "/backend-api/codex/responses/compact"}}
+       ) do
+    CompactionTrigger.project_payload(payload)
+  end
+
+  defp maybe_project_compact_payload(payload, _endpoint, %RequestOptions{}), do: payload
 
   defp normalize_noncompact_backend_responses_envelope(payload, %RequestOptions{} = opts) do
     reasoning = payload |> Map.get("reasoning") |> reasoning_map()

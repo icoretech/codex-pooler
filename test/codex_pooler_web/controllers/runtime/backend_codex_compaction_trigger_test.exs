@@ -13,6 +13,98 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
 
+  test "ordinary singleton input retains the normal Responses route", %{conn: conn} do
+    item = %{"id" => "item_regular_singleton", "type" => "message", "status" => "completed"}
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.output_item.done", %{"type" => "response.output_item.done", "item" => item}},
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_regular_singleton",
+               "status" => "completed",
+               "output" => [item]
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => [%{"type" => "message", "role" => "user", "content" => []}],
+        "stream" => true
+      })
+
+    assert response.status == 200
+
+    assert Enum.map(backend_sse_events(response(response, 200)), & &1["event"]) == [
+             "response.output_item.done",
+             "response.completed"
+           ]
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["input"] == [%{"type" => "message", "role" => "user", "content" => []}]
+  end
+
+  @tag :manual_fake_upstream
+  test "singleton compaction trigger bridges empty compact input and relays the provider rejection",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(
+          %{
+            "error" => %{
+              "code" => "context_length_exceeded",
+              "type" => "invalid_request_error",
+              "param" => "input"
+            }
+          },
+          400
+        )
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => [compaction_trigger()],
+        "stream" => true
+      })
+
+    assert %{
+             "error" => %{
+               "code" => "context_length_exceeded",
+               "type" => "invalid_request_error",
+               "param" => "input"
+             }
+           } = json_response(response, 400)
+
+    refute response.resp_body =~ "compaction_trigger must be the final input item"
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses/compact"
+    assert captured.json["input"] == []
+    refute Map.has_key?(captured.json, "stream")
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses/compact"
+    assert request.transport == "http_compact_json"
+    assert request.status == "failed"
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 1
+  end
+
   test "compaction trigger aliases enforce reasoning before compact dispatch", %{conn: conn} do
     for path <- ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"] do
       upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
@@ -149,9 +241,125 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     end
   end
 
+  test "direct compact aliases project only the pinned compact request fields", %{conn: conn} do
+    for path <- [
+          "/backend-api/codex/responses/compact",
+          "/backend-api/codex/v1/responses/compact"
+        ],
+        parallel_tool_calls <- [true, false] do
+      upstream = start_upstream(compact_mode_matrix_upstream(false))
+      setup = gateway_setup(upstream, compact?: true)
+      put_compact_model_serving_mode!(setup, "full")
+
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post(path, %{
+          "model" => setup.model.exposed_model_id,
+          "instructions" => "direct compact instruction",
+          "input" => visible_input("direct compact projection"),
+          "stream" => false,
+          "tools" => [
+            %{
+              "type" => "function",
+              "name" => "lookup",
+              "strict" => false,
+              "parameters" => %{"type" => "object"}
+            }
+          ],
+          "parallel_tool_calls" => parallel_tool_calls,
+          "reasoning" => %{"effort" => "low"},
+          "promptCacheKey" => "direct-compact-cache-key",
+          "text" => %{"format" => %{"type" => "text"}},
+          "include" => ["reasoning.encrypted_content"],
+          "store" => false,
+          "tool_choice" => "auto",
+          "previous_response_id" => "resp_direct_compact_fixture",
+          "conversation" => "conv_direct_compact_fixture",
+          "client_metadata" => %{"source" => "direct-compact"},
+          "request_only" => "must-not-reach-upstream"
+        })
+
+      assert_compact_mode_matrix_response!(response, false)
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.path == "/backend-api/codex/responses/compact"
+
+      assert MapSet.new(Map.keys(captured.json)) ==
+               MapSet.new(~w(
+                 model
+                 input
+                 instructions
+                 tools
+                 parallel_tool_calls
+                 reasoning
+                 prompt_cache_key
+                 text
+               ))
+
+      assert captured.json["parallel_tool_calls"] == parallel_tool_calls
+      assert captured.json["prompt_cache_key"] == "direct-compact-cache-key"
+      assert captured.json["text"] == %{"format" => %{"type" => "text"}}
+
+      for field <- ~w(
+            stream
+            include
+            store
+            tool_choice
+            previous_response_id
+            conversation
+            client_metadata
+            request_only
+          ) do
+        refute Map.has_key?(captured.json, field)
+      end
+    end
+  end
+
+  @tag :model_serving_modes
+  test "Full compact rejects empty history before provider dispatch", %{conn: conn} do
+    upstream =
+      start_upstream(
+        {:json_error, 400,
+         %{"error" => %{"code" => "synthetic_empty_history", "message" => "synthetic"}}}
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    put_compact_model_serving_mode!(setup, "full")
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses/compact", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => [],
+        "stream" => true
+      })
+
+    assert response.status == 400
+    assert FakeUpstream.count(upstream) == 0
+
+    assert %{
+             "error" => %{
+               "code" => "invalid_request",
+               "param" => "input",
+               "type" => "invalid_request_error"
+             }
+           } = json_response(response, 400)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses/compact"
+    assert request.status == "rejected"
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
+
+    assert Repo.aggregate(from(l in LedgerEntry, where: l.request_id == ^request.id), :count) ==
+             0
+  end
+
   @tag :client_metadata
   @tag :prompt_cache_adaptation
-  test "POST /backend-api/codex/responses adapts nested prompt cache breakpoints before compact dispatch",
+  test "POST /backend-api/codex/responses preserves the OMP compaction-v2 stream contract through compact dispatch",
        %{
          conn: conn
        } do
@@ -188,7 +396,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
             "capabilities" => %{
               "responses" => true,
               "streaming" => true,
-              "reasoning" => true
+              "reasoning" => true,
+              "tools" => true
             },
             "service_tiers" => [
               %{
@@ -217,6 +426,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       }
     ]
 
+    omp_tool = %{
+      "type" => "function",
+      "name" => "lookup",
+      "strict" => false,
+      "parameters" => %{
+        "type" => "object",
+        "encrypted" => true,
+        "properties" => %{
+          "encrypted" => %{"type" => "string", "encrypted" => true}
+        },
+        "required" => ["encrypted"]
+      }
+    }
+
     conn =
       conn
       |> put_req_header("x-codex-turn-state", request_turn_state)
@@ -228,11 +451,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
         "stream" => true,
         "include" => ["reasoning.encrypted_content"],
         "reasoning" => %{"effort" => "low"},
+        "tools" => [omp_tool],
+        "tool_choice" => "auto",
+        "parallel_tool_calls" => true,
         "store" => false,
         "service_tier" => "priority",
         "promptCacheKey" => "compact-camel-cache-key",
-        "previous_response_id" => "resp_previous_compact",
-        "conversation" => "conv_compact_fixture"
+        "text" => %{"format" => %{"type" => "text"}},
+        "client_metadata" => %{"source" => "omp"}
       })
 
     assert [content_type] = get_resp_header(conn, "content-type")
@@ -287,14 +513,42 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
            ]
 
     assert captured.json["reasoning"] == %{"effort" => "low"}
-    refute Map.has_key?(captured.json, "store")
+
+    assert [captured_tool] = captured.json["tools"]
+    assert captured_tool["name"] == "lookup"
+
+    assert captured_tool["parameters"] == %{
+             "type" => "object",
+             "properties" => %{"encrypted" => %{"type" => "string"}},
+             "required" => ["encrypted"]
+           }
+
+    assert captured.json["parallel_tool_calls"] == true
     assert captured.json["service_tier"] == "priority"
     assert captured.json["prompt_cache_key"] == "compact-camel-cache-key"
-    assert captured.json["previous_response_id"] == "resp_previous_compact"
-    assert captured.json["conversation"] == "conv_compact_fixture"
+    assert captured.json["text"] == %{"format" => %{"type" => "text"}}
+
+    assert MapSet.new(Map.keys(captured.json)) ==
+             MapSet.new(~w(
+               model
+               input
+               instructions
+               tools
+               parallel_tool_calls
+               reasoning
+               service_tier
+               prompt_cache_key
+               text
+             ))
+
+    refute inspect(captured.json) =~ "compaction_trigger"
+    refute Map.has_key?(captured.json, "previous_response_id")
+    refute Map.has_key?(captured.json, "conversation")
+    refute Map.has_key?(captured.json, "tool_choice")
+    refute Map.has_key?(captured.json, "store")
     refute Map.has_key?(captured.json, "stream")
     refute Map.has_key?(captured.json, "include")
-    refute inspect(captured.json) =~ "compaction_trigger"
+    refute Map.has_key?(captured.json, "client_metadata")
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses/compact"
@@ -317,6 +571,58 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     persistence_text = inspect({request, attempt})
     refute persistence_text =~ request_turn_state
     refute persistence_text =~ response_turn_state
+  end
+
+  test "compact projection rejects malformed current fields before dispatch", %{conn: conn} do
+    invalid_fields = [
+      {"tools", "not-an-array", "tools", "tools must be an array"},
+      {"tools", nil, "tools", "tools must be an array"},
+      {"tools", %{}, "tools", "tools must be an array"},
+      {"parallel_tool_calls", "not-a-boolean", "parallel_tool_calls",
+       "parallel_tool_calls must be a boolean"},
+      {"parallel_tool_calls", nil, "parallel_tool_calls",
+       "parallel_tool_calls must be a boolean"},
+      {"parallel_tool_calls", [], "parallel_tool_calls", "parallel_tool_calls must be a boolean"},
+      {"text", "not-an-object", "text", "text must be an object"},
+      {"text", nil, "text", "text must be an object"},
+      {"text", [], "text", "text must be an object"}
+    ]
+
+    for {field, value, param, message} <- invalid_fields do
+      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+      setup = gateway_setup(upstream, compact?: true)
+
+      for {path, input} <- [
+            {"/backend-api/codex/responses",
+             visible_input("compact bridge validation") ++ [compaction_trigger()]},
+            {"/backend-api/codex/responses/compact", visible_input("direct compact validation")}
+          ] do
+        response =
+          conn
+          |> recycle()
+          |> auth(setup)
+          |> post(path, %{
+            "model" => setup.model.exposed_model_id,
+            "input" => input,
+            "stream" => true,
+            field => value
+          })
+
+        assert %{
+                 "error" => %{
+                   "code" => "invalid_request",
+                   "message" => ^message,
+                   "param" => ^param,
+                   "type" => "invalid_request_error"
+                 }
+               } = json_response(response, 400)
+      end
+
+      assert FakeUpstream.count(upstream) == 0
+      assert Repo.aggregate(Request, :count) == 0
+      assert Repo.aggregate(Attempt, :count) == 0
+      assert Repo.aggregate(LedgerEntry, :count) == 0
+    end
   end
 
   test "POST /backend-api/codex/responses bridges audio-only input to compact SSE", %{
@@ -731,7 +1037,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     end
   end
 
-  test "POST /backend-api/codex/responses rejects malformed compaction_trigger before dispatch",
+  test "POST /backend-api/codex/responses rejects malformed compaction_trigger with preceding input before dispatch",
        %{
          conn: _conn
        } do
@@ -739,7 +1045,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     setup = gateway_setup(upstream, compact?: true)
 
     invalid_inputs = [
-      [compaction_trigger()],
       [compaction_trigger() | visible_input("non-terminal trigger fixture")],
       [
         %{"type" => "reasoning", "encrypted_content" => "hidden-only-trigger-fixture"},
