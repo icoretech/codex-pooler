@@ -13,7 +13,6 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   alias CodexPooler.Gateway.Payloads.ToolSchemaLowering
 
   @backend_turn_state_client_metadata_key "x-codex-turn-state"
-  @backend_codex_agent_path ~r/\A(?:\/morpheus|\/root(?:\/[a-z0-9_]+)*)\z/
   @websocket_responses_lite_client_metadata_key "ws_request_header_x_openai_internal_codex_responses_lite"
 
   @prompt_cache_adaptation_endpoints [
@@ -69,7 +68,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   @spec normalize(map()) :: {:ok, map()}
   def normalize(%{} = payload) do
-    {:ok, normalize_backend_codex_websocket_input(payload)}
+    {:ok, normalize_backend_codex_websocket_input(payload, nil)}
   end
 
   @spec validate(map(), RequestOptions.t()) :: :ok | {:error, Error.reason()}
@@ -312,7 +311,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     |> Map.drop(["request_id"])
     |> Map.put_new("type", "response.create")
     |> Map.put_new("instructions", "")
-    |> normalize_backend_codex_websocket_input()
+    |> normalize_backend_codex_websocket_input(request_options)
     |> normalize_backend_codex_reasoning_effort()
     |> ToolSchemaLowering.lower_backend_non_strict_function_tools()
     |> remove_backend_codex_encrypted_tool_schema_markers()
@@ -370,7 +369,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     |> Map.drop(["type", "generate"])
     |> maybe_drop_backend_codex_previous_response_id(opts)
     |> Map.put_new("instructions", "")
-    |> normalize_backend_codex_http_input()
+    |> normalize_backend_codex_http_input(opts)
     |> normalize_backend_codex_reasoning_effort()
     |> ToolSchemaLowering.lower_backend_non_strict_function_tools()
     |> remove_backend_codex_encrypted_tool_schema_markers()
@@ -653,31 +652,33 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     RequestOptions.put_continuity(request_options, upstream_previous_response_id?: false)
   end
 
-  defp normalize_backend_codex_http_input(%{"input" => input} = payload) when is_list(input) do
+  defp normalize_backend_codex_http_input(%{"input" => input} = payload, opts)
+       when is_list(input) do
     input =
       Enum.reject(input, fn item ->
-        backend_codex_invalid_encrypted_reasoning?(item) or
+        backend_codex_invalid_encrypted_reasoning?(item, opts) or
           (backend_codex_encrypted_only_input_item?(item) and
-             not ContinuityPayload.current_encrypted_reasoning?(item))
+             not (ContinuityPayload.current_encrypted_reasoning?(item) or
+                    public_encrypted_reasoning_replay?(item, opts)))
       end)
 
     Map.put(payload, "input", input)
   end
 
-  defp normalize_backend_codex_http_input(payload), do: payload
+  defp normalize_backend_codex_http_input(payload, _opts), do: payload
 
-  defp normalize_backend_codex_websocket_input(%{"input" => input} = payload)
+  defp normalize_backend_codex_websocket_input(%{"input" => input} = payload, opts)
        when is_list(input) do
     input =
       Enum.reject(input, fn item ->
-        backend_codex_invalid_encrypted_reasoning?(item) or
+        backend_codex_invalid_encrypted_reasoning?(item, opts) or
           backend_codex_encrypted_agent_message?(item)
       end)
 
     Map.put(payload, "input", input)
   end
 
-  defp normalize_backend_codex_websocket_input(payload), do: payload
+  defp normalize_backend_codex_websocket_input(payload, _opts), do: payload
 
   defp maybe_sanitize_backend_codex_response_item_ids(
          payload,
@@ -747,33 +748,10 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
        )
        when is_list(content) do
     Enum.any?(content, &backend_codex_encrypted_content_marker?/1) and
-      not backend_codex_v2_encrypted_handoff?(item)
+      not ContinuityPayload.v2_encrypted_handoff?(item)
   end
 
   defp backend_codex_encrypted_agent_message?(_item), do: false
-
-  defp backend_codex_v2_encrypted_handoff?(%{
-         "type" => "agent_message",
-         "author" => author,
-         "recipient" => recipient,
-         "content" => [
-           %{"type" => "input_text", "text" => text},
-           %{"type" => "encrypted_content", "encrypted_content" => encrypted_content}
-         ]
-       })
-       when is_binary(author) and is_binary(recipient) and is_binary(text) and
-              is_binary(encrypted_content) do
-    backend_codex_agent_path?(author) and backend_codex_agent_path?(recipient) and
-      String.trim(encrypted_content) != "" and
-      text in [
-        "Message Type: NEW_TASK\nTask name: #{recipient}\nSender: #{author}\nPayload:\n",
-        "Message Type: MESSAGE\nTask name: #{recipient}\nSender: #{author}\nPayload:\n"
-      ]
-  end
-
-  defp backend_codex_v2_encrypted_handoff?(_item), do: false
-
-  defp backend_codex_agent_path?(path), do: Regex.match?(@backend_codex_agent_path, path)
 
   defp backend_codex_encrypted_content_marker?(%{} = item) do
     Map.get(item, "type") == "encrypted_content" ||
@@ -794,12 +772,27 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   defp backend_codex_encrypted_only_input_item?(_item), do: false
 
-  defp backend_codex_invalid_encrypted_reasoning?(%{"type" => "reasoning"} = item) do
+  defp backend_codex_invalid_encrypted_reasoning?(%{"type" => "reasoning"} = item, opts) do
     Map.has_key?(item, "encrypted_content") and
-      not ContinuityPayload.current_encrypted_reasoning?(item)
+      not (ContinuityPayload.current_encrypted_reasoning?(item) or
+             public_encrypted_reasoning_replay?(item, opts))
   end
 
-  defp backend_codex_invalid_encrypted_reasoning?(_item), do: false
+  defp backend_codex_invalid_encrypted_reasoning?(_item, _opts), do: false
+
+  defp public_encrypted_reasoning_replay?(
+         %{"type" => "reasoning", "encrypted_content" => encrypted_content},
+         %RequestOptions{
+           openai_compatibility: %{
+             source_endpoint: "/v1/responses",
+             translated_endpoint: "/backend-api/codex/responses"
+           }
+         }
+       )
+       when is_binary(encrypted_content),
+       do: String.trim(encrypted_content) != ""
+
+  defp public_encrypted_reasoning_replay?(_item, _opts), do: false
 
   defp apply_enforced_payload_policy(payload, %RequestOptions{} = request_options) do
     policy = request_options.routing.api_key_policy || %{}

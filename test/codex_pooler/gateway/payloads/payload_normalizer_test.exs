@@ -747,6 +747,100 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                "input_text"
     end
 
+    @tag :encrypted_reasoning_continuity
+    test "retains current encrypted reasoning across HTTP and websocket normalization" do
+      reasoning = %{
+        "type" => "reasoning",
+        "content" => nil,
+        "encrypted_content" => "synthetic-current-reasoning"
+      }
+
+      payload = %{"model" => "gpt-5.5", "input" => [reasoning]}
+      model = %Model{upstream_model_id: "provider-model"}
+      http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+      websocket_options = RequestOptions.for_websocket(http_options, payload)
+
+      assert {:ok, http_encoded} =
+               PayloadNormalizer.upstream_payload(
+                 payload,
+                 model,
+                 "/backend-api/codex/responses",
+                 http_options
+               )
+
+      assert {:ok, websocket_encoded} =
+               PayloadNormalizer.upstream_payload(
+                 payload,
+                 model,
+                 "/backend-api/codex/responses",
+                 websocket_options
+               )
+
+      refute Map.has_key?(Map.from_struct(http_options.continuity), :protected_replay?)
+      refute Map.has_key?(Map.from_struct(websocket_options.continuity), :protected_replay?)
+      assert Jason.decode!(http_encoded)["input"] == [reasoning]
+      assert Jason.decode!(websocket_encoded)["input"] == [reasoning]
+    end
+
+    @tag :encrypted_reasoning_continuity
+    test "characterizes ordinary prompt cache key routing as HTTP soft locality only" do
+      raw_key = "synthetic-ordinary-prompt-cache-key"
+      payload = %{"model" => "gpt-5.5", "input" => "hello", "prompt_cache_key" => raw_key}
+      expected_hash = :crypto.hash(:sha256, raw_key) |> Base.encode16(case: :lower)
+
+      http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+      websocket_options = RequestOptions.for_websocket(http_options, payload)
+
+      assert http_options.routing.prompt_cache_key == expected_hash
+      assert websocket_options.routing.prompt_cache_key == nil
+      refute Map.has_key?(Map.from_struct(http_options.continuity), :protected_prompt_cache_key)
+
+      refute Map.has_key?(
+               Map.from_struct(websocket_options.continuity),
+               :protected_prompt_cache_key
+             )
+    end
+
+    @tag :encrypted_reasoning_continuity
+    test "strips malformed encrypted reasoning shapes from HTTP and websocket upstream JSON" do
+      invalid_reasoning_items = [
+        %{"type" => "reasoning", "content" => [], "encrypted_content" => "opaque"},
+        %{"type" => "reasoning", "encrypted_content" => "opaque"},
+        %{"type" => "reasoning", "content" => "non-null", "encrypted_content" => "opaque"},
+        %{"type" => "reasoning", "content" => nil, "encrypted_content" => "   "}
+      ]
+
+      Enum.each(invalid_reasoning_items, fn item ->
+        refute ContinuityPayload.current_encrypted_reasoning?(item)
+
+        payload = %{"model" => "gpt-5.5", "input" => [item]}
+
+        options = [
+          RequestOptions.build(%{}, "/backend-api/codex/responses", payload),
+          RequestOptions.for_websocket(%{}, payload)
+        ]
+
+        Enum.each(options, fn options ->
+          assert {:ok, encoded} =
+                   PayloadNormalizer.upstream_payload(
+                     payload,
+                     %Model{upstream_model_id: "provider-model"},
+                     "/backend-api/codex/responses",
+                     options
+                   )
+
+          assert Jason.decode!(encoded)["input"] == []
+        end)
+      end)
+    end
+
+    @tag :encrypted_reasoning_continuity
+    test "recognizes only the canonical v2 encrypted handoff shape" do
+      handoff = AgentV2ContractFixture.handoff!(:send_message)
+
+      assert ContinuityPayload.v2_encrypted_handoff?(handoff)
+    end
+
     test "preserves malformed agent message content shapes while removing encrypted markers" do
       payload = %{
         "model" => "gpt-5.5",
@@ -882,93 +976,6 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
               }} = PayloadNormalizer.normalize(payload)
 
       assert {:ok, ^malformed_payload} = PayloadNormalizer.normalize(malformed_payload)
-    end
-
-    @tag :encrypted_reasoning_continuity
-    test "retains current encrypted reasoning across HTTP and websocket normalization" do
-      reasoning = %{
-        "type" => "reasoning",
-        "content" => nil,
-        "encrypted_content" => "synthetic-current-reasoning"
-      }
-
-      payload = %{"model" => "gpt-5.5", "input" => [reasoning]}
-      model = %Model{upstream_model_id: "provider-model"}
-      http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
-      websocket_options = RequestOptions.for_websocket(http_options, payload)
-
-      assert {:ok, http_encoded} =
-               PayloadNormalizer.upstream_payload(
-                 payload,
-                 model,
-                 "/backend-api/codex/responses",
-                 http_options
-               )
-
-      assert {:ok, websocket_encoded} =
-               PayloadNormalizer.upstream_payload(
-                 payload,
-                 model,
-                 "/backend-api/codex/responses",
-                 websocket_options
-               )
-
-      refute Map.has_key?(Map.from_struct(http_options.continuity), :protected_replay?)
-      refute Map.has_key?(Map.from_struct(websocket_options.continuity), :protected_replay?)
-      assert Jason.decode!(http_encoded)["input"] == [reasoning]
-      assert Jason.decode!(websocket_encoded)["input"] == [reasoning]
-    end
-
-    @tag :encrypted_reasoning_continuity
-    test "characterizes ordinary prompt cache key routing as HTTP soft locality only" do
-      raw_key = "synthetic-ordinary-prompt-cache-key"
-      payload = %{"model" => "gpt-5.5", "input" => "hello", "prompt_cache_key" => raw_key}
-      expected_hash = :crypto.hash(:sha256, raw_key) |> Base.encode16(case: :lower)
-
-      http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
-      websocket_options = RequestOptions.for_websocket(http_options, payload)
-
-      assert http_options.routing.prompt_cache_key == expected_hash
-      assert websocket_options.routing.prompt_cache_key == nil
-      refute Map.has_key?(Map.from_struct(http_options.continuity), :protected_prompt_cache_key)
-
-      refute Map.has_key?(
-               Map.from_struct(websocket_options.continuity),
-               :protected_prompt_cache_key
-             )
-    end
-
-    @tag :encrypted_reasoning_continuity
-    test "strips malformed encrypted reasoning shapes from HTTP and websocket upstream JSON" do
-      invalid_reasoning_items = [
-        %{"type" => "reasoning", "content" => [], "encrypted_content" => "opaque"},
-        %{"type" => "reasoning", "encrypted_content" => "opaque"},
-        %{"type" => "reasoning", "content" => "non-null", "encrypted_content" => "opaque"},
-        %{"type" => "reasoning", "content" => nil, "encrypted_content" => "   "}
-      ]
-
-      Enum.each(invalid_reasoning_items, fn item ->
-        refute ContinuityPayload.current_encrypted_reasoning?(item)
-
-        payload = %{"model" => "gpt-5.5", "input" => [item]}
-
-        options = [
-          RequestOptions.build(%{}, "/backend-api/codex/responses", payload),
-          RequestOptions.for_websocket(%{}, payload)
-        ]
-
-        Enum.each(options, fn options ->
-          assert {:ok, encoded} =
-                   PayloadNormalizer.upstream_payload(
-                     payload,
-                     %Model{upstream_model_id: "provider-model"},
-                     "/backend-api/codex/responses",
-                     options
-                   )
-
-          assert Jason.decode!(encoded)["input"] == []
-        end)
-      end)
     end
 
     test "pins the current source-derived agent handoff contract" do

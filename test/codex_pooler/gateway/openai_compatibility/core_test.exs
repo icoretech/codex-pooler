@@ -174,6 +174,42 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   @tag :responses_coercion
+  test "Responses removes a nil encrypted reasoning replay marker before backend normalization" do
+    assert {:ok, result} =
+             Responses.coerce(%{
+               "model" => "gpt-fixture-text",
+               "previous_response_id" => "resp_replay_fixture",
+               "input" => [
+                 %{
+                   "type" => "reasoning",
+                   "id" => "rs_replay_fixture",
+                   "summary" => [],
+                   "encrypted_content" => nil
+                 },
+                 %{
+                   "type" => "function_call",
+                   "call_id" => "call_replay_fixture",
+                   "name" => "lookup_fixture",
+                   "arguments" => "{}"
+                 },
+                 %{
+                   "type" => "function_call_output",
+                   "call_id" => "call_replay_fixture",
+                   "output" => "fixture output"
+                 }
+               ]
+             })
+
+    assert [
+             %{"type" => "reasoning", "id" => "rs_replay_fixture", "summary" => []} = reasoning
+             | _
+           ] =
+             result.payload["input"]
+
+    refute Map.has_key?(reasoning, "encrypted_content")
+  end
+
+  @tag :responses_coercion
   test "Responses rejects non-text system and developer content before instruction lifting" do
     for {role, part} <- [
           {"developer",
