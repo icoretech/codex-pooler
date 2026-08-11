@@ -26,6 +26,61 @@ defmodule CodexPooler.Upstreams.Import do
     end
   end
 
+  @spec import_trusted_account(Scope.t(), Pool.t(), map()) :: import_result()
+  def import_trusted_account(%Scope{} = scope, %Pool{} = pool, attrs) when is_map(attrs) do
+    with {:ok, attrs} <- validate_trusted_account(scope, pool, attrs) do
+      TokenLinking.link_tokens(scope, pool, attrs, trusted_account_link_options())
+    end
+  end
+
+  def import_trusted_account(_scope, _pool, _attrs) do
+    {:error, %{code: :invalid_request, message: "trusted upstream account is invalid"}}
+  end
+
+  @spec validate_trusted_account(Scope.t(), Pool.t(), map()) ::
+          {:ok, map()} | {:error, Ecto.Changeset.t() | lifecycle_error()}
+  def validate_trusted_account(%Scope{} = scope, %Pool{} = pool, attrs) when is_map(attrs) do
+    attrs = normalize_import_attrs(attrs)
+
+    case import_validation_errors(attrs, require_refresh_token?: true) do
+      [] ->
+        with :ok <- require_import_pool_operate(scope, pool), do: {:ok, attrs}
+
+      errors ->
+        {:error, import_identity_changeset(attrs, errors)}
+    end
+  end
+
+  def validate_trusted_account(_scope, _pool, _attrs) do
+    {:error, %{code: :invalid_request, message: "trusted upstream account is invalid"}}
+  end
+
+  @spec import_trusted_account_in_transaction(Scope.t(), Pool.t(), map()) :: import_result()
+  def import_trusted_account_in_transaction(%Scope{} = scope, %Pool{} = pool, attrs)
+      when is_map(attrs) do
+    with {:ok, attrs} <- validate_trusted_account(scope, pool, attrs) do
+      TokenLinking.link_tokens_in_transaction(
+        scope,
+        pool,
+        attrs,
+        trusted_account_link_options()
+      )
+    end
+  end
+
+  def import_trusted_account_in_transaction(_scope, _pool, _attrs) do
+    {:error, %{code: :invalid_request, message: "trusted upstream account is invalid"}}
+  end
+
+  defp trusted_account_link_options do
+    [
+      onboarding_method: "import",
+      audit_action: "upstream_account.import",
+      broadcast_reason: "upstream_account_bundle_imported",
+      token_refresh_trigger_kind: "upstream_account_bundle_import"
+    ]
+  end
+
   defp import_trusted_auth_json_account(scope, %Pool{} = pool, attrs) when is_map(attrs) do
     attrs = normalize_import_attrs(attrs)
 
@@ -104,11 +159,16 @@ defmodule CodexPooler.Upstreams.Import do
     Map.get(attrs, key) || Map.get(attrs, Atom.to_string(key))
   end
 
-  defp import_validation_errors(attrs) do
+  defp import_validation_errors(attrs, opts \\ []) do
     []
     |> maybe_add_error(blank?(attrs.account_identifier), :account_identifier, "is required")
     |> maybe_add_error(blank?(attrs.account_label), :account_label, "is required")
     |> maybe_add_error(blank?(attrs.token), :token, "is required")
+    |> maybe_add_error(
+      Keyword.get(opts, :require_refresh_token?, false) and blank?(attrs.refresh_token),
+      :refresh_token,
+      "is required"
+    )
   end
 
   defp import_identity_changeset(attrs, errors) do

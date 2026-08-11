@@ -52,13 +52,46 @@ defmodule CodexPooler.Upstreams.TokenLinking do
   def link_tokens(_scope, _pool, _attrs, _opts),
     do: {:error, lifecycle_error(:invalid_request, "token linking request is invalid")}
 
+  @spec link_tokens_in_transaction(Scope.t(), Pool.t(), map(), keyword()) :: link_result()
+  def link_tokens_in_transaction(scope, pool, attrs, opts \\ [])
+
+  def link_tokens_in_transaction(%Scope{} = scope, %Pool{} = pool, attrs, opts)
+      when is_map(attrs) and is_list(opts) do
+    attrs = normalize_link_attrs(attrs, opts)
+
+    if Repo.in_transaction?() do
+      case validate_link_target(pool, attrs) do
+        :ok -> {:ok, persist_link_tokens(scope, pool, attrs)}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      {:error,
+       lifecycle_error(
+         :transaction_required,
+         "token linking requires a caller-owned transaction"
+       )}
+    end
+  end
+
+  def link_tokens_in_transaction(_scope, _pool, _attrs, _opts),
+    do: {:error, lifecycle_error(:invalid_request, "token linking request is invalid")}
+
+  @spec publish_link_result(Scope.t(), Pool.t(), link_success(), keyword()) :: link_result()
+  def publish_link_result(%Scope{} = scope, %Pool{} = pool, %{} = result, opts)
+      when is_list(opts) do
+    {:ok, result}
+    |> tap_audit(scope, pool, opts)
+    |> tap_quota_priming(opts)
+    |> tap_upstream_change(opts)
+  end
+
+  def publish_link_result(_scope, _pool, _result, _opts),
+    do: {:error, lifecycle_error(:invalid_request, "token linking result is invalid")}
+
   defp link_tokens_transaction(%Scope{} = scope, %Pool{} = pool, attrs, opts) do
     case Repo.transaction(fn -> persist_link_tokens(scope, pool, attrs) end) do
       {:ok, result} ->
-        {:ok, result}
-        |> tap_audit(scope, pool, opts)
-        |> tap_quota_priming(opts)
-        |> tap_upstream_change(opts)
+        publish_link_result(scope, pool, result, opts)
 
       {:error, reason} ->
         {:error, reason}
