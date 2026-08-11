@@ -967,7 +967,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
               "call_id" => "",
               "name" => "lookup_fixture",
               "namespace" => "browser.search",
-              "arguments" => "{\"value\":\"sample\"}"
+              "arguments" => "{\"value\":\"sample\"}",
+              "encrypted_function_args" => []
             },
             %{
               "type" => "function_call_output",
@@ -1008,6 +1009,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       refute Map.has_key?(hd(captured.json["input"]), "id")
       assert Enum.at(captured.json["input"], 1)["id"] == "rs_v1_ws_opencode_reasoning"
       assert Enum.at(captured.json["input"], 2)["id"] == "fc_v1_ws_opencode_call"
+      assert Enum.at(captured.json["input"], 2)["encrypted_function_args"] == []
 
       assert Enum.at(captured.json["input"], 2)["call_id"] == "fc_v1_ws_opencode_call"
       assert Enum.at(captured.json["input"], 2)["namespace"] == "browser.search"
@@ -3386,6 +3388,54 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert Repo.aggregate(Attempt, :count) == 0
   end
 
+  test "POST /v1/responses rejects nested tool_search before dispatch", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+    counts = durable_accounting_counts()
+
+    supported_tool = %{
+      "type" => "function",
+      "name" => "lookup_nested_tool_search",
+      "parameters" => %{"type" => "object", "properties" => %{}}
+    }
+
+    for {position, stream} <- [{0, false}, {1, false}, {2, true}] do
+      tools =
+        [supported_tool, supported_tool]
+        |> List.insert_at(position, %{"type" => "tool_search"})
+
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "stream" => stream,
+          "input" => [
+            %{"role" => "user", "content" => "synthetic nested tool search"},
+            %{
+              "type" => "additional_tools",
+              "role" => "developer",
+              "tools" => tools
+            }
+          ]
+        })
+
+      assert %{
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_request",
+                 "message" => "tool_search tools are not supported",
+                 "param" => "input"
+               }
+             } = json_response(response, 400)
+
+      assert FakeUpstream.count(upstream) == 0
+      assert durable_accounting_counts() == counts
+      assert %{items: [], total: 0} = RequestLogs.list(setup.pool)
+    end
+  end
+
   test "POST /v1/responses rejects malformed instruction-role content before dispatch", %{
     conn: conn
   } do
@@ -5350,6 +5400,145 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "succeeded"
     assert request.endpoint == "/backend-api/codex/responses"
+  end
+
+  @tag :invalid_request_error
+  @tag :typed_input_contract
+  test "POST /v1/responses rejects explicit unknown typed content before dispatch", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+    counts = durable_accounting_counts()
+
+    invalid_items = [
+      %{
+        "type" => "future_input_item",
+        "role" => "user",
+        "content" => [%{"type" => "input_text", "text" => "synthetic known-looking content"}]
+      },
+      %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "future_content_part", "text" => "synthetic unknown part"}]
+      }
+    ]
+
+    for stream? <- [false, true], item <- invalid_items do
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => [item],
+          "stream" => stream?
+        })
+
+      assert %{
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_request",
+                 "param" => "input"
+               }
+             } = json_response(response, 400)
+    end
+
+    assert FakeUpstream.requests(upstream) == []
+    assert durable_accounting_counts() == counts
+    assert %{items: [], total: 0} = RequestLogs.list(setup.pool)
+  end
+
+  @tag :invalid_request_error
+  @tag :encrypted_function_args
+  test "POST /v1/responses rejects malformed encrypted function-call replay args before dispatch",
+       %{
+         conn: conn
+       } do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+    counts = durable_accounting_counts()
+
+    for {stream?, invalid_args} <-
+          [{false, "opaque"}, {true, %{}}, {false, ["a", 1]}, {true, [nil]}] do
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => [
+            %{
+              "type" => "function_call",
+              "call_id" => "call_encrypted_args_validation",
+              "name" => "lookup_fixture",
+              "arguments" => "{}",
+              "encrypted_function_args" => invalid_args
+            }
+          ],
+          "stream" => stream?
+        })
+
+      assert %{
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_request",
+                 "param" => "input"
+               }
+             } = json_response(response, 400)
+    end
+
+    assert FakeUpstream.requests(upstream) == []
+    assert durable_accounting_counts() == counts
+    assert %{items: [], total: 0} = RequestLogs.list(setup.pool)
+  end
+
+  @tag :encrypted_function_args
+  test "POST /v1/responses forwards encrypted function-call replay args without durable metadata",
+       %{
+         conn: conn
+       } do
+    for encrypted_args <- [[], ["a", "bb"]] do
+      upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "id" => "resp_encrypted_function_args",
+            "object" => "response",
+            "status" => "completed"
+          })
+        )
+
+      setup = gateway_setup(upstream)
+
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => [
+            %{
+              "type" => "function_call",
+              "call_id" => "call_encrypted_args_forward",
+              "name" => "lookup_fixture",
+              "arguments" => "{}",
+              "encrypted_function_args" => encrypted_args
+            }
+          ]
+        })
+
+      assert %{"id" => "resp_encrypted_function_args"} = json_response(response, 200)
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert [forwarded] = captured.json["input"]
+      assert Map.has_key?(forwarded, "encrypted_function_args")
+
+      assert Enum.map(forwarded["encrypted_function_args"], &byte_size/1) ==
+               Enum.map(encrypted_args, &byte_size/1)
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+      metadata = inspect({request.request_metadata, attempt.response_metadata})
+      refute metadata =~ "encrypted_function_args"
+    end
   end
 
   @tag :invalid_request_error

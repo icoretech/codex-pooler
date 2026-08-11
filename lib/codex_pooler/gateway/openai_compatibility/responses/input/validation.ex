@@ -139,6 +139,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
   defp validate_additional_tool(%{"type" => "mcp"}),
     do: {:error, Error.invalid_request("remote MCP tools are not supported", "input")}
 
+  defp validate_additional_tool(%{"type" => "tool_search"}),
+    do: {:error, Error.invalid_request("tool_search tools are not supported", "input")}
+
   defp validate_additional_tool(_tool), do: :ok
 
   defp validate_item_reference(%{"id" => id} = item, payload, has_tool_result?)
@@ -421,19 +424,41 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
              "namespace",
              "caller",
              "metadata",
+             "encrypted_function_args",
              @metadata_passthrough_key
            ]),
          :ok <- validate_nonblank(call_id),
          :ok <- validate_nonblank(name),
          :ok <- validate_optional_item_metadata(item),
          :ok <- validate_optional_namespace(item),
-         :ok <- validate_optional_caller(item) do
+         :ok <- validate_optional_caller(item),
+         :ok <- validate_optional_encrypted_function_args(item) do
       validate_optional_id(item)
     end
   end
 
   defp validate_function_call_replay_item(_item),
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp validate_optional_encrypted_function_args(item) do
+    case Map.fetch(item, "encrypted_function_args") do
+      :error ->
+        :ok
+
+      {:ok, nil} ->
+        :ok
+
+      {:ok, values} when is_list(values) ->
+        if Enum.all?(values, &is_binary/1) do
+          :ok
+        else
+          {:error, Error.invalid_request("input item shape is not translatable", "input")}
+        end
+
+      {:ok, _value} ->
+        {:error, Error.invalid_request("input item shape is not translatable", "input")}
+    end
+  end
 
   defp validate_custom_tool_call_replay_item(
          %{"call_id" => call_id, "name" => name, "input" => input} = item

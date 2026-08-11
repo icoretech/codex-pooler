@@ -48,6 +48,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Transports.BoundedResponseBody
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser
 
   alias CodexPooler.Gateway.Persistence.{
     BridgeDemotion,
@@ -10618,6 +10619,68 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "succeeded"
+  end
+
+  @tag :encrypted_function_args
+  test "POST /backend-api/codex/responses preserves encrypted function-call args in raw SSE", %{
+    conn: conn
+  } do
+    item = %{
+      "type" => "function_call",
+      "call_id" => "call_backend_encrypted_args",
+      "name" => "lookup_fixture",
+      "arguments" => "{}",
+      "encrypted_function_args" => []
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.output_item.done", %{"type" => "response.output_item.done", "item" => item}},
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_backend_encrypted_args",
+               "status" => "completed",
+               "output" => [item],
+               "usage" => %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic native encrypted-args relay",
+        "stream" => true
+      })
+
+    assert response.status == 200
+
+    events =
+      response.resp_body
+      |> String.split("\n\n", trim: true)
+      |> Enum.map(&SSEParser.stream_block_event/1)
+
+    assert {"response.output_item.done", %{"item" => output_item_done}} =
+             Enum.find(events, fn {event_type, _decoded} ->
+               event_type == "response.output_item.done"
+             end)
+
+    assert Map.fetch(output_item_done, "encrypted_function_args") == {:ok, []}
+
+    assert {"response.completed", %{"response" => %{"output" => [completed_item]}}} =
+             Enum.find(events, fn {event_type, _decoded} -> event_type == "response.completed" end)
+
+    assert Map.fetch(completed_item, "encrypted_function_args") == {:ok, []}
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
   end
 
   test "POST /backend-api/codex/responses relays stream safety-buffering metadata without persisting it",

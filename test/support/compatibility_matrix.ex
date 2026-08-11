@@ -946,7 +946,7 @@ defmodule CodexPooler.CompatibilityMatrix do
         executable: false,
         merges_into_tools: false,
         satisfies_tool_choice: false,
-        unsupported_nested_tool_types: ["mcp"]
+        unsupported_nested_tool_types: ["mcp", "tool_search"]
       },
       remote_mcp_tools: %{
         supported: false,
@@ -981,6 +981,12 @@ defmodule CodexPooler.CompatibilityMatrix do
             statuses: ["completed", "incomplete"]
           },
           function_call: %{
+            encrypted_function_args: %{
+              accepted: ["omitted", "null", "string_list"],
+              preserved: ["omitted", "null", "empty_list", "ordered_string_list"],
+              rejected: ["scalar", "map", "mixed_list", "non_string_list"],
+              durable_metadata: "omitted"
+            },
             caller: %{
               types: ["direct", "program"],
               program_requires: ["caller_id"],
@@ -1823,7 +1829,7 @@ defmodule CodexPooler.CompatibilityMatrix do
         executable: false,
         merges_into_tools: false,
         satisfies_tool_choice: false,
-        unsupported_nested_tool_types: ["mcp"]
+        unsupported_nested_tool_types: ["mcp", "tool_search"]
       },
       remote_mcp_tools: %{
         supported: false,

@@ -214,7 +214,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     frames = [
       ~s({"type":"response.done","response":{"id":"resp_pin_backend_get_done"}}),
-      ~s({ "id" : "resp_pin_backend_get_legacy" })
+      ~s({ "id" : "resp_pin_backend_get_legacy" }),
+      ~s({"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_native_encrypted_args","name":"lookup_fixture","arguments":"{}","encrypted_function_args":[]}}),
+      ~s({"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_native_encrypted_args_ordered","name":"lookup_fixture","arguments":"{}","encrypted_function_args":["a","bb"]}})
     ]
 
     for frame <- frames do

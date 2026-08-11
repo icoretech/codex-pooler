@@ -300,6 +300,102 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     end
 
     @tag :responses_coercion
+    test "Responses retains top-level tool_search rejection while preserving supported additional tools" do
+      supported_additional_tool =
+        flat_function_tool(
+          "lookup_additional_tool_search_pin",
+          %{"type" => "object", "properties" => %{}},
+          nil
+        )
+
+      supported_custom_tool = %{
+        "type" => "custom",
+        "name" => "custom_additional_tool_search_pin"
+      }
+
+      assert {:error, reason} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => "synthetic input",
+                 "tools" => [%{"type" => "tool_search"}]
+               })
+
+      assert reason == %{
+               status: 400,
+               code: "invalid_request",
+               message: "tool shape is not translatable",
+               param: "tools"
+             }
+
+      additional_tools_item = %{
+        "type" => "additional_tools",
+        "role" => "developer",
+        "tools" => [supported_additional_tool, supported_custom_tool]
+      }
+
+      assert {:ok, result} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => [additional_tools_item]
+               })
+
+      assert result.payload["input"] == [additional_tools_item]
+    end
+
+    @tag :unsupported_fields
+    test "Responses rejects tool_search nested in additional_tools before coercion" do
+      supported_tool =
+        flat_function_tool(
+          "lookup_additional_tool_search",
+          %{"type" => "object", "properties" => %{}},
+          nil
+        )
+
+      for position <- 0..2 do
+        tools =
+          [supported_tool, %{"type" => "tool_search"}, supported_tool]
+          |> List.delete_at(1)
+          |> List.insert_at(position, %{"type" => "tool_search"})
+
+        assert {:error, reason} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => [
+                     %{"role" => "user", "content" => "synthetic input"},
+                     %{
+                       "type" => "additional_tools",
+                       "role" => "developer",
+                       "tools" => tools
+                     }
+                   ]
+                 })
+
+        assert reason == %{
+                 status: 400,
+                 code: "invalid_request",
+                 message: "tool_search tools are not supported",
+                 param: "input"
+               }
+      end
+
+      similarly_named_tool = %{"type" => "tool_search_preview"}
+
+      assert {:ok, result} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => [
+                   %{
+                     "type" => "additional_tools",
+                     "role" => "developer",
+                     "tools" => [similarly_named_tool]
+                   }
+                 ]
+               })
+
+      assert get_in(result.payload, ["input", Access.at(0), "tools"]) == [similarly_named_tool]
+    end
+
+    @tag :responses_coercion
     test "Responses accepts empty additional_tools lists and optional ids" do
       valid_items = [
         %{"type" => "additional_tools", "role" => "developer", "tools" => []},
@@ -1383,6 +1479,55 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   @tag :unsupported_fields
+  @tag :typed_input_contract
+  test "Responses preserves untyped SDK maps, explicit messages, and known typed input" do
+    payload = %{
+      "model" => "gpt-fixture-text",
+      "input" => [
+        %{"role" => "user", "content" => "synthetic untyped SDK input"},
+        %{
+          "type" => "message",
+          "role" => "user",
+          "content" => [%{"type" => "input_text", "text" => "synthetic explicit message"}]
+        },
+        %{"type" => "input_file", "file_id" => "file_fixture_known"}
+      ]
+    }
+
+    assert {:ok, %{payload: %{"input" => [untyped, explicit_message, known_item]}}} =
+             Responses.coerce(payload)
+
+    assert untyped == %{
+             "type" => "message",
+             "role" => "user",
+             "content" => [%{"type" => "input_text", "text" => "synthetic untyped SDK input"}]
+           }
+
+    assert explicit_message == Enum.at(payload["input"], 1)
+    assert known_item == Enum.at(payload["input"], 2)
+  end
+
+  @tag :typed_input_contract
+  test "Responses rejects explicit unknown item and content-part types before coercion" do
+    unknown_item_with_message_content = %{
+      "type" => "future_input_item",
+      "role" => "user",
+      "content" => [%{"type" => "input_text", "text" => "synthetic known-looking content"}]
+    }
+
+    unknown_content_part_in_message = %{
+      "type" => "message",
+      "role" => "user",
+      "content" => [%{"type" => "future_content_part", "text" => "synthetic unknown part"}]
+    }
+
+    for input <- [[unknown_item_with_message_content], [unknown_content_part_in_message]] do
+      assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+               Responses.coerce(%{"model" => "gpt-fixture-text", "input" => input})
+    end
+  end
+
+  @tag :unsupported_fields
   test "malformed nested compatibility payloads are rejected before coercion" do
     assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
              Responses.coerce(%{
@@ -1705,6 +1850,48 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
       assert {:ok, _validated} = Responses.validate(payload)
       assert {:ok, %{payload: %{"input" => ^input}}} = Responses.coerce(payload)
+    end
+
+    test "function call replay preserves encrypted argument replay states" do
+      empty_args =
+        :function_call
+        |> programmatic_input_item()
+        |> Map.put("encrypted_function_args", [])
+
+      ordered_args =
+        :function_call
+        |> programmatic_input_item()
+        |> Map.put("encrypted_function_args", ["a", "bb"])
+
+      null_args =
+        :function_call
+        |> programmatic_input_item()
+        |> Map.put("encrypted_function_args", nil)
+
+      payload = %{
+        "model" => "gpt-fixture-text",
+        "input" => [programmatic_input_item(:function_call), null_args, empty_args, ordered_args]
+      }
+
+      assert {:ok, %{payload: %{"input" => [absent, nullable, empty, ordered]}}} =
+               Responses.coerce(payload)
+
+      refute Map.has_key?(absent, "encrypted_function_args")
+      assert nullable["encrypted_function_args"] == nil
+      assert empty["encrypted_function_args"] == []
+      assert [1, 2] = ordered["encrypted_function_args"] |> Enum.map(&byte_size/1)
+    end
+
+    test "function call replay rejects malformed encrypted argument replay fields" do
+      for invalid_value <- ["opaque", %{}, ["a", 1], [nil]] do
+        item =
+          :function_call
+          |> programmatic_input_item()
+          |> Map.put("encrypted_function_args", invalid_value)
+
+        assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+                 Responses.coerce(%{"model" => "gpt-fixture-text", "input" => [item]})
+      end
     end
 
     for input_case <- [

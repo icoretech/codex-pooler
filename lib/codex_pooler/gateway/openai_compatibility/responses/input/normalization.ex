@@ -7,6 +7,20 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
   alias CodexPooler.Gateway.Payloads.ToolResultShape
 
   @metadata_passthrough_key "internal_chat_message_metadata_passthrough"
+  @known_input_item_types ~w(
+    additional_tools
+    message
+    reasoning
+    compaction
+    program
+    program_output
+    function_call
+    custom_tool_call
+    custom_tool_call_output
+    function_call_output
+    input_file
+    item_reference
+  )
 
   @typep audio_normalization_result :: {:ok, map()} | {:error, Error.reason()}
 
@@ -197,6 +211,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
   end
 
   defp normalize_input_item(%{"type" => "additional_tools"} = item), do: {:ok, item}
+
+  defp normalize_input_item(%{"type" => type}) when type not in @known_input_item_types,
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
   defp normalize_input_item(%{"role" => "assistant", "tool_calls" => tool_calls} = item)
        when is_list(tool_calls) do

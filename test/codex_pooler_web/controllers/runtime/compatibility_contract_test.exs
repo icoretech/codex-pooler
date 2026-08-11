@@ -957,7 +957,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         executable: false,
         merges_into_tools: false,
         satisfies_tool_choice: false,
-        unsupported_nested_tool_types: ["mcp"]
+        unsupported_nested_tool_types: ["mcp", "tool_search"]
       }
 
       expected_remote_mcp_tools = %{
