@@ -60,6 +60,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Finalization.ResponseUsage
+  alias CodexPooler.Gateway.Transports.Admission
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
 
@@ -68,6 +69,114 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   @reasoning_denial_message "reasoning effort is not available for this API key"
+
+  @tag :bulkhead_overload
+  test "POST /v1/responses returns the Codex overload vocabulary before JSON or SSE dispatch", %{
+    conn: conn
+  } do
+    setup_runtime_ingress_override(overloaded_bulkhead_settings())
+
+    for stream? <- [false, true] do
+      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
+      setup = gateway_setup(upstream)
+
+      leases =
+        Enum.map(Admission.route_classes(), fn route_class ->
+          assert {:ok, lease} =
+                   Admission.acquire(route_class, %{request_id: "held-#{route_class}-#{stream?}"})
+
+          lease
+        end)
+
+      try do
+        response =
+          conn
+          |> recycle()
+          |> auth(setup)
+          |> post("/v1/responses", %{
+            "model" => setup.model.exposed_model_id,
+            "input" => "synthetic overload contract",
+            "stream" => stream?
+          })
+
+        assert %{"error" => error} = json_response(response, 503)
+
+        assert error == %{
+                 "code" => "server_is_overloaded",
+                 "message" => "gateway route class is temporarily overloaded",
+                 "param" => nil,
+                 "type" => "server_error"
+               }
+
+        assert FakeUpstream.count(upstream) == 0
+        assert Repo.aggregate(Request, :count) == 0
+        assert Repo.aggregate(Attempt, :count) == 0
+        assert Repo.aggregate(LedgerEntry, :count) == 0
+      after
+        Enum.each(leases, &Admission.release/1)
+      end
+    end
+  end
+
+  @tag :bulkhead_overload
+  @tag :v1_websocket
+  test "GET /v1/responses websocket returns the Codex overload vocabulary before dispatch" do
+    for {internal_reason, queue_limit, queue_timeout_ms} <- [
+          {"bulkhead_rejected", 0, 1_000},
+          {"bulkhead_queue_timeout", 1, 25}
+        ] do
+      setup_runtime_ingress_override(overloaded_bulkhead_settings(queue_limit, queue_timeout_ms))
+
+      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
+      setup = gateway_setup(upstream)
+      port = start_public_endpoint!()
+
+      {conn, websocket, ref, _response_headers} =
+        public_v1_websocket_connect!(
+          port,
+          setup,
+          "v1-websocket-overload-#{internal_reason}",
+          [{"openai-beta", "responses_websockets=2026-02-06"}]
+        )
+
+      assert {:ok, lease} =
+               Admission.acquire("proxy_websocket", %{request_id: "held-#{internal_reason}"})
+
+      try do
+        payload =
+          Jason.encode!(%{
+            "type" => "response.create",
+            "model" => setup.model.exposed_model_id,
+            "input" => "synthetic public websocket overload",
+            "stream" => true,
+            "generate" => true
+          })
+
+        {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+        {_conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+        assert %{
+                 "type" => "error",
+                 "status" => 503,
+                 "error" => %{
+                   "code" => "server_is_overloaded",
+                   "message" => "gateway route class is temporarily overloaded",
+                   "param" => nil,
+                   "type" => "server_error"
+                 }
+               } = Jason.decode!(frame)
+
+        refute frame =~ internal_reason
+        assert FakeUpstream.count(upstream) == 0
+        assert Repo.aggregate(Request, :count) == 0
+        assert Repo.aggregate(Attempt, :count) == 0
+        assert Repo.aggregate(LedgerEntry, :count) == 0
+      after
+        Admission.release(lease)
+        Mint.HTTP.close(conn)
+      end
+    end
+  end
 
   test "POST /v1/responses denies unavailable canonical reasoning before JSON or SSE dispatch", %{
     conn: conn
@@ -9562,5 +9671,15 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     )
 
     on_exit(fn -> Application.put_env(:codex_pooler, OperationalSettings, previous) end)
+  end
+
+  defp overloaded_bulkhead_settings(queue_limit \\ 0, queue_timeout_ms \\ 25) do
+    %OperationalSettings{
+      bulkheads:
+        Map.new(Admission.route_classes(), fn route_class ->
+          {route_class,
+           %{max_concurrency: 1, queue_limit: queue_limit, queue_timeout_ms: queue_timeout_ms}}
+        end)
+    }
   end
 end

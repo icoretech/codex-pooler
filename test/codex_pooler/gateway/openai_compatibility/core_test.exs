@@ -17,11 +17,13 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     Files,
     Images,
     Matrix,
+    PublicResponse,
     Responses,
     Validation
   }
 
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Transports.Admission
 
   test "supported field matrix covers endpoint families" do
     assert "model" in Matrix.supported_fields(:responses)
@@ -33,6 +35,24 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     assert "keywords" in Matrix.supported_fields(:audio)
     assert "languages" in Matrix.supported_fields(:audio)
     assert "input_fidelity" in Matrix.supported_fields(:images)
+  end
+
+  test "public error normalization emits the Codex overload vocabulary for each bounded admission cause" do
+    for internal_reason <- ["bulkhead_rejected", "bulkhead_queue_timeout"] do
+      normalized_error =
+        %{code: internal_reason, route_class: "proxy_http"}
+        |> Admission.overload_error()
+        |> PublicResponse.normalize_error(status: 503)
+
+      assert normalized_error == %{
+               "code" => "server_is_overloaded",
+               "message" => "gateway route class is temporarily overloaded",
+               "param" => nil,
+               "type" => "server_error"
+             }
+
+      refute Jason.encode!(normalized_error) =~ internal_reason
+    end
   end
 
   test "supported field matrix tracks current SDK top-level request fields" do

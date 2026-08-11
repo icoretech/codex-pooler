@@ -3799,6 +3799,56 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end)
   end
 
+  test "owner-forwarded websocket overloads keep internal causes off the Codex wire" do
+    for {internal_reason, queue_limit, queue_timeout_ms} <- [
+          {"bulkhead_rejected", 0, 1_000},
+          {"bulkhead_queue_timeout", 1, 25}
+        ] do
+      with_proxy_websocket_bulkhead(queue_limit, queue_timeout_ms, fn ->
+        upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
+        setup = gateway_setup(upstream)
+        {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+        {:ok, state} =
+          owner_socket(
+            auth,
+            "ws-owner-overload-#{internal_reason}",
+            "owner-overload-#{internal_reason}"
+          )
+
+        assert {:ok, lease} =
+                 Admission.acquire("proxy_websocket", %{request_id: "held-#{internal_reason}"})
+
+        try do
+          payload = websocket_payload(setup, "synthetic owner overload")
+
+          assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+          assert {:push, {:text, error_frame}, _state} = receive_socket_done(state)
+
+          assert %{
+                   "type" => "error",
+                   "status" => 503,
+                   "error" => %{
+                     "code" => "server_is_overloaded",
+                     "message" => "gateway route class is temporarily overloaded",
+                     "param" => nil,
+                     "type" => "server_error"
+                   }
+                 } = Jason.decode!(error_frame)
+
+          refute error_frame =~ internal_reason
+          assert FakeUpstream.requests(upstream) == []
+          assert Repo.aggregate(Request, :count) == 0
+          assert Repo.aggregate(Attempt, :count) == 0
+          assert Repo.aggregate(LedgerEntry, :count) == 0
+        after
+          Admission.release(lease)
+          CodexResponsesSocket.terminate(:closed, state)
+        end
+      end)
+    end
+  end
+
   test "owner-forwarded websocket terminal usage settles priced gpt-5.5 request logs" do
     terminal_usage = %{
       "input_tokens" => 123,
@@ -7942,6 +7992,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   defp with_single_proxy_websocket_slot(fun) do
+    with_proxy_websocket_bulkhead(0, 1_000, fun)
+  end
+
+  defp with_proxy_websocket_bulkhead(queue_limit, queue_timeout_ms, fun)
+       when is_integer(queue_limit) and queue_limit >= 0 and is_integer(queue_timeout_ms) and
+              queue_timeout_ms > 0 and is_function(fun, 0) do
     previous_settings = Application.get_env(:codex_pooler, OperationalSettings)
 
     Application.put_env(:codex_pooler, OperationalSettings,
@@ -7952,8 +8008,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           end)
           |> Map.put("proxy_websocket", %{
             max_concurrency: 1,
-            queue_limit: 0,
-            queue_timeout_ms: 1_000
+            queue_limit: queue_limit,
+            queue_timeout_ms: queue_timeout_ms
           })
       }
     )

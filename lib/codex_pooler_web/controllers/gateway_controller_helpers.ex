@@ -15,6 +15,8 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Pools.Routing, as: PoolRouting
 
+  @overload_code "server_is_overloaded"
+
   @type conn :: Plug.Conn.t()
   @type gateway_call_result ::
           {:ok, Contracts.gateway_result()} | {:error, Contracts.gateway_error()}
@@ -263,7 +265,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
         Map.merge(
           %{
             "message" => message,
-            "type" => "invalid_request_error",
+            "type" => client_error_type(code),
             "code" => to_string(code),
             "param" => Map.get(error, :param)
           },
@@ -280,6 +282,9 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   def send_error(conn, %{code: code, message: message}) do
     send_error(conn, %{status: 401, code: code, message: message})
   end
+
+  defp client_error_type(@overload_code), do: "server_error"
+  defp client_error_type(_code), do: "invalid_request_error"
 
   defp forwarded_headers(conn) do
     Enum.filter(conn.req_headers, fn {name, _value} ->

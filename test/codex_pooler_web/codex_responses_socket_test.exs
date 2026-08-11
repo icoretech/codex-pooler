@@ -4,8 +4,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.OperationalSettings.IPRules
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Transports.Admission
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
+  alias CodexPooler.Gateway.Websocket.Adapter
   alias CodexPooler.InstanceSettings.{Cache, Settings}
   alias CodexPoolerWeb.CodexResponsesSocket
 
@@ -13,6 +15,28 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   @cache_key {Cache, :current}
   @cache_version 1
   @revocation_close {1008, "client IP is no longer allowed"}
+
+  test "native and public websocket overload terminals use the shared Codex error vocabulary" do
+    for internal_reason <- ["bulkhead_rejected", "bulkhead_queue_timeout"] do
+      payload =
+        internal_reason
+        |> then(&Admission.overload_error(%{code: &1, route_class: "proxy_websocket"}))
+        |> Adapter.websocket_error()
+
+      assert payload == %{
+               "type" => "error",
+               "status" => 503,
+               "error" => %{
+                 "code" => "server_is_overloaded",
+                 "message" => "gateway route class is temporarily overloaded",
+                 "param" => nil,
+                 "type" => "server_error"
+               }
+             }
+
+      refute Jason.encode!(payload) =~ internal_reason
+    end
+  end
 
   test "locally applied allowed settings are a no-op and stale versions are ignored" do
     original = cached_settings()

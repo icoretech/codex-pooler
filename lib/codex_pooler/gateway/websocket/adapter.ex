@@ -11,6 +11,8 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Gateway.Websocket.DownstreamSession
 
+  @overload_code "server_is_overloaded"
+
   @type socket_state :: map()
 
   @spec put_runtime(socket_state(), Websocket.websocket_runtime()) :: socket_state()
@@ -185,7 +187,7 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
     Map.merge(
       %{
         "message" => message,
-        "type" => "invalid_request_error",
+        "type" => error_type(code),
         "code" => to_string(code),
         "param" => Map.get(reason, :param)
       },
@@ -201,6 +203,9 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
       "param" => nil
     }
   end
+
+  defp error_type(@overload_code), do: "server_error"
+  defp error_type(_code), do: "invalid_request_error"
 
   defp metadata_endpoint(%RequestOptions{transport: %{upstream_endpoint: endpoint}})
        when is_binary(endpoint),

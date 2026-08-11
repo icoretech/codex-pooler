@@ -7,7 +7,10 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   @type error_opts :: [status: error_status(), origin: error_origin()]
 
   @public_recovery_error_tokens ~w(pinned_continuation_reauth_required pinned_continuation_unavailable)
-  @server_error_tokens ~w(internal_error server_error upstream_error)
+  @server_error_tokens ~w(internal_error server_error upstream_error server_is_overloaded)
+  @overload_code "server_is_overloaded"
+  @overload_message "gateway route class is temporarily overloaded"
+  @bulkhead_reasons ~w(bulkhead_rejected bulkhead_queue_timeout)
 
   @spec stream_headers([{term(), term()}]) :: [{String.t(), String.t()} | {term(), term()}]
   def stream_headers(headers) do
@@ -44,10 +47,10 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   def normalize_error(%{} = error, opts) do
     status = error_status(error, opts)
 
-    if local_validation_error?(error, status, opts) do
-      explicit_error(error, status)
-    else
-      redacted_error(error)
+    cond do
+      overload_error?(error) -> overload_error()
+      local_validation_error?(error, status, opts) -> explicit_error(error, status)
+      true -> redacted_error(error)
     end
   end
 
@@ -84,6 +87,15 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
       "message" => "upstream request failed",
       "type" => "server_error",
       "code" => safe_error_code(error) || "upstream_error"
+    }
+  end
+
+  defp overload_error do
+    %{
+      "message" => @overload_message,
+      "type" => "server_error",
+      "code" => @overload_code,
+      "param" => nil
     }
   end
 
@@ -125,6 +137,11 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
 
   defp provider_invalid_request_error?(error),
     do: field(error, "type") == "invalid_request_error"
+
+  defp overload_error?(error) do
+    field(error, "code") == @overload_code and
+      field(error, "internal_reason") in @bulkhead_reasons
+  end
 
   defp public_recovery_error_token?(value) when is_binary(value),
     do: value in @public_recovery_error_tokens
@@ -183,6 +200,10 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   defp field(map, "param"), do: Map.get(map, "param") || Map.get(map, :param)
   defp field(map, "status"), do: Map.get(map, "status") || Map.get(map, :status)
   defp field(map, "status_code"), do: Map.get(map, "status_code") || Map.get(map, :status_code)
+
+  defp field(map, "internal_reason"),
+    do: Map.get(map, "internal_reason") || Map.get(map, :internal_reason)
+
   defp field(_map, _key), do: nil
 
   defp clean_string(value) when is_binary(value) do
