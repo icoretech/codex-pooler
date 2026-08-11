@@ -19,6 +19,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   attr :pool_filter_form, Phoenix.HTML.Form, required: true
   attr :pools, :list, required: true
   attr :can_manage_pools?, :boolean, required: true
+  attr :can_operate_pools?, :boolean, required: true
   attr :compat_panel_views, :map, default: %{}
 
   def pool_inventory(assigns) do
@@ -58,6 +59,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
         :if={@pools != []}
         pools={@pools}
         can_manage_pools?={@can_manage_pools?}
+        can_operate_pools?={@can_operate_pools?}
         compat_panel_views={@compat_panel_views}
       />
     </section>
@@ -365,6 +367,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
 
   attr :pools, :list, required: true
   attr :can_manage_pools?, :boolean, required: true
+  attr :can_operate_pools?, :boolean, required: true
   attr :compat_panel_views, :map, required: true
 
   defp pool_grid(assigns) do
@@ -377,6 +380,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
         :for={pool_row <- @pools}
         pool_row={pool_row}
         can_manage_pools?={@can_manage_pools?}
+        can_operate_pools?={@can_operate_pools?}
         compat_panel_flag={compat_panel_flag(@compat_panel_views, pool_row)}
       />
     </div>
@@ -385,6 +389,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
 
   attr :pool_row, :map, required: true
   attr :can_manage_pools?, :boolean, required: true
+  attr :can_operate_pools?, :boolean, required: true
   attr :compat_panel_flag, :any, default: nil
 
   defp pool_card(assigns) do
@@ -417,7 +422,11 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
               >
                 {@pool_row.pool.status}
               </span>
-              <.pool_action_menu pool_row={@pool_row} can_manage_pools?={@can_manage_pools?} />
+              <.pool_action_menu
+                pool_row={@pool_row}
+                can_manage_pools?={@can_manage_pools?}
+                can_operate_pools?={@can_operate_pools?}
+              />
             </div>
           </div>
         </div>
@@ -631,6 +640,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
 
   attr :pool_row, :map, required: true
   attr :can_manage_pools?, :boolean, required: true
+  attr :can_operate_pools?, :boolean, required: true
 
   defp pool_action_menu(assigns) do
     ~H"""
@@ -662,17 +672,25 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
             aria-label={"Copy ID for #{@pool_row.pool.name}"}
           />
         </li>
-        <li>
+        <li :if={@can_manage_pools?}>
           <AdminComponents.dropdown_action_item
             id={"edit-pool-#{@pool_row.pool.id}"}
             icon="hero-pencil-square"
             label="Edit"
             phx-click="edit_pool"
             phx-value-id={@pool_row.pool.id}
-            disabled={!@can_manage_pools?}
           />
         </li>
-        <li>
+        <li :if={!@can_manage_pools? && @can_operate_pools?}>
+          <AdminComponents.dropdown_action_item
+            id={"models-pool-#{@pool_row.pool.id}"}
+            icon="hero-adjustments-horizontal"
+            label="Models"
+            phx-click="edit_pool_models"
+            phx-value-id={@pool_row.pool.id}
+          />
+        </li>
+        <li :if={@can_manage_pools?}>
           <AdminComponents.dropdown_action_item
             id={"delete-pool-#{@pool_row.pool.id}"}
             icon="hero-trash"
@@ -680,7 +698,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
             variant={:danger}
             phx-click="delete_pool"
             phx-value-id={@pool_row.pool.id}
-            disabled={!@can_manage_pools? || @pool_row.pool.status != "archived"}
+            disabled={@pool_row.pool.status != "archived"}
             title={PoolForm.delete_title(@pool_row.pool)}
           />
         </li>

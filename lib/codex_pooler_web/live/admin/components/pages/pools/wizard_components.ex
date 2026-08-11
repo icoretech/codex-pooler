@@ -63,6 +63,26 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
       upstream_empty_label: "No active upstream accounts are available yet.",
       access_options_id: "pool-edit-api-key-options",
       access_count_id: "pool-edit-api-key-count"
+    },
+    models: %{
+      id: "pool-model-serving-dialog",
+      title: "Model serving modes",
+      description:
+        "Choose serving modes for this assigned Pool. Other Pool settings remain instance-owner only.",
+      form_id: "pool-model-serving-edit-form",
+      form_submit: "save_pool_model_serving",
+      cancel_event: "cancel_edit",
+      cancel_id: "pool-model-serving-cancel",
+      submit_id: "pool-model-serving-submit",
+      submit_label: "Save model modes",
+      submit_icon: "hero-check",
+      routing_controls_id: "pool-model-serving-routing-controls",
+      upstream_field: :upstream_identity_ids,
+      upstream_options_id: "pool-model-serving-upstream-options",
+      upstream_count_id: "pool-model-serving-upstream-count",
+      upstream_empty_label: "No active upstream accounts are available yet.",
+      access_options_id: "pool-model-serving-api-key-options",
+      access_count_id: "pool-model-serving-api-key-count"
     }
   }
 
@@ -94,9 +114,11 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
   def normalize_step(_step), do: "details"
 
   def normalize_step("models", :create), do: "details"
-  def normalize_step(step, mode) when mode in [:create, :edit], do: normalize_step(step)
 
-  attr :mode, :atom, required: true, values: [:create, :edit]
+  def normalize_step(step, mode) when mode in [:create, :edit, :models],
+    do: normalize_step(step)
+
+  attr :mode, :atom, required: true, values: [:create, :edit, :models]
   attr :form, :any, required: true
   attr :current_step, :string, required: true
   attr :upstream_options, :list, required: true
@@ -130,6 +152,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
         docs_url={@docs_url}
       >
         <.form
+          :if={@mode != :models}
           id={@form_id}
           for={@form}
           phx-submit={@form_submit}
@@ -342,7 +365,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
         </.form>
 
         <div
-          :if={@mode == :edit}
+          :if={@mode in [:edit, :models]}
           id={"#{@id}-section-models"}
           class={step_panel_class(@current_step, "models")}
           role="tabpanel"
@@ -358,7 +381,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
 
         <:actions>
           <span
-            :if={@mode == :edit && @current_step == "models" && @model_serving_dirty?}
+            :if={@mode in [:edit, :models] && @current_step == "models" && @model_serving_dirty?}
             id="pool-model-serving-dirty-status"
             class={[AdminBadges.metadata_chip_class(:warning), "self-center"]}
           >
@@ -372,7 +395,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
           />
           <AdminComponents.action_button
             :if={
-              @mode == :edit && @current_step == "models" && @model_serving_form &&
+              @mode in [:edit, :models] && @current_step == "models" && @model_serving_form &&
                 @model_serving_form.rows != []
             }
             id="pool-model-serving-submit"
@@ -548,4 +571,5 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
 
   defp pool_wizard_steps(:edit), do: @pool_wizard_steps
   defp pool_wizard_steps(:create), do: Enum.reject(@pool_wizard_steps, &(&1.id == :models))
+  defp pool_wizard_steps(:models), do: Enum.filter(@pool_wizard_steps, &(&1.id == :models))
 end

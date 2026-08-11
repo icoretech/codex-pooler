@@ -136,6 +136,13 @@ defmodule CodexPooler.Pools do
 
   def can_manage_pools?(_scope), do: false
 
+  @spec can_operate_pools?(Scope.t()) :: boolean()
+  def can_operate_pools?(%Scope{} = scope) do
+    match?({:ok, _pools}, list_pools(scope))
+  end
+
+  def can_operate_pools?(_scope), do: false
+
   @spec owner?(term()) :: boolean()
   defdelegate owner?(scope), to: Authorization
 

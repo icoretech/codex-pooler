@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Accounts
+  alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Catalog
   alias CodexPooler.Catalog.SyncRun
   alias CodexPooler.Events
@@ -112,10 +113,99 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute has_element?(view, "#pool-row-#{hidden_pool.id}")
     refute has_element?(view, "#pools-page-create-action")
     refute has_element?(view, "#pool-create-dialog")
+    refute has_element?(view, "#delete-pool-#{assigned_pool.id}")
 
     state = :sys.get_state(view.pid)
     refute state.socket.assigns.can_manage_pools?
     assert Enum.map(state.socket.assigns.pools, & &1.pool.id) == [assigned_pool.id]
+  end
+
+  test "assigned admin receives a Models-only Pool action", %{scope: scope} do
+    {:ok, assigned_pool} =
+      Pools.create_pool(scope, %{slug: "models-only-assigned", name: "Models Only Assigned"})
+
+    %{assignment: assignment} = upstream_assignment_fixture(assigned_pool)
+
+    model_fixture(assigned_pool, %{
+      exposed_model_id: "gpt-models-only-assigned",
+      metadata: %{"source_assignment_ids" => [assignment.id]}
+    })
+
+    %{user: admin, temporary_password: temporary_password} =
+      operator_fixture(scope, %{
+        "email" => "models-only-assigned-admin@example.com",
+        "password_change_required" => "false"
+      })
+
+    operator_pool_assignment_fixture(admin, assigned_pool, created_by_user_id: scope.user.id)
+
+    assert {:ok, %{token: token}} =
+             Accounts.login_user(%{"email" => admin.email, "password" => temporary_password})
+
+    admin_conn = log_in_user(build_conn(), admin, token)
+    {:ok, view, _html} = live(admin_conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+
+    assert has_element?(view, "#models-pool-#{assigned_pool.id}")
+    refute has_element?(view, "#edit-pool-#{assigned_pool.id}")
+
+    view |> element("#models-pool-#{assigned_pool.id}") |> render_click()
+    _ = render_async(view)
+
+    assert has_element?(view, "#pool-model-serving-dialog[open]")
+    assert has_element?(view, "#pool-model-serving-dialog-tab-models[aria-selected='true']")
+    assert has_element?(view, "#pool-model-serving-form")
+    refute has_element?(view, "#pool-model-serving-dialog-tab-details")
+    refute has_element?(view, "#pool-edit-form")
+    refute has_element?(view, "#pool_edit_name")
+    refute has_element?(view, "#pool_edit_status")
+
+    view
+    |> element("#pool-model-serving-form")
+    |> render_submit(%{
+      "pool_model_serving" => %{
+        "revision" => model_serving_revision(view),
+        "rows" => %{
+          "0" => %{
+            "exposed_model_id" => "gpt-models-only-assigned",
+            "mode" => "lite"
+          }
+        }
+      }
+    })
+
+    _ = render_async(view)
+
+    assert %ModelServingOverride{mode: "lite"} =
+             Repo.get_by!(ModelServingOverride,
+               pool_id: assigned_pool.id,
+               exposed_model_id: "gpt-models-only-assigned"
+             )
+
+    assert %AuditEvent{
+             actor_user_id: actor_user_id,
+             pool_id: pool_id,
+             action: "pool.model_serving_modes_update",
+             target_id: target_id
+           } =
+             Repo.one!(
+               from event in AuditEvent,
+                 where:
+                   event.action == "pool.model_serving_modes_update" and
+                     event.pool_id == ^assigned_pool.id
+             )
+
+    assert actor_user_id == admin.id
+    assert pool_id == assigned_pool.id
+    assert target_id == assigned_pool.id
+
+    view |> element("#pool-model-serving-cancel") |> render_click()
+
+    html =
+      render_click(view, "edit_pool", %{"id" => assigned_pool.id})
+
+    assert html =~ "the actor role cannot perform this capability in the requested scope"
+    refute has_element?(view, "#pool-edit-dialog")
   end
 
   test "unassigned admin sees explicit assigned-pool empty state without owner controls", %{
@@ -148,6 +238,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute html =~ hidden_pool.name
     refute has_element?(view, "#pools-page-create-action")
     refute has_element?(view, "#pool-empty-create-action")
+    refute has_element?(view, "#models-pool-#{hidden_pool.id}")
   end
 
   test "compat flag icons disclose one inline panel and toggle image generation", %{
@@ -1182,6 +1273,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
     _ = await_pool_traffic(view)
+
+    assert has_element?(view, "#edit-pool-#{pool.id}")
+    refute has_element?(view, "#models-pool-#{pool.id}")
 
     view |> element("#edit-pool-#{pool.id}") |> render_click()
     assert has_element?(view, "#pool-edit-dialog[open]")
