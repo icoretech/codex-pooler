@@ -60,6 +60,27 @@ defmodule CodexPooler.Pools.ModelServingModeTest do
                ModelServingMode.resolve(nil, mixed, ["source-a", "source-c"])
     end
 
+    test "Auto keeps health-level Lite evidence when that source is not turn-quota eligible" do
+      metadata = %{
+        "source_assignment_models" => %{
+          "health-visible-turn-ineligible" => %{"use_responses_lite" => true},
+          "turn-eligible" => %{"use_responses_lite" => false}
+        }
+      }
+
+      # `routable_source_ids` is the health-level assignment snapshot. Quota
+      # filtering happens later for the individual turn and must not change the
+      # Pool-model dialect advertised to clients.
+      health_routable_source_ids = ["health-visible-turn-ineligible", "turn-eligible"]
+      turn_quota_eligible_source_ids = ["turn-eligible"]
+
+      assert {:ok, %{effective_mode: "lite", source: "catalog"}} =
+               ModelServingMode.resolve(nil, metadata, health_routable_source_ids)
+
+      assert {:ok, %{effective_mode: "full", source: "catalog"}} =
+               ModelServingMode.resolve(nil, metadata, turn_quota_eligible_source_ids)
+    end
+
     test "Auto falls back to aggregate evidence only when the source map is absent or malformed" do
       for metadata <- [
             %{"use_responses_lite" => true},

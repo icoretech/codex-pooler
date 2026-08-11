@@ -413,6 +413,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     |> ToolSchemaLowering.lower_backend_non_strict_function_tools()
     |> remove_backend_codex_encrypted_tool_schema_markers()
     |> normalize_backend_codex_responses_lite(opts)
+    |> normalize_backend_codex_responses_lite_input(opts)
   end
 
   defp normalize_backend_codex_responses_lite(

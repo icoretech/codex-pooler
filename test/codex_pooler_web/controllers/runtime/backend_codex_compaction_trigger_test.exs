@@ -195,11 +195,41 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
         ],
         stream? <- [false, true] do
       upstream = start_upstream(compact_mode_matrix_upstream(stream?))
-      setup = gateway_setup(upstream, compact?: true)
+
+      setup =
+        gateway_setup(upstream,
+          compact?: true,
+          model_metadata: %{
+            "upstream_model" => %{
+              "capabilities" => %{
+                "responses" => true,
+                "streaming" => true,
+                "reasoning" => true,
+                "tools" => true,
+                "image_input" => true
+              }
+            }
+          }
+        )
 
       payload = %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic compact mode input",
+        "instructions" => "synthetic compact mode instructions",
+        "tools" => [%{"type" => "custom", "name" => "compact_tool"}],
+        "input" => [
+          %{
+            "type" => "message",
+            "role" => "user",
+            "content" => [
+              %{
+                "type" => "input_image",
+                "image_url" => "data:image/png;base64,AA==",
+                "detail" => "high"
+              },
+              %{"type" => "input_text", "text" => "synthetic compact mode input"}
+            ]
+          }
+        ],
         "stream" => stream?
       }
 
@@ -231,11 +261,22 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       assert full_capture.json["model"] == setup.model.upstream_model_id
       assert lite_capture.json["model"] == setup.model.upstream_model_id
 
-      assert Map.drop(full_capture.json, ["reasoning", "parallel_tool_calls"]) ==
-               Map.drop(lite_capture.json, ["reasoning", "parallel_tool_calls"])
+      assert full_capture.json["model"] == lite_capture.json["model"]
+      assert full_capture.json["instructions"] == payload["instructions"]
+      assert full_capture.json["tools"] == payload["tools"]
+      assert full_capture.json["input"] == payload["input"]
 
       assert get_in(lite_capture.json, ["reasoning", "context"]) == "all_turns"
       assert lite_capture.json["parallel_tool_calls"] == false
+      refute Map.has_key?(lite_capture.json, "instructions")
+      refute Map.has_key?(lite_capture.json, "tools")
+      assert get_in(lite_capture.json, ["input", Access.at(0), "type"]) == "additional_tools"
+      assert get_in(lite_capture.json, ["input", Access.at(0), "tools"]) == payload["tools"]
+      assert get_in(lite_capture.json, ["input", Access.at(1), "role"]) == "developer"
+
+      assert get_in(lite_capture.json, ["input", Access.at(2), "content", Access.at(0), "detail"]) ==
+               nil
+
       assert_compact_mode_matrix_headers!(full_capture, lite_capture)
       assert_compact_mode_matrix_metadata!(setup, ["full", "lite"])
     end

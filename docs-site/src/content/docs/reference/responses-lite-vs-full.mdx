@@ -35,7 +35,7 @@ Serving mode never changes the endpoint, the model id, or the credentials.
     </tr>
     <tr>
       <td>Upstream route</td>
-      <td>Identical. Ordinary Responses work reaches the backend Responses route in both modes</td>
+      <td>Identical. Ordinary Responses work and backend compact work reach their matching backend Responses route in both modes</td>
     </tr>
     <tr>
       <td>Client-visible model id</td>
@@ -65,7 +65,7 @@ There is no Lite marker in the HTTP request body, and no marker of either kind i
 
 ## What Changes On The Wire
 
-On the ordinary Responses lanes — HTTP, SSE, and the websocket `response.create` turn — Lite rewrites the outgoing request body. This is a real translation, not a flag. The backend compact route is a separate compatibility surface and is not described by this table.
+On the ordinary Responses lanes — HTTP, SSE, and the websocket `response.create` turn — Lite rewrites the outgoing request body. Backend compact routes receive the same Lite rewrite before their compact-specific projection runs. This is a real translation, not a flag.
 
 <table>
   <thead>
@@ -258,7 +258,7 @@ In the Codex model catalog, the Lite flag and the context-window family are inde
 
 ## What This Means For Clients
 
-Codex Pooler applies the Lite translation server-side, at egress, on every lane that dispatches ordinary Responses work. A client that knows nothing about Lite can send an ordinary Full-shaped body and Codex Pooler produces the Lite shape for it.
+Codex Pooler applies the Lite translation server-side, at egress, on every lane that dispatches ordinary or backend compact Responses work. A client that knows nothing about Lite can send an ordinary Full-shaped body and Codex Pooler produces the Lite shape for it. Compact dispatch then keeps its own narrow projection and validation rules: compact-only controls are still removed, while Lite tools and instructions are carried in the rewritten `input` array.
 
 Most OpenAI-compatible clients are unaware of Lite and need no configuration for it. For those clients, a Lite Pool has these observable effects:
 

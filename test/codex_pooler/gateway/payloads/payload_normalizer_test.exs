@@ -2190,7 +2190,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       end
     end
 
-    test "keeps allowed compact Lite fields without forwarding include or rewriting images" do
+    test "rewrites compact Lite bodies without forwarding include or top-level tools" do
       payload = %{
         "model" => "gpt-5.6-terra",
         "instructions" => "compact instructions",
@@ -2215,10 +2215,33 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       second = prepare_lite_payload(first, "/backend-api/codex/responses/compact")
 
       assert second == first
-      assert first["instructions"] == payload["instructions"]
       refute Map.has_key?(first, "include")
-      assert first["tools"] == payload["tools"]
-      assert first["input"] == payload["input"]
+      refute Map.has_key?(first, "instructions")
+      refute Map.has_key?(first, "tools")
+
+      assert first["input"] == [
+               %{
+                 "type" => "additional_tools",
+                 "role" => "developer",
+                 "tools" => payload["tools"]
+               },
+               %{
+                 "type" => "message",
+                 "role" => "developer",
+                 "content" => [%{"type" => "input_text", "text" => payload["instructions"]}]
+               },
+               %{
+                 "type" => "message",
+                 "role" => "user",
+                 "content" => [
+                   %{
+                     "type" => "input_image",
+                     "image_url" => "data:image/png;base64,AA=="
+                   }
+                 ]
+               }
+             ]
+
       assert first["parallel_tool_calls"] == false
       assert get_in(first, ["reasoning", "context"]) == "all_turns"
 
