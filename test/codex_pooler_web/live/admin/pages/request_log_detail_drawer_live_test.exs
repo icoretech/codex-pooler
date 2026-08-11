@@ -325,6 +325,102 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
     end
   end
 
+  test "renders validated serving-mode labels from request and attempt routing metadata",
+       %{conn: conn, scope: scope} do
+    pool = create_pool!(scope, %{slug: "drawer-serving-modes", name: "Drawer Serving Modes"})
+
+    request_mode = %{
+      "model_serving_mode_configured" => "auto",
+      "model_serving_mode" => "lite",
+      "model_serving_mode_source" => "catalog"
+    }
+
+    attempt_mode = %{
+      "model_serving_mode_configured" => "full",
+      "model_serving_mode" => "full",
+      "model_serving_mode_source" => "override"
+    }
+
+    %{request: valid_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-drawer-serving-modes-valid",
+        requested_model: "gpt-drawer-serving-modes-valid",
+        request_metadata: %{
+          "routing" => request_mode,
+          "body" => %{"model_serving_mode" => "body-mode-must-not-render"}
+        },
+        attempt_response_metadata: %{"routing" => attempt_mode}
+      })
+
+    %{request: invalid_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-drawer-serving-modes-invalid",
+        requested_model: "gpt-drawer-serving-modes-invalid",
+        request_metadata: %{
+          "routing" => %{
+            "model_serving_mode_configured" => "auto",
+            "model_serving_mode" => "lite",
+            "model_serving_mode_source" => "untrusted"
+          }
+        },
+        attempt_response_metadata: %{
+          "routing" => %{
+            "model_serving_mode_configured" => "auto",
+            "model_serving_mode" => "turbo",
+            "model_serving_mode_source" => "untrusted"
+          }
+        }
+      })
+
+    request_row_ids = [
+      "#request-log-detail-model-serving-mode-configured",
+      "#request-log-detail-model-serving-mode",
+      "#request-log-detail-model-serving-mode-source"
+    ]
+
+    attempt_row_ids = [
+      "#request-log-detail-attempt-1-model-serving-mode-configured",
+      "#request-log-detail-attempt-1-model-serving-mode",
+      "#request-log-detail-attempt-1-model-serving-mode-source"
+    ]
+
+    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    _ = await_request_logs(view)
+
+    render_click(element(view, "#request-log-#{valid_request.id}-open-details"))
+    assert_patch(view)
+
+    assert has_element?(view, "#request-log-detail-model-serving-mode-configured", "auto")
+    assert has_element?(view, "#request-log-detail-model-serving-mode", "lite")
+    assert has_element?(view, "#request-log-detail-model-serving-mode-source", "catalog")
+
+    assert has_element?(
+             view,
+             "#request-log-detail-attempt-1-model-serving-mode-configured",
+             "full"
+           )
+
+    assert has_element?(view, "#request-log-detail-attempt-1-model-serving-mode", "full")
+
+    assert has_element?(
+             view,
+             "#request-log-detail-attempt-1-model-serving-mode-source",
+             "override"
+           )
+
+    drawer_html = view |> element("#request-log-detail-sidebar") |> render()
+    refute drawer_html =~ "body-mode-must-not-render"
+
+    render_click(element(view, "#request-log-detail-sidebar-close"))
+    assert_patch(view)
+
+    render_click(element(view, "#request-log-#{invalid_request.id}-open-details"))
+    assert_patch(view)
+
+    refute Enum.any?(request_row_ids, &has_element?(view, &1))
+    refute Enum.any?(attempt_row_ids, &has_element?(view, &1))
+  end
+
   defp create_pool!(scope, attrs) do
     {:ok, pool} = Pools.create_pool(scope, attrs)
     pool

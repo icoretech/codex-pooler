@@ -145,6 +145,37 @@ Common causes to inspect are:
 
 The Errors column should stay safe to copy into operator tickets. It should not include raw prompts, responses, uploaded file contents, credentials, or provider payloads.
 
+### Serving-mode labels
+
+When a request or attempt has a complete validated serving-mode snapshot, the detail drawer shows three metadata rows:
+
+<table>
+  <thead>
+    <tr>
+      <th>Row</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Configured serving mode</td>
+      <td>The Pool-model setting captured for this request or attempt: <code>auto</code>, <code>lite</code>, or <code>full</code>.</td>
+    </tr>
+    <tr>
+      <td>Effective serving mode</td>
+      <td>The backend request shape selected for the captured snapshot: <code>lite</code> or <code>full</code>.</td>
+    </tr>
+    <tr>
+      <td>Serving mode source</td>
+      <td><code>catalog</code> for an Auto resolution or <code>override</code> for an explicit Pool-model setting.</td>
+    </tr>
+  </tbody>
+</table>
+
+The Routing summary reads the request snapshot, while each attempt in the timeline reads that attempt's own persisted snapshot. The three rows are omitted for historical rows with absent or invalid mode metadata. They are never derived from request bodies, prompts, provider text, headers, credentials, or other payload data.
+
+An explicit Full override that receives an ordinary terminal upstream 4xx is classified as `full_upstream_rejection`; a `429` remains `upstream_rate_limited`, and an ordinary 5xx remains `upstream_status`. These classifications are independent of whether the drawer can show a serving-mode snapshot.
+
 ### Upstream Websocket Connection Details
 
 For an attempt that actually used a current-release upstream websocket, the admin attempt-detail drawer can show an `upstream_websocket_connection` group with exactly four fields:
