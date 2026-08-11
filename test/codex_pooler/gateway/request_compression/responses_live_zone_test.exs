@@ -292,6 +292,111 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZoneTest do
                )
     end
 
+    test "skips only outputs bound to a function tool with an output schema" do
+      schema_bound_output = Jason.encode!(%{"items" => Enum.to_list(1..180)})
+      unbound_output = large_output("unbound schema-adjacent output")
+
+      json =
+        Jason.encode!(%{
+          "model" => "gpt-fixture",
+          "tools" => [
+            %{
+              "type" => "function",
+              "name" => "schema_bound",
+              "output_schema" => %{"type" => "object"}
+            },
+            %{"type" => "function", "name" => "unbound"}
+          ],
+          "input" => [
+            %{
+              "type" => "function_call",
+              "call_id" => "call_schema_bound",
+              "name" => "schema_bound"
+            },
+            %{
+              "type" => "function_call_output",
+              "call_id" => "call_schema_bound",
+              "output" => schema_bound_output
+            },
+            %{"type" => "function_call", "call_id" => "call_unbound", "name" => "unbound"},
+            %{
+              "type" => "function_call_output",
+              "call_id" => "call_unbound",
+              "output" => unbound_output
+            }
+          ]
+        })
+
+      assert {:ok, [candidate]} =
+               ResponsesLiveZone.plan_candidates(json, min_bytes: @min_candidate_bytes)
+
+      assert candidate.output_path == ["input", 3, "output"]
+
+      assert {:ok, %{candidate_count: 1, protected_tool_output_skipped_count: 1}} =
+               ResponsesLiveZone.plan(json, min_bytes: @min_candidate_bytes)
+    end
+
+    test "does not protect outputs for malformed tools or unmatched schema names" do
+      output = large_output("unmatched schema binding")
+
+      payloads = [
+        %{
+          "tools" => %{"type" => "function", "name" => "schema_bound", "output_schema" => %{}},
+          "input" => [
+            %{
+              "type" => "function_call",
+              "call_id" => "call_malformed_tools",
+              "name" => "schema_bound"
+            },
+            %{
+              "type" => "function_call_output",
+              "call_id" => "call_malformed_tools",
+              "output" => output
+            }
+          ]
+        },
+        %{
+          "tools" => [%{"type" => "function", "name" => "schema_bound", "output_schema" => %{}}],
+          "input" => [
+            %{"type" => "function_call", "call_id" => "call_name_mismatch", "name" => "other"},
+            %{
+              "type" => "function_call_output",
+              "call_id" => "call_name_mismatch",
+              "output" => output
+            }
+          ]
+        }
+      ]
+
+      for payload <- payloads do
+        json = Jason.encode!(Map.put(payload, "model", "gpt-fixture"))
+
+        assert {:ok, [candidate]} =
+                 ResponsesLiveZone.plan_candidates(json, min_bytes: @min_candidate_bytes)
+
+        assert candidate.output_path == ["input", 1, "output"]
+      end
+    end
+
+    test "retains the existing fail-closed behavior for an unmatched output call id" do
+      json =
+        Jason.encode!(%{
+          "model" => "gpt-fixture",
+          "tools" => [%{"type" => "function", "name" => "schema_bound", "output_schema" => %{}}],
+          "input" => [
+            %{"type" => "function_call", "call_id" => "call_id_source", "name" => "schema_bound"},
+            %{
+              "type" => "function_call_output",
+              "call_id" => "call_id_other",
+              "output" => large_output("unknown")
+            }
+          ]
+        })
+
+      assert {:ok, %{candidate_count: 0, protected_tool_output_skipped_count: 1}} =
+               ResponsesLiveZone.plan(json, min_bytes: @min_candidate_bytes)
+    end
+
     test "protects web retrieval function outputs from candidate planning" do
       input =
         ["WebSearch", "WebFetch", "web_search", "web_fetch"]

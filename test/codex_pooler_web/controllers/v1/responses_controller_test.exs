@@ -2921,7 +2921,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     end)
   end
 
-  test "POST /v1/responses preserves output-only translated tool output before dispatch",
+  test "POST /v1/responses preserves schema-bound tool output while compressing an unbound output",
        %{conn: conn} do
     upstream =
       start_upstream(
@@ -2941,19 +2941,52 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     setup = gateway_setup(upstream, exposed_model_id: "gpt-4o", upstream_model_id: "gpt-4o")
     enable_request_compression!(setup.pool)
-    omitted_sentinel = "v1 translated omitted sentinel"
-    original_output = compression_log_fixture(omitted_sentinel)
+    schema_bound_output = Jason.encode!(%{"rows" => Enum.to_list(1..160)}, pretty: true)
+    unbound_output = Jason.encode!(%{"rows" => Enum.to_list(161..320)}, pretty: true)
+
+    assert byte_size(schema_bound_output) > 512
+    assert byte_size(unbound_output) > 512
 
     conn =
       conn
       |> auth(setup)
       |> post("/v1/responses", %{
         "model" => setup.model.exposed_model_id,
+        "tools" => [
+          %{
+            "type" => "function",
+            "name" => "schema_bound_public_http_fixture",
+            "parameters" => %{"type" => "object", "properties" => %{}},
+            "output_schema" => %{"type" => "object"}
+          },
+          %{
+            "type" => "function",
+            "name" => "unbound_public_http_fixture",
+            "parameters" => %{"type" => "object", "properties" => %{}}
+          }
+        ],
         "input" => [
           %{
-            "role" => "tool",
-            "tool_call_id" => "call_v1_compressed_tool_output",
-            "content" => original_output
+            "type" => "function_call",
+            "call_id" => "call_public_http_schema_bound",
+            "name" => "schema_bound_public_http_fixture",
+            "arguments" => "{}"
+          },
+          %{
+            "type" => "function_call",
+            "call_id" => "call_public_http_unbound",
+            "name" => "unbound_public_http_fixture",
+            "arguments" => "{}"
+          },
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_public_http_schema_bound",
+            "output" => schema_bound_output
+          },
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_public_http_unbound",
+            "output" => unbound_output
           }
         ]
       })
@@ -2964,11 +2997,21 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert captured.json["stream"] == true
     assert captured.json["store"] == false
 
-    translated_item = List.first(captured.json["input"])
-    assert translated_item["type"] == "function_call_output"
-    assert translated_item["call_id"] == "call_v1_compressed_tool_output"
+    schema_bound_item =
+      Enum.find(captured.json["input"], fn item ->
+        item["type"] == "function_call_output" and
+          item["call_id"] == "call_public_http_schema_bound"
+      end)
 
-    assert translated_item["output"] == original_output
+    unbound_item =
+      Enum.find(captured.json["input"], fn item ->
+        item["type"] == "function_call_output" and item["call_id"] == "call_public_http_unbound"
+      end)
+
+    assert schema_bound_item["output"] == schema_bound_output
+    assert Jason.decode!(schema_bound_item["output"]) == Jason.decode!(schema_bound_output)
+    assert unbound_item["output"] != unbound_output
+    assert Jason.decode!(unbound_item["output"]) == Jason.decode!(unbound_output)
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "succeeded"
@@ -2983,18 +3026,17 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert %{
              "enabled" => true,
              "attempted" => true,
-             "status" => "skipped",
-             "reason" => "protected_tool_outputs",
+             "status" => "compressed",
              "route_class" => "proxy_stream",
              "transport" => "http_sse",
-             "candidate_count" => 0,
-             "compressed_count" => 0,
+             "candidate_count" => 1,
+             "compressed_count" => 1,
              "skipped_count" => 0,
              "protected_tool_output_skipped_count" => 1
            } = metadata = attempt.response_metadata["payload_compression"]
 
-    refute inspect(metadata) =~ omitted_sentinel
-    refute inspect(metadata) =~ "call_v1_compressed_tool_output"
+    refute inspect(metadata) =~ "call_public_http_schema_bound"
+    refute inspect(metadata) =~ "call_public_http_unbound"
   end
 
   @tag :v1_websocket_bridge_usage
@@ -8944,29 +8986,6 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
     })
     |> Repo.update!()
-  end
-
-  defp compression_log_fixture(omitted_sentinel) do
-    middle =
-      1..96
-      |> Enum.map(fn
-        48 -> "ordinary build line 48 #{omitted_sentinel}"
-        index -> "ordinary build line #{index}"
-      end)
-
-    [
-      "command started",
-      "context before first",
-      "error: first failure",
-      "context after first"
-    ]
-    |> Kernel.++(middle)
-    |> Kernel.++([
-      "context before final",
-      "fatal: final failure",
-      "context after final"
-    ])
-    |> Enum.join("\n")
   end
 
   defp long_turn_progress_events(response_id) do

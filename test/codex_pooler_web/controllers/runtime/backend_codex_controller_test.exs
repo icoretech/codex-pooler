@@ -2991,19 +2991,49 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     setup = gateway_setup(upstream, supported_compression_model_opts())
     enable_request_compression!(setup.pool)
-    original_rows = compression_rows_fixture()
-    original_output = Jason.encode!(original_rows, pretty: true)
+    schema_bound_rows = compression_rows_fixture()
+    schema_bound_output = Jason.encode!(schema_bound_rows, pretty: true)
+    unbound_rows = Enum.reverse(schema_bound_rows)
+    unbound_output = Jason.encode!(unbound_rows, pretty: true)
+
+    assert byte_size(schema_bound_output) > 512
+    assert byte_size(unbound_output) > 512
 
     conn =
       conn
       |> auth(setup)
       |> post("/backend-api/codex/v1/responses", %{
         "model" => setup.model.exposed_model_id,
+        "tools" => [
+          %{
+            "type" => "function",
+            "name" => "schema_bound_backend_fixture",
+            "output_schema" => %{"type" => "object"}
+          },
+          %{"type" => "function", "name" => "unbound_backend_fixture"}
+        ],
         "input" => [
           %{
-            "type" => "local_shell_call_output",
-            "call_id" => "call_backend_alias_compressed",
-            "output" => original_output
+            "type" => "function_call",
+            "call_id" => "call_backend_schema_bound",
+            "name" => "schema_bound_backend_fixture",
+            "arguments" => "{}"
+          },
+          %{
+            "type" => "function_call",
+            "call_id" => "call_backend_unbound",
+            "name" => "unbound_backend_fixture",
+            "arguments" => "{}"
+          },
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_backend_schema_bound",
+            "output" => schema_bound_output
+          },
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_backend_unbound",
+            "output" => unbound_output
           }
         ]
       })
@@ -3012,15 +3042,153 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
 
-    compressed_output = captured.json["input"] |> List.first() |> Map.fetch!("output")
-    assert compressed_output != original_output
-    assert Jason.decode!(compressed_output) == original_rows
+    schema_bound_item =
+      Enum.find(captured.json["input"], fn item ->
+        item["type"] == "function_call_output" and
+          item["call_id"] == "call_backend_schema_bound"
+      end)
+
+    unbound_item =
+      Enum.find(captured.json["input"], fn item ->
+        item["type"] == "function_call_output" and item["call_id"] == "call_backend_unbound"
+      end)
+
+    assert schema_bound_item["output"] == schema_bound_output
+    assert Jason.decode!(schema_bound_item["output"]) == schema_bound_rows
+    assert unbound_item["output"] != unbound_output
+    assert Jason.decode!(unbound_item["output"]) == unbound_rows
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.transport == "http_json"
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert_compressed_payload_metadata!(attempt, "proxy_http", "http_json", "json_array_lossless")
+
+    assert attempt.response_metadata["payload_compression"]["protected_tool_output_skipped_count"] ==
+             1
+  end
+
+  test "curl -i reaches the isolated native HTTP compression boundary through FakeUpstream" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_curl_schema_bound_compression",
+          "object" => "response",
+          "status" => "completed",
+          "output" => []
+        })
+      )
+
+    setup = gateway_setup(upstream, supported_compression_model_opts())
+    enable_request_compression!(setup.pool)
+    {server, port} = start_public_endpoint_with_server!()
+    temp_root = Path.join(System.tmp_dir!(), "task-9b-curl-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(temp_root)
+    File.chmod!(temp_root, 0o700)
+
+    on_exit(fn ->
+      if Process.alive?(server) do
+        try do
+          GenServer.stop(server)
+        catch
+          :exit, _reason -> :ok
+        end
+      end
+
+      File.rm_rf!(temp_root)
+    end)
+
+    schema_bound_output = Jason.encode!(%{"rows" => Enum.to_list(1..160)}, pretty: true)
+    unbound_output = Jason.encode!(%{"rows" => Enum.to_list(161..320)}, pretty: true)
+
+    request_body =
+      Jason.encode!(%{
+        "model" => setup.model.exposed_model_id,
+        "tools" => [
+          %{
+            "type" => "function",
+            "name" => "schema_bound_curl_fixture",
+            "output_schema" => %{"type" => "object"}
+          },
+          %{"type" => "function", "name" => "unbound_curl_fixture"}
+        ],
+        "input" => [
+          %{
+            "type" => "function_call",
+            "call_id" => "call_curl_schema_bound",
+            "name" => "schema_bound_curl_fixture",
+            "arguments" => "{}"
+          },
+          %{
+            "type" => "function_call",
+            "call_id" => "call_curl_unbound",
+            "name" => "unbound_curl_fixture",
+            "arguments" => "{}"
+          },
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_curl_schema_bound",
+            "output" => schema_bound_output
+          },
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_curl_unbound",
+            "output" => unbound_output
+          }
+        ]
+      })
+
+    request_path = Path.join(temp_root, "request.json")
+    curl_config_path = Path.join(temp_root, "curl.conf")
+    File.write!(request_path, request_body)
+
+    File.write!(
+      curl_config_path,
+      "url = \"http://127.0.0.1:#{port}/backend-api/codex/responses\"\n" <>
+        "request = \"POST\"\n" <>
+        "header = \"content-type: application/json\"\n" <>
+        "header = \"authorization: #{setup.authorization}\"\n" <>
+        "data-binary = \"@#{request_path}\"\n"
+    )
+
+    File.chmod!(request_path, 0o600)
+    File.chmod!(curl_config_path, 0o600)
+
+    {curl_output, 0} =
+      System.cmd(
+        "curl",
+        ["-i", "--silent", "--show-error", "--max-time", "10", "--config", curl_config_path],
+        stderr_to_stdout: true
+      )
+
+    assert String.starts_with?(curl_output, "HTTP/1.1 200")
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert FakeUpstream.http_request_count(upstream) == 1
+
+    schema_bound_item =
+      Enum.find(captured.json["input"], fn item ->
+        item["type"] == "function_call_output" and item["call_id"] == "call_curl_schema_bound"
+      end)
+
+    unbound_item =
+      Enum.find(captured.json["input"], fn item ->
+        item["type"] == "function_call_output" and item["call_id"] == "call_curl_unbound"
+      end)
+
+    assert schema_bound_item["output"] == schema_bound_output
+    assert is_map(Jason.decode!(schema_bound_item["output"]))
+    assert unbound_item["output"] != unbound_output
+    assert Jason.decode!(unbound_item["output"]) == Jason.decode!(unbound_output)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+    assert %{
+             "candidate_count" => 1,
+             "compressed_count" => 1,
+             "protected_tool_output_skipped_count" => 1,
+             "status" => "compressed"
+           } = attempt.response_metadata["payload_compression"]
   end
 
   test "POST /backend-api/codex/responses compresses embedded JSON in eligible function output",

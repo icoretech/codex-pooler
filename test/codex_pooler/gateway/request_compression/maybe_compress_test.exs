@@ -13,6 +13,75 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
   @supported_model "gpt-4o"
 
   describe "maybe_compress/3" do
+    test "preserves schema-bound JSON output while compressing an unbound function output" do
+      schema_bound_output =
+        Jason.encode!(%{"rows" => Enum.map(1..160, &%{"id" => &1})}, pretty: true)
+
+      unbound_sentinel = "unbound compression sentinel"
+      unbound_output = oversized_log_fixture("unbound", unbound_sentinel)
+
+      body =
+        Jason.encode!(%{
+          "model" => @supported_model,
+          "tools" => [
+            %{
+              "type" => "function",
+              "name" => "schema_bound",
+              "output_schema" => %{"type" => "object"}
+            },
+            %{"type" => "function", "name" => "unbound"}
+          ],
+          "input" => [
+            %{
+              "type" => "function_call",
+              "call_id" => "call_schema_bound_output",
+              "name" => "schema_bound",
+              "arguments" => "{}"
+            },
+            %{
+              "type" => "function_call_output",
+              "call_id" => "call_schema_bound_output",
+              "output" => schema_bound_output
+            },
+            %{
+              "type" => "function_call",
+              "call_id" => "call_unbound_output",
+              "name" => "unbound",
+              "arguments" => "{}"
+            },
+            %{
+              "type" => "function_call_output",
+              "call_id" => "call_unbound_output",
+              "output" => unbound_output
+            }
+          ]
+        })
+
+      {context, request_options} = request_context(body)
+
+      assert {compressed_body, compressed_options} =
+               RequestCompression.maybe_compress(body, context, request_options)
+
+      compressed_input = compressed_body |> Jason.decode!() |> Map.fetch!("input")
+      preserved_output = Enum.at(compressed_input, 1)["output"]
+      compressed_output = Enum.at(compressed_input, 3)["output"]
+
+      assert preserved_output == schema_bound_output
+      assert Jason.decode!(preserved_output) == Jason.decode!(schema_bound_output)
+      assert compressed_output =~ "[compressed log output: omitted"
+      refute compressed_output =~ unbound_sentinel
+
+      assert %{
+               "status" => "compressed",
+               "candidate_count" => 1,
+               "compressed_count" => 1,
+               "skipped_count" => 0,
+               "protected_tool_output_skipped_count" => 1
+             } = compressed_options.runtime.payload_compression
+
+      refute inspect(compressed_options.runtime.payload_compression) =~ unbound_sentinel
+    end
+
     test "rewrites only function output in a mixed programmatic replay" do
       function_output_sentinel = "eligible function output omitted sentinel"
       program_result_sentinel = "program result preserved sentinel"

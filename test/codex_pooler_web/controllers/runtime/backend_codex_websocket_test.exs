@@ -5278,6 +5278,125 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     end
   end
 
+  test "direct websocket preserves schema-bound output while compressing an unbound output" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_schema_bound_compression",
+          "object" => "response",
+          "status" => "completed"
+        })
+      )
+
+    setup =
+      gateway_setup(upstream,
+        exposed_model_id: "gpt-4o",
+        upstream_model_id: "gpt-4o",
+        pricing_ref: "gpt-4o"
+      )
+
+    setup.pool
+    |> Pools.ensure_routing_settings()
+    |> Ecto.Changeset.change(request_compression_enabled: true)
+    |> Repo.update!()
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, state} =
+      CodexResponsesSocket.init(%{
+        auth: auth,
+        opts: %{
+          request_id: "ws-schema-bound-compression",
+          accepted_turn_state: "stable-ws-schema-bound-compression",
+          client_ip: "127.0.0.1"
+        }
+      })
+
+    schema_bound_output = Jason.encode!(%{"rows" => Enum.to_list(1..160)}, pretty: true)
+    unbound_output = Jason.encode!(%{"rows" => Enum.to_list(161..320)}, pretty: true)
+
+    assert byte_size(schema_bound_output) > 512
+    assert byte_size(unbound_output) > 512
+
+    payload =
+      Jason.encode!(%{
+        "type" => "response.create",
+        "model" => setup.model.exposed_model_id,
+        "tools" => [
+          %{
+            "type" => "function",
+            "name" => "schema_bound_direct_fixture",
+            "output_schema" => %{"type" => "object"}
+          },
+          %{"type" => "function", "name" => "unbound_direct_fixture"}
+        ],
+        "input" => [
+          %{
+            "type" => "function_call",
+            "call_id" => "call_direct_schema_bound",
+            "name" => "schema_bound_direct_fixture",
+            "arguments" => "{}"
+          },
+          %{
+            "type" => "function_call",
+            "call_id" => "call_direct_unbound",
+            "name" => "unbound_direct_fixture",
+            "arguments" => "{}"
+          },
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_direct_schema_bound",
+            "output" => schema_bound_output
+          },
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_direct_unbound",
+            "output" => unbound_output
+          }
+        ],
+        "stream" => true,
+        "generate" => true
+      })
+
+    try do
+      assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+      assert {:push, {:text, frame}, state} = receive_socket_push(state)
+      assert %{"id" => "resp_ws_schema_bound_compression"} = Jason.decode!(frame)
+      assert {:ok, _state} = receive_socket_done(state)
+
+      assert [captured] = FakeUpstream.requests(upstream)
+
+      schema_bound_item =
+        Enum.find(captured.json["input"], fn item ->
+          item["type"] == "function_call_output" and
+            item["call_id"] == "call_direct_schema_bound"
+        end)
+
+      unbound_item =
+        Enum.find(captured.json["input"], fn item ->
+          item["type"] == "function_call_output" and item["call_id"] == "call_direct_unbound"
+        end)
+
+      assert schema_bound_item["output"] == schema_bound_output
+      assert Jason.decode!(schema_bound_item["output"]) == Jason.decode!(schema_bound_output)
+      assert unbound_item["output"] != unbound_output
+      assert Jason.decode!(unbound_item["output"]) == Jason.decode!(unbound_output)
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+      assert %{
+               "candidate_count" => 1,
+               "compressed_count" => 1,
+               "protected_tool_output_skipped_count" => 1,
+               "status" => "compressed",
+               "transport" => "websocket"
+             } = attempt.response_metadata["payload_compression"]
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
   test "downstream websocket does not inject last response id when continuation omits previous_response_id" do
     upstream =
       start_upstream(

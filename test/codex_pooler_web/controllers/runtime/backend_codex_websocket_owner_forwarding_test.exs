@@ -3134,18 +3134,46 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       })
 
     try do
-      omitted_sentinel = "owner websocket compressed omitted marker"
-      original_output = compression_log_fixture(omitted_sentinel)
+      schema_bound_output = Jason.encode!(%{"rows" => Enum.to_list(1..160)}, pretty: true)
+      unbound_output = Jason.encode!(%{"rows" => Enum.to_list(161..320)}, pretty: true)
+
+      assert byte_size(schema_bound_output) > 512
+      assert byte_size(unbound_output) > 512
 
       tool_payload =
         Jason.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
+          "tools" => [
+            %{
+              "type" => "function",
+              "name" => "schema_bound_owner_fixture",
+              "output_schema" => %{"type" => "object"}
+            },
+            %{"type" => "function", "name" => "unbound_owner_fixture"}
+          ],
           "input" => [
             %{
+              "type" => "function_call",
+              "call_id" => "call_owner_schema_bound",
+              "name" => "schema_bound_owner_fixture",
+              "arguments" => "{}"
+            },
+            %{
+              "type" => "function_call",
+              "call_id" => "call_owner_unbound",
+              "name" => "unbound_owner_fixture",
+              "arguments" => "{}"
+            },
+            %{
               "type" => "function_call_output",
-              "call_id" => "call_owner_tool",
-              "output" => original_output
+              "call_id" => "call_owner_schema_bound",
+              "output" => schema_bound_output
+            },
+            %{
+              "type" => "function_call_output",
+              "call_id" => "call_owner_unbound",
+              "output" => unbound_output
             }
           ],
           "stream" => true,
@@ -3166,10 +3194,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert first_request.websocket_connection_id == second_request.websocket_connection_id
       assert second_request.json["previous_response_id"] == "resp_owner_tool_first"
 
-      assert [%{"type" => "function_call_output", "call_id" => "call_owner_tool"} = tool_output] =
-               second_request.json["input"]
+      schema_bound_item =
+        Enum.find(second_request.json["input"], fn item ->
+          item["type"] == "function_call_output" and
+            item["call_id"] == "call_owner_schema_bound"
+        end)
 
-      assert tool_output["output"] == original_output
+      unbound_item =
+        Enum.find(second_request.json["input"], fn item ->
+          item["type"] == "function_call_output" and item["call_id"] == "call_owner_unbound"
+        end)
+
+      assert schema_bound_item["output"] == schema_bound_output
+      assert Jason.decode!(schema_bound_item["output"]) == Jason.decode!(schema_bound_output)
+      assert unbound_item["output"] != unbound_output
+      assert Jason.decode!(unbound_item["output"]) == Jason.decode!(unbound_output)
 
       assert [first_log, second_log] = request_logs(setup.pool.id)
       assert first_log.status == "succeeded"
@@ -3186,12 +3225,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert %{
                "enabled" => true,
                "attempted" => true,
-               "status" => "skipped",
-               "reason" => "protected_tool_outputs",
+               "status" => "compressed",
                "route_class" => "proxy_websocket",
                "transport" => "websocket",
-               "candidate_count" => 0,
-               "compressed_count" => 0,
+               "candidate_count" => 1,
+               "compressed_count" => 1,
                "skipped_count" => 0,
                "protected_tool_output_skipped_count" => 1
              } = second_attempt.response_metadata["payload_compression"]
@@ -3206,7 +3244,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       refute_payload_compression_leak!(
         second_attempt.response_metadata["payload_compression"],
-        [omitted_sentinel, "call_owner_tool"]
+        ["call_owner_schema_bound", "call_owner_unbound"]
       )
     after
       CodexResponsesSocket.terminate(:closed, second_state)
@@ -7346,29 +7384,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         flunk("payload compression metadata leaked forbidden owner websocket request content")
       end
     end
-  end
-
-  defp compression_log_fixture(omitted_sentinel) do
-    middle =
-      1..96
-      |> Enum.map(fn
-        48 -> "ordinary build line 48 #{omitted_sentinel}"
-        index -> "ordinary build line #{index}"
-      end)
-
-    [
-      "command started",
-      "context before first",
-      "error: first failure",
-      "context after first"
-    ]
-    |> Kernel.++(middle)
-    |> Kernel.++([
-      "context before final",
-      "fatal: final failure",
-      "context after final"
-    ])
-    |> Enum.join("\n")
   end
 
   defp receive_owner_socket_push(state) do

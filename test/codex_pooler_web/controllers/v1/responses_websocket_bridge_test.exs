@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     only: [
       auth: 2,
       gateway_setup: 1,
+      gateway_setup: 2,
       pricing_config: 1,
       pricing_snapshot!: 2,
       start_upstream: 1
@@ -626,16 +627,53 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     conn: conn
   } do
     upstream = start_upstream(FakeUpstream.sse_stream([completed_event("resp_compression")]))
-    setup = gateway_setup(upstream)
+    setup = gateway_setup(upstream, exposed_model_id: "gpt-4o", upstream_model_id: "gpt-4o")
     enable_request_compression!(setup.pool)
     session = "compression-session-#{System.unique_integer([:positive])}"
-    omitted_sentinel = "bridged compression omitted marker"
-    original_output = compression_log_fixture(omitted_sentinel)
+    schema_bound_output = Jason.encode!(%{"rows" => Enum.to_list(1..160)}, pretty: true)
+    unbound_output = Jason.encode!(%{"rows" => Enum.to_list(161..320)}, pretty: true)
+
+    assert byte_size(schema_bound_output) > 512
+    assert byte_size(unbound_output) > 512
 
     payload = %{
       "model" => setup.model.exposed_model_id,
+      "tools" => [
+        %{
+          "type" => "function",
+          "name" => "schema_bound_public_bridge_fixture",
+          "parameters" => %{"type" => "object", "properties" => %{}},
+          "output_schema" => %{"type" => "object"}
+        },
+        %{
+          "type" => "function",
+          "name" => "unbound_public_bridge_fixture",
+          "parameters" => %{"type" => "object", "properties" => %{}}
+        }
+      ],
       "input" => [
-        %{"role" => "tool", "tool_call_id" => "call_bridge_tool", "content" => original_output}
+        %{
+          "type" => "function_call",
+          "call_id" => "call_bridge_schema_bound",
+          "name" => "schema_bound_public_bridge_fixture",
+          "arguments" => "{}"
+        },
+        %{
+          "type" => "function_call",
+          "call_id" => "call_bridge_unbound",
+          "name" => "unbound_public_bridge_fixture",
+          "arguments" => "{}"
+        },
+        %{
+          "type" => "function_call_output",
+          "call_id" => "call_bridge_schema_bound",
+          "output" => schema_bound_output
+        },
+        %{
+          "type" => "function_call_output",
+          "call_id" => "call_bridge_unbound",
+          "output" => unbound_output
+        }
       ],
       "stream" => true
     }
@@ -650,13 +688,26 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     # sent, and its decision is what the metadata below has to describe.
     assert [captured] = FakeUpstream.requests(upstream)
 
-    assert [%{"type" => "function_call_output", "call_id" => "call_bridge_tool"} = tool_output] =
-             captured.json["input"]
-
-    assert tool_output["output"] == original_output
-
     request = latest_request(setup.pool)
     assert [attempt] = attempts_for(request)
+    assert attempt.response_metadata["payload_compression"]["status"] == "compressed"
+
+    schema_bound_item =
+      Enum.find(captured.json["input"], fn item ->
+        item["type"] == "function_call_output" and
+          item["call_id"] == "call_bridge_schema_bound"
+      end)
+
+    unbound_item =
+      Enum.find(captured.json["input"], fn item ->
+        item["type"] == "function_call_output" and item["call_id"] == "call_bridge_unbound"
+      end)
+
+    assert schema_bound_item["output"] == schema_bound_output
+    assert Jason.decode!(schema_bound_item["output"]) == Jason.decode!(schema_bound_output)
+    assert unbound_item["output"] != unbound_output
+    assert Jason.decode!(unbound_item["output"]) == Jason.decode!(unbound_output)
+
     assert attempt.transport == "websocket"
     assert attempt.response_metadata["upstream_websocket_bridge"] == true
 
@@ -666,16 +717,18 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert %{
              "enabled" => true,
              "attempted" => true,
-             "status" => "skipped",
+             "status" => "compressed",
              "transport" => "websocket",
              "original_bytes" => original_bytes,
-             "compressed_count" => 0
+             "candidate_count" => 1,
+             "compressed_count" => 1,
+             "protected_tool_output_skipped_count" => 1
            } = metadata = attempt.response_metadata["payload_compression"]
 
-    assert original_bytes == byte_size(captured.body)
+    assert original_bytes > byte_size(captured.body)
 
-    refute inspect(metadata) =~ omitted_sentinel
-    refute inspect(metadata) =~ "call_bridge_tool"
+    refute inspect(metadata) =~ "call_bridge_schema_bound"
+    refute inspect(metadata) =~ "call_bridge_unbound"
   end
 
   @tag :prompt_cache_adaptation
@@ -2238,29 +2291,6 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert attempt.transport == "http_sse"
     assert FakeUpstream.http_request_count(upstream) == 1
     assert settlement_count(request) == 1
-  end
-
-  defp compression_log_fixture(omitted_sentinel) do
-    middle =
-      1..96
-      |> Enum.map(fn
-        48 -> "ordinary build line 48 #{omitted_sentinel}"
-        index -> "ordinary build line #{index}"
-      end)
-
-    [
-      "command started",
-      "context before first",
-      "error: first failure",
-      "context after first"
-    ]
-    |> Kernel.++(middle)
-    |> Kernel.++([
-      "context before final",
-      "fatal: final failure",
-      "context after final"
-    ])
-    |> Enum.join("\n")
   end
 
   defp oversized_completed_frame(response_id, sentinel, include_usage?) do
