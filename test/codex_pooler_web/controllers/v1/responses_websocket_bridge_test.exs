@@ -1196,10 +1196,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert attempt.response_metadata["upstream_websocket_bridge"] == true
 
     assert %{
+             "lifecycle_id" => lifecycle_id,
              "generation" => 1,
              "reused" => false,
              "reconnected" => false
            } = upstream_connection(attempt)
+
+    assert is_binary(lifecycle_id)
 
     assert settlement_count(request) == 1
   end
@@ -1998,15 +2001,18 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert attempt.network_error_code == "client_disconnected"
 
     assert %{
+             "lifecycle_id" => lifecycle_id,
              "generation" => 1,
              "reused" => false,
              "reconnected" => false
            } = upstream_connection(attempt)
 
+    assert is_binary(lifecycle_id)
     assert settlement_count(request) == 1
 
-    # The owner session must not stay wedged on the interrupted turn: the next
-    # turn on the same session bridges again over the SAME upstream websocket.
+    # The owner session must not stay wedged on the interrupted turn: caller
+    # cancellation closes that abandoned upstream socket, so the next turn
+    # bridges again on the same lifecycle's next generation.
     second =
       Phoenix.ConnTest.build_conn()
       |> auth(setup)
@@ -2015,8 +2021,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
 
     assert second.status == 200
     assert completed_id(second.resp_body) == "resp_disconnect_t2"
-    assert FakeUpstream.websocket_connection_count(upstream) == 1
-    assert [^disconnect_connection_id] = FakeUpstream.websocket_connection_ids(upstream)
+    assert FakeUpstream.websocket_connection_count(upstream) == 2
+
+    assert [^disconnect_connection_id, reconnect_connection_id] =
+             FakeUpstream.websocket_connection_ids(upstream)
+
+    assert is_reference(reconnect_connection_id)
+    refute reconnect_connection_id == disconnect_connection_id
 
     second_request = latest_request(setup.pool)
     assert second_request.id != request.id
@@ -2025,13 +2036,12 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert second_attempt.transport == "websocket"
 
     assert %{
-             "lifecycle_id" => lifecycle_id,
-             "generation" => 1,
-             "reused" => true,
+             "lifecycle_id" => ^lifecycle_id,
+             "generation" => 2,
+             "reused" => false,
              "reconnected" => false
            } = upstream_connection(second_attempt)
 
-    assert is_binary(lifecycle_id)
     assert settlement_count(second_request) == 1
   end
 

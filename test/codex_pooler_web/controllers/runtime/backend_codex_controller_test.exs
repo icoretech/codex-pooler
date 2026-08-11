@@ -7437,7 +7437,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag assignment_model_http: true
-  test "POST /backend-api/codex/responses keeps a hard-pinned canonical model miss final",
+  test "POST /backend-api/codex/responses keeps previous-response pin final despite prompt locality",
        %{conn: conn} do
     fallback_upstream =
       start_upstream(
@@ -7480,6 +7480,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
     previous_response_id = "resp_model_hard_pin_#{System.unique_integer([:positive])}"
+    raw_prompt_cache_key = "synthetic-conflicting-prompt-locality"
     register_previous_response_anchor!(auth, pinned.assignment, previous_response_id)
 
     conn =
@@ -7488,7 +7489,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
         "input" => "synthetic hard pinned model miss input",
-        "previous_response_id" => previous_response_id
+        "previous_response_id" => previous_response_id,
+        "prompt_cache_key" => raw_prompt_cache_key
       })
 
     assert %{"error" => %{"code" => "model_not_found"}} = json_response(conn, 404)
@@ -7509,6 +7511,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
            } = Repo.one!(from(c in RoutingCircuitState))
 
     assert pinned_assignment_id == pinned.assignment.id
+    refute inspect({request, attempt}) =~ raw_prompt_cache_key
   end
 
   @tag assignment_model_http: true
