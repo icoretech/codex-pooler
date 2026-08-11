@@ -13,15 +13,14 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageController do
     result =
       conn
       |> GatewayHelpers.authenticate()
-      |> Usage.resolve_codex_usage_auth(opts)
       |> admit_usage_request(conn, endpoint, opts)
 
     GatewayHelpers.send_or_error(conn, result)
   end
 
-  defp admit_usage_request({:ok, usage_auth}, conn, endpoint, opts) do
+  defp admit_usage_request({:ok, auth}, conn, endpoint, opts) do
     GatewayHelpers.admit(conn, RouteClass.proxy_http(), %{endpoint: endpoint}, fn ->
-      Usage.codex_usage_for_resolved_auth(usage_auth, endpoint, opts)
+      Usage.codex_usage(auth, endpoint, opts)
     end)
   end
 
@@ -30,10 +29,6 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageController do
   defp usage_request_opts(conn) do
     conn
     |> GatewayHelpers.request_opts()
-    |> Map.put(:authorization_header, header(conn, "authorization"))
-    |> Map.put(:chatgpt_account_id, header(conn, "chatgpt-account-id"))
     |> RequestOptions.from_conn_metadata(conn.request_path, %{})
   end
-
-  defp header(conn, name), do: get_req_header(conn, name) |> List.first()
 end

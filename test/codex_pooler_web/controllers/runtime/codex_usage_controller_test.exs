@@ -9,7 +9,6 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [monthly_only_account_primary_quota_window_attrs: 1]
 
-  alias CodexPooler.Accounting
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Accounting.UsageResponses
   alias CodexPooler.Repo
@@ -348,13 +347,14 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
     end)
   end
 
-  test "GET /api/codex/usage supports ChatGPT account usage branch", %{conn: conn} do
+  test "all Codex usage aliases require a Pool key and reject ChatGPT account tokens", %{
+    conn: conn
+  } do
     pool = pool_fixture()
 
     %{identity: identity} =
       upstream_assignment_fixture(pool, %{
         chatgpt_account_id: "chatgpt-account-1",
-        account_label: "Percent-only selected account",
         plan_family: "pro"
       })
 
@@ -364,68 +364,23 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
                plaintext: "upstream-chatgpt-token"
              })
 
-    assert {:ok, _windows} =
-             QuotaWindows.upsert_quota_windows(identity, [
-               %{
-                 window_kind: "primary",
-                 window_minutes: 300,
-                 used_percent: Decimal.new("67"),
-                 reset_at: DateTime.add(DateTime.utc_now(), 300, :second),
-                 source: "test",
-                 freshness_state: "fresh"
-               },
-               %{
-                 quota_key: "gpt_5_3_codex_spark",
-                 window_kind: "primary",
-                 window_minutes: 300,
-                 used_percent: Decimal.new("55"),
-                 display_label: "GPT-5.3-Codex-Spark",
-                 limit_name: "codex_other",
-                 metered_feature: "codex_bengalfox",
-                 source: "test",
-                 freshness_state: "fresh"
-               }
-             ])
+    for path <- ["/api/codex/usage", "/wham/usage", "/backend-api/wham/usage"] do
+      conn =
+        conn
+        |> recycle()
+        |> put_req_header("authorization", "Bearer upstream-chatgpt-token")
+        |> put_req_header("chatgpt-account-id", "chatgpt-account-1")
+        |> get(path)
 
-    conn =
-      conn
-      |> put_req_header("authorization", "Bearer upstream-chatgpt-token")
-      |> put_req_header("chatgpt-account-id", "chatgpt-account-1")
-      |> get("/api/codex/usage")
+      assert json_response(conn, 401)["error"] == %{
+               "code" => "api_key_missing",
+               "message" => "Pool API key is required or invalid",
+               "param" => nil,
+               "type" => "invalid_request_error"
+             }
+    end
 
-    response = json_response(conn, 200)
-
-    assert %{
-             "plan_type" => "pro",
-             "rate_limit" => %{
-               "allowed" => true,
-               "limit_reached" => false,
-               "primary_window" => %{"used_percent" => 67}
-             },
-             "additional_rate_limits" => [
-               %{
-                 "quota_key" => "codex_spark",
-                 "display_label" => "GPT-5.3-Codex-Spark",
-                 "metered_feature" => "codex_bengalfox",
-                 "rate_limit" => %{"primary_window" => %{"used_percent" => 55}}
-               }
-             ]
-           } = response
-
-    refute Map.has_key?(response, "credits")
-
-    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^pool.id))
-    assert request.api_key_id == nil
-    assert request.endpoint == "/api/codex/usage"
-    assert request.status == "succeeded"
-    assert request.request_metadata["auth_mode"] == "chatgpt_account_token"
-    assert request.upstream_account_label == identity.account_label
-    assert is_nil(request.upstream_account_email)
-
-    assert %{items: [log], total: 1} = Accounting.list_request_logs(pool)
-    assert log.api_key_id == nil
-    assert log.upstream_account_label == identity.account_label
-    assert is_nil(log.upstream_account_email)
+    assert Repo.aggregate(Request, :count, :id) == 0
   end
 
   test "Codex rate-limit output keeps absent and jointly healthy windows allowed" do
@@ -502,6 +457,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
 
   test "GET /api/codex/usage requires every account rate-limit window to allow", %{conn: conn} do
     pool = pool_fixture()
+    setup = active_api_key_fixture(pool)
     account_id = "two-window-account-#{System.unique_integer([:positive])}"
     token = "two-window-token-#{System.unique_integer([:positive])}"
     now = DateTime.utc_now() |> DateTime.truncate(:second)
@@ -546,7 +502,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
 
     conn =
       conn
-      |> put_req_header("authorization", "Bearer #{token}")
+      |> put_req_header("authorization", setup.authorization)
       |> put_req_header("chatgpt-account-id", account_id)
       |> get("/api/codex/usage")
 
@@ -560,7 +516,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
            } = json_response(conn, 200)
   end
 
-  test "GET /api/codex/usage ChatGPT token branch returns only that account usage", %{conn: conn} do
+  test "GET /api/codex/usage never selects an account from an upstream token", %{conn: conn} do
     pool = pool_fixture()
 
     %{identity: free_identity} =
@@ -617,17 +573,11 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
       |> put_req_header("chatgpt-account-id", "chatgpt-free-account")
       |> get("/api/codex/usage")
 
-    assert %{
-             "plan_type" => "free",
-             "rate_limit" => %{
-               "allowed" => false,
-               "limit_reached" => true,
-               "primary_window" => %{"used_percent" => 100}
-             }
-           } = json_response(conn, 200)
+    assert json_response(conn, 401)["error"]["code"] == "api_key_missing"
+    assert Repo.aggregate(Request, :count, :id) == 0
   end
 
-  test "GET /api/codex/usage ChatGPT token branch selects the token-matched workspace slot", %{
+  test "GET /api/codex/usage never selects a workspace slot from an upstream token", %{
     conn: conn
   } do
     pool = pool_fixture()
@@ -697,24 +647,15 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
       |> put_req_header("chatgpt-account-id", account_id)
       |> get("/api/codex/usage")
 
-    assert %{
-             "plan_type" => "Selected token workspace plan",
-             "rate_limit" => %{
-               "allowed" => true,
-               "limit_reached" => false,
-               "primary_window" => %{"used_percent" => 91}
-             },
-             "credits" => %{"has_credits" => true, "unlimited" => false, "balance" => "9"}
-           } = json_response(conn, 200)
-
-    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^pool.id))
-    assert request.upstream_account_label == free_identity.account_label
+    assert json_response(conn, 401)["error"]["code"] == "api_key_missing"
+    assert Repo.aggregate(Request, :count, :id) == 0
   end
 
   test "GET /api/codex/usage preserves provider percent for a credit-bearing usage payload", %{
     conn: conn
   } do
     pool = pool_fixture()
+    setup = active_api_key_fixture(pool)
     account_id = "credit-percent-account-#{System.unique_integer([:positive])}"
     token = "credit-percent-token-#{System.unique_integer([:positive])}"
 
@@ -758,7 +699,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
 
     conn =
       conn
-      |> put_req_header("authorization", "Bearer #{token}")
+      |> put_req_header("authorization", setup.authorization)
       |> put_req_header("chatgpt-account-id", account_id)
       |> get("/api/codex/usage")
 
@@ -794,7 +735,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
 
     burn_conn =
       build_conn()
-      |> put_req_header("authorization", "Bearer #{token}")
+      |> put_req_header("authorization", setup.authorization)
       |> put_req_header("chatgpt-account-id", account_id)
       |> get("/api/codex/usage")
 
@@ -813,6 +754,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
          conn: conn
        } do
     pool = pool_fixture()
+    setup = active_api_key_fixture(pool)
     now = ~U[2026-06-07 12:00:00Z]
     account_id = "monthly-account-#{System.unique_integer([:positive])}"
 
@@ -840,7 +782,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
 
     conn =
       conn
-      |> put_req_header("authorization", "Bearer monthly-usage-token")
+      |> put_req_header("authorization", setup.authorization)
       |> put_req_header("chatgpt-account-id", account_id)
       |> get("/api/codex/usage")
 
@@ -862,7 +804,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
     refute response_text =~ "Free-looking label"
   end
 
-  test "GET /api/codex/usage returns a statusful gateway error for inactive ChatGPT account usage",
+  test "GET /api/codex/usage does not expose inactive ChatGPT account lookup through a token",
        %{conn: conn} do
     pool = pool_fixture()
 
@@ -884,16 +826,14 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
       |> put_req_header("chatgpt-account-id", "inactive-chatgpt-account")
       |> get("/api/codex/usage")
 
-    assert %{"error" => error} = json_response(conn, 404)
-    assert error["type"] == "invalid_request_error"
-    assert error["code"] == "invalid_chatgpt_account"
-    assert error["message"] == "unknown or inactive chatgpt-account-id"
+    assert json_response(conn, 401)["error"]["code"] == "api_key_missing"
+    assert Repo.aggregate(Request, :count, :id) == 0
   end
 
   test "GET /api/codex/usage requires a bearer token for ChatGPT account mode", %{conn: conn} do
     conn = conn |> put_req_header("chatgpt-account-id", "acct") |> get("/api/codex/usage")
 
-    assert json_response(conn, 401)["error"]["code"] == "invalid_authorization"
+    assert json_response(conn, 401)["error"]["code"] == "api_key_missing"
   end
 
   test "GET /api/codex/usage rejects invalid auth before admission", %{conn: conn} do
@@ -901,7 +841,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
 
     conn = conn |> put_req_header("chatgpt-account-id", "acct") |> get("/api/codex/usage")
 
-    assert json_response(conn, 401)["error"]["code"] == "invalid_authorization"
+    assert json_response(conn, 401)["error"]["code"] == "api_key_missing"
     refute_received {:usage_admission_event, _event, _metadata}
   end
 
@@ -925,7 +865,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
       |> put_req_header("chatgpt-account-id", "chatgpt-account-2")
       |> get("/api/codex/usage")
 
-    assert json_response(conn, 401)["error"]["code"] == "invalid_authorization"
+    assert json_response(conn, 401)["error"]["code"] == "api_key_missing"
   end
 
   test "POST reset-credit consume routes are absent before malformed body handling" do
@@ -966,6 +906,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
 
   defp usage_reset_identity_fixture do
     pool = pool_fixture()
+    api_key_setup = active_api_key_fixture(pool)
     unique = System.unique_integer([:positive])
     account_id = "weekly-reset-account-#{unique}"
     token = "weekly-reset-token-#{unique}"
@@ -988,7 +929,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
     %{
       identity: identity,
       account_id: account_id,
-      authorization: "Bearer #{token}",
+      authorization: api_key_setup.authorization,
       observed_at: observed_at,
       reset_at: DateTime.add(observed_at, 5, :day)
     }

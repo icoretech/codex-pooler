@@ -13,7 +13,9 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   alias CodexPooler.Gateway.Metadata
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.Persona
   alias CodexPooler.Pools.Routing, as: PoolRouting
+  alias CodexPoolerWeb.Plugs.RuntimeIngress.Path, as: IngressPath
 
   @type conn :: Plug.Conn.t()
   @type gateway_call_result ::
@@ -49,39 +51,49 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
 
   @spec authenticate_v1(conn()) ::
           {:ok, Access.auth_context()} | {:error, Contracts.gateway_error()}
-  def authenticate_v1(conn) do
-    with {:ok, auth} <- authenticate_v1_auth_context(conn) do
-      authorize_v1_compatibility(auth)
+  def authenticate_v1(conn), do: authenticate_facade(conn)
+
+  @spec authenticate_facade(conn()) ::
+          {:ok, Access.auth_context()} | {:error, Contracts.gateway_error()}
+  def authenticate_facade(%Plug.Conn{private: %{runtime_api_auth: auth}}) do
+    authorize_facade_compatibility(auth)
+  end
+
+  def authenticate_facade(conn) do
+    with {:ok, raw_key} <- facade_api_key(conn),
+         {:ok, auth} <- authenticate_facade_api_key(raw_key) do
+      authorize_facade_compatibility(auth)
     end
   end
 
-  defp authenticate_v1_auth_context(%Plug.Conn{private: %{runtime_api_auth: auth}}),
-    do: {:ok, auth}
-
-  defp authenticate_v1_auth_context(conn) do
-    case Access.authenticate_v1_authorization_header(
-           get_req_header(conn, "authorization")
-           |> List.first()
-         ) do
+  defp authenticate_facade_api_key(raw_key) do
+    case Access.authenticate_v1_api_key(raw_key) do
       {:ok, auth} -> {:ok, auth}
       {:error, reason} -> {:error, Map.put(reason, :status, 401)}
     end
   end
 
-  defp authorize_v1_compatibility(%{pool: pool} = auth) do
-    if pool.status == "active" and PoolRouting.v1_compatibility_enabled?(pool) do
+  defp authorize_facade_compatibility(%{pool: %{status: "active"} = pool} = auth) do
+    if PoolRouting.v1_compatibility_enabled?(pool) do
       {:ok, auth}
     else
       {:error,
        %{
          status: 403,
          code: "v1_compatibility_disabled",
-         message: "OpenAI /v1 compatibility is disabled for this pool"
+         message: "Compatibility access is disabled for this Pool"
        }}
     end
   end
 
-  defp authorize_v1_compatibility(auth), do: {:ok, auth}
+  defp authorize_facade_compatibility(_auth) do
+    {:error,
+     %{
+       status: 403,
+       code: "v1_compatibility_disabled",
+       message: "Compatibility access is disabled for this Pool"
+     }}
+  end
 
   @spec read_json_body(conn()) :: body_read_result()
   def read_json_body(%Plug.Conn{private: %{runtime_json_parse_error: true}}) do
@@ -141,7 +153,8 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
       user_agent: get_req_header(conn, "user-agent") |> List.first(),
       request_content_type: get_req_header(conn, "content-type") |> List.first(),
       forwarded_headers: forwarded_headers(conn),
-      client_ip: conn.remote_ip |> :inet.ntoa() |> to_string()
+      client_ip: conn.remote_ip |> :inet.ntoa() |> to_string(),
+      persona: Persona.fixed(persona_protocol(conn))
     }
   end
 
@@ -286,6 +299,73 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
       name == "user-agent" or String.starts_with?(name, "x-openai-") or
         String.starts_with?(name, "x-codex-")
     end)
+  end
+
+  defp facade_api_key(conn) do
+    with {:ok, authorization} <- single_header(conn, "authorization"),
+         {:ok, x_api_key} <- single_header(conn, "x-api-key"),
+         {:ok, bearer_key} <- bearer_key(authorization),
+         {:ok, anthropic_key} <- direct_key(x_api_key) do
+      select_facade_key(bearer_key, anthropic_key)
+    else
+      {:error, :invalid_credentials} -> facade_authentication_error()
+    end
+  end
+
+  defp single_header(conn, name) do
+    case get_req_header(conn, name) do
+      [] -> {:ok, nil}
+      [value] when is_binary(value) -> {:ok, value}
+      _headers -> {:error, :invalid_credentials}
+    end
+  end
+
+  defp bearer_key(nil), do: {:ok, nil}
+  defp bearer_key("Bearer " <> raw_key) when byte_size(raw_key) > 0, do: {:ok, raw_key}
+  defp bearer_key(_authorization), do: {:error, :invalid_credentials}
+
+  defp direct_key(nil), do: {:ok, nil}
+  defp direct_key(raw_key) when is_binary(raw_key) and byte_size(raw_key) > 0, do: {:ok, raw_key}
+  defp direct_key(_raw_key), do: {:error, :invalid_credentials}
+
+  defp select_facade_key(nil, nil), do: facade_authentication_error()
+  defp select_facade_key(raw_key, nil), do: {:ok, raw_key}
+  defp select_facade_key(nil, raw_key), do: {:ok, raw_key}
+
+  defp select_facade_key(bearer_key, anthropic_key) do
+    if byte_size(bearer_key) == byte_size(anthropic_key) and
+         Plug.Crypto.secure_compare(bearer_key, anthropic_key) do
+      {:ok, bearer_key}
+    else
+      facade_authentication_error()
+    end
+  end
+
+  defp facade_authentication_error do
+    {:error,
+     %{
+       status: 401,
+       code: :api_key_missing,
+       message: "Pool API key is required or invalid"
+     }}
+  end
+
+  defp persona_protocol(conn) do
+    case IngressPath.decoded_segments(conn) do
+      ["api", "chat" | _rest] -> :ollama_chat
+      ["api", "generate" | _rest] -> :ollama_generate
+      ["v1", "messages" | _rest] -> :anthropic_messages
+      ["v1", "responses" | _rest] -> :openai_responses
+      ["v1", "chat", "completions" | _rest] -> :openai_chat
+      ["v1", "completions" | _rest] -> :openai_completions
+      ["v1", kind | _rest] when kind in ["audio", "files", "images"] -> :media
+      ["v1" | _rest] -> :metadata
+      ["backend-api", "codex", "images" | _rest] -> :media
+      ["backend-api", "codex", "models" | _rest] -> :metadata
+      ["backend-api", "codex" | _rest] -> :codex
+      ["backend-api", kind | _rest] when kind in ["files", "transcribe"] -> :media
+      _segments -> :metadata
+    end
   end
 
   defp accepted_turn_state(conn) do

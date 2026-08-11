@@ -12,7 +12,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.Path do
     ["api", "codex", "usage"],
     ["wham", "usage"],
     ["backend-api", "wham", "usage"],
-    ["v1"]
+    ["v1"],
+    ["api"]
   ]
 
   @pruned_runtime_paths [
@@ -32,6 +33,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.Path do
   ]
 
   @type scope :: :runtime | :mcp | :passthrough
+  @type protocol :: :ollama | :anthropic | :openai | :codex | :runtime_metadata
 
   @type t :: %__MODULE__{
           decoded_segments: [String.t()],
@@ -57,6 +59,13 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.Path do
   @spec decoded_segments(Plug.Conn.t() | t()) :: [String.t()]
   def decoded_segments(%__MODULE__{decoded_segments: segments}), do: segments
   def decoded_segments(%Plug.Conn{} = conn), do: conn |> fetch() |> decoded_segments()
+
+  @spec protocol(Plug.Conn.t() | t()) :: protocol()
+  def protocol(%Plug.Conn{} = conn), do: conn |> fetch() |> protocol()
+
+  def protocol(%__MODULE__{candidate_segments: segments}) do
+    classify_protocol(segments)
+  end
 
   defp build(raw_segments) do
     decoded_segments = Enum.map(raw_segments, &URI.decode/1)
@@ -93,6 +102,21 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.Path do
       :passthrough
     end
   end
+
+  # Runtime metadata helpers must win before the general Ollama `/api/*`
+  # classification. Candidate segments are derived from one URI decode, so an
+  # unsafe encoded path receives the same protocol-shaped local error as its
+  # unencoded route family.
+  defp classify_protocol(["api", "codex" | _rest]), do: :runtime_metadata
+  defp classify_protocol(["wham", "usage" | _rest]), do: :runtime_metadata
+  defp classify_protocol(["backend-api", "wham" | _rest]), do: :runtime_metadata
+  defp classify_protocol(["api" | _rest]), do: :ollama
+  defp classify_protocol(["v1", "messages" | _rest]), do: :anthropic
+  defp classify_protocol(["v1" | _rest]), do: :openai
+  defp classify_protocol(["backend-api", "codex" | _rest]), do: :codex
+  defp classify_protocol(["backend-api", "files" | _rest]), do: :codex
+  defp classify_protocol(["backend-api", "transcribe" | _rest]), do: :codex
+  defp classify_protocol(_segments), do: :runtime_metadata
 
   defp unsafe_segment?(segment) do
     :binary.match(segment, "/") != :nomatch or

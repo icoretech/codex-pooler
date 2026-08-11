@@ -3,8 +3,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
 
   import Plug.Conn
 
-  alias CodexPooler.Access
   alias CodexPooler.Gateway.Admission, as: GatewayAdmission
+  alias CodexPooler.Gateway.Facade.Error, as: FacadeError
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPoolerWeb.GatewayControllerHelpers
@@ -14,7 +14,6 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
   alias Plug.Conn.Query
   alias Plug.Conn.Utils
 
-  @json_error_type "invalid_request_error"
   @parser_settings_private_key :codex_pooler_runtime_ingress_settings
   @parser_error_scope_private_key :codex_pooler_json_parse_error_scope
 
@@ -68,11 +67,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
         |> put_json_parser_context(settings, json_parse_error_scope(conn))
         |> enforce_firewall(settings)
         |> reject_pruned_runtime_helper()
-        |> authenticate_v1_request()
+        |> authenticate_facade_request()
         |> reject_unsupported_v1_request()
-        |> authenticate_multipart_transcribe_request()
-        |> authenticate_protected_backend_raw_request()
-        |> authenticate_protected_backend_json_request()
         |> enforce_image_generation_permission()
         |> maybe_decode_compressed_body(settings)
 
@@ -285,16 +281,12 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
     send_mcp_error(conn, 403, -32_600, "client IP is not allowed")
   end
 
-  defp authenticate_v1_request(%Plug.Conn{halted: true} = conn), do: conn
+  defp authenticate_facade_request(%Plug.Conn{halted: true} = conn), do: conn
 
-  defp authenticate_v1_request(conn) do
-    if v1_request?(conn) do
-      case GatewayControllerHelpers.authenticate_v1(conn) do
-        {:ok, auth} -> put_private(conn, :runtime_api_auth, auth)
-        {:error, reason} -> send_runtime_error(conn, reason)
-      end
-    else
-      conn
+  defp authenticate_facade_request(conn) do
+    case GatewayControllerHelpers.authenticate_facade(conn) do
+      {:ok, auth} -> put_private(conn, :runtime_api_auth, auth)
+      {:error, reason} -> send_runtime_error(conn, reason)
     end
   end
 
@@ -308,31 +300,6 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
     end
   end
 
-  defp authenticate_multipart_transcribe_request(conn) do
-    authenticate_when(conn, &multipart_transcribe_request?/1)
-  end
-
-  defp authenticate_protected_backend_raw_request(conn) do
-    authenticate_when(conn, &protected_backend_raw_request?/1)
-  end
-
-  defp authenticate_protected_backend_json_request(conn) do
-    authenticate_when(conn, &protected_backend_json_request?/1)
-  end
-
-  defp authenticate_when(%Plug.Conn{halted: true} = conn, _predicate), do: conn
-
-  defp authenticate_when(conn, predicate) when is_function(predicate, 1) do
-    if predicate.(conn) do
-      case authenticate_runtime_api_request(conn) do
-        {:ok, conn} -> conn
-        {:error, reason, conn} -> send_runtime_error(conn, reason)
-      end
-    else
-      conn
-    end
-  end
-
   defp maybe_decode_compressed_body(%Plug.Conn{halted: true} = conn, _settings), do: conn
 
   defp maybe_decode_compressed_body(conn, settings) do
@@ -341,27 +308,10 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
         conn
 
       {:ok, _encoding} ->
-        case authenticate_runtime_api_request(conn) do
-          {:ok, conn} -> decode_or_send_compressed_body(conn, settings)
-          {:error, reason, conn} -> send_runtime_error(conn, reason)
-        end
+        decode_or_send_compressed_body(conn, settings)
 
       :none ->
         conn
-    end
-  end
-
-  defp authenticate_runtime_api_request(%Plug.Conn{private: %{runtime_api_auth: _auth}} = conn),
-    do: {:ok, conn}
-
-  defp authenticate_runtime_api_request(conn) do
-    conn
-    |> get_req_header("authorization")
-    |> List.first()
-    |> Access.authenticate_authorization_header()
-    |> case do
-      {:ok, auth} -> {:ok, put_private(conn, :runtime_api_auth, auth)}
-      {:error, reason} -> {:error, Map.put(reason, :status, 401), conn}
     end
   end
 
@@ -394,24 +344,6 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
 
   defp image_generation_request?(_conn), do: false
 
-  defp multipart_transcribe_request?(conn) do
-    conn.method == "POST" and Path.decoded_segments(conn) == ["backend-api", "transcribe"] and
-      multipart_content_type?(conn)
-  end
-
-  defp multipart_content_type?(conn) do
-    conn
-    |> get_req_header("content-type")
-    |> List.first()
-    |> case do
-      nil ->
-        false
-
-      content_type ->
-        content_type |> String.downcase() |> String.starts_with?("multipart/form-data")
-    end
-  end
-
   @spec protected_backend_json_request?(Plug.Conn.t() | term()) :: boolean()
   def protected_backend_json_request?(%Plug.Conn{method: "POST"} = conn) do
     path_info = Path.decoded_segments(conn)
@@ -429,8 +361,6 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
   end
 
   def protected_backend_json_request?(_conn), do: false
-
-  def protected_backend_raw_request?(_conn), do: false
 
   @spec pruned_runtime_helper_request?(Plug.Conn.t()) :: boolean()
   defp pruned_runtime_helper_request?(%Plug.Conn{method: method} = conn) do
@@ -462,8 +392,6 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
     |> halt()
   end
 
-  defp v1_request?(conn), do: List.starts_with?(Path.decoded_segments(conn), ["v1"])
-
   defp unsupported_v1_error do
     %{
       status: 404,
@@ -477,14 +405,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
   end
 
   defp send_runtime_error(conn, status, code, message) do
-    body = %{
-      "error" => %{
-        "message" => message,
-        "type" => @json_error_type,
-        "code" => to_string(code),
-        "param" => nil
-      }
-    }
+    error = %{status: status, code: code, message: message}
+    body = FacadeError.body(Path.protocol(conn), status, error)
 
     conn
     |> put_resp_content_type("application/json")

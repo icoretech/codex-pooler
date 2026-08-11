@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.OperationalSettings.IPRules
+  alias CodexPooler.Gateway.Payloads.RequestOptions.Persona
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Cache
   alias CodexPooler.InstanceSettings.Settings
@@ -20,11 +21,13 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
   alias CodexPooler.Upstreams.Quota.Windows
   alias CodexPoolerWeb.Plugs.{RuntimeIngress, TrustedProxyRemoteIp}
+  alias CodexPoolerWeb.GatewayControllerHelpers
 
   alias CodexPoolerWeb.Plugs.RuntimeIngress.{
     CompressedBody,
     Firewall,
-    ForwardedClientIP
+    ForwardedClientIP,
+    Path
   }
 
   alias CodexPoolerWeb.Plugs.RuntimeIngress.Firewall.Decision
@@ -101,6 +104,66 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   end
 
   describe "canonical path classification" do
+    test "classifies every facade protocol from decoded path segments" do
+      for {request_path, protocol} <- [
+            {"/api/tags", :ollama},
+            {"/api/chat", :ollama},
+            {"/api/codex/usage", :runtime_metadata},
+            {"/wham/usage", :runtime_metadata},
+            {"/backend-api/wham/usage", :runtime_metadata},
+            {"/v1/messages", :anthropic},
+            {"/v1/messages/count_tokens", :anthropic},
+            {"/v1/responses", :openai},
+            {"/backend-api/codex/responses", :codex},
+            {"/backend-api/files", :codex},
+            {"/backend-api/transcribe", :codex}
+          ] do
+        path = :get |> Plug.Test.conn(request_path) |> Path.fetch()
+
+        assert path.scope == :runtime
+        assert Path.protocol(path) == protocol
+      end
+    end
+
+    test "classifies encoded unsafe facade candidates before returning an error" do
+      for {request_path, protocol} <- [
+            {"/api%2Fchat", :ollama},
+            {"/v1%2Fmessages", :anthropic},
+            {"/v1%2Fresponses", :openai},
+            {"/backend-api%2Fcodex/responses", :codex},
+            {"/api/codex%00/usage", :runtime_metadata}
+          ] do
+        path = :get |> Plug.Test.conn(request_path) |> Path.fetch()
+
+        assert path.scope == :runtime
+        assert path.unsafe_segment?
+        assert Path.protocol(path) == protocol
+      end
+    end
+
+    test "attaches the exact fixed persona for each facade endpoint kind" do
+      for {request_path, persona_protocol} <- [
+            {"/api/chat", :ollama_chat},
+            {"/api/generate", :ollama_generate},
+            {"/api/tags", :metadata},
+            {"/v1/messages", :anthropic_messages},
+            {"/v1/responses", :openai_responses},
+            {"/v1/chat/completions", :openai_chat},
+            {"/v1/completions", :openai_completions},
+            {"/v1/images/generations", :media},
+            {"/v1/models", :metadata},
+            {"/backend-api/codex/responses", :codex},
+            {"/backend-api/files", :media},
+            {"/backend-api/transcribe", :media},
+            {"/api/codex/usage", :metadata}
+          ] do
+        conn = Plug.Test.conn(:get, request_path)
+
+        assert GatewayControllerHelpers.request_opts(conn).persona ==
+                 Persona.fixed(persona_protocol)
+      end
+    end
+
     @tag :capture_log
     test "encoded runtime route families reach the same pre-parser firewall", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
@@ -1336,7 +1399,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       assert %{
                "error" => %{
                  "code" => "unsupported_endpoint",
-                 "message" => "Unsupported OpenAI /v1 endpoint",
+                 "message" => "Endpoint is not supported",
                  "param" => nil,
                  "type" => "invalid_request_error"
                }
@@ -1774,16 +1837,25 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
     upstream = gateway_upstream(pool, upstream, "upstream-token")
     prime_routing_quota!(upstream.identity)
 
+    reasoning_levels =
+      Enum.map(~w(low medium high xhigh max ultra), &%{"effort" => &1, "description" => &1})
+
     model =
       model_fixture(pool, %{
-        exposed_model_id: "gpt-test-model",
-        upstream_model_id: "provider-gpt-test-model",
-        pricing_ref: "provider-gpt-test-model",
+        exposed_model_id: "gpt-5.6-sol",
+        upstream_model_id: "gpt-5.6-sol",
+        pricing_ref: "gpt-5.6-sol",
         metadata: %{
           "source_assignment_ids" => [upstream.assignment.id],
           "source_assignment_models" => %{
-            upstream.assignment.id => %{"slug" => "gpt-test-model"}
-          }
+            upstream.assignment.id => %{
+              "slug" => "gpt-5.6-sol",
+              "supported_reasoning_levels" => reasoning_levels,
+              "default_reasoning_level" => "max"
+            }
+          },
+          "supported_reasoning_levels" => reasoning_levels,
+          "default_reasoning_level" => "max"
         },
         supports_responses: true,
         supports_streaming: true
