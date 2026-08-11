@@ -153,6 +153,56 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert json_response(conn, 400)["error"]["code"] == "websocket_upgrade_required"
   end
 
+  @tag :encrypted_reasoning_continuity
+  test "decoded websocket response.create retains current reasoning without alias state" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_current_reasoning_stateless",
+          "object" => "response",
+          "status" => "completed",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 2, "total_tokens" => 6}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    raw_prompt_cache_key = "synthetic-websocket-current-reasoning-key"
+    alias_count = Repo.aggregate(BridgeSessionAlias, :count)
+
+    reasoning = %{
+      "type" => "reasoning",
+      "content" => nil,
+      "encrypted_content" => "synthetic-websocket-current-reasoning"
+    }
+
+    payload =
+      Jason.encode!(%{
+        "type" => "response.create",
+        "model" => setup.model.exposed_model_id,
+        "prompt_cache_key" => raw_prompt_cache_key,
+        "input" => [reasoning],
+        "stream" => true,
+        "generate" => true
+      })
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               payload,
+               %{request_id: "ws-current-reasoning-stateless"},
+               fn _frame -> :ok end
+             )
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.json["input"] == [reasoning]
+    assert Repo.aggregate(BridgeSessionAlias, :count) == alias_count
+
+    metadata_text = inspect({Repo.all(BridgeSessionAlias), Repo.all(Request), Repo.all(Attempt)})
+    refute metadata_text =~ raw_prompt_cache_key
+    refute metadata_text =~ reasoning["encrypted_content"]
+  end
+
   test "an allowed locally applied firewall version keeps an open websocket usable" do
     upstream =
       start_upstream(

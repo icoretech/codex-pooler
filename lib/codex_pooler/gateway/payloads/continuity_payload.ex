@@ -25,6 +25,17 @@ defmodule CodexPooler.Gateway.Payloads.ContinuityPayload do
     |> blank_to_nil()
   end
 
+  @spec current_encrypted_reasoning?(term()) :: boolean()
+  def current_encrypted_reasoning?(%{
+        "type" => "reasoning",
+        "content" => nil,
+        "encrypted_content" => encrypted_content
+      })
+      when is_binary(encrypted_content),
+      do: String.trim(encrypted_content) != ""
+
+  def current_encrypted_reasoning?(_item), do: false
+
   defp blank_to_nil(value) when is_binary(value) do
     value = String.trim(value)
     if value == "", do: nil, else: value

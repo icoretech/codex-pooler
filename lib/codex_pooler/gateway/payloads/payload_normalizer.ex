@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   alias CodexPooler.Access.APIKeys.ReasoningEffortPolicy.Decision
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.OpenAICompatibility.Error
+  alias CodexPooler.Gateway.Payloads.ContinuityPayload
   alias CodexPooler.Gateway.Payloads.DebugPayloadSummary
   alias CodexPooler.Gateway.Payloads.ReasoningEffort
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -547,7 +548,13 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   end
 
   defp normalize_backend_codex_http_input(%{"input" => input} = payload) when is_list(input) do
-    input = Enum.reject(input, &backend_codex_encrypted_only_input_item?/1)
+    input =
+      Enum.reject(input, fn item ->
+        backend_codex_invalid_encrypted_reasoning?(item) or
+          (backend_codex_encrypted_only_input_item?(item) and
+             not ContinuityPayload.current_encrypted_reasoning?(item))
+      end)
+
     Map.put(payload, "input", input)
   end
 
@@ -555,7 +562,12 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   defp normalize_backend_codex_websocket_input(%{"input" => input} = payload)
        when is_list(input) do
-    input = Enum.reject(input, &backend_codex_encrypted_agent_message?/1)
+    input =
+      Enum.reject(input, fn item ->
+        backend_codex_invalid_encrypted_reasoning?(item) or
+          backend_codex_encrypted_agent_message?(item)
+      end)
+
     Map.put(payload, "input", input)
   end
 
@@ -666,11 +678,22 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   defp backend_codex_encrypted_content_marker?(_item), do: false
 
+  defp backend_codex_encrypted_only_input_item?(%{"type" => "reasoning"} = item) do
+    Map.has_key?(item, "encrypted_content")
+  end
+
   defp backend_codex_encrypted_only_input_item?(%{"content" => nil} = item) do
     Map.has_key?(item, "encrypted_content")
   end
 
   defp backend_codex_encrypted_only_input_item?(_item), do: false
+
+  defp backend_codex_invalid_encrypted_reasoning?(%{"type" => "reasoning"} = item) do
+    Map.has_key?(item, "encrypted_content") and
+      not ContinuityPayload.current_encrypted_reasoning?(item)
+  end
+
+  defp backend_codex_invalid_encrypted_reasoning?(_item), do: false
 
   defp apply_enforced_payload_policy(payload, %RequestOptions{} = request_options) do
     policy = request_options.routing.api_key_policy || %{}

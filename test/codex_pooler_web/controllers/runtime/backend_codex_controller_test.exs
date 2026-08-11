@@ -51,6 +51,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
   alias CodexPooler.Gateway.Persistence.{
     BridgeDemotion,
+    BridgeSessionAlias,
     CodexSession,
     CodexTurn,
     RoutingCircuitState
@@ -7705,6 +7706,81 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute metadata_text =~ "provider_cache"
     refute metadata_text =~ "provider cache"
     refute metadata_text =~ "prompt cache hit"
+  end
+
+  @tag :encrypted_reasoning_continuity
+  test "current encrypted reasoning is retained without creating hard-affinity alias state", %{
+    conn: conn
+  } do
+    reasoning = %{
+      "type" => "reasoning",
+      "content" => nil,
+      "encrypted_content" => "synthetic-current-reasoning"
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_current_reasoning_stateless",
+          "object" => "response",
+          "status" => "completed",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 2, "total_tokens" => 6}
+        })
+      )
+
+    sibling_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_current_reasoning_sibling_must_not_run",
+          "object" => "response",
+          "status" => "completed"
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    sibling =
+      gateway_upstream(setup.pool, sibling_upstream, "synthetic-current-reasoning-sibling-token",
+        compact?: false
+      )
+
+    prime_routing_quota!(sibling.identity)
+    use_routing_strategy!(setup.pool, "bridge_ring", 2)
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [setup.assignment, sibling.assignment])
+      )
+
+    raw_prompt_cache_key =
+      prompt_cache_key_with_assignment_order(setup, [setup.assignment.id, sibling.assignment.id])
+
+    alias_count = Repo.aggregate(BridgeSessionAlias, :count)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "prompt_cache_key" => raw_prompt_cache_key,
+        "input" => [reasoning]
+      })
+
+    assert %{"id" => "resp_current_reasoning_stateless"} = json_response(response, 200)
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.json["input"] == [reasoning]
+    assert FakeUpstream.count(sibling_upstream) == 0
+    assert Repo.aggregate(BridgeSessionAlias, :count) == alias_count
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.pool_upstream_assignment_id == setup.assignment.id
+
+    metadata_text = inspect({request, attempt, Repo.all(BridgeSessionAlias)})
+    refute metadata_text =~ raw_prompt_cache_key
+    refute metadata_text =~ reasoning["encrypted_content"]
   end
 
   test "POST /backend-api/codex/responses deterministic_rotation retries only within the bridge ring shortlist",
