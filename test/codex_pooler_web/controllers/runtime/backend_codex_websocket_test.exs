@@ -575,6 +575,76 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
            ) == 0
   end
 
+  @tag :model_serving_modes
+  test "backend websocket rejects scalar input and non-list tools before upstream dispatch in Full and Lite" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_unexpected"}))
+    setup = gateway_setup(upstream)
+    scope = model_serving_scope()
+    port = start_public_endpoint!()
+
+    assert_rejections = fn mode, expected_revision ->
+      revision = set_model_serving_mode!(scope, setup, mode, expected_revision)
+
+      for {payload, param} <- [
+            {%{"input" => "synthetic scalar input"}, "input"},
+            {%{"input" => [], "tools" => "synthetic non-list tools"}, "tools"}
+          ] do
+        {conn, websocket, ref, _response_headers} =
+          public_websocket_connect_with_headers!(port, setup, "", "/backend-api/codex/responses")
+
+        try do
+          frame =
+            Jason.encode!(
+              payload
+              |> Map.put("type", "response.create")
+              |> Map.put("model", setup.model.exposed_model_id)
+            )
+
+          {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, frame)
+          {_conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+          assert %{
+                   "type" => "error",
+                   "status" => 400,
+                   "error" => %{
+                     "code" => "invalid_request",
+                     "param" => ^param
+                   }
+                 } = Jason.decode!(frame)
+        after
+          Mint.HTTP.close(conn)
+        end
+      end
+
+      revision
+    end
+
+    revision = assert_rejections.("full", nil)
+    _revision = assert_rejections.("lite", revision)
+
+    assert FakeUpstream.count(upstream) == 0
+
+    assert requests = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert length(requests) == 4
+    assert Enum.all?(requests, &(&1.status == "rejected"))
+    assert Enum.all?(requests, &(&1.last_error_code == "invalid_request"))
+
+    assert requests
+           |> Enum.map(&get_in(&1.request_metadata, ["gateway_denial", "param"]))
+           |> Enum.sort() ==
+             ["input", "input", "tools", "tools"]
+
+    assert Repo.aggregate(
+             from(a in Attempt, where: a.request_id in ^Enum.map(requests, & &1.id)),
+             :count
+           ) == 0
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry, where: entry.request_id in ^Enum.map(requests, & &1.id)),
+             :count
+           ) == 0
+  end
+
   for {route_label, path, accounting_endpoint, catalog_etag?} <-
         @model_serving_websocket_routes do
     test "#{path} keeps one serving mode per turn and observes a Pool edit on the next turn" do

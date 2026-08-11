@@ -678,6 +678,60 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :model_serving_modes
+  test "native Responses rejects scalar input and non-list tools before upstream dispatch in Full and Lite",
+       %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_unexpected"}))
+    setup = gateway_setup(upstream)
+
+    for mode <- ["full", "lite"],
+        {payload, param} <- [
+          {%{"input" => "synthetic scalar input"}, "input"},
+          {%{"input" => [], "tools" => "synthetic non-list tools"}, "tools"}
+        ] do
+      put_model_serving_mode!(setup, mode)
+
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post(
+          "/backend-api/codex/responses",
+          Map.put(payload, "model", setup.model.exposed_model_id)
+        )
+
+      assert %{
+               "error" => %{
+                 "code" => "invalid_request",
+                 "param" => ^param,
+                 "type" => "invalid_request_error"
+               }
+             } = json_response(response, 400)
+    end
+
+    assert FakeUpstream.count(upstream) == 0
+
+    assert requests = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert length(requests) == 4
+    assert Enum.all?(requests, &(&1.status == "rejected"))
+    assert Enum.all?(requests, &(&1.last_error_code == "invalid_request"))
+
+    assert requests
+           |> Enum.map(&get_in(&1.request_metadata, ["gateway_denial", "param"]))
+           |> Enum.sort() ==
+             ["input", "input", "tools", "tools"]
+
+    assert Repo.aggregate(
+             from(a in Attempt, where: a.request_id in ^Enum.map(requests, & &1.id)),
+             :count
+           ) == 0
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry, where: entry.request_id in ^Enum.map(requests, & &1.id)),
+             :count
+           ) == 0
+  end
+
+  @tag :model_serving_modes
   test "backend pre-visible failover does not cross a divergent Lite schema partition", %{
     conn: conn
   } do

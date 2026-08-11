@@ -73,11 +73,39 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   @spec validate(map(), RequestOptions.t()) :: :ok | {:error, Error.reason()}
   def validate(payload, %RequestOptions{} = request_options) do
-    case validate_compact_projection(payload, request_options) do
-      :ok -> validate_tool_choice(payload, request_options)
-      {:error, _reason} = error -> error
+    with :ok <- validate_compact_projection(payload, request_options),
+         :ok <- validate_native_responses_shape(payload, request_options) do
+      validate_tool_choice(payload, request_options)
     end
   end
+
+  defp validate_native_responses_shape(
+         payload,
+         %RequestOptions{
+           transport: %{upstream_endpoint: "/backend-api/codex/responses"},
+           openai_compatibility: %{source_endpoint: nil}
+         }
+       ) do
+    with :ok <- validate_native_responses_input(payload) do
+      validate_native_responses_tools(payload)
+    end
+  end
+
+  defp validate_native_responses_shape(_payload, %RequestOptions{}), do: :ok
+
+  defp validate_native_responses_input(%{"input" => input}) when is_list(input), do: :ok
+
+  defp validate_native_responses_input(%{"input" => _input}),
+    do: {:error, Error.invalid_request("input must be an array", "input")}
+
+  defp validate_native_responses_input(%{}), do: :ok
+
+  defp validate_native_responses_tools(%{"tools" => tools}) when is_list(tools), do: :ok
+
+  defp validate_native_responses_tools(%{"tools" => _tools}),
+    do: {:error, Error.invalid_request("tools must be an array", "tools")}
+
+  defp validate_native_responses_tools(%{}), do: :ok
 
   defp validate_compact_projection(
          payload,

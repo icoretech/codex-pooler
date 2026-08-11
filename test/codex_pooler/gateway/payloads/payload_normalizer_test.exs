@@ -1715,6 +1715,35 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       end
     end
 
+    test "native Responses rejects scalar input and non-list tools for Full HTTP and websocket" do
+      for {payload, param} <- [
+            {%{"model" => "gpt-5.6-terra", "input" => "synthetic scalar input"}, "input"},
+            {%{
+               "model" => "gpt-5.6-terra",
+               "input" => [],
+               "tools" => "synthetic non-list tools"
+             }, "tools"}
+          ] do
+        options =
+          RequestOptions.build(serving_mode_opts("full"), "/backend-api/codex/responses", payload)
+
+        for request_options <- [options, RequestOptions.for_websocket(options, payload)] do
+          assert {:error,
+                  %{
+                    status: 400,
+                    code: "invalid_request",
+                    param: ^param
+                  }} =
+                   PayloadNormalizer.upstream_payload(
+                     payload,
+                     %Model{upstream_model_id: "provider-model"},
+                     "/backend-api/codex/responses",
+                     request_options
+                   )
+        end
+      end
+    end
+
     test "effective snapshot survives compact and websocket retargeting without legacy flag control" do
       payload = %{
         "model" => "gpt-5.6-terra",

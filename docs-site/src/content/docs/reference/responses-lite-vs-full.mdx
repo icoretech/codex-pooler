@@ -267,7 +267,7 @@ Most OpenAI-compatible clients are unaware of Lite and need no configuration for
 - `detail` pins on input images are not forwarded. A `detail` of `high` or `low` has no effect in Lite.
 - The response, including the event stream, is unchanged.
 
-Send `input` as an array of items rather than a bare string on the Codex backend route. Lite assembles its `input` from an item list, and a bare string `input` is not carried into that array, so the turn reaches the provider without that content. The narrow `/v1` surface normalizes a string `input` into an item before the serving mode is applied, so `/v1` clients are unaffected.
+On native, non-compact Codex backend Responses routes, a present `input` or `tools` value must be an array. A non-list value is rejected before dispatch with `400 invalid_request` in both Lite and Full, so it is never silently dropped or forwarded with changed meaning. The narrow `/v1` surface continues to normalize a string `input` into an item array before serving-mode handling, so existing `/v1` string-input behavior is unaffected.
 
 There is one hard limit. **On a Lite-served model, a map-shaped `tool_choice` is rejected** before any upstream request, with HTTP `400`, code `unsupported_parameter`, and `param: "tool_choice"`. The rejection follows the model's serving mode rather than the endpoint, so it applies to a Chat Completions named-function choice too. Scalar choices such as `"auto"`, `"none"`, and `"required"` are accepted in both modes. If a client needs forced typed tool selection, that model must be served in Full.
 
