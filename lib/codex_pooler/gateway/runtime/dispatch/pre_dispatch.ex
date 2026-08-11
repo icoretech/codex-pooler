@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   alias CodexPooler.Access
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Contracts, as: GatewayContracts
+  alias CodexPooler.Gateway.Facade.Dispatch, as: FacadeDispatch
   alias CodexPooler.Gateway.Metadata.CodexCatalog
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.InputShape
@@ -76,6 +77,30 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
           visible_model_context
       )
       when is_list(visible_models) do
+    with :ok <- FacadeDispatch.verify(payload, request_options, model) do
+      prepare_verified(
+        auth,
+        endpoint,
+        payload,
+        request_options,
+        model,
+        visible_model,
+        visible_models,
+        visible_model_context
+      )
+    end
+  end
+
+  defp prepare_verified(
+         auth,
+         endpoint,
+         payload,
+         request_options,
+         model,
+         visible_model,
+         visible_models,
+         visible_model_context
+       ) do
     visible_models = visible_models(visible_models)
 
     visible_model_context =
@@ -571,6 +596,14 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
         {:error, policy_error(reason)}
     end
   end
+
+  defp resolve_reasoning_effort(
+         _auth,
+         _model,
+         _payload,
+         %RequestOptions{persona: %RequestOptions.Persona{}} = request_options
+       ),
+       do: {:ok, request_options}
 
   defp resolve_reasoning_effort(auth, model, payload, request_options) do
     requested_effort = ReasoningEffort.extract(payload, request_options)

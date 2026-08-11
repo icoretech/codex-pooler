@@ -103,6 +103,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
       client_ip: request_metadata.client_ip,
       user_agent: request_metadata.user_agent,
       api_key_policy: request_options.routing.api_key_policy,
+      requested_model: request_options.routing.requested_model,
+      effective_model: request_options.routing.effective_model,
       request_metadata:
         request_metadata_attrs(auth, payload, accounting_endpoint, request_options, route_state)
     }

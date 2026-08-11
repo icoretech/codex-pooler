@@ -47,4 +47,11 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Persona do
       protocol: protocol
     }
   end
+
+  @spec fixed?(term()) :: boolean()
+  def fixed?(%__MODULE__{protocol: protocol} = persona) when protocol in @protocols do
+    persona == fixed(protocol)
+  end
+
+  def fixed?(_persona), do: false
 end

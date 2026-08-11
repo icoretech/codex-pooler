@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Denials
+  alias CodexPooler.Gateway.Facade.Dispatch, as: FacadeDispatch
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Payloads.TranscriptionPayload
@@ -151,13 +152,28 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          "Image generation is disabled for this pool"
        )}
     else
-      case requested_model(payload) do
-        {:ok, model_name} ->
-          request_options = execute_request_options(opts, endpoint, payload, model_name)
-          execute_requested_model(auth, endpoint, payload, request_options, model_name)
+      case FacadeDispatch.prepare(auth, endpoint, payload, opts) do
+        :passthrough ->
+          execute_client_selected_model(auth, endpoint, payload, opts)
 
-        {:error, %{code: _code} = reason} ->
-          {:error, reason}
+        {:ok, facade_payload, request_options} ->
+          execute_effective_model(
+            auth,
+            endpoint,
+            facade_payload,
+            request_options,
+            request_options.routing.effective_model
+          )
+
+        {:error, reason, facade_payload, request_options} ->
+          log_gateway_denial(
+            denial_context(auth, nil, reason, endpoint, facade_payload, request_options)
+          )
+
+        {:policy_error, reason, facade_payload, request_options} ->
+          Denials.log_policy(
+            denial_context(auth, nil, reason, endpoint, facade_payload, request_options)
+          )
       end
     end
   end
@@ -175,6 +191,17 @@ defmodule CodexPooler.Gateway.Runtime.Service do
        do: not PoolRouting.allow_image_generation?(pool)
 
   defp image_generation_permission_denied?(_auth, %RequestOptions{}), do: false
+
+  defp execute_client_selected_model(auth, endpoint, payload, opts) do
+    case requested_model(payload) do
+      {:ok, model_name} ->
+        request_options = execute_request_options(opts, endpoint, payload, model_name)
+        execute_requested_model(auth, endpoint, payload, request_options, model_name)
+
+      {:error, %{code: _code} = reason} ->
+        {:error, reason}
+    end
+  end
 
   defp execute_requested_model(auth, endpoint, payload, request_options, model_name) do
     case normalize_policy_or_log(auth, endpoint, payload, request_options) do
@@ -218,7 +245,12 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         )
 
       nil ->
-        reason = error(400, "invalid_model", "model is not available for this pool", "model")
+        reason =
+          if FacadeDispatch.facade?(request_options) do
+            FacadeDispatch.unavailable_error()
+          else
+            error(400, "invalid_model", "model is not available for this pool", "model")
+          end
 
         Denials.log_gateway(denial_context(auth, nil, reason, endpoint, payload, request_options))
     end
