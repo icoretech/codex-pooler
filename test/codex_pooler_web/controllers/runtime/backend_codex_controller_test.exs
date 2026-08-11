@@ -2740,7 +2740,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured.json["tools"] |> Enum.at(1) |> Map.fetch!("parameters") ==
              lowered_backend_function_schema()
 
-    refute Map.has_key?(Enum.at(captured.json["tools"], 1), "encrypted")
+    assert Enum.at(captured.json["tools"], 1)["encrypted"] == true
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "succeeded"

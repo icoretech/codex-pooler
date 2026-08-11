@@ -20,6 +20,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     "/backend-api/codex/responses/compact"
   ]
   @prompt_cache_breakpoint_types ~w(input_text input_image input_file)
+  @schema_definition_keys ~w(properties $defs definitions)
+  @schema_list_keys ~w(anyOf oneOf allOf)
 
   @unsupported_upstream_fields ~w(
     max_output_tokens
@@ -344,6 +346,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   defp normalize_backend_codex_compact_payload(payload, opts) do
     payload
     |> normalize_backend_codex_reasoning_effort()
+    |> ToolSchemaLowering.lower_backend_non_strict_function_tools()
+    |> remove_backend_codex_encrypted_tool_schema_markers()
     |> normalize_backend_codex_responses_lite(opts)
   end
 
@@ -496,21 +500,68 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   defp remove_backend_tool_encrypted_markers(%{"type" => "namespace"} = tool), do: tool
 
-  defp remove_backend_tool_encrypted_markers(%{"type" => "function"} = tool),
-    do: remove_schema_encrypted_markers(tool)
+  defp remove_backend_tool_encrypted_markers(%{"type" => "function"} = tool) do
+    if strict_function_tool?(tool), do: tool, else: remove_function_parameter_schema_markers(tool)
+  end
 
   defp remove_backend_tool_encrypted_markers(tool), do: tool
 
-  defp remove_schema_encrypted_markers(%{} = value) do
-    value
-    |> Map.delete("encrypted")
-    |> Map.new(fn {key, value} -> {key, remove_schema_encrypted_markers(value)} end)
+  defp strict_function_tool?(%{"function" => %{} = function} = tool) do
+    Map.get(tool, "strict") == true or Map.get(function, "strict") == true
   end
 
-  defp remove_schema_encrypted_markers(value) when is_list(value),
-    do: Enum.map(value, &remove_schema_encrypted_markers/1)
+  defp strict_function_tool?(tool), do: Map.get(tool, "strict") == true
+
+  defp remove_function_parameter_schema_markers(%{"function" => %{} = function} = tool) do
+    Map.put(tool, "function", remove_function_parameter_schema_markers(function))
+  end
+
+  defp remove_function_parameter_schema_markers(%{"parameters" => %{} = parameters} = function) do
+    Map.put(function, "parameters", remove_schema_encrypted_markers(parameters))
+  end
+
+  defp remove_function_parameter_schema_markers(function), do: function
+
+  defp remove_schema_encrypted_markers(%{} = schema) do
+    schema
+    |> Enum.reject(fn {key, value} -> key == "encrypted" and value == true end)
+    |> Map.new(fn
+      {key, value} when key in @schema_definition_keys ->
+        {key, remove_named_schema_markers(value)}
+
+      {"items", value} ->
+        {"items", remove_schema_value_markers(value)}
+
+      {"additionalProperties", value} ->
+        {"additionalProperties", remove_schema_value_markers(value)}
+
+      {key, value} when key in @schema_list_keys ->
+        {key, remove_schema_list_markers(value)}
+
+      entry ->
+        entry
+    end)
+  end
 
   defp remove_schema_encrypted_markers(value), do: value
+
+  defp remove_named_schema_markers(%{} = schemas) do
+    Map.new(schemas, fn {name, schema} -> {name, remove_schema_encrypted_markers(schema)} end)
+  end
+
+  defp remove_named_schema_markers(value), do: value
+
+  defp remove_schema_value_markers(%{} = schema), do: remove_schema_encrypted_markers(schema)
+
+  defp remove_schema_value_markers(value) when is_list(value),
+    do: remove_schema_list_markers(value)
+
+  defp remove_schema_value_markers(value), do: value
+
+  defp remove_schema_list_markers(value) when is_list(value),
+    do: Enum.map(value, &remove_schema_encrypted_markers/1)
+
+  defp remove_schema_list_markers(value), do: value
 
   defp maybe_drop_backend_codex_previous_response_id(payload, _opts) do
     if backend_codex_tool_result_continuation?(payload),

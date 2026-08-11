@@ -356,6 +356,110 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
              )
     end
 
+    @tag :schema_position_aware
+    test "cleans flat non-strict schema marker keywords without deleting encrypted property or definition names" do
+      payload = schema_position_aware_tool_payload()
+      model = %Model{upstream_model_id: "provider-model"}
+
+      options_by_transport = [
+        http: RequestOptions.build(%{}, "/backend-api/codex/responses", payload),
+        compact: RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload),
+        websocket:
+          %{}
+          |> RequestOptions.build("/backend-api/codex/responses", payload)
+          |> RequestOptions.for_websocket(payload)
+      ]
+
+      for {transport, request_options} <- options_by_transport do
+        endpoint =
+          if transport == :compact,
+            do: "/backend-api/codex/responses/compact",
+            else: "/backend-api/codex/responses"
+
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(payload, model, endpoint, request_options)
+
+        parameters = Jason.decode!(encoded) |> get_in(["tools", Access.at(0), "parameters"])
+
+        refute Map.has_key?(parameters, "encrypted"), "unexpected root marker for #{transport}"
+
+        assert parameters["required"] == ["encrypted", "nested"],
+               "required drift for #{transport}"
+
+        assert get_in(parameters, ["properties", "encrypted", "properties", "encrypted"]) ==
+                 %{"type" => "string"},
+               "property name drift for #{transport}"
+
+        assert get_in(parameters, ["$defs", "encrypted"]) == %{"type" => "string"},
+               "$defs name drift for #{transport}"
+
+        assert get_in(parameters, ["definitions", "encrypted"]) == %{"type" => "number"},
+               "definitions name drift for #{transport}"
+
+        assert get_in(parameters, ["items", "properties", "encrypted"]) == %{"type" => "boolean"},
+               "items property drift for #{transport}"
+
+        assert get_in(parameters, ["anyOf", Access.at(0), "properties", "encrypted"]) ==
+                 %{"type" => "string"},
+               "composition property drift for #{transport}"
+
+        assert get_in(parameters, ["oneOf", Access.at(0), "properties", "encrypted"]) ==
+                 %{"type" => "integer"},
+               "oneOf property drift for #{transport}"
+
+        assert get_in(parameters, ["allOf", Access.at(0), "properties", "encrypted"]) ==
+                 %{"type" => "null"},
+               "allOf property drift for #{transport}"
+      end
+    end
+
+    @tag :schema_position_aware
+    test "keeps malformed schema-position branches bounded without deleting encrypted names" do
+      payload = %{
+        "model" => "gpt-5.5",
+        "input" => [%{"role" => "user", "content" => "hello"}],
+        "tools" => [
+          %{
+            "type" => "function",
+            "name" => "malformed_schema_position_fixture",
+            "strict" => false,
+            "parameters" => %{
+              "type" => "object",
+              "encrypted" => %{"unexpected" => true},
+              "properties" => %{"encrypted" => ["not-a-schema"]},
+              "$defs" => %{"encrypted" => 42},
+              "definitions" => %{"encrypted" => nil},
+              "items" => ["not-a-schema"],
+              "anyOf" => %{"not" => "a-list"},
+              "unknown" => %{"encrypted" => true}
+            }
+          }
+        ]
+      }
+
+      model = %Model{upstream_model_id: "provider-model"}
+
+      for {endpoint, request_options} <- [
+            {"/backend-api/codex/responses",
+             RequestOptions.build(%{}, "/backend-api/codex/responses", payload)},
+            {"/backend-api/codex/responses/compact",
+             RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload)},
+            {"/backend-api/codex/responses",
+             %{}
+             |> RequestOptions.build("/backend-api/codex/responses", payload)
+             |> RequestOptions.for_websocket(payload)}
+          ] do
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(payload, model, endpoint, request_options)
+
+        parameters = Jason.decode!(encoded) |> get_in(["tools", Access.at(0), "parameters"])
+
+        assert Map.has_key?(parameters["properties"], "encrypted")
+        assert Map.has_key?(parameters["$defs"], "encrypted")
+        assert Map.has_key?(parameters["definitions"], "encrypted")
+      end
+    end
+
     test "lowers backend Codex non-strict function tool schemas for HTTP and websocket upstream JSON" do
       payload = non_strict_tool_schema_payload()
       model = %Model{upstream_model_id: "provider-model"}
@@ -392,14 +496,16 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         "strict" => true,
         "parameters" => %{
           "type" => "object",
+          "encrypted" => true,
           "additionalProperties" => false,
           "properties" => %{
             "config" => %{
               "type" => "future-native-token",
               "unknown_schema_key" => %{"preserve" => [1, nil, false]}
-            }
+            },
+            "encrypted" => %{"type" => "string", "encrypted" => true}
           },
-          "required" => ["config"],
+          "required" => ["config", "encrypted"],
           "unknown_root_key" => true
         },
         "unknown_tool_key" => %{"preserve" => true}
@@ -414,13 +520,18 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       model = %Model{upstream_model_id: "provider-model"}
       http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
       websocket_options = RequestOptions.for_websocket(http_options, payload)
+      compact_options = RequestOptions.build(%{}, "/backend-api/codex/responses/compact", payload)
 
-      for request_options <- [http_options, websocket_options] do
+      for {endpoint, request_options} <- [
+            {"/backend-api/codex/responses", http_options},
+            {"/backend-api/codex/responses/compact", compact_options},
+            {"/backend-api/codex/responses", websocket_options}
+          ] do
         assert {:ok, encoded} =
                  PayloadNormalizer.upstream_payload(
                    payload,
                    model,
-                   "/backend-api/codex/responses",
+                   endpoint,
                    request_options
                  )
 
@@ -451,7 +562,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         assert get_in(upstream, ["tools", Access.at(1), "parameters"]) ==
                  lowered_backend_function_schema()
 
-        refute Map.has_key?(Enum.at(upstream["tools"], 1), "encrypted")
+        assert Enum.at(upstream["tools"], 1)["encrypted"]
       end
     end
 
