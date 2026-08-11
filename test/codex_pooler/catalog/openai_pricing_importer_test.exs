@@ -10,8 +10,8 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
   @fixture Path.expand("../../fixtures/pricing/openai/2026-07-28.json", __DIR__)
   @target Path.expand("../../../priv/pricing/openai/pricing.json", __DIR__)
-  @target_sha256 "0d6ed91d7ad5c741fc78a6cf2f90d02915c4bc2abb59df6796817dcb95402d34"
-  @target_generated_at "2026-08-05T17:15:03.219498Z"
+  @target_sha256 "108c8820c12ca3190f2fc73c5108a80623ea7c9c70018dddba21200631eb857e"
+  @target_generated_at "2026-08-10T18:34:37.635217Z"
   @removed_identifiers [
     "computer-use-preview",
     "gpt-3.5-0301",
@@ -105,7 +105,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
     refute Enum.any?(rows, &(&1.config["service_tier"] == "fast"))
   end
 
-  test "imports the reviewed August 5 target as canonical revision 2 rows" do
+  test "imports the reviewed August 10 target as canonical revision 2 rows" do
     payload = @target |> File.read!() |> Jason.decode!()
 
     assert Map.keys(payload["models"]) |> Enum.filter(&(&1 in @removed_identifiers)) == []
@@ -129,7 +129,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
     assert {:ok, first} = OpenAIPricingImporter.import_file(@target)
     assert first.price_version == "#{@target_generated_at}:importer-format-2"
-    assert first.inserted == 177
+    assert first.inserted == 184
     assert first.skipped == 82
 
     rows =
@@ -137,7 +137,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
         from snapshot in PricingSnapshot, where: snapshot.price_version == ^first.price_version
       )
 
-    assert length(rows) == 177
+    assert length(rows) == 184
     assert Enum.all?(rows, &(&1.config["importer_format_revision"] == "2"))
     refute Enum.any?(rows, &(&1.config["service_tier"] == "fast"))
     refute Enum.any?(rows, &(&1.model_identifier in @removed_identifiers))
@@ -192,7 +192,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
       payload
       |> put_in(["models", hd(@removed_identifiers)], payload["models"]["babbage-002"])
       |> put_in(["models", hd(@removed_identifiers), "model"], hd(@removed_identifiers))
-      |> Map.put("models_count", 80)
+      |> Map.put("models_count", 81)
 
     removal_path = write_json!(removal_mutation)
 
@@ -338,6 +338,9 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
         "standard" => %{"transcription" => %{"estimated_cost" => 1}},
         "priority" => %{"transcription" => %{"estimated_cost" => nil}}
       }),
+      unsupported_payload("live-malformed", "per_minute", ["per_minute"], %{
+        "standard" => %{"live_transcription" => %{"estimated_cost" => "0.017"}}
+      }),
       unsupported_payload("second-extra", "per_second", ["per_second"], %{
         "priority" => %{
           "720p" => %{
@@ -357,6 +360,32 @@ defmodule CodexPooler.Catalog.OpenAIPricingImporterTest do
 
       assert Repo.aggregate(PricingSnapshot, :count) == count
     end)
+  end
+
+  test "live per-minute models import as validated skips without zero-price rows" do
+    live_identifier = "live-minute-model"
+    token_identifier = "token-model"
+
+    payload =
+      payload_with_models("2026-07-28T00:00:00Z", [token_identifier, live_identifier])
+      |> put_in(["models", live_identifier, "category"], "audio_transcription")
+      |> put_in(["models", live_identifier, "categories"], ["audio_transcription"])
+      |> put_in(["models", live_identifier, "pricing_type"], "per_minute")
+      |> put_in(["models", live_identifier, "pricing_types"], ["per_minute"])
+      |> put_in(["models", live_identifier, "prices"], %{
+        "standard" => %{"live_transcription" => %{"estimated_cost" => 0.017}}
+      })
+
+    assert {:ok, %{inserted: 1, skipped: 1, total: 2}} =
+             OpenAIPricingImporter.import_file(write_json!(payload))
+
+    assert Repo.exists?(
+             from row in PricingSnapshot, where: row.model_identifier == ^token_identifier
+           )
+
+    refute Repo.exists?(
+             from row in PricingSnapshot, where: row.model_identifier == ^live_identifier
+           )
   end
 
   test "duplicate raw JSON keys and normalized model collisions fail without writes" do
