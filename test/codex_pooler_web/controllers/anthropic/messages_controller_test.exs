@@ -2,7 +2,7 @@ defmodule CodexPoolerWeb.Anthropic.MessagesControllerTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
-  import CodexPooler.PoolerFixtures, only: [active_api_key_fixture: 1]
+  import CodexPooler.PoolerFixtures, only: [active_api_key_fixture: 1, pool_fixture: 0]
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [
@@ -16,6 +16,8 @@ defmodule CodexPoolerWeb.Anthropic.MessagesControllerTest do
     ]
 
   alias CodexPooler.Accounting.{Attempt, Request}
+  alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Transports.Admission
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Repo
 
@@ -642,12 +644,89 @@ defmodule CodexPoolerWeb.Anthropic.MessagesControllerTest do
     assert Repo.aggregate(Attempt, :count) == 0
   end
 
+  test "token counting is rejected before validation when proxy admission is overloaded", %{
+    conn: conn
+  } do
+    configure_single_proxy_admission!()
+    setup = active_api_key_fixture(pool_fixture())
+    assert {:ok, lease} = Admission.acquire("proxy_http", %{request_id: "held-count"})
+
+    response =
+      conn
+      |> put_req_header("authorization", setup.authorization)
+      |> put_req_header("anthropic-version", @version)
+      |> post("/v1/messages/count_tokens", %{
+        "messages" => "this invalid shape must never be tokenized while overloaded"
+      })
+
+    assert %{
+             "type" => "error",
+             "error" => %{"type" => "api_error", "message" => "gemma3 is temporarily unavailable"}
+           } = json_response(response, 503)
+
+    Admission.release(lease)
+  end
+
+  test "token count admission leases release after success and validation error", %{conn: conn} do
+    configure_single_proxy_admission!()
+    setup = active_api_key_fixture(pool_fixture())
+
+    success =
+      conn
+      |> put_req_header("authorization", setup.authorization)
+      |> put_req_header("anthropic-version", @version)
+      |> post("/v1/messages/count_tokens", %{
+        "messages" => [%{"role" => "user", "content" => "count me"}]
+      })
+
+    assert %{"input_tokens" => count} = json_response(success, 200)
+    assert count > 0
+    assert {:ok, %{"proxy_http" => %{running: 0, queued: 0}}} = Admission.saturation()
+
+    invalid =
+      conn
+      |> recycle()
+      |> put_req_header("authorization", setup.authorization)
+      |> put_req_header("anthropic-version", @version)
+      |> post("/v1/messages/count_tokens", %{"messages" => "invalid"})
+
+    assert json_response(invalid, 400)["error"]["type"] == "invalid_request_error"
+    assert {:ok, %{"proxy_http" => %{running: 0, queued: 0}}} = Admission.saturation()
+  end
+
   defp minimal_message do
     %{
       "messages" => [%{"role" => "user", "content" => "hello"}],
       "max_tokens" => 32,
       "stream" => false
     }
+  end
+
+  defp configure_single_proxy_admission! do
+    previous = Application.get_env(:codex_pooler, OperationalSettings)
+    Admission.reset_for_test()
+
+    bulkheads =
+      Map.new(Admission.route_classes(), fn route_class ->
+        {route_class, %{max_concurrency: 4, queue_limit: 4, queue_timeout_ms: 1_000}}
+      end)
+      |> Map.put("proxy_http", %{max_concurrency: 1, queue_limit: 0, queue_timeout_ms: 1_000})
+
+    Application.put_env(
+      :codex_pooler,
+      OperationalSettings,
+      settings: %OperationalSettings{bulkheads: bulkheads}
+    )
+
+    on_exit(fn ->
+      Admission.reset_for_test()
+
+      if previous do
+        Application.put_env(:codex_pooler, OperationalSettings, previous)
+      else
+        Application.delete_env(:codex_pooler, OperationalSettings)
+      end
+    end)
   end
 
   defp put_headers(conn, headers) do

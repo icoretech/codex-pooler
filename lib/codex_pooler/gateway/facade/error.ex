@@ -18,6 +18,7 @@ defmodule CodexPooler.Gateway.Facade.Error do
 
   @local_message_codes ~w(
     invalid_request
+    invalid_turn_state
     invalid_model
     invalid_function_parameters
     invalid_json_schema
@@ -158,7 +159,10 @@ defmodule CodexPooler.Gateway.Facade.Error do
       origin == :local and code in @safe_local_codes ->
         code
 
-      code in @safe_protocol_codes ->
+      status == 429 ->
+        "rate_limit_exceeded"
+
+      code in @safe_protocol_codes and (code != "server_error" or status >= 500) ->
         code
 
       true ->
@@ -180,15 +184,11 @@ defmodule CodexPooler.Gateway.Facade.Error do
 
   defp origin(opts), do: Keyword.get(opts, :origin, :local)
 
-  defp openai_type(status, error) do
-    if status >= 500 or normalized_type(error) == "server_error",
+  defp openai_type(status, _error) do
+    if status >= 500,
       do: "server_error",
       else: "invalid_request_error"
   end
-
-  defp normalized_type(%{type: type}) when is_binary(type), do: type
-  defp normalized_type(%{"type" => type}) when is_binary(type), do: type
-  defp normalized_type(_error), do: nil
 
   defp normalized_code(%{code: code}) when is_atom(code), do: Atom.to_string(code)
   defp normalized_code(%{code: code}) when is_binary(code), do: code

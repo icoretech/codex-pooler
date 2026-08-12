@@ -369,7 +369,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         assignment_advertised?: assignment_advertised?,
         request_options: %RequestOptions{} = request_options
       }) do
-    headers = websocket_headers(identity, token)
+    headers = websocket_headers(identity, token, request_options)
     timeouts = request_options.timeout_config
     message_mapper = websocket_message_mapper(request_options)
 
@@ -837,11 +837,35 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     end
   end
 
-  defp websocket_headers(identity, token) do
-    upstream_headers(identity, token, [
-      {"openai-beta", "responses_websockets=2026-02-06"}
-    ])
+  defp websocket_headers(identity, token, %RequestOptions{} = request_options) do
+    headers =
+      [{"openai-beta", "responses_websockets=2026-02-06"}]
+      |> maybe_put_resolved_websocket_turn_state(request_options)
+
+    upstream_headers(identity, token, headers)
   end
+
+  defp maybe_put_resolved_websocket_turn_state(
+         headers,
+         %RequestOptions{
+           continuity: %{resolved_turn_state_assignment_id: assignment_id},
+           transport: %{forwarded_metadata_headers: forwarded_headers}
+         }
+       )
+       when is_binary(assignment_id) and is_list(forwarded_headers) do
+    case Enum.find(forwarded_headers, fn
+           {name, value} when is_binary(name) and is_binary(value) ->
+             String.downcase(name) == "x-codex-turn-state"
+
+           _header ->
+             false
+         end) do
+      {_name, value} -> [{"x-codex-turn-state", value} | headers]
+      nil -> headers
+    end
+  end
+
+  defp maybe_put_resolved_websocket_turn_state(headers, %RequestOptions{}), do: headers
 
   defp normalize_upstream_transport_result(
          {:error, %Finch.TransportError{} = exception},

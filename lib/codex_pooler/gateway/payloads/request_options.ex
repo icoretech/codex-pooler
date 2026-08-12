@@ -117,6 +117,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :pool_timeout,
     :pool_timeout_ms,
     :reasoning_effort_snapshot,
+    :resolved_turn_state_assignment_id,
+    :resolved_turn_state_session_id,
     :pool_upstream_assignment_id,
     :previous_response_id,
     :prompt_cache_controls_downgraded,

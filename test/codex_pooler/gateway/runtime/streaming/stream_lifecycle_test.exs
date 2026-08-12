@@ -13,7 +13,14 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Persistence.{BridgeDemotion, RoutingCircuitState}
+
+  alias CodexPooler.Gateway.Persistence.{
+    BridgeDemotion,
+    CodexTurn,
+    RoutingCircuitState,
+    SessionContinuity
+  }
+
   alias CodexPooler.Gateway.Routing.{BridgeRing, RoutePlanInput}
   alias CodexPooler.Gateway.Runtime.Dispatch
 
@@ -57,6 +64,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
       |> RouteState.put_codex_models_etag(etag)
 
     context = %SelectedCandidateContext{
+      auth: auth,
       request_options: request_options,
       route_state: route_state,
       assignment: setup.fallback_assignment,
@@ -78,12 +86,16 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
         %{finalization_callbacks: finalization_callbacks()}
       )
 
-    assert Map.new(result.headers) == %{
+    headers = Map.new(result.headers)
+
+    assert Map.take(headers, ~w(cache-control content-type x-models-etag)) == %{
              "cache-control" => "no-cache",
              "content-type" => "text/event-stream; charset=utf-8",
-             "x-codex-turn-state" => "turn-state",
              "x-models-etag" => etag
            }
+
+    assert "cpts_" <> _encrypted = headers["x-codex-turn-state"]
+    refute headers["x-codex-turn-state"] =~ "turn-state"
   end
 
   test "catalog token is absent outside backend noncompact Responses SSE" do
@@ -145,6 +157,80 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
 
     assert {:arity, 2} = :erlang.fun_info(handlers.finalize_success, :arity)
     assert {:arity, 3} = :erlang.fun_info(handlers.finalize_failure, :arity)
+  end
+
+  test "malformed websocket stream data emits one local error and fails request attempt and turn" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+    parent = self()
+
+    request_options =
+      request_options(auth, payload, setup, websocket?: true)
+      |> RequestOptions.put_transport(websocket_writer: &send(parent, {:downstream_frame, &1}))
+
+    assert {:ok, session} = SessionContinuity.start_codex_session(auth, request_options)
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, payload, %{
+               endpoint: @endpoint_path,
+               transport: "websocket",
+               correlation_id:
+                 "websocket-malformed-projection-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    assert {:ok, turn} =
+             SessionContinuity.start_codex_turn(session, reserved.request, request_options)
+
+    context =
+      retry_context(setup, auth, request_options, reserved.request,
+        candidates: [{setup.assignment, setup.identity}],
+        attempt: attempt
+      )
+
+    stream = WebsocketBridgeStream.start("websocket-malformed-projection")
+    send(self(), {stream.ref, {:data, "data: [\"provider-account-sentinel\"]\n\n"}})
+
+    send(
+      self(),
+      {stream.ref,
+       {:data,
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"must-not-follow-failure\"}}\n\n"}}
+    )
+
+    send(self(), {stream.ref, :done})
+
+    result =
+      StreamDispatch.streaming_result(
+        %{sse_response() | body: stream},
+        context,
+        %{finalization_callbacks: finalization_callbacks()}
+      )
+
+    assert {:error, %{code: "upstream_stream_error"}} = result.websocket_stream.()
+
+    assert_receive {:downstream_frame, failure_frame}
+    assert %{"type" => "error", "code" => "server_error"} = Jason.decode!(failure_frame)
+    refute failure_frame =~ "provider-account-sentinel"
+    refute failure_frame =~ "must-not-follow-failure"
+    refute_receive {:downstream_frame, _duplicate}
+
+    request = Repo.reload!(reserved.request)
+    attempt = Repo.reload!(attempt)
+    turn = Repo.get!(CodexTurn, turn.id)
+
+    assert request.status == "failed"
+    assert request.last_error_code == "upstream_stream_error"
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "upstream_stream_error"
+    assert turn.status == "failed"
+    assert turn.error_code == "upstream_stream_error"
+    assert turn.final_attempt_id == attempt.id
   end
 
   test "shared stream finalization helpers resolve bounded transports and emit exact labels" do

@@ -95,6 +95,32 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert covered_categories == Enum.sort(CompatibilityMatrix.required_categories())
     end
 
+    test "documents encrypted local file capability proxy boundaries" do
+      feature = CompatibilityMatrix.by_slug!(:files)
+      fixture = CompatibilityMatrix.fixture!(:file_upload)
+
+      assert %{method: :put, path: "/file-capabilities/:capability"} in feature.routes
+      assert %{method: :get, path: "/file-capabilities/:capability"} in feature.routes
+      assert feature.contract =~ "encrypted local upload and download capabilities"
+      assert feature.contract =~ "never redirects to or persists the provider URL"
+
+      assert fixture.public_create_keys == ["file_id", "upload_url"]
+
+      assert fixture.public_finalize_keys == [
+               "download_url",
+               "file_name",
+               "mime_type",
+               "status"
+             ]
+
+      assert fixture.capability.max_handle_bytes == 8_192
+      assert fixture.capability.request_logging == false
+      assert fixture.capability.provider_url_exposed == false
+      assert fixture.capability.provider_url_persisted == false
+      assert fixture.capability.redirects == false
+      assert fixture.capability.bearer_auth_optional == true
+    end
+
     test "has no pending compatibility gaps" do
       assert CompatibilityMatrix.pending_gaps() == []
     end
@@ -104,7 +130,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       fixture = CompatibilityMatrix.fixture!(:pruned_runtime_helper_firewall)
 
       assert feature.current == :firewall_before_fixed_absence
-      assert feature.categories == [:route, :error]
+      assert feature.categories == [:route, :auth, :error]
       assert feature.routes == []
 
       assert %{method: :post, path: "/backend-api/codex/analytics-events/events"} in fixture.routes
@@ -131,7 +157,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                :accounting,
                :denial_observation
              ]) == %{
-               authentication: :not_attempted,
+               authentication: :required_before_fixed_absence,
                body_read: false,
                upstream_dispatch: false,
                reservation: false,
@@ -1315,13 +1341,24 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  "x-codex-installation-id",
                  "x-openai-subagent"
                ],
-               relayed_response_headers: ["x-codex-turn-state"],
+               relayed_response_headers: ["x-codex-turn-state as cpts_ encrypted handle"],
                not_forwarded_on: [
                  "/v1/responses",
-                 "backend_websocket_response.create",
                  "public_v1_websocket_response.create"
                ],
-               privacy: "raw_values_not_persisted",
+               privacy: "raw_turn_state_restored_only_to_selected_upstream_and_not_persisted",
+               opaque_turn_state: %{
+                 public_prefix: "cpts_",
+                 max_header_bytes: 4_096,
+                 expiry: "required",
+                 encrypted_scope: ["pool_id", "api_key_id", "assignment_id", "session_id"],
+                 assignment_routing: "hard_pin_active_assignment_in_authenticated_pool",
+                 session_routing: "exact_reconnectable_pool_and_api_key_scoped_session",
+                 http: "request_header",
+                 websocket_upgrade: "request_header",
+                 websocket_frame: "response.create.client_metadata",
+                 upstream_restore: "exact_raw_value"
+               },
                turn_metadata_projection: %{
                  direct_header_removes_top_level: ["code_mode_tool_names"],
                  structured_output: "ascii_safe_json",
@@ -1345,16 +1382,25 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "per-frame request-scoped turn state"
       assert feature.contract =~ "upgrade/header value only as fallback"
 
-      assert fixture.headers == %{"x-codex-turn-state" => "fixture-upgrade-turn-state"}
+      assert fixture.headers == %{
+               "x-codex-turn-state" => "cpts_<encrypted-upgrade-state>"
+             }
 
       assert fixture.response_create_client_metadata == %{
-               "x-codex-turn-state" => "fixture-frame-turn-state"
+               "x-codex-turn-state" => "cpts_<encrypted-frame-state>"
              }
 
       assert fixture.turn_state_precedence ==
                "response.create.client_metadata_over_upgrade_header"
 
-      assert fixture.privacy == "raw_value_not_persisted"
+      assert fixture.privacy == "raw_value_restored_only_upstream_and_not_persisted"
+
+      assert fixture.opaque_resolution == %{
+               cross_pool_or_key: "invalid_turn_state_before_dispatch",
+               tamper_or_expiry: "invalid_turn_state_before_dispatch",
+               assignment: "hard_pinned",
+               session: "exact_reconnectable_anchor_for_upgrade_owner_and_frame_retarget"
+             }
 
       assert feature.contract =~ "native websocket continuation"
       assert feature.contract =~ "reused upstream connection"
@@ -2101,7 +2147,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                "upload_url" => upload_url
              } = json_response(conn, 200)
 
-      assert upload_url =~ "fake-upload.invalid"
+      assert upload_url =~ "/file-capabilities/cpfc_"
+      refute upload_url =~ "fake-upload.invalid"
 
       file = Repo.get_by!(FileRecord, file_id: file_id)
       assert file.metadata["source"] == "backend-api/files/upstream"
@@ -2116,7 +2163,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert %{"status" => "success", "download_url" => download_url} =
                json_response(finalize_conn, 200)
 
-      assert download_url =~ "fake-download.invalid"
+      assert download_url =~ "/file-capabilities/cpfc_"
+      refute download_url =~ "fake-download.invalid"
 
       request =
         Repo.one!(
@@ -2156,7 +2204,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert Repo.aggregate(Request, :count) == request_count_before
     end
 
-    test "supported responses contract records weekly probe upstream 400 as upstream error", %{
+    test "supported responses contract sanitizes and records weekly probe upstream 400", %{
       conn: conn
     } do
       upstream =
@@ -2182,8 +2230,16 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
           "stream" => true
         })
 
-      assert response(conn, 400) == ""
+      assert %{
+               "error" => %{
+                 "code" => "invalid_request",
+                 "message" => "Request is invalid",
+                 "type" => "invalid_request_error"
+               }
+             } = json_response(conn, 400)
+
       refute response(conn, 400) =~ "quota_evidence_unavailable"
+      refute response(conn, 400) =~ "synthetic upstream validation failure"
 
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.path == "/backend-api/codex/responses"
@@ -2344,7 +2400,21 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     end
 
     test "supported chat streaming contract keeps terminal SSE marker", %{conn: conn} do
-      upstream = start_upstream(FakeUpstream.sse_stream([%{"choices" => [%{"delta" => %{}}]}]))
+      upstream =
+        start_upstream(
+          FakeUpstream.sse_stream([
+            {"response.completed",
+             %{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => "resp_contract_terminal_marker",
+                 "object" => "response",
+                 "status" => "completed"
+               }
+             }}
+          ])
+        )
+
       setup = gateway_setup(upstream)
 
       conn =
@@ -2361,7 +2431,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
     test "supported reasoning minimal selector is replaced by fixed max before dispatch",
          %{conn: conn} do
-      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_reasoning_minimal"}))
+      upstream = start_upstream(contract_response_upstream("resp_reasoning_minimal"))
       setup = gateway_setup(upstream)
 
       conn =
@@ -2380,7 +2450,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
     test "supported reasoning none selector is replaced by fixed max before dispatch",
          %{conn: conn} do
-      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_reasoning_none"}))
+      upstream = start_upstream(contract_response_upstream("resp_reasoning_none"))
       setup = gateway_setup(upstream)
 
       conn =
@@ -2399,7 +2469,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
     test "supported reasoning ultra contract rewrites ultra to max before dispatch",
          %{conn: conn} do
-      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_reasoning_ultra"}))
+      upstream = start_upstream(contract_response_upstream("resp_reasoning_ultra"))
       setup = gateway_setup(upstream)
 
       conn =
@@ -2417,7 +2487,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     end
 
     test "supported reasoning contract replaces non-max efforts", %{conn: conn} do
-      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_reasoning_medium"}))
+      upstream = start_upstream(contract_response_upstream("resp_reasoning_medium"))
       setup = gateway_setup(upstream)
 
       conn =
@@ -2433,6 +2503,15 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.json["reasoning"] == %{"effort" => "max"}
     end
+  end
+
+  defp contract_response_upstream(id) do
+    FakeUpstream.json_response(%{
+      "id" => id,
+      "object" => "response",
+      "status" => "completed",
+      "output" => []
+    })
   end
 
   defp gateway_setup(upstream, opts \\ []) do

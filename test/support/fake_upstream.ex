@@ -774,7 +774,14 @@ defmodule CodexPooler.FakeUpstream do
 
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
-    |> Plug.Conn.send_resp(200, Jason.encode!(%{"late" => true}))
+    |> Plug.Conn.send_resp(
+      200,
+      Jason.encode!(%{
+        "id" => "resp_delayed_headers",
+        "object" => "response",
+        "status" => "completed"
+      })
+    )
   end
 
   defp respond(_pid, conn, {:timeout_after_sse_headers, notify, release_ref}, _request) do
@@ -851,6 +858,8 @@ defmodule CodexPooler.FakeUpstream do
         ),
       upload_status: Map.get(opts, :upload_status, 201),
       upload_body: Map.get(opts, :upload_body, ""),
+      create_extra: Map.get(opts, :create_extra, %{}),
+      finalize_extra: Map.get(opts, :finalize_extra, %{}),
       unauthorized_payload:
         Map.get(opts, :unauthorized_payload, %{"error" => %{"code" => "invalid_api_key"}}),
       error_body: Map.get(opts, :error_body, "fake upstream file finalize failure")
@@ -870,12 +879,13 @@ defmodule CodexPooler.FakeUpstream do
   end
 
   defp file_protocol_create_response(conn, config) do
+    body =
+      config.create_extra
+      |> Map.merge(%{"file_id" => config.file_id, "upload_url" => config.upload_url})
+
     conn
     |> Plug.Conn.put_resp_content_type("application/json")
-    |> Plug.Conn.send_resp(
-      200,
-      Jason.encode!(%{"file_id" => config.file_id, "upload_url" => config.upload_url})
-    )
+    |> Plug.Conn.send_resp(200, Jason.encode!(body))
   end
 
   defp file_protocol_finalize_response(
@@ -917,17 +927,18 @@ defmodule CodexPooler.FakeUpstream do
   end
 
   defp file_protocol_finalize_success(conn, config) do
-    conn
-    |> Plug.Conn.put_resp_content_type("application/json")
-    |> Plug.Conn.send_resp(
-      200,
-      Jason.encode!(%{
+    body =
+      config.finalize_extra
+      |> Map.merge(%{
         "status" => "success",
         "download_url" => config.download_url,
         "file_name" => config.file_name,
         "mime_type" => config.mime_type
       })
-    )
+
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.send_resp(200, Jason.encode!(body))
   end
 
   defp bump_route_count(pid, key) do

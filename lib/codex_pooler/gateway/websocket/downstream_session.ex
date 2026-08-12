@@ -3,6 +3,8 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
 
   require Logger
 
+  alias CodexPooler.Gateway.Facade.TurnState
+  alias CodexPooler.Gateway.Payloads.PayloadNormalizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
   alias CodexPooler.Gateway.Transports.Websocket.{
@@ -99,21 +101,48 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
   def maybe_retarget_before_start(payload, %{websocket_owner_downstream: downstream} = state)
       when is_binary(payload) and is_map(downstream) do
     with {:ok, %{} = decoded_payload} <- Jason.decode(payload),
+         {:ok, retarget_opts} <- resolve_retarget_options(state.auth, decoded_payload, state),
          {:ok, runtime} <-
            Websocket.retarget_websocket_owner_runtime(
              state.auth,
              runtime_state(state),
              decoded_payload,
-             Map.get(state, :opts, %{})
+             retarget_opts
            ) do
       {:ok, maybe_put_retargeted_runtime(state, runtime)}
     else
       {:error, %Jason.DecodeError{}} -> {:ok, state}
+      {:skip, :invalid_turn_state} -> {:ok, state}
       {:error, reason} -> {:error, reason}
     end
   end
 
   def maybe_retarget_before_start(_payload, state), do: {:ok, state}
+
+  defp resolve_retarget_options(auth, payload, state) do
+    opts = Map.get(state, :opts, %{}) |> RequestOptions.for_websocket()
+
+    case PayloadNormalizer.backend_client_metadata_turn_state(payload) do
+      "cpts_" <> _opaque = public ->
+        case TurnState.resolve(public, auth) do
+          {:ok, resolution} ->
+            {:ok,
+             RequestOptions.put_continuity(opts,
+               accepted_turn_state: public,
+               resolved_turn_state_assignment_id: resolution.assignment_id,
+               resolved_turn_state_session_id: resolution.session_id
+             )}
+
+          {:error, :invalid} ->
+            # The request task performs the protocol-shaped validation before
+            # dispatch. Do not hash or retarget an unverified local handle.
+            {:skip, :invalid_turn_state}
+        end
+
+      _local_or_absent ->
+        {:ok, opts}
+    end
+  end
 
   @spec accept_downstream_message(term(), socket_state()) ::
           WebsocketOwnerContract.downstream_match_result() | :drop

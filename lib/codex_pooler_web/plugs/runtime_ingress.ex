@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
 
   alias CodexPooler.Gateway.Admission, as: GatewayAdmission
   alias CodexPooler.Gateway.Facade.Error, as: FacadeError
+  alias CodexPooler.Gateway.Facade.TurnState
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPoolerWeb.GatewayControllerHelpers
@@ -44,10 +45,6 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
     send_mcp_error(conn, 400, -32_600, "invalid request")
   end
 
-  defp route_request(conn, %{scope: :runtime, unsafe_segment?: true}) do
-    send_runtime_error(conn, 400, "invalid_request", "request path is invalid")
-  end
-
   defp route_request(conn, %{scope: :mcp}) do
     settings = operational_settings(conn)
 
@@ -66,8 +63,10 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
         conn
         |> put_json_parser_context(settings, json_parse_error_scope(conn))
         |> enforce_firewall(settings)
-        |> reject_pruned_runtime_helper()
         |> authenticate_facade_request()
+        |> reject_unsafe_runtime_path()
+        |> resolve_turn_state()
+        |> reject_pruned_runtime_helper()
         |> reject_unsupported_v1_request()
         |> enforce_image_generation_permission()
         |> maybe_decode_compressed_body(settings)
@@ -288,6 +287,69 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress do
       {:ok, auth} -> put_private(conn, :runtime_api_auth, auth)
       {:error, reason} -> send_runtime_error(conn, reason)
     end
+  end
+
+  defp reject_unsafe_runtime_path(%Plug.Conn{halted: true} = conn), do: conn
+
+  defp reject_unsafe_runtime_path(conn) do
+    if Path.fetch(conn).unsafe_segment? do
+      send_runtime_error(conn, 400, "invalid_request", "request path is invalid")
+    else
+      conn
+    end
+  end
+
+  defp resolve_turn_state(%Plug.Conn{halted: true} = conn), do: conn
+
+  defp resolve_turn_state(conn) do
+    if turn_state_capability_request?(conn) do
+      case get_req_header(conn, "x-codex-turn-state") do
+        [] ->
+          conn
+
+        ["cpts_" <> _rest = handle] ->
+          resolve_opaque_turn_state(conn, handle)
+
+        [_local_websocket_state] when conn.method == "GET" ->
+          conn
+
+        [handle] ->
+          resolve_opaque_turn_state(conn, handle)
+
+        _multiple ->
+          invalid_turn_state(conn)
+      end
+    else
+      conn
+    end
+  end
+
+  defp resolve_opaque_turn_state(conn, handle) do
+    case TurnState.resolve(handle, conn.private.runtime_api_auth) do
+      {:ok, resolution} -> put_private(conn, :runtime_turn_state, resolution)
+      {:error, :invalid} -> invalid_turn_state(conn)
+    end
+  end
+
+  defp turn_state_capability_request?(%Plug.Conn{method: method} = conn)
+       when method in ["GET", "POST"] do
+    Path.decoded_segments(conn) in [
+      ["backend-api", "codex", "responses"],
+      ["backend-api", "codex", "v1", "responses"],
+      ["backend-api", "codex", "responses", "compact"],
+      ["backend-api", "codex", "v1", "responses", "compact"]
+    ]
+  end
+
+  defp turn_state_capability_request?(_conn), do: false
+
+  defp invalid_turn_state(conn) do
+    send_runtime_error(
+      conn,
+      400,
+      "invalid_turn_state",
+      "x-codex-turn-state is invalid or expired"
+    )
   end
 
   defp reject_unsupported_v1_request(%Plug.Conn{halted: true} = conn), do: conn

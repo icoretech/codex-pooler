@@ -90,6 +90,9 @@ defmodule CodexPoolerWeb.Endpoint do
   def request_log_level(%Plug.Conn{path_info: [path]}) when path in ["healthz", "readyz"],
     do: false
 
+  def request_log_level(%Plug.Conn{path_info: ["file-capabilities", _opaque_capability]}),
+    do: false
+
   def request_log_level(_conn), do: :info
 
   @impl Plug.ErrorHandler

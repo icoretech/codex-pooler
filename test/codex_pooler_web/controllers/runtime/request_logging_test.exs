@@ -64,6 +64,36 @@ defmodule CodexPoolerWeb.Runtime.RequestLoggingTest do
     refute log =~ "Sent 401"
   end
 
+  test "opaque file capability paths are excluded from endpoint and completion logs", %{
+    conn: conn
+  } do
+    token = "cpfc_SECRET_BEARER_CAPABILITY_SENTINEL"
+
+    conn = %{
+      conn
+      | method: "PUT",
+        path_info: ["file-capabilities", token],
+        request_path: "/file-capabilities/#{token}",
+        status: 404
+    }
+
+    assert CodexPoolerWeb.Endpoint.request_log_level(conn) == false
+
+    log =
+      capture_log([level: :info], fn ->
+        assert :ok =
+                 CodexPoolerWeb.RequestLogger.handle_stop(
+                   [:phoenix, :endpoint, :stop],
+                   %{duration: System.convert_time_unit(1, :millisecond, :native)},
+                   %{conn: conn},
+                   :ok
+                 )
+      end)
+
+    refute log =~ token
+    refute log =~ "/file-capabilities/"
+  end
+
   test "runtime request logging sanitizes multiline control user agents and ignores untrusted forwarded IP",
        %{conn: conn} do
     malicious_user_agent = "Codex\nInjected-Header: secret-token\r\nsecond-line\ttrail"

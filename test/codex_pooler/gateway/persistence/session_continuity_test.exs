@@ -223,6 +223,73 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityTest do
     end
   end
 
+  describe "resolved opaque turn-state session anchors" do
+    test "reattaches only the exact reconnectable session in the authenticated scope" do
+      auth = auth_fixture()
+      session = continuity_session_fixture(auth, "opaque-resolved-anchor")
+      %{assignment: assignment} = active_upstream_assignment_fixture(auth.pool)
+      assignment_id = assignment.id
+
+      session =
+        session
+        |> Ecto.Changeset.change(pool_upstream_assignment_id: assignment_id)
+        |> Repo.update!()
+
+      original_session_key = session.session_key
+      before_count = Repo.aggregate(CodexSession, :count)
+
+      opts =
+        owner_request_options(%{
+          accepted_turn_state: "cpts_public_handle_fixture",
+          resolved_turn_state_assignment_id: assignment_id,
+          resolved_turn_state_session_id: session.id,
+          owner_instance_id: "node-resolved-anchor"
+        })
+
+      assert {:ok, %CodexSession{id: session_id} = reattached} =
+               SessionContinuity.start_codex_session(auth, opts)
+
+      assert session_id == session.id
+      assert reattached.session_key == original_session_key
+      assert Repo.aggregate(CodexSession, :count) == before_count
+
+      %{api_key: alternate_key} =
+        active_api_key_fixture(auth.pool, %{
+          created_by_user_id: auth.pool.created_by_user_id
+        })
+
+      alternate_auth = %{pool: auth.pool, api_key: alternate_key}
+
+      assert {:error, :session_not_found} =
+               SessionContinuity.start_codex_session(alternate_auth, opts)
+
+      missing_opts =
+        RequestOptions.put_continuity(opts,
+          resolved_turn_state_session_id: Ecto.UUID.generate()
+        )
+
+      assert {:error, :session_not_found} =
+               SessionContinuity.start_codex_session(auth, missing_opts)
+
+      %{assignment: mismatched_assignment} = active_upstream_assignment_fixture(auth.pool)
+
+      mismatched_assignment_opts =
+        RequestOptions.put_continuity(opts,
+          resolved_turn_state_assignment_id: mismatched_assignment.id
+        )
+
+      assert {:error, :session_not_found} =
+               SessionContinuity.start_codex_session(auth, mismatched_assignment_opts)
+
+      reattached
+      |> Ecto.Changeset.change(%{status: "closed", closed_at: DateTime.utc_now()})
+      |> Repo.update!()
+
+      assert {:error, :session_not_found} = SessionContinuity.start_codex_session(auth, opts)
+      assert Repo.aggregate(CodexSession, :count) == before_count
+    end
+  end
+
   @tag :session_start_race
   test "concurrent first start for the same session key reuses the winning session" do
     auth =

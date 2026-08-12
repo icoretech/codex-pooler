@@ -14,6 +14,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.RouteClass
 
+  @failed_stream_buffer <<0, "codex-pooler-websocket-stream-failed", 0>>
+
   @type decode_error :: :invalid_json | :not_object
   @type gateway_error :: Contracts.gateway_error()
   @type deliver_result :: :ok | {:error, gateway_error()}
@@ -44,18 +46,37 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   end
 
   def deliver_result(%{websocket_messages: messages}, push_frame) do
-    Enum.each(messages, fn message -> push_frame.(public_websocket_message(message)) end)
-    :ok
+    case public_websocket_messages(messages) do
+      {:ok, frames} ->
+        Enum.each(frames, push_frame)
+        :ok
+
+      {:error, frame} ->
+        push_frame.(frame)
+        websocket_stream_error()
+    end
   end
 
   def deliver_result(%{raw_body: body}, push_frame) do
-    push_frame.(PublicProjection.json_message(body))
-    :ok
+    deliver_projected_json(body, push_frame)
   end
 
   def deliver_result(%{body: body}, push_frame) do
-    push_frame.(body |> PublicProjection.gateway_body() |> Jason.encode!())
-    :ok
+    deliver_projected_json(Jason.encode!(body), push_frame)
+  end
+
+  defp deliver_projected_json(body, push_frame) do
+    case PublicProjection.json_message_result(body) do
+      {:ok, frame, _projected} ->
+        push_frame.(frame)
+        :ok
+
+      {:error, frame} ->
+        push_frame.(frame)
+
+        {:error,
+         %{status: 502, code: "websocket_stream_error", message: "websocket stream failed"}}
+    end
   end
 
   defp normalize_websocket_stream_result(:ok), do: :ok
@@ -69,12 +90,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
        do: error
 
   defp normalize_websocket_stream_result(_result) do
-    {:error,
-     %{
-       status: 502,
-       code: "websocket_stream_error",
-       message: "websocket stream failed"
-     }}
+    websocket_stream_error()
   end
 
   @spec warmup_result() :: map()
@@ -184,72 +200,121 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   def stream_messages(%{id: request_id}, data, buffer),
     do: stream_messages(request_id, data, buffer)
 
+  def stream_messages(_request_id, _data, @failed_stream_buffer),
+    do: {[], @failed_stream_buffer}
+
   def stream_messages(request_id, data, buffer)
       when is_binary(request_id) and is_binary(data) and is_binary(buffer) do
-    buffered_size = byte_size(buffer) + byte_size(data)
-    {blocks, buffer} = StreamProtocol.complete_sse_blocks(buffer, data, bounded?: true)
+    {blocks, next_buffer} =
+      StreamProtocol.complete_sse_blocks(buffer, data, bounded?: false)
 
-    if oversized_incomplete_sse_prefix?(blocks, buffer, buffered_size) do
+    if StreamProtocol.oversized_incomplete_sse_block?(next_buffer) do
       BufferTelemetry.record_oversized_incomplete(
         "websocket_sse",
-        buffered_size,
+        byte_size(next_buffer),
         StreamProtocol.max_incomplete_sse_block_bytes()
       )
+
+      fail_stream()
+    else
+      project_stream_messages(blocks, buffer, data, next_buffer)
     end
-
-    messages =
-      case messages_from_sse_blocks(blocks) do
-        [] -> direct_json_message(data)
-        messages -> messages
-      end
-
-    {messages, buffer}
   end
 
   def stream_messages(_request_id, _data, _buffer), do: {[], ""}
 
-  defp oversized_incomplete_sse_prefix?([], "", buffered_size),
-    do: buffered_size > StreamProtocol.max_incomplete_sse_block_bytes()
-
-  defp oversized_incomplete_sse_prefix?(_blocks, _buffer, _buffered_size), do: false
+  @doc false
+  @spec failed_stream_buffer?(term()) :: boolean()
+  def failed_stream_buffer?(@failed_stream_buffer), do: true
+  def failed_stream_buffer?(_buffer), do: false
 
   defp messages_from_sse_blocks(blocks) do
-    blocks
-    |> Enum.map(&StreamProtocol.sse_field(&1, "data"))
-    |> Enum.reject(&(&1 in [nil, "[DONE]"]))
-    |> Enum.flat_map(&canonical_sse_data_message/1)
+    Enum.reduce_while(blocks, {:ok, []}, fn block, {:ok, messages} ->
+      case sse_block_message(block) do
+        {:ok, nil} -> {:cont, {:ok, messages}}
+        {:ok, message} -> {:cont, {:ok, [message | messages]}}
+        :error -> {:halt, :error}
+      end
+    end)
+    |> case do
+      {:ok, messages} -> {:ok, Enum.reverse(messages)}
+      :error -> :error
+    end
+  end
+
+  defp sse_block_message(block) do
+    case StreamProtocol.sse_field(block, "data") do
+      nil -> if comment_sse_block?(block), do: {:ok, nil}, else: :error
+      "[DONE]" -> {:ok, nil}
+      data -> canonical_sse_data_message(data)
+    end
+  end
+
+  defp comment_sse_block?(block) do
+    block
+    |> String.split("\n")
+    |> Enum.reject(&(String.trim(&1) == ""))
+    |> case do
+      [] -> false
+      lines -> Enum.all?(lines, &String.starts_with?(String.trim_leading(&1), ":"))
+    end
   end
 
   defp canonical_sse_data_message(data) do
-    case Jason.decode(data) do
-      {:ok, %{} = decoded} ->
-        {canonical, _decoded} =
-          StreamProtocol.canonicalize_codex_responses_json_message(data, decoded)
-
-        [PublicProjection.json_message(canonical)]
-
-      {:ok, _decoded} ->
-        [data]
-
-      {:error, _reason} ->
-        []
-    end
+    canonical_json_message(data)
   end
 
   defp direct_json_message(data) do
-    case Jason.decode(data) do
-      {:ok, %{} = decoded} ->
-        {canonical, _decoded} =
-          StreamProtocol.canonicalize_codex_responses_json_message(data, decoded)
+    canonical_json_message(data)
+  end
 
-        [PublicProjection.json_message(canonical)]
-
-      {:ok, _decoded} ->
-        [data]
-
-      {:error, _reason} ->
-        []
+  defp canonical_json_message(data) do
+    with {:ok, %{} = decoded} <- Jason.decode(data),
+         {canonical, _decoded} =
+           StreamProtocol.canonicalize_codex_responses_json_message(data, decoded),
+         {:ok, projected, _decoded} <- PublicProjection.json_message_result(canonical) do
+      {:ok, projected}
+    else
+      _invalid -> :error
     end
+  end
+
+  defp project_stream_messages([], "", data, next_buffer) do
+    cond do
+      next_buffer != data ->
+        {[], next_buffer}
+
+      incomplete_sse_prefix?(data) ->
+        {[], next_buffer}
+
+      true ->
+        case direct_json_message(data) do
+          {:ok, message} -> {[message], ""}
+          :error -> fail_stream()
+        end
+    end
+  end
+
+  defp project_stream_messages([], _buffer, _data, next_buffer), do: {[], next_buffer}
+
+  defp project_stream_messages(blocks, _buffer, _data, next_buffer) do
+    case messages_from_sse_blocks(blocks) do
+      {:ok, messages} -> {messages, next_buffer}
+      :error -> fail_stream()
+    end
+  end
+
+  defp incomplete_sse_prefix?(data) do
+    trimmed = String.trim_leading(data)
+
+    String.starts_with?(trimmed, ["data:", "event:", "id:", "retry:", ":"])
+  end
+
+  defp fail_stream, do: {[local_failure_frame()], @failed_stream_buffer}
+
+  defp local_failure_frame do
+    {:error, frame} = PublicProjection.json_message_result("")
+    frame
   end
 
   defp coerce_response_payload(
@@ -296,12 +361,18 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
          "/backend-api/codex/responses",
          payload
        ) do
-    case PayloadNormalizer.backend_client_metadata_turn_state(payload) do
-      nil ->
+    case request_options.continuity do
+      %{resolved_turn_state_assignment_id: assignment_id} when is_binary(assignment_id) ->
         request_options
 
-      turn_state ->
-        RequestOptions.put_continuity(request_options, accepted_turn_state: turn_state)
+      _unresolved ->
+        case PayloadNormalizer.backend_client_metadata_turn_state(payload) do
+          nil ->
+            request_options
+
+          turn_state ->
+            RequestOptions.put_continuity(request_options, accepted_turn_state: turn_state)
+        end
     end
   end
 
@@ -332,12 +403,43 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   defp continuity_ordered_payload(_payload), do: false
 
-  defp public_websocket_message(%{} = message) do
-    message |> PublicProjection.gateway_body() |> Jason.encode!()
+  defp public_websocket_messages(messages) when is_list(messages) do
+    Enum.reduce_while(messages, {:ok, []}, fn message, {:ok, frames} ->
+      case public_websocket_message(message) do
+        {:ok, frame} -> {:cont, {:ok, [frame | frames]}}
+        {:error, frame} -> {:halt, {:error, frame}}
+      end
+    end)
+    |> case do
+      {:ok, frames} -> {:ok, Enum.reverse(frames)}
+      {:error, frame} -> {:error, frame}
+    end
   end
 
-  defp public_websocket_message(message) when is_binary(message),
-    do: PublicProjection.json_message(message)
+  defp public_websocket_messages(_messages), do: {:error, local_failure_frame()}
 
-  defp public_websocket_message(message), do: Jason.encode!(message)
+  defp public_websocket_message(%{} = message) do
+    case PublicProjection.gateway_body_result(message) do
+      {:ok, projected} -> {:ok, Jason.encode!(projected)}
+      :error -> {:error, local_failure_frame()}
+    end
+  end
+
+  defp public_websocket_message(message) when is_binary(message) do
+    case PublicProjection.json_message_result(message) do
+      {:ok, frame, _projected} -> {:ok, frame}
+      {:error, frame} -> {:error, frame}
+    end
+  end
+
+  defp public_websocket_message(_message), do: {:error, local_failure_frame()}
+
+  defp websocket_stream_error do
+    {:error,
+     %{
+       status: 502,
+       code: "websocket_stream_error",
+       message: "websocket stream failed"
+     }}
+  end
 end

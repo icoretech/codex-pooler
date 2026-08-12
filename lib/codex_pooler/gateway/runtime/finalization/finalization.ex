@@ -448,7 +448,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     case AttemptSettlement.finalize_failure(reserved.request, attempt, attrs) do
       {:ok, _finalized} ->
         headers =
-          Metadata.response_headers(response, RouteClass.streaming?(payload), request_options)
+          Metadata.response_headers(
+            response,
+            RouteClass.streaming?(payload),
+            request_options,
+            context
+          )
 
         result = failure_result(status, headers, body, request_options, opts)
 
@@ -554,7 +559,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         {:ok,
          %{
            status: response.status,
-           headers: Metadata.response_headers(response, false, request_options),
+           headers: Metadata.response_headers(response, false, request_options, context),
            raw_body: body
          }}
 

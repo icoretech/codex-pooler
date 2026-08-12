@@ -3,7 +3,9 @@ defmodule CodexPoolerWeb.Runtime.BackendFileControllerTest do
 
   import Ecto.Query
   import CodexPooler.PoolerFixtures
-  import CodexPoolerWeb.Runtime.BackendCodexTestSupport, only: [auth: 2, start_upstream: 1]
+
+  import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
+    only: [auth: 2, start_public_endpoint!: 0, start_upstream: 1]
 
   alias CodexPooler.Accounting.Request
   alias CodexPooler.FakeUpstream
@@ -66,7 +68,9 @@ defmodule CodexPoolerWeb.Runtime.BackendFileControllerTest do
              "upload_url" => upload_url
            } = json_response(conn, 200)
 
-    assert upload_url =~ "fake-upload.invalid"
+    assert upload_url =~ "/file-capabilities/"
+    refute upload_url =~ "fake-upload.invalid"
+    refute upload_url =~ "sig=fake-upload"
 
     file = Repo.get_by!(FileRecord, file_id: file_id)
     assert file.pool_id == setup.pool.id
@@ -92,7 +96,9 @@ defmodule CodexPoolerWeb.Runtime.BackendFileControllerTest do
              "mime_type" => "text/plain"
            } = json_response(conn, 200)
 
-    assert download_url =~ "fake-download.invalid"
+    assert download_url =~ "/file-capabilities/"
+    refute download_url =~ "fake-download.invalid"
+    refute download_url =~ "sig=fake-download"
 
     finalized_file = Repo.get!(FileRecord, file.id)
     assert finalized_file.status == "uploaded"
@@ -320,7 +326,8 @@ defmodule CodexPoolerWeb.Runtime.BackendFileControllerTest do
     assert %{"file_id" => first_file_id, "upload_url" => first_upload_url} =
              json_response(first_conn, 200)
 
-    assert first_upload_url =~ "fake-upload.invalid"
+    assert first_upload_url =~ "/file-capabilities/cpfc_"
+    refute first_upload_url =~ "fake-upload.invalid"
 
     second_upstream =
       start_upstream(
@@ -345,7 +352,8 @@ defmodule CodexPoolerWeb.Runtime.BackendFileControllerTest do
     assert %{"file_id" => second_file_id, "upload_url" => second_upload_url} =
              json_response(second_conn, 200)
 
-    assert second_upload_url =~ "fake-upload.invalid"
+    assert second_upload_url =~ "/file-capabilities/cpfc_"
+    refute second_upload_url =~ "fake-upload.invalid"
     refute second_file_id == first_file_id
 
     assert Repo.aggregate(
@@ -442,5 +450,201 @@ defmodule CodexPoolerWeb.Runtime.BackendFileControllerTest do
     assert Enum.all?(finalize_requests, &is_nil(&1.idempotency_key))
     refute inspect(Enum.map(finalize_requests, & &1.request_metadata)) =~ idempotency_key
     refute inspect(Enum.map(finalize_requests, & &1.request_metadata)) =~ "finalize body"
+  end
+
+  test "router-level capabilities proxy exact bytes without exposing or accepting scoped secrets" do
+    setup = active_api_key_fixture()
+    other_key = active_api_key_fixture(setup.pool)
+    other_pool_key = active_api_key_fixture()
+    file_id = "file_native_capability_#{System.unique_integer([:positive])}"
+    upload_bytes = Jason.encode!("1234567890")
+    download_bytes = "return-bytes"
+    assert byte_size(upload_bytes) == 12
+    assert byte_size(download_bytes) == 12
+
+    provider_upload =
+      "https://provider-upload.example.invalid/upload/#{file_id}?sig=UPLOAD_SIGNATURE_SENTINEL"
+
+    provider_download =
+      "https://provider-download.example.invalid/download/#{file_id}?sig=DOWNLOAD_SIGNATURE_SENTINEL"
+
+    provider_sentinel = "acct_provider_private_file_sentinel"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.file_protocol_success(
+          file_id: file_id,
+          file_name: "native.txt",
+          mime_type: "text/plain",
+          upload_url: provider_upload,
+          download_url: provider_download,
+          create_extra: %{"provider_account" => provider_sentinel},
+          finalize_extra: %{"provider_account" => provider_sentinel}
+        )
+      )
+
+    active_upstream_assignment_fixture(setup.pool, %{
+      chatgpt_account_id: "acct_native_capability_assignment",
+      metadata: %{"base_url" => FakeUpstream.url(upstream)},
+      access_token: "native-capability-upstream-token"
+    })
+
+    stub = {__MODULE__, :native_capability, file_id}
+    test_pid = self()
+
+    Req.Test.stub(stub, fn conn ->
+      case {conn.method, conn.request_path} do
+        {"PUT", "/upload/" <> _file_id} ->
+          send(test_pid, {:capability_provider_upload, Req.Test.raw_body(conn), conn.req_headers})
+
+          conn
+          |> Plug.Conn.put_status(201)
+          |> Req.Test.text("")
+
+        {"GET", "/download/" <> _file_id} ->
+          send(test_pid, :capability_provider_download)
+
+          conn
+          |> Plug.Conn.put_resp_content_type("application/octet-stream")
+          |> Plug.Conn.put_resp_header(
+            "content-length",
+            Integer.to_string(byte_size(download_bytes))
+          )
+          |> Req.Test.text(download_bytes)
+
+        _unexpected ->
+          conn |> Plug.Conn.put_status(404) |> Req.Test.text("")
+      end
+    end)
+
+    bridge_config = Application.get_env(:codex_pooler, FileBridge, [])
+
+    Application.put_env(
+      :codex_pooler,
+      FileBridge,
+      Keyword.merge(bridge_config,
+        upload_req_options: [plug: {Req.Test, stub}],
+        download_req_options: [plug: {Req.Test, stub}]
+      )
+    )
+
+    port = start_public_endpoint!()
+    origin = "http://127.0.0.1:#{port}"
+
+    create =
+      Req.post!(origin <> "/backend-api/files",
+        headers: [{"authorization", setup.authorization}],
+        json: %{"file_name" => "native.txt", "file_size" => 12},
+        retry: false
+      )
+
+    assert create.status == 200
+    assert %{"file_id" => ^file_id, "upload_url" => upload_url} = create.body
+    assert String.starts_with?(upload_url, origin <> "/file-capabilities/cpfc_")
+
+    public_create = inspect(create.body)
+    refute public_create =~ "provider-upload"
+    refute public_create =~ "UPLOAD_SIGNATURE_SENTINEL"
+    refute public_create =~ provider_sentinel
+
+    for denied_key <- [other_key, other_pool_key] do
+      wrong_scope =
+        Req.put!(upload_url,
+          headers: [
+            {"authorization", denied_key.authorization},
+            {"content-type", "text/plain"}
+          ],
+          body: upload_bytes,
+          retry: false
+        )
+
+      assert wrong_scope.status == 404
+    end
+
+    refute_received {:capability_provider_upload, _body, _headers}
+
+    last = String.last(upload_url)
+    tampered = String.replace_suffix(upload_url, last, if(last == "x", do: "y", else: "x"))
+    assert Req.put!(tampered, body: upload_bytes, retry: false).status == 404
+    refute_received {:capability_provider_upload, _body, _headers}
+
+    assert Req.get!(upload_url, retry: false).status == 404
+    refute_received :capability_provider_download
+
+    assert Req.put!(upload_url, body: upload_bytes <> "x", retry: false).status == 413
+    assert Req.put!(upload_url, body: "short", retry: false).status == 400
+    refute_received {:capability_provider_upload, _body, _headers}
+
+    encoded =
+      Req.put!(upload_url,
+        headers: [
+          {"content-type", "application/octet-stream"},
+          {"content-encoding", "gzip"}
+        ],
+        body: upload_bytes,
+        retry: false
+      )
+
+    assert encoded.status == 415
+    assert encoded.body["error"]["code"] == "unsupported_content_encoding"
+    refute_received {:capability_provider_upload, _body, _headers}
+
+    uploaded =
+      Req.put!(upload_url,
+        headers: [{"content-type", "application/json"}],
+        body: upload_bytes,
+        retry: false
+      )
+
+    assert uploaded.status == 201
+    assert_receive {:capability_provider_upload, ^upload_bytes, upload_headers}, 1_000
+    assert {"content-type", "application/json"} in upload_headers
+
+    finalized =
+      Req.post!(origin <> "/backend-api/files/#{file_id}/uploaded",
+        headers: [{"authorization", setup.authorization}],
+        json: %{},
+        retry: false
+      )
+
+    assert finalized.status == 200
+    assert %{"status" => "success", "download_url" => download_url} = finalized.body
+    assert String.starts_with?(download_url, origin <> "/file-capabilities/cpfc_")
+
+    public_finalize = inspect(finalized.body)
+    refute public_finalize =~ "provider-download"
+    refute public_finalize =~ "DOWNLOAD_SIGNATURE_SENTINEL"
+    refute public_finalize =~ provider_sentinel
+
+    for denied_key <- [other_key, other_pool_key] do
+      denied_download =
+        Req.get!(download_url,
+          headers: [{"authorization", denied_key.authorization}],
+          retry: false
+        )
+
+      assert denied_download.status == 404
+    end
+
+    refute_received :capability_provider_download
+
+    downloaded = Req.get!(download_url, retry: false)
+    assert downloaded.status == 200
+    assert downloaded.body == download_bytes
+    assert_receive :capability_provider_download, 1_000
+
+    stored = inspect(Repo.all(from record in FileRecord, where: record.file_id == ^file_id))
+    refute stored =~ provider_upload
+    refute stored =~ provider_download
+    refute stored =~ upload_bytes
+    refute stored =~ download_bytes
+
+    requests =
+      inspect(Repo.all(from request in Request, where: request.pool_id == ^setup.pool.id))
+
+    refute requests =~ provider_upload
+    refute requests =~ provider_download
+    refute requests =~ upload_bytes
+    refute requests =~ download_bytes
   end
 end

@@ -48,6 +48,7 @@ defmodule CodexPoolerWeb.RouteSurfaceTest do
                {:get, "/backend-api/wham/usage"},
                {:get, "/bootstrap"},
                {:get, "/bootstrap/status"},
+               {:get, "/file-capabilities/:capability"},
                {:get, "/healthz"},
                {:get, "/login"},
                {:get, "/mcp"},
@@ -109,7 +110,8 @@ defmodule CodexPoolerWeb.RouteSurfaceTest do
                {:post, "/v1/moderations"},
                {:post, "/v1/responses"},
                {:post, "/v1/responses/:response_id/cancel"},
-               {:post, "/v1/responses/compact"}
+               {:post, "/v1/responses/compact"},
+               {:put, "/file-capabilities/:capability"}
              ]
 
     for route <- pruned_runtime_routes() do

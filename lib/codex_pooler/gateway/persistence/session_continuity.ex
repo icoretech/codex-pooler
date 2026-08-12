@@ -49,7 +49,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     owner = owner_instance_id(opts)
 
     Repo.transaction(fn ->
-      session = upsert_session_for_start!(auth, opts, session_key, owner, now)
+      session = start_session_record!(auth, opts, session_key, owner, now)
       lease = OwnerLease.acquire!(session, auth, opts, owner, now)
       Aliases.register!(session, auth, opts, now)
       OwnerLease.persist_session!(session, lease, now)
@@ -205,6 +205,42 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
         lock: "FOR UPDATE"
     )
   end
+
+  defp start_session_record!(auth, opts, session_key, owner, now) do
+    case opts.continuity.resolved_turn_state_session_id do
+      nil ->
+        upsert_session_for_start!(auth, opts, session_key, owner, now)
+
+      session_id when is_binary(session_id) ->
+        case resolved_turn_state_session_for_update(
+               auth,
+               session_id,
+               opts.continuity.resolved_turn_state_assignment_id
+             ) do
+          %CodexSession{} = session -> update_existing_session!(session, auth, opts, owner, now)
+          nil -> Repo.rollback(:session_not_found)
+        end
+
+      _invalid ->
+        Repo.rollback(:session_not_found)
+    end
+  end
+
+  defp resolved_turn_state_session_for_update(auth, session_id, assignment_id)
+       when is_binary(assignment_id) do
+    Repo.one(
+      from session in CodexSession,
+        where:
+          session.id == ^session_id and session.pool_id == ^auth.pool.id and
+            session.api_key_id == ^auth.api_key.id and
+            session.status in ^@session_reconnectable_statuses and
+            (is_nil(session.pool_upstream_assignment_id) or
+               session.pool_upstream_assignment_id == ^assignment_id),
+        lock: "FOR UPDATE"
+    )
+  end
+
+  defp resolved_turn_state_session_for_update(_auth, _session_id, _assignment_id), do: nil
 
   defp upsert_session_for_start!(auth, opts, session_key, owner, now) do
     existing_session = existing_session_for_start!(auth, opts, session_key, now)

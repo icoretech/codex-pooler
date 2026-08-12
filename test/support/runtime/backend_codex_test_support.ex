@@ -1148,6 +1148,71 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     end
   end
 
+  def public_websocket_refute_text!(conn, websocket, ref, timeout_ms) do
+    case dequeue_public_websocket_text(ref) do
+      {:ok, text} ->
+        flunk("received unexpected websocket text frame: #{inspect(text)}")
+
+      :empty ->
+        refute_public_websocket_text_until!(
+          conn,
+          websocket,
+          ref,
+          System.monotonic_time(:millisecond) + timeout_ms,
+          []
+        )
+    end
+  end
+
+  defp refute_public_websocket_text_until!(conn, websocket, ref, deadline, deferred_messages) do
+    remaining_ms = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      message ->
+        case Mint.WebSocket.stream(conn, message) do
+          {:ok, conn, responses} ->
+            case decode_public_websocket_text(websocket, ref, responses) do
+              {:ok, _websocket, text} ->
+                restore_deferred_messages(deferred_messages)
+                flunk("received unexpected websocket text frame: #{inspect(text)}")
+
+              {:cont, websocket} ->
+                refute_public_websocket_text_until!(
+                  conn,
+                  websocket,
+                  ref,
+                  deadline,
+                  deferred_messages
+                )
+            end
+
+          {:error, conn, reason, _responses} ->
+            restore_deferred_messages(deferred_messages)
+            Mint.HTTP.close(conn)
+            flunk("websocket duplicate-frame check failed: #{inspect(reason)}")
+
+          :unknown ->
+            refute_public_websocket_text_until!(
+              conn,
+              websocket,
+              ref,
+              deadline,
+              [message | deferred_messages]
+            )
+        end
+    after
+      remaining_ms ->
+        restore_deferred_messages(deferred_messages)
+        {conn, websocket}
+    end
+  end
+
+  defp restore_deferred_messages(messages) do
+    messages
+    |> Enum.reverse()
+    |> Enum.each(&send(self(), &1))
+  end
+
   def decode_public_websocket_text(websocket, ref, responses) do
     Enum.reduce_while(responses, {:cont, websocket}, fn
       {:data, ^ref, data}, {:cont, websocket} ->

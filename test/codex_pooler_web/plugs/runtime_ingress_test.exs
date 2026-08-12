@@ -96,7 +96,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       assert json_response(usage, 200)["plan_type"] == "api_key"
 
       pruned = post(build_conn(), "/backend-api/codex/thread/goal/get", %{})
-      assert response(pruned, 404) =~ "Not Found"
+      assert json_response(pruned, 401)["error"]["code"] == "api_key_missing"
 
       health = get(build_conn(), "/healthz")
       assert json_response(health, 200)["status"] == "ok"
@@ -229,15 +229,25 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       end
     end
 
-    test "unsafe runtime candidates return only the fixed invalid-path envelope", %{conn: conn} do
+    test "unsafe runtime candidates authenticate before returning the fixed invalid-path envelope",
+         %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{firewall_allowlist: ["203.0.113.10"]})
+      setup = active_api_key_fixture()
 
       for path <- [
             "/v1%2Fresponses",
             "/backend-api%5Cfiles",
             "/api/codex%00/usage"
           ] do
-        conn = conn |> recycle() |> remote_ip({198, 51, 100, 20}) |> get(path)
+        unauthenticated = conn |> recycle() |> remote_ip({203, 0, 113, 10}) |> get(path)
+        assert json_response(unauthenticated, 401)["error"]["code"] == "api_key_missing"
+
+        conn =
+          conn
+          |> recycle()
+          |> auth(setup)
+          |> remote_ip({203, 0, 113, 10})
+          |> get(path)
 
         assert json_response(conn, 400) == %{
                  "error" => %{
@@ -1045,7 +1055,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       end
     end
 
-    test "pruned backend helper routes preserve the fixed absent response without ingress auth",
+    test "pruned backend helper routes authenticate before the fixed absent response",
          %{
            conn: conn
          } do
@@ -1064,9 +1074,20 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
              "v=0\r\ns=codex-pooler-test\r\n"},
             {"POST", "/backend-api/codex/safety/arc", "application/json", "{}"}
           ] do
+        unauthenticated =
+          conn
+          |> recycle()
+          |> dispatch_absent_backend_helper(method, path, content_type, body)
+
+        assert json_response(unauthenticated, 401)["error"]["code"] == "api_key_missing"
+        assert %Plug.Conn.Unfetched{aspect: :body_params} = unauthenticated.body_params
+
+        setup = active_api_key_fixture()
+
         conn =
           conn
           |> recycle()
+          |> auth(setup)
           |> dispatch_absent_backend_helper(method, path, content_type, body)
 
         assert get_resp_header(conn, "content-type") == ["text/html; charset=utf-8"]
@@ -1084,7 +1105,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
         |> put_req_header("content-type", "application/json")
         |> post("/backend-api/codex/thread/goal/set", ~s({"goal":))
 
-      assert response(conn, 404) =~ "Not Found"
+      assert json_response(conn, 401)["error"]["code"] == "api_key_missing"
+      assert %Plug.Conn.Unfetched{aspect: :body_params} = conn.body_params
       assert Repo.aggregate(Request, :count) == 0
     end
 
@@ -1098,7 +1120,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
         |> put_req_header("content-type", "application/json")
         |> post("/api/codex/rate-limit-reset-credits/consume", ~s({"redeem_request_id":))
 
-      assert response(conn, 404) =~ "Not Found"
+      assert json_response(conn, 401)["error"]["code"] == "api_key_missing"
+      assert %Plug.Conn.Unfetched{aspect: :body_params} = conn.body_params
       assert Repo.aggregate(Request, :count) == 0
     end
   end
@@ -1188,7 +1211,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
     test "decodes gzip JSON bodies within configured limits", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{})
-      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "gzip_ok"}))
+      upstream = start_upstream(FakeUpstream.json_response(gateway_response("gzip_ok")))
       setup = gateway_setup(upstream)
 
       body = gateway_body(setup)
@@ -1209,7 +1232,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
     test "accepts uncompressed JSON when compressed encodings are disabled", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{decompression_algorithms: []})
-      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "plain_json_ok"}))
+      upstream = start_upstream(FakeUpstream.json_response(gateway_response("plain_json_ok")))
       setup = gateway_setup(upstream)
 
       conn =
@@ -1253,7 +1276,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
     test "decodes deflate JSON bodies within configured limits", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{})
-      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "deflate_ok"}))
+      upstream = start_upstream(FakeUpstream.json_response(gateway_response("deflate_ok")))
       setup = gateway_setup(upstream)
 
       body = gateway_body(setup)
@@ -1270,7 +1293,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
     test "decodes zstd JSON bodies within configured limits", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{})
-      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "zstd_ok"}))
+      upstream = start_upstream(FakeUpstream.json_response(gateway_response("zstd_ok")))
       setup = gateway_setup(upstream)
 
       body = gateway_body(setup)
@@ -1291,7 +1314,9 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
         max_decompression_ratio: 1_000_000
       })
 
-      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "zstd_multi_output_ok"}))
+      upstream =
+        start_upstream(FakeUpstream.json_response(gateway_response("zstd_multi_output_ok")))
+
       setup = gateway_setup(upstream)
       input = String.duplicate("a", 500_000)
       body = gateway_body(setup) |> Map.put("input", input)
@@ -1315,7 +1340,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
         max_decompression_ratio: 100
       })
 
-      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "zstd_chunked_ok"}))
+      upstream = start_upstream(FakeUpstream.json_response(gateway_response("zstd_chunked_ok")))
       setup = gateway_setup(upstream)
       input = deterministic_input(450_000)
       body = gateway_body(setup) |> Map.put("input", input)
@@ -1339,7 +1364,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
         max_decompression_ratio: 1_000_000
       })
 
-      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "zstd_one_mib_ok"}))
+      upstream = start_upstream(FakeUpstream.json_response(gateway_response("zstd_one_mib_ok")))
       setup = gateway_setup(upstream)
       body = fixed_size_gateway_body(setup, 1_048_576)
       encoded = Jason.encode!(body)
@@ -1388,7 +1413,10 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
     test "rejects unsupported content provenance checks before gzip decompression", %{conn: conn} do
       setup_runtime_ingress(%OperationalSettings{})
-      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+
+      upstream =
+        start_upstream(FakeUpstream.json_response(gateway_response("should_not_dispatch")))
+
       setup = upstream |> gateway_setup() |> disabled_image_generation_setup()
 
       conn =
@@ -1480,7 +1508,10 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
                "decompressed_request_too_large"
 
       setup_runtime_ingress(%OperationalSettings{max_decompressed_body_bytes: 4_096})
-      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "gzip_updated_limit_ok"}))
+
+      upstream =
+        start_upstream(FakeUpstream.json_response(gateway_response("gzip_updated_limit_ok")))
+
       gateway_setup = gateway_setup(upstream)
 
       accepted_conn =
@@ -1505,7 +1536,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
         max_decompression_ratio: 100
       })
 
-      upstream = start_upstream(FakeUpstream.json_response(%{"id" => "gzip_chunked_ok"}))
+      upstream = start_upstream(FakeUpstream.json_response(gateway_response("gzip_chunked_ok")))
       setup = gateway_setup(upstream)
       large_input = :crypto.strong_rand_bytes(1_200_000) |> Base.encode16(case: :lower)
       body = gateway_body(setup) |> Map.put("input", large_input)
@@ -1813,6 +1844,10 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
     }
   end
 
+  defp gateway_response(id) do
+    %{"id" => id, "object" => "response", "model" => "private-fixture", "output" => []}
+  end
+
   defp fixed_size_gateway_body(setup, target_bytes) do
     body = gateway_body(setup) |> Map.put("input", "")
     padding_bytes = target_bytes - byte_size(Jason.encode!(body))
@@ -1957,7 +1992,6 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   end
 
   defp assert_pruned_helper_side_effects_absent(conn, upstream) do
-    refute conn.private[:runtime_api_auth]
     assert %Plug.Conn.Unfetched{aspect: :body_params} = conn.body_params
     assert FakeUpstream.requests(upstream) == []
     assert Repo.aggregate(Request, :count) == 0

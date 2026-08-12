@@ -150,6 +150,8 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
       client_request_id: client_request_id(conn),
       idempotency_key: get_req_header(conn, "idempotency-key") |> List.first(),
       accepted_turn_state: accepted_turn_state(conn),
+      resolved_turn_state_assignment_id: resolved_turn_state_assignment_id(conn),
+      resolved_turn_state_session_id: resolved_turn_state_session_id(conn),
       previous_response_id: previous_response_id(conn),
       session_header: session_header,
       session_header_source: session_header_source,
@@ -262,17 +264,21 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   def send_gateway_result(conn, %{raw_body: body} = result) do
     conn = put_gateway_headers(conn, result_headers(result))
 
-    case facade_json_body(conn, body) do
+    case facade_json_body(conn, body, result.status) do
       {:ok, projected} -> conn |> put_status(result.status) |> json(projected)
+      :invalid -> send_projection_failure(conn)
       :passthrough -> send_resp(conn, result.status, body)
     end
   end
 
   def send_gateway_result(conn, %{body: body} = result) do
-    conn
-    |> put_gateway_headers(result_headers(result))
-    |> put_status(result.status)
-    |> json(project_gateway_body(conn, body))
+    conn = put_gateway_headers(conn, result_headers(result))
+
+    case project_gateway_body_result(conn, body, result.status) do
+      {:ok, projected} -> conn |> put_status(result.status) |> json(projected)
+      :invalid -> send_projection_failure(conn)
+      :passthrough -> conn |> put_status(result.status) |> json(body)
+    end
   end
 
   @spec send_error(conn(), Contracts.gateway_error() | map()) :: conn()
@@ -290,11 +296,22 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   end
 
   defp forwarded_headers(conn) do
-    Enum.filter(conn.req_headers, fn {name, _value} ->
+    conn.req_headers
+    |> Enum.filter(fn {name, _value} ->
       name == "user-agent" or String.starts_with?(name, "x-openai-") or
         String.starts_with?(name, "x-codex-")
     end)
+    |> Enum.reject(fn {name, _value} ->
+      name == "x-codex-turn-state" and match?(%{runtime_turn_state: %{}}, conn.private)
+    end)
+    |> maybe_put_resolved_turn_state(conn)
   end
+
+  defp maybe_put_resolved_turn_state(headers, %{private: %{runtime_turn_state: resolution}}) do
+    [{"x-codex-turn-state", resolution.upstream} | headers]
+  end
+
+  defp maybe_put_resolved_turn_state(headers, _conn), do: headers
 
   defp facade_api_key(conn) do
     with {:ok, authorization} <- single_header(conn, "authorization"),
@@ -364,11 +381,21 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   end
 
   defp accepted_turn_state(conn) do
-    conn
-    |> get_req_header("x-codex-turn-state")
-    |> List.first()
-    |> blank_to_nil()
+    case conn.private do
+      %{runtime_turn_state: %{public: public}} -> public
+      _private -> conn |> get_req_header("x-codex-turn-state") |> List.first() |> blank_to_nil()
+    end
   end
+
+  defp resolved_turn_state_assignment_id(%{private: %{runtime_turn_state: resolution}}),
+    do: resolution.assignment_id
+
+  defp resolved_turn_state_assignment_id(_conn), do: nil
+
+  defp resolved_turn_state_session_id(%{private: %{runtime_turn_state: resolution}}),
+    do: resolution.session_id
+
+  defp resolved_turn_state_session_id(_conn), do: nil
 
   defp websocket_turn_state(conn), do: accepted_turn_state(conn) || Ecto.UUID.generate()
 
@@ -462,24 +489,70 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
     Enum.reduce(headers, conn, fn {key, value}, conn -> put_resp_header(conn, key, value) end)
   end
 
-  defp facade_json_body(conn, body) when is_binary(body) do
+  defp facade_json_body(conn, body, status) when is_binary(body) do
     if facade_runtime?(conn) do
-      case Jason.decode(body) do
-        {:ok, %{} = decoded} -> {:ok, PublicProjection.gateway_body(decoded)}
-        _invalid -> :passthrough
+      with {:ok, %{} = decoded} <- Jason.decode(body),
+           {:ok, projected} <- project_gateway_body_result(conn, decoded, status) do
+        {:ok, projected}
+      else
+        _invalid when status >= 400 ->
+          {:ok,
+           FacadeError.body(
+             IngressPath.protocol(conn),
+             status,
+             %{code: "upstream_status", message: "upstream request failed"},
+             origin: :untrusted
+           )}
+
+        _invalid ->
+          :invalid
       end
     else
       :passthrough
     end
   end
 
-  defp facade_json_body(_conn, _body), do: :passthrough
+  defp facade_json_body(_conn, _body, _status), do: :passthrough
 
-  defp project_gateway_body(conn, %{} = body) do
-    if facade_runtime?(conn), do: PublicProjection.gateway_body(body), else: body
+  defp project_gateway_body_result(conn, %{} = body, status) do
+    cond do
+      not facade_runtime?(conn) ->
+        {:ok, body}
+
+      IngressPath.protocol(conn) == :runtime_metadata ->
+        {:ok, body}
+
+      status < 400 and IngressPath.protocol(conn) == :ollama ->
+        case PublicProjection.ollama_body_result(conn.request_path, body) do
+          {:ok, projected} -> {:ok, projected}
+          :error -> :invalid
+        end
+
+      status < 400 and conn.request_path == "/backend-api/transcribe" ->
+        case PublicProjection.transcription_body_result(body) do
+          {:ok, projected} -> {:ok, projected}
+          :error -> :invalid
+        end
+
+      true ->
+        case PublicProjection.gateway_body_result(body, status) do
+          {:ok, projected} -> {:ok, projected}
+          :error -> :invalid
+        end
+    end
   end
 
-  defp project_gateway_body(_conn, body), do: body
+  defp project_gateway_body_result(conn, _body, _status) do
+    if facade_runtime?(conn), do: :invalid, else: :passthrough
+  end
+
+  defp send_projection_failure(conn) do
+    send_error(conn, %{
+      status: 502,
+      code: "server_error",
+      message: "gemma3 request failed"
+    })
+  end
 
   defp error_body(conn, status, code, message, error) do
     if facade_runtime?(conn) do

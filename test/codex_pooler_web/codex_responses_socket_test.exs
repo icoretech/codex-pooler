@@ -178,7 +178,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   end
 
   @tag :task_1_pin
-  test "PIN-P03 backend GET websocket preserves done and legacy JSON frame bytes" do
+  test "PIN-P03 backend GET websocket projects done and legacy JSON frames" do
     task_pid = self()
 
     state = %{
@@ -189,15 +189,19 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     }
 
     frames = [
-      ~s({"type":"response.done","response":{"id":"resp_pin_backend_get_done"}}),
-      ~s({ "id" : "resp_pin_backend_get_legacy" })
+      {~s({"type":"response.done","response":{"id":"resp_pin_backend_get_done"}}),
+       %{
+         "type" => "response.done",
+         "response" => %{"id" => "resp_pin_backend_get_done"}
+       }},
+      {~s({ "id" : "resp_pin_backend_get_legacy" }), %{"id" => "resp_pin_backend_get_legacy"}}
     ]
 
-    for frame <- frames do
+    for {frame, expected} <- frames do
       assert {:push, {:text, pushed}, next_state} =
                CodexResponsesSocket.handle_info({:codex_response_chunk, task_pid, frame}, state)
 
-      assert pushed == frame
+      assert Jason.decode!(pushed) == expected
       assert next_state.native_turn_output_task_pids == MapSet.new([task_pid])
 
       assert Map.delete(next_state, :native_turn_output_task_pids) ==
@@ -220,8 +224,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert Jason.decode!(payload) == %{
              "type" => "response.completed",
              "sequence_number" => 0,
-             "response" => Map.put_new(legacy_response, "status", "completed")
+             "response" => %{"id" => "resp_red_public_legacy", "status" => "completed"}
            }
+
+    refute payload =~ "custom"
   end
 
   @tag :task_1_red

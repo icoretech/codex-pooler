@@ -5,6 +5,7 @@ defmodule CodexPooler.Files do
 
   import Ecto.Query
 
+  alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting.Request
 
   alias CodexPooler.Files.{
@@ -18,6 +19,7 @@ defmodule CodexPooler.Files do
   }
 
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Pools
   alias CodexPooler.Repo
 
   @default_file_ttl_seconds 24 * 60 * 60
@@ -315,6 +317,80 @@ defmodule CodexPooler.Files do
       "expires_at" => file.expires_at |> DateTime.to_unix()
     }
   end
+
+  @doc false
+  @spec resolve_capability_file(map(), :upload | :download, DateTime.t()) ::
+          {:ok, %{file: FileRecord.t(), auth: auth()}} | {:error, file_error()}
+  def resolve_capability_file(resolution, kind, now \\ now())
+
+  def resolve_capability_file(
+        %{
+          pool_id: pool_id,
+          api_key_id: api_key_id,
+          file_id: file_id,
+          assignment_id: assignment_id,
+          identity_id: identity_id,
+          byte_size: byte_size
+        },
+        kind,
+        %DateTime{} = now
+      )
+      when kind in [:upload, :download] do
+    file =
+      Repo.one(
+        from file in FileRecord,
+          where:
+            file.pool_id == ^pool_id and file.api_key_id == ^api_key_id and
+              file.file_id == ^file_id and
+              file.pool_upstream_assignment_id == ^assignment_id and
+              file.upstream_identity_id == ^identity_id and file.byte_size == ^byte_size
+      )
+
+    with %FileRecord{} = file <- file,
+         true <- capability_file_state?(file, kind, now),
+         %APIKey{} = api_key <- usable_capability_api_key(api_key_id, pool_id, now),
+         %{status: "active"} = pool <- Pools.get_active_pool(pool_id) do
+      {:ok,
+       %{
+         file: file,
+         auth: %{
+           api_key: api_key,
+           pool: pool,
+           api_key_id: api_key.id,
+           pool_id: pool.id,
+           key_prefix: api_key.key_prefix
+         }
+       }}
+    else
+      _invalid -> {:error, capability_not_found_error()}
+    end
+  end
+
+  def resolve_capability_file(_resolution, _kind, _now),
+    do: {:error, capability_not_found_error()}
+
+  defp capability_file_state?(file, :upload, now),
+    do: FileState.classify(file, now) == :upstream_pending
+
+  defp capability_file_state?(file, :download, now),
+    do: FileState.classify(file, now) == :uploaded
+
+  defp usable_capability_api_key(api_key_id, pool_id, now) do
+    case Repo.get(APIKey, api_key_id) do
+      %APIKey{pool_id: ^pool_id, status: "active", expires_at: nil} = api_key ->
+        api_key
+
+      %APIKey{pool_id: ^pool_id, status: "active", expires_at: expires_at} = api_key
+      when not is_nil(expires_at) ->
+        if DateTime.compare(expires_at, now) == :gt, do: api_key
+
+      _invalid ->
+        nil
+    end
+  end
+
+  defp capability_not_found_error,
+    do: error(404, :invalid_file_capability, "file capability is invalid or expired")
 
   defp create_file_request_opts(opts), do: RequestMetadata.build(opts, "/backend-api/files")
 

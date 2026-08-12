@@ -11,6 +11,16 @@ defmodule CodexPoolerWeb.Plugs.RuntimeJsonParser do
   def init(opts), do: JSON.init(opts)
 
   @impl true
+  def parse(
+        %Plug.Conn{method: "PUT", path_info: ["file-capabilities", _opaque_capability]} = conn,
+        _type,
+        _subtype,
+        _headers,
+        _opts
+      ) do
+    {:next, conn}
+  end
+
   def parse(conn, type, subtype, headers, opts) do
     JSON.parse(conn, type, subtype, headers, opts)
   rescue

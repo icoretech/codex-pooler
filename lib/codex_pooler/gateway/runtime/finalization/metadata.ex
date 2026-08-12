@@ -3,6 +3,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
 
   alias CodexPooler.Gateway.Payloads.DebugPayloadSummary
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Facade.TurnState
+  alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.Streaming.DownstreamStream
   alias CodexPooler.Gateway.Transports.BoundedResponseBody
   alias CodexPooler.Gateway.Transports.RejectionBody
@@ -351,14 +353,21 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   @spec response_headers(Req.Response.t(), boolean()) :: [{String.t(), String.t()}]
   @spec response_headers(Req.Response.t(), boolean(), RequestOptions.t() | nil) ::
           [{String.t(), String.t()}]
-  def response_headers(response, streaming?, request_options \\ nil) do
+  @spec response_headers(
+          Req.Response.t(),
+          boolean(),
+          RequestOptions.t() | nil,
+          SelectedCandidateContext.t() | nil
+        ) :: [{String.t(), String.t()}]
+  def response_headers(response, streaming?, request_options \\ nil, context \\ nil) do
     content_type =
       header(response, "content-type") ||
         if(streaming?, do: "text/event-stream", else: "application/json")
 
     headers = [{"content-type", content_type}]
 
-    headers = maybe_put_backend_turn_state_response_header(headers, response, request_options)
+    headers =
+      maybe_put_backend_turn_state_response_header(headers, response, request_options, context)
 
     if streaming?, do: [{"cache-control", "no-cache"} | headers], else: headers
   end
@@ -487,7 +496,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   @spec maybe_put_backend_turn_state_response_header(
           [{String.t(), String.t()}],
           Req.Response.t(),
-          RequestOptions.t() | nil
+          RequestOptions.t() | nil,
+          SelectedCandidateContext.t() | nil
         ) :: [{String.t(), String.t()}]
   defp maybe_put_backend_turn_state_response_header(
          headers,
@@ -495,17 +505,29 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
          %RequestOptions{
            transport: %{upstream_endpoint: endpoint},
            openai_compatibility: %{source_endpoint: nil, openai_chat_payload: nil}
-         }
+         },
+         %SelectedCandidateContext{} = context
        )
        when endpoint in @backend_turn_state_relay_endpoints do
     case header(response, "x-codex-turn-state") do
-      value when is_binary(value) -> [{"x-codex-turn-state", value} | headers]
-      _value -> headers
+      value when is_binary(value) ->
+        case TurnState.mint_for_context(value, context) do
+          {:ok, public} -> [{"x-codex-turn-state", public} | headers]
+          {:error, :invalid} -> headers
+        end
+
+      _value ->
+        headers
     end
   end
 
-  defp maybe_put_backend_turn_state_response_header(headers, _response, _request_options),
-    do: headers
+  defp maybe_put_backend_turn_state_response_header(
+         headers,
+         _response,
+         _request_options,
+         _context
+       ),
+       do: headers
 
   defp header(%Req.Response{headers: headers}, key) do
     headers

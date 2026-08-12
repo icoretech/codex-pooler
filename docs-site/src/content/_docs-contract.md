@@ -1,6 +1,6 @@
 # Public Docs Contract And Source Map
 
-This underscore-prefixed authoring contract is removed from the built site. It may name implementation facts that public client pages must not reveal.
+This underscore-prefixed authoring contract is removed from the built site. It still follows the repository's public-source rules and names private implementation roles only, never their identifiers.
 
 ## Audience And Scope
 
@@ -10,13 +10,13 @@ Root files in `docs-site/public`, the repository README, examples, screenshots, 
 
 ## Immutable Façade Contract
 
-The implementation constants are:
+The public and private implementation roles are:
 
 - public model: `gemma3`
-- private reasoning target: `gpt-5.6-sol`
+- private reasoning target: a server-owned fixed target
 - private reasoning effort: `max`
-- fixed transcription helper: `gpt-4o-transcribe`
-- fixed image helper: `gpt-image-1`
+- fixed transcription helper: a non-selectable server helper
+- fixed image helper: a non-selectable server helper
 
 Public client-facing material may advertise or configure only `gemma3`. It must not name the private reasoning target, helper identifiers, provider, upstream account, assignment, or private endpoint. It may state that reasoning uses a server-owned fixed target at `max` and that dedicated media endpoints use non-selectable server helpers.
 

@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.FacadeTransportLeakageTest do
   alias CodexPooler.Gateway.Facade.{PublicProjection}
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPoolerWeb.GatewayControllerHelpers
+  alias CodexPoolerWeb.PublicGatewayResult
 
   test "JSON bodies and headers expose only the virtual identity" do
     hidden = facade_sentinels()
@@ -104,6 +105,42 @@ defmodule CodexPoolerWeb.FacadeTransportLeakageTest do
              content
 
     assert_cloaked_json(projected, allow_content: [content])
+  end
+
+  test "malformed and unknown collected responses become local 502 failures" do
+    for result <- [
+          %{status: 200, headers: [], raw_body: "{provider-private-not-json"},
+          %{status: 200, headers: [], body: %{"unknown" => "provider-private"}}
+        ] do
+      conn =
+        Phoenix.ConnTest.build_conn(:post, "/v1/responses")
+        |> GatewayControllerHelpers.send_gateway_result(result)
+
+      assert %{
+               "error" => %{
+                 "code" => "server_error",
+                 "message" => "gemma3 request failed"
+               }
+             } = json_response(conn, 502)
+
+      refute conn.resp_body =~ "provider-private"
+    end
+
+    for raw <- [
+          Jason.encode!(%{"unknown" => "private"}),
+          "{malformed-provider-private",
+          Jason.encode!([%{"provider" => "private"}])
+        ] do
+      conn =
+        Phoenix.ConnTest.build_conn(:post, "/v1/responses")
+        |> PublicGatewayResult.send(
+          {:ok, %{status: 200, headers: [], raw_body: raw}},
+          & &1
+        )
+
+      assert json_response(conn, 502)["error"]["code"] == "server_error"
+      refute conn.resp_body =~ "private"
+    end
   end
 
   defp private_response(hidden, content) do

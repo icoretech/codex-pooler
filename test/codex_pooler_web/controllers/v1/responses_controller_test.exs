@@ -1472,7 +1472,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              json_response(conn, 200)
 
     assert usage["input_tokens"] == 23
-    assert usage["input_tokens_details"] == input_tokens_details
+    assert usage["input_tokens_details"] == %{"cached_tokens" => 11}
     assert usage["output_tokens"] == 29
     assert usage["output_tokens_details"] == output_tokens_details
     assert usage["total_tokens"] == 52
@@ -5723,9 +5723,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       })
 
     assert %{"error" => error} = json_response(conn, 500)
-    assert error["message"] == "upstream request failed"
+    assert error["message"] == "gemma3 request failed"
     assert error["type"] == "server_error"
-    assert error["code"] in ["server_error", "upstream_error"]
+    assert error["code"] == "service_error"
     refute Map.has_key?(error, "param")
     refute conn.resp_body =~ "provider failed"
     refute conn.resp_body =~ "upstream.internal.example"
@@ -7122,7 +7122,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
            } = Enum.find(events, &(&1["event"] == "response.completed"))
 
     assert usage["input_tokens"] == 53
-    assert usage["input_tokens_details"] == input_tokens_details
+    assert usage["input_tokens_details"] == %{"cached_tokens" => 31}
     assert usage["output_tokens"] == 59
     assert usage["output_tokens_details"] == output_tokens_details
     assert usage["total_tokens"] == 112
@@ -7296,23 +7296,12 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     events = public_sse_events(conn.resp_body)
 
-    assert %{
-             "event" => "response.created",
-             "data" => %{
-               "response" => %{
-                 "metadata" => ^moderation_metadata
-               }
-             }
-           } = Enum.find(events, &(&1["event"] == "response.created"))
-
-    assert %{
-             "event" => "response.completed",
-             "data" => %{
-               "response" => %{
-                 "metadata" => ^moderation_metadata
-               }
-             }
-           } = Enum.find(events, &(&1["event"] == "response.completed"))
+    created = Enum.find(events, &(&1["event"] == "response.created"))
+    completed = Enum.find(events, &(&1["event"] == "response.completed"))
+    refute Map.has_key?(created["data"]["response"], "metadata")
+    refute Map.has_key?(completed["data"]["response"], "metadata")
+    refute conn.resp_body =~ "metadata moderation sentinel must not persist"
+    refute conn.resp_body =~ "mod_check_metadata_fixture"
 
     assert conn.resp_body =~ "visible metadata text"
 
@@ -7971,14 +7960,14 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert %{
                "type" => "response.failed",
                "error" => %{
-                 "code" => "service_error",
+                 "code" => "server_error",
                  "message" => "gemma3 request failed"
                },
                "response" => %{
                  "status" => "failed",
                  "model" => "gemma3",
                  "error" => %{
-                   "code" => "service_error",
+                   "code" => "server_error",
                    "message" => "gemma3 request failed"
                  }
                }
@@ -7997,7 +7986,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert request.endpoint == "/v1/responses"
       assert request.transport == "websocket"
       assert request.status == "failed"
-      assert request.last_error_code == "upstream_terminal_failure"
+      assert request.last_error_code == "upstream_stream_error"
 
       assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
       assert attempt.status == "failed"
@@ -8356,9 +8345,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       })
 
     assert %{"error" => error} = json_response(conn, 400)
-    assert error["message"] == "upstream request failed"
-    assert error["type"] == "server_error"
-    assert error["code"] == "upstream_status"
+    assert error["message"] == "Request is invalid"
+    assert error["type"] == "invalid_request_error"
+    assert error["code"] == "invalid_request"
     refute Map.has_key?(error, "param")
     refute conn.resp_body =~ "synthetic startup rejection"
     assert FakeUpstream.count(upstream) == 1

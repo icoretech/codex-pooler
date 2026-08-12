@@ -3,11 +3,16 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
 
   alias CodexPooler.Gateway.OpenAICompatibility.{ChatCompletions, Completions}
   alias CodexPooler.Gateway.Facade.Anthropic.Stream, as: AnthropicStream
+  alias CodexPooler.Gateway.Facade.PublicProjection
   alias CodexPooler.Gateway.Facade.Ollama.Stream, as: OllamaStream
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.Persona
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+
+  @max_codex_iodata_bytes 64 * 1024 * 1024
+  @max_codex_iodata_depth 128
+  @max_codex_iodata_nodes 1_000_000
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses
 
   @type state :: map()
@@ -158,6 +163,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
     end
   end
 
+  def terminal_outcome(%{codex_responses_failure: %{} = failure}),
+    do: {:failed, failure}
+
   def terminal_outcome(_state), do: nil
 
   @spec synthetic_terminal_failure(state(), term()) :: {binary() | nil, state()}
@@ -187,6 +195,17 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
     else
       {nil, state}
     end
+  end
+
+  def synthetic_terminal_failure(
+        %{codex_responses_failure: %{} = _failure, codex_failure_emitted?: true} = state,
+        _reason
+      ),
+      do: {nil, state}
+
+  def synthetic_terminal_failure(%{codex_responses_failure: %{} = _failure} = state, reason) do
+    data = StreamProtocol.synthetic_public_openai_responses_error_sse(reason, 0)
+    {data, Map.put(state, :codex_failure_emitted?, true)}
   end
 
   def synthetic_terminal_failure(%{public_openai_completions: stream_state} = state, _reason) do
@@ -399,39 +418,93 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   defp normalize_public_openai_responses_stream_data(data, state), do: {data, state}
 
   defp normalize_codex_responses_stream_data(data, endpoint, opts, state) when is_binary(data) do
-    buffer = Map.get(state, :codex_responses_sse_buffer, "")
-
-    if buffer == "" and not codex_responses_sse_chunk?(data) do
-      {data, state}
+    if Map.has_key?(state, :codex_responses_failure) do
+      {"", state}
     else
+      buffer = Map.get(state, :codex_responses_sse_buffer, "")
       previous_buffer = buffer
       buffered_size = byte_size(previous_buffer) + byte_size(data)
 
-      {blocks, buffer} =
-        StreamProtocol.complete_sse_blocks(previous_buffer, data, bounded?: true)
+      cond do
+        previous_buffer == "" and not possible_codex_sse_prefix?(data) ->
+          fail_codex_stream(state, "upstream_stream_invalid")
 
-      data =
-        if oversized_incomplete_sse_prefix?(blocks, buffer, buffered_size) do
-          BufferTelemetry.record_oversized_incomplete(
-            "codex_responses_sse",
-            buffered_size,
-            StreamProtocol.max_incomplete_sse_block_bytes(),
-            request_options: opts,
-            endpoint: endpoint
-          )
+        true ->
+          {blocks, buffer} =
+            StreamProtocol.complete_sse_blocks(previous_buffer, data, bounded?: true)
 
-          previous_buffer <> data
-        else
-          blocks
-          |> Enum.map(&StreamProtocol.normalize_codex_responses_sse_block/1)
-          |> IO.iodata_to_binary()
-        end
+          if oversized_incomplete_sse_prefix?(blocks, buffer, buffered_size) do
+            BufferTelemetry.record_oversized_incomplete(
+              "codex_responses_sse",
+              buffered_size,
+              StreamProtocol.max_incomplete_sse_block_bytes(),
+              request_options: opts,
+              endpoint: endpoint
+            )
 
-      {data, Map.put(state, :codex_responses_sse_buffer, buffer)}
+            fail_codex_stream(
+              Map.put(state, :codex_responses_sse_buffer, ""),
+              "upstream_stream_too_large"
+            )
+          else
+            project_codex_sse_blocks(
+              blocks,
+              Map.put(state, :codex_responses_sse_buffer, buffer)
+            )
+          end
+      end
     end
   end
 
-  defp normalize_codex_responses_stream_data(data, _endpoint, _opts, state), do: {data, state}
+  defp normalize_codex_responses_stream_data(data, endpoint, opts, state) when is_list(data) do
+    case bounded_iodata_to_binary(data) do
+      {:ok, binary} -> normalize_codex_responses_stream_data(binary, endpoint, opts, state)
+      :error -> fail_codex_stream(state, "upstream_stream_invalid")
+    end
+  end
+
+  defp normalize_codex_responses_stream_data(_data, _endpoint, _opts, state),
+    do: fail_codex_stream(state, "upstream_stream_invalid")
+
+  defp bounded_iodata_to_binary(data) do
+    case validate_iodata([{data, 0}], 0, 0) do
+      {:ok, _bytes} -> {:ok, IO.iodata_to_binary(data)}
+      :error -> :error
+    end
+  rescue
+    ArgumentError -> :error
+    SystemLimitError -> :error
+  end
+
+  defp validate_iodata([], bytes, _nodes), do: {:ok, bytes}
+
+  defp validate_iodata(_pending, _bytes, nodes) when nodes >= @max_codex_iodata_nodes,
+    do: :error
+
+  defp validate_iodata([{binary, _depth} | rest], bytes, nodes) when is_binary(binary) do
+    next_bytes = bytes + byte_size(binary)
+
+    if next_bytes <= @max_codex_iodata_bytes,
+      do: validate_iodata(rest, next_bytes, nodes + 1),
+      else: :error
+  end
+
+  defp validate_iodata([{byte, _depth} | rest], bytes, nodes)
+       when is_integer(byte) and byte in 0..255 do
+    if bytes < @max_codex_iodata_bytes,
+      do: validate_iodata(rest, bytes + 1, nodes + 1),
+      else: :error
+  end
+
+  defp validate_iodata([{[], _depth} | rest], bytes, nodes),
+    do: validate_iodata(rest, bytes, nodes + 1)
+
+  defp validate_iodata([{[head | tail], depth} | rest], bytes, nodes)
+       when depth < @max_codex_iodata_depth do
+    validate_iodata([{head, depth + 1}, {tail, depth} | rest], bytes, nodes + 1)
+  end
+
+  defp validate_iodata(_pending, _bytes, _nodes), do: :error
 
   defp normalize_endpoint_data("/backend-api/codex/responses", data) when is_binary(data) do
     StreamProtocol.normalize_codex_responses_sse_data(data)
@@ -455,10 +528,51 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
 
   defp public_openai_responses_stream?(_opts), do: false
 
-  defp codex_responses_sse_chunk?(data) when is_binary(data) do
-    String.starts_with?(data, "event: ") or String.starts_with?(data, "data: ") or
-      String.contains?(data, "\nevent: ") or String.contains?(data, "\ndata: ") or
-      String.contains?(data, "\n\n")
+  defp project_codex_sse_blocks(blocks, state) do
+    Enum.reduce_while(blocks, {[], state}, fn block, {projected, state} ->
+      # Validate the source block before normalization. Otherwise a malformed
+      # source record can become a valid-looking local error and erase the
+      # signal needed to latch a terminal stream failure. Once validated, run
+      # the native error canonicalizer and its projector so safe protocol codes
+      # such as stream_incomplete and rate_limit_exceeded retain their meaning.
+      case PublicProjection.sse_block_result(block) do
+        {:ok, _source_projection} ->
+          safe =
+            block
+            |> StreamProtocol.normalize_codex_responses_sse_block()
+            |> IO.iodata_to_binary()
+
+          {:cont, {[safe | projected], state}}
+
+        {:error, _safe_failure} ->
+          {:halt, fail_codex_stream(state, "upstream_stream_invalid")}
+      end
+    end)
+    |> case do
+      {projected, state} when is_list(projected) ->
+        {projected |> Enum.reverse() |> IO.iodata_to_binary(), state}
+
+      {"", state} ->
+        {"", state}
+    end
+  end
+
+  defp fail_codex_stream(state, code) do
+    failure = %{
+      code: code,
+      upstream_code: nil,
+      upstream_error_param: nil,
+      event_type: nil,
+      data_type: nil
+    }
+
+    {"", Map.put(state, :codex_responses_failure, failure)}
+  end
+
+  defp possible_codex_sse_prefix?(data) when is_binary(data) do
+    Enum.any?(["event:", "data:", ":"], fn prefix ->
+      String.starts_with?(data, prefix) or String.starts_with?(prefix, data)
+    end)
   end
 
   defp oversized_incomplete_sse_prefix?([], "", buffered_size),

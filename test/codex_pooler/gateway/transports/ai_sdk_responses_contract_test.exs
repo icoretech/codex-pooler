@@ -151,22 +151,14 @@ defmodule CodexPooler.Gateway.Transports.AISDKResponsesContractTest do
                  "message" => "gemma3 request failed",
                  "type" => "server_error"
                },
-               "incomplete_details" => nil,
                "model" => "gemma3",
                "object" => "response",
                "output" => [],
                "output_text" => "",
-               "instructions" => nil,
-               "metadata" => nil,
                "parallel_tool_calls" => false,
-               "tool_choice" => "auto",
-               "tools" => [],
                "usage" => %{
                  "input_tokens" => 7,
-                 "input_tokens_details" => %{
-                   "cache_write_tokens" => 1,
-                   "cached_tokens" => 2
-                 },
+                 "input_tokens_details" => %{"cached_tokens" => 2},
                  "output_tokens" => 3,
                  "output_tokens_details" => %{"reasoning_tokens" => 2},
                  "total_tokens" => 10

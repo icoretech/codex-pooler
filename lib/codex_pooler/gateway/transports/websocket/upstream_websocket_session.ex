@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   use GenServer
 
+  alias CodexPooler.Gateway.Facade.PublicProjection
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
@@ -906,12 +907,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       {:text, raw_text}, {:continue, state, receive_state} ->
         raw_decoded = decode_text_frame(raw_text)
 
-        {text, decoded} =
-          raw_text
-          |> map_message(raw_decoded, receive_state.message_mapper)
-          |> sanitize_downstream_text()
+        case project_text_frame(raw_text, raw_decoded, receive_state.message_mapper) do
+          {:ok, text, decoded} ->
+            handle_text_frame(state, receive_state, text, raw_decoded, decoded)
 
-        handle_text_frame(state, receive_state, text, raw_decoded, decoded)
+          {:error, safe_text, safe_decoded} ->
+            handle_invalid_text_frame(state, receive_state, safe_text, safe_decoded)
+        end
 
       {:ping, payload}, {:continue, state, receive_state} ->
         case send_frame(state, {:pong, payload}) do
@@ -943,6 +945,72 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         receive_state = %{receive_state | termination_source: :unexpected_binary_frame}
         {:halt, {:failure, state, receive_state, :unexpected_upstream_websocket_binary}}
     end)
+  end
+
+  defp project_text_frame(raw_text, raw_decoded, mapper) when is_function(mapper, 1) do
+    if mapper == (&StreamProtocol.canonicalize_native_codex_responses_json_message/1) do
+      case StreamProtocol.canonicalize_native_codex_responses_json_message_result(raw_text) do
+        {:ok, text, decoded} -> {:ok, text, decoded}
+        {:error, safe_text} -> {:error, safe_text, decode_text_frame(safe_text)}
+      end
+    else
+      project_mapped_text_frame(raw_text, raw_decoded, mapper)
+    end
+  end
+
+  defp project_text_frame(raw_text, raw_decoded, mapper) do
+    project_mapped_text_frame(raw_text, raw_decoded, mapper)
+  end
+
+  defp project_mapped_text_frame(raw_text, %{} = raw_decoded, mapper) do
+    # Source validation happens before any protocol-specific canonicalization.
+    # The marker is deliberately out-of-band: no upstream field can make a
+    # frame trusted, while the exact response.failed canonicalizer may safely
+    # discard content-bearing failure payloads that the general projector
+    # rejects.
+    case PublicProjection.websocket_source_result(raw_decoded) do
+      {:ok, _trusted_projection} ->
+        {text, decoded} =
+          raw_text
+          |> map_message(raw_decoded, mapper)
+          |> sanitize_downstream_text()
+
+        {:ok, text, decoded}
+
+      :error ->
+        invalid_text_frame()
+    end
+  end
+
+  defp project_mapped_text_frame(_raw_text, _raw_decoded, _mapper),
+    do: invalid_text_frame()
+
+  defp invalid_text_frame do
+    {:error, safe_text} =
+      PublicProjection.json_message_result("")
+
+    {:error, safe_text, decode_text_frame(safe_text)}
+  end
+
+  defp handle_invalid_text_frame(state, %ReceiveState{} = receive_state, text, decoded) do
+    terminal_discriminator = TerminalDiscriminator.classify(decoded)
+
+    receive_state =
+      receive_state
+      |> increment_text_frame_count()
+      |> append_receive_body(text)
+      |> put_terminal_discriminator(terminal_discriminator)
+      |> Map.put(:termination_source, :invalid_upstream_websocket_text_frame)
+
+    observe_frame(receive_state, text, decoded)
+    write_frame(receive_state.writer, text, terminal_discriminator)
+
+    receive_state =
+      receive_state
+      |> maybe_mark_downstream_output_started(decoded)
+      |> mark_terminal_seen()
+
+    {:halt, {:failure, state, receive_state, :invalid_upstream_websocket_stream_data}}
   end
 
   defp append_receive_body(%ReceiveState{body: body} = receive_state, text) do
@@ -1259,11 +1327,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         mapped = mapper.(text)
         {mapped, if(mapped == text, do: decoded, else: decode_text_frame(mapped))}
     end
-  end
-
-  defp map_message(text, decoded, mapper) when is_function(mapper, 1) do
-    mapped = mapper.(text)
-    {mapped, if(mapped == text, do: decoded, else: decode_text_frame(mapped))}
   end
 
   defp map_message(text, decoded, _mapper), do: {text, decoded}

@@ -119,6 +119,39 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
       assert error.message == "websocket stream failed"
       refute inspect(error) =~ "sensitive transport detail"
     end
+
+    test "emits a safe local failure and settles malformed or unknown websocket results as failed" do
+      for result <- [
+            %{raw_body: "{malformed-provider-account-private-model-sentinel"},
+            %{body: %{"unknown_envelope" => "provider-account-private-model-sentinel"}}
+          ] do
+        assert {:error,
+                %{status: 502, code: "websocket_stream_error", message: "websocket stream failed"}} =
+                 WebsocketCodec.deliver_result(result, fn frame ->
+                   send(self(), {:safe_failure_frame, frame})
+                 end)
+
+        assert_receive {:safe_failure_frame, frame}
+        decoded = Jason.decode!(frame)
+        assert decoded["type"] == "error"
+        assert decoded["code"] == "server_error"
+        refute frame =~ "provider-account-private-model-sentinel"
+      end
+    end
+
+    test "never serializes non-object websocket messages from an upstream result" do
+      sentinel = "provider-account-private-model-sentinel"
+
+      assert {:error,
+              %{status: 502, code: "websocket_stream_error", message: "websocket stream failed"}} =
+               WebsocketCodec.deliver_result(%{websocket_messages: [[sentinel]]}, fn frame ->
+                 send(self(), {:safe_non_object_frame, frame})
+               end)
+
+      assert_receive {:safe_non_object_frame, frame}
+      assert %{"type" => "error", "code" => "server_error"} = Jason.decode!(frame)
+      refute frame =~ sentinel
+    end
   end
 
   describe "stream_messages/3" do
@@ -141,7 +174,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
       refute Process.get({:websocket_sse_buffer, request_id})
     end
 
-    test "preserves safety-buffering metadata from upstream SSE frames" do
+    test "drops undocumented safety-buffering metadata while preserving the content delta" do
       request_id = "websocket-safety-buffering"
 
       sse =
@@ -160,16 +193,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
 
       assert {[message], ""} = WebsocketCodec.stream_messages(request_id, sse, "")
 
-      assert %{
-               "type" => "response.output_text.delta",
-               "safety_buffering" => safety_buffering
-             } = Jason.decode!(message)
+      assert %{"type" => "response.output_text.delta", "delta" => content} =
+               decoded = Jason.decode!(message)
 
-      assert safety_buffering == %{
-               "model" => "safety-buffering-model-sentinel",
-               "use_cases" => ["cyber"],
-               "reasons" => ["user-risk-sentinel"]
-             }
+      assert content == "visible synthetic safety-buffered text"
+      refute Map.has_key?(decoded, "safety_buffering")
+      refute message =~ "safety-buffering-model-sentinel"
+      refute message =~ "user-risk-sentinel"
     end
 
     test "canonicalizes a decoded SSE terminal identically to a direct JSON message" do
@@ -184,19 +214,91 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
       assert {[message], ""} =
                WebsocketCodec.stream_messages(request_id, "data: #{frame}\n\n", "")
 
-      assert {[direct_message], ^frame} = WebsocketCodec.stream_messages(request_id, frame, "")
+      assert {[direct_message], ""} = WebsocketCodec.stream_messages(request_id, frame, "")
       assert message == direct_message
 
       assert %{"type" => "response.failed", "error" => %{"code" => "stream_incomplete"}} =
                Jason.decode!(message)
     end
 
-    test "drops oversized incomplete SSE buffers instead of retaining them" do
+    test "fails closed once for scalar, malformed, and unknown complete SSE data" do
+      sentinel = "provider-account-private-model-sentinel"
+
+      invalid_blocks = [
+        "data: #{Jason.encode!([sentinel])}\n\n",
+        "data: {malformed-#{sentinel}\n\n",
+        "data: #{Jason.encode!(%{"unknown_envelope" => sentinel})}\n\n"
+      ]
+
+      for {block, index} <- Enum.with_index(invalid_blocks) do
+        request_id = "websocket-invalid-sse-#{index}"
+
+        assert {[failure], failed_buffer} =
+                 WebsocketCodec.stream_messages(request_id, block, "")
+
+        assert failed_buffer != ""
+        assert %{"type" => "error", "code" => "server_error"} = Jason.decode!(failure)
+        refute failure =~ sentinel
+
+        valid_followup =
+          "data: " <>
+            Jason.encode!(%{
+              "type" => "response.output_text.delta",
+              "delta" => "must not be emitted"
+            }) <>
+            "\n\n"
+
+        assert {[], ^failed_buffer} =
+                 WebsocketCodec.stream_messages(request_id, valid_followup, failed_buffer)
+      end
+    end
+
+    test "fails closed once for scalar direct JSON while retaining valid control SSE blocks" do
+      request_id = "websocket-scalar-direct-json"
+      sentinel = "provider-account-private-model-sentinel"
+
+      assert {[failure], failed_buffer} =
+               WebsocketCodec.stream_messages(request_id, Jason.encode!(sentinel), "")
+
+      assert %{"type" => "error", "code" => "server_error"} = Jason.decode!(failure)
+      refute failure =~ sentinel
+
+      assert {[], ^failed_buffer} =
+               WebsocketCodec.stream_messages(
+                 request_id,
+                 Jason.encode!(%{"type" => "response.completed", "response" => %{}}),
+                 failed_buffer
+               )
+
+      assert {[], ""} =
+               WebsocketCodec.stream_messages("websocket-comment", ": keepalive\n\n", "")
+
+      assert {[], ""} =
+               WebsocketCodec.stream_messages("websocket-done", "data: [DONE]\n\n", "")
+    end
+
+    test "fails closed and latches oversized incomplete SSE buffers" do
       attach_stream_buffer_telemetry()
       request_id = "websocket-buffer-oversized"
       oversized = String.duplicate("data: unavailable-upstream-prefix", 260_000)
 
-      assert {[], ""} = WebsocketCodec.stream_messages(request_id, oversized, "")
+      assert {[failure], failed_buffer} =
+               WebsocketCodec.stream_messages(request_id, oversized, "")
+
+      assert failed_buffer != ""
+      assert %{"type" => "error", "code" => "server_error"} = Jason.decode!(failure)
+
+      assert {[], ^failed_buffer} =
+               WebsocketCodec.stream_messages(
+                 request_id,
+                 "data: " <>
+                   Jason.encode!(%{
+                     "type" => "response.output_text.delta",
+                     "delta" => "must not be emitted"
+                   }) <>
+                   "\n\n",
+                 failed_buffer
+               )
 
       assert_receive {[:codex_pooler, :gateway, :stream_buffer, :oversized],
                       %{bytes: bytes, count: 1, max_bytes: 8_388_608},

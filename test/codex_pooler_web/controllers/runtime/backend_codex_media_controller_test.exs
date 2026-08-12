@@ -268,7 +268,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
     test "POST /backend-api/transcribe returns terminal upstream errors through accounting", %{
       conn: conn
     } do
-      upstream = start_upstream({:json_error, 400, %{"error" => %{"code" => "bad_audio"}}})
+      upstream =
+        start_upstream(
+          {:json_error, 400,
+           %{
+             "error" => %{
+               "code" => "bad_audio",
+               "message" => "provider account sentinel must not escape"
+             }
+           }}
+        )
 
       setup =
         gateway_setup(upstream,
@@ -280,7 +289,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
 
       conn = conn |> auth(setup) |> post("/backend-api/transcribe", %{"file" => upload})
 
-      assert json_response(conn, 400)["error"]["code"] == "bad_audio"
+      assert %{
+               "error" => %{
+                 "code" => "invalid_request",
+                 "type" => "invalid_request_error"
+               }
+             } = json_response(conn, 400)
+
+      refute conn.resp_body =~ "bad_audio"
+      refute conn.resp_body =~ "provider account sentinel"
       assert FakeUpstream.count(upstream) == 1
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
       assert request.endpoint == "/backend-api/transcribe"

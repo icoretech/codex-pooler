@@ -311,7 +311,11 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
       response = Task.await(request_task, 1_000)
 
       assert response.status == 200
-      assert Enum.count(stream_event_types(response.resp_body), &(&1 == @public_type)) == 1
+      event_types = stream_event_types(response.resp_body)
+
+      assert Enum.count(event_types, &(&1 == @public_type)) == 1,
+             "unexpected terminal event types #{inspect(event_types)} in #{inspect(response.resp_body)}"
+
       refute response.resp_body =~ "unexpected_http_replay"
 
       if @terminal_type == "response.failed" do
@@ -633,19 +637,14 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
           "message" => "gemma3 request failed",
           "type" => "server_error"
         },
-        "incomplete_details" => nil,
         "model" => "gemma3",
         "object" => "response",
         "output" => [],
         "output_text" => "",
-        "instructions" => nil,
-        "metadata" => nil,
         "parallel_tool_calls" => false,
-        "tool_choice" => "auto",
-        "tools" => [],
         "usage" => %{
           "input_tokens" => 6,
-          "input_tokens_details" => %{"cache_write_tokens" => 0, "cached_tokens" => 2},
+          "input_tokens_details" => %{"cached_tokens" => 2},
           "output_tokens" => 4,
           "output_tokens_details" => %{"reasoning_tokens" => 1},
           "total_tokens" => 10

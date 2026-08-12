@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       gateway_setup: 1,
       mint_websocket_new!: 4,
       public_websocket_receive_text!: 3,
+      public_websocket_refute_text!: 4,
       public_websocket_send_text!: 4,
       start_public_endpoint!: 0,
       start_public_endpoint_with_server!: 0,
@@ -1411,12 +1412,12 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
-  test "direct GET /v1/responses drops malformed and non-object provider frames" do
-    assert_invalid_provider_frames_dropped(false)
+  test "direct GET /v1/responses fails once on malformed and non-object provider frames" do
+    assert_invalid_provider_frames_fail_once(false)
   end
 
-  test "owner-forwarded GET /v1/responses drops malformed and non-object provider frames" do
-    assert_invalid_provider_frames_dropped(true)
+  test "owner-forwarded GET /v1/responses fails once on malformed and non-object provider frames" do
+    assert_invalid_provider_frames_fail_once(true)
   end
 
   test "owner-forwarded GET /v1/responses emits one safe interruption after visible output" do
@@ -1662,7 +1663,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end)
   end
 
-  defp assert_invalid_provider_frames_dropped(owner_forwarding?) do
+  defp assert_invalid_provider_frames_fail_once(owner_forwarding?) do
     if owner_forwarding?, do: enable_owner_forwarding!()
 
     completion =
@@ -1701,29 +1702,47 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
 
       assert %{
-               "type" => "response.completed",
-               "sequence_number" => 0,
-               "response" => %{"status" => "completed"}
+               "type" => "response.failed",
+               "error" => %{"code" => "server_error"},
+               "response" => %{
+                 "status" => "failed",
+                 "error" => %{"code" => "server_error"}
+               }
              } = Jason.decode!(frame)
+
+      refute frame =~ "resp_after_invalid_frames"
+      refute frame =~ "synthetic invalid provider frame input"
+
+      {conn, websocket} = public_websocket_refute_text!(conn, websocket, ref, 200)
 
       assert_receive {Events,
                       %{
                         reason: "request_finalized",
-                        payload: %{"status" => "succeeded"}
+                        payload: %{"status" => "failed"}
                       }},
                      @websocket_frame_timeout
 
       assert [request] =
                Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
 
-      assert request.status == "succeeded"
-      assert is_nil(request.last_error_code)
+      assert request.status == "failed"
+      assert is_binary(request.last_error_code)
 
       assert [attempt] =
                Repo.all(from(attempt in Attempt, where: attempt.request_id == ^request.id))
 
-      assert attempt.status == "succeeded"
-      assert is_nil(attempt.network_error_code)
+      assert attempt.status == "failed"
+      assert is_binary(attempt.network_error_code)
+
+      assert Repo.aggregate(
+               from(entry in LedgerEntry,
+                 where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+               ),
+               :count
+             ) == 1
+
+      assert [turn] = Repo.all(from(turn in CodexTurn, where: turn.request_id == ^request.id))
+      assert turn.status == "failed"
 
       {conn, websocket}
     after

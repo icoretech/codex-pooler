@@ -146,11 +146,16 @@ defmodule CodexPooler.Gateway.Transports.WebsocketFrameDifferentialTest do
   test "large item.done and delta fixtures do not retain their parent after normalization" do
     parent = large_frame_parent()
 
-    Enum.each([large_delta(parent), large_item_done(parent)], fn frame ->
-      normalized = PublicResponses.normalize_json_message(frame)
-      assert byte_size(normalized) == byte_size(frame)
-      assert :binary.referenced_byte_size(normalized) == byte_size(normalized)
-    end)
+    delta = large_delta(parent)
+    normalized_delta = PublicResponses.normalize_json_message(delta)
+    assert byte_size(normalized_delta) == byte_size(delta)
+    assert :binary.referenced_byte_size(normalized_delta) == byte_size(normalized_delta)
+
+    item_done = large_item_done(parent)
+    normalized_item_done = PublicResponses.normalize_json_message(item_done)
+    assert byte_size(normalized_item_done) < byte_size(item_done)
+    assert :binary.referenced_byte_size(normalized_item_done) == byte_size(normalized_item_done)
+    refute normalized_item_done =~ String.slice(parent, 0, 256)
   end
 
   defp frame_corpus do

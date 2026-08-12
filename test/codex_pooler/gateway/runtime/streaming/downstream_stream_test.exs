@@ -280,28 +280,46 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
              |> Enum.any?(&match?(%{"choices" => [%{"finish_reason" => "stop"}]}, &1))
     end
 
-    test "passes through non-SSE JSON bodies on backend codex responses stream relay" do
+    test "discards non-SSE bodies and records a native Codex stream failure" do
       opts = RequestOptions.build(%{}, "/backend-api/codex/responses", %{"stream" => true})
       state = DownstreamStream.initial_state(:relay, opts)
 
-      json_body = Jason.encode!(%{"id" => "resp_sparse_metadata", "object" => "response"})
+      unsafe_body =
+        Jason.encode!(%{
+          "id" => "resp_sparse_metadata",
+          "object" => "response",
+          "provider" => "provider-non-sse-sentinel"
+        })
 
-      assert {^json_body, ^state} =
+      assert {"", failed_state} =
                DownstreamStream.normalize_data(
-                 json_body,
+                 unsafe_body,
                  "/backend-api/codex/responses",
                  opts,
                  state
                )
+
+      assert {:failed, %{code: "upstream_stream_invalid"}} =
+               DownstreamStream.terminal_outcome(failed_state)
+
+      assert {terminal, settled_state} =
+               DownstreamStream.synthetic_terminal_failure(failed_state, :invalid_stream)
+
+      assert terminal =~ "event: error"
+      assert terminal =~ ~s("code":"server_error")
+      refute terminal =~ "provider-non-sse-sentinel"
+
+      assert {:failed, %{code: "upstream_stream_invalid"}} =
+               DownstreamStream.terminal_outcome(settled_state)
     end
 
-    test "passes through oversized incomplete backend codex SSE prefixes without retaining them" do
+    test "discards oversized incomplete backend codex SSE prefixes and records failure" do
       attach_stream_buffer_telemetry()
       opts = RequestOptions.build(%{}, "/backend-api/codex/responses", %{"stream" => true})
       state = DownstreamStream.initial_state(:relay, opts)
       oversized = String.duplicate("data: unavailable-upstream-prefix", 260_000)
 
-      assert {^oversized, state} =
+      assert {"", state} =
                DownstreamStream.normalize_data(
                  oversized,
                  "/backend-api/codex/responses",
@@ -310,6 +328,15 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
                )
 
       assert state.codex_responses_sse_buffer == ""
+
+      assert {:failed, %{code: "upstream_stream_too_large"}} =
+               DownstreamStream.terminal_outcome(state)
+
+      assert {terminal, _state} =
+               DownstreamStream.synthetic_terminal_failure(state, :oversized_stream)
+
+      assert terminal =~ "event: error"
+      refute terminal =~ "unavailable-upstream-prefix"
 
       assert_receive {[:codex_pooler, :gateway, :stream_buffer, :oversized],
                       %{bytes: bytes, count: 1, max_bytes: 8_388_608},
@@ -321,6 +348,126 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
 
       assert bytes > 8_388_608
       assert is_binary(route_class)
+    end
+
+    test "discards malformed native Codex SSE and records a settled failure" do
+      opts = RequestOptions.build(%{}, "/backend-api/codex/responses", %{"stream" => true})
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      malformed =
+        "event: response.completed\n" <>
+          "data: {not-json-provider-account-private-model-sentinel}\n\n"
+
+      assert {"", state} =
+               DownstreamStream.normalize_data(
+                 malformed,
+                 "/backend-api/codex/responses",
+                 opts,
+                 state
+               )
+
+      assert {:failed, %{code: "upstream_stream_invalid"}} =
+               DownstreamStream.terminal_outcome(state)
+
+      assert {terminal, _state} =
+               DownstreamStream.synthetic_terminal_failure(state, :invalid_stream)
+
+      assert terminal =~ "event: error"
+      refute terminal =~ "provider-account-private-model-sentinel"
+    end
+
+    test "emits reconstructed native Codex SSE rather than validated raw framing" do
+      opts = RequestOptions.build(%{}, "/backend-api/codex/responses", %{"stream" => true})
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      raw = [
+        ": provider-comment-private-sentinel\n",
+        [
+          "id: account-id-private-sentinel\n",
+          [
+            "retry: 1000\n",
+            "event: response.completed\n",
+            "unknown: assignment-private-sentinel\n",
+            "data: ",
+            Jason.encode!(%{
+              "type" => "response.completed",
+              "provider" => "provider-envelope-private-sentinel",
+              "response" => %{
+                "id" => "resp_reconstructed_native_sse",
+                "object" => "response",
+                "model" => "private-upstream-model",
+                "status" => "completed"
+              }
+            }),
+            "\n\n"
+          ]
+        ]
+      ]
+
+      assert {projected, state} =
+               DownstreamStream.normalize_data(
+                 raw,
+                 "/backend-api/codex/responses",
+                 opts,
+                 state
+               )
+
+      assert ["event: response.completed", "data: " <> encoded] =
+               String.split(projected, "\n", trim: true)
+
+      decoded = Jason.decode!(encoded)
+      assert decoded["response"]["model"] == "gemma3"
+
+      for sentinel <- [
+            "provider-comment-private-sentinel",
+            "account-id-private-sentinel",
+            "assignment-private-sentinel",
+            "provider-envelope-private-sentinel",
+            "private-upstream-model"
+          ] do
+        refute projected =~ sentinel
+      end
+
+      assert DownstreamStream.terminal_outcome(state) == nil
+    end
+
+    test "invalid and excessively deep native Codex iodata fail once and latch" do
+      opts = RequestOptions.build(%{}, "/backend-api/codex/responses", %{"stream" => true})
+      valid_later = "event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n"
+
+      deep =
+        Enum.reduce(1..130, valid_later, fn _level, nested -> [nested] end)
+
+      for invalid <- [["data: {}" | :invalid_tail], deep] do
+        initial = DownstreamStream.initial_state(:relay, opts)
+
+        assert {"", failed} =
+                 DownstreamStream.normalize_data(
+                   invalid,
+                   "/backend-api/codex/responses",
+                   opts,
+                   initial
+                 )
+
+        assert {:failed, %{code: "upstream_stream_invalid"}} =
+                 DownstreamStream.terminal_outcome(failed)
+
+        assert {"", latched} =
+                 DownstreamStream.normalize_data(
+                   valid_later,
+                   "/backend-api/codex/responses",
+                   opts,
+                   failed
+                 )
+
+        assert {terminal, emitted} =
+                 DownstreamStream.synthetic_terminal_failure(latched, :invalid_iodata)
+
+        assert terminal =~ "event: error"
+
+        assert {nil, _emitted} =
+                 DownstreamStream.synthetic_terminal_failure(emitted, :duplicate_failure)
+      end
     end
 
     test "blocks keepalive comments while public OpenAI Responses SSE is incomplete" do
@@ -748,17 +895,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
                    "message" => "gemma3 request failed",
                    "type" => "server_error"
                  },
-                 "incomplete_details" => nil,
                  "model" => "gemma3",
                  "object" => "response",
                  "output" => [],
                  "output_text" => "",
-                 "instructions" => nil,
-                 "metadata" => nil,
                  "parallel_tool_calls" => false,
-                 "tool_choice" => "auto",
-                 "tools" => [],
-                 "usage" => nil,
                  "temperature" => nil,
                  "top_p" => nil
                }

@@ -190,6 +190,17 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
   def apply_codex_session_assignment(
         candidates,
         %RequestOptions{
+          continuity: %{resolved_turn_state_assignment_id: assignment_id}
+        } = request_options,
+        %Model{}
+      )
+      when is_binary(assignment_id) do
+    filter_resolved_turn_state_assignment(candidates, request_options, assignment_id)
+  end
+
+  def apply_codex_session_assignment(
+        candidates,
+        %RequestOptions{
           continuity: %{codex_session: %CodexSession{pool_upstream_assignment_id: assignment_id}}
         } = request_options,
         %Model{} = model
@@ -260,6 +271,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
           | :live_upstream_websocket
           | :local_session_header
           | :accepted_turn_state
+          | :opaque_turn_state
           | :same_model_successful_turn
           | :codex_session_assignment
 
@@ -297,6 +309,9 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
       {:hard, :file_affinity} ->
         true
 
+      {:hard, :opaque_turn_state} ->
+        true
+
       {_pin_mode, _reason} ->
         false
     end
@@ -323,6 +338,9 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
   @spec classify_codex_session_pin(RequestOptions.t(), Model.t()) :: {pin_mode(), pin_reason()}
   defp classify_codex_session_pin(%RequestOptions{} = request_options, %Model{} = model) do
     cond do
+      resolved_turn_state?(request_options) ->
+        {:hard, :opaque_turn_state}
+
       previous_response_id?(request_options) ->
         {:hard, :previous_response_id}
 
@@ -358,6 +376,28 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuity do
          continuity: %{accepted_turn_state: accepted_turn_state}
        }),
        do: is_binary(clean_string(accepted_turn_state))
+
+  defp resolved_turn_state?(%RequestOptions{
+         continuity: %{resolved_turn_state_assignment_id: assignment_id}
+       }),
+       do: is_binary(clean_string(assignment_id))
+
+  defp filter_resolved_turn_state_assignment(candidates, _request_options, assignment_id) do
+    pinned =
+      Enum.filter(candidates, fn {assignment, _identity} -> assignment.id == assignment_id end)
+
+    case pinned do
+      [] ->
+        {:error,
+         pinned_session_assignment_unavailable_error(
+           assignment_id,
+           %{"pin_mode" => "hard", "pin_reason" => "opaque_turn_state"}
+         )}
+
+      _candidates ->
+        {:ok, pinned}
+    end
+  end
 
   @spec local_session_header?(RequestOptions.t()) :: boolean()
   defp local_session_header?(%RequestOptions{continuity: continuity}) do

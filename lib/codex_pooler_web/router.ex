@@ -101,6 +101,9 @@ defmodule CodexPoolerWeb.Router do
     get "/api/codex/usage", Runtime.CodexUsageController, :show
 
     get "/wham/usage", Runtime.CodexUsageController, :show
+
+    put "/file-capabilities/:capability", Runtime.BackendFileController, :upload_capability
+    get "/file-capabilities/:capability", Runtime.BackendFileController, :download_capability
   end
 
   scope "/backend-api/codex", CodexPoolerWeb do

@@ -110,7 +110,6 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
 
     assert legacy_data["response"] == %{
              "id" => "resp_public_legacy",
-             "custom" => %{"kept" => true},
              "status" => "completed"
            }
 
@@ -586,7 +585,7 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
     assert Jason.decode!(legacy_payload) == %{
              "type" => "response.completed",
              "sequence_number" => 0,
-             "response" => Map.put(legacy, "status", "completed")
+             "response" => %{"id" => "resp_ws_legacy", "status" => "completed"}
            }
   end
 
@@ -721,10 +720,7 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
           incomplete_details: %{"reason" => "content_filter"},
           usage: %{
             "input_tokens" => 11,
-            "input_tokens_details" => %{
-              "cache_write_tokens" => 2,
-              "cached_tokens" => 3
-            },
+            "input_tokens_details" => %{"cached_tokens" => 3},
             "output_tokens" => 5,
             "output_tokens_details" => %{"reasoning_tokens" => 4},
             "total_tokens" => 16
@@ -862,7 +858,7 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
        expected_failed_response(
          usage: %{
            "input_tokens" => 8,
-           "input_tokens_details" => %{"cache_write_tokens" => 0, "cached_tokens" => 2},
+           "input_tokens_details" => %{"cached_tokens" => 2},
            "output_tokens" => 5,
            "output_tokens_details" => %{"reasoning_tokens" => 0},
            "total_tokens" => 13
@@ -884,7 +880,7 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
        expected_failed_response(
          usage: %{
            "input_tokens" => 0,
-           "input_tokens_details" => %{"cache_write_tokens" => 0, "cached_tokens" => 0},
+           "input_tokens_details" => %{"cached_tokens" => 0},
            "output_tokens" => 7,
            "output_tokens_details" => %{"reasoning_tokens" => 0},
            "total_tokens" => 7
@@ -900,7 +896,7 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
        expected_failed_response(
          usage: %{
            "input_tokens" => max_safe_integer,
-           "input_tokens_details" => %{"cache_write_tokens" => 0, "cached_tokens" => 0},
+           "input_tokens_details" => %{"cached_tokens" => 0},
            "output_tokens" => max_safe_integer,
            "output_tokens_details" => %{"reasoning_tokens" => 0},
            "total_tokens" => max_safe_integer
@@ -1158,7 +1154,7 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
   end
 
   defp expected_failed_response(overrides \\ []) do
-    %{
+    response = %{
       "id" => Keyword.get(overrides, :id, "resp_failed"),
       "created_at" => 0,
       "status" => "failed",
@@ -1167,20 +1163,27 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
         "message" => "gemma3 request failed",
         "type" => "server_error"
       },
-      "incomplete_details" => Keyword.get(overrides, :incomplete_details),
       "model" => "gemma3",
       "object" => "response",
       "output" => [],
       "output_text" => "",
-      "instructions" => nil,
-      "metadata" => nil,
       "parallel_tool_calls" => false,
-      "tool_choice" => "auto",
-      "tools" => [],
-      "usage" => Keyword.get(overrides, :usage),
       "temperature" => nil,
       "top_p" => nil
     }
+
+    response =
+      if Keyword.has_key?(overrides, :incomplete_details) do
+        Map.put(response, "incomplete_details", Keyword.fetch!(overrides, :incomplete_details))
+      else
+        response
+      end
+
+    if Keyword.has_key?(overrides, :usage) do
+      Map.put(response, "usage", Keyword.fetch!(overrides, :usage))
+    else
+      response
+    end
   end
 
   defp malformed_terminal(:top_level, error) do

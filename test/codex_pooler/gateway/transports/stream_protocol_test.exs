@@ -93,20 +93,27 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
   end
 
   @tag :task_1_pin
-  test "PIN-P04 backend POST SSE preserves decoded done and legacy JSON bytes across LF and CRLF" do
+  test "PIN-P04 backend POST SSE preserves decoded done and legacy JSON across LF and CRLF" do
     fixtures = [
       {"response.done",
-       ~s({"type":"response.done","response":{"id":"resp_pin_backend_post_done"}})},
-      {nil, ~s({ "id" : "resp_pin_backend_post_legacy" })}
+       ~s({"type":"response.done","response":{"id":"resp_pin_backend_post_done"}}),
+       %{"type" => "response.done", "response" => %{"id" => "resp_pin_backend_post_done"}}},
+      {nil, ~s({ "id" : "resp_pin_backend_post_legacy", "provider" : "private-sentinel" }),
+       %{
+         "type" => "response.completed",
+         "response" => %{"id" => "resp_pin_backend_post_legacy", "status" => "completed"}
+       }}
     ]
 
-    for {event_type, json} <- fixtures, newline <- ["\n", "\r\n"] do
+    for {event_type, json, expected} <- fixtures, newline <- ["\n", "\r\n"] do
       event_line = if event_type, do: "event: #{event_type}#{newline}", else: ""
       source = event_line <> "data: " <> json <> newline <> newline
 
       normalized = StreamProtocol.normalize_codex_responses_sse_data(source)
       assert {[block], ""} = StreamProtocol.complete_sse_blocks(normalized, bounded?: false)
-      assert StreamProtocol.sse_field(block, "data") == json
+
+      assert block |> StreamProtocol.sse_field("data") |> Jason.decode!() == expected
+      refute block =~ "private-sentinel"
     end
   end
 
@@ -179,7 +186,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
       assert second_out == ""
     end
 
-    test "preserves safety-buffering metadata on public Responses stream events" do
+    test "drops provider safety-buffering metadata while preserving public text" do
       state = StreamProtocol.public_openai_responses_stream_state()
 
       event =
@@ -201,11 +208,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
 
       assert data["delta"] == "visible synthetic safety-buffered text"
 
-      assert data["safety_buffering"] == %{
-               "model" => "safety-buffering-model-sentinel",
-               "use_cases" => ["cyber"],
-               "reasons" => ["user-risk-sentinel"]
-             }
+      refute Map.has_key?(data, "safety_buffering")
+      refute chunk =~ "safety-buffering-model-sentinel"
+      refute chunk =~ "user-risk-sentinel"
     end
 
     test "passes keepalive events through without changing terminal state" do
@@ -370,6 +375,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
               "status" => "completed",
               "output" => [
                 %{
+                  "id" => "msg_large_terminal",
+                  "type" => "message",
+                  "status" => "completed",
+                  "role" => "assistant",
                   "content" => [
                     %{
                       "type" => "output_text",
@@ -513,17 +522,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
                  "message" => "gemma3 request failed",
                  "type" => "server_error"
                },
-               "incomplete_details" => nil,
                "model" => "gemma3",
                "object" => "response",
                "output" => [],
                "output_text" => "",
-               "instructions" => nil,
-               "metadata" => nil,
                "parallel_tool_calls" => false,
-               "tool_choice" => "auto",
-               "tools" => [],
-               "usage" => nil,
                "temperature" => nil,
                "top_p" => nil
              }

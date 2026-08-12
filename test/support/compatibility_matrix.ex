@@ -25,12 +25,14 @@ defmodule CodexPooler.CompatibilityMatrix do
       categories: [:route, :auth, :error, :ownership],
       routes: [
         %{method: :post, path: "/backend-api/files"},
-        %{method: :post, path: "/backend-api/files/:file_id/uploaded"}
+        %{method: :post, path: "/backend-api/files/:file_id/uploaded"},
+        %{method: :put, path: "/file-capabilities/:capability"},
+        %{method: :get, path: "/file-capabilities/:capability"}
       ],
       future_routes: [],
       fixture: :file_upload,
       contract:
-        "backend file routes use JSON SAS create and finalize, return upstream file_id plus upload_url, reject OpenAI /v1/files multipart semantics, and store metadata only"
+        "authenticated backend file create and finalize return only exact public schemas with encrypted local upload and download capabilities; the bounded capability proxy verifies Pool, API-key, file, operation, expiry, ownership, status, assignment, and declared bytes before server-side provider transfer, never redirects to or persists the provider URL, suppresses bearer-capability request paths from logs, rejects OpenAI /v1/files multipart semantics, and stores metadata only"
     },
     %{
       slug: :backend_transcription,
@@ -450,12 +452,12 @@ defmodule CodexPooler.CompatibilityMatrix do
       slug: :pruned_runtime_helper_firewall,
       status: :supported,
       current: :firewall_before_fixed_absence,
-      categories: [:route, :error],
+      categories: [:route, :auth, :error],
       routes: [],
       future_routes: [],
       fixture: :pruned_runtime_helper_firewall,
       contract:
-        "pruned runtime helper routes enforce runtime settings availability and firewall policy before preserving their fixed unauthenticated HTML 404 response, without body parsing, upstream dispatch, reservation, or accounting side effects"
+        "pruned runtime helper routes enforce runtime settings availability, firewall policy, and Pool API-key authentication before preserving their fixed authenticated HTML 404 response, without body parsing, upstream dispatch, reservation, or accounting side effects"
     },
     %{
       slug: :decompression,
@@ -688,7 +690,29 @@ defmodule CodexPooler.CompatibilityMatrix do
 
   @fixtures %{
     file_upload: %{
-      json: %{"file_name" => "fixture-upload.txt", "file_size" => 24, "use_case" => "codex"}
+      json: %{"file_name" => "fixture-upload.txt", "file_size" => 24, "use_case" => "codex"},
+      public_create_keys: ["file_id", "upload_url"],
+      public_finalize_keys: ["download_url", "file_name", "mime_type", "status"],
+      capability: %{
+        scheme: "request_origin_local_route",
+        path: "/file-capabilities/cpfc_<encrypted-capability>",
+        max_handle_bytes: 8_192,
+        request_logging: false,
+        provider_url_exposed: false,
+        provider_url_persisted: false,
+        redirects: false,
+        bearer_auth_optional: true,
+        encrypted_scope: [
+          "pool_id",
+          "api_key_id",
+          "file_id",
+          "assignment_id",
+          "identity_id",
+          "operation",
+          "declared_bytes",
+          "expiry"
+        ]
+      }
     },
     backend_transcription: %{
       fields: %{"prompt" => "synthetic backend glossary"},
@@ -1144,13 +1168,24 @@ defmodule CodexPooler.CompatibilityMatrix do
           "x-codex-installation-id",
           "x-openai-subagent"
         ],
-        relayed_response_headers: ["x-codex-turn-state"],
+        relayed_response_headers: ["x-codex-turn-state as cpts_ encrypted handle"],
         not_forwarded_on: [
           "/v1/responses",
-          "backend_websocket_response.create",
           "public_v1_websocket_response.create"
         ],
-        privacy: "raw_values_not_persisted",
+        privacy: "raw_turn_state_restored_only_to_selected_upstream_and_not_persisted",
+        opaque_turn_state: %{
+          public_prefix: "cpts_",
+          max_header_bytes: 4_096,
+          expiry: "required",
+          encrypted_scope: ["pool_id", "api_key_id", "assignment_id", "session_id"],
+          assignment_routing: "hard_pin_active_assignment_in_authenticated_pool",
+          session_routing: "exact_reconnectable_pool_and_api_key_scoped_session",
+          http: "request_header",
+          websocket_upgrade: "request_header",
+          websocket_frame: "response.create.client_metadata",
+          upstream_restore: "exact_raw_value"
+        },
         turn_metadata_projection: %{
           direct_header_removes_top_level: ["code_mode_tool_names"],
           structured_output: "ascii_safe_json",
@@ -1214,10 +1249,18 @@ defmodule CodexPooler.CompatibilityMatrix do
       }
     },
     websocket_turn: %{
-      headers: %{"x-codex-turn-state" => "fixture-upgrade-turn-state"},
-      response_create_client_metadata: %{"x-codex-turn-state" => "fixture-frame-turn-state"},
+      headers: %{"x-codex-turn-state" => "cpts_<encrypted-upgrade-state>"},
+      response_create_client_metadata: %{
+        "x-codex-turn-state" => "cpts_<encrypted-frame-state>"
+      },
       turn_state_precedence: "response.create.client_metadata_over_upgrade_header",
-      privacy: "raw_value_not_persisted",
+      privacy: "raw_value_restored_only_upstream_and_not_persisted",
+      opaque_resolution: %{
+        cross_pool_or_key: "invalid_turn_state_before_dispatch",
+        tamper_or_expiry: "invalid_turn_state_before_dispatch",
+        assignment: "hard_pinned",
+        session: "exact_reconnectable_anchor_for_upgrade_owner_and_frame_retarget"
+      },
       native_continuation_generation_guard: %{
         scope: "native_backend_websocket_exact_previous_response_not_found",
         marked_continuation_connection_use: "reused_only",
@@ -1393,7 +1436,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       admitted: %{status: 404, content_type: "text/html; charset=utf-8", body: "Not Found"},
       denied: %{status: 403, error_code: "access_denied"},
       settings_unavailable: %{status: 503, error_code: "settings_unavailable"},
-      authentication: :not_attempted,
+      authentication: :required_before_fixed_absence,
       body_read: false,
       upstream_dispatch: false,
       reservation: false,

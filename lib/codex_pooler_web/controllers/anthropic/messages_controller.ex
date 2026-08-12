@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.Anthropic.MessagesController do
 
   alias CodexPooler.Gateway.Facade.Anthropic.{Messages, Response, TokenCount}
   alias CodexPooler.Gateway.OpenAICompatibility.Error
+  alias CodexPooler.RouteClass
   alias CodexPoolerWeb.GatewayControllerHelpers, as: GatewayHelpers
   alias CodexPoolerWeb.PublicGatewayDispatch
 
@@ -34,10 +35,20 @@ defmodule CodexPoolerWeb.Anthropic.MessagesController do
 
     case GatewayHelpers.authenticate_facade(conn) do
       {:ok, _auth} ->
-        with :ok <- validate_headers(conn),
-             {:ok, result} <- TokenCount.count(payload) do
-          json(conn, result)
-        else
+        result =
+          GatewayHelpers.admit(
+            conn,
+            RouteClass.proxy_http(),
+            %{endpoint: "/v1/messages/count_tokens"},
+            fn ->
+              with :ok <- validate_headers(conn) do
+                TokenCount.count(payload)
+              end
+            end
+          )
+
+        case result do
+          {:ok, count} -> json(conn, count)
           {:error, reason} -> GatewayHelpers.send_error(conn, reason)
         end
 

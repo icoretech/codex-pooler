@@ -1159,13 +1159,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     reasoning_frame_sentinel = "raw-reasoning-frame-#{System.unique_integer([:positive])}"
 
     reasoning_event =
-      {"response.reasoning",
+      {"response.reasoning_summary_text.delta",
        %{
-         "type" => "response.reasoning",
-         "response_id" => "resp_opencode_1011",
+         "type" => "response.reasoning_summary_text.delta",
          "output_index" => 0,
          "item_id" => "reasoning_opencode_1011",
-         "summary" => reasoning_frame_sentinel
+         "content_index" => 0,
+         "delta" => reasoning_frame_sentinel
        }}
 
     upstream =
@@ -1200,7 +1200,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       )
 
     assert failed.status == 200
-    assert event_types(failed.resp_body) == ["response.reasoning", "error"]
+    assert event_types(failed.resp_body) == ["response.reasoning_summary_text.delta", "error"]
     assert failed.resp_body =~ reasoning_frame_sentinel
 
     data = response_failed_data(failed.resp_body)
@@ -1715,7 +1715,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert settlement_count(request) == 1
   end
 
-  test "websocket bridge drops malformed and non-object provider frames before completion", %{
+  test "websocket bridge fails once on malformed provider data and drops later frames", %{
     conn: conn
   } do
     sentinel = "BRIDGE_INVALID_FRAME_SENTINEL"
@@ -1744,23 +1744,34 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       post_stream(conn, setup, session, stream_payload(setup, "bridge invalid provider frames"))
 
     assert response.status == 200
-    assert event_types(response.resp_body) == ["response.created", "response.completed"]
+    assert event_types(response.resp_body) == ["error"]
     refute response.resp_body =~ sentinel
+    refute response.resp_body =~ "resp_bridge_after_invalid"
 
-    assert response.resp_body
-           |> event_payloads()
-           |> Enum.map(& &1["sequence_number"]) == [0, 1]
+    assert %{
+             "type" => "error",
+             "error" => %{
+               "type" => "server_error",
+               "code" => "server_error",
+               "message" => "gemma3 request failed"
+             }
+           } = response_failed_data(response.resp_body)
 
     request = latest_request(setup.pool)
-    assert request.status == "succeeded"
+    assert request.status == "failed"
     assert request.transport == "http_sse"
-    assert is_nil(request.last_error_code)
+    assert request.last_error_code == "server_error"
 
     assert [attempt] = attempts_for(request)
-    assert attempt.status == "succeeded"
+    assert attempt.status == "failed"
     assert attempt.transport == "websocket"
     assert attempt.response_metadata["upstream_websocket_bridge"] == true
-    assert is_nil(attempt.network_error_code)
+    assert attempt.network_error_code == "server_error"
+
+    assert [%CodexTurn{status: "failed", error_code: "server_error"}] =
+             Repo.all(from(turn in CodexTurn, where: turn.request_id == ^request.id))
+
+    assert settlement_count(request) == 1
   end
 
   test "a websocket bridge preflight timeout before public data fails without HTTP replay",
@@ -2033,8 +2044,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   test "envelope frames followed by a peer close fall back to plain HTTP", %{conn: conn} do
     events = [
       created_event("resp_precontent_ws"),
-      output_item_added_event("resp_precontent_ws", "reasoning"),
-      codex_marker_event()
+      output_item_added_event("resp_precontent_ws", "reasoning")
     ]
 
     upstream =

@@ -130,7 +130,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     refute inspect(result) =~ "private-header-characterization"
   end
 
-  test "decoded observer sees mapped frames while malformed frames preserve fallback state" do
+  test "decoded observer sees one safe terminal and malformed frames fail the stream" do
     rate_limit = ~s({"type":"codex.rate_limits","rate_limits":{}})
     malformed = ~s({"type":"response.output_text.delta")
 
@@ -160,20 +160,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         end
     }
 
-    assert {:ok, result} = UpstreamWebsocketSession.request(session, request)
+    assert {:error, result} = UpstreamWebsocketSession.request(session, request)
 
     assert_receive {:observed_frame, rate_limit_bytes, %{"type" => "codex.rate_limits"}}
     assert rate_limit_bytes == byte_size(rate_limit)
-    assert_receive {:observed_frame, malformed_bytes, :undecodable}
-    assert malformed_bytes == byte_size(malformed)
 
-    assert_receive {:observed_frame, terminal_bytes,
-                    %{"type" => "response.failed", "response" => %{"status" => "failed"}}}
+    assert_receive {:observed_frame, safe_bytes,
+                    %{"type" => "error", "error" => %{"code" => "server_error"}}}
 
-    assert terminal_bytes < byte_size(terminal) + 1_000
-    assert result.terminal == "response.failed"
-    assert result.websocket_frame_headers == %{"openai-request-id" => "observer-request"}
-    assert result.body =~ "data: #{rate_limit}\n\ndata: #{malformed}\n\n"
+    assert safe_bytes < 1_024
+    assert result.reason == :invalid_upstream_websocket_stream_data
+    assert result.websocket_frame_headers == %{}
+    assert result.body =~ "data: #{rate_limit}\n\ndata: "
+    refute result.body =~ malformed
+    refute_receive {:observed_frame, _bytes, %{"type" => "response.failed"}}, 100
     refute result.body =~ "observer-request"
   end
 
@@ -391,7 +391,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert FakeUpstream.http_request_count(upstream) == 0
   end
 
-  test "peer close after an arbitrary nonterminal event records only bounded protocol buckets" do
+  test "an arbitrary websocket event fails once with only bounded protocol buckets" do
     raw_event_type = "response.private_event_sentinel_deadbeef"
     raw_payload = "private-frame-sentinel-cafefeed"
     raw_close_reason = "private-close-sentinel-feedface"
@@ -428,13 +428,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
              "last_upstream_event_class",
              "terminal_candidate_seen"
            ]) == %{
-             "last_upstream_event_type" => "response.unknown",
-             "last_upstream_event_class" => "response_unknown_event",
-             "terminal_candidate_seen" => false
+             "last_upstream_event_type" => "error",
+             "last_upstream_event_class" => "terminal_failure_candidate",
+             "terminal_candidate_seen" => true
            }
 
-    refute Map.has_key?(failure.transport_failure, "terminal_candidate_type")
-    refute Map.has_key?(failure.transport_failure, "terminal_candidate_class")
+    assert failure.reason == :invalid_upstream_websocket_stream_data
+    assert failure.transport_failure["terminal_candidate_type"] == "error"
+    assert failure.transport_failure["terminal_candidate_class"] == "failure"
     refute Map.has_key?(failure.transport_failure, "terminal_candidate_rejection")
 
     for sentinel <- [raw_event_type, raw_payload, raw_close_reason] do
@@ -1712,15 +1713,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     events =
       [
-        %{"type" => "response.created", "response" => %{"id" => "resp_ws_bounded_body"}},
-        %{
-          "type" => "item/started",
-          "item" => %{
-            "type" => "sleep",
-            "id" => "item_sleep_fixture",
-            "duration_ms" => 25
-          }
-        }
+        %{"type" => "response.created", "response" => %{"id" => "resp_ws_bounded_body"}}
       ] ++
         for index <- 1..240 do
           %{
@@ -1848,16 +1841,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
     frames = [
       ~s({"type":"response.created","id":"typed-top-level-id"}),
-      ~s({"type":"response.metadata","response_id":"metadata-response-id"}),
-      ~s({"response_id":"typeless-response-id"}),
       ~s({"type":"response.created","response":{"id":"   "}}),
       Jason.encode!(%{"type" => "response.created", "response" => %{"id" => 1}}),
       Jason.encode!(%{
         "type" => "response.created",
         "response" => %{"id" => String.duplicate("x", 1_025)}
       }),
-      ~s({"type":"response.created","response":{"id":"unterminated"),
-      ~s(["not-an-object"]),
       Jason.encode!(%{
         "type" => "response.created",
         "response" => %{"id" => first_response_id}

@@ -42,9 +42,10 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
     else
       case PublicResponse.normalize_raw_body(status, body, success_normalizer) do
         {:ok, normalized} ->
-          conn
-          |> put_status(status)
-          |> json(PublicProjection.gateway_body(normalized))
+          case project_normalized_body(conn, normalized, status) do
+            {:ok, projected} -> conn |> put_status(status) |> json(projected)
+            :error -> GatewayHelpers.send_error(conn, projection_failure())
+          end
 
         :passthrough ->
           GatewayHelpers.send_gateway_result(conn, result)
@@ -88,4 +89,17 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
   end
 
   defp merge_recovery_error_fields(body, _reason), do: body
+
+  defp project_normalized_body(conn, normalized, status)
+       when conn.request_path in ["/v1/responses", "/v1/chat/completions"] do
+    PublicProjection.gateway_body_result(normalized, status)
+  end
+
+  # All other coerced public protocols construct a fresh, route-specific body
+  # in their local normalizer (Anthropic, Ollama, audio, images, completions).
+  defp project_normalized_body(_conn, normalized, _status), do: {:ok, normalized}
+
+  defp projection_failure do
+    %{status: 502, code: "server_error", message: "gemma3 request failed"}
+  end
 end

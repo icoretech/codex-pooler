@@ -10,6 +10,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Denials
   alias CodexPooler.Gateway.Facade.Affinity
   alias CodexPooler.Gateway.Facade.Dispatch, as: FacadeDispatch
+  alias CodexPooler.Gateway.Facade.TurnState
+  alias CodexPooler.Gateway.Payloads.PayloadNormalizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Payloads.TranscriptionPayload
@@ -506,6 +508,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   def execute_websocket_response(auth, raw_payload, %RequestOptions{} = opts, push_frame)
       when is_binary(raw_payload) and is_function(push_frame, 1) do
     with {:ok, payload} <- decode_websocket_payload(raw_payload),
+         {:ok, payload, opts} <- resolve_websocket_turn_state(auth, payload, opts),
          {:ok, result} <-
            execute_websocket_payload(auth, payload, opts, push_frame) do
       WebsocketCodec.deliver_result(result, push_frame)
@@ -514,6 +517,43 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
   def execute_websocket_response(_auth, _raw_payload, _opts, _push_frame) do
     {:error, error(400, "invalid_request", "websocket message must be a text JSON frame")}
+  end
+
+  defp resolve_websocket_turn_state(auth, payload, %RequestOptions{} = opts) do
+    case PayloadNormalizer.backend_client_metadata_turn_state(payload) do
+      "cpts_" <> _opaque = public ->
+        case TurnState.resolve(public, auth) do
+          {:ok, resolution} ->
+            request_options =
+              RequestOptions.put_continuity(opts,
+                accepted_turn_state: public,
+                resolved_turn_state_assignment_id: resolution.assignment_id,
+                resolved_turn_state_session_id: resolution.session_id
+              )
+
+            {:ok, put_upstream_turn_state(payload, resolution.upstream), request_options}
+
+          {:error, :invalid} ->
+            {:error,
+             error(
+               400,
+               "invalid_turn_state",
+               "x-codex-turn-state is invalid or expired",
+               "client_metadata.x-codex-turn-state"
+             )}
+        end
+
+      _local_or_absent ->
+        {:ok, payload, opts}
+    end
+  end
+
+  defp put_upstream_turn_state(%{"client_metadata" => %{} = metadata} = payload, upstream) do
+    Map.put(
+      payload,
+      "client_metadata",
+      Map.put(metadata, "x-codex-turn-state", upstream)
+    )
   end
 
   defp execute_websocket_payload(auth, payload, opts, push_frame) do

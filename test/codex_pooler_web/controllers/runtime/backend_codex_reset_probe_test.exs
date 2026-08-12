@@ -183,7 +183,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
     assert redemption["phase"] == "consumed_pending_probe"
     assert is_binary(get_in(redemption, ["probe", "token"]))
 
-    assert %{"error" => %{"code" => "model_not_found"}} = json_response(conn, 404)
+    assert %{
+             "error" => %{
+               "code" => "not_found",
+               "type" => "invalid_request_error",
+               "message" => "Endpoint was not found"
+             }
+           } = json_response(conn, 404)
+
+    refute conn.resp_body =~ "model_not_found"
 
     assert Enum.count(
              FakeUpstream.requests(probe_upstream),

@@ -105,9 +105,20 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressRawHTTPTest do
     assert_no_gateway_side_effects(ctx.upstream)
   end
 
-  test "unsafe runtime and MCP path bytes return their fixed envelopes", ctx do
+  test "unsafe runtime paths authenticate before their fixed envelope and MCP keeps its envelope",
+       ctx do
     for target <- ["/v1%2Fresponses", "/backend-api%5Cfiles", "/api/codex%00/usage"] do
-      response = raw_request(ctx, "GET", target)
+      unauthenticated =
+        raw_request(ctx, "GET", target, [{"x-forwarded-for", "198.51.100.20"}])
+
+      assert unauthenticated.status == 401
+      assert json_field(unauthenticated, ["error", "code"]) == "api_key_missing"
+
+      response =
+        raw_request(ctx, "GET", target, [
+          {"authorization", ctx.gateway.authorization},
+          {"x-forwarded-for", "198.51.100.20"}
+        ])
 
       assert response.status == 400
       assert json_field(response, ["error", "code"]) == "invalid_request"

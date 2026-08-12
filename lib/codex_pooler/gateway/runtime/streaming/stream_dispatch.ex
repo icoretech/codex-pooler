@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   """
 
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Facade.TurnState
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Routing.ModelMetadata
@@ -89,14 +90,32 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     fn ->
       response_context = %ResponseContext{context: context, response: response}
 
-      StreamRelay.run(
-        stream_relay_state(:websocket, context.request_options, response),
-        response,
-        stream_relay_handlers(response_context, response, {:websocket, writer}, callbacks)
-      )
+      relay_result =
+        StreamRelay.run(
+          stream_relay_state(:websocket, context.request_options, response),
+          response,
+          stream_relay_handlers(response_context, response, {:websocket, writer}, callbacks)
+        )
+
+      relay_result
       |> case do
-        {:ok, _state} -> :ok
-        {:error, _gateway_error} = error -> error
+        {:ok, %{websocket_sse_buffer: buffer}} ->
+          if WebsocketCodec.failed_stream_buffer?(buffer) do
+            {:error,
+             %{
+               status: 502,
+               code: "upstream_stream_error",
+               message: "websocket stream failed"
+             }}
+          else
+            :ok
+          end
+
+        {:ok, _state} ->
+          :ok
+
+        {:error, _gateway_error} = error ->
+          error
       end
     end
   end
@@ -151,12 +170,43 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
       {data, state} =
         normalize_stream_data(response_context, state, data, &visible_websocket_data?/1)
 
-      {messages, websocket_sse_buffer} =
-        WebsocketCodec.stream_messages(request, data, websocket_sse_buffer(state))
+      case DownstreamStream.terminal_outcome(state) do
+        {:failed, %{code: code} = failure}
+        when code in ["upstream_stream_invalid", "upstream_stream_too_large"] ->
+          {messages, failed_buffer} =
+            WebsocketCodec.stream_messages(request, "", websocket_sse_buffer(state))
 
-      Enum.each(messages, writer)
+          Enum.each(messages, writer)
 
-      {:ok, put_websocket_sse_buffer(state, websocket_sse_buffer)}
+          settlement_failure = %{
+            failure
+            | code: "upstream_stream_error",
+              upstream_code: nil,
+              upstream_error_param: nil
+          }
+
+          {:terminal_stream_failure, put_websocket_sse_buffer(state, failed_buffer),
+           settlement_failure}
+
+        nil when data == "" ->
+          # A valid SSE record may span several upstream chunks. The native
+          # projector retains that residue in `state` and deliberately emits
+          # no bytes until the record is complete; an empty normalized chunk
+          # is therefore not itself malformed websocket data.
+          {:ok, state}
+
+        _outcome ->
+          {messages, websocket_sse_buffer} =
+            WebsocketCodec.stream_messages(request, data, websocket_sse_buffer(state))
+
+          Enum.each(messages, writer)
+
+          if WebsocketCodec.failed_stream_buffer?(websocket_sse_buffer) do
+            {:error, {:upstream_stream_interrupted, :invalid_websocket_stream_data}}
+          else
+            {:ok, put_websocket_sse_buffer(state, websocket_sse_buffer)}
+          end
+      end
     end
   end
 
@@ -767,7 +817,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
       end
 
     [{"cache-control", "no-cache"}, {"content-type", content_type}]
-    |> maybe_put_backend_turn_state_response_header(response, context.request_options)
+    |> maybe_put_backend_turn_state_response_header(response, context)
     |> maybe_put_backend_models_etag(context)
   end
 
@@ -796,15 +846,23 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   defp maybe_put_backend_turn_state_response_header(
          headers,
          response,
-         %RequestOptions{
-           transport: %{upstream_endpoint: endpoint},
-           openai_compatibility: %{source_endpoint: nil, openai_chat_payload: nil}
-         }
+         %SelectedCandidateContext{
+           request_options: %RequestOptions{
+             transport: %{upstream_endpoint: endpoint},
+             openai_compatibility: %{source_endpoint: nil, openai_chat_payload: nil}
+           }
+         } = context
        )
        when endpoint in @backend_turn_state_relay_endpoints do
     case header(response, "x-codex-turn-state") do
-      value when is_binary(value) -> [{"x-codex-turn-state", value} | headers]
-      _value -> headers
+      value when is_binary(value) ->
+        case TurnState.mint_for_context(value, context) do
+          {:ok, public} -> [{"x-codex-turn-state", public} | headers]
+          {:error, :invalid} -> headers
+        end
+
+      _value ->
+        headers
     end
   end
 

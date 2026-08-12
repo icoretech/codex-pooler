@@ -915,16 +915,26 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
   end
 
   test "POST reset-credit consume routes are absent before malformed body handling" do
+    setup = active_api_key_fixture()
+
     for path <- @removed_reset_credit_paths do
       assert Phoenix.Router.route_info(CodexPoolerWeb.Router, "POST", path, "example.com") ==
                :error
 
-      conn =
+      unauthenticated_conn =
         build_conn()
         |> put_req_header("content-type", "application/octet-stream")
         |> post(path, ~s({"redeem_request_id":))
 
-      assert response(conn, 404) =~ "Not Found"
+      assert json_response(unauthenticated_conn, 401)["error"]["code"] == "api_key_missing"
+
+      authenticated_conn =
+        build_conn()
+        |> put_req_header("authorization", setup.authorization)
+        |> put_req_header("content-type", "application/octet-stream")
+        |> post(path, ~s({"redeem_request_id":))
+
+      assert response(authenticated_conn, 404) =~ "Not Found"
     end
 
     assert Repo.aggregate(Request, :count, :id) == 0

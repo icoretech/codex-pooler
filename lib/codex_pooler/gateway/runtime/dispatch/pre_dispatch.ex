@@ -346,6 +346,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
 
     [
       request_options.routing.file_affinity_assignment_id,
+      request_options.continuity.resolved_turn_state_assignment_id,
       codex_session_assignment_id(request_options)
     ]
     |> Enum.filter(&(is_binary(&1) and MapSet.member?(valid_assignment_ids, &1)))

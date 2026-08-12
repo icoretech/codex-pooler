@@ -20,6 +20,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
   @finalize_retry_timeout_ms :timer.seconds(30)
   @finalize_retry_interval_ms 250
   @upload_req_option_allowlist [:adapter, :plug]
+  @download_req_option_allowlist [:adapter, :plug]
   @upload_request_step_denylist [:put_user_agent]
 
   @type auth :: CodexPooler.Access.auth_context()
@@ -84,6 +85,44 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
 
   def upload_file(_upload_url, _file, _opts) do
     {:error, Error.reason(400, "invalid_request", "file upload is not readable", "file")}
+  end
+
+  @spec open_download(String.t(), bridge_opts()) ::
+          {:ok, Req.Response.t()} | {:error, map()}
+  def open_download(download_url, opts \\ %{})
+
+  def open_download(download_url, opts) when is_binary(download_url) do
+    timeouts = TransportEnvelope.timeout_config(opts, @timeout_defaults)
+
+    request_options =
+      configured_download_req_options()
+      |> Keyword.merge(
+        decode_body: false,
+        headers: [{"accept", "application/octet-stream"}],
+        into: :self,
+        redirect: false,
+        retry: false
+      )
+      |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts))
+
+    download_url
+    |> download_request()
+    |> Req.get(request_options)
+    |> normalize_download_response(opts)
+  rescue
+    exception in [
+      Req.TransportError,
+      Req.HTTPError,
+      Finch.TransportError,
+      Finch.HTTPError,
+      Mint.TransportError,
+      Mint.HTTPError
+    ] ->
+      normalize_download_response({:error, exception}, opts)
+  end
+
+  def open_download(_download_url, _opts) do
+    {:error, Error.reason(400, "invalid_request", "file download capability is invalid")}
   end
 
   defp create_file_with_selection(payload, opts, %RoutingSelection{} = selection) do
@@ -286,6 +325,12 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
     |> disable_request_steps(@upload_request_step_denylist)
   end
 
+  defp download_request(download_url) do
+    [url: download_url]
+    |> Req.new()
+    |> disable_request_steps(@upload_request_step_denylist)
+  end
+
   @spec disable_request_steps(Req.Request.t(), [atom()]) :: Req.Request.t()
   defp disable_request_steps(%Req.Request{} = request, step_names) when is_list(step_names) do
     request_steps =
@@ -301,6 +346,13 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
   defp configured_upload_req_options do
     case Keyword.get(config(), :upload_req_options, []) do
       opts when is_list(opts) -> Keyword.take(opts, @upload_req_option_allowlist)
+      _opts -> []
+    end
+  end
+
+  defp configured_download_req_options do
+    case Keyword.get(config(), :download_req_options, []) do
+      opts when is_list(opts) -> Keyword.take(opts, @download_req_option_allowlist)
       _opts -> []
     end
   end
@@ -341,6 +393,37 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
         {:error, Error.reason(502, "upstream_file_upload_failed", "upstream file upload failed")}
     end
   end
+
+  defp normalize_download_response({:ok, %Req.Response{status: status} = response}, _opts)
+       when status in 200..299,
+       do: {:ok, response}
+
+  defp normalize_download_response({:ok, %Req.Response{} = response}, _opts) do
+    cancel_async_response(response)
+
+    {:error, Error.reason(502, "upstream_file_download_failed", "upstream file download failed")}
+  end
+
+  defp normalize_download_response({:error, exception}, opts)
+       when transport_exception?(exception) do
+    log_transport_exception(exception, nil, opts)
+
+    {:error, Error.reason(502, "upstream_file_download_failed", "upstream file download failed")}
+  end
+
+  defp normalize_download_response(_result, _opts) do
+    {:error, Error.reason(502, "upstream_file_download_failed", "upstream file download failed")}
+  end
+
+  defp cancel_async_response(%Req.Response{body: %Req.Response.Async{}} = response) do
+    Req.cancel_async_response(response)
+  rescue
+    _exception -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
+  defp cancel_async_response(_response), do: :ok
 
   defp upload_transport_error(exception, opts) do
     log_transport_exception(exception, nil, opts)

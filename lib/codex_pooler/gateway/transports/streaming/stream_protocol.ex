@@ -133,6 +133,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
     |> PublicProjection.json_message()
   end
 
+  @spec canonicalize_native_codex_responses_json_message_result(binary()) ::
+          {:ok, binary(), map()} | {:error, binary()}
+  def canonicalize_native_codex_responses_json_message_result(data) when is_binary(data) do
+    data
+    |> ErrorCanonicalization.canonicalize_native_codex_responses_json_message()
+    |> PublicProjection.json_message_result()
+  end
+
   @spec canonicalize_native_codex_responses_json_message(binary(), map()) :: {binary(), map()}
   def canonicalize_native_codex_responses_json_message(data, decoded)
       when is_binary(data) and is_map(decoded) do

@@ -117,11 +117,11 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
         "file_size" => 21
       })
 
-    assert %{
-             "file_id" => "file_upstream_bridge",
-             "upload_url" =>
-               "https://fake-upload.invalid/upload/file_upstream_bridge?sig=fake-upload"
-           } = json_response(create_conn, 200)
+    assert %{"file_id" => "file_upstream_bridge", "upload_url" => upload_url} =
+             json_response(create_conn, 200)
+
+    assert upload_url =~ "/file-capabilities/cpfc_"
+    refute upload_url =~ "fake-upload.invalid"
 
     file = Repo.get_by!(FileRecord, file_id: "file_upstream_bridge")
     assert file.pool_id == setup.pool.id
@@ -141,11 +141,13 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
 
     assert %{
              "status" => "success",
-             "download_url" =>
-               "https://fake-download.invalid/download/file_upstream_bridge?sig=fake-download",
+             "download_url" => download_url,
              "file_name" => "bridge-fixture.txt",
              "mime_type" => "text/plain"
            } = json_response(finalize_conn, 200)
+
+    assert download_url =~ "/file-capabilities/cpfc_"
+    refute download_url =~ "fake-download.invalid"
 
     finalized_file = Repo.get!(FileRecord, file.id)
     assert finalized_file.status == "uploaded"

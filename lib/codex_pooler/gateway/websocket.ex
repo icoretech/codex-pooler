@@ -510,6 +510,14 @@ defmodule CodexPooler.Gateway.Websocket do
   @spec start_owner_session_from_turn_state(auth(), RequestOptions.t()) ::
           {:ok, CodexSession.t()}
           | {:error, term()}
+  defp start_owner_session_from_turn_state(
+         auth,
+         %RequestOptions{continuity: %{resolved_turn_state_session_id: session_id}} = opts
+       )
+       when is_binary(session_id) do
+    SessionContinuity.start_codex_session(auth, opts)
+  end
+
   defp start_owner_session_from_turn_state(auth, %RequestOptions{} = opts) do
     case SessionContinuity.start_codex_session_from_turn_state(auth, opts) do
       {:ok, %CodexSession{} = session} -> {:ok, session}

@@ -8,9 +8,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
+  alias CodexPooler.Access
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Gateway.Facade.IdentityInstruction
+  alias CodexPooler.Gateway.Facade.{IdentityInstruction, TurnState}
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
 
@@ -165,21 +166,34 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
     upstream =
       start_upstream(
-        FakeUpstream.json_response_with_headers(
-          %{
-            "id" => "resp_compaction_bridge",
-            "object" => "response.compaction",
-            "output" => [
-              %{
-                "type" => "compaction",
-                "encrypted_content" => "encrypted-compact-fixture"
-              }
-            ],
-            "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8},
-            "raw_compact_detail" => "must-not-leak"
-          },
-          [{"x-codex-turn-state", response_turn_state}]
-        )
+        {:sequence,
+         [
+           FakeUpstream.json_response_with_headers(
+             %{
+               "id" => "resp_compaction_seed",
+               "object" => "response",
+               "status" => "completed",
+               "output" => [],
+               "usage" => %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}
+             },
+             [{"x-codex-turn-state", request_turn_state}]
+           ),
+           FakeUpstream.json_response_with_headers(
+             %{
+               "id" => "resp_compaction_bridge",
+               "object" => "response.compaction",
+               "output" => [
+                 %{
+                   "type" => "compaction",
+                   "encrypted_content" => "encrypted-compact-fixture"
+                 }
+               ],
+               "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8},
+               "raw_compact_detail" => "must-not-leak"
+             },
+             [{"x-codex-turn-state", response_turn_state}]
+           )
+         ]}
       )
 
     setup =
@@ -220,9 +234,27 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       }
     ]
 
-    conn =
+    seed =
       conn
-      |> put_req_header("x-codex-turn-state", request_turn_state)
+      |> put_req_header(
+        "x-codex-window-id",
+        "compact-bridge-window-#{System.unique_integer([:positive])}"
+      )
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "establish compact bridge continuity"
+      })
+
+    assert %{"id" => "resp_compaction_seed"} = json_response(seed, 200)
+    assert [request_handle] = get_resp_header(seed, "x-codex-turn-state")
+    assert String.starts_with?(request_handle, "cpts_")
+    refute request_handle =~ request_turn_state
+
+    response =
+      conn
+      |> recycle()
+      |> put_req_header("x-codex-turn-state", request_handle)
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
@@ -238,14 +270,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
         "conversation" => "conv_compact_fixture"
       })
 
-    assert [content_type] = get_resp_header(conn, "content-type")
+    assert [content_type] = get_resp_header(response, "content-type")
     assert content_type =~ "text/event-stream"
-    assert conn.status == 200
-    assert get_resp_header(conn, "x-codex-turn-state") == [response_turn_state]
+    assert response.status == 200
+    assert [response_handle] = get_resp_header(response, "x-codex-turn-state")
+    assert String.starts_with?(response_handle, "cpts_")
+    refute response_handle =~ response_turn_state
 
-    events = backend_sse_events(response(conn, 200))
+    events = backend_sse_events(response(response, 200))
     assert Enum.map(events, & &1["event"]) == ["response.output_item.done", "response.completed"]
-    assert response(conn, 200) =~ "data: [DONE]\n\n"
+    assert response(response, 200) =~ "data: [DONE]\n\n"
 
     assert %{
              "type" => "response.output_item.done",
@@ -270,9 +304,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
              }
            } = List.last(events)["data"]
 
-    refute response(conn, 200) =~ "raw_compact_detail"
+    refute response(response, 200) =~ "raw_compact_detail"
 
-    assert [captured] = FakeUpstream.requests(upstream)
+    assert [seed_capture, captured] = FakeUpstream.requests(upstream)
+    refute Map.has_key?(Map.new(seed_capture.headers), "x-codex-turn-state")
     assert captured.path == "/backend-api/codex/responses/compact"
     assert Map.new(captured.headers)["x-codex-turn-state"] == request_turn_state
     assert captured.json["model"] == setup.model.upstream_model_id
@@ -302,10 +337,26 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     refute Map.has_key?(captured.json, "include")
     refute inspect(captured.json) =~ "compaction_trigger"
 
-    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [seed_request, request] =
+             Repo.all(
+               from(r in Request,
+                 where: r.pool_id == ^setup.pool.id,
+                 order_by: [asc: r.admitted_at, asc: r.id]
+               )
+             )
+
     assert request.endpoint == "/backend-api/codex/responses/compact"
     assert request.transport == "http_compact_json"
     assert request.status == "succeeded"
+
+    assert seed_request.request_metadata["codex_session_id"] ==
+             request.request_metadata["codex_session_id"]
+
+    {:ok, auth_context} = Access.authenticate_authorization_header(setup.authorization)
+    assert {:ok, resolution} = TurnState.resolve(response_handle, auth_context)
+    assert resolution.upstream == response_turn_state
+    assert resolution.assignment_id == setup.assignment.id
+    assert resolution.session_id == request.request_metadata["codex_session_id"]
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "succeeded"
@@ -323,6 +374,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     persistence_text = inspect({request, attempt})
     refute persistence_text =~ request_turn_state
     refute persistence_text =~ response_turn_state
+    refute persistence_text =~ request_handle
+    refute persistence_text =~ response_handle
   end
 
   test "POST /backend-api/codex/responses bridges audio-only input to compact SSE", %{
@@ -425,18 +478,46 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
       upstream =
         start_upstream(
-          FakeUpstream.json_response_with_headers(
-            compact_response,
-            [{"x-codex-turn-state", response_turn_state}]
-          )
+          {:sequence,
+           [
+             FakeUpstream.json_response_with_headers(
+               %{
+                 "id" => "resp_seed_#{case_name}",
+                 "object" => "response",
+                 "status" => "completed",
+                 "output" => [],
+                 "usage" => %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}
+               },
+               [{"x-codex-turn-state", request_turn_state}]
+             ),
+             FakeUpstream.json_response_with_headers(
+               compact_response,
+               [{"x-codex-turn-state", response_turn_state}]
+             )
+           ]}
         )
 
       setup = gateway_setup(upstream, compact?: true)
 
+      seed =
+        conn
+        |> recycle()
+        |> put_req_header("x-codex-window-id", "compact-shape-window-#{case_name}")
+        |> auth(setup)
+        |> post("/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "establish #{case_name} continuity"
+        })
+
+      assert %{"id" => "resp_seed_" <> ^case_name} = json_response(seed, 200)
+      assert [request_handle] = get_resp_header(seed, "x-codex-turn-state")
+      assert String.starts_with?(request_handle, "cpts_")
+      refute request_handle =~ request_turn_state
+
       response =
         conn
         |> recycle()
-        |> put_req_header("x-codex-turn-state", request_turn_state)
+        |> put_req_header("x-codex-turn-state", request_handle)
         |> auth(setup)
         |> post(path, %{
           "model" => setup.model.exposed_model_id,
@@ -446,7 +527,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
       assert response.status == 200
       assert ["text/event-stream" <> _suffix] = get_resp_header(response, "content-type")
-      assert get_resp_header(response, "x-codex-turn-state") == [response_turn_state]
+      assert [response_handle] = get_resp_header(response, "x-codex-turn-state")
+      assert String.starts_with?(response_handle, "cpts_")
+      refute response_handle =~ response_turn_state
 
       response_body = response(response, 200)
       events = backend_sse_events(response_body)
@@ -511,15 +594,32 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
         refute response_body =~ forbidden
       end
 
-      assert [captured] = FakeUpstream.requests(upstream)
+      assert [seed_capture, captured] = FakeUpstream.requests(upstream)
+      refute Map.has_key?(Map.new(seed_capture.headers), "x-codex-turn-state")
       assert captured.path == "/backend-api/codex/responses/compact"
       assert Map.new(captured.headers)["x-codex-turn-state"] == request_turn_state
       refute inspect(captured.json) =~ "compaction_trigger"
 
-      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert [seed_request, request] =
+               Repo.all(
+                 from(r in Request,
+                   where: r.pool_id == ^setup.pool.id,
+                   order_by: [asc: r.admitted_at, asc: r.id]
+                 )
+               )
+
       assert request.endpoint == "/backend-api/codex/responses/compact"
       assert request.transport == "http_compact_json"
       assert request.status == "succeeded"
+
+      assert seed_request.request_metadata["codex_session_id"] ==
+               request.request_metadata["codex_session_id"]
+
+      {:ok, auth_context} = Access.authenticate_authorization_header(setup.authorization)
+      assert {:ok, resolution} = TurnState.resolve(response_handle, auth_context)
+      assert resolution.upstream == response_turn_state
+      assert resolution.assignment_id == setup.assignment.id
+      assert resolution.session_id == request.request_metadata["codex_session_id"]
 
       assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
       assert attempt.status == "succeeded"
@@ -534,6 +634,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
                )
 
       persisted = inspect({request, attempt, settlement})
+      refute persisted =~ request_handle
+      refute persisted =~ response_handle
+      refute persisted =~ request_turn_state
+      refute persisted =~ response_turn_state
 
       for replay_value <- [
             encrypted_content,

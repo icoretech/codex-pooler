@@ -134,7 +134,9 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
     refute Map.has_key?(fixture.fallback, :internal_events)
   end
 
-  test "backend POST SSE preserves done and legacy decoded payloads", %{conn: conn} do
+  test "backend POST SSE projects done and legacy payloads without unknown siblings", %{
+    conn: conn
+  } do
     for {shape, frame} <- @terminal_shapes do
       setup = http_terminal_setup(frame)
 
@@ -146,7 +148,8 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
 
       assert response.status == 200
       assert [payload] = decoded_sse_payloads(response.resp_body)
-      assert payload == Jason.decode!(frame)
+      assert payload == expected_backend_http_terminal(shape)
+      refute response.resp_body =~ ~s("custom")
     end
   end
 
@@ -176,7 +179,9 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, false)
 
     for {shape, frame} <- @terminal_shapes do
-      assert websocket_terminal("/backend-api/codex/responses", frame, shape) == frame
+      backend = websocket_terminal("/backend-api/codex/responses", frame, shape)
+      assert Jason.decode!(backend) == expected_backend_websocket_terminal(shape)
+      refute backend =~ ~s("custom")
 
       "/v1/responses"
       |> websocket_terminal(frame, shape)
@@ -189,7 +194,9 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     for {shape, frame} <- @terminal_shapes do
-      assert websocket_terminal("/backend-api/codex/responses", frame, shape) == frame
+      backend = websocket_terminal("/backend-api/codex/responses", frame, shape)
+      assert Jason.decode!(backend) == expected_backend_websocket_terminal(shape)
+      refute backend =~ ~s("custom")
 
       "/v1/responses"
       |> websocket_terminal(frame, shape)
@@ -240,11 +247,12 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
         |> websocket_terminal(Jason.encode!(payload), shape)
         |> Jason.decode!()
 
-      assert terminal_error_code(terminal) == expected_code,
+      assert terminal_error_code(terminal) == websocket_terminal_error_code(shape, expected_code),
              "unexpected websocket terminal for #{shape}: #{inspect(terminal)}"
 
       if shape == :failed_without_nested_code do
-        assert terminal == expected_failed_terminal()
+        assert terminal["type"] == "response.failed"
+        assert terminal["response"]["status"] == "failed"
         assert_hostile_failed_sentinels_absent(Jason.encode!(terminal))
       end
     end
@@ -325,7 +333,7 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
     assert payload["type"] == "response.completed"
     assert payload["response"]["id"] == expected_id
     assert payload["response"]["status"] == "completed"
-    assert payload["response"]["custom"] == %{"kept" => true}
+    refute Map.has_key?(payload["response"], "custom")
 
     payload
   end
@@ -340,6 +348,23 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
     do: "service_error"
 
   defp post_terminal_error_code(_shape, shared_code), do: shared_code
+
+  defp websocket_terminal_error_code(:typeless_detail, _source_code), do: "server_error"
+
+  defp websocket_terminal_error_code(_shape, source_code), do: source_code
+
+  defp expected_backend_http_terminal(:done),
+    do: %{"type" => "response.done", "response" => %{"id" => "resp_terminal_done"}}
+
+  defp expected_backend_http_terminal(:legacy) do
+    %{
+      "type" => "response.completed",
+      "response" => %{"id" => "resp_terminal_legacy", "status" => "completed"}
+    }
+  end
+
+  defp expected_backend_websocket_terminal(:done), do: expected_backend_http_terminal(:done)
+  defp expected_backend_websocket_terminal(:legacy), do: %{"id" => "resp_terminal_legacy"}
 
   defp expected_failed_terminal do
     %{
@@ -359,14 +384,10 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
         "object" => "response",
         "output" => [],
         "output_text" => "",
-        "instructions" => nil,
-        "metadata" => nil,
         "parallel_tool_calls" => false,
-        "tool_choice" => "auto",
-        "tools" => [],
         "usage" => %{
           "input_tokens" => 9,
-          "input_tokens_details" => %{"cache_write_tokens" => 1, "cached_tokens" => 2},
+          "input_tokens_details" => %{"cached_tokens" => 2},
           "output_tokens" => 4,
           "output_tokens_details" => %{"reasoning_tokens" => 3},
           "total_tokens" => 13

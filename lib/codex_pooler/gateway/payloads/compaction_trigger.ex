@@ -55,7 +55,11 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
        %{
          status: 200,
          headers: stream_headers(result),
-         raw_body: sse_body(decoded, item)
+         # This is a freshly reconstructed local SSE envelope. Represent it as
+         # a stream so the controller never mistakes it for an untrusted raw
+         # upstream JSON body and subjects the whole SSE document to the
+         # collected-response projector.
+         stream: local_sse_stream(sse_body(decoded, item))
        }}
     else
       {:error, :invalid_json} ->
@@ -269,6 +273,15 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
 
   defp sse_block(event, data) do
     ["event: ", event, "\n", "data: ", Jason.encode!(data), "\n\n"]
+  end
+
+  defp local_sse_stream(body) when is_binary(body) do
+    fn conn ->
+      case Plug.Conn.chunk(conn, body) do
+        {:ok, conn} -> {:ok, conn}
+        {:error, reason} -> {:error, reason}
+      end
+    end
   end
 
   defp stream_headers(result) do

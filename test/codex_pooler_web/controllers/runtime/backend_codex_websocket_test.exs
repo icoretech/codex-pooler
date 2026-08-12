@@ -15,6 +15,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway, as: RuntimeGateway
+  alias CodexPooler.Gateway.Facade.TurnState
   alias CodexPooler.Gateway.Metadata.CodexCatalog
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -309,6 +310,180 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     after
       Mint.HTTP.close(conn)
     end
+  end
+
+  test "websocket upgrade and frame metadata resolve opaque HTTP turn state only for upstream" do
+    raw_turn_state = "raw-websocket-continuity-#{System.unique_integer([:positive])}"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_opaque_turn_state",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert {:ok, %CodexSession{} = upgrade_session} =
+             Gateway.start_codex_session(auth, %{
+               accepted_turn_state: "source-websocket-upgrade-anchor"
+             })
+
+    assert {:ok, opaque} =
+             TurnState.mint(raw_turn_state, auth, setup.assignment.id,
+               session_id: upgrade_session.id
+             )
+
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref, response_headers} =
+      public_websocket_connect_with_headers!(port, setup, opaque)
+
+    try do
+      assert {"x-codex-turn-state", ^opaque} =
+               List.keyfind(response_headers, "x-codex-turn-state", 0)
+
+      payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => "continue from an HTTP turn",
+          "stream" => true,
+          "generate" => true
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {_conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+      assert %{"id" => "resp_ws_opaque_turn_state"} = Jason.decode!(frame)
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert Map.new(captured.headers)["x-codex-turn-state"] == raw_turn_state
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.request_metadata["codex_session_id"] == upgrade_session.id
+    after
+      Mint.HTTP.close(conn)
+    end
+
+    {:ok, session} = Gateway.start_codex_session(auth, %{})
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               Jason.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => "continue from frame metadata",
+                 "stream" => true,
+                 "client_metadata" => %{"x-codex-turn-state" => opaque}
+               }),
+               %{request_id: "ws-frame-opaque-turn-state", codex_session: session},
+               fn _frame -> :ok end
+             )
+
+    assert [_, frame_request] = FakeUpstream.requests(upstream)
+
+    assert frame_request.json["client_metadata"]["x-codex-turn-state"] == raw_turn_state
+    refute frame_request.body =~ opaque
+
+    other_key = CodexPooler.PoolerFixtures.active_api_key_fixture(setup.pool)
+    {:ok, other_auth} = Access.authenticate_authorization_header(other_key.authorization)
+
+    for {label, rejected_auth, rejected_handle} <- [
+          {:cross_key, other_auth, opaque},
+          {:tampered, auth, opaque <> "tampered"}
+        ] do
+      assert {:error, reason} =
+               execute_websocket_response(
+                 rejected_auth,
+                 Jason.encode!(%{
+                   "type" => "response.create",
+                   "model" => setup.model.exposed_model_id,
+                   "input" => "must fail before dispatch",
+                   "stream" => true,
+                   "client_metadata" => %{"x-codex-turn-state" => rejected_handle}
+                 }),
+                 %{request_id: "ws-frame-opaque-turn-state-#{label}", codex_session: session},
+                 fn _frame ->
+                   flunk("invalid opaque frame state must not produce upstream output")
+                 end
+               )
+
+      assert reason.code == "invalid_turn_state"
+    end
+
+    assert FakeUpstream.count(upstream) == 2
+  end
+
+  test "opaque frame continuity retargets the owner runtime to its authenticated session anchor" do
+    previous_owner_forwarding =
+      Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled, false)
+
+    Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
+
+    on_exit(fn ->
+      Application.put_env(
+        :codex_pooler,
+        :websocket_owner_forwarding_enabled,
+        previous_owner_forwarding
+      )
+    end)
+
+    raw_turn_state = "raw-owner-session-anchor-#{System.unique_integer([:positive])}"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_opaque_session_anchor",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert {:ok, %CodexSession{} = anchored_session} =
+             Gateway.start_codex_session(auth, %{
+               accepted_turn_state: "source-owner-session-anchor",
+               owner_instance_id: Atom.to_string(node())
+             })
+
+    assert {:ok, opaque} =
+             TurnState.mint(raw_turn_state, auth, setup.assignment.id,
+               session_id: anchored_session.id
+             )
+
+    port = start_public_endpoint!()
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, "")
+
+    try do
+      payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => "continue from the encrypted owner anchor",
+          "stream" => true,
+          "generate" => true,
+          "client_metadata" => %{"x-codex-turn-state" => opaque}
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {_conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+      assert %{"id" => "resp_ws_opaque_session_anchor"} = Jason.decode!(frame)
+    after
+      Mint.HTTP.close(conn)
+    end
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.json["client_metadata"]["x-codex-turn-state"] == raw_turn_state
+    refute captured.body =~ opaque
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.request_metadata["codex_session_id"] == anchored_session.id
   end
 
   test "one authenticated catalog ETag is identical across every backend alias surface" do
@@ -4157,7 +4332,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     setup = gateway_setup(upstream)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
-    assert :ok =
+    assert {:error, %{code: "upstream_request_failed", status: 502}} =
              execute_websocket_response(
                auth,
                Jason.encode!(%{
@@ -4172,14 +4347,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
              )
 
     assert_receive {:websocket_frame, malformed_frame}, @websocket_frame_timeout
-    assert {:error, _reason} = Jason.decode(malformed_frame)
 
-    frames = receive_websocket_frames_by_type(["response.completed"], @websocket_frame_timeout)
+    assert %{"type" => "error", "error" => %{"code" => "server_error"}} =
+             Jason.decode!(malformed_frame)
 
-    assert %{
-             "type" => "response.completed",
-             "response" => %{"id" => "resp_ws_malformed_rate_limits"}
-           } = frames["response.completed"]
+    refute malformed_frame =~ "resp_ws_malformed_rate_limits"
+    refute_receive {:websocket_frame, _later_frame}
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.last_error_code == "upstream_stream_error"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "upstream_stream_error"
 
     wait_for_rate_limit_event_tasks()
     refute_rate_limit_event_windows(setup.identity)
@@ -6575,20 +6756,29 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       )
 
     setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    raw_turn_state = "http-turn-state"
+
+    {:ok, seeded_session} =
+      Gateway.start_codex_session(auth, %{accepted_turn_state: raw_turn_state})
+
+    seeded_session = pin_session_to_assignment!(seeded_session, setup.assignment)
+
+    {:ok, turn_state_handle} =
+      TurnState.mint(raw_turn_state, auth, setup.assignment.id, session_id: seeded_session.id)
 
     conn =
       conn
       |> auth(setup)
-      |> put_req_header("x-codex-turn-state", "http-turn-state")
+      |> put_req_header("x-codex-turn-state", turn_state_handle)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
         "input" => "http continuity"
       })
 
     assert %{"id" => "resp_http_to_ws"} = json_response(conn, 200)
-    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
-
     assert [http_session] = Repo.all(from(session in CodexSession))
+    assert http_session.id == seeded_session.id
 
     assert [response_alias] =
              Repo.all(
@@ -6857,11 +7047,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       )
 
     setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    raw_turn_state = "http-expired-lease-turn"
+
+    {:ok, seeded_session} =
+      Gateway.start_codex_session(auth, %{accepted_turn_state: raw_turn_state})
+
+    seeded_session = pin_session_to_assignment!(seeded_session, setup.assignment)
+
+    {:ok, turn_state_handle} =
+      TurnState.mint(raw_turn_state, auth, setup.assignment.id, session_id: seeded_session.id)
 
     conn =
       conn
       |> auth(setup)
-      |> put_req_header("x-codex-turn-state", "http-expired-lease-turn")
+      |> put_req_header("x-codex-turn-state", turn_state_handle)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
         "input" => "http continuity past lease"
@@ -6869,6 +7069,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     assert %{"id" => "resp_http_expired_lease"} = json_response(conn, 200)
     assert [http_session] = Repo.all(from(session in CodexSession))
+    assert http_session.id == seeded_session.id
 
     expired_at = DateTime.add(DateTime.utc_now(), -30, :second) |> DateTime.truncate(:microsecond)
 
@@ -6879,8 +7080,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     BridgeOwnerLease
     |> where([lease], lease.codex_session_id == ^http_session.id)
     |> Repo.update_all(set: [expires_at: expired_at, updated_at: expired_at])
-
-    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     {:ok, resumed_session} =
       Gateway.start_codex_session(auth, %{

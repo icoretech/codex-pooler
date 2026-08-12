@@ -756,13 +756,22 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       assert {:push, {:text, partial_frame}, state} = receive_owner_socket_push(state)
 
-      assert %{"type" => ^raw_event_type, "delta" => @sentinel} =
-               Jason.decode!(partial_frame)
+      assert %{
+               "type" => "response.failed",
+               "error" => %{"code" => "server_error"},
+               "response" => %{
+                 "status" => "failed",
+                 "error" => %{"code" => "server_error"}
+               }
+             } = Jason.decode!(partial_frame)
 
-      assert {:push, {:text, error_frame}, _state} = receive_socket_done(state)
+      refute partial_frame =~ raw_event_type
+      refute partial_frame =~ @sentinel
 
-      assert %{"type" => "error", "error" => %{"code" => "service_error"}} =
-               Jason.decode!(error_frame)
+      assert {:ok, state} = receive_owner_socket_complete(state)
+      assert {:ok, _state} = receive_socket_done(state)
+
+      refute_receive {:websocket_owner_frame, _, _, {:data, _duplicate_terminal}}, 100
 
       assert [request_log] = request_logs(setup.pool.id)
       assert request_log.status == "failed"
@@ -789,18 +798,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                "connection_idle_bucket" => "first_request",
                "connection_request_bucket" => "first",
                "connection_use" => "fresh",
-               "last_upstream_event_class" => "response_unknown_event",
-               "last_upstream_event_type" => "response.unknown",
-               "peer_close_code" => 1001,
-               "peer_close_reason_bytes" => 36,
-               "peer_close_reason_present" => true,
-               "phase" => "upstream_close",
+               "last_upstream_event_class" => "terminal_failure_candidate",
+               "last_upstream_event_type" => "error",
+               "phase" => "receive",
                "pre_visible_output" => false,
-               "reason" => "upstream_websocket_closed_before_terminal",
-               "reason_class" => "upstream_websocket_closed_before_terminal",
-               "terminal_candidate_seen" => false,
-               "terminal_seen" => false,
-               "termination_source" => "peer_close_frame",
+               "reason" => "invalid_upstream_websocket_stream_data",
+               "reason_class" => "invalid_upstream_websocket_stream_data",
+               "terminal_candidate_class" => "failure",
+               "terminal_candidate_seen" => true,
+               "terminal_candidate_type" => "error",
+               "terminal_seen" => true,
                "text_frame_count" => 1,
                "transport_signal" => "tcp_data",
                "upstream_committed" => true,

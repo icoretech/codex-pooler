@@ -44,6 +44,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   alias CodexPooler.Files
   alias CodexPooler.Gateway.Facade
   alias CodexPooler.Gateway.Facade.IdentityInstruction
+  alias CodexPooler.Gateway.Facade.TurnState
   alias CodexPooler.Gateway.Metadata
   alias CodexPooler.Gateway.Metadata.CodexCatalog
   alias CodexPooler.Gateway.OperationalSettings
@@ -68,14 +69,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
 
   @supported_compression_model "gpt-5.6-sol"
-  @canonical_full_failure_body %{
-    "error" => %{
-      "code" => "server_error",
-      "message" => "upstream request failed",
-      "type" => "server_error"
-    }
-  }
-
   @tag :facade_task4
   test "backend Responses alias normalizes before the compact-trigger bridge", %{conn: conn} do
     upstream =
@@ -1147,7 +1140,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "stream" => true
       })
 
-    assert response(conn, 400) == ""
+    assert safe_failure_response?(conn, 400)
+    refute conn.resp_body =~ raw_message
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
 
@@ -1197,7 +1191,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> Plug.Conn.send_chunked(200)
 
     assert {:ok, stream_conn} = stream.(stream_conn)
-    assert Jason.decode!(stream_conn.resp_body) == @canonical_full_failure_body
+    assert stream_conn.status == 200
+
+    assert Jason.decode!(stream_conn.resp_body) == %{
+             "error" => %{
+               "code" => "server_error",
+               "message" => "upstream request failed",
+               "type" => "server_error"
+             }
+           }
 
     assert full_failure_sentinels_absent?([stream_conn.resp_body], sentinels)
     assert FakeUpstream.count(failing_upstream) == 1
@@ -1205,7 +1207,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :task_15_sanitization
-  test "Auto preserves ordinary upstream failure status and body byte for byte", %{conn: conn} do
+  test "Auto preserves ordinary upstream failure status with a safe public body", %{conn: conn} do
     upstream_body = legacy_compatibility_failure_body()
     upstream = start_upstream(FakeUpstream.json_response(upstream_body, 422))
     setup = gateway_setup(upstream)
@@ -1219,8 +1221,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       })
 
     assert response.status == 422
-    unchanged_body? = unchanged_upstream_body?(response, upstream_body)
-    assert unchanged_body?
+    assert safe_failure_response?(response, 422)
+    refute response.resp_body =~ "legacy compatibility response"
+    refute response.resp_body =~ "legacy_compatibility_error"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.last_error_code == "upstream_status"
@@ -1238,7 +1241,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :task_15_sanitization
-  test "Auto preserves the final canonical model-miss response body byte for byte", %{conn: conn} do
+  test "Auto preserves final model-miss status with a safe public body", %{conn: conn} do
     upstream_body = %{
       "error" => %{
         "code" => "model_not_found",
@@ -1260,8 +1263,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       })
 
     assert response.status == 404
-    unchanged_body? = unchanged_upstream_body?(response, upstream_body)
-    assert unchanged_body?
+    assert safe_failure_response?(response, 404)
+    refute response.resp_body =~ "model_not_found"
+    refute response.resp_body =~ "sanitized model unavailable"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "failed"
@@ -1281,7 +1285,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :task_15_sanitization
-  test "explicit Full preserves the established final model-miss response body", %{conn: conn} do
+  test "explicit Full preserves final model-miss status with a safe public body", %{conn: conn} do
     upstream_body = %{
       "error" => %{
         "code" => "model_not_found",
@@ -1304,8 +1308,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       })
 
     assert response.status == 404
-    unchanged_body? = unchanged_upstream_body?(response, upstream_body)
-    assert unchanged_body?
+    assert safe_failure_response?(response, 404)
+    refute response.resp_body =~ "model_not_found"
+    refute response.resp_body =~ "sanitized model unavailable"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "failed"
@@ -1317,7 +1322,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :task_15_sanitization
-  test "Lite preserves ordinary upstream failure status and body byte for byte", %{conn: conn} do
+  test "Lite preserves ordinary upstream failure status with a safe public body", %{conn: conn} do
     upstream_body = legacy_compatibility_failure_body()
     upstream = start_upstream(FakeUpstream.json_response(upstream_body, 422))
     setup = gateway_setup(upstream)
@@ -1332,8 +1337,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       })
 
     assert response.status == 422
-    unchanged_body? = unchanged_upstream_body?(response, upstream_body)
-    assert unchanged_body?
+    assert safe_failure_response?(response, 422)
+    refute response.resp_body =~ "legacy compatibility response"
+    refute response.resp_body =~ "legacy_compatibility_error"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
 
@@ -1350,7 +1356,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :task_15_sanitization
-  test "explicit Full leaves compact failure status and body byte for byte", %{conn: conn} do
+  test "explicit Full leaves compact failure status with a safe public body", %{conn: conn} do
     upstream_body = legacy_compatibility_failure_body()
     upstream = start_upstream(FakeUpstream.json_response(upstream_body, 422))
     setup = gateway_setup(upstream, compact?: true)
@@ -1365,8 +1371,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       })
 
     assert response.status == 422
-    unchanged_body? = unchanged_upstream_body?(response, upstream_body)
-    assert unchanged_body?
+    assert safe_failure_response?(response, 422)
+    refute response.resp_body =~ "legacy compatibility response"
+    refute response.resp_body =~ "legacy_compatibility_error"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses/compact"
@@ -3274,10 +3281,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :client_metadata
-  test "POST /backend-api/codex/responses forwards and relays x-codex-turn-state for backend continuity",
+  test "POST /backend-api/codex/responses mints scoped opaque turn state and restores exact upstream continuity",
        %{conn: conn} do
-    request_turn_state = "backend-http-turn-state-#{System.unique_integer([:positive])}"
     response_turn_state = "upstream-http-turn-state-#{System.unique_integer([:positive])}"
+    window_id = "opaque-http-session-anchor-#{System.unique_integer([:positive])}"
 
     upstream =
       start_upstream(
@@ -3295,23 +3302,83 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     setup = gateway_setup(upstream)
 
-    conn =
+    first =
       conn
-      |> put_req_header("x-codex-turn-state", request_turn_state)
+      |> put_req_header("x-codex-window-id", window_id)
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic turn-state forwarding request"
+        "input" => "synthetic first turn-state request"
       })
 
-    assert %{"id" => "resp_backend_turn_state"} = json_response(conn, 200)
-    assert get_resp_header(conn, "x-codex-turn-state") == [response_turn_state]
+    assert %{"id" => "resp_backend_turn_state"} = json_response(first, 200)
+    assert [opaque_turn_state] = get_resp_header(first, "x-codex-turn-state")
+    assert String.starts_with?(opaque_turn_state, "cpts_")
+    refute opaque_turn_state == response_turn_state
+    refute opaque_turn_state =~ response_turn_state
 
-    assert [captured] = FakeUpstream.requests(upstream)
-    assert captured.path == "/backend-api/codex/responses"
-    assert Map.new(captured.headers)["x-codex-turn-state"] == request_turn_state
+    second =
+      conn
+      |> recycle()
+      |> put_req_header("x-codex-turn-state", opaque_turn_state)
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic continuation request"
+      })
 
-    assert_turn_state_not_persisted!(setup, request_turn_state)
+    assert %{"id" => "resp_backend_turn_state"} = json_response(second, 200)
+    assert [second_opaque] = get_resp_header(second, "x-codex-turn-state")
+    assert String.starts_with?(second_opaque, "cpts_")
+    refute second_opaque == response_turn_state
+
+    assert [first_capture, second_capture] = FakeUpstream.requests(upstream)
+    refute Map.has_key?(Map.new(first_capture.headers), "x-codex-turn-state")
+    assert Map.new(second_capture.headers)["x-codex-turn-state"] == response_turn_state
+
+    assert [first_request, second_request] =
+             Repo.all(
+               from(r in Request,
+                 where: r.pool_id == ^setup.pool.id,
+                 order_by: [asc: r.admitted_at, asc: r.id]
+               )
+             )
+
+    assert first_request.request_metadata["codex_session_id"]
+
+    assert second_request.request_metadata["codex_session_id"] ==
+             first_request.request_metadata["codex_session_id"]
+
+    other_key = active_api_key_fixture(setup.pool)
+
+    cross_key =
+      conn
+      |> recycle()
+      |> put_req_header("x-codex-turn-state", opaque_turn_state)
+      |> put_req_header("authorization", other_key.authorization)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "must not cross API keys"
+      })
+
+    assert json_response(cross_key, 400)["error"]["code"] == "invalid_turn_state"
+
+    other_pool_key = active_api_key_fixture(pool_fixture())
+
+    cross_pool =
+      conn
+      |> recycle()
+      |> put_req_header("x-codex-turn-state", opaque_turn_state)
+      |> put_req_header("authorization", other_pool_key.authorization)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "must not cross Pools"
+      })
+
+    assert json_response(cross_pool, 400)["error"]["code"] == "invalid_turn_state"
+    assert FakeUpstream.count(upstream) == 2
+
+    assert_turn_state_not_persisted!(setup, opaque_turn_state)
     assert_turn_state_not_persisted!(setup, response_turn_state)
   end
 
@@ -3338,10 +3405,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       )
 
     setup = gateway_setup(upstream)
+    request_handle = opaque_turn_state!(setup, request_turn_state)
 
     conn =
       conn
-      |> put_req_header("x-codex-turn-state", request_turn_state)
+      |> put_req_header("x-codex-turn-state", request_handle)
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
@@ -3349,7 +3417,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       })
 
     assert %{"error" => %{"code" => "rate_limit_exceeded"}} = json_response(conn, 429)
-    assert get_resp_header(conn, "x-codex-turn-state") == [response_turn_state]
+    assert [response_handle] = get_resp_header(conn, "x-codex-turn-state")
+    assert String.starts_with?(response_handle, "cpts_")
+    refute response_handle =~ response_turn_state
 
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
@@ -3364,7 +3434,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert attempt.upstream_status_code == 429
     assert attempt.network_error_code == "upstream_rate_limited"
 
+    assert_turn_state_not_persisted!(setup, request_handle)
     assert_turn_state_not_persisted!(setup, request_turn_state)
+    assert_turn_state_not_persisted!(setup, response_handle)
     assert_turn_state_not_persisted!(setup, response_turn_state)
   end
 
@@ -4850,7 +4922,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     conn = Task.await(task, 1_000)
 
-    assert %{"late" => true} = json_response(conn, 200)
+    assert %{
+             "id" => "resp_delayed_headers",
+             "object" => "response",
+             "status" => "completed"
+           } = json_response(conn, 200)
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "succeeded"
@@ -7236,7 +7312,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "input" => "synthetic final model miss input"
       })
 
-    assert %{"error" => %{"code" => "model_not_found"}} = json_response(conn, 404)
+    assert safe_failure_response?(conn, 404)
+    refute conn.resp_body =~ "model_not_found"
+    refute conn.resp_body =~ "sanitized model unavailable"
     assert FakeUpstream.count(upstream) == 1
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -7276,8 +7354,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "input" => "synthetic final provenance model miss input"
       })
 
-    assert %{"error" => %{"type" => "invalid_request_error", "param" => "model"}} =
-             json_response(conn, 404)
+    assert safe_failure_response?(conn, 404)
+    refute conn.resp_body =~ ~s("param":"model")
 
     assert FakeUpstream.count(upstream) == 1
 
@@ -7352,7 +7430,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "previous_response_id" => previous_response_id
       })
 
-    assert %{"error" => %{"code" => "model_not_found"}} = json_response(conn, 404)
+    assert safe_failure_response?(conn, 404)
+    refute conn.resp_body =~ "model_not_found"
     assert FakeUpstream.count(pinned_upstream) == 1
     assert FakeUpstream.count(fallback_upstream) == 0
 
@@ -7421,8 +7500,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "previous_response_id" => previous_response_id
       })
 
-    assert %{"error" => %{"type" => "invalid_request_error", "param" => "model"}} =
-             json_response(conn, 404)
+    assert safe_failure_response?(conn, 404)
+    refute conn.resp_body =~ ~s("param":"model")
 
     assert FakeUpstream.count(pinned_upstream) == 1
     assert FakeUpstream.count(fallback_upstream) == 0
@@ -7497,7 +7576,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "input" => [%{"type" => "input_file", "file_id" => file_id}]
       })
 
-    assert %{"error" => %{"code" => "model_not_found"}} = json_response(conn, 404)
+    assert safe_failure_response?(conn, 404)
+    refute conn.resp_body =~ "model_not_found"
     assert FakeUpstream.count(pinned_upstream) == 1
     assert FakeUpstream.count(fallback_upstream) == 0
 
@@ -7555,7 +7635,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "input" => "synthetic generic 404 input"
       })
 
-    assert %{"error" => %{"code" => "request_not_found"}} = json_response(conn, 404)
+    assert safe_failure_response?(conn, 404)
+    refute conn.resp_body =~ "request_not_found"
     assert FakeUpstream.count(first_upstream) == 1
     assert FakeUpstream.count(second_upstream) == 0
 
@@ -7625,7 +7706,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "input" => "synthetic compact model miss input"
       })
 
-    assert %{"error" => %{"code" => "model_not_found"}} = json_response(conn, 404)
+    assert safe_failure_response?(conn, 404)
+    refute conn.resp_body =~ "model_not_found"
     assert FakeUpstream.count(first_upstream) == 1
     assert FakeUpstream.count(second_upstream) == 0
 
@@ -10267,12 +10349,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       )
 
     setup = gateway_setup(upstream, compact?: true)
+    turn_state_handle = opaque_turn_state!(setup, "compact-turn-state")
 
     raw_prompt_cache_key = "raw-compact-prompt-cache-routing-key-do-not-log"
 
     conn =
       conn
-      |> put_req_header("x-codex-turn-state", "compact-turn-state")
+      |> put_req_header("x-codex-turn-state", turn_state_handle)
       |> auth(setup)
       |> post("/backend-api/codex/responses/compact", %{
         "model" => setup.model.exposed_model_id,
@@ -10381,10 +10464,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       )
 
     setup = gateway_setup(upstream, compact?: true)
+    request_handle = opaque_turn_state!(setup, request_turn_state)
 
     conn =
       conn
-      |> put_req_header("x-codex-turn-state", request_turn_state)
+      |> put_req_header("x-codex-turn-state", request_handle)
       |> auth(setup)
       |> post("/backend-api/codex/responses/compact", %{
         "model" => setup.model.exposed_model_id,
@@ -10392,13 +10476,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       })
 
     assert %{"object" => "response.compaction"} = json_response(conn, 200)
-    assert get_resp_header(conn, "x-codex-turn-state") == [response_turn_state]
+    assert [response_handle] = get_resp_header(conn, "x-codex-turn-state")
+    assert String.starts_with?(response_handle, "cpts_")
+    refute response_handle =~ response_turn_state
 
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses/compact"
     assert Map.new(captured.headers)["x-codex-turn-state"] == request_turn_state
 
+    assert_turn_state_not_persisted!(setup, request_handle)
     assert_turn_state_not_persisted!(setup, request_turn_state)
+    assert_turn_state_not_persisted!(setup, response_handle)
     assert_turn_state_not_persisted!(setup, response_turn_state)
   end
 
@@ -10521,10 +10609,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       )
 
     setup = gateway_setup(upstream)
+    request_handle = opaque_turn_state!(setup, request_turn_state)
 
     conn =
       conn
-      |> put_req_header("x-codex-turn-state", request_turn_state)
+      |> put_req_header("x-codex-turn-state", request_handle)
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
@@ -10532,7 +10621,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "stream" => true
       })
 
-    assert get_resp_header(conn, "x-codex-turn-state") == [response_turn_state]
+    assert [response_handle] = get_resp_header(conn, "x-codex-turn-state")
+    assert String.starts_with?(response_handle, "cpts_")
+    refute response_handle =~ response_turn_state
     assert [_models_etag] = get_resp_header(conn, "x-models-etag")
     assert conn.resp_body =~ "event: response.completed\n"
     assert conn.resp_body =~ "resp_backend_stream_turn_state"
@@ -10542,7 +10633,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured.path == "/backend-api/codex/responses"
     assert Map.new(captured.headers)["x-codex-turn-state"] == request_turn_state
 
+    assert_turn_state_not_persisted!(setup, request_handle)
     assert_turn_state_not_persisted!(setup, request_turn_state)
+    assert_turn_state_not_persisted!(setup, response_handle)
     assert_turn_state_not_persisted!(setup, response_turn_state)
   end
 
@@ -10613,7 +10706,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert attempt.status == "succeeded"
   end
 
-  test "POST /backend-api/codex/responses relays stream safety-buffering metadata without persisting it",
+  test "POST /backend-api/codex/responses drops stream safety-buffering metadata without persisting it",
        %{conn: conn} do
     safety_buffering = %{
       "model" => "safety-buffering-model-sentinel",
@@ -10653,9 +10746,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       })
 
     assert conn.resp_body =~ "event: response.output_text.delta\n"
-    assert conn.resp_body =~ ~s("safety_buffering":)
-    assert conn.resp_body =~ "safety-buffering-model-sentinel"
-    assert conn.resp_body =~ "user-risk-sentinel"
+    assert conn.resp_body =~ "visible synthetic safety-buffered text"
+    refute conn.resp_body =~ ~s("safety_buffering":)
+    refute conn.resp_body =~ "safety-buffering-model-sentinel"
+    refute conn.resp_body =~ "user-risk-sentinel"
     assert conn.resp_body =~ "data: [DONE]\n\n"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -10777,10 +10871,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       )
 
     setup = gateway_setup(upstream, compact?: true)
+    turn_state_handle = opaque_turn_state!(setup, "v1-compact-turn-state")
 
     conn =
       conn
-      |> put_req_header("x-codex-turn-state", "v1-compact-turn-state")
+      |> put_req_header("x-codex-turn-state", turn_state_handle)
       |> auth(setup)
       |> post("/backend-api/codex/v1/responses/compact", %{
         "model" => setup.model.exposed_model_id,
@@ -10808,6 +10903,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       )
 
     setup = gateway_setup(upstream, compact?: true)
+    turn_state_handle = opaque_turn_state!(setup, "compact-large-turn-state")
     large_entry = String.duplicate("a", 8_100_000)
 
     body =
@@ -10822,7 +10918,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     conn =
       conn
       |> put_req_header("content-type", "application/json")
-      |> put_req_header("x-codex-turn-state", "compact-large-turn-state")
+      |> put_req_header("x-codex-turn-state", turn_state_handle)
       |> auth(setup)
       |> post("/backend-api/codex/responses/compact", body)
 
@@ -10856,10 +10952,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       )
 
     setup = gateway_setup(upstream, compact?: true)
+    request_handle = opaque_turn_state!(setup, request_turn_state)
 
     conn =
       conn
-      |> put_req_header("x-codex-turn-state", request_turn_state)
+      |> put_req_header("x-codex-turn-state", request_handle)
       |> auth(setup)
       |> post("/backend-api/codex/responses/compact", %{
         "model" => setup.model.exposed_model_id,
@@ -10867,7 +10964,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       })
 
     assert %{"error" => %{"code" => "rate_limit_exceeded"}} = json_response(conn, 429)
-    assert get_resp_header(conn, "x-codex-turn-state") == [response_turn_state]
+    assert [response_handle] = get_resp_header(conn, "x-codex-turn-state")
+    assert String.starts_with?(response_handle, "cpts_")
+    refute response_handle =~ response_turn_state
 
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses/compact"
@@ -10888,6 +10987,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert [turn] = Repo.all(from(t in CodexTurn, where: t.request_id == ^request.id))
     assert turn.transport_kind == "http_json"
     assert turn.status == "failed"
+
+    assert_turn_state_not_persisted!(setup, request_handle)
+    assert_turn_state_not_persisted!(setup, request_turn_state)
+    assert_turn_state_not_persisted!(setup, response_handle)
+    assert_turn_state_not_persisted!(setup, response_turn_state)
 
     assert_turn_state_not_persisted!(setup, request_turn_state)
     assert_turn_state_not_persisted!(setup, response_turn_state)
@@ -11643,7 +11747,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag assignment_model_http: true
-  test "POST /backend-api/codex/responses retries an accepted model miss from accepted turn state",
+  test "POST /backend-api/codex/responses keeps an accepted opaque turn-state model miss hard pinned",
        %{conn: conn} do
     pinned_upstream =
       start_upstream(
@@ -11683,33 +11787,29 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     turn_state = "model-miss-turn-#{System.unique_integer([:positive])}"
     {:ok, session} = Gateway.start_codex_session(auth, %{accepted_turn_state: turn_state})
     session = pin_session_to_assignment!(session, setup.assignment)
+    turn_state_handle = opaque_turn_state!(setup, turn_state, session_id: session.id)
 
     conn =
       conn
       |> auth(setup)
-      |> put_req_header("x-codex-turn-state", turn_state)
+      |> put_req_header("x-codex-turn-state", turn_state_handle)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
         "input" => "synthetic accepted turn state model miss"
       })
 
-    assert %{"id" => "resp_turn_state_model_fallback"} = json_response(conn, 200)
+    assert safe_failure_response?(conn, 404)
     assert FakeUpstream.count(pinned_upstream) == 1
-    assert FakeUpstream.count(fallback_upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 0
 
-    assert [first_attempt, second_attempt] =
-             Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
-
-    assert first_attempt.pool_upstream_assignment_id == setup.assignment.id
-    assert first_attempt.status == "retryable_failed"
-    assert first_attempt.usage_status == "usage_unknown"
-    assert second_attempt.pool_upstream_assignment_id == fallback.assignment.id
-    assert second_attempt.status == "succeeded"
-    assert second_attempt.usage_status == "usage_known"
+    assert [attempt] = Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number]))
+    assert attempt.pool_upstream_assignment_id == setup.assignment.id
+    assert attempt.status == "failed"
+    assert attempt.usage_status == "usage_unknown"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.request_metadata["codex_session_id"] == session.id
-    assert request.retry_count == 1
+    assert request.retry_count == 0
   end
 
   @tag :hard_pinned_quota_recovery
@@ -13033,6 +13133,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute persistence_text =~ turn_state
   end
 
+  defp opaque_turn_state!(setup, raw, opts \\ []) do
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    assignment_id = Keyword.get(opts, :assignment_id, setup.assignment.id)
+    mint_opts = Keyword.take(opts, [:session_id, :now, :ttl_seconds])
+    {:ok, handle} = TurnState.mint(raw, auth, assignment_id, mint_opts)
+    handle
+  end
+
   defp backend_chat_completed_upstream do
     FakeUpstream.sse_stream([
       {"response.completed",
@@ -13328,12 +13436,30 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   defp canonical_full_failure_response?(response, status) do
-    response.status == status and
-      Jason.decode(response.resp_body) == {:ok, @canonical_full_failure_body}
+    safe_failure_response?(response, status)
   end
 
-  defp unchanged_upstream_body?(response, upstream_body) do
-    response.resp_body == Jason.encode!(upstream_body)
+  defp safe_failure_response?(response, status) do
+    {code, message, type} =
+      case status do
+        400 -> {"invalid_request", "Request is invalid", "invalid_request_error"}
+        404 -> {"not_found", "Endpoint was not found", "invalid_request_error"}
+        429 -> {"rate_limit_exceeded", "Local request limit exceeded", "invalid_request_error"}
+        value when value >= 500 -> {"server_error", "gemma3 request failed", "server_error"}
+        _status -> {"request_failed", "Request failed", "invalid_request_error"}
+      end
+
+    with true <- response.status == status,
+         {:ok, %{"error" => error}} when is_map(error) <- Jason.decode(response.resp_body),
+         true <- Map.get(error, "code") == code,
+         true <- Map.get(error, "message") == message,
+         true <- Map.get(error, "type") == type,
+         true <- Map.get(error, "param") in [nil],
+         true <- Map.keys(error) -- ~w(code message param type) == [] do
+      true
+    else
+      _mismatch -> false
+    end
   end
 
   defp legacy_compatibility_failure_body do
