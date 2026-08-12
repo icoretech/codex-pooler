@@ -4,12 +4,12 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@ai-sdk/openai": "3.0.84",
-    "ai": "6.0.168",
-    "effect": "4.0.0-beta.83",
-    "zod": "4.1.8"
+    "@ai-sdk/openai": "4.0.41",
+    "ai": "7.0.63",
+    "effect": "4.0.0-rc.108",
+    "zod": "4.4.3"
   },
   "devDependencies": {
-    "typescript": "5.8.2"
+    "typescript": "7.0.2"
   }
 }
