@@ -288,7 +288,9 @@ body {
   bottom: 0.3125rem;
   left: 0.75rem;
   width: 4px;
-  border-radius: 2px;
+  /* Pill, written the way the other pills in this file are. On a 4px bar the
+     browser clamps this to a 2px radius, so the shape is unchanged. */
+  border-radius: 999px;
   background: var(--admin-status-tick, var(--color-base-300));
 }
 
@@ -359,7 +361,8 @@ body {
     align-self: stretch;
     width: 4px;
     margin-top: 2px;
-    border-radius: 2px;
+    /* Same 4px pill as the table tick above; clamped identically. */
+    border-radius: 999px;
     background: var(--admin-status-tick, var(--color-base-300));
   }
 
