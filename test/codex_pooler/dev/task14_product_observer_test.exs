@@ -112,6 +112,23 @@ defmodule CodexPooler.Dev.Task14ProductObserverTest do
            ]
   end
 
+  test "records Pooler-generated request identity when the client sent no x-request-id" do
+    :ok = Task14ProductObserver.arm()
+
+    emit(:provider_to_pooler, "response.completed",
+      client_request_id: nil,
+      response_fingerprint: "a1b2c3d4e5f6"
+    )
+
+    assert %{
+             "request-1" => %{
+               "clientRequestId" => nil,
+               "requestId" => "request-1",
+               "attemptId" => "attempt-1"
+             }
+           } = Task14ProductObserver.captures()
+  end
+
   test "retains every request of a real multi-turn round and still bounds the window" do
     :ok = Task14ProductObserver.arm()
 
@@ -176,7 +193,7 @@ defmodule CodexPooler.Dev.Task14ProductObserverTest do
   defp emit(direction, event_type, opts \\ []) do
     :telemetry.execute(@event, %{count: 1}, %{
       request_id: Keyword.get(opts, :request_id, "request-1"),
-      client_request_id: "client-1",
+      client_request_id: Keyword.get(opts, :client_request_id, "client-1"),
       attempt_id: Keyword.get(opts, :attempt_id, "attempt-1"),
       direction: direction,
       event_type: event_type,

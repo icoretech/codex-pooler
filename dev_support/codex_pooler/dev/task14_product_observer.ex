@@ -73,7 +73,7 @@ defmodule CodexPooler.Dev.Task14ProductObserver do
 
   defp observation(metadata) do
     with {:ok, request_id} <- bounded_id(metadata[:request_id]),
-         {:ok, client_request_id} <- bounded_id(metadata[:client_request_id]),
+         {:ok, client_request_id} <- optional_bounded_id(metadata[:client_request_id]),
          {:ok, attempt_id} <- optional_bounded_id(metadata[:attempt_id]),
          direction when direction in [:provider_to_pooler, :pooler_to_codex] <-
            metadata[:direction],
