@@ -26,6 +26,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
              UpstreamAccountBundle.export_bundle(source_pool, @password)
 
     assert export_receipt.exported == 1
+    assert export_receipt.version == 2
     assert export_receipt.skipped_missing_refresh_token == 0
     refute bundle =~ source.access_token
     refute bundle =~ source.refresh_token
@@ -44,6 +45,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
     imported =
       Upstreams.get_upstream_identity_by_chatgpt_account(source.identity.chatgpt_account_id)
 
+    assert imported.credential_provenance == "codex_chatgpt_oauth"
     assert {:ok, access_token} = Secrets.decrypt_active_secret(imported, "access_token")
     assert {:ok, refresh_token} = Secrets.decrypt_active_secret(imported, "refresh_token")
     assert access_token == source.access_token
@@ -57,7 +59,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
     refute inspect(import_receipt) =~ source.identity.account_email
   end
 
-  test "rejects a wrong password, tampering, and unsupported versions before writes" do
+  test "rejects a wrong password, tampering, legacy, unversioned, and unsupported bundles before writes" do
     source_pool = pool_fixture()
     source = account_fixture(source_pool)
     target_pool = pool_fixture()
@@ -95,6 +97,24 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
 
     assert {:error, %{code: :bundle_unsupported_version}} =
              UpstreamAccountBundle.import_bundle(unsupported, target_pool, scope, @password)
+
+    legacy =
+      bundle
+      |> Jason.decode!()
+      |> Map.put("version", 1)
+      |> Jason.encode!()
+
+    assert {:error, %{code: :bundle_unsupported_version}} =
+             UpstreamAccountBundle.import_bundle(legacy, target_pool, scope, @password)
+
+    unversioned =
+      bundle
+      |> Jason.decode!()
+      |> Map.delete("version")
+      |> Jason.encode!()
+
+    assert {:error, %{code: :bundle_malformed}} =
+             UpstreamAccountBundle.import_bundle(unversioned, target_pool, scope, @password)
 
     downgraded_kdf =
       bundle
@@ -161,6 +181,24 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
 
     assert Upstreams.list_active_pool_assignments(target_pool) == []
     refute inspect(bundle) =~ source.identity.account_email
+  end
+
+  test "round trip preserves an explicitly unclassified credential without authorizing it" do
+    source_pool = pool_fixture()
+    source = account_fixture(source_pool, credential_provenance: :unclassified)
+    target_pool = pool_fixture()
+    scope = owner_scope()
+
+    assert {:ok, bundle, _receipt} = UpstreamAccountBundle.export_bundle(source_pool, @password)
+
+    assert {:ok, %{imported: 1}} =
+             UpstreamAccountBundle.import_bundle(bundle, target_pool, scope, @password)
+
+    imported =
+      Upstreams.get_upstream_identity_by_chatgpt_account(source.identity.chatgpt_account_id)
+
+    assert imported.credential_provenance == nil
+    refute UpstreamIdentity.authenticated_codex_chatgpt?(imported)
   end
 
   test "rolls back a first created account and all side effects when the second account fails" do
@@ -315,6 +353,63 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
     refute inspect(error) =~ source.access_token
     refute inspect(error) =~ source.refresh_token
     refute inspect(error) =~ source.identity.account_email
+  end
+
+  test "trusted import rejects missing, forged, and malformed credential provenance before writes" do
+    source_pool = pool_fixture()
+    source = account_fixture(source_pool)
+    target_pool = pool_fixture()
+    scope = owner_scope()
+    before = persistence_counts()
+
+    for provenance <- [:missing, "forged_provenance", 42] do
+      attrs =
+        source
+        |> import_attrs()
+        |> then(fn attrs ->
+          if provenance == :missing,
+            do: Map.delete(attrs, :credential_provenance),
+            else: Map.put(attrs, :credential_provenance, provenance)
+        end)
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Upstreams.import_trusted_account_in_transaction(scope, target_pool, attrs)
+
+      assert "is invalid" in errors_on(changeset).credential_provenance
+    end
+
+    assert persistence_counts() == before
+  end
+
+  test "encrypted v2 import rejects missing, forged, and malformed credential provenance before writes" do
+    source_pool = pool_fixture()
+    _source = account_fixture(source_pool)
+    target_pool = pool_fixture()
+    scope = owner_scope()
+
+    assert {:ok, bundle, _receipt} = UpstreamAccountBundle.export_bundle(source_pool, @password)
+    before = persistence_counts()
+
+    mutations = [
+      &Map.delete(&1, "credential_provenance"),
+      &Map.put(&1, "credential_provenance", "forged_provenance"),
+      &Map.put(&1, "credential_provenance", 42)
+    ]
+
+    for mutation <- mutations do
+      invalid_bundle = reseal_first_account(bundle, mutation)
+
+      assert {:error, %{code: :bundle_invalid_account}} =
+               UpstreamAccountBundle.import_bundle(
+                 invalid_bundle,
+                 target_pool,
+                 scope,
+                 @password
+               )
+    end
+
+    assert persistence_counts() == before
+    assert Upstreams.list_active_pool_assignments(target_pool) == []
   end
 
   test "strict CLI parsers reject duplicate and contradictory destructive options" do
@@ -496,7 +591,17 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
                plaintext: refresh_token
              })
 
-    Map.merge(fixture, %{access_token: access_token, refresh_token: refresh_token})
+    identity =
+      fixture.identity
+      |> Ecto.Changeset.change()
+      |> UpstreamIdentity.put_credential_provenance(
+        Keyword.get(opts, :credential_provenance, :codex_chatgpt)
+      )
+      |> Repo.update!()
+
+    fixture
+    |> Map.put(:identity, identity)
+    |> Map.merge(%{access_token: access_token, refresh_token: refresh_token})
   end
 
   defp owner_scope do
@@ -550,9 +655,61 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
       plan_label: source.identity.plan_label,
       token: source.access_token,
       refresh_token: source.refresh_token,
+      credential_provenance: source.identity.credential_provenance,
       import_metadata: %{}
     }
   end
+
+  defp reseal_first_account(bundle, mutation) do
+    header = Jason.decode!(bundle)
+    kdf = header["kdf"]
+    salt = Base.decode64!(kdf["salt"])
+    nonce = Base.decode64!(header["nonce"])
+    <<tag::binary-size(16), ciphertext::binary>> = Base.decode64!(header["ciphertext"])
+    key = bundle_key(salt, kdf)
+    aad = header |> Map.delete("ciphertext") |> canonical_json() |> IO.iodata_to_binary()
+
+    plaintext =
+      :crypto.crypto_one_time_aead(:aes_256_gcm, key, nonce, ciphertext, aad, tag, false)
+
+    %{"accounts" => [account]} = payload = Jason.decode!(plaintext)
+    encoded = Jason.encode!(%{payload | "accounts" => [mutation.(account)]})
+
+    {ciphertext, tag} =
+      :crypto.crypto_one_time_aead(:aes_256_gcm, key, nonce, encoded, aad, true)
+
+    header
+    |> Map.put("ciphertext", Base.encode64(tag <> ciphertext))
+    |> Jason.encode!()
+  end
+
+  defp bundle_key(salt, kdf) do
+    hash =
+      Argon2.Base.hash_password(@password, salt,
+        format: :raw_hash,
+        hashlen: 32,
+        t_cost: kdf["t_cost"],
+        m_cost: kdf["m_cost"],
+        parallelism: kdf["parallelism"],
+        argon2_type: 2
+      )
+
+    Base.decode16!(hash, case: :lower)
+  end
+
+  defp canonical_json(%{} = map) do
+    [
+      "{",
+      map
+      |> Enum.sort_by(fn {key, _value} -> key end)
+      |> Enum.map_join(",", fn {key, value} ->
+        [Jason.encode!(key), ":", canonical_json(value)]
+      end),
+      "}"
+    ]
+  end
+
+  defp canonical_json(value), do: Jason.encode!(value)
 
   defp private_tmp_dir! do
     path =

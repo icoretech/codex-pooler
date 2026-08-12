@@ -15,7 +15,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
 
   @password_env "CODEX_POOLER_ACCOUNT_BUNDLE_PASSWORD"
   @format "codex-pooler.upstream-accounts"
-  @version 1
+  @version 2
   @cipher "aes-256-gcm"
   @salt_bytes 16
   @nonce_bytes 12
@@ -26,7 +26,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
   @kdf_keys ~w(alg t_cost m_cost parallelism salt)
   @account_keys ~w(
     chatgpt_account_id chatgpt_user_id account_email account_label workspace_id workspace_label
-    seat_type plan_label access_token refresh_token access_token_expires_at
+    seat_type plan_label credential_provenance access_token refresh_token access_token_expires_at
   )
 
   @type lifecycle_error :: %{required(:code) => atom(), required(:message) => String.t()}
@@ -254,6 +254,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
          "workspace_label" => identity.workspace_label,
          "seat_type" => identity.seat_type,
          "plan_label" => identity.plan_label,
+         "credential_provenance" => identity.credential_provenance,
          "access_token" => access_token,
          "refresh_token" => refresh_token,
          "access_token_expires_at" => access_token_expires_at(identity.metadata)
@@ -424,24 +425,33 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
   end
 
   defp valid_account?(%{} = account) do
-    Enum.sort(Map.keys(account)) == Enum.sort(@account_keys) and
-      present_string?(account["chatgpt_account_id"]) and
-      present_string?(account["account_label"]) and
-      present_string?(account["access_token"]) and
-      present_string?(account["refresh_token"]) and
-      optional_string?(account["chatgpt_user_id"]) and
-      optional_string?(account["account_email"]) and
-      optional_string?(account["workspace_id"]) and
-      optional_string?(account["workspace_label"]) and
-      optional_string?(account["seat_type"]) and
-      optional_string?(account["plan_label"]) and
-      optional_datetime?(account["access_token_expires_at"])
+    valid_account_keys?(account) and valid_account_values?(account)
   end
 
   defp valid_account?(_account), do: false
 
+  defp valid_account_keys?(account),
+    do: Enum.sort(Map.keys(account)) == Enum.sort(@account_keys)
+
+  defp valid_account_values?(account) do
+    Enum.all?([
+      present_string?(account["chatgpt_account_id"]) and
+        present_string?(account["account_label"]),
+      present_string?(account["access_token"]) and present_string?(account["refresh_token"]),
+      optional_string?(account["chatgpt_user_id"]) and
+        optional_string?(account["account_email"]),
+      optional_string?(account["workspace_id"]) and
+        optional_string?(account["workspace_label"]),
+      optional_string?(account["seat_type"]) and optional_string?(account["plan_label"]),
+      valid_credential_provenance?(account["credential_provenance"]),
+      optional_datetime?(account["access_token_expires_at"])
+    ])
+  end
+
   defp present_string?(value), do: is_binary(value) and byte_size(String.trim(value)) > 0
   defp optional_string?(value), do: is_nil(value) or is_binary(value)
+
+  defp valid_credential_provenance?(value), do: value in [nil, "codex_chatgpt_oauth"]
 
   defp optional_datetime?(nil), do: true
 
@@ -513,6 +523,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
       plan_label: account["plan_label"],
       token: account["access_token"],
       refresh_token: account["refresh_token"],
+      credential_provenance: account["credential_provenance"],
       access_token_expires_at: account["access_token_expires_at"],
       import_metadata: %{}
     }

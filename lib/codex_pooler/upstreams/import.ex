@@ -29,7 +29,7 @@ defmodule CodexPooler.Upstreams.Import do
   @spec import_trusted_account(Scope.t(), Pool.t(), map()) :: import_result()
   def import_trusted_account(%Scope{} = scope, %Pool{} = pool, attrs) when is_map(attrs) do
     with {:ok, attrs} <- validate_trusted_account(scope, pool, attrs) do
-      TokenLinking.link_tokens(scope, pool, attrs, trusted_account_link_options())
+      TokenLinking.link_tokens(scope, pool, attrs, trusted_account_link_options(attrs))
     end
   end
 
@@ -42,7 +42,10 @@ defmodule CodexPooler.Upstreams.Import do
   def validate_trusted_account(%Scope{} = scope, %Pool{} = pool, attrs) when is_map(attrs) do
     attrs = normalize_import_attrs(attrs)
 
-    case import_validation_errors(attrs, require_refresh_token?: true) do
+    case import_validation_errors(attrs,
+           require_refresh_token?: true,
+           require_credential_provenance?: true
+         ) do
       [] ->
         with :ok <- require_import_pool_operate(scope, pool), do: {:ok, attrs}
 
@@ -63,7 +66,7 @@ defmodule CodexPooler.Upstreams.Import do
         scope,
         pool,
         attrs,
-        trusted_account_link_options()
+        trusted_account_link_options(attrs)
       )
     end
   end
@@ -72,14 +75,18 @@ defmodule CodexPooler.Upstreams.Import do
     {:error, %{code: :invalid_request, message: "trusted upstream account is invalid"}}
   end
 
-  defp trusted_account_link_options do
+  defp trusted_account_link_options(attrs) do
     [
       onboarding_method: "import",
+      credential_provenance: trusted_credential_provenance(attrs.credential_provenance),
       audit_action: "upstream_account.import",
       broadcast_reason: "upstream_account_bundle_imported",
       token_refresh_trigger_kind: "upstream_account_bundle_import"
     ]
   end
+
+  defp trusted_credential_provenance("codex_chatgpt_oauth"), do: :codex_chatgpt
+  defp trusted_credential_provenance(nil), do: :unclassified
 
   defp import_trusted_auth_json_account(scope, %Pool{} = pool, attrs) when is_map(attrs) do
     attrs = normalize_import_attrs(attrs)
@@ -149,6 +156,10 @@ defmodule CodexPooler.Upstreams.Import do
         attrs
         |> import_value(:access_token_expires_at)
         |> parse_optional_datetime(),
+      credential_provenance: import_value(attrs, :credential_provenance),
+      credential_provenance_present?:
+        Map.has_key?(attrs, :credential_provenance) or
+          Map.has_key?(attrs, "credential_provenance"),
       import_metadata:
         attrs
         |> import_value(:import_metadata)
@@ -170,6 +181,19 @@ defmodule CodexPooler.Upstreams.Import do
       :refresh_token,
       "is required"
     )
+    |> maybe_add_error(
+      Keyword.get(opts, :require_credential_provenance?, false) and
+        not attrs.credential_provenance_present?,
+      :credential_provenance,
+      "is invalid"
+    )
+    |> maybe_add_error(
+      Keyword.get(opts, :require_credential_provenance?, false) and
+        attrs.credential_provenance_present? and
+        attrs.credential_provenance not in [nil, "codex_chatgpt_oauth"],
+      :credential_provenance,
+      "is invalid"
+    )
   end
 
   defp import_identity_changeset(attrs, errors) do
@@ -178,6 +202,7 @@ defmodule CodexPooler.Upstreams.Import do
       account_label: attrs[:account_label],
       plan_label: attrs[:plan_label],
       pool_id: attrs[:pool_id],
+      credential_provenance: attrs[:credential_provenance],
       token: ""
     }
 
@@ -187,6 +212,7 @@ defmodule CodexPooler.Upstreams.Import do
        account_label: :string,
        plan_label: :string,
        pool_id: :string,
+       credential_provenance: :string,
        token: :string
      }}
     |> Ecto.Changeset.cast(data, Map.keys(data))

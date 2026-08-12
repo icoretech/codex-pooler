@@ -347,6 +347,7 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
     assert Repo.aggregate(InviteAcceptance, :count) == acceptance_count_before + 1
     identity = Repo.one!(UpstreamIdentity)
     assert identity.status == "active"
+    assert identity.credential_provenance == "codex_chatgpt_oauth"
     assert identity.account_email == "codex-user@example.com"
     assert identity.metadata["credential_epoch"] == 1
     assert identity.metadata["usage_probe_sequence"] == 0
@@ -397,6 +398,7 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
     assert Repo.aggregate(InviteAcceptance, :count) == acceptance_count_before
     assert Repo.aggregate(Oban.Job, :count) == job_count_before
     assert Repo.one!(UpstreamIdentity).status == "pending"
+    assert Repo.one!(UpstreamIdentity).credential_provenance == nil
     assert Repo.one!(PoolUpstreamAssignment).status == "pending"
     assert active_secret_count("access_token") == 0
     assert active_secret_count("refresh_token") == 0
@@ -467,6 +469,8 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
       InviteOnboarding.poll_device(second_token, second_start.account.identity.id)
 
     assert second_completed.identity.id == first_completed.identity.id
+    assert second_completed.identity.credential_provenance == "codex_chatgpt_oauth"
+    assert Repo.reload!(second_completed.identity).credential_provenance == "codex_chatgpt_oauth"
     assert second_completed.identity.metadata["credential_epoch"] == first_epoch + 1
     assert second_completed.assignment.id == first_completed.assignment.id
     assert second_completed.identity.account_email == "codex-user@example.com"

@@ -145,6 +145,7 @@ defmodule CodexPooler.Upstreams.OAuthDeviceLinkingTest do
     assert identity.chatgpt_user_id == "user_acct_device_success"
     assert identity.account_email == "device-acct_device_success@example.com"
     assert identity.onboarding_method == "device"
+    assert identity.credential_provenance == "codex_chatgpt_oauth"
     assert identity.workspace_id == "workspace-device"
     assert identity.plan_family == "team"
     assert assignment.pool_id == pool.id
