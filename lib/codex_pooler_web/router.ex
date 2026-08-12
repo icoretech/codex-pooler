@@ -128,6 +128,26 @@ defmodule CodexPoolerWeb.Router do
     get "/wham/usage", Runtime.CodexUsageController, :show
   end
 
+  scope "/api", CodexPoolerWeb do
+    pipe_through :api
+
+    get "/tags", Ollama.DiscoveryController, :tags
+    post "/show", Ollama.DiscoveryController, :show
+    get "/ps", Ollama.DiscoveryController, :ps
+    get "/version", Ollama.DiscoveryController, :version
+
+    post "/pull", Ollama.ModelManagementController, :pull
+    post "/create", Ollama.ModelManagementController, :immutable
+    post "/copy", Ollama.ModelManagementController, :immutable
+    post "/push", Ollama.ModelManagementController, :immutable
+    delete "/delete", Ollama.ModelManagementController, :immutable
+    # Plug.Head rewrites an external HEAD to GET before Phoenix route matching.
+    get "/blobs/:digest", Ollama.ModelManagementController, :immutable
+    post "/blobs/:digest", Ollama.ModelManagementController, :immutable
+    post "/embed", Ollama.ModelManagementController, :embeddings
+    post "/embeddings", Ollama.ModelManagementController, :embeddings
+  end
+
   scope "/v1", CodexPoolerWeb do
     pipe_through :api
 

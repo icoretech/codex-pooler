@@ -32,7 +32,7 @@ defmodule CodexPooler.Gateway.Facade.HeaderPolicy do
     name = name |> to_string() |> String.downcase()
 
     case name do
-      "content-type" -> normalize_content_type(value)
+      "content-type" -> normalize_content_type(protocol, value)
       "cache-control" -> exact_value(name, value, ["no-cache"])
       "connection" -> exact_value(name, value, @connection_values)
       @local_recovery_header -> safe_recovery_value(value)
@@ -44,10 +44,16 @@ defmodule CodexPooler.Gateway.Facade.HeaderPolicy do
 
   defp normalize(_protocol, _header), do: nil
 
-  defp normalize_content_type(value) do
+  defp normalize_content_type(protocol, value) do
     case value |> String.split(";", parts: 2) |> hd() |> String.trim() |> String.downcase() do
-      "text/event-stream" -> {"content-type", "text/event-stream"}
-      _content_type -> nil
+      "text/event-stream" ->
+        {"content-type", "text/event-stream"}
+
+      "application/x-ndjson" when protocol == :ollama ->
+        {"content-type", "application/x-ndjson"}
+
+      _content_type ->
+        nil
     end
   end
 
