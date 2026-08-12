@@ -201,6 +201,10 @@ animated):
 - Panel switcher: 150ms opacity ease-out with `motion-reduce:transition-none`.
 - Pool compat disclosure: 160ms slide/fade in (`pool-compat-panel-in`),
   disabled under reduced motion.
+- Admin rail expansion below `xl` (`.admin-rail`): 160ms `ease-out` on width and
+  box-shadow, opening after a 140ms delay and closing with none. Reduced motion
+  drops the duration to `0s` but keeps the delay: the wait is an intent filter
+  that stops a passing pointer from opening the rail, not decoration.
 - Hover/focus color transitions: `transition-colors` (~200ms) on nav items,
   chips, pills, dropdown items.
 - Flash show/hide: 200–300ms fade/scale via `CoreComponents.show/hide`;
@@ -393,7 +397,9 @@ wrapped by `Layouts.app chrome={:admin}` in
   dropdown, alert notifications, the live-updates toggle, and the WebSocket
   state dropdown.
 - Fixed sidebar: `w-16` icon rail, `xl:w-64` with labels; active item gets
-  `!border-l-primary bg-base-300` on a `border-l-[3px]` slot.
+  `!border-l-primary bg-base-300` on a `border-l-[3px]` slot. Below `xl` the
+  collapsed rail opens to that same labelled shape on pointer or keyboard
+  focus; see the rail rule below.
 - The nav ends with the Observatory item, the one exit to the key-holder
   surface. It looks like its siblings — no arrow glyphs, separators, or
   group labels — and the protection is the interaction: it opens through the
@@ -416,6 +422,25 @@ page in the 768–1280 band — landscape goes to 1054px and the table fits whol
 Nav labels are recoverable (each item keeps `title` and `aria-label`); a column
 that has been pushed off the screen is not. When judging any layout change,
 measure the content column, not the viewport.
+
+**The collapsed rail opens on demand, and it overlays rather than reflows.**
+Recoverable is not the same as legible: an icon alone does not say where it
+goes, and `title` answers a second late and never to a keyboard. Below `xl`,
+pointing at the rail or tabbing into it widens it to the `xl` shape (`.admin-rail`
+in `app.css`). Because the aside is `position: fixed`, the open rail lies over
+the content column instead of pushing it, so the width the rail exists to
+protect is never handed back — which is also why the open rail takes a shadow,
+the one place this flat-first chrome behaves like an overlay. Opening waits
+140ms and closing does not, so crossing the rail is not a request to open it.
+
+The labelled shape is a **container query on the rail's own width**, not a
+second breakpoint: `.admin-rail` declares `container: admin-rail / inline-size`
+and every element inside switches at `rail-open` (`@container admin-rail (width
+>= 12rem)`). Whatever widens the rail — the `xl` breakpoint, a pointer, a
+keyboard focus — the labels follow one rule. **New sidebar items use
+`rail-open:`, never `xl:`**; an `xl:` variant inside the rail is a bug that
+shows up only between 768 and 1280. Pointer expansion is gated behind
+`(hover: hover)`, so touch below `xl` still has icons and accessible names only.
 
 **The live-updates toggle is global, and belongs to the reading session.** Eight
 admin pages rebuild themselves when Pool events arrive, and the operators page

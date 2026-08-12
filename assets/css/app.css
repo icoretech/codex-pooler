@@ -110,6 +110,15 @@
 @custom-variant observatory-freshness-compact (@media (width <= 26.25rem));
 @custom-variant observatory-wordmark-compact (@media (width <= 23.4375rem));
 
+/* The admin rail's labelled shape is a function of the rail's own width, not of
+   the viewport: whatever widens it — the xl breakpoint, a pointer, a keyboard
+   focus — every element inside follows one rule instead of one rule per
+   trigger. 12rem is three quarters of the open width, so labels land as the
+   rail finishes opening rather than crowding the icons on the way there. The
+   container itself is declared on `.admin-rail` further down, with the rest of
+   the opening behavior. */
+@custom-variant rail-open (@container admin-rail (width >= 12rem));
+
 @keyframes admin-loading-icon-rotate {
   from {
     transform: rotate(0turn);
@@ -1859,5 +1868,60 @@ body {
 @keyframes admin-nav-hold-pop {
   50% {
     transform: scale(1.15);
+  }
+}
+
+/* Admin rail. Below xl the sidebar is a 64px icon rail, and that is a content
+   decision rather than a nav one (the Content-Column Rule): it returns ~192px
+   to every admin page in the 768-1280 band. What it costs is legibility — an
+   icon alone does not say where it goes, and `title` answers a second late and
+   never to a keyboard. Pointing at the rail, or tabbing into it, widens it to
+   the same labelled shape it already has at xl; everything inside follows the
+   width through the `rail-open` container variant.
+
+   The aside is `position: fixed`, so the open rail lies over the content column
+   instead of reflowing it and the width the rail exists to protect is never
+   handed back. Lying over the content is also why it takes a shadow, which this
+   flat-first surface otherwise reserves for overlays; the offset runs sideways
+   because that is the direction the rail opens.
+
+   Opening waits, closing does not: crossing the rail on the way somewhere else
+   is not a request to open it, but leaving it always is. Under reduced motion
+   the wait survives as a zero-duration transition — it is an intent filter, not
+   decoration — while the slide does not. `overflow: hidden` makes the labels
+   arrive as a wipe behind the growing edge rather than a spill over the page. */
+.admin-rail {
+  /* 16rem is xl:w-64. The open rail is the xl rail, not a third shape. */
+  --admin-rail-open-width: 16rem;
+  --admin-rail-open-shadow: 10px 0 30px -10px oklch(0% 0 0 / 0.18);
+
+  container: admin-rail / inline-size;
+}
+
+@media (width < 80rem) {
+  .admin-rail {
+    overflow: hidden;
+    transition:
+      width 160ms ease-out,
+      box-shadow 160ms ease-out;
+  }
+
+  .admin-rail:has(:focus-visible) {
+    width: var(--admin-rail-open-width);
+    box-shadow: var(--admin-rail-open-shadow);
+  }
+
+  @media (hover: hover) {
+    .admin-rail:hover {
+      width: var(--admin-rail-open-width);
+      box-shadow: var(--admin-rail-open-shadow);
+      transition-delay: 140ms;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .admin-rail {
+      transition-duration: 0s;
+    }
   }
 }
