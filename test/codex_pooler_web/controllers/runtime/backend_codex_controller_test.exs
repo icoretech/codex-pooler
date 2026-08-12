@@ -74,6 +74,59 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       "type" => "server_error"
     }
   }
+
+  @tag :facade_task4
+  test "backend Responses alias normalizes before the compact-trigger bridge", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_facade_compaction_bridge",
+          "object" => "response.compaction",
+          "output" => [
+            %{"type" => "compaction", "encrypted_content" => "synthetic-encrypted-facade"}
+          ],
+          "usage" => %{"input_tokens" => 5, "output_tokens" => 2, "total_tokens" => 7}
+        })
+      )
+
+    setup = facade_gateway_setup(upstream, compact?: true)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/v1/responses", %{
+        "model" => "arbitrary-backend-model",
+        "instructions" => "Synthetic backend client instruction",
+        "input" => [
+          %{
+            "type" => "message",
+            "role" => "user",
+            "content" => [%{"type" => "input_text", "text" => "visible compact input"}]
+          },
+          %{"type" => "compaction_trigger"}
+        ],
+        "stream" => true,
+        "reasoningEffort" => "low",
+        "thinking" => %{"type" => "enabled", "budget_tokens" => 8_192}
+      })
+
+    assert response.status == 200
+    refute response.resp_body =~ "Your external model identity is gemma3"
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses/compact"
+    assert captured.json["model"] == "gpt-5.6-sol"
+    assert captured.json["reasoning"] == %{"effort" => "max"}
+    assert captured.json["instructions"] =~ "Synthetic backend client instruction"
+    assert captured.json["instructions"] =~ "Your external model identity is gemma3"
+    refute Jason.encode!(captured.json) =~ "arbitrary-backend-model"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses/compact"
+    assert request.requested_model == "gemma3"
+    assert request.request_metadata["effective_model"] == "gpt-5.6-sol"
+  end
+
   @code_mode_turn_metadata_projection_routes [
     %{
       local_path: "/backend-api/codex/responses",
@@ -122,6 +175,25 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         })
     }
   ]
+
+  defp facade_gateway_setup(upstream, opts) do
+    reasoning_levels =
+      Enum.map(~w(low medium high xhigh max ultra), &%{"effort" => &1, "description" => &1})
+
+    gateway_setup(
+      upstream,
+      Keyword.merge(opts,
+        exposed_model_id: "gpt-5.6-sol",
+        upstream_model_id: "gpt-5.6-sol",
+        pricing_ref: "gpt-5.6-sol",
+        display_name: "Facade fixed target",
+        model_metadata: %{
+          "supported_reasoning_levels" => reasoning_levels,
+          "default_reasoning_level" => "max"
+        }
+      )
+    )
+  end
 
   test "backend Responses HTTP and SSE enforce native reasoning aliases before dispatch", %{
     conn: conn

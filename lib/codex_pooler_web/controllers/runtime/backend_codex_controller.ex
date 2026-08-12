@@ -2,6 +2,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
   use CodexPoolerWeb, :controller
 
   alias CodexPooler.Gateway
+  alias CodexPooler.Gateway.Facade.RequestNormalizer
   alias CodexPooler.Gateway.Metadata
   alias CodexPooler.Gateway.OpenAICompatibility.{Chat, ChatCompletions}
   alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
@@ -151,6 +152,28 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
       |> GatewayHelpers.request_opts()
       |> Map.merge(Map.new(private_opts))
 
+    with {:ok, payload} <- normalize_reasoning_payload(local_endpoint, payload, opts) do
+      dispatch_proxy_payload(
+        conn,
+        local_endpoint,
+        upstream_endpoint,
+        accounting_endpoint,
+        auth,
+        payload,
+        opts
+      )
+    end
+  end
+
+  defp dispatch_proxy_payload(
+         conn,
+         local_endpoint,
+         upstream_endpoint,
+         accounting_endpoint,
+         auth,
+         payload,
+         opts
+       ) do
     case CompactionTrigger.prepare_bridge(local_endpoint, payload) do
       :passthrough ->
         PublicGatewayDispatch.dispatch_json_payload(
@@ -170,6 +193,22 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
         {:error, reason}
     end
   end
+
+  defp normalize_reasoning_payload(local_endpoint, payload, opts)
+       when local_endpoint in [
+              "/backend-api/codex/responses",
+              "/backend-api/codex/v1/responses",
+              "/backend-api/codex/responses/compact",
+              "/backend-api/codex/v1/responses/compact"
+            ] do
+    request_options = RequestOptions.from_conn_metadata(opts, local_endpoint, payload)
+
+    case RequestNormalizer.openai(payload, request_options) do
+      {:ok, normalized, _metadata} -> {:ok, normalized}
+    end
+  end
+
+  defp normalize_reasoning_payload(_local_endpoint, payload, _opts), do: {:ok, payload}
 
   defp proxy_compaction_trigger_bridge(conn, local_endpoint, auth, compact_payload, opts) do
     compact_endpoint = "/backend-api/codex/responses/compact"

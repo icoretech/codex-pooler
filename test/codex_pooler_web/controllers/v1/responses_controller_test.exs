@@ -243,6 +243,108 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   @timing_observation_timeout_ms 1_000
   @failure_observation_timeout_ms 2_000
 
+  @tag :facade_task4
+  test "facade Responses accepts omitted selectors and forwards only the fixed target", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_facade_normalized",
+               "status" => "completed",
+               "model" => "gpt-5.6-sol",
+               "output" => [],
+               "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+             }
+           }}
+        ])
+      )
+
+    setup = facade_gateway_setup(upstream)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "input" => "synthetic facade Responses input",
+        "reasoning_effort" => "low",
+        "reasoning" => %{
+          "effort" => "minimal",
+          "summary" => "detailed",
+          "model" => "nested-client-selector"
+        },
+        "thinking" => %{"type" => "enabled", "budget_tokens" => 12_000}
+      })
+
+    assert %{"id" => "resp_facade_normalized"} = json_response(response, 200)
+    refute response.resp_body =~ "Your external model identity is gemma3"
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.json["model"] == "gpt-5.6-sol"
+    assert captured.json["reasoning"] == %{"effort" => "max", "summary" => "detailed"}
+    assert captured.json["instructions"] =~ "Your external model identity is gemma3"
+    refute Jason.encode!(captured.json) =~ "nested-client-selector"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.requested_model == "gemma3"
+    assert request.request_metadata["effective_model"] == "gpt-5.6-sol"
+  end
+
+  @tag :facade_task4
+  @tag :v1_websocket
+  test "facade Responses websocket accepts response.create without a model" do
+    upstream =
+      start_upstream(public_websocket_completed_response("resp_facade_websocket_normalized"))
+
+    setup = facade_gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+    turn_state = "facade-v1-ws-#{System.unique_integer([:positive])}"
+
+    {conn, websocket, ref, _response_headers} =
+      public_v1_websocket_connect!(port, setup, turn_state, [
+        {"openai-beta", "responses_websockets=2026-02-06"}
+      ])
+
+    try do
+      payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "input" => "synthetic facade websocket input",
+          "generate" => true,
+          "stream" => true,
+          "reasoning" => %{"effort" => "low"}
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{
+               "type" => "response.completed",
+               "response" => %{"id" => "resp_facade_websocket_normalized"}
+             } = Jason.decode!(frame)
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.method == "WEBSOCKET"
+      assert captured.json["type"] == "response.create"
+      assert captured.json["model"] == "gpt-5.6-sol"
+      assert get_in(captured.json, ["reasoning", "effort"]) == "max"
+      assert captured.json["instructions"] =~ "Your external model identity is gemma3"
+
+      assert_receive_finalized_request!()
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.requested_model == "gemma3"
+
+      conn
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   defp with_public_metadata_headers(conn) do
     conn
     |> put_req_header("x-codex-turn-metadata", "turn-metadata-redacted")
@@ -254,6 +356,22 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     |> put_req_header("x-openai-extra", "extra-redacted")
     |> put_req_header("cookie", "public-client-cookie")
     |> put_req_header("idempotency-key", "public-client-idempotency")
+  end
+
+  defp facade_gateway_setup(upstream) do
+    reasoning_levels =
+      Enum.map(~w(low medium high xhigh max ultra), &%{"effort" => &1, "description" => &1})
+
+    gateway_setup(upstream,
+      exposed_model_id: "gpt-5.6-sol",
+      upstream_model_id: "gpt-5.6-sol",
+      pricing_ref: "gpt-5.6-sol",
+      display_name: "Facade fixed target",
+      model_metadata: %{
+        "supported_reasoning_levels" => reasoning_levels,
+        "default_reasoning_level" => "max"
+      }
+    )
   end
 
   defp public_v1_websocket_connect!(port, setup, turn_state, extra_headers) do

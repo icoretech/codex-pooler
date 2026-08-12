@@ -43,6 +43,51 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
 
   @reasoning_denial_message "reasoning effort is not available for this API key"
 
+  @tag :facade_task4
+  test "facade Chat ignores client model selectors and preserves instruction messages", %{
+    conn: conn
+  } do
+    upstream = start_upstream(completed_chat_upstream())
+    setup = facade_gateway_setup(upstream)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/chat/completions", %{
+        "model" => "arbitrary-client-model",
+        "reasoning_effort" => "low",
+        "thinking" => %{"type" => "enabled", "budget_tokens" => 4_096},
+        "messages" => [
+          %{"role" => "system", "content" => "Synthetic facade system constraint"},
+          %{"role" => "developer", "content" => "Synthetic facade developer constraint"},
+          %{"role" => "user", "content" => "Synthetic facade user prompt"}
+        ]
+      })
+
+    assert %{"id" => "resp_reasoning_policy_chat"} = json_response(response, 200)
+    refute response.resp_body =~ "Your external model identity is gemma3"
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.json["model"] == "gpt-5.6-sol"
+    assert captured.json["reasoning"] == %{"effort" => "max"}
+    assert captured.json["instructions"] =~ "Synthetic facade system constraint"
+    assert captured.json["instructions"] =~ "Synthetic facade developer constraint"
+    assert captured.json["instructions"] =~ "Your external model identity is gemma3"
+
+    assert length(
+             Regex.scan(
+               ~r/Your external model identity is gemma3/,
+               captured.json["instructions"]
+             )
+           ) == 1
+
+    refute Jason.encode!(captured.json) =~ "arbitrary-client-model"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.requested_model == "gemma3"
+    assert request.request_metadata["effective_model"] == "gpt-5.6-sol"
+  end
+
   test "POST /v1/chat/completions enforces reasoning availability before gateway effort", %{
     conn: conn
   } do
@@ -2244,6 +2289,22 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
         %{"role" => "user", "content" => "Synthetic user"}
       ]
     }
+  end
+
+  defp facade_gateway_setup(upstream) do
+    reasoning_levels =
+      Enum.map(~w(low medium high xhigh max ultra), &%{"effort" => &1, "description" => &1})
+
+    gateway_setup(upstream,
+      exposed_model_id: "gpt-5.6-sol",
+      upstream_model_id: "gpt-5.6-sol",
+      pricing_ref: "gpt-5.6-sol",
+      display_name: "Facade fixed target",
+      model_metadata: %{
+        "supported_reasoning_levels" => reasoning_levels,
+        "default_reasoning_level" => "max"
+      }
+    )
   end
 
   defp issue_231_chat_gateway_setup(selected_upstream, alternate_upstream) do

@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Facade.Dispatch do
   alias CodexPooler.Access.APIKeys.ReasoningEffortPolicy.Decision
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Facade
+  alias CodexPooler.Gateway.Facade.IdentityInstruction
   alias CodexPooler.Gateway.Facade.Policy
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.Persona
@@ -128,6 +129,7 @@ defmodule CodexPooler.Gateway.Facade.Dispatch do
     ])
     |> Map.put("model", persona.effective_model)
     |> Map.put("reasoning", reasoning)
+    |> IdentityInstruction.install()
   end
 
   defp reasoning_summary(%{} = reasoning) do

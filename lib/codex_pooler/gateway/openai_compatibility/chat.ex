@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
   @moduledoc false
 
   alias CodexPooler.Gateway.OpenAICompatibility.{Error, Matrix, Responses, Validation}
+  alias CodexPooler.Gateway.Facade.RequestNormalizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.ServiceTier
 
@@ -12,7 +13,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
   @spec validate(term()) :: {:ok, map()} | {:error, Error.reason()}
   def validate(payload) do
     with {:ok, %{chat_payload: chat_payload, response_payload: response_payload}} <-
-           prepare_response_payload(payload),
+           prepare_response_payload(payload, %{}),
          {:ok, _response_payload} <- Responses.validate(response_payload, surface: :chat) do
       {:ok, chat_payload}
     end
@@ -29,7 +30,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
           | {:error, Error.reason()}
   def coerce(payload, opts \\ %{}) do
     with {:ok, %{chat_payload: chat_payload, response_payload: response_payload}} <-
-           prepare_response_payload(payload),
+           prepare_response_payload(payload, opts),
          {:ok, response} <- Responses.coerce(response_payload, put_surface(opts, :chat)) do
       {:ok, Map.put(response, :chat_payload, chat_payload)}
     end
@@ -38,8 +39,11 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
   defp put_surface(opts, surface) when is_list(opts), do: Keyword.put(opts, :surface, surface)
   defp put_surface(opts, surface) when is_map(opts), do: Map.put(opts, :surface, surface)
 
-  defp prepare_response_payload(payload) do
+  defp prepare_response_payload(payload, opts) do
     with {:ok, payload} <- Validation.normalize_payload(payload),
+         normalization_options = normalization_options(opts, payload),
+         {:ok, payload, _facade_metadata} <-
+           RequestNormalizer.chat(payload, normalization_options),
          :ok <- reject_legacy_functions(payload),
          :ok <- Validation.reject_high_impact_fields(payload),
          :ok <- Validation.reject_unsupported_fields(payload, :chat),
@@ -257,6 +261,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
 
     with {:ok, base} <- maybe_put_tools(base, payload) do
       base
+      |> maybe_put(payload, "instructions")
       |> maybe_put_tool_choice(payload)
       |> maybe_put(payload, "parallel_tool_calls")
       |> maybe_put(payload, "metadata")
@@ -801,4 +806,10 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
 
   defp normalize_enum(value) when is_binary(value),
     do: value |> String.trim() |> String.downcase()
+
+  defp normalization_options(%RequestOptions{} = opts, payload),
+    do: RequestOptions.for_payload(opts, "/backend-api/codex/responses", payload)
+
+  defp normalization_options(opts, payload),
+    do: RequestOptions.build(opts, "/backend-api/codex/responses", payload)
 end

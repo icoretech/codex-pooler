@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
 
   alias CodexPooler.Gateway.OpenAICompatibility.{Error, Matrix, Validation}
   alias CodexPooler.Gateway.OpenAICompatibility.Responses.{Input, SSE}
+  alias CodexPooler.Gateway.Facade.RequestNormalizer
 
   alias CodexPooler.Gateway.Payloads.{
     InputShape,
@@ -30,6 +31,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
     surface = surface(opts)
 
     with {:ok, payload} <- Validation.normalize_payload(payload),
+         normalization_options = normalization_options(opts, payload),
+         {:ok, payload, _facade_metadata} <-
+           RequestNormalizer.openai(payload, normalization_options),
          :ok <- Validation.reject_high_impact_fields(payload),
          :ok <- Validation.reject_unsupported_fields(payload, :responses),
          :ok <- Validation.require_model(payload),
@@ -66,7 +70,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
            payload
            |> Map.take(Matrix.forwarded_fields(:responses))
            |> normalize_forwarded_enums()
-           |> Input.finalize_normalized_input() do
+           |> Input.finalize_normalized_input(),
+         {:ok, payload, _facade_metadata} <-
+           RequestNormalizer.openai(payload, normalization_options(opts, payload)) do
       payload =
         maybe_force_backend_streaming(payload, opts)
 
@@ -94,6 +100,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   defp drop_surface(opts) when is_list(opts), do: Keyword.delete(opts, :surface)
   defp drop_surface(%RequestOptions{} = opts), do: opts
   defp drop_surface(opts) when is_map(opts), do: Map.delete(opts, :surface)
+
+  defp normalization_options(%RequestOptions{} = opts, payload),
+    do: RequestOptions.for_payload(opts, @endpoint, payload)
+
+  defp normalization_options(opts, payload),
+    do: opts |> drop_surface() |> RequestOptions.build(@endpoint, payload)
 
   @spec response_from_sse(binary(), RequestOptions.t() | map()) ::
           {:ok, map()} | {:error, Error.reason()}
