@@ -68,6 +68,7 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
           required(:pool_metrics) => metrics(),
           required(:traffic_pool_ids) => [Ecto.UUID.t()],
           required(:can_manage_pools?) => boolean(),
+          required(:can_operate_pools?) => boolean(),
           required(:upstream_identity_options) => [option()],
           required(:api_key_options) => [option()],
           required(:data_load_warnings) => [data_load_warning()]
@@ -82,6 +83,7 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
     pool_rows = structural_pool_rows(scope, traffic_window)
     visible_pool_rows = filter_pool_rows(pool_rows, filters)
     can_manage_pools? = Pools.can_manage_pools?(scope)
+    can_operate_pools? = Pools.can_operate_pools?(scope)
 
     {upstream_identity_options, upstream_warnings} =
       PoolForm.load_upstream_identity_options(scope, can_manage_pools?)
@@ -93,6 +95,7 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
       pool_metrics: pool_metrics(pool_rows, traffic_window),
       traffic_pool_ids: Enum.map(pool_rows, & &1.pool.id),
       can_manage_pools?: can_manage_pools?,
+      can_operate_pools?: can_operate_pools?,
       upstream_identity_options: upstream_identity_options,
       api_key_options: api_key_options,
       data_load_warnings: upstream_warnings ++ api_key_warnings

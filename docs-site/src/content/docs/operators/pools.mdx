@@ -266,7 +266,9 @@ Use separate Pool API keys for separate clients, environments, or automation bou
 
 ## Edit a Pool
 
-Use the card menu's `Edit` action to update an existing Pool.
+Instance owners use the card menu's `Edit` action to update an existing Pool. That dialog includes the owner-only Details, Routing, Upstreams, API keys, and Models steps.
+
+An assigned instance admin sees a separate `Models` action for an assigned active Pool. It opens only the Models panel, where the admin can review and save serving modes for that Pool. Details, routing, lifecycle status, upstream assignments, API-key assignments, and delete actions are not exposed through this path. The save is guarded by the assigned Pool scope and records the normal model-serving audit event.
 
 ![Edit Pool details step](/operators/pools/pools-edit-dialog-details.png)
 
@@ -278,7 +280,9 @@ The edit Routing step uses the same routing controls as create. Changes apply to
 
 ### Model Serving Modes
 
-The edit-only `Models` step controls serving mode for real operator-side catalog targets. A saved choice belongs to one Pool-model pair, while clients continue to see only `gemma3`.
+The owner `Edit` dialog and the assigned-admin `Models` dialog both use the `Models` panel to control serving mode for each real operator-side catalog target available to the Pool. A saved choice belongs to one Pool-model pair. The same target can therefore use different modes in different Pools, while public clients continue to see only `gemma3`.
+
+For what Lite and Full actually change on the outgoing request, and what they deliberately leave alone, see [Responses Lite and Full](/reference/responses-lite-vs-full/).
 
 ![Edit Pool model serving modes step](/operators/pools/pools-edit-dialog-models.png)
 
@@ -295,7 +299,7 @@ Use `Auto` unless a provider-specific requirement calls for an override:
   <tbody>
     <tr>
       <td>Auto</td>
-      <td>Uses Lite when any routable catalog source reports literal <code>true</code> for Lite support. False, missing, or malformed source values do not count; otherwise the effective mode is Full. For legacy catalog rows without a source-assignment map, a literal top-level <code>use_responses_lite: true</code> selects Lite; every other legacy value selects Full.</td>
+      <td>Uses Lite when any health-level routable catalog source reports literal <code>true</code> for Lite support. Routable means active, eligible, health-active, past cooldown, and attached to a visible upstream identity; quota availability for this individual turn is evaluated later and does not change the Pool-model dialect. False, missing, or malformed source values do not count; otherwise the effective mode is Full. For legacy catalog rows without a source-assignment map, a literal top-level <code>use_responses_lite: true</code> selects Lite; every other legacy value selects Full.</td>
       <td>Recommended. It follows current catalog evidence as assignments and provider capabilities change.</td>
     </tr>
     <tr>
@@ -311,11 +315,15 @@ Use `Auto` unless a provider-specific requirement calls for an override:
   </tbody>
 </table>
 
+If a catalog refresh no longer returns a model, an existing Lite or Full override stays visible as an unavailable row and is marked `Saved setting retained`. Selecting Auto changes that row to `Selecting Auto removes this saved override when you save.` Saving removes only that explicit override; sibling model overrides, catalog rows, and upstream assignments remain unchanged. Reopen the Models panel after saving to see the refreshed set of retained and available rows.
+
 Codex, Claude Code, Ollama, OpenCode, and other supported clients keep their Pool API key, protocol base URL, and `gemma3` model id. Codex Pooler changes only operator-side target behavior. `GET /v1/models` remains `gemma3`-only and does not expose serving-mode fields; public `POST /v1/responses/compact` remains unsupported.
+
+Backend compact routes use the same Lite body rewrite as ordinary backend Responses routes before compact-specific projection. In Lite, top-level `tools` and non-blank `instructions` move into `input`; compact-only controls are still removed. In Full, compact keeps its narrow projection without the Lite rewrite.
 
 One HTTP request or one websocket `response.create` turn keeps the mode it started with across retries, assignment failover, and cross-node owner forwarding. A later websocket turn can pick up a saved change. Mode selection does not remove otherwise eligible assignments from the candidate set.
 
-Full never silently downgrades. A generic ordinary Responses HTTP failure under the explicit Full override keeps the upstream status but returns only a fixed server-owned error; provider message, body, code, param, and extra fields are not returned. Request logs classify a non-rate-limit 4xx as `full_upstream_rejection`, a 429 as `upstream_rate_limited`, and an ordinary 5xx as `upstream_status`, alongside the configured/effective/source mode labels. They do not retain the upstream error text, request payload, prompt, response body, or credentials. Auto, Lite, compact or unrelated routes, and established model-unavailability responses keep their existing response behavior. Review provider support, then explicitly select `Auto` or `Lite` and retry as a new request or turn.
+Full never silently downgrades. A generic ordinary Responses HTTP failure under the explicit Full override keeps the upstream status but returns only a fixed server-owned error; provider message, body, code, param, and extra fields are not returned. Request-log detail drawers show the configured, effective, and source labels when each request or attempt has a complete validated snapshot; a non-rate-limit 4xx is classified as `full_upstream_rejection`, a 429 as `upstream_rate_limited`, and an ordinary 5xx as `upstream_status`. They do not retain the upstream error text, request payload, prompt, response body, or credentials. Auto, Lite, compact or unrelated routes, and established model-unavailability responses keep their existing response behavior. Review provider support, then explicitly select `Auto` or `Lite` and retry as a new request or turn.
 
 Serving modes are database-backed Pool configuration. There is no global environment variable or Helm value for them.
 

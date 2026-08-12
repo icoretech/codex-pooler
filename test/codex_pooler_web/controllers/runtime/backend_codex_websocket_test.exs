@@ -153,6 +153,56 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert json_response(conn, 400)["error"]["code"] == "websocket_upgrade_required"
   end
 
+  @tag :encrypted_reasoning_continuity
+  test "decoded websocket response.create retains current reasoning without alias state" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_current_reasoning_stateless",
+          "object" => "response",
+          "status" => "completed",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 2, "total_tokens" => 6}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    raw_prompt_cache_key = "synthetic-websocket-current-reasoning-key"
+    alias_count = Repo.aggregate(BridgeSessionAlias, :count)
+
+    reasoning = %{
+      "type" => "reasoning",
+      "content" => nil,
+      "encrypted_content" => "synthetic-websocket-current-reasoning"
+    }
+
+    payload =
+      Jason.encode!(%{
+        "type" => "response.create",
+        "model" => setup.model.exposed_model_id,
+        "prompt_cache_key" => raw_prompt_cache_key,
+        "input" => [reasoning],
+        "stream" => true,
+        "generate" => true
+      })
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               payload,
+               %{request_id: "ws-current-reasoning-stateless"},
+               fn _frame -> :ok end
+             )
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.json["input"] == [reasoning]
+    assert Repo.aggregate(BridgeSessionAlias, :count) == alias_count
+
+    metadata_text = inspect({Repo.all(BridgeSessionAlias), Repo.all(Request), Repo.all(Attempt)})
+    refute metadata_text =~ raw_prompt_cache_key
+    refute metadata_text =~ reasoning["encrypted_content"]
+  end
+
   test "an allowed locally applied firewall version keeps an open websocket usable" do
     upstream =
       start_upstream(
@@ -181,7 +231,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         Jason.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
-          "input" => "allowed firewall update",
+          "input" => native_text_input("allowed firewall update"),
           "stream" => true,
           "generate" => true
         })
@@ -251,7 +301,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         Jason.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
-          "input" => "admitted turn",
+          "input" => native_text_input("admitted turn"),
           "stream" => true,
           "generate" => true
         })
@@ -350,7 +400,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         Jason.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
-          "input" => "continue from an HTTP turn",
+          "input" => native_text_input("continue from an HTTP turn"),
           "stream" => true,
           "generate" => true
         })
@@ -376,7 +426,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                Jason.encode!(%{
                  "type" => "response.create",
                  "model" => setup.model.exposed_model_id,
-                 "input" => "continue from frame metadata",
+                 "input" => native_text_input("continue from frame metadata"),
                  "stream" => true,
                  "client_metadata" => %{"x-codex-turn-state" => opaque}
                }),
@@ -465,7 +515,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         Jason.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
-          "input" => "continue from the encrypted owner anchor",
+          "input" => native_text_input("continue from the encrypted owner anchor"),
           "stream" => true,
           "generate" => true,
           "client_metadata" => %{"x-codex-turn-state" => opaque}
@@ -616,7 +666,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         Jason.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
-          "input" => "no client turn state",
+          "input" => native_text_input("no client turn state"),
           "stream" => true,
           "generate" => true
         })
@@ -677,7 +727,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         |> auth(setup)
         |> post(path, %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic shared catalog SSE request",
+          "input" => native_text_input("synthetic shared catalog SSE request"),
           "stream" => true
         })
 
@@ -718,7 +768,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
           Jason.encode!(%{
             "type" => "response.create",
             "model" => setup.model.exposed_model_id,
-            "input" => "synthetic shared catalog websocket request",
+            "input" => native_text_input("synthetic shared catalog websocket request"),
             "stream" => true
           })
 
@@ -783,7 +833,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         Jason.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic websocket ETag lifetime request",
+          "input" => native_text_input("synthetic websocket ETag lifetime request"),
           "stream" => true
         })
 
@@ -822,7 +872,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         Jason.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic Lite typed-choice websocket request",
+          "input" => native_text_input("synthetic Lite typed-choice websocket request"),
           "tools" => [%{"type" => "custom", "name" => "typed_choice_fixture"}],
           "tool_choice" => %{"type" => "custom", "name" => "typed_choice_fixture"}
         })
@@ -851,6 +901,76 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     assert Repo.aggregate(
              from(entry in LedgerEntry, where: entry.request_id == ^request.id),
+             :count
+           ) == 0
+  end
+
+  @tag :model_serving_modes
+  test "backend websocket rejects scalar input and non-list tools before upstream dispatch in Full and Lite" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_unexpected"}))
+    setup = gateway_setup(upstream)
+    scope = model_serving_scope()
+    port = start_public_endpoint!()
+
+    assert_rejections = fn mode, expected_revision ->
+      revision = set_model_serving_mode!(scope, setup, mode, expected_revision)
+
+      for {payload, param} <- [
+            {%{"input" => "synthetic scalar input"}, "input"},
+            {%{"input" => [], "tools" => "synthetic non-list tools"}, "tools"}
+          ] do
+        {conn, websocket, ref, _response_headers} =
+          public_websocket_connect_with_headers!(port, setup, "", "/backend-api/codex/responses")
+
+        try do
+          frame =
+            Jason.encode!(
+              payload
+              |> Map.put("type", "response.create")
+              |> Map.put("model", setup.model.exposed_model_id)
+            )
+
+          {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, frame)
+          {_conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+          assert %{
+                   "type" => "error",
+                   "status" => 400,
+                   "error" => %{
+                     "code" => "invalid_request",
+                     "param" => ^param
+                   }
+                 } = Jason.decode!(frame)
+        after
+          Mint.HTTP.close(conn)
+        end
+      end
+
+      revision
+    end
+
+    revision = assert_rejections.("full", nil)
+    _revision = assert_rejections.("lite", revision)
+
+    assert FakeUpstream.count(upstream) == 0
+
+    assert requests = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert length(requests) == 4
+    assert Enum.all?(requests, &(&1.status == "rejected"))
+    assert Enum.all?(requests, &(&1.last_error_code == "invalid_request"))
+
+    assert requests
+           |> Enum.map(&get_in(&1.request_metadata, ["gateway_denial", "param"]))
+           |> Enum.sort() ==
+             ["input", "input", "tools", "tools"]
+
+    assert Repo.aggregate(
+             from(a in Attempt, where: a.request_id in ^Enum.map(requests, & &1.id)),
+             :count
+           ) == 0
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry, where: entry.request_id in ^Enum.map(requests, & &1.id)),
              :count
            ) == 0
   end
@@ -1159,7 +1279,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       |> auth(setup)
       |> post("/v1/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic public response exclusion",
+        "input" => native_text_input("synthetic public response exclusion"),
         "stream" => false
       })
 
@@ -1187,7 +1307,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         |> auth(setup)
         |> post(path, %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic backend compact exclusion"
+          "input" => native_text_input("synthetic backend compact exclusion")
         })
 
       assert conn.status == 200
@@ -1199,7 +1319,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       |> auth(setup)
       |> post("/v1/responses/compact", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic public compact exclusion"
+        "input" => native_text_input("synthetic public compact exclusion")
       })
 
     assert json_response(public_compact, 404)["error"]["code"] == "unsupported_endpoint"
@@ -1417,6 +1537,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       assert frame == Jason.encode!(provider_payload)
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.json["service_tier"] == "priority"
+
+      assert Map.new(captured.headers)["x-codex-routing-hint"] ==
+               "model=#{setup.model.upstream_model_id};tier=priority"
+
       conn
     after
       Mint.HTTP.close(conn)
@@ -1444,7 +1568,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         Jason.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic namespace request",
+          "input" => native_text_input("synthetic namespace request"),
           "tools" => [namespace_tool, backend_ordinary_function_tool()],
           "stream" => true,
           "generate" => true
@@ -1461,7 +1585,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       assert captured.json["tools"] |> Enum.at(1) |> Map.fetch!("parameters") ==
                lowered_backend_function_schema()
 
-      refute Map.has_key?(Enum.at(captured.json["tools"], 1), "encrypted")
+      assert Enum.at(captured.json["tools"], 1)["encrypted"]
 
       assert [request] = await_succeeded_pool_requests!(setup.pool.id, 1)
       assert request.status == "succeeded"
@@ -1511,7 +1635,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         Jason.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
-          "input" => String.duplicate("x", 7_000),
+          "input" => native_text_input(String.duplicate("x", 7_000)),
           "stream" => true,
           "generate" => true
         })
@@ -1855,7 +1979,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
           %{
             "type" => "response.create",
             "model" => setup.model.exposed_model_id,
-            "input" => "synthetic websocket policy request",
+            "input" => native_text_input("synthetic websocket policy request"),
             "stream" => true,
             "generate" => true
           }
@@ -1915,7 +2039,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
               %{
                 "type" => "response.create",
                 "model" => setup.model.exposed_model_id,
-                "input" => "synthetic websocket policy denial",
+                "input" => native_text_input("synthetic websocket policy denial"),
                 "stream" => true,
                 "generate" => true
               }
@@ -2035,7 +2159,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         Jason.encode!(%{
           "type" => "response.create",
           "model" => model.exposed_model_id,
-          "input" => "synthetic selected partition failure",
+          "input" => native_text_input("synthetic selected partition failure"),
           "stream" => true,
           "generate" => true
         })
@@ -2101,7 +2225,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         Jason.encode!(%{
           "type" => "response.create",
           "model" => model.exposed_model_id,
-          "input" => "synthetic malformed canonical pin",
+          "input" => native_text_input("synthetic malformed canonical pin"),
           "previous_response_id" => previous_response_id,
           "stream" => true,
           "generate" => true
@@ -2349,7 +2473,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     result =
       execute_websocket_response(
         auth,
-        Jason.encode!(%{"model" => setup.model.exposed_model_id, "input" => "hello over ws"}),
+        Jason.encode!(%{
+          "model" => setup.model.exposed_model_id,
+          "input" => native_text_input("hello over ws")
+        }),
         %{
           request_id: "ws-request-#{System.unique_integer([:positive])}",
           client_ip: "127.0.0.1",
@@ -3089,7 +3216,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     payload = %{
       "model" => setup.model.exposed_model_id,
-      "input" => "hello over typed ws",
+      "input" => native_text_input("hello over typed ws"),
       "stream" => true
     }
 
@@ -3558,7 +3685,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     payload = %{
       "model" => setup.model.exposed_model_id,
-      "input" => "gateway typed options"
+      "input" => native_text_input("gateway typed options")
     }
 
     correlation_id = "ws-public-typed-options-#{System.unique_integer([:positive])}"
@@ -4400,7 +4527,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                Jason.encode!(%{
                  "type" => "response.create",
                  "model" => setup.model.exposed_model_id,
-                 "input" => "trigger websocket usage limit terminal",
+                 "input" => native_text_input("trigger websocket usage limit terminal"),
                  "stream" => true,
                  "generate" => true
                }),
@@ -4624,7 +4751,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                Jason.encode!(%{
                  "type" => "response.create",
                  "model" => setup.model.exposed_model_id,
-                 "input" => "header body quota conflict",
+                 "input" => native_text_input("header body quota conflict"),
                  "stream" => true,
                  "generate" => true
                }),
@@ -5622,6 +5749,125 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     end
   end
 
+  test "direct websocket preserves schema-bound output while compressing an unbound output" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_schema_bound_compression",
+          "object" => "response",
+          "status" => "completed"
+        })
+      )
+
+    setup =
+      gateway_setup(upstream,
+        exposed_model_id: "gpt-4o",
+        upstream_model_id: "gpt-4o",
+        pricing_ref: "gpt-4o"
+      )
+
+    setup.pool
+    |> Pools.ensure_routing_settings()
+    |> Ecto.Changeset.change(request_compression_enabled: true)
+    |> Repo.update!()
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, state} =
+      CodexResponsesSocket.init(%{
+        auth: auth,
+        opts: %{
+          request_id: "ws-schema-bound-compression",
+          accepted_turn_state: "stable-ws-schema-bound-compression",
+          client_ip: "127.0.0.1"
+        }
+      })
+
+    schema_bound_output = Jason.encode!(%{"rows" => Enum.to_list(1..160)}, pretty: true)
+    unbound_output = Jason.encode!(%{"rows" => Enum.to_list(161..320)}, pretty: true)
+
+    assert byte_size(schema_bound_output) > 512
+    assert byte_size(unbound_output) > 512
+
+    payload =
+      Jason.encode!(%{
+        "type" => "response.create",
+        "model" => setup.model.exposed_model_id,
+        "tools" => [
+          %{
+            "type" => "function",
+            "name" => "schema_bound_direct_fixture",
+            "output_schema" => %{"type" => "object"}
+          },
+          %{"type" => "function", "name" => "unbound_direct_fixture"}
+        ],
+        "input" => [
+          %{
+            "type" => "function_call",
+            "call_id" => "call_direct_schema_bound",
+            "name" => "schema_bound_direct_fixture",
+            "arguments" => "{}"
+          },
+          %{
+            "type" => "function_call",
+            "call_id" => "call_direct_unbound",
+            "name" => "unbound_direct_fixture",
+            "arguments" => "{}"
+          },
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_direct_schema_bound",
+            "output" => schema_bound_output
+          },
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_direct_unbound",
+            "output" => unbound_output
+          }
+        ],
+        "stream" => true,
+        "generate" => true
+      })
+
+    try do
+      assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+      assert {:push, {:text, frame}, state} = receive_socket_push(state)
+      assert %{"id" => "resp_ws_schema_bound_compression"} = Jason.decode!(frame)
+      assert {:ok, _state} = receive_socket_done(state)
+
+      assert [captured] = FakeUpstream.requests(upstream)
+
+      schema_bound_item =
+        Enum.find(captured.json["input"], fn item ->
+          item["type"] == "function_call_output" and
+            item["call_id"] == "call_direct_schema_bound"
+        end)
+
+      unbound_item =
+        Enum.find(captured.json["input"], fn item ->
+          item["type"] == "function_call_output" and item["call_id"] == "call_direct_unbound"
+        end)
+
+      assert schema_bound_item["output"] == schema_bound_output
+      assert Jason.decode!(schema_bound_item["output"]) == Jason.decode!(schema_bound_output)
+      assert unbound_item["output"] != unbound_output
+      assert Jason.decode!(unbound_item["output"]) == Jason.decode!(unbound_output)
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+      assert %{
+               "candidate_count" => 1,
+               "compressed_count" => 1,
+               "protected_tool_output_skipped_count" => 1,
+               "status" => "compressed",
+               "transport" => "websocket"
+             } = attempt.response_metadata["payload_compression"]
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
   test "downstream websocket does not inject last response id when continuation omits previous_response_id" do
     upstream =
       start_upstream(
@@ -5729,7 +5975,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         Jason.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
-          "input" => "anchor",
+          "input" => native_text_input("anchor"),
           "stream" => true,
           "generate" => true
         })
@@ -6243,7 +6489,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "hello",
+        "input" => native_text_input("hello"),
         "tools" => [
           %{
             "type" => "function",
@@ -6411,7 +6657,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert :ok =
              execute_websocket_response(
                auth,
-               Jason.encode!(%{"model" => setup.model.exposed_model_id, "input" => "first ws"}),
+               Jason.encode!(%{
+                 "model" => setup.model.exposed_model_id,
+                 "input" => native_text_input("first ws")
+               }),
                %{request_id: "ws-affinity-first", codex_session: session},
                fn frame -> send(self(), {:websocket_frame, :first, frame}) end
              )
@@ -6433,7 +6682,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert :ok =
              execute_websocket_response(
                auth,
-               Jason.encode!(%{"model" => setup.model.exposed_model_id, "input" => "second ws"}),
+               Jason.encode!(%{
+                 "model" => setup.model.exposed_model_id,
+                 "input" => native_text_input("second ws")
+               }),
                %{request_id: "ws-affinity-second", codex_session: session},
                fn frame -> send(self(), {:websocket_frame, :second, frame}) end
              )
@@ -6491,7 +6743,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert :ok =
              execute_websocket_response(
                auth,
-               Jason.encode!(%{"model" => setup.model.exposed_model_id, "input" => "first ws"}),
+               Jason.encode!(%{
+                 "model" => setup.model.exposed_model_id,
+                 "input" => native_text_input("first ws")
+               }),
                %{request_id: "ws-unavailable-first", codex_session: session},
                fn frame -> send(self(), {:websocket_frame, :first, frame}) end
              )
@@ -6522,7 +6777,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                auth,
                Jason.encode!(%{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "second ws",
+                 "input" => native_text_input("second ws"),
                  "previous_response_id" => "resp_ws_unavailable_first"
                }),
                %{request_id: "ws-unavailable-second", codex_session: session},
@@ -6634,7 +6889,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         Jason.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
-          "input" => visible_input,
+          "input" => native_text_input(visible_input),
           "stream" => true,
           "generate" => true,
           "previous_response_id" => previous_response_id
@@ -6920,7 +7175,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                auth,
                Jason.encode!(%{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "resume first"
+                 "input" => native_text_input("resume first")
                }),
                %{
                  request_id: "ws-resume-first",
@@ -6989,7 +7244,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       |> put_req_header("x-codex-turn-state", turn_state_handle)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "http continuity"
+        "input" => native_text_input("http continuity")
       })
 
     assert %{"id" => "resp_http_to_ws"} = json_response(conn, 200)
@@ -7023,7 +7278,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                Jason.encode!(%{
                  "model" => setup.model.exposed_model_id,
                  "previous_response_id" => "resp_http_to_ws",
-                 "input" => "ws continuity"
+                 "input" => native_text_input("ws continuity")
                }),
                %{
                  request_id: "ws-continuity-turn",
@@ -7133,7 +7388,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
         "previous_response_id" => "resp_sticky_previous",
-        "input" => "recover sticky session quota"
+        "input" => native_text_input("recover sticky session quota")
       })
 
     assert %{"id" => "resp_sticky_refreshed_quota"} = json_response(conn, 200)
@@ -7212,7 +7467,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                  Jason.encode!(%{
                    "type" => "response.create",
                    "model" => setup.model.exposed_model_id,
-                   "input" => "live upstream websocket quota rejection",
+                   "input" => native_text_input("live upstream websocket quota rejection"),
                    "stream" => true,
                    "generate" => true
                  }),
@@ -7280,7 +7535,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       |> put_req_header("x-codex-turn-state", turn_state_handle)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "http continuity past lease"
+        "input" => native_text_input("http continuity past lease")
       })
 
     assert %{"id" => "resp_http_expired_lease"} = json_response(conn, 200)
@@ -7330,10 +7585,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     {:ok, session} = Gateway.start_codex_session(auth, %{accepted_turn_state: "same-connection"})
     opts = %{request_id: "connection-request-id", codex_session: session}
 
-    first_payload = Jason.encode!(%{"model" => setup.model.exposed_model_id, "input" => "first"})
+    first_payload =
+      Jason.encode!(%{
+        "model" => setup.model.exposed_model_id,
+        "input" => native_text_input("first")
+      })
 
     second_payload =
-      Jason.encode!(%{"model" => setup.model.exposed_model_id, "input" => "second"})
+      Jason.encode!(%{
+        "model" => setup.model.exposed_model_id,
+        "input" => native_text_input("second")
+      })
 
     assert :ok =
              execute_websocket_response(auth, first_payload, opts, fn frame ->
@@ -7381,7 +7643,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       Jason.encode!(%{
         "model" => setup.model.exposed_model_id,
         "turn_id" => "duplicate-turn-id",
-        "input" => "dedupe me"
+        "input" => native_text_input("dedupe me")
       })
 
     assert :ok =
@@ -7451,7 +7713,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       Jason.encode!(%{
         "model" => setup.model.exposed_model_id,
         "turn_id" => "duplicate-reset-turn-id",
-        "input" => "dedupe me before reset"
+        "input" => native_text_input("dedupe me before reset")
       })
 
     assert :ok =
@@ -7506,7 +7768,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       Jason.encode!(%{
         "model" => setup.model.exposed_model_id,
         "turn_id" => "duplicate-race-turn-id",
-        "input" => "dedupe me concurrently"
+        "input" => native_text_input("dedupe me concurrently")
       })
 
     tasks =
@@ -7612,7 +7874,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                auth,
                Jason.encode!(%{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "avoid demoted"
+                 "input" => native_text_input("avoid demoted")
                }),
                %{request_id: "after-demotion-turn", codex_session: session},
                fn frame -> send(self(), {:websocket_frame, frame}) end
@@ -7690,7 +7952,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                auth,
                Jason.encode!(%{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "preserve sticky session assignment"
+                 "input" => native_text_input("preserve sticky session assignment")
                }),
                %{request_id: "sticky-demoted-turn", codex_session: session},
                fn frame -> send(self(), {:websocket_frame, frame}) end
@@ -7770,7 +8032,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                Jason.encode!(%{
                  "type" => "response.create",
                  "model" => setup.model.exposed_model_id,
-                 "input" => "soft local alias may fall back before dispatch",
+                 "input" => native_text_input("soft local alias may fall back before dispatch"),
                  "stream" => true,
                  "generate" => true
                }),
@@ -7866,7 +8128,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                Jason.encode!(%{
                  "type" => "response.create",
                  "model" => setup.model.exposed_model_id,
-                 "input" => "live websocket state must not fall back",
+                 "input" => native_text_input("live websocket state must not fall back"),
                  "stream" => true,
                  "generate" => true
                }),
@@ -7979,7 +8241,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
           Jason.encode!(%{
             "type" => "response.create",
             "model" => setup.model.exposed_model_id,
-            "input" => "fail over before visible websocket output",
+            "input" => native_text_input("fail over before visible websocket output"),
             "stream" => true,
             "generate" => true
           }),
@@ -8058,7 +8320,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                  Jason.encode!(%{
                    "type" => "response.create",
                    "model" => setup.model.exposed_model_id,
-                   "input" => "non-101 websocket upgrade rejection",
+                   "input" => native_text_input("non-101 websocket upgrade rejection"),
                    "stream" => true,
                    "generate" => true
                  }),
@@ -8744,7 +9006,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                Jason.encode!(%{
                  "type" => "response.create",
                  "model" => setup.model.exposed_model_id,
-                 "input" => "retry pre-visible websocket close",
+                 "input" => native_text_input("retry pre-visible websocket close"),
                  "stream" => true,
                  "generate" => true
                }),
@@ -8884,7 +9146,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                  Jason.encode!(%{
                    "type" => "response.create",
                    "model" => setup.model.exposed_model_id,
-                   "input" => "synthetic websocket assignment model failover input",
+                   "input" =>
+                     native_text_input("synthetic websocket assignment model failover input"),
                    "stream" => true,
                    "generate" => true
                  }),
@@ -9024,7 +9287,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                Jason.encode!(%{
                  "type" => "response.create",
                  "model" => setup.model.exposed_model_id,
-                 "input" => "final websocket assignment model miss",
+                 "input" => native_text_input("final websocket assignment model miss"),
                  "stream" => true,
                  "generate" => true
                }),
@@ -9106,7 +9369,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                Jason.encode!(%{
                  "type" => "response.create",
                  "model" => setup.model.exposed_model_id,
-                 "input" => "visible websocket assignment model miss",
+                 "input" => native_text_input("visible websocket assignment model miss"),
                  "stream" => true,
                  "generate" => true
                }),
@@ -9183,7 +9446,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                  {Jason.encode!(%{
                     "type" => "response.create",
                     "model" => setup.model.exposed_model_id,
-                    "input" => "synthetic live direct anchor",
+                    "input" => native_text_input("synthetic live direct anchor"),
                     "stream" => true,
                     "generate" => true
                   }), [opcode: :text]},
@@ -9209,7 +9472,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                  {Jason.encode!(%{
                     "type" => "response.create",
                     "model" => setup.model.exposed_model_id,
-                    "input" => "synthetic live direct model miss",
+                    "input" => native_text_input("synthetic live direct model miss"),
                     "stream" => true,
                     "generate" => true
                   }), [opcode: :text]},
@@ -9313,7 +9576,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                  Jason.encode!(%{
                    "type" => "response.create",
                    "model" => setup.model.exposed_model_id,
-                   "input" => "retry first websocket connection limit",
+                   "input" => native_text_input("retry first websocket connection limit"),
                    "stream" => true,
                    "generate" => true
                  }),
@@ -9447,7 +9710,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                  Jason.encode!(%{
                    "type" => "response.create",
                    "model" => setup.model.exposed_model_id,
-                   "input" => "exhaust the native websocket connection limit retry",
+                   "input" =>
+                     native_text_input("exhaust the native websocket connection limit retry"),
                    "stream" => true,
                    "generate" => true
                  }),
@@ -9555,7 +9819,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                Jason.encode!(%{
                  "type" => "response.create",
                  "model" => setup.model.exposed_model_id,
-                 "input" => "retry after internal websocket rate limits",
+                 "input" => native_text_input("retry after internal websocket rate limits"),
                  "stream" => true,
                  "generate" => true
                }),
@@ -9636,7 +9900,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                Jason.encode!(%{
                  "type" => "response.create",
                  "model" => setup.model.exposed_model_id,
-                 "input" => "terminal failure",
+                 "input" => native_text_input("terminal failure"),
                  "stream" => true,
                  "generate" => true
                }),
@@ -9702,7 +9966,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                Jason.encode!(%{
                  "type" => "response.create",
                  "model" => setup.model.exposed_model_id,
-                 "input" => "too much context",
+                 "input" => native_text_input("too much context"),
                  "stream" => true,
                  "generate" => true
                }),
@@ -9761,7 +10025,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                Jason.encode!(%{
                  "type" => "response.create",
                  "model" => setup.model.exposed_model_id,
-                 "input" => "invalid safe parameter precedence",
+                 "input" => native_text_input("invalid safe parameter precedence"),
                  "stream" => true,
                  "generate" => true
                }),
@@ -9806,7 +10070,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                Jason.encode!(%{
                  "type" => "response.create",
                  "model" => setup.model.exposed_model_id,
-                 "input" => "too much context",
+                 "input" => native_text_input("too much context"),
                  "stream" => true,
                  "generate" => true
                }),
@@ -10138,7 +10402,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                Jason.encode!(%{
                  "type" => "response.create",
                  "model" => setup.model.exposed_model_id,
-                 "input" => "hit a websocket rate limit",
+                 "input" => native_text_input("hit a websocket rate limit"),
                  "stream" => true,
                  "generate" => true
                }),
@@ -10228,7 +10492,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                Jason.encode!(%{
                  "type" => "response.create",
                  "model" => setup.model.exposed_model_id,
-                 "input" => "trigger websocket server error",
+                 "input" => native_text_input("trigger websocket server error"),
                  "stream" => true,
                  "generate" => true
                }),
@@ -10696,7 +10960,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
              Accounting.reserve(
                auth,
                setup.model,
-               %{"model" => setup.model.exposed_model_id, "input" => "disconnect me"},
+               %{
+                 "model" => setup.model.exposed_model_id,
+                 "input" => native_text_input("disconnect me")
+               },
                %{
                  endpoint: "/backend-api/codex/responses",
                  transport: "websocket",
@@ -10734,7 +11001,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
              Accounting.reserve(
                auth,
                setup.model,
-               %{"model" => setup.model.exposed_model_id, "input" => "disconnect me"},
+               %{
+                 "model" => setup.model.exposed_model_id,
+                 "input" => native_text_input("disconnect me")
+               },
                %{
                  endpoint: "/backend-api/codex/responses",
                  transport: "websocket",
@@ -10775,7 +11045,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
              Accounting.reserve(
                auth,
                setup.model,
-               %{"model" => setup.model.exposed_model_id, "input" => "complete me"},
+               %{
+                 "model" => setup.model.exposed_model_id,
+                 "input" => native_text_input("complete me")
+               },
                %{
                  endpoint: "/backend-api/codex/responses",
                  transport: "websocket",
@@ -10812,7 +11085,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       Jason.encode!(%{
         "type" => "response.create",
         "model" => "gpt-test-model",
-        "input" => "sensitive prompt sentinel"
+        "input" => native_text_input("sensitive prompt sentinel")
       })
 
     log =
@@ -10881,7 +11154,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
           Jason.encode!(%{
             "type" => "response.create",
             "model" => setup.model.exposed_model_id,
-            "input" => "ordinary failure prompt sentinel",
+            "input" => native_text_input("ordinary failure prompt sentinel"),
             "stream" => true,
             "generate" => true
           })
@@ -11228,7 +11501,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
              Accounting.reserve(
                auth,
                setup.model,
-               %{"model" => setup.model.exposed_model_id, "input" => "finish after disconnect"},
+               %{
+                 "model" => setup.model.exposed_model_id,
+                 "input" => native_text_input("finish after disconnect")
+               },
                %{
                  endpoint: "/backend-api/codex/responses",
                  transport: "websocket",
@@ -11283,7 +11559,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
              Accounting.reserve(
                auth,
                setup.model,
-               %{"model" => setup.model.exposed_model_id, "input" => "complete me"},
+               %{
+                 "model" => setup.model.exposed_model_id,
+                 "input" => native_text_input("complete me")
+               },
                %{
                  endpoint: "/backend-api/codex/responses",
                  transport: "websocket",
@@ -11375,7 +11654,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                setup.model,
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "cancel direct native request"
+                 "input" => native_text_input("cancel direct native request")
                },
                %{
                  endpoint: "/backend-api/codex/responses",
@@ -11667,7 +11946,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     Jason.encode!(%{
       "type" => "response.create",
       "model" => setup.model.exposed_model_id,
-      "input" => "websocket auth refresh fixture #{marker}",
+      "input" => native_text_input("websocket auth refresh fixture #{marker}"),
       "stream" => true,
       "generate" => true
     })
@@ -11768,7 +12047,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     Jason.encode!(%{
       "type" => "response.create",
       "model" => model.exposed_model_id,
-      "input" => "synthetic #{marker} model fallback",
+      "input" => native_text_input("synthetic #{marker} model fallback"),
       "stream" => true,
       "generate" => true
     })
@@ -12150,7 +12429,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     Jason.encode!(%{
       "type" => "response.create",
       "model" => setup.model.exposed_model_id,
-      "input" => "synthetic websocket mode #{label}",
+      "input" => native_text_input("synthetic websocket mode #{label}"),
       "stream" => true,
       "generate" => true,
       "parallel_tool_calls" => true,
@@ -12460,7 +12739,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     Jason.encode!(%{
       "type" => "response.create",
       "model" => model_id,
-      "input" => "anchor",
+      "input" => native_text_input("anchor"),
       "stream" => true,
       "generate" => true
     })

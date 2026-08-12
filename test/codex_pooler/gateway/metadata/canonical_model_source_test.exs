@@ -56,6 +56,57 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSourceTest do
     assert payload["service_tiers"] == source["service_tiers"]
   end
 
+  test "serving mode overlays do not alter context-window policy" do
+    source =
+      Map.merge(source_metadata(), %{
+        "context_window" => 272_000,
+        "max_context_window" => 300_000,
+        "effective_context_window_percent" => 90,
+        "auto_compact_token_limit" => nil
+      })
+
+    model = model(source)
+    pricing_buckets = %{"gpt-schema-fixture" => ["long_context"]}
+    context_window_overrides = %{"unrelated-model" => 256_000}
+
+    assert {:ok, lite} =
+             CanonicalModelSource.project(
+               source,
+               model,
+               pricing_buckets,
+               context_window_overrides,
+               "lite"
+             )
+
+    assert {:ok, full} =
+             CanonicalModelSource.project(
+               source,
+               model,
+               pricing_buckets,
+               context_window_overrides,
+               "full"
+             )
+
+    context_fields = [
+      "context_window",
+      "max_context_window",
+      "effective_context_window_percent",
+      "auto_compact_token_limit"
+    ]
+
+    assert Map.take(lite, context_fields) == %{
+             "context_window" => 270_000,
+             "max_context_window" => 300_000,
+             "effective_context_window_percent" => 90,
+             "auto_compact_token_limit" => 243_000
+           }
+
+    assert Map.take(full, context_fields) == Map.take(lite, context_fields)
+    assert Map.delete(lite, "use_responses_lite") == Map.delete(full, "use_responses_lite")
+    assert lite["use_responses_lite"]
+    refute full["use_responses_lite"]
+  end
+
   test "canonical source removes atom-form provenance after safe key normalization" do
     clean_source = %{"slug" => "gpt-schema-fixture"}
 

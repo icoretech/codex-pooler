@@ -366,6 +366,12 @@ defmodule CodexPooler.Catalog.OpenAIPricingFormat do
       {"transcription_+_diarization", values} ->
         exact_numeric_keys?(values, ~w(estimated_cost input output))
 
+      {"live_transcription", values} ->
+        exact_numeric_keys?(values, ["estimated_cost"])
+
+      {"live_translation", values} ->
+        exact_numeric_keys?(values, ["estimated_cost"])
+
       _other ->
         false
     end)

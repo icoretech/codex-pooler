@@ -410,7 +410,15 @@ defmodule CodexPooler.Gateway.Runtime.DispatchTest do
   defp payload(setup) do
     %{
       "model" => setup.model.exposed_model_id,
-      "input" => "runtime dispatch accounting regression"
+      "input" => [
+        %{
+          "type" => "message",
+          "role" => "user",
+          "content" => [
+            %{"type" => "input_text", "text" => "runtime dispatch accounting regression"}
+          ]
+        }
+      ]
     }
   end
 

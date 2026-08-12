@@ -34,6 +34,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.CodexResponsesSocket
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -72,7 +73,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
                "/backend-api/codex/responses",
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "stream retry fixture",
+                 "input" => native_text_input("stream retry fixture"),
                  "stream" => true
                },
                RequestOptions.build(
@@ -83,7 +84,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
                  "/backend-api/codex/responses",
                  %{
                    "model" => setup.model.exposed_model_id,
-                   "input" => "stream retry fixture",
+                   "input" => native_text_input("stream retry fixture"),
                    "stream" => true
                  }
                )
@@ -482,7 +483,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     key = active_api_key_fixture()
     pool = key.pool
     compact? = Keyword.get(opts, :compact?, false)
-    upstream = gateway_upstream(pool, upstream, "upstream-token", compact?: compact?)
+
+    upstream =
+      gateway_upstream(pool, upstream, "upstream-token",
+        compact?: compact?,
+        credential_provenance: Keyword.get(opts, :credential_provenance, :codex_chatgpt)
+      )
 
     if Keyword.get(opts, :quota?, true) do
       prime_routing_quota!(upstream.identity)
@@ -586,7 +592,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   def strict_text_format_payload(schema, strict \\ true) do
     %{
       "model" => "gpt-test-model",
-      "input" => "answer in json",
+      "input" => native_text_input("answer in json"),
       "text" => %{
         "format" => %{
           "type" => "json_schema",
@@ -596,6 +602,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
         }
       }
     }
+  end
+
+  def native_text_input(text) do
+    [
+      %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "input_text", "text" => text}]
+      }
+    ]
   end
 
   def prime_routing_quota!(identity, overrides \\ %{}) do
@@ -890,6 +906,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
 
     assert {:ok, identity} =
              IdentityLifecycle.activate_upstream_identity(identity)
+
+    identity =
+      identity
+      |> Ecto.Changeset.change()
+      |> UpstreamIdentity.put_credential_provenance(
+        Keyword.get(opts, :credential_provenance, :codex_chatgpt)
+      )
+      |> Repo.update!()
 
     assert {:ok, _secret} =
              Upstreams.store_encrypted_secret(identity, %{

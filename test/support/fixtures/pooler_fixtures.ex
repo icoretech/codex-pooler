@@ -147,6 +147,11 @@ defmodule CodexPooler.PoolerFixtures do
              })
 
     identity
+    |> Ecto.Changeset.change()
+    |> UpstreamIdentity.put_credential_provenance(
+      Map.get(attrs, :credential_provenance, :codex_chatgpt)
+    )
+    |> Repo.update!()
   end
 
   def active_upstream_identity_fixture(attrs \\ %{}) do

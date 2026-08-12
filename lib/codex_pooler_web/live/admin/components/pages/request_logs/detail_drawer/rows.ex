@@ -15,11 +15,16 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
 
   import CodexPoolerWeb.Admin.RequestLogDetailDrawer.Format, only: [safe_text: 1]
 
+  @serving_mode_configured_key "model_serving_mode_configured"
+  @serving_mode_effective_key "model_serving_mode"
+  @serving_mode_source_key "model_serving_mode_source"
+
   @type detail_row :: %{
-          id: String.t(),
-          label: String.t(),
-          value: term(),
-          mono: boolean()
+          required(:id) => String.t(),
+          required(:label) => String.t(),
+          required(:value) => term(),
+          required(:mono) => boolean(),
+          optional(:role) => String.t()
         }
 
   @spec final_outcome_rows(map(), map()) :: [detail_row()]
@@ -74,7 +79,7 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
   def routing_rows(log) do
     routing = metadata_section(log, "routing")
 
-    [
+    rows = [
       detail("request-log-detail-pool", "Pool", log.pool_name),
       detail(
         "request-log-detail-upstream",
@@ -101,7 +106,38 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
         list_count(log.metadata["candidate_exclusions"])
       )
     ]
-    |> present_rows()
+
+    (rows ++ serving_mode_rows("request-log-detail", routing)) |> present_rows()
+  end
+
+  @spec serving_mode_rows(String.t(), map() | nil) :: [detail_row()]
+  def serving_mode_rows(prefix, snapshot) do
+    case valid_serving_mode_snapshot(snapshot) do
+      %{configured_mode: configured_mode, effective_mode: effective_mode, source: source} ->
+        [
+          detail(
+            "#{prefix}-model-serving-mode-configured",
+            "Configured serving mode",
+            configured_mode,
+            mono: true
+          ),
+          detail(
+            "#{prefix}-model-serving-mode",
+            "Effective serving mode",
+            effective_mode,
+            mono: true
+          ),
+          detail(
+            "#{prefix}-model-serving-mode-source",
+            "Serving mode source",
+            source,
+            mono: true
+          )
+        ]
+
+      nil ->
+        []
+    end
   end
 
   @spec usage_rows(map()) :: [detail_row()]
@@ -255,6 +291,35 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
       role: Keyword.get(opts, :role, "request-log-detail-field")
     }
   end
+
+  defp valid_serving_mode_snapshot(%{
+         configured_mode: configured_mode,
+         effective_mode: effective_mode,
+         source: source
+       }) do
+    valid_serving_mode_snapshot(configured_mode, effective_mode, source)
+  end
+
+  defp valid_serving_mode_snapshot(%{
+         @serving_mode_configured_key => configured_mode,
+         @serving_mode_effective_key => effective_mode,
+         @serving_mode_source_key => source
+       }) do
+    valid_serving_mode_snapshot(configured_mode, effective_mode, source)
+  end
+
+  defp valid_serving_mode_snapshot(_snapshot), do: nil
+
+  defp valid_serving_mode_snapshot("auto", effective_mode, "catalog")
+       when effective_mode in ~w(lite full) do
+    %{configured_mode: "auto", effective_mode: effective_mode, source: "catalog"}
+  end
+
+  defp valid_serving_mode_snapshot(mode, mode, "override") when mode in ~w(lite full) do
+    %{configured_mode: mode, effective_mode: mode, source: "override"}
+  end
+
+  defp valid_serving_mode_snapshot(_configured_mode, _effective_mode, _source), do: nil
 
   defp present_rows(rows), do: Enum.reject(rows, &(blank?(&1.value) or &1.value == "-"))
 

@@ -289,7 +289,7 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
   defp stream_payload(setup, shape) do
     %{
       "model" => setup.model.exposed_model_id,
-      "input" => "synthetic #{shape} terminal compatibility request",
+      "input" => native_text_input("synthetic #{shape} terminal compatibility request"),
       "stream" => true
     }
   end

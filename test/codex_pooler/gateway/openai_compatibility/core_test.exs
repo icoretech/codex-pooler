@@ -17,6 +17,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     Files,
     Images,
     Matrix,
+    PublicResponse,
     Responses,
     Validation
   }
@@ -24,6 +25,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   alias CodexPooler.Gateway.Facade.{IdentityInstruction, RequestNormalizer}
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.Persona
+  alias CodexPooler.Gateway.Transports.Admission
 
   describe "facade request normalization" do
     @describetag :facade_task4
@@ -173,6 +175,24 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     assert "input_fidelity" in Matrix.supported_fields(:images)
   end
 
+  test "public error normalization emits the Codex overload vocabulary for each bounded admission cause" do
+    for internal_reason <- ["bulkhead_rejected", "bulkhead_queue_timeout"] do
+      normalized_error =
+        %{code: internal_reason, route_class: "proxy_http"}
+        |> Admission.overload_error()
+        |> PublicResponse.normalize_error(status: 503)
+
+      assert normalized_error == %{
+               "code" => "server_is_overloaded",
+               "message" => "gateway route class is temporarily overloaded",
+               "param" => nil,
+               "type" => "server_error"
+             }
+
+      refute Jason.encode!(normalized_error) =~ internal_reason
+    end
+  end
+
   defp facade_options(protocol, payload) do
     RequestOptions.build(
       %{persona: Persona.fixed(protocol)},
@@ -300,6 +320,42 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   @tag :responses_coercion
+  test "Responses removes a nil encrypted reasoning replay marker before backend normalization" do
+    assert {:ok, result} =
+             Responses.coerce(%{
+               "model" => "gpt-fixture-text",
+               "previous_response_id" => "resp_replay_fixture",
+               "input" => [
+                 %{
+                   "type" => "reasoning",
+                   "id" => "rs_replay_fixture",
+                   "summary" => [],
+                   "encrypted_content" => nil
+                 },
+                 %{
+                   "type" => "function_call",
+                   "call_id" => "call_replay_fixture",
+                   "name" => "lookup_fixture",
+                   "arguments" => "{}"
+                 },
+                 %{
+                   "type" => "function_call_output",
+                   "call_id" => "call_replay_fixture",
+                   "output" => "fixture output"
+                 }
+               ]
+             })
+
+    assert [
+             %{"type" => "reasoning", "id" => "rs_replay_fixture", "summary" => []} = reasoning
+             | _
+           ] =
+             result.payload["input"]
+
+    refute Map.has_key?(reasoning, "encrypted_content")
+  end
+
+  @tag :responses_coercion
   test "Responses rejects non-text system and developer content before instruction lifting" do
     for {role, part} <- [
           {"developer",
@@ -423,6 +479,102 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
       refute Map.has_key?(result.payload, "tools")
       refute Map.has_key?(result.payload, "tool_choice")
+    end
+
+    @tag :responses_coercion
+    test "Responses retains top-level tool_search rejection while preserving supported additional tools" do
+      supported_additional_tool =
+        flat_function_tool(
+          "lookup_additional_tool_search_pin",
+          %{"type" => "object", "properties" => %{}},
+          nil
+        )
+
+      supported_custom_tool = %{
+        "type" => "custom",
+        "name" => "custom_additional_tool_search_pin"
+      }
+
+      assert {:error, reason} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => "synthetic input",
+                 "tools" => [%{"type" => "tool_search"}]
+               })
+
+      assert reason == %{
+               status: 400,
+               code: "invalid_request",
+               message: "tool shape is not translatable",
+               param: "tools"
+             }
+
+      additional_tools_item = %{
+        "type" => "additional_tools",
+        "role" => "developer",
+        "tools" => [supported_additional_tool, supported_custom_tool]
+      }
+
+      assert {:ok, result} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => [additional_tools_item]
+               })
+
+      assert result.payload["input"] == [additional_tools_item]
+    end
+
+    @tag :unsupported_fields
+    test "Responses rejects tool_search nested in additional_tools before coercion" do
+      supported_tool =
+        flat_function_tool(
+          "lookup_additional_tool_search",
+          %{"type" => "object", "properties" => %{}},
+          nil
+        )
+
+      for position <- 0..2 do
+        tools =
+          [supported_tool, %{"type" => "tool_search"}, supported_tool]
+          |> List.delete_at(1)
+          |> List.insert_at(position, %{"type" => "tool_search"})
+
+        assert {:error, reason} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => [
+                     %{"role" => "user", "content" => "synthetic input"},
+                     %{
+                       "type" => "additional_tools",
+                       "role" => "developer",
+                       "tools" => tools
+                     }
+                   ]
+                 })
+
+        assert reason == %{
+                 status: 400,
+                 code: "invalid_request",
+                 message: "tool_search tools are not supported",
+                 param: "input"
+               }
+      end
+
+      similarly_named_tool = %{"type" => "tool_search_preview"}
+
+      assert {:ok, result} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => [
+                   %{
+                     "type" => "additional_tools",
+                     "role" => "developer",
+                     "tools" => [similarly_named_tool]
+                   }
+                 ]
+               })
+
+      assert get_in(result.payload, ["input", Access.at(0), "tools"]) == [similarly_named_tool]
     end
 
     @tag :responses_coercion
@@ -1509,6 +1661,55 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   @tag :unsupported_fields
+  @tag :typed_input_contract
+  test "Responses preserves untyped SDK maps, explicit messages, and known typed input" do
+    payload = %{
+      "model" => "gpt-fixture-text",
+      "input" => [
+        %{"role" => "user", "content" => "synthetic untyped SDK input"},
+        %{
+          "type" => "message",
+          "role" => "user",
+          "content" => [%{"type" => "input_text", "text" => "synthetic explicit message"}]
+        },
+        %{"type" => "input_file", "file_id" => "file_fixture_known"}
+      ]
+    }
+
+    assert {:ok, %{payload: %{"input" => [untyped, explicit_message, known_item]}}} =
+             Responses.coerce(payload)
+
+    assert untyped == %{
+             "type" => "message",
+             "role" => "user",
+             "content" => [%{"type" => "input_text", "text" => "synthetic untyped SDK input"}]
+           }
+
+    assert explicit_message == Enum.at(payload["input"], 1)
+    assert known_item == Enum.at(payload["input"], 2)
+  end
+
+  @tag :typed_input_contract
+  test "Responses rejects explicit unknown item and content-part types before coercion" do
+    unknown_item_with_message_content = %{
+      "type" => "future_input_item",
+      "role" => "user",
+      "content" => [%{"type" => "input_text", "text" => "synthetic known-looking content"}]
+    }
+
+    unknown_content_part_in_message = %{
+      "type" => "message",
+      "role" => "user",
+      "content" => [%{"type" => "future_content_part", "text" => "synthetic unknown part"}]
+    }
+
+    for input <- [[unknown_item_with_message_content], [unknown_content_part_in_message]] do
+      assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+               Responses.coerce(%{"model" => "gpt-fixture-text", "input" => input})
+    end
+  end
+
+  @tag :unsupported_fields
   test "malformed nested compatibility payloads are rejected before coercion" do
     assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
              Responses.coerce(%{
@@ -1831,6 +2032,48 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
       assert {:ok, _validated} = Responses.validate(payload)
       assert {:ok, %{payload: %{"input" => ^input}}} = Responses.coerce(payload)
+    end
+
+    test "function call replay preserves encrypted argument replay states" do
+      empty_args =
+        :function_call
+        |> programmatic_input_item()
+        |> Map.put("encrypted_function_args", [])
+
+      ordered_args =
+        :function_call
+        |> programmatic_input_item()
+        |> Map.put("encrypted_function_args", ["a", "bb"])
+
+      null_args =
+        :function_call
+        |> programmatic_input_item()
+        |> Map.put("encrypted_function_args", nil)
+
+      payload = %{
+        "model" => "gpt-fixture-text",
+        "input" => [programmatic_input_item(:function_call), null_args, empty_args, ordered_args]
+      }
+
+      assert {:ok, %{payload: %{"input" => [absent, nullable, empty, ordered]}}} =
+               Responses.coerce(payload)
+
+      refute Map.has_key?(absent, "encrypted_function_args")
+      assert nullable["encrypted_function_args"] == nil
+      assert empty["encrypted_function_args"] == []
+      assert [1, 2] = ordered["encrypted_function_args"] |> Enum.map(&byte_size/1)
+    end
+
+    test "function call replay rejects malformed encrypted argument replay fields" do
+      for invalid_value <- ["opaque", %{}, ["a", 1], [nil]] do
+        item =
+          :function_call
+          |> programmatic_input_item()
+          |> Map.put("encrypted_function_args", invalid_value)
+
+        assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+                 Responses.coerce(%{"model" => "gpt-fixture-text", "input" => [item]})
+      end
     end
 
     for input_case <- [
@@ -2320,7 +2563,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
           "type" => "reasoning",
           "id" => "rs_fixture_passthrough",
           "summary" => [],
-          "encrypted_content" => nil,
           passthrough_key => %{"turn_id" => "turn_fixture_reasoning"}
         },
         %{
@@ -2542,6 +2784,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
           "summary" => [%{"type" => "summary_text", "text" => "bad"}],
           "encrypted_content" => "synthetic-encrypted-reasoning",
           "status" => "completed"
+        },
+        %{
+          "type" => "reasoning",
+          "summary" => [%{"type" => "summary_text", "text" => "bad"}],
+          "content" => [%{"type" => "reasoning_text", "text" => 42}],
+          "encrypted_content" => "synthetic-encrypted-reasoning"
         },
         %{
           "type" => "reasoning",
@@ -4543,6 +4791,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
           "type" => "reasoning",
           "id" => "rs_fixture_replay",
           "summary" => [%{"type" => "summary_text", "text" => "synthetic summary"}],
+          "content" => [
+            %{"type" => "reasoning_text", "text" => "synthetic reasoning replay"}
+          ],
           "encrypted_content" => "synthetic-encrypted-reasoning"
         },
         %{
@@ -4583,6 +4834,61 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
     assert Enum.at(result.payload["input"], 2)["call_id"] == "call_fixture_replay"
     assert Enum.at(result.payload["input"], 3)["call_id"] == "call_fixture_replay"
+
+    assert Enum.at(result.payload["input"], 0)["content"] == [
+             %{"type" => "reasoning_text", "text" => "synthetic reasoning replay"}
+           ]
+  end
+
+  @tag :responses_coercion
+  test "Responses preserves Open Responses reasoning_text items in tool continuations" do
+    payload = %{
+      "model" => "gpt-fixture-text",
+      "previous_response_id" => "resp_fixture_reasoning_text",
+      "input" => [
+        %{
+          "type" => "reasoning",
+          "summary" => [],
+          "content" => [
+            %{"type" => "reasoning_text", "text" => "synthetic reasoning text"}
+          ]
+        },
+        %{
+          "type" => "function_call",
+          "call_id" => "call_fixture_reasoning_text",
+          "name" => "lookup_fixture",
+          "arguments" => "{}"
+        },
+        %{
+          "type" => "function_call_output",
+          "call_id" => "call_fixture_reasoning_text",
+          "output" => "synthetic tool output"
+        }
+      ]
+    }
+
+    assert {:ok, %{payload: coerced}} = Responses.coerce(payload)
+
+    assert coerced["input"] == [
+             %{
+               "type" => "reasoning",
+               "summary" => [],
+               "content" => [
+                 %{"type" => "reasoning_text", "text" => "synthetic reasoning text"}
+               ]
+             },
+             %{
+               "type" => "function_call",
+               "call_id" => "call_fixture_reasoning_text",
+               "name" => "lookup_fixture",
+               "arguments" => "{}"
+             },
+             %{
+               "type" => "function_call_output",
+               "call_id" => "call_fixture_reasoning_text",
+               "output" => "synthetic tool output"
+             }
+           ]
   end
 
   test "Responses preserves item metadata and Codex internal turn metadata on replay items" do

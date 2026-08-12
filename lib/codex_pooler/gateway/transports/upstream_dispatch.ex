@@ -42,6 +42,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     "x-openai-subagent"
   ]
   @responses_lite_header_name "x-openai-internal-codex-responses-lite"
+  @routing_hint_header_name "x-codex-routing-hint"
   @stable_downstream_keys [:active_turn_reconnect?, :correlation_id, :epoch, :pid]
   @public_per_call_downstream_keys [:owner_turn_id | @stable_downstream_keys]
 
@@ -54,6 +55,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defmodule Request do
     @moduledoc false
 
+    alias CodexPooler.Accounting.Attempt, as: AccountingAttempt
     alias CodexPooler.Accounting.Request, as: AccountingRequest
     alias CodexPooler.Gateway.Payloads.RequestOptions
     alias CodexPooler.Gateway.Payloads.RequestOptions.Transport
@@ -65,7 +67,9 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       :upstream_payload,
       :original_payload,
       :identity,
+      :routing_hint_authorized?,
       :accounting_request,
+      :accounting_attempt,
       :writer,
       :assignment_advertised?,
       :request_options
@@ -77,7 +81,9 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
             upstream_payload: binary() | {:multipart, list()},
             original_payload: map() | nil,
             identity: UpstreamIdentity.t(),
+            routing_hint_authorized?: boolean(),
             accounting_request: AccountingRequest.t() | nil,
+            accounting_attempt: AccountingAttempt.t() | nil,
             writer: Transport.websocket_writer(),
             assignment_advertised?: boolean(),
             request_options: RequestOptions.t()
@@ -197,6 +203,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       )
 
     headers = maybe_put_responses_lite_header(headers, request_options)
+    headers = maybe_put_routing_hint_header(headers, Keyword.get(opts, :routing_hint))
 
     TransportEnvelope.headers(identity, token, headers, envelope_opts)
   end
@@ -304,27 +311,38 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         upstream_payload: body,
         original_payload: payload,
         identity: identity,
+        routing_hint_authorized?: routing_hint_authorized?,
         request_options: %RequestOptions{} = opts
       }) do
     timeouts = configured_timeouts(opts)
+
+    upstream_header_list =
+      CloudflareCookies.request_headers(
+        url,
+        regular_runtime_headers(
+          identity,
+          token,
+          opts,
+          [
+            {"content-type", "application/json"},
+            {"accept",
+             if(RouteClass.streaming?(payload),
+               do: "text/event-stream",
+               else: "application/json"
+             )}
+          ],
+          routing_hint: routing_hint_header(body, routing_hint_authorized?, opts)
+        )
+      )
+
+    emit_egress_observation(:http, upstream_header_list, opts, :none)
 
     request_options =
       [
         body: body,
         decode_body: false,
         retry: false,
-        headers:
-          CloudflareCookies.request_headers(
-            url,
-            regular_runtime_headers(identity, token, opts, [
-              {"content-type", "application/json"},
-              {"accept",
-               if(RouteClass.streaming?(payload),
-                 do: "text/event-stream",
-                 else: "application/json"
-               )}
-            ])
-          )
+        headers: upstream_header_list
       ]
       |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts))
 
@@ -364,23 +382,35 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         token: token,
         upstream_payload: payload_body,
         identity: identity,
+        routing_hint_authorized?: routing_hint_authorized?,
         accounting_request: request,
+        accounting_attempt: attempt,
         writer: writer,
         assignment_advertised?: assignment_advertised?,
         request_options: %RequestOptions{} = request_options
       }) do
-    headers = websocket_headers(identity, token, request_options)
+    headers =
+      websocket_headers(
+        identity,
+        token,
+        routing_hint_header(payload_body, routing_hint_authorized?, request_options),
+        request_options
+      )
+
+    emit_egress_observation(:websocket, headers, request_options, payload_body)
     timeouts = request_options.timeout_config
     message_mapper = websocket_message_mapper(request_options)
+
+    observation = task14_observation_context(request, attempt, request_options)
 
     upstream_request = %UpstreamWebsocketSession.Request{
       url: url,
       headers: headers,
       payload: payload_body,
       timeouts: timeouts,
-      writer: writer,
+      writer: task14_observing_writer(writer, observation),
       message_mapper: message_mapper,
-      frame_observer: websocket_frame_observer(identity),
+      frame_observer: websocket_frame_observer(identity, observation),
       reset_probe: request_options.routing.reset_probe,
       assignment_advertised?: assignment_advertised?,
       connection_bound_continuation?: connection_bound_continuation?(request_options),
@@ -403,6 +433,51 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
       {:error, reason} ->
         owner_request_result({:error, reason}, identity, request, request_options)
+    end
+  end
+
+  @egress_observation_flag :task10_egress_observation_enabled
+  @egress_observation_event [:codex_pooler, :gateway, :upstream, :egress_observation]
+
+  # Metadata-only egress observation for the dev-runtime Task 10 observer.
+  # Emits upstream header *names* and websocket `client_metadata` *keys* only —
+  # never values, payloads, tokens, or frames — and only while the dev observer
+  # has armed the flag; production emits nothing. Observation must never affect
+  # dispatch, so every failure path collapses to :ok.
+  defp emit_egress_observation(transport, headers, %RequestOptions{} = opts, payload) do
+    if Application.get_env(:codex_pooler, @egress_observation_flag, false) do
+      :telemetry.execute(@egress_observation_event, %{count: 1}, %{
+        transport: transport,
+        client_request_id: egress_client_request_id(opts),
+        header_names: Enum.map(headers, fn {name, _value} -> to_string(name) end),
+        websocket_client_metadata: egress_websocket_client_metadata(payload)
+      })
+    end
+
+    :ok
+  rescue
+    _error -> :ok
+  end
+
+  defp egress_client_request_id(%RequestOptions{
+         request_metadata: %{client_request_id: client_request_id}
+       }),
+       do: client_request_id
+
+  defp egress_client_request_id(%RequestOptions{}), do: nil
+
+  defp egress_websocket_client_metadata(:none), do: :none
+
+  defp egress_websocket_client_metadata(payload) do
+    case Jason.decode(IO.iodata_to_binary(payload)) do
+      {:ok, %{"client_metadata" => client_metadata}} when is_map(client_metadata) ->
+        {:keys, Map.keys(client_metadata)}
+
+      {:ok, _decoded} ->
+        {:keys, []}
+
+      {:error, _reason} ->
+        :unparseable
     end
   end
 
@@ -830,16 +905,103 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     result
   end
 
-  defp websocket_frame_observer(identity) do
+  defp websocket_frame_observer(identity, observation) do
     fn
-      _frame, %{} = decoded -> RateLimitObserver.record_complete_event(identity, decoded)
-      frame, _decoded -> RateLimitObserver.record_complete_events(identity, frame)
+      _frame, %{} = decoded ->
+        RateLimitObserver.record_complete_event(identity, decoded)
+        emit_task14_product_observation(observation, :provider_to_pooler, decoded)
+
+      frame, _decoded ->
+        RateLimitObserver.record_complete_events(identity, frame)
     end
   end
 
-  defp websocket_headers(identity, token, %RequestOptions{} = request_options) do
+  defp task14_observing_writer(nil, _observation), do: nil
+
+  defp task14_observing_writer(writer, observation) when is_function(writer, 2) do
+    fn text, terminal_discriminator ->
+      result = writer.(text, terminal_discriminator)
+      emit_task14_downstream_observation(observation, text)
+      result
+    end
+  end
+
+  defp task14_observing_writer(writer, observation) when is_function(writer, 1) do
+    fn text ->
+      result = writer.(text)
+      emit_task14_downstream_observation(observation, text)
+      result
+    end
+  end
+
+  defp task14_observation_context(request, attempt, %RequestOptions{} = request_options) do
+    %{
+      request_id: task14_request_id(request, request_options),
+      client_request_id: request_options.request_metadata.client_request_id,
+      attempt_id: if(is_map(attempt), do: Map.get(attempt, :id)),
+      route: "backend_websocket",
+      mode: RequestOptions.model_serving_mode(request_options)
+    }
+  end
+
+  defp task14_request_id(%{id: id}, _request_options) when is_binary(id), do: id
+
+  defp task14_request_id(_request, %RequestOptions{} = request_options),
+    do: request_options.request_metadata.request_id
+
+  defp emit_task14_downstream_observation(observation, text) when is_binary(text) do
+    case Jason.decode(text) do
+      {:ok, %{} = decoded} ->
+        emit_task14_product_observation(observation, :pooler_to_codex, decoded)
+
+      _not_json ->
+        :ok
+    end
+  end
+
+  defp emit_task14_product_observation(observation, direction, decoded) do
+    if Application.get_env(:codex_pooler, :task14_product_observation_enabled, false) do
+      case Map.get(decoded, "type") do
+        event_type when event_type in ["response.output_text.delta", "response.completed"] ->
+          metadata =
+            observation
+            |> Map.put(:direction, direction)
+            |> Map.put(:event_type, event_type)
+            |> Map.put(:response_fingerprint, task14_response_fingerprint(decoded))
+
+          :telemetry.execute(
+            [:codex_pooler, :gateway, :task14, :product_stage],
+            %{count: 1},
+            metadata
+          )
+
+        _other ->
+          :ok
+      end
+    end
+  end
+
+  defp task14_response_fingerprint(decoded) do
+    response_id =
+      case decoded do
+        %{"response" => %{"id" => id}} when is_binary(id) -> id
+        %{"response_id" => id} when is_binary(id) -> id
+        %{"id" => id} when is_binary(id) -> id
+        _other -> nil
+      end
+
+    if is_binary(response_id) do
+      :sha256
+      |> :crypto.hash(response_id)
+      |> Base.encode16(case: :lower)
+      |> binary_part(0, 12)
+    end
+  end
+
+  defp websocket_headers(identity, token, routing_hint, %RequestOptions{} = request_options) do
     headers =
       [{"openai-beta", "responses_websockets=2026-02-06"}]
+      |> maybe_put_routing_hint_header(routing_hint)
       |> maybe_put_resolved_websocket_turn_state(request_options)
 
     upstream_headers(identity, token, headers)
@@ -1008,6 +1170,60 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       headers
     end
   end
+
+  defp maybe_put_routing_hint_header(headers, routing_hint) when is_list(headers) do
+    headers =
+      Enum.reject(headers, fn
+        {name, _value} when is_binary(name) -> String.downcase(name) == @routing_hint_header_name
+        _header -> false
+      end)
+
+    case routing_hint do
+      value when is_binary(value) -> [{@routing_hint_header_name, value} | headers]
+      _other -> headers
+    end
+  end
+
+  defp routing_hint_header(
+         body,
+         true,
+         %RequestOptions{
+           transport: %{upstream_endpoint: endpoint},
+           openai_compatibility: %{source_endpoint: nil, openai_chat_payload: nil}
+         }
+       )
+       when endpoint in @regular_runtime_metadata_endpoints and is_binary(body) do
+    with {:ok, %{} = payload} <- Jason.decode(body),
+         {:ok, model} <- routing_hint_component(Map.get(payload, "model")),
+         {:ok, service_tier} <- routing_hint_service_tier(payload) do
+      case service_tier do
+        nil -> "model=#{model}"
+        tier -> "model=#{model};tier=#{tier}"
+      end
+    else
+      _other -> nil
+    end
+  end
+
+  defp routing_hint_header(_body, _routing_hint_authorized?, %RequestOptions{}), do: nil
+
+  defp routing_hint_service_tier(payload) do
+    case Map.fetch(payload, "service_tier") do
+      :error -> {:ok, nil}
+      {:ok, tier} -> routing_hint_component(tier)
+    end
+  end
+
+  defp routing_hint_component(value) when is_binary(value) do
+    if String.valid?(value) and byte_size(value) in 1..128 and
+         Regex.match?(~r/\A[a-zA-Z0-9][a-zA-Z0-9._-]*\z/, value) do
+      {:ok, value}
+    else
+      :error
+    end
+  end
+
+  defp routing_hint_component(_value), do: :error
 
   defp regular_responses_endpoint?(%RequestOptions{
          transport: %{upstream_endpoint: endpoint}

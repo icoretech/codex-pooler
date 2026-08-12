@@ -86,6 +86,13 @@ curl -sS https://codex-pooler.example.com/v1/responses \
 
 The server accepts omitted, `gemma3`, or arbitrary client model selectors on supported inference routes and replaces them with its immutable routing decision. Reasoning selectors are also server-owned. Model-detail path selectors are identity-neutral too: any selector resolves to the same available `gemma3` descriptor instead of discovering another model.
 
+For a `previous_response_id` tool continuation, a native `reasoning` replay item
+may include `content` with `reasoning_text` parts. Codex Pooler preserves that
+accepted reasoning content for the upstream continuation. Stateless replay drops
+reasoning items before dispatch instead.
+
+`GET /v1/models` may include `context_length` for clients that probe OpenAI-compatible model lists, such as Hermes. The official OpenAI SDK request APIs and Vercel AI SDK generation APIs do not expose Codex model-catalog context controls. Use their output-budget fields only when your application needs one: `max_output_tokens` in OpenAI Responses, `max_completion_tokens` in Chat Completions, and `maxOutputTokens` at the Vercel AI SDK layer. Codex Pooler's public `/v1/responses` currently rejects `context_management`, and public `/v1/responses/compact` is routed but unsupported, so do not document SDK-side compaction as a Codex Pooler feature.
+
 ## Supported file and media routes
 
 | Route | Support |

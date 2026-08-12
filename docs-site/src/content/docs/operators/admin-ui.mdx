@@ -27,7 +27,7 @@ The table below summarizes what each role can do across the admin UI. "Assigned 
     <tr>
       <td><a href="/operators/pools/">Pools</a></td>
       <td>Creates Pools and controls their full lifecycle: edit, pause, archive, and delete archived Pools.</td>
-      <td>Sees assigned Pools, can rename them and adjust their routing settings. Cannot create, pause, archive, or delete Pools.</td>
+      <td>Sees assigned active Pools and gets a scoped <code>Models</code> action for serving-mode changes. Details, routing, status, upstream assignment, API-key assignment, and delete actions remain owner-only; the Models save is audited.</td>
     </tr>
     <tr>
       <td><a href="/operators/upstreams/">Upstreams</a></td>

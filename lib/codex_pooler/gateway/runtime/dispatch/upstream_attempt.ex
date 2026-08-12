@@ -73,6 +73,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
     dispatch_request =
       dispatch_request(prepared_context,
         accounting_request: context.reserved.request,
+        accounting_attempt: context.attempt,
         writer: writer,
         original_payload: nil
       )
@@ -106,7 +107,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
       upstream_payload: prepared_context.upstream_payload,
       original_payload: Keyword.get(opts, :original_payload, context.payload),
       identity: context.identity,
+      routing_hint_authorized?: prepared_context.routing_hint_authorized?,
       accounting_request: Keyword.get(opts, :accounting_request),
+      accounting_attempt: Keyword.get(opts, :accounting_attempt),
       writer: Keyword.get(opts, :writer),
       assignment_advertised?:
         ModelMetadata.assignment_source?(context.model, context.assignment.id),

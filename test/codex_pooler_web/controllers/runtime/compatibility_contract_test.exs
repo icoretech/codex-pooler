@@ -53,6 +53,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     image_generation_permission
     responses_executable_custom_tools
     backend_agent_v2_handoffs
+    multi_agent_product_certification
     function_tool_schema_lowering
     direct_responses_strict_schema_repair
     v1_supported_surface
@@ -742,6 +743,87 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert fixture.durable_metadata == "encrypted_content_omitted"
     end
 
+    test "pins Full-mode multi-agent certification and staged external disposition" do
+      feature = CompatibilityMatrix.by_slug!(:multi_agent_product_certification)
+      fixture = CompatibilityMatrix.fixture!(:multi_agent_product_certification)
+
+      assert feature.current == :pinned_full_mode_v1_v2_stage_classification
+      assert feature.contract =~ "gpt-5.5 resolves v1 through feature fallback"
+      assert feature.contract =~ "gpt-5.6-terra resolves v2"
+      assert feature.contract =~ "instruction_observation_missing"
+      assert feature.contract =~ "without a production transport change"
+
+      assert fixture.source_pin == "c9c6c0daa994109cec50fddcb57d076fdf9e738c"
+      assert fixture.primary_serving_mode == "full"
+      assert fixture.preflight.catalog_use_responses_lite == false
+      assert fixture.preflight.http_lite_header_present == false
+      assert fixture.preflight.websocket_lite_metadata_present == false
+
+      assert fixture.protocol_matrix.v1 == %{
+               model: "gpt-5.5",
+               selection: "feature_fallback",
+               multi_agent: true,
+               multi_agent_v2: false
+             }
+
+      assert fixture.protocol_matrix.v2 == %{
+               model: "gpt-5.6-terra",
+               selection: "feature_override",
+               multi_agent_v2: true
+             }
+
+      assert fixture.protocol_matrix.same_model_causal_pair == ["v2", "direct_control"]
+      assert fixture.live_text_disposition.pooler_delivery == "present"
+      assert fixture.live_text_disposition.first_failing_stage == "codex_app_server_boundary"
+      assert fixture.live_text_disposition.production_transport_change == "none"
+
+      assert fixture.done_claim_disposition == %{
+               v2_exact_instruction: "instruction_observation_missing",
+               reason: "opaque_encrypted_arguments_without_permitted_external_resolution_source",
+               downstream_stages: "not_attributed_past_first_missing_observation"
+             }
+
+      assert fixture.implemented_runtime_outcomes.overload == %{
+               public_status: 503,
+               wire_code: "server_is_overloaded",
+               internal_reasons: ["bulkhead_rejected", "bulkhead_queue_timeout"]
+             }
+
+      assert fixture.implemented_runtime_outcomes.compact_projection.preserves == [
+               "model",
+               "input",
+               "instructions",
+               "tools",
+               "parallel_tool_calls",
+               "reasoning",
+               "service_tier",
+               "prompt_cache_key",
+               "text"
+             ]
+
+      assert fixture.implemented_runtime_outcomes.public_v1 == %{
+               unknown_typed_input: "reject_before_dispatch",
+               nested_tool_search: "reject_before_dispatch",
+               encrypted_function_args: "validated_and_round_tripped"
+             }
+
+      assert fixture.implemented_runtime_outcomes.routing_hint ==
+               "trusted_native_effective_model_and_service_tier_only"
+
+      assert fixture.implemented_runtime_outcomes.schema_bound_function_output_compression ==
+               "byte_exact_json_preserved"
+
+      assert fixture.implemented_runtime_outcomes.responses_lite_full.auto_source ==
+               "health_level_aggregate"
+
+      assert fixture.deployment_certification == "exact_tested_commit_sha_required"
+      assert fixture.reporting == "metadata_only"
+      refute fixture.metrics_added
+      refute fixture.runtime_config_added
+      refute fixture.dashboards_changed
+      refute fixture.helm_changed
+    end
+
     test "documents executable custom tools separately from custom replay" do
       feature = CompatibilityMatrix.by_slug!(:responses_executable_custom_tools)
       fixture = CompatibilityMatrix.fixture!(:responses_executable_custom_tools)
@@ -989,7 +1071,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         executable: false,
         merges_into_tools: false,
         satisfies_tool_choice: false,
-        unsupported_nested_tool_types: ["mcp"]
+        unsupported_nested_tool_types: ["mcp", "tool_search"]
       }
 
       expected_remote_mcp_tools = %{
@@ -1245,11 +1327,12 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                    "model",
                    "instructions",
                    "input",
+                   "tools",
+                   "parallel_tool_calls",
                    "reasoning",
                    "service_tier",
                    "prompt_cache_key",
-                   "previous_response_id",
-                   "conversation"
+                   "text"
                  ],
                  output_events: ["response.output_item.done", "response.completed", "[DONE]"],
                  output_item: %{
@@ -2232,7 +2315,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         |> auth(setup)
         |> post(~p"/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "upstream validation secret text",
+          "input" => native_text_input("upstream validation secret text"),
           "stream" => true
         })
 
@@ -2302,7 +2385,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         |> auth(setup)
         |> post(~p"/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic oversized context request",
+          "input" => native_text_input("synthetic oversized context request"),
           "stream" => false
         })
 
@@ -2359,7 +2442,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         |> auth(setup)
         |> post(~p"/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic safe field request",
+          "input" => native_text_input("synthetic safe field request"),
           "text" => %{"format" => %{"type" => "json_object"}},
           "store" => false,
           "include" => ["message.input_image.image_url"],
@@ -2428,7 +2511,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         |> auth(setup)
         |> post(~p"/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic chat",
+          "input" => native_text_input("synthetic chat"),
           "stream" => true
         })
 
@@ -2445,7 +2528,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         |> auth(setup)
         |> post(~p"/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic reasoning request",
+          "input" => native_text_input("synthetic reasoning request"),
           "reasoning" => %{"effort" => "minimal"}
         })
 
@@ -2464,7 +2547,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         |> auth(setup)
         |> post(~p"/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic reasoning request",
+          "input" => native_text_input("synthetic reasoning request"),
           "reasoning" => %{"effort" => "none"}
         })
 
@@ -2483,7 +2566,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         |> auth(setup)
         |> post(~p"/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic reasoning request",
+          "input" => native_text_input("synthetic reasoning request"),
           "reasoning" => %{"effort" => "ultra"}
         })
 
@@ -2501,7 +2584,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         |> auth(setup)
         |> post(~p"/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic reasoning request",
+          "input" => native_text_input("synthetic reasoning request"),
           "reasoning" => %{"effort" => "medium"}
         })
 
@@ -2668,6 +2751,16 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
   end
 
   defp multipart_boundary, do: "codex-pooler-compat-boundary"
+
+  defp native_text_input(text) do
+    [
+      %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "input_text", "text" => text}]
+      }
+    ]
+  end
 
   defp multipart_body(filename, contents) do
     [

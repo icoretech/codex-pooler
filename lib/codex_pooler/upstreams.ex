@@ -124,6 +124,16 @@ defmodule CodexPooler.Upstreams do
   @spec import_codex_auth_json(term(), term(), binary()) :: import_result()
   defdelegate import_codex_auth_json(scope, pool, content), to: Import
 
+  @spec import_trusted_account(Scope.t(), Pool.t(), map()) :: import_result()
+  defdelegate import_trusted_account(scope, pool, attrs), to: Import
+
+  @spec validate_trusted_account(Scope.t(), Pool.t(), map()) ::
+          {:ok, map()} | {:error, Ecto.Changeset.t() | lifecycle_error()}
+  defdelegate validate_trusted_account(scope, pool, attrs), to: Import
+
+  @spec import_trusted_account_in_transaction(Scope.t(), Pool.t(), map()) :: import_result()
+  defdelegate import_trusted_account_in_transaction(scope, pool, attrs), to: Import
+
   @spec start_browser_oauth(Scope.t(), Pool.t(), keyword()) :: oauth_flow_start_result()
   defdelegate start_browser_oauth(scope, pool, opts \\ []), to: OAuth
 

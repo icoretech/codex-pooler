@@ -21,7 +21,8 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
   @response_item_keys %{
     "message" => ~w(id type status role content),
     "reasoning" => ~w(id type status summary content encrypted_content),
-    "function_call" => ~w(id type status call_id name namespace arguments caller),
+    "function_call" =>
+      ~w(id type status call_id name namespace arguments encrypted_function_args caller),
     "function_call_output" => ~w(id type status call_id namespace output caller),
     "custom_tool_call" => ~w(id type status call_id name namespace input),
     "custom_tool_call_output" => ~w(id type status call_id namespace output),
@@ -1237,6 +1238,7 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
            ),
          :ok <- validate_response_message_role(type, item),
          :ok <- validate_item_namespace(type, item),
+         :ok <- validate_encrypted_function_args(type, item),
          :ok <- optional_boolean(item, "approve"),
          :ok <-
            validate_optional_binaries(
@@ -1279,6 +1281,24 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
        do: optional_binary_or_nil(item, "namespace")
 
   defp validate_item_namespace(_type, _item), do: :ok
+
+  defp validate_encrypted_function_args("function_call", item) do
+    case Map.fetch(item, "encrypted_function_args") do
+      :error ->
+        :ok
+
+      {:ok, nil} ->
+        :ok
+
+      {:ok, values} when is_list(values) ->
+        if Enum.all?(values, &is_binary/1), do: :ok, else: :error
+
+      {:ok, _wrong_type} ->
+        :error
+    end
+  end
+
+  defp validate_encrypted_function_args(_type, _item), do: :ok
 
   defp project_item_content(%{"content" => content} = item) when is_list(content) do
     case map_results(content, &content_part_result/1) do

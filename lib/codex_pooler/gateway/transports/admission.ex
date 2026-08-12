@@ -12,6 +12,9 @@ defmodule CodexPooler.Gateway.Transports.Admission do
 
   @default_queue_timeout_ms 5_000
   @telemetry_prefix [:codex_pooler, :gateway, :admission]
+  @overload_code "server_is_overloaded"
+  @overload_message "gateway route class is temporarily overloaded"
+  @bulkhead_reasons ~w(bulkhead_rejected bulkhead_queue_timeout)
   @class_defaults %{
     running: 0,
     queue: :queue.new(),
@@ -34,7 +37,9 @@ defmodule CodexPooler.Gateway.Transports.Admission do
           required(:code) => String.t(),
           required(:message) => String.t(),
           required(:param) => nil,
-          required(:route_class) => String.t()
+          required(:route_class) => String.t(),
+          optional(:internal_reason) => String.t(),
+          optional(:accounting_disposition) => :zero_work
         }
   @type saturation_snapshot :: %{
           required(RouteClass.t()) => %{
@@ -144,7 +149,13 @@ defmodule CodexPooler.Gateway.Transports.Admission do
         {:noreply, put_class(state, route_class, class)}
 
       true ->
-        emit(:rejected, route_class, metadata, %{queued: :queue.len(class.queue)})
+        emit(
+          :rejected,
+          route_class,
+          metadata,
+          %{queued: :queue.len(class.queue)},
+          "bulkhead_rejected"
+        )
 
         {:reply, {:error, %{code: "bulkhead_rejected", route_class: route_class}}, state}
     end
@@ -174,7 +185,13 @@ defmodule CodexPooler.Gateway.Transports.Admission do
           {:error, %{code: "bulkhead_queue_timeout", route_class: route_class}}
         )
 
-        emit(:timeout, route_class, queued.metadata, %{queued_ms: elapsed_ms(queued.enqueued_at)})
+        emit(
+          :timeout,
+          route_class,
+          queued.metadata,
+          %{queued_ms: elapsed_ms(queued.enqueued_at)},
+          "bulkhead_queue_timeout"
+        )
 
         {:noreply, put_class(state, route_class, class)}
     end
@@ -358,23 +375,46 @@ defmodule CodexPooler.Gateway.Transports.Admission do
     }
   end
 
+  defp error(%{code: code, route_class: route_class}) when code in @bulkhead_reasons do
+    %{
+      status: 503,
+      code: @overload_code,
+      message: @overload_message,
+      param: nil,
+      route_class: route_class,
+      internal_reason: code,
+      accounting_disposition: :zero_work
+    }
+  end
+
   defp error(%{code: code, route_class: route_class}) do
     %{
       status: 503,
       code: code,
-      message: "gateway route class is temporarily overloaded",
+      message: @overload_message,
       param: nil,
       route_class: route_class
     }
   end
 
-  defp emit(event, route_class, metadata, measurements) do
+  defp emit(event, route_class, metadata, measurements, internal_reason \\ nil) do
+    metadata =
+      metadata
+      |> Map.merge(%{route_class: route_class})
+      |> maybe_put_internal_reason(internal_reason)
+
     :telemetry.execute(
       @telemetry_prefix ++ [event],
       Map.merge(%{count: 1}, measurements),
-      Map.merge(metadata, %{route_class: route_class})
+      metadata
     )
   end
+
+  defp maybe_put_internal_reason(metadata, internal_reason)
+       when internal_reason in @bulkhead_reasons,
+       do: Map.put(metadata, :internal_reason, internal_reason)
+
+  defp maybe_put_internal_reason(metadata, _internal_reason), do: metadata
 
   defp sanitize_metadata(metadata) when is_map(metadata) do
     metadata

@@ -218,6 +218,7 @@ defmodule CodexPooler.Upstreams.OAuthFlows.Completion do
        ) do
     case TokenLinking.link_tokens(scope, pool, oauth_link_attrs(tokens, token_info, config),
            onboarding_method: config.onboarding_method,
+           credential_provenance: :codex_chatgpt,
            actor_metadata_key: "oauth_linked_by_user_id",
            audit_action: config.audit_action,
            broadcast_reason: "upstream_account_oauth_linked",

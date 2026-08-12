@@ -319,27 +319,41 @@ defmodule CodexPooler.Access.InviteOnboarding do
         |> put_account_email(info.email)
       )
 
-    IdentityLifecycle.activate_upstream_identity_with_plan(identity, attrs)
+    with {:ok, identity} <-
+           IdentityLifecycle.activate_upstream_identity_with_plan(identity, attrs) do
+      classify_verified_codex_identity(identity)
+    end
   end
 
   defp activate_verified_pool_account(identity, assignment, invite, method, info) do
-    InternalLifecycle.activate_verified_pool_account(
-      identity,
-      assignment,
-      Map.put(
-        verified_identity_attrs(identity, info),
-        :metadata,
-        identity
-        |> replacement_metadata()
-        |> complete_onboarding_metadata(invite, method)
-        |> Map.put("chatgpt_user_id", info.chatgpt_user_id)
-        |> put_account_email(info.email)
-      ),
-      %{
-        metadata: complete_onboarding_metadata(assignment.metadata, invite, method),
-        skip_quota_priming: true
-      }
-    )
+    with {:ok, %{identity: identity} = completed} <-
+           InternalLifecycle.activate_verified_pool_account(
+             identity,
+             assignment,
+             Map.put(
+               verified_identity_attrs(identity, info),
+               :metadata,
+               identity
+               |> replacement_metadata()
+               |> complete_onboarding_metadata(invite, method)
+               |> Map.put("chatgpt_user_id", info.chatgpt_user_id)
+               |> put_account_email(info.email)
+             ),
+             %{
+               metadata: complete_onboarding_metadata(assignment.metadata, invite, method),
+               skip_quota_priming: true
+             }
+           ),
+         {:ok, identity} <- classify_verified_codex_identity(identity) do
+      {:ok, %{completed | identity: identity}}
+    end
+  end
+
+  defp classify_verified_codex_identity(identity) do
+    identity
+    |> Ecto.Changeset.change()
+    |> UpstreamIdentity.put_credential_provenance(:codex_chatgpt)
+    |> Repo.update()
   end
 
   defp store_verified_tokens(identity, tokens) do

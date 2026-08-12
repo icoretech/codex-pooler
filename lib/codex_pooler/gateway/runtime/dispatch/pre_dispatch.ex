@@ -565,14 +565,64 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
       :no_runtime_model ->
         CandidateEligibility.routable_candidates(visible_model_context, effective_model)
 
-      nil
-      when request_options.routing.effective_model != effective_model.exposed_model_id ->
+      nil ->
+        resolve_visible_image_host_serving_mode(
+          overrides,
+          effective_model,
+          visible_model_context,
+          request_options,
+          effective_modes
+        )
+    end
+  end
+
+  defp resolve_visible_image_host_serving_mode(
+         overrides,
+         %Model{} = effective_model,
+         visible_model_context,
+         %RequestOptions{} = request_options,
+         effective_modes
+       ) do
+    cond do
+      visible_image_host_request?(request_options, effective_model) ->
+        resolution =
+          ModelServingMode.resolve(
+            Map.get(
+              overrides,
+              ModelServingOverride.canonical_exposed_model_id(effective_model.exposed_model_id)
+            ),
+            ModelMetadata.metadata(effective_model),
+            routable_source_ids(visible_model_context, effective_model)
+          )
+
+        case resolution do
+          {:ok, resolution} ->
+            {:ok, RequestOptions.put_model_serving_mode(request_options, resolution),
+             effective_modes}
+
+          :no_runtime_model ->
+            CandidateEligibility.routable_candidates(visible_model_context, effective_model)
+        end
+
+      request_options.routing.effective_model != effective_model.exposed_model_id ->
         {:ok, request_options, effective_modes}
 
-      nil ->
+      true ->
         {:error, error(400, "invalid_model", "model is not available for this pool", "model")}
     end
   end
+
+  defp visible_image_host_request?(
+         %RequestOptions{
+           routing: %{effective_model: requested_model},
+           openai_compatibility: %{collect_openai_image_stream: true}
+         },
+         %Model{exposed_model_id: host_model}
+       )
+       when is_binary(requested_model) and is_binary(host_model),
+       do: requested_model != host_model
+
+  defp visible_image_host_request?(%RequestOptions{}, %Model{}), do: false
 
   defp routable_source_ids(visible_model_context, %Model{} = model) do
     visible_model_context

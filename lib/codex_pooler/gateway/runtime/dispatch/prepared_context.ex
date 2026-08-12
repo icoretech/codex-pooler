@@ -7,13 +7,15 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreparedContext do
     :context,
     :url,
     :token,
-    :upstream_payload
+    :upstream_payload,
+    :routing_hint_authorized?
   ]
 
   @type t :: %__MODULE__{
           context: SelectedCandidateContext.t(),
           url: String.t(),
           token: String.t(),
-          upstream_payload: binary() | {:multipart, list()}
+          upstream_payload: binary() | {:multipart, list()},
+          routing_hint_authorized?: boolean()
         }
 end

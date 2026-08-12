@@ -8,6 +8,11 @@ Public docs serve operators and client integrators deploying the immutable `gemm
 
 Root files in `docs-site/public`, the repository README, examples, screenshots, and generated search/answer assets are public too. They must follow this contract.
 
+Use sentence case for H2 headings across public pages unless a proper noun or
+fixed product name requires capitalization. Keep `llms.txt` as a deliberate
+curated index: add a page only when it belongs in the declared primary or
+discovery scope, then update its inventory check and matching review date.
+
 ## Immutable Façade Contract
 
 The public and private implementation roles are:

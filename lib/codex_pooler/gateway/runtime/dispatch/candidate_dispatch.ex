@@ -10,6 +10,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.Finalization
   alias CodexPooler.Upstreams.EndpointMetadata
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPooler.Upstreams.Secrets
 
   @secret_kind "access_token"
@@ -63,7 +64,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.CandidateDispatch do
         context: context,
         token: token,
         url: url,
-        upstream_payload: upstream_payload
+        upstream_payload: upstream_payload,
+        routing_hint_authorized?: UpstreamIdentity.authenticated_codex_chatgpt?(context.identity)
       })
     else
       {:error, reason} ->

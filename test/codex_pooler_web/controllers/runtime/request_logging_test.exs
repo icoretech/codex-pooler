@@ -170,7 +170,15 @@ defmodule CodexPoolerWeb.Runtime.RequestLoggingTest do
   end
 
   test "healthy backend response coalesces routing request metadata writes", %{conn: conn} do
-    input = "metadata coalescing input #{System.unique_integer([:positive])}"
+    input_text = "metadata coalescing input #{System.unique_integer([:positive])}"
+
+    input = [
+      %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "input_text", "text" => input_text}]
+      }
+    ]
 
     upstream =
       start_upstream(
@@ -209,7 +217,7 @@ defmodule CodexPoolerWeb.Runtime.RequestLoggingTest do
     assert request_update_count(query_events) <= 3
 
     metadata_text = inspect(request.request_metadata)
-    refute metadata_text =~ input
+    refute metadata_text =~ input_text
     refute metadata_text =~ setup.authorization
   end
 

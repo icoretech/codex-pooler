@@ -1,50 +1,92 @@
 # Codex Pooler Public Docs For Agents
 
 Last reviewed: 2026-08-12
-Canonical docs: https://docs.codex-pooler.com/
-Short answers: https://docs.codex-pooler.com/answers.md
 
-Codex Pooler is a self-hosted pooled AI gateway. Every supported client configures exactly one public model: gemma3. The server owns the private target, fixed reasoning policy, account selection, retry, continuity, quota, and accounting decisions.
+Inventory scope: curated primary and discovery pages listed below; this index intentionally excludes other rendered pages.
 
-Client entry points:
-- Ollama: https://docs.codex-pooler.com/clients/ollama/ with base URL https://codex-pooler.example.com, a Pool API key, and model gemma3.
-- Claude Code: https://docs.codex-pooler.com/clients/claude-code/ with ANTHROPIC_BASE_URL=https://codex-pooler.example.com, all Anthropic model aliases set to gemma3, and a Pool API key.
-- OpenAI SDKs: https://docs.codex-pooler.com/clients/openai-compatible/ with base URL https://codex-pooler.example.com/v1, a Pool API key, and model gemma3.
-- Codex CLI: https://docs.codex-pooler.com/clients/codex-cli/ with base URL https://codex-pooler.example.com/backend-api/codex, a Pool API key, and model gemma3.
-- Exact route and support table: https://docs.codex-pooler.com/reference/runtime-routes/.
+Canonical docs base: https://docs.codex-pooler.com/
+Canonical llms index: https://docs.codex-pooler.com/llms.txt
+Short answer reference: https://docs.codex-pooler.com/answers.md
+Pricing and availability: https://docs.codex-pooler.com/pricing.md
 
-Other client guides all use gemma3:
+Primary public docs:
+- https://docs.codex-pooler.com/getting-started/quick-start/
+- https://docs.codex-pooler.com/getting-started/configuration/
+- https://docs.codex-pooler.com/clients/codex-cli/
+- https://docs.codex-pooler.com/clients/openai-compatible/
 - https://docs.codex-pooler.com/clients/aider/
-- https://docs.codex-pooler.com/clients/cline/
 - https://docs.codex-pooler.com/clients/continue/
+- https://docs.codex-pooler.com/clients/cline/
 - https://docs.codex-pooler.com/clients/goose/
-- https://docs.codex-pooler.com/clients/hermes/
 - https://docs.codex-pooler.com/clients/kilo/
-- https://docs.codex-pooler.com/clients/omp/
-- https://docs.codex-pooler.com/clients/openclaw/
 - https://docs.codex-pooler.com/clients/opencode/
+- https://docs.codex-pooler.com/clients/openclaw/
 - https://docs.codex-pooler.com/clients/openhands/
+- https://docs.codex-pooler.com/clients/omp/
 - https://docs.codex-pooler.com/clients/pi/
 - https://docs.codex-pooler.com/clients/trae/
+- https://docs.codex-pooler.com/clients/hermes/
 - https://docs.codex-pooler.com/clients/windmill/
+- https://docs.codex-pooler.com/reference/runtime-routes/
+- https://docs.codex-pooler.com/reference/routing-strategies/
+- https://docs.codex-pooler.com/reference/responses-lite-vs-full/
+- https://docs.codex-pooler.com/operators/admin-ui/
+- https://docs.codex-pooler.com/operators/alerts/
+- https://docs.codex-pooler.com/operators/monitoring/
+- https://docs.codex-pooler.com/deployment/docker-compose/
+- https://docs.codex-pooler.com/deployment/helm/
 
-Credential rules:
-- Use Pool API keys for /api, /v1, and /backend-api runtime routes.
-- Use only an operator-owned MCP token for /mcp.
-- Never configure an upstream account credential in a client.
-- Never place raw credentials in URLs, docs, prompts, tickets, screenshots, or logs.
+AI search discovery pages:
+- https://docs.codex-pooler.com/discovery/ai-coding-agent-gateway/
+- https://docs.codex-pooler.com/discovery/self-hosted-codex-gateway/
+- https://docs.codex-pooler.com/discovery/codex-account-pooling/
+- https://docs.codex-pooler.com/discovery/openai-compatible-codex-gateway/
+- https://docs.codex-pooler.com/discovery/codex-pooler-vs-direct-credentials/
 
-Compatibility rules:
-- Ollama /api/chat and /api/generate support native JSON/NDJSON; discovery exposes only gemma3. Model mutation, blobs, and embeddings are unsupported.
+What Codex Pooler is:
+Codex Pooler is a self-hosted pooled gateway for trusted AI agents and tools. Clients authenticate with stable Pool API keys and see exactly one virtual model, gemma3. The server owns the private target, fixed reasoning policy, account selection, retries, continuity, quota handling, and accounting.
+
+Client entry points:
+- Ollama clients use https://codex-pooler.example.com and model gemma3.
+- Claude Code and Anthropic Messages clients use https://codex-pooler.example.com and set every model alias to gemma3.
+- OpenAI-compatible SDKs use https://codex-pooler.example.com/v1 and model gemma3.
+- Codex CLI and Codex Desktop use https://codex-pooler.example.com/backend-api/codex and model gemma3.
+- Local setup uses http://localhost:4000 with the same paths.
+
+Compatibility boundaries:
+- Ollama compatibility covers authenticated discovery, show, pull-as-no-op, chat, generation, JSON, NDJSON, tools, images, thinking, and structured output. This gateway is not a local Ollama daemon and does not download weights or expose model mutation, blobs, or embeddings.
 - Anthropic compatibility is limited to POST /v1/messages and POST /v1/messages/count_tokens.
-- OpenAI compatibility includes models, Responses, Chat Completions, legacy Completions, usage, selected files, transcription, and image routes. It is not full OpenAI parity, and /v1/realtime is unsupported.
+- OpenAI compatibility covers the documented models, Responses, Chat Completions, legacy Completions, usage, selected files, transcription, and image routes. It is not full OpenAI parity, and /v1/realtime is unsupported.
 - Codex compatibility is an explicit /backend-api/codex route family, not a wildcard app-server proxy.
-- Codex CLI and Claude Code preserve their own local agent runtimes. Protocol adapters are not token-for-token equivalent.
+- Codex CLI and Claude Code keep their own local tools, sandbox, edits, transcript, interruption, and resume behavior. Protocol adapters do not promise token-for-token equivalence with each other or with a direct service connection.
 
-Privacy and caching rules:
-- Clients see only gemma3 in protocol identity fields; provider, account, assignment, private target, upstream request IDs, and unsafe headers/errors are removed.
+Identity and routing rules:
+- Every supported client configures only gemma3. Missing, gemma3, and arbitrary client model selectors on supported inference routes are normalized before private target validation.
+- Client reasoning selectors cannot change the fixed server-owned reasoning policy.
+- Discovery returns zero or one model. If the private target is unavailable, the gateway fails closed instead of advertising or choosing a fallback.
+- Protocol identity fields, response headers, streams, and errors expose only gemma3 and remove provider, account, assignment, private-target, upstream-request, and unsafe diagnostic details.
 - Arbitrary generated prose, filenames, and tool arguments are not blindly rewritten.
-- Codex Pooler does not cache completed responses. Supported cache/session values are converted into Pool/API-key-scoped one-way identities to improve locality without guaranteeing a cache hit.
-- Operator diagnostics retain truthful sanitized metadata, but raw prompts, completions, tool payloads, media bodies, websocket frames, keys, credentials, and raw facade affinity values are not request-log content.
 
-Local examples use http://localhost:4000. Deployed examples use https://codex-pooler.example.com. Documentation links use https://docs.codex-pooler.com.
+Credential boundaries:
+- Use Pool API keys for /api, /v1, and /backend-api runtime routes.
+- The sole headerless runtime exception is a short-lived, encrypted, single-purpose upload or download capability URL issued after Pool-key authentication. It remains bound to the Pool, key, file, assignment, identity, operation, and expiry; a supplied Authorization header must match its encrypted scope.
+- Use only an operator-owned MCP token for /mcp. Do not use a Pool API key for /mcp or an MCP token for runtime routes.
+- Never configure an upstream account credential in a client.
+- Never put raw keys, tokens, cookies, account credentials, callback URLs, signed URLs, private hostnames, or real account identifiers in documentation, prompts, tickets, screenshots, or logs.
+
+Caching and observability:
+- Codex Pooler does not cache completed responses.
+- Supported cache and session values are transformed into Pool/API-key-scoped identities for locality and continuity. This does not guarantee a provider cache hit.
+- Authorized operators retain truthful metadata-only routing, usage, and accounting evidence. Raw prompts, completions, tool payloads, media bytes, websocket frames, credentials, signed URLs, and raw affinity values are excluded from request logs.
+
+Agent guidance:
+- Start with https://docs.codex-pooler.com/clients/ollama/ for native Ollama clients.
+- Start with https://docs.codex-pooler.com/clients/claude-code/ for Claude Code and Anthropic Messages configuration.
+- Start with https://docs.codex-pooler.com/clients/openai-compatible/ for selected OpenAI SDK-compatible clients.
+- Start with https://docs.codex-pooler.com/clients/codex-cli/ for Codex CLI or Codex Desktop configuration.
+- Use each client-specific page for configuration examples, and keep every client model or fallback role on gemma3.
+- Use https://docs.codex-pooler.com/reference/runtime-routes/ for the exact route, authentication, streaming, file-capability, and unsupported-operation contract.
+- Use https://docs.codex-pooler.com/reference/responses-lite-vs-full/ only for operator-side serving behavior; it does not change the public model identity or fixed reasoning policy.
+- Use https://docs.codex-pooler.com/answers.md for short answers about scope, routes, credentials, privacy, setup, and deployment.
+- Keep local examples on http://localhost:4000 and deployed examples on https://codex-pooler.example.com.
+- Use https://docs.codex-pooler.com/ links as canonical documentation URLs.

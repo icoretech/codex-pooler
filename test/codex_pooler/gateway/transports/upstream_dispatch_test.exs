@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   import ExUnit.CaptureLog
   import Ecto.Query
 
+  alias CodexPooler.Accounting.Attempt
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -177,6 +178,437 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     refute Map.has_key?(first_headers, "cookie")
     refute Map.has_key?(second_headers, "cookie")
+  end
+
+  test "native Responses HTTP and compact dispatch derive routing hints from normalized upstream payloads" do
+    for {endpoint, path} <- [
+          {"/backend-api/codex/responses", "/backend-api/codex/responses"},
+          {"/backend-api/codex/responses/compact", "/backend-api/codex/responses/compact"}
+        ] do
+      {:ok, upstream} =
+        FakeUpstream.start_link({:path_json, %{path => {200, %{"ok" => true}}}})
+
+      on_exit(fn -> FakeUpstream.stop(upstream) end)
+
+      upstream_payload = %{
+        "model" => "upstream-routing-model",
+        "service_tier" => "priority",
+        "input" => []
+      }
+
+      request = %UpstreamDispatch.Request{
+        url: FakeUpstream.url(upstream) <> path,
+        token: "redacted",
+        upstream_payload: Jason.encode!(upstream_payload),
+        original_payload: %{"model" => "public-model", "input" => []},
+        identity: upstream_identity(),
+        routing_hint_authorized?: true,
+        request_options:
+          RequestOptions.build(
+            %{
+              receive_timeout_ms: 1_000,
+              forwarded_headers: [{"x-codex-routing-hint", "model=forged"}]
+            },
+            endpoint,
+            %{
+              "model" => "public-model",
+              "input" => []
+            }
+          )
+      }
+
+      assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(request)
+      assert [captured] = FakeUpstream.requests(upstream)
+
+      assert Map.new(captured.headers)["x-codex-routing-hint"] ==
+               "model=upstream-routing-model;tier=priority"
+    end
+  end
+
+  test "native Responses dispatch omits malformed effective routing tiers" do
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        {:path_json, %{"/backend-api/codex/responses" => {200, %{"ok" => true}}}}
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+
+    request = %UpstreamDispatch.Request{
+      url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
+      token: "redacted",
+      upstream_payload:
+        Jason.encode!(%{
+          "model" => "upstream-routing-model",
+          "service_tier" => "priority\r\nforged",
+          "input" => []
+        }),
+      original_payload: %{"model" => "public-model", "input" => []},
+      identity: upstream_identity(),
+      routing_hint_authorized?: true,
+      request_options:
+        RequestOptions.build(%{receive_timeout_ms: 1_000}, "/backend-api/codex/responses", %{
+          "model" => "public-model",
+          "input" => []
+        })
+    }
+
+    assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(request)
+    assert [captured] = FakeUpstream.requests(upstream)
+    refute Map.has_key?(Map.new(captured.headers), "x-codex-routing-hint")
+  end
+
+  test "flag-gated egress observation emits sanitized dispatch metadata and stays silent by default" do
+    {:ok, http_upstream} =
+      FakeUpstream.start_link(
+        {:path_json, %{"/backend-api/codex/responses" => {200, %{"ok" => true}}}}
+      )
+
+    {:ok, websocket_upstream} =
+      FakeUpstream.start_link({:sequence, [websocket_success("egress-observation")]})
+
+    on_exit(fn -> FakeUpstream.stop(http_upstream) end)
+    on_exit(fn -> FakeUpstream.stop(websocket_upstream) end)
+
+    handler_id = "task10-egress-observation-test"
+    parent = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :upstream, :egress_observation],
+        fn _event, _measurements, metadata, _config ->
+          send(parent, {:egress_observation, metadata})
+        end,
+        nil
+      )
+
+    Application.put_env(:codex_pooler, :task10_egress_observation_enabled, true)
+
+    on_exit(fn ->
+      Application.put_env(:codex_pooler, :task10_egress_observation_enabled, false)
+      :telemetry.detach(handler_id)
+    end)
+
+    upstream_payload = %{"model" => "upstream-routing-model", "input" => []}
+
+    http_request = %UpstreamDispatch.Request{
+      url: FakeUpstream.url(http_upstream) <> "/backend-api/codex/responses",
+      token: "redacted",
+      upstream_payload: Jason.encode!(upstream_payload),
+      original_payload: upstream_payload,
+      identity: upstream_identity(),
+      routing_hint_authorized?: true,
+      request_options:
+        RequestOptions.build(
+          %{receive_timeout_ms: 1_000, client_request_id: "task10-egress-correlator"},
+          "/backend-api/codex/responses",
+          upstream_payload
+        )
+    }
+
+    assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(http_request)
+
+    assert_receive {:egress_observation, http_metadata}
+    assert http_metadata.transport == :http
+    assert http_metadata.client_request_id == "task10-egress-correlator"
+    assert "authorization" in http_metadata.header_names
+    assert http_metadata.websocket_client_metadata == :none
+    # Names only: the credential value must never ride along.
+    refute Enum.any?(http_metadata.header_names, &String.contains?(&1, "redacted"))
+
+    websocket_request = %{
+      websocket_dispatch_request(websocket_upstream, websocket_request_options())
+      | upstream_payload:
+          Jason.encode!(%{
+            "type" => "response.create",
+            "model" => "upstream-routing-model",
+            "input" => [],
+            "client_metadata" => %{
+              "ws_request_header_x_openai_internal_codex_responses_lite" => "true"
+            }
+          })
+    }
+
+    assert {:ok, _response} = UpstreamDispatch.websocket_request(websocket_request)
+
+    assert_receive {:egress_observation, websocket_metadata}
+    assert websocket_metadata.transport == :websocket
+
+    assert websocket_metadata.websocket_client_metadata ==
+             {:keys, ["ws_request_header_x_openai_internal_codex_responses_lite"]}
+
+    Application.put_env(:codex_pooler, :task10_egress_observation_enabled, false)
+    assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(http_request)
+    refute_receive {:egress_observation, _silent}, 100
+  end
+
+  test "Task 14 product observation emits bounded websocket stage metadata only" do
+    {:ok, websocket_upstream} =
+      FakeUpstream.start_link(
+        {:sequence,
+         [
+           FakeUpstream.websocket_text_frames([
+             Jason.encode!(%{
+               "type" => "response.output_text.delta",
+               "delta" => "forbidden raw text"
+             }),
+             Jason.encode!(%{
+               "type" => "response.completed",
+               "response" => %{"id" => "task14-product-observer"}
+             })
+           ])
+         ]}
+      )
+
+    on_exit(fn -> FakeUpstream.stop(websocket_upstream) end)
+    handler_id = "task14-product-observation-test"
+    parent = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :task14, :product_stage],
+        fn _event, _measurements, metadata, _config ->
+          send(parent, {:task14_product_observation, metadata})
+        end,
+        nil
+      )
+
+    Application.put_env(:codex_pooler, :task14_product_observation_enabled, true)
+
+    on_exit(fn ->
+      Application.put_env(:codex_pooler, :task14_product_observation_enabled, false)
+      :telemetry.detach(handler_id)
+    end)
+
+    request_options =
+      RequestOptions.build(
+        %{
+          receive_timeout_ms: 1_000,
+          request_id: "request-1",
+          client_request_id: "client-1"
+        },
+        "/backend-api/codex/responses",
+        %{"model" => "upstream-routing-model", "input" => []}
+      )
+      |> RequestOptions.put_model_serving_mode(%{
+        configured_mode: "full",
+        effective_mode: "full",
+        source: "override"
+      })
+
+    request = websocket_dispatch_request(websocket_upstream, request_options)
+    request = %{request | accounting_attempt: %Attempt{id: "attempt-1"}}
+    assert {:ok, _response} = UpstreamDispatch.websocket_request(request)
+
+    observations = collect_task14_observations([])
+    assert length(observations) == 4
+
+    assert Enum.frequencies_by(observations, &{&1.direction, &1.event_type}) == %{
+             {:provider_to_pooler, "response.output_text.delta"} => 1,
+             {:provider_to_pooler, "response.completed"} => 1,
+             {:pooler_to_codex, "response.output_text.delta"} => 1,
+             {:pooler_to_codex, "response.completed"} => 1
+           }
+
+    completed = Enum.filter(observations, &(&1.event_type == "response.completed"))
+    assert Enum.uniq(Enum.map(completed, & &1.response_fingerprint)) |> length() == 1
+    assert Enum.all?(completed, &Regex.match?(~r/^[0-9a-f]{12}$/, &1.response_fingerprint))
+    assert Enum.all?(observations -- completed, &is_nil(&1.response_fingerprint))
+    refute inspect(observations) =~ "forbidden raw text"
+
+    for observation <- observations do
+      assert observation.request_id == "request-1"
+      assert observation.client_request_id == "client-1"
+      assert observation.attempt_id == "attempt-1"
+      assert observation.route == "backend_websocket"
+      assert observation.mode == "full"
+      assert observation.event_type in ["response.output_text.delta", "response.completed"]
+      refute Map.has_key?(observation, :payload)
+      refute Map.has_key?(observation, :frame)
+      refute Map.has_key?(observation, :token)
+    end
+  end
+
+  test "native Responses websocket dispatch derives the model-only routing hint, including prewarm payloads" do
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        {:sequence,
+         [websocket_success("routing-hint-response"), websocket_success("routing-hint-warmup")]}
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+
+    request_options = websocket_request_options()
+
+    for upstream_payload <- [
+          %{"type" => "response.create", "model" => "upstream-routing-model", "input" => []},
+          %{"generate" => false, "model" => "upstream-routing-model"}
+        ] do
+      request = %{
+        websocket_dispatch_request(upstream, request_options)
+        | upstream_payload: Jason.encode!(upstream_payload)
+      }
+
+      assert {:ok, _response} = UpstreamDispatch.websocket_request(request)
+    end
+
+    assert [request, prewarm] = FakeUpstream.requests(upstream)
+
+    for captured <- [request, prewarm] do
+      assert Map.new(captured.headers)["x-codex-routing-hint"] ==
+               "model=upstream-routing-model"
+    end
+  end
+
+  test "native-shaped provider-specific and API-key paths omit routing hints on HTTP and websocket dispatch" do
+    {:ok, http_upstream} =
+      FakeUpstream.start_link(
+        {:path_json, %{"/backend-api/codex/responses" => {200, %{"ok" => true}}}}
+      )
+
+    {:ok, websocket_upstream} =
+      FakeUpstream.start_link({:sequence, [websocket_success("provider-routing-hint")]})
+
+    on_exit(fn -> FakeUpstream.stop(http_upstream) end)
+    on_exit(fn -> FakeUpstream.stop(websocket_upstream) end)
+
+    upstream_payload = %{"model" => "upstream-routing-model", "input" => []}
+
+    http_request = %UpstreamDispatch.Request{
+      url: FakeUpstream.url(http_upstream) <> "/backend-api/codex/responses",
+      token: "redacted",
+      upstream_payload: Jason.encode!(upstream_payload),
+      original_payload: upstream_payload,
+      # Provider-specific credentials are represented by a synthetic local
+      # identity rather than a selected Codex OpenAI-auth identity.
+      identity: %UpstreamIdentity{chatgpt_account_id: "local_provider_identity"},
+      routing_hint_authorized?: false,
+      request_options:
+        RequestOptions.build(
+          %{receive_timeout_ms: 1_000},
+          "/backend-api/codex/responses",
+          upstream_payload
+        )
+    }
+
+    websocket_request = %{
+      websocket_dispatch_request(websocket_upstream, websocket_request_options())
+      | # An API-key credential path has no trusted ChatGPT account provenance.
+        identity: %UpstreamIdentity{},
+        routing_hint_authorized?: false,
+        upstream_payload:
+          Jason.encode!(%{
+            "type" => "response.create",
+            "model" => "upstream-routing-model",
+            "input" => []
+          })
+    }
+
+    assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(http_request)
+    assert {:ok, _response} = UpstreamDispatch.websocket_request(websocket_request)
+
+    assert [http_capture] = FakeUpstream.requests(http_upstream)
+    assert [websocket_capture] = FakeUpstream.requests(websocket_upstream)
+
+    refute Map.has_key?(Map.new(http_capture.headers), "x-codex-routing-hint")
+    refute Map.has_key?(Map.new(websocket_capture.headers), "x-codex-routing-hint")
+  end
+
+  test "custom non-prefixed credentials omit routing hints on HTTP and websocket dispatch" do
+    {:ok, http_upstream} =
+      FakeUpstream.start_link(
+        {:path_json, %{"/backend-api/codex/responses" => {200, %{"ok" => true}}}}
+      )
+
+    {:ok, websocket_upstream} =
+      FakeUpstream.start_link({:sequence, [websocket_success("custom-routing-hint")]})
+
+    on_exit(fn -> FakeUpstream.stop(http_upstream) end)
+    on_exit(fn -> FakeUpstream.stop(websocket_upstream) end)
+
+    upstream_payload = %{"model" => "upstream-routing-model", "input" => []}
+    custom_identity = %UpstreamIdentity{chatgpt_account_id: "unclassified_identity"}
+
+    http_request = %UpstreamDispatch.Request{
+      url: FakeUpstream.url(http_upstream) <> "/backend-api/codex/responses",
+      token: "redacted",
+      upstream_payload: Jason.encode!(upstream_payload),
+      original_payload: upstream_payload,
+      identity: custom_identity,
+      routing_hint_authorized?: false,
+      request_options:
+        RequestOptions.build(
+          %{receive_timeout_ms: 1_000},
+          "/backend-api/codex/responses",
+          upstream_payload
+        )
+    }
+
+    websocket_request = %{
+      websocket_dispatch_request(websocket_upstream, websocket_request_options())
+      | identity: custom_identity,
+        routing_hint_authorized?: false,
+        upstream_payload:
+          Jason.encode!(%{
+            "type" => "response.create",
+            "model" => "upstream-routing-model",
+            "input" => []
+          })
+    }
+
+    assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(http_request)
+    assert {:ok, _response} = UpstreamDispatch.websocket_request(websocket_request)
+
+    assert [http_capture] = FakeUpstream.requests(http_upstream)
+    assert [websocket_capture] = FakeUpstream.requests(websocket_upstream)
+
+    refute Map.has_key?(Map.new(http_capture.headers), "x-codex-routing-hint")
+    refute Map.has_key?(Map.new(websocket_capture.headers), "x-codex-routing-hint")
+  end
+
+  test "public and translated Responses dispatch never forwards caller routing hints" do
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        {:path_json,
+         %{
+           "/v1/responses" => {200, %{"ok" => true}},
+           "/backend-api/codex/responses" => {200, %{"ok" => true}}
+         }}
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+
+    upstream_payload = %{"model" => "upstream-routing-model", "input" => []}
+
+    for {endpoint, path, opts} <- [
+          {"/v1/responses", "/v1/responses", %{}},
+          {"/backend-api/codex/responses", "/backend-api/codex/responses",
+           %{openai_source_endpoint: "/v1/responses"}}
+        ] do
+      request_options =
+        RequestOptions.build(
+          Map.put(opts, :forwarded_headers, [{"x-codex-routing-hint", "model=forged"}]),
+          endpoint,
+          %{"model" => "public-model", "input" => []}
+        )
+
+      request = %UpstreamDispatch.Request{
+        url: FakeUpstream.url(upstream) <> path,
+        token: "redacted",
+        upstream_payload: Jason.encode!(upstream_payload),
+        original_payload: %{"model" => "public-model", "input" => []},
+        identity: upstream_identity(),
+        routing_hint_authorized?: true,
+        request_options: request_options
+      }
+
+      assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(request)
+    end
+
+    for captured <- FakeUpstream.requests(upstream) do
+      refute Map.has_key?(Map.new(captured.headers), "x-codex-routing-hint")
+    end
   end
 
   test "streaming non-429 4xx drains the complete rejection body into response private" do
@@ -504,7 +936,9 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       token: "redacted",
       upstream_payload: "{}",
       identity: upstream_identity(),
+      routing_hint_authorized?: true,
       accounting_request: nil,
+      accounting_attempt: nil,
       writer: fn _message -> :ok end,
       request_options: request_options
     }
@@ -643,6 +1077,15 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     RequestOptions.for_websocket(opts, %{"model" => "example-model"})
   end
 
+  defp collect_task14_observations(observations) do
+    receive do
+      {:task14_product_observation, observation} ->
+        collect_task14_observations([observation | observations])
+    after
+      0 -> Enum.reverse(observations)
+    end
+  end
+
   defp async_response(notify, cancel_fun \\ nil, stream_fun \\ nil) do
     ref = make_ref()
 
@@ -702,6 +1145,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       token: "redacted",
       upstream_payload: "{}",
       identity: upstream_identity(),
+      routing_hint_authorized?: true,
       accounting_request: nil,
       writer: fn _message -> :ok end,
       assignment_advertised?: false,

@@ -12,7 +12,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Accounts
+  alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Catalog
+  alias CodexPooler.Catalog.Model, as: CatalogModel
   alias CodexPooler.Catalog.SyncRun
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
@@ -113,10 +115,99 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute has_element?(view, "#pool-row-#{hidden_pool.id}")
     refute has_element?(view, "#pools-page-create-action")
     refute has_element?(view, "#pool-create-dialog")
+    refute has_element?(view, "#delete-pool-#{assigned_pool.id}")
 
     state = :sys.get_state(view.pid)
     refute state.socket.assigns.can_manage_pools?
     assert Enum.map(state.socket.assigns.pools, & &1.pool.id) == [assigned_pool.id]
+  end
+
+  test "assigned admin receives a Models-only Pool action", %{scope: scope} do
+    {:ok, assigned_pool} =
+      Pools.create_pool(scope, %{slug: "models-only-assigned", name: "Models Only Assigned"})
+
+    %{assignment: assignment} = upstream_assignment_fixture(assigned_pool)
+
+    model_fixture(assigned_pool, %{
+      exposed_model_id: "gpt-models-only-assigned",
+      metadata: %{"source_assignment_ids" => [assignment.id]}
+    })
+
+    %{user: admin, temporary_password: temporary_password} =
+      operator_fixture(scope, %{
+        "email" => "models-only-assigned-admin@example.com",
+        "password_change_required" => "false"
+      })
+
+    operator_pool_assignment_fixture(admin, assigned_pool, created_by_user_id: scope.user.id)
+
+    assert {:ok, %{token: token}} =
+             Accounts.login_user(%{"email" => admin.email, "password" => temporary_password})
+
+    admin_conn = log_in_user(build_conn(), admin, token)
+    {:ok, view, _html} = live(admin_conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+
+    assert has_element?(view, "#models-pool-#{assigned_pool.id}")
+    refute has_element?(view, "#edit-pool-#{assigned_pool.id}")
+
+    view |> element("#models-pool-#{assigned_pool.id}") |> render_click()
+    _ = render_async(view)
+
+    assert has_element?(view, "#pool-model-serving-dialog[open]")
+    assert has_element?(view, "#pool-model-serving-dialog-tab-models[aria-selected='true']")
+    assert has_element?(view, "#pool-model-serving-form")
+    refute has_element?(view, "#pool-model-serving-dialog-tab-details")
+    refute has_element?(view, "#pool-edit-form")
+    refute has_element?(view, "#pool_edit_name")
+    refute has_element?(view, "#pool_edit_status")
+
+    view
+    |> element("#pool-model-serving-form")
+    |> render_submit(%{
+      "pool_model_serving" => %{
+        "revision" => model_serving_revision(view),
+        "rows" => %{
+          "0" => %{
+            "exposed_model_id" => "gpt-models-only-assigned",
+            "mode" => "lite"
+          }
+        }
+      }
+    })
+
+    _ = render_async(view)
+
+    assert %ModelServingOverride{mode: "lite"} =
+             Repo.get_by!(ModelServingOverride,
+               pool_id: assigned_pool.id,
+               exposed_model_id: "gpt-models-only-assigned"
+             )
+
+    assert %AuditEvent{
+             actor_user_id: actor_user_id,
+             pool_id: pool_id,
+             action: "pool.model_serving_modes_update",
+             target_id: target_id
+           } =
+             Repo.one!(
+               from event in AuditEvent,
+                 where:
+                   event.action == "pool.model_serving_modes_update" and
+                     event.pool_id == ^assigned_pool.id
+             )
+
+    assert actor_user_id == admin.id
+    assert pool_id == assigned_pool.id
+    assert target_id == assigned_pool.id
+
+    view |> element("#pool-model-serving-cancel") |> render_click()
+
+    html =
+      render_click(view, "edit_pool", %{"id" => assigned_pool.id})
+
+    assert html =~ "the actor role cannot perform this capability in the requested scope"
+    refute has_element?(view, "#pool-edit-dialog")
   end
 
   test "unassigned admin sees explicit assigned-pool empty state without owner controls", %{
@@ -149,6 +240,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute html =~ hidden_pool.name
     refute has_element?(view, "#pools-page-create-action")
     refute has_element?(view, "#pool-empty-create-action")
+    refute has_element?(view, "#models-pool-#{hidden_pool.id}")
   end
 
   test "compat flag icons disclose one inline panel and toggle image generation", %{
@@ -1184,6 +1276,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
     _ = await_pool_traffic(view)
 
+    assert has_element?(view, "#edit-pool-#{pool.id}")
+    refute has_element?(view, "#models-pool-#{pool.id}")
+
     view |> element("#edit-pool-#{pool.id}") |> render_click()
     assert has_element?(view, "#pool-edit-dialog[open]")
     assert has_element?(view, "#pool-edit-upstream-assignment-options")
@@ -1578,7 +1673,12 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => model.exposed_model_id,
-        "input" => "synthetic task 15 red input",
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [%{"type" => "input_text", "text" => "synthetic task 15 red input"}]
+          }
+        ],
         "parallel_tool_calls" => true
       })
 
@@ -1635,16 +1735,37 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     full_payloads = [
       %{
         "model" => model.exposed_model_id,
-        "input" => "synthetic task 15 full absent input"
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{"type" => "input_text", "text" => "synthetic task 15 full absent input"}
+            ]
+          }
+        ]
       },
       %{
         "model" => model.exposed_model_id,
-        "input" => "synthetic task 15 full true input",
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{"type" => "input_text", "text" => "synthetic task 15 full true input"}
+            ]
+          }
+        ],
         "parallel_tool_calls" => true
       },
       %{
         "model" => model.exposed_model_id,
-        "input" => "synthetic task 15 full false input",
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{"type" => "input_text", "text" => "synthetic task 15 full false input"}
+            ]
+          }
+        ],
         "parallel_tool_calls" => false
       }
     ]
@@ -1716,7 +1837,14 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => model.exposed_model_id,
-        "input" => "synthetic task 15 invalid full input"
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{"type" => "input_text", "text" => "synthetic task 15 invalid full input"}
+            ]
+          }
+        ]
       })
 
     assert %{"error" => %{"code" => "server_error"}} = json_response(invalid_response, 500)
@@ -1762,7 +1890,14 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => model.exposed_model_id,
-        "input" => "synthetic task 15 retained full input"
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{"type" => "input_text", "text" => "synthetic task 15 retained full input"}
+            ]
+          }
+        ]
       })
 
     assert %{"id" => "resp_task_15_after_full_failure"} =
@@ -2051,8 +2186,166 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(
              view,
              "##{unavailable_row_id}-availability-warning",
-             "Will be removed on save"
+             "Selecting Auto removes this saved override when you save"
            )
+  end
+
+  test "removes only an unavailable model override when Auto is saved", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "override-lifecycle", name: "Override Lifecycle"})
+
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    unavailable_model =
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-lifecycle-unavailable",
+        display_name: "Lifecycle unavailable",
+        metadata: %{"source_assignment_ids" => [assignment.id]}
+      })
+
+    sibling_model =
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-lifecycle-sibling",
+        display_name: "Lifecycle sibling",
+        metadata: %{"source_assignment_ids" => [assignment.id]}
+      })
+
+    assert {:ok, initial} = Pools.model_serving_modes_snapshot(scope, pool)
+
+    assert {:ok, configured} =
+             Pools.update_model_serving_modes(
+               scope,
+               pool,
+               [
+                 %{exposed_model_id: unavailable_model.exposed_model_id, mode: "full"},
+                 %{exposed_model_id: sibling_model.exposed_model_id, mode: "lite"}
+               ],
+               initial.revision
+             )
+
+    assert {:ok, _retired_model} = Catalog.retire_model(unavailable_model)
+    _sync_run = catalog_sync_run_fixture(pool, "succeeded")
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+    open_edit_models(view, pool)
+    _ = render_async(view)
+
+    unavailable_row_id = PoolForm.model_serving_dom_id(unavailable_model.exposed_model_id)
+    sibling_row_id = PoolForm.model_serving_dom_id(sibling_model.exposed_model_id)
+
+    assert has_element?(
+             view,
+             "##{unavailable_row_id}[data-availability='saved-unavailable']"
+           )
+
+    assert has_element?(
+             view,
+             "##{unavailable_row_id}-availability-warning",
+             "Saved setting retained"
+           )
+
+    assert has_element?(view, "##{sibling_row_id}[data-availability='available']")
+
+    audit_count_before =
+      Repo.aggregate(
+        from(event in AuditEvent, where: event.action == "pool.model_serving_modes_update"),
+        :count
+      )
+
+    view
+    |> element("#pool-model-serving-form")
+    |> render_change(%{
+      "pool_model_serving" => %{
+        "revision" => model_serving_revision(view),
+        "rows" => %{
+          "0" => %{
+            "exposed_model_id" => unavailable_model.exposed_model_id,
+            "mode" => "auto"
+          },
+          "1" => %{
+            "exposed_model_id" => sibling_model.exposed_model_id,
+            "mode" => "lite"
+          }
+        }
+      }
+    })
+
+    assert has_element?(
+             view,
+             "##{unavailable_row_id}-availability-warning",
+             "Selecting Auto removes this saved override when you save"
+           )
+
+    view
+    |> element("#pool-model-serving-form")
+    |> render_submit(%{
+      "pool_model_serving" => %{
+        "revision" => model_serving_revision(view),
+        "rows" => %{
+          "0" => %{
+            "exposed_model_id" => unavailable_model.exposed_model_id,
+            "mode" => "auto"
+          },
+          "1" => %{
+            "exposed_model_id" => sibling_model.exposed_model_id,
+            "mode" => "lite"
+          }
+        }
+      }
+    })
+
+    _ = render_async(view)
+
+    refute Repo.get_by(ModelServingOverride,
+             pool_id: pool.id,
+             exposed_model_id: unavailable_model.exposed_model_id
+           )
+
+    assert %ModelServingOverride{mode: "lite"} =
+             Repo.get_by!(ModelServingOverride,
+               pool_id: pool.id,
+               exposed_model_id: sibling_model.exposed_model_id
+             )
+
+    assert Repo.get!(CatalogModel, sibling_model.id).retired_at == nil
+    assert Repo.get!(PoolUpstreamAssignment, assignment.id).pool_id == pool.id
+
+    assert Repo.aggregate(
+             from(event in AuditEvent, where: event.action == "pool.model_serving_modes_update"),
+             :count
+           ) == audit_count_before + 1
+
+    assert %AuditEvent{
+             details: %{
+               "changed_count" => 1,
+               "transitions" => [
+                 %{
+                   "exposed_model_id" => "gpt-lifecycle-unavailable",
+                   "from_mode" => "full",
+                   "to_mode" => "auto"
+                 }
+               ]
+             }
+           } =
+             Repo.one!(
+               from event in AuditEvent,
+                 where: event.action == "pool.model_serving_modes_update",
+                 order_by: [desc: event.occurred_at],
+                 limit: 1
+             )
+
+    view |> element("#pool-edit-cancel") |> render_click()
+    open_edit_models(view, pool)
+    _ = render_async(view)
+
+    refute has_element?(view, "##{unavailable_row_id}[data-availability='saved-unavailable']")
+    assert has_element?(view, "##{sibling_row_id}[data-availability='available']")
+    assert has_element?(view, "##{sibling_row_id}-effective[data-effective-mode='lite']")
+    assert configured.revision != model_serving_revision(view)
   end
 
   test "saving Pool fields keeps unsaved model-mode choices in the open dialog", %{
@@ -2184,7 +2477,12 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => model.exposed_model_id,
-        "input" => "synthetic Auto routability input"
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [%{"type" => "input_text", "text" => "synthetic Auto routability input"}]
+          }
+        ]
       })
 
     assert %{"id" => "resp_auto_routability"} = json_response(response, 200)

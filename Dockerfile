@@ -46,6 +46,11 @@ RUN mix local.hex --force && mix local.rebar --force
 COPY mix.exs mix.lock ./
 COPY config config
 RUN mix deps.get --only prod && mix deps.compile
+RUN for attempt in 1 2 3; do \
+    mix tailwind.install && exit 0; \
+    if [ "${attempt}" -eq 3 ]; then exit 1; fi; \
+    sleep "$((attempt * 2))"; \
+  done
 
 COPY --from=assets_deps /app/assets/node_modules ./assets/node_modules
 COPY assets assets

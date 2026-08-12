@@ -29,6 +29,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
        can_manage_pools?: false,
        creating_pool: false,
        editing_pool: nil,
+       pool_editor_mode: nil,
        deleting_pool: nil,
        delete_form_version: 0,
        create_form: PoolForm.create_form(),
@@ -128,20 +129,57 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
         {:noreply, put_flash(socket, :error, "Pool was not found")}
 
       pool ->
-        {:noreply,
-         socket
-         |> close_create_dialog()
-         |> assign(:editing_pool, pool)
-         |> assign(:edit_form, PoolForm.edit_form(pool))
-         |> assign(:pool_wizard_step, "details")
-         |> clear_deleting()
-         |> begin_model_serving_load(pool)
-         |> defer_pool_traffic_refresh()}
+        case ensure_can_manage_pool(socket, pool) do
+          :ok ->
+            {:noreply,
+             socket
+             |> close_create_dialog()
+             |> assign(:editing_pool, pool)
+             |> assign(:pool_editor_mode, :edit)
+             |> assign(:edit_form, PoolForm.edit_form(pool))
+             |> assign(:pool_wizard_step, "details")
+             |> clear_deleting()
+             |> begin_model_serving_load(pool)
+             |> defer_pool_traffic_refresh()}
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, error_message(reason))}
+        end
+    end
+  end
+
+  def handle_event("edit_pool_models", %{"id" => pool_id}, socket) do
+    case find_pool(socket, pool_id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "Pool was not found")}
+
+      pool ->
+        case ensure_can_operate_pool(socket, pool) do
+          :ok ->
+            {:noreply,
+             socket
+             |> close_create_dialog()
+             |> assign(:editing_pool, pool)
+             |> assign(:pool_editor_mode, :models)
+             |> assign(:edit_form, PoolForm.edit_form(pool))
+             |> assign(:pool_wizard_step, "models")
+             |> clear_deleting()
+             |> begin_model_serving_load(pool)
+             |> defer_pool_traffic_refresh()}
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, error_message(reason))}
+        end
     end
   end
 
   def handle_event("pool_wizard_step", %{"step" => step}, socket) do
-    mode = if socket.assigns.creating_pool, do: :create, else: :edit
+    mode =
+      cond do
+        socket.assigns.creating_pool -> :create
+        socket.assigns.pool_editor_mode == :models -> :models
+        true -> :edit
+      end
 
     {:noreply, assign(socket, :pool_wizard_step, PoolWizardComponents.normalize_step(step, mode))}
   end
@@ -216,6 +254,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     pool = socket.assigns.editing_pool
 
     with %{} <- pool,
+         :ok <- ensure_can_operate_pool(socket, pool),
          {:ok, _result} <-
            Pools.update_model_serving_modes(
              socket.assigns.current_scope,
@@ -603,7 +642,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
 
         <PoolWizardComponents.pool_wizard
           :if={@editing_pool}
-          mode={:edit}
+          mode={@pool_editor_mode || :edit}
           form={@edit_form}
           current_step={@pool_wizard_step}
           upstream_options={
@@ -623,6 +662,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
           pool_filter_form={@pool_filter_form}
           pools={@pools}
           can_manage_pools?={@can_manage_pools?}
+          can_operate_pools?={@can_operate_pools?}
           compat_panel_views={@pool_compat_panels}
         />
       </section>
@@ -741,6 +781,28 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     end
   end
 
+  defp ensure_can_manage_pool(socket, pool) do
+    case Pools.require_capability(
+           socket.assigns.current_scope,
+           Pools.capability(:pool_manage),
+           pool_id: pool.id
+         ) do
+      {:ok, _decision} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp ensure_can_operate_pool(socket, pool) do
+    case Pools.require_capability(
+           socket.assigns.current_scope,
+           Pools.capability(:pool_operate),
+           pool_id: pool.id
+         ) do
+      {:ok, _decision} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp find_pool(socket, pool_id) when is_binary(pool_id) do
     socket.assigns.pools
     |> Enum.find(&(&1.pool.id == pool_id))
@@ -786,6 +848,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   defp clear_editing(socket) do
     assign(socket,
       editing_pool: nil,
+      pool_editor_mode: nil,
       edit_form: nil,
       model_serving_form: nil,
       model_serving_snapshot: nil,

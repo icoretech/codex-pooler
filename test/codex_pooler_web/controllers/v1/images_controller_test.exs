@@ -7,7 +7,7 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
     only: [auth: 2, gateway_setup: 1, start_upstream: 1]
 
   alias CodexPooler.Access
-  alias CodexPooler.Accounting.Request
+  alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Facade
   alias CodexPooler.Gateway.OpenAICompatibility.Images
@@ -171,6 +171,21 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
     assert request.status == "succeeded"
     assert request.request_metadata["requested_model"] == Facade.public_model()
     assert request.request_metadata["effective_model"] == Facade.effective_model()
+
+    expected_mode_metadata = %{
+      "model_serving_mode_configured" => "auto",
+      "model_serving_mode" => "full",
+      "model_serving_mode_source" => "catalog"
+    }
+
+    assert Map.take(request.request_metadata["routing"], Map.keys(expected_mode_metadata)) ==
+             expected_mode_metadata
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+    assert Map.take(attempt.response_metadata["routing"], Map.keys(expected_mode_metadata)) ==
+             expected_mode_metadata
+
     refute inspect(request.request_metadata) =~ "synthetic hidden image request"
     refute inspect(request.request_metadata) =~ "B64_HIDDEN"
   end

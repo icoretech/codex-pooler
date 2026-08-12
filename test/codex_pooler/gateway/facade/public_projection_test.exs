@@ -1221,6 +1221,31 @@ defmodule CodexPooler.Gateway.Facade.PublicProjectionTest do
     assert tool_call["arguments"] == preserved_arguments
   end
 
+  test "preserves only typed encrypted function arguments" do
+    function_call = %{
+      "type" => "function_call",
+      "call_id" => "call_encrypted_args",
+      "name" => "lookup_fixture",
+      "arguments" => "{}"
+    }
+
+    assert {:ok, projected} =
+             PublicProjection.gateway_body_result(%{
+               "type" => "response.output_item.done",
+               "item" => Map.put(function_call, "encrypted_function_args", ["a", "bb"])
+             })
+
+    assert projected["item"]["encrypted_function_args"] == ["a", "bb"]
+
+    for invalid <- ["raw", %{"provider" => @hidden_provider}, [1], ["safe", %{}]] do
+      assert :error =
+               PublicProjection.gateway_body_result(%{
+                 "type" => "response.output_item.done",
+                 "item" => Map.put(function_call, "encrypted_function_args", invalid)
+               })
+    end
+  end
+
   test "recursively projects nested tool execution envelopes" do
     projected =
       PublicProjection.gateway_body(%{

@@ -119,6 +119,46 @@ adopt_legacy_receipt() {
   printf 'dev-server: adopted verified legacy dev server pid %s\n' "$legacy_pid"
 }
 
+# A receipt is provably stale when it is a running-state receipt for THIS
+# checkout and port whose recorded process no longer exists: the pid is gone,
+# or the pid was reused by a process with a different start signature. Both
+# leave nothing of ours to signal, so only the receipt files are cleaned and
+# no process is ever touched. Receipts for another checkout, another port, a
+# non-running state, or with any parse failure stay on the fail-closed
+# validate_owned_process path.
+stale_owned_pid=""
+
+owned_process_gone() {
+  local recorded_pid recorded_start
+  recorded_pid="$(receipt_value "$receipt_path" pid)" || return 1
+  recorded_start="$(receipt_value "$receipt_path" start_signature)" || return 1
+  [[ "$recorded_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  stale_owned_pid="$recorded_pid"
+
+  if ! process_alive "$recorded_pid"; then
+    return 0
+  fi
+
+  [ "$(process_start "$recorded_pid")" != "$recorded_start" ]
+}
+
+stale_owned_receipt() {
+  local recorded_state recorded_cwd recorded_port
+  recorded_state="$(receipt_value "$receipt_path" state)" || return 1
+  recorded_cwd="$(receipt_value "$receipt_path" cwd)" || return 1
+  recorded_port="$(receipt_value "$receipt_path" port)" || return 1
+  [ "$recorded_state" = "running" ] || return 1
+  [ "$recorded_cwd" = "$server_cwd" ] || return 1
+  [ "$recorded_port" = "$port" ] || return 1
+  owned_process_gone
+}
+
+clear_stale_owned_receipt() {
+  rm -f -- "$receipt_path" "$active_path"
+  printf 'dev-server: cleared stale ownership receipt for owned pid %s that no longer exists\n' \
+    "$stale_owned_pid"
+}
+
 validate_owned_process() {
   local recorded_state recorded_pid recorded_start recorded_command recorded_cwd recorded_port
   recorded_state="$(receipt_value "$receipt_path" state)" || fail "refusing malformed ownership receipt"
@@ -160,10 +200,14 @@ start_server() {
 
   if [ -e "$active_path" ]; then
     load_active_receipt
-    validate_owned_process
-    curl -fsS "$health_url" >/dev/null || fail "owned listener failed health validation"
-    printf 'dev-server: reusing owned dev server pid %s\n' "$owned_pid"
-    return 0
+    if stale_owned_receipt; then
+      clear_stale_owned_receipt
+    else
+      validate_owned_process
+      curl -fsS "$health_url" >/dev/null || fail "owned listener failed health validation"
+      printf 'dev-server: reusing owned dev server pid %s\n' "$owned_pid"
+      return 0
+    fi
   fi
 
   [ -z "$(listener_pids)" ] || fail "refusing occupied port ${port}; no process was stopped"
@@ -215,6 +259,13 @@ stop_server() {
   if ! prepare_stop_receipt; then
     return 0
   fi
+
+  if stale_owned_receipt; then
+    clear_stale_owned_receipt
+    printf 'dev-server: no live owned dev server to stop\n'
+    return 0
+  fi
+
   validate_owned_process
 
   printf 'dev-server: stopping owned dev server pid %s\n' "$owned_pid"
@@ -243,6 +294,11 @@ stop_server() {
 status_server() {
   server_cwd="$(cd "$server_cwd" && pwd -P)"
   load_active_receipt
+
+  if stale_owned_receipt; then
+    fail "stale ownership receipt: owned pid ${stale_owned_pid} no longer exists; start or stop will clean it"
+  fi
+
   validate_owned_process
   curl -fsS "$health_url" >/dev/null || fail "owned listener failed health validation"
   printf 'dev-server: owned dev server running pid %s; healthz ok\n' "$owned_pid"

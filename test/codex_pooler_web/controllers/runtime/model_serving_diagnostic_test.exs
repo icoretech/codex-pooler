@@ -50,7 +50,13 @@ defmodule CodexPoolerWeb.Runtime.ModelServingDiagnosticTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic Full rejection request",
+        "input" => [
+          %{
+            "type" => "message",
+            "role" => "user",
+            "content" => [%{"type" => "input_text", "text" => "synthetic Full rejection request"}]
+          }
+        ],
         "parallel_tool_calls" => true
       })
 

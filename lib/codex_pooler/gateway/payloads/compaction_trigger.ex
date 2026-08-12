@@ -2,22 +2,30 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   @moduledoc false
 
   alias CodexPooler.Gateway.Contracts
+  alias CodexPooler.Gateway.OpenAICompatibility.Error
 
   @backend_response_endpoints [
     "/backend-api/codex/responses",
     "/backend-api/codex/v1/responses"
   ]
 
+  @compact_endpoints [
+    "/backend-api/codex/responses/compact",
+    "/backend-api/codex/v1/responses/compact"
+  ]
+
   @compact_payload_keys ~w(
     model
     instructions
     input
+    tools
+    parallel_tool_calls
     reasoning
     service_tier
     prompt_cache_key
-    previous_response_id
-    conversation
+    text
   )
+  @compact_bridge_payload_keys @compact_payload_keys ++ ~w(previous_response_id conversation)
 
   @stream_headers [{"content-type", "text/event-stream"}]
 
@@ -28,6 +36,9 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   def prepare_bridge(local_endpoint, payload)
       when is_binary(local_endpoint) and is_map(payload) do
     cond do
+      local_endpoint in @compact_endpoints ->
+        validate_direct_compact_payload(payload)
+
       local_endpoint not in @backend_response_endpoints ->
         :passthrough
 
@@ -40,6 +51,39 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
       true ->
         prepare_input_bridge(payload)
     end
+  end
+
+  @spec validate_projection(payload()) :: :ok | {:error, Contracts.gateway_error()}
+  def validate_projection(payload) when is_map(payload) do
+    cond do
+      Map.has_key?(payload, "tools") and not is_list(payload["tools"]) ->
+        {:error, Error.invalid_request("tools must be an array", "tools")}
+
+      Map.has_key?(payload, "parallel_tool_calls") and
+          not is_boolean(payload["parallel_tool_calls"]) ->
+        {:error,
+         Error.invalid_request("parallel_tool_calls must be a boolean", "parallel_tool_calls")}
+
+      Map.has_key?(payload, "text") and not is_map(payload["text"]) ->
+        {:error, Error.invalid_request("text must be an object", "text")}
+
+      true ->
+        :ok
+    end
+  end
+
+  @spec project_payload(payload()) :: payload()
+  def project_payload(payload) when is_map(payload) do
+    payload
+    |> Map.take(@compact_payload_keys)
+    |> maybe_put_prompt_cache_key(payload)
+  end
+
+  @spec project_bridge_payload(payload()) :: payload()
+  def project_bridge_payload(payload) when is_map(payload) do
+    payload
+    |> Map.take(@compact_bridge_payload_keys)
+    |> maybe_put_prompt_cache_key(payload)
   end
 
   @spec adapt_gateway_result(
@@ -82,6 +126,12 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
 
   def adapt_gateway_result(result), do: result
 
+  defp prepare_input_bridge(%{"input" => [%{"type" => "compaction_trigger"}]} = payload) do
+    payload
+    |> compact_payload()
+    |> validate_compact_payload()
+  end
+
   defp prepare_input_bridge(%{"input" => input} = payload) do
     trigger_indexes = trigger_indexes(input)
 
@@ -99,7 +149,22 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
         {:error, invalid_trigger_error()}
 
       true ->
-        {:ok, compact_payload(payload)}
+        compact_payload(payload)
+        |> validate_compact_payload()
+    end
+  end
+
+  defp validate_direct_compact_payload(payload) do
+    case validate_projection(payload) do
+      :ok -> :passthrough
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp validate_compact_payload(payload) do
+    case validate_projection(payload) do
+      :ok -> {:ok, payload}
+      {:error, _reason} = error -> error
     end
   end
 
@@ -167,9 +232,8 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
 
   defp compact_payload(payload) do
     payload
-    |> Map.take(@compact_payload_keys)
+    |> project_bridge_payload()
     |> Map.put("input", payload["input"] |> Enum.drop(-1))
-    |> maybe_put_prompt_cache_key(payload)
   end
 
   defp maybe_put_prompt_cache_key(compact_payload, %{"prompt_cache_key" => value}) do

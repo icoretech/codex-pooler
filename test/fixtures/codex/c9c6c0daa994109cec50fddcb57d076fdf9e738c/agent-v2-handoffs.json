@@ -1,0 +1,195 @@
+{
+  "contract_version": 2,
+  "source": {
+    "commit": "c9c6c0daa994109cec50fddcb57d076fdf9e738c",
+    "protocol_path": "codex-rs/protocol/src/protocol.rs",
+    "models_path": "codex-rs/protocol/src/models.rs",
+    "router_path": "codex-rs/core/src/tools/router.rs",
+    "multi_agent_spec_path": "codex-rs/core/src/tools/handlers/multi_agents_spec.rs",
+    "v2_handler_path": "codex-rs/core/src/tools/handlers/multi_agents_v2.rs",
+    "spec_plan_path": "codex-rs/core/src/tools/spec_plan.rs"
+  },
+  "v1": {
+    "ordinary_user_role_handoff": {
+      "item": {
+        "type": "message",
+        "id": "item_v1_ordinary_synthetic",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "SYNTHETIC_V1_ORDINARY_PAYLOAD"
+          }
+        ],
+        "internal_chat_message_metadata_passthrough": {
+          "synthetic_turn": "v1-ordinary"
+        }
+      }
+    }
+  },
+  "v2": {
+    "namespace_tools": [
+      {
+        "type": "namespace",
+        "name": "collaboration",
+        "description": "Tools for spawning and managing sub-agents.",
+        "tools": [
+          {
+            "type": "function",
+            "name": "send_message",
+            "description": "Send a message to an existing agent. The message will be delivered promptly. Does not trigger a new turn.",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "description": "Relative or canonical task name to message (from spawn_agent)."
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Message text to queue on the target agent.",
+                  "encrypted": true
+                }
+              },
+              "required": ["target", "message"],
+              "additionalProperties": false
+            }
+          }
+        ]
+      },
+      {
+        "type": "namespace",
+        "name": "collaboration",
+        "description": "Tools for spawning and managing sub-agents.",
+        "tools": [
+          {
+            "type": "function",
+            "name": "followup_task",
+            "description": "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes.",
+            "strict": false,
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "type": "string",
+                  "description": "Agent id or canonical task name to send a follow-up task to (from spawn_agent)."
+                },
+                "message": {
+                  "type": "string",
+                  "description": "Message text to send to the target agent.",
+                  "encrypted": true
+                }
+              },
+              "required": ["target", "message"],
+              "additionalProperties": false
+            }
+          }
+        ]
+      }
+    ],
+    "handoffs": {
+      "spawn_agent": {
+        "message_type": "NEW_TASK",
+        "item": {
+          "type": "agent_message",
+          "id": "item_v2_spawn_synthetic",
+          "author": "/root",
+          "recipient": "/root/worker",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n"
+            },
+            {
+              "type": "encrypted_content",
+              "encrypted_content": "synthetic-v2-spawn"
+            }
+          ],
+          "internal_chat_message_metadata_passthrough": {
+            "synthetic_turn": "v2-spawn"
+          }
+        }
+      },
+      "send_message": {
+        "message_type": "MESSAGE",
+        "item": {
+          "type": "agent_message",
+          "id": "item_v2_send_synthetic",
+          "author": "/root",
+          "recipient": "/root/worker",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Message Type: MESSAGE\nTask name: /root/worker\nSender: /root\nPayload:\n"
+            },
+            {
+              "type": "encrypted_content",
+              "encrypted_content": "synthetic-v2-send"
+            }
+          ],
+          "internal_chat_message_metadata_passthrough": {
+            "synthetic_turn": "v2-send"
+          }
+        }
+      },
+      "followup_task": {
+        "message_type": "NEW_TASK",
+        "item": {
+          "type": "agent_message",
+          "id": "item_v2_followup_synthetic",
+          "author": "/root",
+          "recipient": "/root/worker",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n"
+            },
+            {
+              "type": "encrypted_content",
+              "encrypted_content": "synthetic-v2-followup"
+            }
+          ],
+          "internal_chat_message_metadata_passthrough": {
+            "synthetic_turn": "v2-followup"
+          }
+        }
+      }
+    }
+  },
+  "plaintext": {
+    "encrypted_function_args": [],
+    "function_call": {
+      "type": "function_call",
+      "id": "item_v2_plain_function_synthetic",
+      "call_id": "call_v2_plain_synthetic",
+      "name": "send_message",
+      "namespace": "collaboration",
+      "arguments": "{}",
+      "encrypted_function_args": [],
+      "internal_chat_message_metadata_passthrough": {
+        "synthetic_turn": "v2-plaintext"
+      }
+    },
+    "handoff": {
+      "item": {
+        "type": "agent_message",
+        "id": "item_v2_plain_handoff_synthetic",
+        "author": "/root",
+        "recipient": "/root/worker",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "Message Type: MESSAGE\nTask name: /root/worker\nSender: /root\nPayload:\nSYNTHETIC_V2_PLAINTEXT_PAYLOAD"
+          }
+        ],
+        "internal_chat_message_metadata_passthrough": {
+          "synthetic_turn": "v2-plaintext"
+        }
+      }
+    }
+  },
+  "final_answer": {
+    "text": "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\nSYNTHETIC_FINAL_ANSWER_SENTINEL"
+  }
+}

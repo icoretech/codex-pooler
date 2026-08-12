@@ -5,7 +5,7 @@ defmodule CodexPooler.MixProject do
     [
       app: :codex_pooler,
       # x-release-please-start-version
-      version: "0.5.18",
+      version: "0.6.0",
       # x-release-please-end
       elixir: "~> 1.20",
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -52,16 +52,16 @@ defmodule CodexPooler.MixProject do
   defp deps do
     [
       {:argon2_elixir, "== 4.1.3"},
-      {:phoenix, "== 1.8.9"},
+      {:phoenix, "== 1.8.11"},
       {:phoenix_ecto, "== 4.7.0"},
       {:ecto_sql, "== 3.14.0"},
       {:postgrex, "== 0.22.4"},
       {:phoenix_html, "== 4.3.0"},
       {:phoenix_live_reload, "== 1.7.0", only: :dev},
-      {:phoenix_live_view, "== 1.2.8"},
+      {:phoenix_live_view, "== 1.2.9"},
       {:lazy_html, "== 0.1.12", only: :test},
       {:oban, "== 2.23.1"},
-      {:phoenix_live_dashboard, "== 0.8.7", only: :dev},
+      {:phoenix_live_dashboard, "== 0.9.0", only: :dev},
       {:esbuild, "== 0.10.0", runtime: Mix.env() == :dev},
       {:tailwind, "== 0.5.1", runtime: Mix.env() == :dev},
       {:heroicons,
@@ -76,7 +76,7 @@ defmodule CodexPooler.MixProject do
       {:req, "== 0.7.2"},
       {:finch, "== 0.23.0"},
       {:mint, "== 1.9.3"},
-      {:mint_web_socket, "== 1.0.5"},
+      {:mint_web_socket, "== 1.0.6"},
       {:telemetry_metrics, "== 1.1.0"},
       {:telemetry_metrics_prometheus_core, "== 1.2.1"},
       {:telemetry_poller, "== 1.3.0"},
@@ -89,7 +89,7 @@ defmodule CodexPooler.MixProject do
       {:jason, "== 1.4.5"},
       {:dns_cluster, "== 0.2.0"},
       {:websock, "== 0.5.3"},
-      {:websock_adapter, "== 0.5.9"},
+      {:websock_adapter, "== 0.6.0"},
       {:bandit, "== 1.12.4"}
     ]
   end

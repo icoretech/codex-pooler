@@ -1,6 +1,7 @@
 defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
   @moduledoc false
 
+  alias CodexPooler.Accounting
   alias CodexPooler.Accounting.{Attempt, Request}
 
   alias CodexPooler.Accounting.RequestLogs.DebugProjection.{
@@ -240,8 +241,31 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
     |> maybe_put_transport_failure(attempt)
     |> maybe_put_upstream_error_param(attempt)
     |> maybe_put_rejection_metadata(attempt)
+    |> maybe_put_model_serving_mode(attempt, surface)
     |> maybe_put_upstream_websocket_connection(attempt, surface)
   end
+
+  defp maybe_put_model_serving_mode(projection, %Attempt{} = attempt, :admin) do
+    metadata = attempt.response_metadata || %{}
+
+    case metadata |> Accounting.sanitize_metadata() |> Map.get("routing") do
+      %{
+        "model_serving_mode_configured" => configured_mode,
+        "model_serving_mode" => effective_mode,
+        "model_serving_mode_source" => source
+      } ->
+        Map.put(projection, :model_serving_mode, %{
+          configured_mode: configured_mode,
+          effective_mode: effective_mode,
+          source: source
+        })
+
+      _invalid ->
+        projection
+    end
+  end
+
+  defp maybe_put_model_serving_mode(projection, _attempt, _surface), do: projection
 
   defp maybe_put_upstream_websocket_connection(projection, %Attempt{} = attempt, :admin) do
     case UpstreamWebsocketConnection.build(attempt.response_metadata) do

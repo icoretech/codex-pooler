@@ -5,10 +5,20 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
 
   import CodexPooler.PoolerFixtures
 
-  alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Persistence.{BridgeAffinity, BridgeDemotion, CodexSession}
+  alias CodexPooler.Gateway.Payloads.{PayloadNormalizer, RequestOptions}
+
+  alias CodexPooler.Gateway.Persistence.{
+    BridgeAffinity,
+    BridgeDemotion,
+    BridgeOwnerLease,
+    BridgeSessionAlias,
+    CodexSession,
+    SessionContinuity
+  }
+
   alias CodexPooler.Gateway.Routing.{BridgeRing, CandidateEligibility, RoutePlanInput}
   alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
+  alias CodexPooler.Gateway.Routing.SessionContinuity, as: RoutingSessionContinuity
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Pools
   alias CodexPooler.Pools.Pool
@@ -267,6 +277,133 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
   end
 
   describe "plan_route/1 prompt-cache locality" do
+    @tag :encrypted_reasoning_continuity
+    test "encrypted reasoning uses soft prompt-cache locality without continuity state across instances" do
+      # Given: a durable session already owned by a distinct gateway instance.
+      setup = routing_setup(3)
+      update_routing_settings!(setup.pool, "bridge_ring", length(setup.candidates))
+
+      session_options =
+        RequestOptions.for_websocket(%{
+          accepted_turn_state: "task13-existing-session",
+          owner_instance_id: "task13-node-a"
+        })
+
+      assert {:ok, %CodexSession{}} =
+               SessionContinuity.start_codex_session(setup.auth, session_options)
+
+      continuity_before = continuity_persistence_state(setup.auth)
+      prompt_cache_key = "task13-cache-#{System.unique_integer([:positive, :monotonic])}"
+      encrypted_content = Base.encode64(:crypto.strong_rand_bytes(32))
+      encrypted_content_fingerprint = sha256_fingerprint(encrypted_content)
+      prompt_cache_key_fingerprint = sha256_fingerprint(prompt_cache_key)
+
+      payload = %{
+        "model" => setup.model.exposed_model_id,
+        "prompt_cache_key" => prompt_cache_key,
+        "input" => [
+          %{
+            "type" => "reasoning",
+            "content" => nil,
+            "encrypted_content" => encrypted_content
+          }
+        ]
+      }
+
+      request_options =
+        Enum.map(
+          [{"task13-node-b", "task13-request-b"}, {"task13-node-c", "task13-request-c"}],
+          fn {
+               owner_instance_id,
+               request_id
+             } ->
+            RequestOptions.build(
+              %{owner_instance_id: owner_instance_id, request_id: request_id},
+              "/backend-api/codex/responses",
+              payload
+            )
+          end
+        )
+
+      # When: each instance normalizes and offers the same current encrypted reasoning request.
+      Enum.each(request_options, fn options ->
+        assert options.routing.prompt_cache_key == prompt_cache_key_fingerprint
+        assert options.continuity.previous_response_id == nil
+        assert options.continuity.accepted_turn_state == nil
+        assert options.continuity.codex_session == nil
+
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(
+                   payload,
+                   setup.model,
+                   "/backend-api/codex/responses",
+                   options
+                 )
+
+        normalized_payload = Jason.decode!(encoded)
+
+        assert sha256_fingerprint(Map.fetch!(normalized_payload, "prompt_cache_key")) ==
+                 prompt_cache_key_fingerprint
+
+        assert [%{"type" => "reasoning", "content" => nil} = reasoning] =
+                 Map.fetch!(normalized_payload, "input")
+
+        assert sha256_fingerprint(Map.fetch!(reasoning, "encrypted_content")) ==
+                 encrypted_content_fingerprint
+      end)
+
+      # Then: continuity does not touch shared persistence or hard-pin the route.
+      {{{:ok, attached_on_node_b}, {:ok, attached_on_node_c}}, continuity_queries} =
+        capture_repo_queries(fn ->
+          [node_b_options, node_c_options] = request_options
+
+          {RoutingSessionContinuity.attach_codex_session(setup.auth, payload, node_b_options),
+           RoutingSessionContinuity.attach_codex_session(setup.auth, payload, node_c_options)}
+        end)
+
+      [node_b_options, node_c_options] = request_options
+      assert attached_on_node_b == node_b_options
+      assert attached_on_node_c == node_c_options
+      assert continuity_queries == []
+
+      Enum.each([attached_on_node_b, attached_on_node_c], fn options ->
+        refute RoutingSessionContinuity.hard_pinned_continuity?(options, setup.model)
+
+        assert {:ok, candidates} =
+                 RoutingSessionContinuity.apply_codex_session_assignment(
+                   setup.candidates,
+                   options,
+                   setup.model
+                 )
+
+        assert candidates == setup.candidates
+      end)
+
+      [node_b_plan, node_c_plan] =
+        Enum.map(request_options, fn options ->
+          BridgeRing.plan_route(%{
+            auth: setup.auth,
+            model: setup.model,
+            candidates: setup.candidates,
+            route_plan_input: RoutePlanInput.from_request_opts(options),
+            request_options: options
+          })
+        end)
+
+      expected_candidate_ids = prompt_cache_order_ids(setup, setup.candidates, prompt_cache_key)
+
+      assert candidate_ids(node_b_plan.candidates) == expected_candidate_ids
+      assert candidate_ids(node_c_plan.candidates) == expected_candidate_ids
+      assert node_b_plan.selected_assignment_id == node_c_plan.selected_assignment_id
+      assert node_b_plan.affinity.kind == "request_correlation"
+      assert node_c_plan.affinity.kind == "request_correlation"
+      assert node_b_plan.request_metadata["routing_locality_status"] == "applied"
+      assert node_c_plan.request_metadata["routing_locality_status"] == "applied"
+      assert node_b_plan.request_metadata["routing_locality_applied"] == true
+      assert node_c_plan.request_metadata["routing_locality_applied"] == true
+      assert continuity_persistence_state(setup.auth) == continuity_before
+    end
+
     test "prompt-cache locality keeps the same selection for the same eligible set and seed" do
       setup = routing_setup(4)
       prompt_cache_key = "synthetic-cache-key-stable"
@@ -1225,6 +1362,77 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
       freshness_state: "fresh",
       observed_at: observed_at
     }
+  end
+
+  defp continuity_persistence_state(auth) do
+    %{
+      sessions:
+        Repo.all(
+          from session in CodexSession,
+            where: session.pool_id == ^auth.pool.id and session.api_key_id == ^auth.api_key.id,
+            order_by: [asc: session.id],
+            select:
+              {session.id, session.status, session.owner_instance_id,
+               session.owner_lease_expires_at, session.updated_at}
+        ),
+      aliases:
+        Repo.all(
+          from alias_record in BridgeSessionAlias,
+            where:
+              alias_record.pool_id == ^auth.pool.id and
+                alias_record.api_key_id == ^auth.api_key.id,
+            order_by: [asc: alias_record.id],
+            select:
+              {alias_record.id, alias_record.alias_kind, alias_record.status,
+               alias_record.updated_at}
+        ),
+      owner_leases:
+        Repo.all(
+          from lease in BridgeOwnerLease,
+            where: lease.pool_id == ^auth.pool.id and lease.api_key_id == ^auth.api_key.id,
+            order_by: [asc: lease.id],
+            select:
+              {lease.id, lease.owner_instance_id, lease.status, lease.renewed_at,
+               lease.expires_at, lease.updated_at}
+        )
+    }
+  end
+
+  defp sha256_fingerprint(value) when is_binary(value) do
+    value
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+  end
+
+  defp capture_repo_queries(fun) when is_function(fun, 0) do
+    parent = self()
+    handler_id = {__MODULE__, System.unique_integer([:positive, :monotonic])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo do
+            send(parent, {handler_id, Map.get(metadata, :query, "")})
+          end
+        end,
+        nil
+      )
+
+    try do
+      {fun.(), drain_repo_queries(handler_id, [])}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_repo_queries(handler_id, queries) do
+    receive do
+      {^handler_id, query} -> drain_repo_queries(handler_id, [query | queries])
+    after
+      0 -> Enum.reverse(queries)
+    end
   end
 
   defp credit_backed_weekly_window_at(observed_at) do

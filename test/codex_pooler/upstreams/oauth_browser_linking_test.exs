@@ -72,6 +72,7 @@ defmodule CodexPooler.Upstreams.OAuthBrowserLinkingTest do
     assert identity.workspace_label == "Browser Workspace"
     assert identity.seat_type == "team-seat"
     assert identity.onboarding_method == "browser"
+    assert identity.credential_provenance == "codex_chatgpt_oauth"
     assert identity.plan_family == "team"
     assert identity.plan_label == "team"
     assert assignment.pool_id == pool.id

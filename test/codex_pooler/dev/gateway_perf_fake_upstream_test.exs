@@ -113,6 +113,14 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
     assert response.body == "ok"
   end
 
+  test "Full catalog entry is canonical-source eligible and explicitly non-Lite" do
+    model = GatewayPerfFakeUpstream.full_catalog_model()
+
+    assert model["slug"] == model["id"]
+    assert model["use_responses_lite"] == false
+    assert model["capabilities"]["responses"] == true
+  end
+
   test "backend and v1 routes emit equivalent successful SSE streams" do
     server = start_server!("short-ok")
 

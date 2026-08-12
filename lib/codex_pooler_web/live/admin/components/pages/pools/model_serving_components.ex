@@ -308,7 +308,7 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
   defp effective_mode_class(_row), do: "text-xs font-bold text-base-content/75"
 
   defp availability_warning_label(%{configured_mode: "auto"}),
-    do: "Will be removed on save."
+    do: "Selecting Auto removes this saved override when you save."
 
   defp availability_warning_label(_row), do: "Saved setting retained."
 

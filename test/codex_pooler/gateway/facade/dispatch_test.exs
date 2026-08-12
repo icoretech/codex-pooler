@@ -2,7 +2,7 @@ defmodule CodexPooler.Gateway.Facade.DispatchTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
-    only: [gateway_setup: 2, start_upstream: 1]
+    only: [gateway_setup: 2, native_text_input: 1, start_upstream: 1]
 
   import CodexPooler.PoolerFixtures, only: [active_api_key_fixture: 1]
 
@@ -26,17 +26,20 @@ defmodule CodexPooler.Gateway.Facade.DispatchTest do
     {:ok, auth} = Access.authenticate_authorization_header(fixture.authorization)
 
     payloads = [
-      %{"input" => "missing selector"},
-      %{"model" => " \n\t ", "input" => "blank selector"},
-      %{"model" => "gemma3", "input" => "public selector"},
+      %{"input" => native_text_input("missing selector")},
+      %{"model" => " \n\t ", "input" => native_text_input("blank selector")},
+      %{"model" => "gemma3", "input" => native_text_input("public selector")},
       %{
         "model" => "client-selected-model",
         "reasoning" => %{"effort" => "low", "model" => "nested-client-model"},
         "reasoning_effort" => "high",
         "thinking" => %{"effort" => "xhigh"},
-        "input" => "conflicting selectors"
+        "input" => native_text_input("conflicting selectors")
       },
-      %{"model" => %{"name" => "nested-model-object"}, "input" => "object selector"}
+      %{
+        "model" => %{"name" => "nested-model-object"},
+        "input" => native_text_input("object selector")
+      }
     ]
 
     for payload <- payloads do
@@ -133,7 +136,12 @@ defmodule CodexPooler.Gateway.Facade.DispatchTest do
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_policy_agrees"}))
     fixture = facade_setup(upstream)
     {:ok, auth} = Access.authenticate_authorization_header(fixture.authorization)
-    payload = %{"model" => "ignored", "reasoning" => %{"effort" => "low"}, "input" => "ok"}
+
+    payload = %{
+      "model" => "ignored",
+      "reasoning" => %{"effort" => "low"},
+      "input" => native_text_input("ok")
+    }
 
     agreeing_keys = [
       %{
@@ -302,7 +310,7 @@ defmodule CodexPooler.Gateway.Facade.DispatchTest do
 
     payload = %{
       "model" => client_model,
-      "input" => "cache fixture",
+      "input" => native_text_input("cache fixture"),
       "prompt_cache_key" => raw_cache_key
     }
 

@@ -310,3 +310,29 @@ DONE_WITH_CONCERNS. Two final confirmed blockers were repaired in a new, narrow 
 
 - The repository-wide suite is not completely green because the same unrelated dev-server lifecycle teardown assertion remains reproducible across the frozen baselines and all review waves. All 874 directly impacted tests and every other full-suite test pass.
 - No live-provider or deployed-client smoke test was authorized. Runtime production deployment and credential operations remain root-owned follow-up work.
+
+## Upstream `main` integration (2026-08-12)
+
+The reviewed façade head `f2dc0f3d6fac97acadaa869b93a225988f234ef4` was merged with upstream `main` at `29c8247a81abe5708c62a30dffe2402073a474e0` (release 0.6.0) before PR handoff. Conflicts were resolved by retaining the immutable public `gemma3` contract while integrating the new routing-hint, serving-mode, encrypted-function-argument, request-compression, credential-provenance, and documentation-inventory work.
+
+Merge-specific regressions were reproduced and repaired before commit:
+
+- Native Responses fixtures now use the required array input shape rather than relying on the former scalar shortcut.
+- Direct compact calls retain the new strict projected field set, while Responses-to-compact bridge dispatch separately preserves `previous_response_id` and `conversation` continuity fields.
+- `encrypted_function_args` is projected across native SSE and websocket output only when absent, null, or an ordered string list; container or mixed-type values fail closed.
+- Public overload terminals consistently use the sanitized `gemma3 is temporarily unavailable` wording across HTTP, direct websocket, and owner-forwarded websocket paths.
+- Canonically reconstructed websocket JSON is compared structurally instead of relying on source key order.
+- The OpenAI websocket request-compression fixture now uses the façade's fixed target instead of constructing an unroutable legacy target.
+
+Verification on the exact staged merge tree:
+
+- Merge-conflict integration gate: `640 passed` after the final projector/continuity updates.
+- Isolated full-run failure ledger: `37 passed` with the remaining suite excluded.
+- Full suite: `MIX_ENV=test mix test --seed 0` returned `6530 passed` in 315.5s with zero failures.
+- `mix format --check-formatted`, `MIX_ENV=test mix compile --warnings-as-errors`, `MIX_ENV=test mix quality.xref`, and `git diff --cached --check` — PASS.
+- Documentation `npm run check` — PASS, including 34 curated AI-agent URLs, 30 source-backed pages, and matching review/sitemap dates.
+- Documentation `npm run build` — PASS; 43 pages built.
+- Shell syntax scan — PASS.
+- Public README/docs scan for the three private target/helper identifiers — zero matches.
+
+The first merged full-suite attempt returned `6512/6530` because legacy fixtures still used scalar native input or unsafe overload wording, one test compared canonical JSON byte order, one compression fixture deliberately created a non-fixed target, and root-owned leftovers from earlier container runs prevented ExUnit from cleaning deterministic dev-test directories. The exact root-owned test-temporary directories were removed; the affected dev tests then passed, and the clean final full suite passed all 6,530 tests.

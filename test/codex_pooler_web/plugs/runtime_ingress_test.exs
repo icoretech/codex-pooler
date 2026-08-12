@@ -1319,7 +1319,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
       setup = gateway_setup(upstream)
       input = String.duplicate("a", 500_000)
-      body = gateway_body(setup) |> Map.put("input", input)
+      body = gateway_body(setup) |> Map.put("input", native_text_input(input))
       compressed = zstd(body)
 
       assert zstd_first_output_shape(compressed) == {:remainder, 131_072}
@@ -1331,7 +1331,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
       assert %{"id" => "zstd_multi_output_ok"} = json_response(conn, 200)
       assert [captured] = FakeUpstream.requests(upstream)
-      assert captured.json["input"] == input
+      assert captured.json["input"] == native_text_input(input)
     end
 
     test "decodes zstd JSON bodies across multiple decoder input chunks", %{conn: conn} do
@@ -1343,7 +1343,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       upstream = start_upstream(FakeUpstream.json_response(gateway_response("zstd_chunked_ok")))
       setup = gateway_setup(upstream)
       input = deterministic_input(450_000)
-      body = gateway_body(setup) |> Map.put("input", input)
+      body = gateway_body(setup) |> Map.put("input", native_text_input(input))
       compressed = zstd(body)
 
       assert byte_size(compressed) > 16_384
@@ -1355,7 +1355,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
       assert %{"id" => "zstd_chunked_ok"} = json_response(conn, 200)
       assert [captured] = FakeUpstream.requests(upstream)
-      assert captured.json["input"] == input
+      assert captured.json["input"] == native_text_input(input)
     end
 
     test "accepts a zstd JSON body at the exact one MiB decompressed limit", %{conn: conn} do
@@ -1378,7 +1378,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
       assert %{"id" => "zstd_one_mib_ok"} = json_response(conn, 200)
       assert [captured] = FakeUpstream.requests(upstream)
-      assert byte_size(captured.json["input"]) > 1_000_000
+      assert captured.json["input"] |> native_input_text() |> byte_size() > 1_000_000
     end
 
     test "rejects zstd when runtime support is unavailable", %{conn: conn} do
@@ -1478,7 +1478,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       setup_runtime_ingress(%OperationalSettings{max_decompressed_body_bytes: 16})
       setup = active_api_key_fixture()
 
-      payload = %{"model" => "x", "input" => String.duplicate("a", 200)}
+      payload = %{"model" => "x", "input" => native_text_input(String.duplicate("a", 200))}
 
       conn =
         conn
@@ -1493,7 +1493,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
     end
 
     test "updated decompressed limits affect subsequent compressed requests", %{conn: conn} do
-      payload = %{"model" => "x", "input" => String.duplicate("a", 200)}
+      payload = %{"model" => "x", "input" => native_text_input(String.duplicate("a", 200))}
       compressed = :zlib.gzip(Jason.encode!(payload))
 
       setup_runtime_ingress(%OperationalSettings{max_decompressed_body_bytes: 16})
@@ -1539,7 +1539,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       upstream = start_upstream(FakeUpstream.json_response(gateway_response("gzip_chunked_ok")))
       setup = gateway_setup(upstream)
       large_input = :crypto.strong_rand_bytes(1_200_000) |> Base.encode16(case: :lower)
-      body = gateway_body(setup) |> Map.put("input", large_input)
+      body = gateway_body(setup) |> Map.put("input", native_text_input(large_input))
       compressed = :zlib.gzip(Jason.encode!(body))
 
       assert byte_size(compressed) > 1_000_000
@@ -1840,7 +1840,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   defp gateway_body(setup) do
     %{
       "model" => setup.model.exposed_model_id,
-      "input" => "hello"
+      "input" => native_text_input("hello")
     }
   end
 
@@ -1849,10 +1849,22 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
   end
 
   defp fixed_size_gateway_body(setup, target_bytes) do
-    body = gateway_body(setup) |> Map.put("input", "")
+    body = gateway_body(setup) |> Map.put("input", native_text_input(""))
     padding_bytes = target_bytes - byte_size(Jason.encode!(body))
-    Map.put(body, "input", String.duplicate("a", padding_bytes))
+    Map.put(body, "input", native_text_input(String.duplicate("a", padding_bytes)))
   end
+
+  defp native_text_input(text) do
+    [
+      %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "input_text", "text" => text}]
+      }
+    ]
+  end
+
+  defp native_input_text([%{"content" => [%{"text" => text}]}]), do: text
 
   defp deterministic_input(target_bytes) do
     1..ceil(target_bytes / 64)

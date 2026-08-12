@@ -4,6 +4,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   alias CodexPooler.Access.APIKeys.ReasoningEffortPolicy.Decision
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.OpenAICompatibility.Error
+  alias CodexPooler.Gateway.Payloads.CompactionTrigger
+  alias CodexPooler.Gateway.Payloads.ContinuityPayload
   alias CodexPooler.Gateway.Payloads.DebugPayloadSummary
   alias CodexPooler.Gateway.Payloads.ReasoningEffort
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -11,7 +13,6 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   alias CodexPooler.Gateway.Payloads.ToolSchemaLowering
 
   @backend_turn_state_client_metadata_key "x-codex-turn-state"
-  @backend_codex_agent_path ~r/\A(?:\/morpheus|\/root(?:\/[a-z0-9_]+)*)\z/
   @websocket_responses_lite_client_metadata_key "ws_request_header_x_openai_internal_codex_responses_lite"
 
   @prompt_cache_adaptation_endpoints [
@@ -19,6 +20,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     "/backend-api/codex/responses/compact"
   ]
   @prompt_cache_breakpoint_types ~w(input_text input_image input_file)
+  @schema_definition_keys ~w(properties $defs definitions)
+  @schema_list_keys ~w(anyOf oneOf allOf)
 
   @unsupported_upstream_fields ~w(
     max_output_tokens
@@ -89,21 +92,82 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   @spec normalize(map()) :: {:ok, map()}
   def normalize(%{} = payload) do
-    {:ok, normalize_backend_codex_websocket_input(payload)}
+    {:ok, normalize_backend_codex_websocket_input(payload, nil)}
   end
 
   @spec validate(map(), RequestOptions.t()) :: :ok | {:error, Error.reason()}
-  def validate(
-        %{"tool_choice" => tool_choice},
-        %RequestOptions{} = request_options
-      )
-      when is_map(tool_choice) do
+  def validate(payload, %RequestOptions{} = request_options) do
+    with :ok <- validate_compact_projection(payload, request_options),
+         :ok <- validate_native_responses_shape(payload, request_options) do
+      validate_tool_choice(payload, request_options)
+    end
+  end
+
+  defp validate_native_responses_shape(
+         payload,
+         %RequestOptions{
+           transport: %{upstream_endpoint: "/backend-api/codex/responses"},
+           openai_compatibility: %{source_endpoint: nil}
+         }
+       ) do
+    with :ok <- validate_native_responses_input(payload) do
+      validate_native_responses_tools(payload)
+    end
+  end
+
+  defp validate_native_responses_shape(_payload, %RequestOptions{}), do: :ok
+
+  defp validate_native_responses_input(%{"input" => input}) when is_list(input), do: :ok
+
+  defp validate_native_responses_input(%{"input" => _input}),
+    do: {:error, Error.invalid_request("input must be an array", "input")}
+
+  defp validate_native_responses_input(%{}), do: :ok
+
+  defp validate_native_responses_tools(%{"tools" => tools}) when is_list(tools), do: :ok
+
+  defp validate_native_responses_tools(%{"tools" => _tools}),
+    do: {:error, Error.invalid_request("tools must be an array", "tools")}
+
+  defp validate_native_responses_tools(%{}), do: :ok
+
+  defp validate_compact_projection(
+         payload,
+         %RequestOptions{transport: %{upstream_endpoint: "/backend-api/codex/responses/compact"}} =
+           request_options
+       ) do
+    case validate_compact_input(payload, request_options) do
+      :ok -> CompactionTrigger.validate_projection(payload)
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp validate_compact_projection(_payload, %RequestOptions{}), do: :ok
+
+  defp validate_compact_input(
+         %{"input" => []},
+         %RequestOptions{payload_context: %{compaction_trigger_bridge?: true}}
+       ),
+       do: :ok
+
+  defp validate_compact_input(%{"input" => []}, request_options) do
+    if RequestOptions.use_responses_lite?(request_options) do
+      :ok
+    else
+      {:error, Error.invalid_request("input must be a non-empty array", "input")}
+    end
+  end
+
+  defp validate_compact_input(_payload, _request_options), do: :ok
+
+  defp validate_tool_choice(%{"tool_choice" => tool_choice}, request_options)
+       when is_map(tool_choice) do
     if RequestOptions.use_responses_lite?(request_options),
       do: {:error, Error.unsupported_parameter("tool_choice")},
       else: :ok
   end
 
-  def validate(_payload, %RequestOptions{}), do: :ok
+  defp validate_tool_choice(_payload, _request_options), do: :ok
 
   defp json_payload(payload, model, endpoint, %RequestOptions{} = request_options) do
     payload =
@@ -132,6 +196,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
     {upstream_payload, prompt_cache_controls_downgraded} =
       adapt_prompt_cache_controls(upstream_payload, request_options)
+
+    upstream_payload =
+      maybe_project_compact_payload(upstream_payload, endpoint, request_options)
 
     debug_payload =
       maybe_record_gateway_debug_payload(endpoint, payload, upstream_payload, request_options)
@@ -296,7 +363,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     |> Map.drop(["request_id"])
     |> Map.put_new("type", "response.create")
     |> Map.put_new("instructions", "")
-    |> normalize_backend_codex_websocket_input()
+    |> normalize_backend_codex_websocket_input(request_options)
     |> normalize_backend_codex_reasoning_effort()
     |> ToolSchemaLowering.lower_backend_non_strict_function_tools()
     |> remove_backend_codex_encrypted_tool_schema_markers()
@@ -354,7 +421,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     |> Map.drop(["type", "generate"])
     |> maybe_drop_backend_codex_previous_response_id(opts)
     |> Map.put_new("instructions", "")
-    |> normalize_backend_codex_http_input()
+    |> normalize_backend_codex_http_input(opts)
     |> normalize_backend_codex_reasoning_effort()
     |> ToolSchemaLowering.lower_backend_non_strict_function_tools()
     |> remove_backend_codex_encrypted_tool_schema_markers()
@@ -367,7 +434,10 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   defp normalize_backend_codex_compact_payload(payload, opts) do
     payload
     |> normalize_backend_codex_reasoning_effort()
+    |> ToolSchemaLowering.lower_backend_non_strict_function_tools()
+    |> remove_backend_codex_encrypted_tool_schema_markers()
     |> normalize_backend_codex_responses_lite(opts)
+    |> normalize_backend_codex_responses_lite_input(opts)
   end
 
   defp normalize_backend_codex_responses_lite(
@@ -406,6 +476,32 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
       payload
     end
   end
+
+  defp maybe_project_compact_payload(
+         payload,
+         "/backend-api/codex/responses/compact",
+         %RequestOptions{payload_context: %{compaction_trigger_bridge?: true}}
+       ) do
+    CompactionTrigger.project_bridge_payload(payload)
+  end
+
+  defp maybe_project_compact_payload(
+         payload,
+         "/backend-api/codex/responses/compact",
+         %RequestOptions{}
+       ) do
+    CompactionTrigger.project_payload(payload)
+  end
+
+  defp maybe_project_compact_payload(
+         payload,
+         _endpoint,
+         %RequestOptions{transport: %{upstream_endpoint: "/backend-api/codex/responses/compact"}}
+       ) do
+    CompactionTrigger.project_payload(payload)
+  end
+
+  defp maybe_project_compact_payload(payload, _endpoint, %RequestOptions{}), do: payload
 
   defp normalize_noncompact_backend_responses_envelope(payload, %RequestOptions{} = opts) do
     reasoning = payload |> Map.get("reasoning") |> reasoning_map()
@@ -519,21 +615,68 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   defp remove_backend_tool_encrypted_markers(%{"type" => "namespace"} = tool), do: tool
 
-  defp remove_backend_tool_encrypted_markers(%{"type" => "function"} = tool),
-    do: remove_schema_encrypted_markers(tool)
+  defp remove_backend_tool_encrypted_markers(%{"type" => "function"} = tool) do
+    if strict_function_tool?(tool), do: tool, else: remove_function_parameter_schema_markers(tool)
+  end
 
   defp remove_backend_tool_encrypted_markers(tool), do: tool
 
-  defp remove_schema_encrypted_markers(%{} = value) do
-    value
-    |> Map.delete("encrypted")
-    |> Map.new(fn {key, value} -> {key, remove_schema_encrypted_markers(value)} end)
+  defp strict_function_tool?(%{"function" => %{} = function} = tool) do
+    Map.get(tool, "strict") == true or Map.get(function, "strict") == true
   end
 
-  defp remove_schema_encrypted_markers(value) when is_list(value),
-    do: Enum.map(value, &remove_schema_encrypted_markers/1)
+  defp strict_function_tool?(tool), do: Map.get(tool, "strict") == true
+
+  defp remove_function_parameter_schema_markers(%{"function" => %{} = function} = tool) do
+    Map.put(tool, "function", remove_function_parameter_schema_markers(function))
+  end
+
+  defp remove_function_parameter_schema_markers(%{"parameters" => %{} = parameters} = function) do
+    Map.put(function, "parameters", remove_schema_encrypted_markers(parameters))
+  end
+
+  defp remove_function_parameter_schema_markers(function), do: function
+
+  defp remove_schema_encrypted_markers(%{} = schema) do
+    schema
+    |> Enum.reject(fn {key, value} -> key == "encrypted" and value == true end)
+    |> Map.new(fn
+      {key, value} when key in @schema_definition_keys ->
+        {key, remove_named_schema_markers(value)}
+
+      {"items", value} ->
+        {"items", remove_schema_value_markers(value)}
+
+      {"additionalProperties", value} ->
+        {"additionalProperties", remove_schema_value_markers(value)}
+
+      {key, value} when key in @schema_list_keys ->
+        {key, remove_schema_list_markers(value)}
+
+      entry ->
+        entry
+    end)
+  end
 
   defp remove_schema_encrypted_markers(value), do: value
+
+  defp remove_named_schema_markers(%{} = schemas) do
+    Map.new(schemas, fn {name, schema} -> {name, remove_schema_encrypted_markers(schema)} end)
+  end
+
+  defp remove_named_schema_markers(value), do: value
+
+  defp remove_schema_value_markers(%{} = schema), do: remove_schema_encrypted_markers(schema)
+
+  defp remove_schema_value_markers(value) when is_list(value),
+    do: remove_schema_list_markers(value)
+
+  defp remove_schema_value_markers(value), do: value
+
+  defp remove_schema_list_markers(value) when is_list(value),
+    do: Enum.map(value, &remove_schema_encrypted_markers/1)
+
+  defp remove_schema_list_markers(value), do: value
 
   defp maybe_drop_backend_codex_previous_response_id(payload, _opts) do
     if backend_codex_tool_result_continuation?(payload),
@@ -570,20 +713,33 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
     RequestOptions.put_continuity(request_options, upstream_previous_response_id?: false)
   end
 
-  defp normalize_backend_codex_http_input(%{"input" => input} = payload) when is_list(input) do
-    input = Enum.reject(input, &backend_codex_encrypted_only_input_item?/1)
-    Map.put(payload, "input", input)
-  end
-
-  defp normalize_backend_codex_http_input(payload), do: payload
-
-  defp normalize_backend_codex_websocket_input(%{"input" => input} = payload)
+  defp normalize_backend_codex_http_input(%{"input" => input} = payload, opts)
        when is_list(input) do
-    input = Enum.reject(input, &backend_codex_encrypted_agent_message?/1)
+    input =
+      Enum.reject(input, fn item ->
+        backend_codex_invalid_encrypted_reasoning?(item, opts) or
+          (backend_codex_encrypted_only_input_item?(item) and
+             not (ContinuityPayload.current_encrypted_reasoning?(item) or
+                    public_encrypted_reasoning_replay?(item, opts)))
+      end)
+
     Map.put(payload, "input", input)
   end
 
-  defp normalize_backend_codex_websocket_input(payload), do: payload
+  defp normalize_backend_codex_http_input(payload, _opts), do: payload
+
+  defp normalize_backend_codex_websocket_input(%{"input" => input} = payload, opts)
+       when is_list(input) do
+    input =
+      Enum.reject(input, fn item ->
+        backend_codex_invalid_encrypted_reasoning?(item, opts) or
+          backend_codex_encrypted_agent_message?(item)
+      end)
+
+    Map.put(payload, "input", input)
+  end
+
+  defp normalize_backend_codex_websocket_input(payload, _opts), do: payload
 
   defp maybe_sanitize_backend_codex_response_item_ids(
          payload,
@@ -653,33 +809,10 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
        )
        when is_list(content) do
     Enum.any?(content, &backend_codex_encrypted_content_marker?/1) and
-      not backend_codex_v2_encrypted_handoff?(item)
+      not ContinuityPayload.v2_encrypted_handoff?(item)
   end
 
   defp backend_codex_encrypted_agent_message?(_item), do: false
-
-  defp backend_codex_v2_encrypted_handoff?(%{
-         "type" => "agent_message",
-         "author" => author,
-         "recipient" => recipient,
-         "content" => [
-           %{"type" => "input_text", "text" => text},
-           %{"type" => "encrypted_content", "encrypted_content" => encrypted_content}
-         ]
-       })
-       when is_binary(author) and is_binary(recipient) and is_binary(text) and
-              is_binary(encrypted_content) do
-    backend_codex_agent_path?(author) and backend_codex_agent_path?(recipient) and
-      String.trim(encrypted_content) != "" and
-      text in [
-        "Message Type: NEW_TASK\nTask name: #{recipient}\nSender: #{author}\nPayload:\n",
-        "Message Type: MESSAGE\nTask name: #{recipient}\nSender: #{author}\nPayload:\n"
-      ]
-  end
-
-  defp backend_codex_v2_encrypted_handoff?(_item), do: false
-
-  defp backend_codex_agent_path?(path), do: Regex.match?(@backend_codex_agent_path, path)
 
   defp backend_codex_encrypted_content_marker?(%{} = item) do
     Map.get(item, "type") == "encrypted_content" ||
@@ -690,11 +823,37 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   defp backend_codex_encrypted_content_marker?(_item), do: false
 
+  defp backend_codex_encrypted_only_input_item?(%{"type" => "reasoning"} = item) do
+    Map.has_key?(item, "encrypted_content")
+  end
+
   defp backend_codex_encrypted_only_input_item?(%{"content" => nil} = item) do
     Map.has_key?(item, "encrypted_content")
   end
 
   defp backend_codex_encrypted_only_input_item?(_item), do: false
+
+  defp backend_codex_invalid_encrypted_reasoning?(%{"type" => "reasoning"} = item, opts) do
+    Map.has_key?(item, "encrypted_content") and
+      not (ContinuityPayload.current_encrypted_reasoning?(item) or
+             public_encrypted_reasoning_replay?(item, opts))
+  end
+
+  defp backend_codex_invalid_encrypted_reasoning?(_item, _opts), do: false
+
+  defp public_encrypted_reasoning_replay?(
+         %{"type" => "reasoning", "encrypted_content" => encrypted_content},
+         %RequestOptions{
+           openai_compatibility: %{
+             source_endpoint: "/v1/responses",
+             translated_endpoint: "/backend-api/codex/responses"
+           }
+         }
+       )
+       when is_binary(encrypted_content),
+       do: String.trim(encrypted_content) != ""
+
+  defp public_encrypted_reasoning_replay?(_item, _opts), do: false
 
   defp apply_enforced_payload_policy(payload, %RequestOptions{} = request_options) do
     policy = request_options.routing.api_key_policy || %{}

@@ -57,7 +57,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "guarded reset probe",
+        "input" => native_text_input("guarded reset probe"),
         "stream" => false
       })
 
@@ -170,7 +170,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
       |> put_req_header("x-request-id", request_id)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "guarded reset probe model miss",
+        "input" => native_text_input("guarded reset probe model miss"),
         "stream" => false
       })
 
@@ -458,7 +458,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
     |> auth(fixture.setup)
     |> post("/backend-api/codex/responses", %{
       "model" => fixture.setup.model.exposed_model_id,
-      "input" => input,
+      "input" => native_text_input(input),
       "stream" => false
     })
   end
@@ -521,7 +521,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeTest do
       |> auth(fixture.setup)
       |> post("/backend-api/codex/responses", %{
         "model" => fixture.setup.model.exposed_model_id,
-        "input" => "replacement probe must not run",
+        "input" => native_text_input("replacement probe must not run"),
         "stream" => false
       })
 

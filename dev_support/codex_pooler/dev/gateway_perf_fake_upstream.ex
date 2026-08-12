@@ -165,6 +165,29 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
     send_resp(conn, 200, "ok")
   end
 
+  # Bounded metadata-only wire capture. HTTP entries hold lowercased request header
+  # *names*; websocket entries hold `client_metadata` *keys* read from the first text
+  # frame. No header value, payload, prompt, or credential is retained. This is the one
+  # Full-mode fact the correlated Pooler request rows deliberately do not persist.
+  get "/__smoke/wire-capture" do
+    json(conn, wire_captures())
+  end
+
+  post "/__smoke/wire-capture/reset" do
+    reset_wire_captures()
+    json(conn, %{"status" => "reset"})
+  end
+
+  # Smallest deterministic Full catalog this control needs. Product discovery calls
+  # GET /backend-api/codex/responses' sibling path with a client_version query and
+  # accepts a 200 body under "data", "models", or a bare list. One Full model with
+  # use_responses_lite=false is enough to provision a loopback-routed pool; no secret,
+  # token, or account value appears here.
+  get "/backend-api/codex/models" do
+    {conn, _fingerprint} = with_upstream_request_id(conn, :http)
+    json(conn, %{"data" => [full_catalog_model()]})
+  end
+
   post "/backend-api/codex/responses" do
     serve_http_stream(conn)
   end
@@ -334,7 +357,233 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
     |> super(opts)
   end
 
+  @full_catalog_model_id "gateway-perf-full"
+
+  @doc """
+  Deterministic Full catalog entry served to Pooler catalog discovery.
+
+  `use_responses_lite` is explicitly false so a pool provisioned against this fake is a
+  Full-mode target; the wire capture then proves no Lite marker was actually sent.
+  """
+  @spec full_catalog_model() :: map()
+  def full_catalog_model do
+    %{
+      "id" => @full_catalog_model_id,
+      "slug" => @full_catalog_model_id,
+      "display_name" => "Gateway perf Full",
+      "use_responses_lite" => false,
+      "capabilities" => %{
+        "responses" => true,
+        "streaming" => true,
+        "reasoning" => true,
+        "tools" => true
+      }
+    }
+  end
+
+  @wire_capture_store __MODULE__.WireCapture
+  @wire_capture_correlator_headers ["x-request-id", "x-client-request-id"]
+  @wire_capture_max_correlators 32
+  @wire_capture_max_names 64
+  @upstream_request_id_prefix "perfreq_"
+
+  @doc """
+  Generates one bounded synthetic upstream request id.
+
+  The id is returned to the caller in the established `x-request-id` response
+  header (HTTP responses and websocket 101 upgrades alike), which the product
+  already persists as attempt metadata `upstream_request_id`. Only its
+  12-character SHA-256 fingerprint is stored beside the wire capture, so the
+  capture entry and the durable Pooler attempt row can be correlated without
+  forwarding any new downstream header.
+  """
+  @spec generate_upstream_request_id() :: String.t()
+  def generate_upstream_request_id do
+    @upstream_request_id_prefix <> Base.encode16(:crypto.strong_rand_bytes(12), case: :lower)
+  end
+
+  @doc "12-character lowercase-hex SHA-256 fingerprint of a request id."
+  @spec upstream_request_id_fingerprint(String.t()) :: String.t()
+  def upstream_request_id_fingerprint(value) when is_binary(value) do
+    :sha256
+    |> :crypto.hash(value)
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, 12)
+  end
+
+  @doc """
+  Returns the bounded metadata-only wire capture keyed by request correlator.
+
+  Values are header *names* and derived websocket client-metadata *keys* only.
+  """
+  @spec wire_captures() :: map()
+  def wire_captures do
+    ensure_wire_capture_store()
+    Agent.get(@wire_capture_store, & &1)
+  end
+
+  @spec reset_wire_captures() :: :ok
+  def reset_wire_captures do
+    ensure_wire_capture_store()
+    Agent.update(@wire_capture_store, fn _state -> %{} end)
+  end
+
+  defp ensure_wire_capture_store do
+    case Process.whereis(@wire_capture_store) do
+      nil ->
+        case Agent.start(fn -> %{} end, name: @wire_capture_store) do
+          {:ok, _pid} -> :ok
+          {:error, {:already_started, _pid}} -> :ok
+        end
+
+      _pid ->
+        :ok
+    end
+  end
+
+  @doc """
+  Records bounded websocket `client_metadata` keys observed in a decoded text frame.
+
+  Only the metadata keys are retained, never their values.
+  """
+  @spec record_websocket_client_metadata(String.t(), term()) :: :ok
+  def record_websocket_client_metadata(key, payload) when is_binary(key) do
+    keys = websocket_client_metadata_keys(payload)
+
+    if keys == [] do
+      :ok
+    else
+      ensure_wire_capture_store()
+
+      Agent.update(@wire_capture_store, fn captures ->
+        if map_size(captures) >= @wire_capture_max_correlators and
+             not Map.has_key?(captures, key) do
+          captures
+        else
+          Map.update(
+            captures,
+            key,
+            new_wire_capture(:websocket, keys, nil),
+            &merge_wire_capture(&1, :websocket, keys, nil)
+          )
+        end
+      end)
+    end
+  end
+
+  defp websocket_client_metadata_keys(payload) do
+    case payload do
+      %{"client_metadata" => metadata} when is_map(metadata) ->
+        metadata
+        |> Map.keys()
+        |> Enum.filter(&bounded_wire_name?/1)
+        |> Enum.uniq()
+        |> Enum.take(@wire_capture_max_names)
+
+      _other ->
+        []
+    end
+  end
+
+  # Mints the per-request synthetic upstream request id, returns it in the
+  # `x-request-id` response header, and records the bounded capture entry keyed
+  # by the downstream correlator header when one exists, or by the id's own
+  # fingerprint otherwise (Pooler deliberately forwards no downstream
+  # correlator upstream). The raw id is never stored; only its fingerprint.
+  defp with_upstream_request_id(conn, transport) do
+    upstream_request_id = generate_upstream_request_id()
+    fingerprint = upstream_request_id_fingerprint(upstream_request_id)
+
+    conn =
+      conn
+      |> put_resp_header("x-request-id", upstream_request_id)
+      |> record_wire_capture(transport, fingerprint)
+
+    {conn, fingerprint}
+  end
+
+  defp record_wire_capture(conn, transport, fingerprint) do
+    ensure_wire_capture_store()
+    key = wire_capture_key(conn, fingerprint)
+    names = wire_capture_names(conn)
+
+    Agent.update(@wire_capture_store, fn captures ->
+      if map_size(captures) >= @wire_capture_max_correlators and
+           not Map.has_key?(captures, key) do
+        captures
+      else
+        Map.update(
+          captures,
+          key,
+          new_wire_capture(transport, names, fingerprint),
+          &merge_wire_capture(&1, transport, names, fingerprint)
+        )
+      end
+    end)
+
+    conn
+  end
+
+  defp new_wire_capture(:http, names, fingerprint) do
+    put_wire_fingerprint(
+      %{"httpHeaderNames" => names, "websocketClientMetadataKeys" => []},
+      fingerprint
+    )
+  end
+
+  defp new_wire_capture(:websocket, names, fingerprint) do
+    put_wire_fingerprint(
+      %{"httpHeaderNames" => [], "websocketClientMetadataKeys" => names},
+      fingerprint
+    )
+  end
+
+  defp merge_wire_capture(capture, :http, names, fingerprint) do
+    capture
+    |> Map.put("httpHeaderNames", merge_wire_names(capture["httpHeaderNames"], names))
+    |> put_wire_fingerprint(fingerprint)
+  end
+
+  defp merge_wire_capture(capture, :websocket, names, fingerprint) do
+    capture
+    |> Map.put(
+      "websocketClientMetadataKeys",
+      merge_wire_names(capture["websocketClientMetadataKeys"], names)
+    )
+    |> put_wire_fingerprint(fingerprint)
+  end
+
+  defp put_wire_fingerprint(capture, nil), do: capture
+
+  defp put_wire_fingerprint(capture, fingerprint) when is_binary(fingerprint),
+    do: Map.put_new(capture, "upstreamRequestIdFingerprint", fingerprint)
+
+  defp merge_wire_names(existing, names),
+    do: (List.wrap(existing) ++ names) |> Enum.uniq() |> Enum.take(@wire_capture_max_names)
+
+  defp wire_capture_key(conn, fingerprint) do
+    Enum.find_value(@wire_capture_correlator_headers, fingerprint, fn name ->
+      value = first_req_header(conn, name)
+      if bounded_wire_name?(value), do: value, else: nil
+    end)
+  end
+
+  defp wire_capture_names(conn) do
+    conn.req_headers
+    |> Enum.map(fn {name, _value} -> String.downcase(name) end)
+    |> Enum.filter(&bounded_wire_name?/1)
+    |> Enum.uniq()
+    |> Enum.take(@wire_capture_max_names)
+  end
+
+  defp bounded_wire_name?(value) do
+    is_binary(value) and byte_size(value) > 0 and byte_size(value) <= 120 and
+      Regex.match?(~r/\A[A-Za-z0-9_-]+\z/, value)
+  end
+
   defp serve_http_stream(conn) do
+    {conn, _fingerprint} = with_upstream_request_id(conn, :http)
+
     case selected_profile(conn) do
       {:ok, profile} ->
         respond_with_profile(conn, profile)
@@ -347,10 +596,21 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
   end
 
   defp serve_websocket(conn) do
+    # The upgrade request carries ordinary HTTP headers, so they are recorded as such.
+    # Websocket client metadata is not visible here: it arrives inside the first text
+    # frame, and is recorded from that payload rather than inferred from the handshake.
+    # The synthetic upstream request id travels on the 101 upgrade response header and
+    # its fingerprint keys the entry so the later frame metadata joins the same entry.
+    {conn, fingerprint} = with_upstream_request_id(conn, :http)
+
     case selected_profile(conn) do
       {:ok, profile} ->
         conn
-        |> WebSockAdapter.upgrade(Websocket, %{profile: profile}, [])
+        |> WebSockAdapter.upgrade(
+          Websocket,
+          %{profile: profile, wire_key: wire_capture_key(conn, fingerprint)},
+          []
+        )
         |> halt()
 
       {:error, message} ->
@@ -681,7 +941,11 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
     def init(state), do: {:ok, state}
 
     @impl WebSock
-    def handle_in({_payload, [opcode: :text]}, %{profile: profile} = state) do
+    def handle_in({payload, [opcode: :text]}, %{profile: profile} = state) do
+      # Websocket client metadata travels in the frame payload, not the handshake.
+      # Only its keys are recorded.
+      record_client_metadata(state, payload)
+
       case profile["http_status"] do
         200 ->
           push_profile(profile, state)
@@ -698,6 +962,21 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
     end
 
     def handle_in({_payload, [opcode: :binary]}, state), do: {:stop, :unsupported_binary, state}
+
+    defp record_client_metadata(%{wire_key: wire_key}, payload) when is_binary(wire_key) do
+      case Jason.decode(payload) do
+        {:ok, decoded} ->
+          CodexPooler.Dev.GatewayPerfFakeUpstream.record_websocket_client_metadata(
+            wire_key,
+            decoded
+          )
+
+        {:error, _reason} ->
+          :ok
+      end
+    end
+
+    defp record_client_metadata(_state, _payload), do: :ok
 
     @impl WebSock
     def handle_info({:gateway_perf_close_websocket, code, reason}, state) do

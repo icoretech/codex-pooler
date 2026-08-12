@@ -598,7 +598,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
 
       payload = %{
         "model" => model.exposed_model_id,
-        "input" => "hello",
+        "input" => native_text_input("hello"),
         "previous_response_id" => previous_response_id
       }
 
@@ -620,7 +620,11 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
       model =
         model_for_assignments(setup.pool, [setup.pinned.assignment.id, setup.other.assignment.id])
 
-      payload = %{"model" => model.exposed_model_id, "input" => "hello", "stream" => true}
+      payload = %{
+        "model" => model.exposed_model_id,
+        "input" => native_text_input("hello"),
+        "stream" => true
+      }
 
       opts =
         %{api_key_policy: auth.api_key}
@@ -764,9 +768,22 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
     |> Repo.insert!()
   end
 
+  defp native_text_input(text) do
+    [
+      %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "input_text", "text" => text}]
+      }
+    ]
+  end
+
   defp request_options_with_session(%CodexSession{} = session) do
     %{}
-    |> RequestOptions.build(@endpoint, %{"model" => "gpt-5.5", "input" => "hello"})
+    |> RequestOptions.build(@endpoint, %{
+      "model" => "gpt-5.5",
+      "input" => native_text_input("hello")
+    })
     |> RequestOptions.put_continuity(codex_session: session)
   end
 
@@ -774,7 +791,7 @@ defmodule CodexPooler.Gateway.Routing.SessionContinuityTest do
     %{}
     |> RequestOptions.build(@endpoint, %{
       "model" => "gpt-5.5",
-      "input" => "hello",
+      "input" => native_text_input("hello"),
       "stream" => true
     })
     |> RequestOptions.put_continuity(codex_session: session)

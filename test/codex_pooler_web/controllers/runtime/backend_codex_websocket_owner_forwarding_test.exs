@@ -3228,18 +3228,46 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       })
 
     try do
-      omitted_sentinel = "owner websocket compressed omitted marker"
-      original_output = compression_log_fixture(omitted_sentinel)
+      schema_bound_output = Jason.encode!(%{"rows" => Enum.to_list(1..160)}, pretty: true)
+      unbound_output = Jason.encode!(%{"rows" => Enum.to_list(161..320)}, pretty: true)
+
+      assert byte_size(schema_bound_output) > 512
+      assert byte_size(unbound_output) > 512
 
       tool_payload =
         Jason.encode!(%{
           "type" => "response.create",
           "model" => setup.model.exposed_model_id,
+          "tools" => [
+            %{
+              "type" => "function",
+              "name" => "schema_bound_owner_fixture",
+              "output_schema" => %{"type" => "object"}
+            },
+            %{"type" => "function", "name" => "unbound_owner_fixture"}
+          ],
           "input" => [
             %{
+              "type" => "function_call",
+              "call_id" => "call_owner_schema_bound",
+              "name" => "schema_bound_owner_fixture",
+              "arguments" => "{}"
+            },
+            %{
+              "type" => "function_call",
+              "call_id" => "call_owner_unbound",
+              "name" => "unbound_owner_fixture",
+              "arguments" => "{}"
+            },
+            %{
               "type" => "function_call_output",
-              "call_id" => "call_owner_tool",
-              "output" => original_output
+              "call_id" => "call_owner_schema_bound",
+              "output" => schema_bound_output
+            },
+            %{
+              "type" => "function_call_output",
+              "call_id" => "call_owner_unbound",
+              "output" => unbound_output
             }
           ],
           "stream" => true,
@@ -3260,10 +3288,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert first_request.websocket_connection_id == second_request.websocket_connection_id
       assert second_request.json["previous_response_id"] == "resp_owner_tool_first"
 
-      assert [%{"type" => "function_call_output", "call_id" => "call_owner_tool"} = tool_output] =
-               second_request.json["input"]
+      schema_bound_item =
+        Enum.find(second_request.json["input"], fn item ->
+          item["type"] == "function_call_output" and
+            item["call_id"] == "call_owner_schema_bound"
+        end)
 
-      assert tool_output["output"] == original_output
+      unbound_item =
+        Enum.find(second_request.json["input"], fn item ->
+          item["type"] == "function_call_output" and item["call_id"] == "call_owner_unbound"
+        end)
+
+      assert schema_bound_item["output"] == schema_bound_output
+      assert Jason.decode!(schema_bound_item["output"]) == Jason.decode!(schema_bound_output)
+      assert unbound_item["output"] != unbound_output
+      assert Jason.decode!(unbound_item["output"]) == Jason.decode!(unbound_output)
 
       assert [first_log, second_log] = request_logs(setup.pool.id)
       assert first_log.status == "succeeded"
@@ -3280,12 +3319,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert %{
                "enabled" => true,
                "attempted" => true,
-               "status" => "skipped",
-               "reason" => "protected_tool_outputs",
+               "status" => "compressed",
                "route_class" => "proxy_websocket",
                "transport" => "websocket",
-               "candidate_count" => 0,
-               "compressed_count" => 0,
+               "candidate_count" => 1,
+               "compressed_count" => 1,
                "skipped_count" => 0,
                "protected_tool_output_skipped_count" => 1
              } = second_attempt.response_metadata["payload_compression"]
@@ -3300,7 +3338,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       refute_payload_compression_leak!(
         second_attempt.response_metadata["payload_compression"],
-        [omitted_sentinel, "call_owner_tool"]
+        ["call_owner_schema_bound", "call_owner_unbound"]
       )
     after
       CodexResponsesSocket.terminate(:closed, second_state)
@@ -3891,6 +3929,56 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         CodexResponsesSocket.terminate(:closed, state)
       end
     end)
+  end
+
+  test "owner-forwarded websocket overloads keep internal causes off the Codex wire" do
+    for {internal_reason, queue_limit, queue_timeout_ms} <- [
+          {"bulkhead_rejected", 0, 1_000},
+          {"bulkhead_queue_timeout", 1, 25}
+        ] do
+      with_proxy_websocket_bulkhead(queue_limit, queue_timeout_ms, fn ->
+        upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
+        setup = gateway_setup(upstream)
+        {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+        {:ok, state} =
+          owner_socket(
+            auth,
+            "ws-owner-overload-#{internal_reason}",
+            "owner-overload-#{internal_reason}"
+          )
+
+        assert {:ok, lease} =
+                 Admission.acquire("proxy_websocket", %{request_id: "held-#{internal_reason}"})
+
+        try do
+          payload = websocket_payload(setup, "synthetic owner overload")
+
+          assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+          assert {:push, {:text, error_frame}, _state} = receive_socket_done(state)
+
+          assert %{
+                   "type" => "error",
+                   "status" => 503,
+                   "error" => %{
+                     "code" => "server_is_overloaded",
+                     "message" => "gemma3 is temporarily unavailable",
+                     "param" => nil,
+                     "type" => "server_error"
+                   }
+                 } = Jason.decode!(error_frame)
+
+          refute error_frame =~ internal_reason
+          assert FakeUpstream.requests(upstream) == []
+          assert Repo.aggregate(Request, :count) == 0
+          assert Repo.aggregate(Attempt, :count) == 0
+          assert Repo.aggregate(LedgerEntry, :count) == 0
+        after
+          Admission.release(lease)
+          CodexResponsesSocket.terminate(:closed, state)
+        end
+      end)
+    end
   end
 
   test "owner-forwarded websocket terminal usage settles priced gpt-5.5 request logs" do
@@ -5893,6 +5981,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert [request] = await_upstream_requests(upstream, 1)
       assert request.json["input"] |> List.first() |> Map.get("content") == "dispatch takeover"
 
+      assert Map.new(request.headers)["x-codex-routing-hint"] ==
+               "model=#{setup.model.upstream_model_id}"
+
       assert [request_log] = request_logs(setup.pool.id)
       assert request_log.status == "succeeded"
       assert request_log.response_status_code == 200
@@ -7387,29 +7478,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
-  defp compression_log_fixture(omitted_sentinel) do
-    middle =
-      1..96
-      |> Enum.map(fn
-        48 -> "ordinary build line 48 #{omitted_sentinel}"
-        index -> "ordinary build line #{index}"
-      end)
-
-    [
-      "command started",
-      "context before first",
-      "error: first failure",
-      "context after first"
-    ]
-    |> Kernel.++(middle)
-    |> Kernel.++([
-      "context before final",
-      "fatal: final failure",
-      "context after final"
-    ])
-    |> Enum.join("\n")
-  end
-
   defp receive_owner_socket_push(state) do
     receive do
       {:websocket_owner_frame, _correlation_id, _epoch, _payload} = message ->
@@ -8034,6 +8102,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   defp with_single_proxy_websocket_slot(fun) do
+    with_proxy_websocket_bulkhead(0, 1_000, fun)
+  end
+
+  defp with_proxy_websocket_bulkhead(queue_limit, queue_timeout_ms, fun)
+       when is_integer(queue_limit) and queue_limit >= 0 and is_integer(queue_timeout_ms) and
+              queue_timeout_ms > 0 and is_function(fun, 0) do
     previous_settings = Application.get_env(:codex_pooler, OperationalSettings)
 
     Application.put_env(:codex_pooler, OperationalSettings,
@@ -8044,8 +8118,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           end)
           |> Map.put("proxy_websocket", %{
             max_concurrency: 1,
-            queue_limit: 0,
-            queue_timeout_ms: 1_000
+            queue_limit: queue_limit,
+            queue_timeout_ms: queue_timeout_ms
           })
       }
     )

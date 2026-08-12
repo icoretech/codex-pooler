@@ -139,6 +139,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
   defp validate_additional_tool(%{"type" => "mcp"}),
     do: {:error, Error.invalid_request("remote MCP tools are not supported", "input")}
 
+  defp validate_additional_tool(%{"type" => "tool_search"}),
+    do: {:error, Error.invalid_request("tool_search tools are not supported", "input")}
+
   defp validate_additional_tool(_tool), do: :ok
 
   defp validate_item_reference(%{"id" => id} = item, payload, has_tool_result?)
@@ -285,6 +288,25 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
 
   defp validate_optional_assistant_status(_item), do: :ok
 
+  defp validate_reasoning_replay_item(%{"summary" => summary, "content" => content} = item) do
+    with :ok <-
+           validate_exact_item_keys(item, [
+             "type",
+             "id",
+             "summary",
+             "content",
+             "encrypted_content",
+             "metadata",
+             @metadata_passthrough_key
+           ]),
+         :ok <- validate_optional_id(item),
+         :ok <- validate_optional_item_metadata(item),
+         :ok <- validate_reasoning_replay_encrypted_content(Map.get(item, "encrypted_content")),
+         :ok <- validate_reasoning_replay_content(content) do
+      validate_reasoning_replay_summary(summary)
+    end
+  end
+
   defp validate_reasoning_replay_item(%{"id" => id, "summary" => summary} = item)
        when is_binary(id) do
     with :ok <-
@@ -343,6 +365,23 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
   end
 
   defp validate_reasoning_replay_summary_part(_part),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp validate_reasoning_replay_content(content) when is_list(content) do
+    validate_each(content, &validate_reasoning_replay_content_part/1)
+  end
+
+  defp validate_reasoning_replay_content(_content),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp validate_reasoning_replay_content_part(
+         %{"type" => "reasoning_text", "text" => text} = part
+       )
+       when is_binary(text) do
+    validate_exact_item_keys(part, ["type", "text"])
+  end
+
+  defp validate_reasoning_replay_content_part(_part),
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
   defp validate_compaction_replay_item(
@@ -421,19 +460,41 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
              "namespace",
              "caller",
              "metadata",
+             "encrypted_function_args",
              @metadata_passthrough_key
            ]),
          :ok <- validate_nonblank(call_id),
          :ok <- validate_nonblank(name),
          :ok <- validate_optional_item_metadata(item),
          :ok <- validate_optional_namespace(item),
-         :ok <- validate_optional_caller(item) do
+         :ok <- validate_optional_caller(item),
+         :ok <- validate_optional_encrypted_function_args(item) do
       validate_optional_id(item)
     end
   end
 
   defp validate_function_call_replay_item(_item),
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp validate_optional_encrypted_function_args(item) do
+    case Map.fetch(item, "encrypted_function_args") do
+      :error ->
+        :ok
+
+      {:ok, nil} ->
+        :ok
+
+      {:ok, values} when is_list(values) ->
+        if Enum.all?(values, &is_binary/1) do
+          :ok
+        else
+          {:error, Error.invalid_request("input item shape is not translatable", "input")}
+        end
+
+      {:ok, _value} ->
+        {:error, Error.invalid_request("input item shape is not translatable", "input")}
+    end
+  end
 
   defp validate_custom_tool_call_replay_item(
          %{"call_id" => call_id, "name" => name, "input" => input} = item

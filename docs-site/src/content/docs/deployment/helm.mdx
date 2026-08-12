@@ -15,7 +15,7 @@ helm repo update
 helm upgrade --install codex-pooler icoretech/codex-pooler \
   --namespace codex-pooler \
   --create-namespace \
-  --version 0.5.3 \
+  --version 0.6.22 \
   --values ./values.production.yaml
 ```
 
@@ -25,7 +25,7 @@ The same chart is also published as an OCI artifact:
 helm upgrade --install codex-pooler oci://ghcr.io/icoretech/charts/codex-pooler \
   --namespace codex-pooler \
   --create-namespace \
-  --version 0.5.3 \
+  --version 0.6.22 \
   --values ./values.production.yaml
 ```
 
@@ -154,7 +154,7 @@ Render the monitoring resource before installing:
 ```bash
 helm template codex-pooler icoretech/codex-pooler \
   --namespace codex-pooler \
-  --version 0.5.3 \
+  --version 0.6.22 \
   --set monitoring.serviceMonitor.enabled=true \
   --set monitoring.serviceMonitor.labels.release=kube-prometheus-stack \
   --set monitoring.serviceMonitor.interval=10s \
@@ -253,7 +253,7 @@ spec:
   chart:
     spec:
       chart: codex-pooler
-      version: "0.5.3"
+      version: "0.6.22"
       sourceRef:
         kind: HelmRepository
         name: icoretech
@@ -323,7 +323,7 @@ Render manifests locally before applying them:
 
 ```bash
 helm template codex-pooler icoretech/codex-pooler \
-  --version 0.5.3 \
+  --version 0.6.22 \
   --set config.host=codex-pooler.example.com \
   --set ingress.enabled=true \
   --set ingress.hosts[0].host=codex-pooler.example.com
@@ -337,7 +337,7 @@ For install or upgrade, provide your production values file from a private path:
 helm upgrade --install codex-pooler icoretech/codex-pooler \
   --namespace codex-pooler \
   --create-namespace \
-  --version 0.5.3 \
+  --version 0.6.22 \
   --values ./values.production.yaml
 ```
 

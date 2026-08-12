@@ -2,7 +2,7 @@ defmodule CodexPooler.Gateway.Runtime.FacadePreDispatchTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
-    only: [gateway_setup: 2, start_upstream: 1]
+    only: [gateway_setup: 2, native_text_input: 1, start_upstream: 1]
 
   alias CodexPooler.Access
   alias CodexPooler.Access.APIKeys.ReasoningEffortPolicy.Decision
@@ -99,7 +99,7 @@ defmodule CodexPooler.Gateway.Runtime.FacadePreDispatchTest do
     %{
       "model" => Facade.effective_model(),
       "reasoning" => %{"effort" => Facade.reasoning_effort()},
-      "input" => "facade invariant"
+      "input" => native_text_input("facade invariant")
     }
   end
 

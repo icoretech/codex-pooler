@@ -4,8 +4,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.OperationalSettings.IPRules
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Transports.Admission
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
+  alias CodexPooler.Gateway.Websocket.Adapter
   alias CodexPooler.InstanceSettings.{Cache, Settings}
   alias CodexPoolerWeb.CodexResponsesSocket
 
@@ -13,6 +15,28 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   @cache_key {Cache, :current}
   @cache_version 1
   @revocation_close {1008, "client IP is no longer allowed"}
+
+  test "native and public websocket overload terminals use the shared Codex error vocabulary" do
+    for internal_reason <- ["bulkhead_rejected", "bulkhead_queue_timeout"] do
+      payload =
+        internal_reason
+        |> then(&Admission.overload_error(%{code: &1, route_class: "proxy_websocket"}))
+        |> Adapter.websocket_error()
+
+      assert payload == %{
+               "type" => "error",
+               "status" => 503,
+               "error" => %{
+                 "code" => "server_is_overloaded",
+                 "message" => "gemma3 is temporarily unavailable",
+                 "param" => nil,
+                 "type" => "server_error"
+               }
+             }
+
+      refute Jason.encode!(payload) =~ internal_reason
+    end
+  end
 
   test "locally applied allowed settings are a no-op and stale versions are ignored" do
     original = cached_settings()
@@ -189,19 +213,17 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     }
 
     frames = [
-      {~s({"type":"response.done","response":{"id":"resp_pin_backend_get_done"}}),
-       %{
-         "type" => "response.done",
-         "response" => %{"id" => "resp_pin_backend_get_done"}
-       }},
-      {~s({ "id" : "resp_pin_backend_get_legacy" }), %{"id" => "resp_pin_backend_get_legacy"}}
+      ~s({"type":"response.done","response":{"id":"resp_pin_backend_get_done"}}),
+      ~s({ "id" : "resp_pin_backend_get_legacy" }),
+      ~s({"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_native_encrypted_args","name":"lookup_fixture","arguments":"{}","encrypted_function_args":[]}}),
+      ~s({"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_native_encrypted_args_ordered","name":"lookup_fixture","arguments":"{}","encrypted_function_args":["a","bb"]}})
     ]
 
-    for {frame, expected} <- frames do
+    for frame <- frames do
       assert {:push, {:text, pushed}, next_state} =
                CodexResponsesSocket.handle_info({:codex_response_chunk, task_pid, frame}, state)
 
-      assert Jason.decode!(pushed) == expected
+      assert Jason.decode!(pushed) == Jason.decode!(frame)
       assert next_state.native_turn_output_task_pids == MapSet.new([task_pid])
 
       assert Map.delete(next_state, :native_turn_output_task_pids) ==

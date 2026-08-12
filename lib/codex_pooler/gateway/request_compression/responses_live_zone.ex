@@ -114,7 +114,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
 
   defp collect_candidates(
          json,
-         %{"input" => input},
+         %{"input" => input} = payload,
          ranges,
          min_bytes,
          excluded_function_tool_names
@@ -122,9 +122,10 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
        when is_list(input) do
     range_by_path = Map.new(ranges, &{&1.path, &1})
     items = input_items(input, ["input"])
+    schema_bound_tool_names = schema_bound_tool_names(payload)
 
-    {skipped_call_ids, known_function_call_ids} =
-      call_id_sets(items, excluded_function_tool_names)
+    {skipped_call_ids, known_function_call_ids, schema_bound_call_ids} =
+      call_id_sets(items, excluded_function_tool_names, schema_bound_tool_names)
 
     candidates =
       items
@@ -134,6 +135,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
                range_by_path,
                skipped_call_ids,
                known_function_call_ids,
+               schema_bound_call_ids,
                item,
                path,
                min_bytes
@@ -153,6 +155,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
           items,
           skipped_call_ids,
           known_function_call_ids,
+          schema_bound_call_ids,
           min_bytes
         )
     }
@@ -166,13 +169,20 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
          range_by_path,
          skipped_call_ids,
          known_function_call_ids,
+         schema_bound_call_ids,
          item,
          path,
          min_bytes
        ) do
     with item_type when is_binary(item_type) <- Map.get(item, "type"),
          true <- supported_output_item_type?(item_type),
-         false <- protected_tool_output?(item, skipped_call_ids, known_function_call_ids),
+         false <-
+           protected_tool_output?(
+             item,
+             skipped_call_ids,
+             known_function_call_ids,
+             schema_bound_call_ids
+           ),
          output_path <- path ++ ["output"],
          %{byte_start: byte_start, byte_end: byte_end, encoded_byte_size: encoded_byte_size} =
            range <- Map.get(range_by_path, output_path),
@@ -198,10 +208,15 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
     end
   end
 
-  defp call_id_sets(items, excluded_function_tool_names) do
-    Enum.reduce(items, {MapSet.new(), MapSet.new()}, fn {item, _path},
-                                                        {skipped_call_ids, known_call_ids} ->
+  defp call_id_sets(items, excluded_function_tool_names, schema_bound_tool_names) do
+    Enum.reduce(items, {MapSet.new(), MapSet.new(), MapSet.new()}, fn {item, _path},
+                                                                      {skipped_call_ids,
+                                                                       known_call_ids,
+                                                                       schema_bound_call_ids} ->
       known_call_ids = put_known_function_call_id(known_call_ids, item)
+
+      schema_bound_call_ids =
+        put_schema_bound_function_call_id(schema_bound_call_ids, item, schema_bound_tool_names)
 
       skipped_call_ids =
         case skipped_function_call_id(item, excluded_function_tool_names) do
@@ -212,7 +227,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
             skipped_call_ids
         end
 
-      {skipped_call_ids, known_call_ids}
+      {skipped_call_ids, known_call_ids, schema_bound_call_ids}
     end)
   end
 
@@ -222,6 +237,21 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
   end
 
   defp put_known_function_call_id(call_ids, _item), do: call_ids
+
+  defp put_schema_bound_function_call_id(
+         call_ids,
+         %{"type" => "function_call", "call_id" => call_id, "name" => name},
+         schema_bound_tool_names
+       )
+       when is_binary(call_id) and call_id != "" and is_binary(name) do
+    if MapSet.member?(schema_bound_tool_names, name) do
+      MapSet.put(call_ids, call_id)
+    else
+      call_ids
+    end
+  end
+
+  defp put_schema_bound_function_call_id(call_ids, _item, _schema_bound_tool_names), do: call_ids
 
   defp skipped_function_call_id(item, excluded_function_tool_names) do
     cond do
@@ -255,13 +285,20 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
   defp protected_tool_output?(
          %{"type" => "function_call_output"} = item,
          skipped_call_ids,
-         known_function_call_ids
+         known_function_call_ids,
+         schema_bound_call_ids
        ) do
     skipped_call_id?(item, skipped_call_ids) or
-      unknown_function_tool_output?(item, known_function_call_ids)
+      unknown_function_tool_output?(item, known_function_call_ids) or
+      schema_bound_function_tool_output?(item, schema_bound_call_ids)
   end
 
-  defp protected_tool_output?(item, skipped_call_ids, _known_function_call_ids) do
+  defp protected_tool_output?(
+         item,
+         skipped_call_ids,
+         _known_function_call_ids,
+         _schema_bound_call_ids
+       ) do
     skipped_call_id?(item, skipped_call_ids)
   end
 
@@ -271,6 +308,13 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
   end
 
   defp unknown_function_tool_output?(_item, _known_function_call_ids), do: true
+
+  defp schema_bound_function_tool_output?(%{"call_id" => call_id}, schema_bound_call_ids)
+       when is_binary(call_id) and call_id != "" do
+    MapSet.member?(schema_bound_call_ids, call_id)
+  end
+
+  defp schema_bound_function_tool_output?(_item, _schema_bound_call_ids), do: false
 
   defp skipped_call_id?(item, skipped_call_ids) do
     case Map.get(item, "call_id") do
@@ -289,6 +333,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
          items,
          skipped_call_ids,
          known_function_call_ids,
+         schema_bound_call_ids,
          min_bytes
        ) do
     Enum.count(items, fn {item, path} ->
@@ -299,6 +344,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
         path,
         skipped_call_ids,
         known_function_call_ids,
+        schema_bound_call_ids,
         min_bytes
       )
     end)
@@ -311,11 +357,18 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
          path,
          skipped_call_ids,
          known_function_call_ids,
+         schema_bound_call_ids,
          min_bytes
        ) do
     with item_type when is_binary(item_type) <- Map.get(item, "type"),
          true <- supported_output_item_type?(item_type),
-         true <- protected_tool_output?(item, skipped_call_ids, known_function_call_ids),
+         true <-
+           protected_tool_output?(
+             item,
+             skipped_call_ids,
+             known_function_call_ids,
+             schema_bound_call_ids
+           ),
          output_path <- path ++ ["output"],
          range when is_map(range) <- Map.get(range_by_path, output_path),
          {:ok, output} <- JsonStringRanges.decode_string(json, range) do
@@ -335,6 +388,20 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
   defp input_items(value, path) when is_map(value), do: [{value, path}]
 
   defp input_items(_value, _path), do: []
+
+  defp schema_bound_tool_names(%{"tools" => tools}) when is_list(tools) do
+    tools
+    |> Enum.reduce(MapSet.new(), fn
+      %{"type" => "function", "name" => name, "output_schema" => output_schema}, names
+      when is_binary(name) and name != "" and not is_nil(output_schema) ->
+        MapSet.put(names, name)
+
+      _tool, names ->
+        names
+    end)
+  end
+
+  defp schema_bound_tool_names(_payload), do: MapSet.new()
 
   defp min_bytes(opts) when is_list(opts) do
     opts

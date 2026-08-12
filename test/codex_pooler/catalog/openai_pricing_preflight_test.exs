@@ -5,13 +5,15 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
 
   @fixture Path.expand("../../fixtures/pricing/openai/2026-07-28.json", __DIR__)
   @target Path.expand("../../../priv/pricing/openai/pricing.json", __DIR__)
-  @target_sha256 "0d6ed91d7ad5c741fc78a6cf2f90d02915c4bc2abb59df6796817dcb95402d34"
+  @target_sha256 "108c8820c12ca3190f2fc73c5108a80623ea7c9c70018dddba21200631eb857e"
 
   @skipped_pricing_type_paths [
     "models.gpt-4o-mini-transcribe.pricing_type",
     "models.gpt-4o-transcribe-diarize.pricing_type",
     "models.gpt-4o-transcribe.pricing_type",
     "models.gpt-live-transcribe.pricing_type",
+    "models.gpt-realtime-translate.pricing_type",
+    "models.gpt-realtime-whisper.pricing_type",
     "models.gpt-transcribe.pricing_type",
     "models.sora-2-pro.pricing_type",
     "models.sora-2.pricing_type",
@@ -57,16 +59,16 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
            ]
   end
 
-  test "classifies the reviewed August 5 target with exact artifact and warning coverage" do
+  test "classifies the reviewed August 10 target with exact artifact and warning coverage" do
     raw = File.read!(@target)
     payload = Jason.decode!(raw)
     result = OpenAIPricingPreflight.validate_file(@target)
 
-    assert byte_size(raw) == 62_975
+    assert byte_size(raw) == 64_012
     assert Base.encode16(:crypto.hash(:sha256, raw), case: :lower) == @target_sha256
-    assert payload["generated_at"] == "2026-08-05T17:15:03.219498Z"
-    assert payload["models_count"] == 79
-    assert map_size(payload["models"]) == 79
+    assert payload["generated_at"] == "2026-08-10T18:34:37.635217Z"
+    assert payload["models_count"] == 80
+    assert map_size(payload["models"]) == 80
     assert payload["tools_count"] == 4
     assert map_size(payload["tools"]) == 4
 
@@ -75,29 +77,29 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
     assert length(result.warnings) == 82
 
     assert result.summary == %{
-             importable_rows: 177,
-             priced_rows: 165,
-             unavailable_rows: 12,
-             skipped_models: 8,
-             skipped_price_buckets: 74
+             importable_rows: 184,
+             priced_rows: 168,
+             unavailable_rows: 16,
+             skipped_models: 10,
+             skipped_price_buckets: 72
            }
 
     assert result.coverage.imported_price_buckets == %{
-             "default" => 111,
-             "long_context" => 33,
-             "short_context" => 33
+             "default" => 112,
+             "long_context" => 36,
+             "short_context" => 36
            }
 
     assert Enum.frequencies_by(result.warnings, & &1.code) == %{
              incomplete_price_bucket: 4,
-             unsupported_price_bucket: 70,
-             unsupported_pricing_type: 8
+             unsupported_price_bucket: 68,
+             unsupported_pricing_type: 10
            }
 
     warning_paths = Enum.group_by(result.warnings, & &1.code, & &1.path)
     assert warning_paths.incomplete_price_bucket == @incomplete_bucket_paths
     assert warning_paths.unsupported_pricing_type == @skipped_pricing_type_paths
-    assert length(Enum.uniq(warning_paths.unsupported_price_bucket)) == 70
+    assert length(Enum.uniq(warning_paths.unsupported_price_bucket)) == 68
     assert result.warnings == Enum.sort_by(result.warnings, &{&1.path, &1.code, &1.message})
   end
 
@@ -282,6 +284,58 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
       )
 
     refute OpenAIPricingPreflight.validate_payload(changed).compatible?
+  end
+
+  test "accepts the reviewed live per-minute flat-rate descriptors as validated skips" do
+    candidates = [
+      unsupported_payload("future-live-transcribe", "per_minute", ["per_minute"], %{
+        "standard" => %{"live_transcription" => %{"estimated_cost" => 0.017}}
+      }),
+      unsupported_payload("future-live-translate", "per_minute", ["per_minute"], %{
+        "standard" => %{"live_translation" => %{"estimated_cost" => 0.034}}
+      })
+    ]
+
+    Enum.each(candidates, fn payload ->
+      result = OpenAIPricingPreflight.validate_payload(payload)
+      assert result.compatible?, inspect(result.errors)
+      assert [%{code: :unsupported_pricing_type}] = result.warnings
+      assert result.summary.skipped_models == 1
+      assert result.summary.importable_rows == 0
+    end)
+  end
+
+  test "unknown and malformed live per-minute variants stay fail-closed" do
+    variants = [
+      {"live_transcription", %{"estimated_cost" => 0.017, "input" => 2.5, "output" => 10}},
+      {"live_translation", %{"estimated_cost" => 0.034, "input" => 2.5, "output" => 10}},
+      {"live_transcription", %{"estimated_cost" => nil}},
+      {"live_transcription", %{"estimated_cost" => "0.017"}},
+      {"live_transcription", %{"estimated_cost" => -0.017}},
+      {"live_transcription", %{"estimated_cost" => 0.017, "unit" => "minute"}},
+      {"live_translation", %{}},
+      {"live_diarization", %{"estimated_cost" => 0.017}}
+    ]
+
+    Enum.each(variants, fn {bucket, values} ->
+      payload =
+        unsupported_payload("future-live-variant", "per_minute", ["per_minute"], %{
+          "standard" => %{bucket => values}
+        })
+
+      result = OpenAIPricingPreflight.validate_payload(payload)
+      refute result.compatible?, bucket
+      assert Enum.any?(result.errors, &(&1.code == :unsupported_pricing_type_shape))
+      assert result.summary.importable_rows == 0
+    end)
+
+    extra_tier =
+      unsupported_payload("future-live-tier", "per_minute", ["per_minute"], %{
+        "standard" => %{"live_transcription" => %{"estimated_cost" => 0.017}},
+        "batch" => %{"live_transcription" => %{"estimated_cost" => 0.017}}
+      })
+
+    refute OpenAIPricingPreflight.validate_payload(extra_tier).compatible?
   end
 
   test "mixed and per-minute descriptors reject every non-standard tier" do

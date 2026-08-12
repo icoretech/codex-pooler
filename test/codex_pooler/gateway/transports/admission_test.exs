@@ -84,6 +84,21 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
              Admission.run("proxy_magic", %{request_id: "unknown-route"}, fn -> :ok end)
   end
 
+  test "overload responses keep each bounded internal reason while using the common client code" do
+    for internal_reason <- ["bulkhead_rejected", "bulkhead_queue_timeout"] do
+      assert %{
+               status: 503,
+               code: "server_is_overloaded",
+               message: "gateway route class is temporarily overloaded",
+               param: nil,
+               route_class: "proxy_http",
+               internal_reason: ^internal_reason,
+               accounting_disposition: :zero_work
+             } =
+               Admission.overload_error(%{code: internal_reason, route_class: "proxy_http"})
+    end
+  end
+
   test "route class catalog exposes a dedicated MCP lane with defaults" do
     assert RouteClass.mcp() in Admission.route_classes()
     assert Map.has_key?(OperationalSettings.current().bulkheads, RouteClass.mcp())
@@ -249,9 +264,32 @@ defmodule CodexPooler.Gateway.Transports.AdmissionTest do
 
     assert timeout_metadata.route_class == "audio_transcription"
     assert timeout_metadata.request_id == "queued-media"
+    assert timeout_metadata.internal_reason == "bulkhead_queue_timeout"
     assert is_integer(measurements.queued_ms)
     refute inspect(timeout_metadata) =~ "private prompt"
     refute inspect(timeout_metadata) =~ "secret-token"
+
+    Admission.release(held)
+  end
+
+  test "rejections emit their bounded internal reason without retaining request contents" do
+    attach_telemetry()
+    assert {:ok, held} = Admission.acquire("proxy_http", %{request_id: "held-http"})
+
+    assert {:error, %{code: "bulkhead_rejected", route_class: "proxy_http"}} =
+             Admission.acquire("proxy_http", %{
+               request_id: "rejected-http",
+               body: "private prompt",
+               authorization: "Bearer secret-token"
+             })
+
+    assert_receive {:admission_event, [:codex_pooler, :gateway, :admission, :rejected],
+                    _measurements, metadata}
+
+    assert metadata.route_class == "proxy_http"
+    assert metadata.internal_reason == "bulkhead_rejected"
+    refute inspect(metadata) =~ "private prompt"
+    refute inspect(metadata) =~ "secret-token"
 
     Admission.release(held)
   end

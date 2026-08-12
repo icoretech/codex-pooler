@@ -1,0 +1,308 @@
+---
+title: Responses Lite And Full
+description: What the Codex Responses Lite request dialect changes on the wire, how Codex Pooler picks Lite or Full per Pool and model, and what it means for clients.
+---
+
+Codex backend Responses has two request dialects. The ordinary dialect, which Codex Pooler calls **Full**, sends `instructions` and `tools` as top-level request fields. The **Lite** dialect carries the same information inside the request `input` array instead, and sets a marker so the provider knows which dialect it is reading.
+
+Both dialects describe the same turn, reach the same upstream route, and return the same response shape. They differ only in how the outgoing request is assembled.
+
+Codex Pooler decides the dialect per Pool and per model, then guarantees it on the way upstream. Clients keep one Pool API key, one base URL, and one model id in either mode.
+
+Use this page when you need to know what Lite actually changes, why a request shape differs from what your client sent, or what a serving mode does and does not affect. For the operator workflow that sets the mode, see [Pools](/operators/pools/). For where these requests are admitted and dispatched, see [Runtime Routes](/reference/runtime-routes/).
+
+## Why Do Two Dialects Exist?
+
+Some Codex models are served by a backend that expects the Lite request shape. Its model catalog entry advertises this with a `use_responses_lite` boolean. A Codex-compatible client reads that flag and builds the matching request; a client that sends the ordinary shape to a Lite model, or the Lite shape to an ordinary one, can be rejected by the provider.
+
+Because a Pool routes one model id across several upstream accounts, Codex Pooler cannot leave that decision to the client. It resolves the dialect itself, advertises the result in its own catalog, and applies the matching request shape at dispatch.
+
+## Lite And Full Use The Same Route
+
+Serving mode never changes the endpoint, the model id, or the credentials.
+
+<table>
+  <thead>
+    <tr>
+      <th>Property</th>
+      <th>Lite and Full</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Client endpoint</td>
+      <td>Identical. The same <code>/backend-api/codex</code> or <code>/v1</code> route in both modes</td>
+    </tr>
+    <tr>
+      <td>Upstream route</td>
+      <td>Identical. Ordinary Responses work and backend compact work reach their matching backend Responses route in both modes</td>
+    </tr>
+    <tr>
+      <td>Client-visible model id</td>
+      <td>Identical</td>
+    </tr>
+    <tr>
+      <td>Pool API key and base URL</td>
+      <td>Identical</td>
+    </tr>
+    <tr>
+      <td>Response shape</td>
+      <td>Identical. Codex Pooler applies no Lite-specific handling to the response or the event stream</td>
+    </tr>
+    <tr>
+      <td>Transport choice</td>
+      <td>Identical. HTTP, SSE, and websocket eligibility never read the serving mode</td>
+    </tr>
+  </tbody>
+</table>
+
+The dialect marker itself travels differently per transport:
+
+- Over HTTP and SSE it is the upstream request header `x-openai-internal-codex-responses-lite: true`. It is absent, not `false`, in Full.
+- Over websockets it is a request-body entry, `client_metadata.ws_request_header_x_openai_internal_codex_responses_lite`, whose value is the string `"true"`. It is set per turn, so one websocket connection can legitimately carry Lite and Full turns.
+
+There is no Lite marker in the HTTP request body, and no marker of either kind in any response Codex Pooler returns to a client.
+
+## What Changes On The Wire
+
+On the ordinary Responses lanes — HTTP, SSE, and the websocket `response.create` turn — Lite rewrites the outgoing request body. Backend compact routes receive the same Lite rewrite before their compact-specific projection runs. This is a real translation, not a flag.
+
+<table>
+  <thead>
+    <tr>
+      <th>Request field</th>
+      <th>Full</th>
+      <th>Lite</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>tools</code></td>
+      <td>Sent as a top-level array</td>
+      <td>Removed from the top level. The tool list becomes the first <code>input</code> item, an <code>additional_tools</code> item with role <code>developer</code></td>
+    </tr>
+    <tr>
+      <td><code>instructions</code></td>
+      <td>Sent as a top-level string</td>
+      <td>Removed from the top level. A non-blank value becomes a <code>developer</code> message item placed immediately after the tools item</td>
+    </tr>
+    <tr>
+      <td><code>parallel_tool_calls</code></td>
+      <td>The client's value, preserved exactly, including absent when the client omitted it</td>
+      <td>Forced to the boolean <code>false</code></td>
+    </tr>
+    <tr>
+      <td><code>reasoning.context</code></td>
+      <td>Left as sent, so the provider default applies</td>
+      <td>Forced to the string <code>all_turns</code></td>
+    </tr>
+    <tr>
+      <td><code>input_image</code> detail</td>
+      <td>Preserved</td>
+      <td>The <code>detail</code> field is removed from <code>input_image</code> entries in typed <code>message</code> content and in <code>function_call_output</code> and <code>custom_tool_call_output</code> outputs</td>
+    </tr>
+    <tr>
+      <td>Dialect marker</td>
+      <td>Removed if a client supplied one</td>
+      <td>Added by Codex Pooler</td>
+    </tr>
+  </tbody>
+</table>
+
+The `additional_tools` item is always present in Lite, even when the request declared no tools. In that case its `tools` array is empty.
+
+### A Request In Both Dialects
+
+A client sends this ordinary Responses body:
+
+```json
+{
+  "model": "example-model",
+  "instructions": "Example system instructions.",
+  "tools": [
+    { "type": "function", "name": "lookup", "parameters": { "type": "object", "properties": {} } }
+  ],
+  "parallel_tool_calls": true,
+  "input": [
+    { "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "Example user turn." }] }
+  ]
+}
+```
+
+Served in Full, the tools and instructions stay where they are. Served in Lite, the same turn is restructured before dispatch:
+
+```json
+{
+  "model": "example-model",
+  "parallel_tool_calls": false,
+  "reasoning": { "context": "all_turns" },
+  "include": ["reasoning.encrypted_content"],
+  "input": [
+    {
+      "type": "additional_tools",
+      "role": "developer",
+      "tools": [
+        { "type": "function", "name": "lookup", "parameters": { "type": "object", "properties": {} } }
+      ]
+    },
+    { "type": "message", "role": "developer", "content": [{ "type": "input_text", "text": "Example system instructions." }] },
+    { "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "Example user turn." }] }
+  ]
+}
+```
+
+Top-level `instructions` and `tools` are gone, the tool list leads the input, and the instructions follow it as a developer message.
+
+These blocks isolate the serving-mode difference. Codex Pooler applies other normalization to every ordinary backend Responses request in both modes — it maps the model id to the selected upstream account's identifier, ensures `include` carries `reasoning.encrypted_content`, and lowers non-strict tool schemas — so a captured upstream body carries those changes too, in Lite and in Full alike.
+
+## Who Decides The Dialect?
+
+Codex Pooler decides, and it closes the loop at both ends.
+
+1. The Pool's serving mode for that model resolves to Lite or Full before dispatch.
+2. `GET /backend-api/codex/models` advertises `use_responses_lite` as that **effective** serving mode, not as the raw value an upstream account reported. This is what a Codex-compatible client reads to decide which dialect to build.
+3. A Lite-aware client therefore builds the Lite shape itself, and Codex Pooler applies the same translation again at egress.
+
+Applying the translation twice is safe because it is idempotent. A leading `additional_tools` developer item that carries no `id` is reused rather than wrapped a second time, and a request that already omits top-level `instructions` produces no duplicate developer message. Normalizing an already-normalized request produces an identical request.
+
+`additional_tools` is also an ordinary public Responses item type. Codex Pooler adopts an existing item as the Lite tools prefix only when the request declared no top-level `tools` and the item is leading, carries role `developer`, and has no `id` — the exact shape a Lite-aware client produces. An `additional_tools` item that carries an `id` is always treated as ordinary input.
+
+Clients cannot set the dialect. Codex Pooler removes any client-supplied `x-openai-internal-codex-responses-lite` header and any client-supplied `ws_request_header_x_openai_internal_codex_responses_lite` entry from `client_metadata` on every request, then adds its own only when the effective mode is Lite. Codex Pooler never reads a Lite preference out of a request body or header.
+
+The public `GET /v1/models` response carries no serving-mode field.
+
+## How Codex Pooler Resolves The Mode
+
+A serving mode belongs to one Pool and one canonical exposed model id. The same model can use different modes in different Pools, and the choice applies to every Pool API key in that Pool.
+
+<table>
+  <thead>
+    <tr>
+      <th>Configured mode</th>
+      <th>Effective mode</th>
+      <th>Recorded source</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>auto</code> (the default, stored as no override)</td>
+      <td>Lite when any routable catalog source for that Pool-model pair reports literal <code>true</code> for Lite support, otherwise Full</td>
+      <td><code>catalog</code></td>
+    </tr>
+    <tr>
+      <td><code>lite</code></td>
+      <td>Lite</td>
+      <td><code>override</code></td>
+    </tr>
+    <tr>
+      <td><code>full</code></td>
+      <td>Full</td>
+      <td><code>override</code></td>
+    </tr>
+  </tbody>
+</table>
+
+Two details of Auto matter in practice:
+
+- **Only a literal `true` selects Lite.** `false`, a missing key, the string `"true"`, the number `1`, and any other malformed value all select Full. When a model entry has no per-source map at all, only a literal `true` top-level value selects Lite.
+- **"Routable" means health-level routable.** The assignment is active, eligible, has an `active` health status, is past any cooldown, and belongs to a visible upstream account. It does not mean that account has quota available, or that this turn will select it. A single Lite-advertising account is enough to put the whole Pool-model pair in Lite.
+
+A model with no routable source at all is not resolved to a serving mode. The request fails eligibility with a `503` and no upstream dispatch, rather than defaulting to a dialect.
+
+Serving-mode choices are stored independently of the model catalog. They persist while a model is stale, retired, or suppressed, remain editable, and re-apply when the model returns under the same exposed model id.
+
+## What Serving Mode Does Not Affect
+
+This section exists because the mode is easy to over-attribute. Lite and Full change the outgoing request shape and nothing else.
+
+<table>
+  <thead>
+    <tr>
+      <th>Concern</th>
+      <th>Effect of serving mode</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Context window</td>
+      <td>None. A model advertises the same context window in Lite and in Full. Codex Pooler derives the advertised window from the operator context-window override, the model's pricing bucket, and the model's effective context-window percentage — the serving mode is not an input, and the Lite boolean is applied after that policy has already run</td>
+    </tr>
+    <tr>
+      <td>Token budgets and auto-compaction limits</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <td>Pricing and accounting</td>
+      <td>None. Reservation is derived from the request payload and the API key's output-token policy. The mode appears in request and attempt metadata only as diagnostic labels</td>
+    </tr>
+    <tr>
+      <td>Routing and eligibility</td>
+      <td>None. Serving mode never removes an upstream assignment from the candidate set and never reorders it</td>
+    </tr>
+    <tr>
+      <td>Catalog partition selection</td>
+      <td>None. Partitions are computed from the pristine upstream model entries, before the effective mode is applied</td>
+    </tr>
+    <tr>
+      <td>Plan family</td>
+      <td>None. Lite support is a model catalog property. Codex Pooler has no rule that ties Lite to Free, Go, Plus, Pro, Team, Business, or Enterprise</td>
+    </tr>
+    <tr>
+      <td>Response payloads</td>
+      <td>None</td>
+    </tr>
+  </tbody>
+</table>
+
+In the Codex model catalog, the Lite flag and the context-window family are independent fields. A model can advertise Lite with a large context window, or the ordinary dialect with a small one. Neither implies the other.
+
+## What This Means For Clients
+
+Codex Pooler applies the Lite translation server-side, at egress, on every lane that dispatches ordinary or backend compact Responses work. A client that knows nothing about Lite can send an ordinary Full-shaped body and Codex Pooler produces the Lite shape for it. Compact dispatch then keeps its own narrow projection and validation rules: compact-only controls are still removed, while Lite tools and instructions are carried in the rewritten `input` array.
+
+Most OpenAI-compatible clients are unaware of Lite and need no configuration for it. For those clients, a Lite Pool has these observable effects:
+
+- `parallel_tool_calls` is overridden to `false`, so parallel tool calling is off regardless of what was requested.
+- `reasoning.context` is forced to `all_turns`.
+- `detail` pins on input images are not forwarded. A `detail` of `high` or `low` has no effect in Lite.
+- The response, including the event stream, is unchanged.
+
+On native, non-compact Codex backend Responses routes, a present `input` or `tools` value must be an array. A non-list value is rejected before dispatch with `400 invalid_request` in both Lite and Full, so it is never silently dropped or forwarded with changed meaning. The narrow `/v1` surface continues to normalize a string `input` into an item array before serving-mode handling, so existing `/v1` string-input behavior is unaffected.
+
+There is one hard limit. **On a Lite-served model, a map-shaped `tool_choice` is rejected** before any upstream request, with HTTP `400`, code `unsupported_parameter`, and `param: "tool_choice"`. The rejection follows the model's serving mode rather than the endpoint, so it applies to a Chat Completions named-function choice too. Scalar choices such as `"auto"`, `"none"`, and `"required"` are accepted in both modes. If a client needs forced typed tool selection, that model must be served in Full.
+
+Clients that implement Lite themselves stay compatible, because the translation is idempotent: a Lite-aware client talking to a Lite Pool produces the same upstream request whether the client or Codex Pooler built the shape.
+
+The conversion runs in one direction only. Codex Pooler translates an ordinary request into the Lite dialect when the mode is Lite; it never translates a Lite-shaped request back into the ordinary dialect. A client that forces Lite on its own side while the Pool serves Full will have its Lite-shaped body forwarded as sent, without the Lite marker. Leave client-side Lite settings at their default and let the Pool decide, which is what a client does when it reads `use_responses_lite` from the Pool's own catalog.
+
+## Stability Within A Request
+
+One HTTP request, or one websocket `response.create` turn, keeps the serving mode it started with. The resolved mode is captured once, before dispatch, and is then immutable for that request. It survives:
+
+- same-assignment retry,
+- cross-assignment failover to a different upstream account,
+- cross-node owner forwarding.
+
+Saving a new mode does not mutate a request or turn that is already in flight. A change is picked up by the next HTTP request, or by the next `response.create` turn on an already-open websocket connection.
+
+Because the effective mode is part of the backend catalog body, changing it changes the `GET /backend-api/codex/models` ETag. An open websocket connection keeps the models ETag it handshook with; a new connection observes the updated one.
+
+## Operational Evidence
+
+Codex Pooler records the mode on each request and attempt as three metadata labels: the configured mode, the effective mode, and the source. They are bounded values only — `auto`, `lite`, or `full` for the configured mode; `lite` or `full` for the effective mode; `catalog` or `override` for the source. No request body, prompt, tool payload, header, or credential is retained with them.
+
+The mode a Pool is using is visible in two places:
+
+- the Pool's edit dialog, `Models` step, which shows the configured choice and the resolved effective mode per model, and
+- the authenticated `GET /backend-api/codex/models` response, whose `use_responses_lite` boolean is the effective mode for that Pool.
+
+Full is an advanced, provider-dependent override, and Codex Pooler never silently downgrades it. When an ordinary Responses HTTP request under an explicit Full override receives a terminal non-rate-limit `4xx`, the request log classifies it as `full_upstream_rejection` and the client receives only a fixed server-owned error; the provider message, body, code, and param are not forwarded. A `429` is classified `upstream_rate_limited` and an ordinary `5xx` keeps `upstream_status`, both of which are unrelated to the serving mode. Auto and Lite traffic produce no serving-mode-specific error code.
+
+Serving modes are database-backed Pool configuration. There is no environment variable or Helm value that sets them.
+
+## Related References
+
+- [Pools](/operators/pools/) for the operator workflow that selects Auto, Lite, or Full
+- [Runtime Routes](/reference/runtime-routes/) for the routes these requests are admitted on and the custom tool contract that interacts with `tool_choice`
+- [Routing Strategies](/reference/routing-strategies/) for how an upstream account is chosen, which serving mode never influences
+- [Request logs](/operators/request-logs/) for per-request metadata and error classification

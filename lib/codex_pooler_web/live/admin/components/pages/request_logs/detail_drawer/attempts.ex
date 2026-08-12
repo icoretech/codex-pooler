@@ -3,6 +3,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
 
   import CodexPoolerWeb.Admin.RequestLogsDisplay, only: [format_route_latency: 1]
 
+  alias CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows
+
   @type detail_row :: %{
           id: String.t(),
           label: String.t(),
@@ -56,7 +58,13 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
       detail("request-log-detail-attempt-#{attempt.attempt_number}-final", "Final", attempt.final)
     ]
 
-    present_rows(rows ++ websocket_connection_rows(attempt))
+    mode_rows =
+      Rows.serving_mode_rows(
+        "request-log-detail-attempt-#{attempt.attempt_number}",
+        Map.get(attempt, :model_serving_mode)
+      )
+
+    present_rows(rows ++ mode_rows ++ websocket_connection_rows(attempt))
   end
 
   @spec transport_failure_rows(map()) :: [detail_row()]
