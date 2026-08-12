@@ -2,6 +2,7 @@ defmodule CodexPoolerWeb.FacadeLeakageTest do
   use CodexPoolerWeb.ConnCase, async: true
 
   alias CodexPoolerWeb.GatewayControllerHelpers
+  alias CodexPooler.Gateway.Websocket.Adapter
 
   @hidden_model "gpt-5.6-sol-controller-sentinel"
   @hidden_provider "provider-controller-sentinel"
@@ -85,5 +86,31 @@ defmodule CodexPoolerWeb.FacadeLeakageTest do
     end
 
     assert %{"error" => %{"param" => nil}} = json_response(error_conn, 502)
+  end
+
+  test "websocket-local failures use the same cloaked error boundary" do
+    frame =
+      Adapter.websocket_error(%{
+        status: 403,
+        code: "facade_policy_conflict",
+        message: "#{@hidden_provider} account #{@hidden_account} cannot route #{@hidden_model}"
+      })
+
+    assert frame == %{
+             "type" => "error",
+             "status" => 403,
+             "error" => %{
+               "message" => "Request denied by local Pool policy",
+               "type" => "invalid_request_error",
+               "code" => "local_policy_denied",
+               "param" => nil
+             }
+           }
+
+    serialized = Jason.encode!(frame)
+
+    for hidden <- ["facade", @hidden_model, @hidden_provider, @hidden_account] do
+      refute serialized =~ hidden
+    end
   end
 end

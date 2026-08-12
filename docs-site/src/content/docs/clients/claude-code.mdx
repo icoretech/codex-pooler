@@ -1,0 +1,65 @@
+---
+title: Claude Code
+description: Configure Claude Code to use Codex Pooler's authenticated Anthropic Messages adapter with the single public gemma3 identity.
+---
+
+Claude Code can use Codex Pooler through the Anthropic Messages-compatible route. Claude Code remains the local coding-agent runtime; Codex Pooler adapts its model traffic, tools, streaming events, continuity hints, routing, and accounting behind the single public model `gemma3`.
+
+## Environment
+
+```bash
+export ANTHROPIC_BASE_URL="https://codex-pooler.example.com"
+export ANTHROPIC_AUTH_TOKEN="<pool-api-key>"
+export ANTHROPIC_API_KEY="<pool-api-key>"
+
+export ANTHROPIC_MODEL="gemma3"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="gemma3"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="gemma3"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="gemma3"
+
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+```
+
+For local setup, set `ANTHROPIC_BASE_URL=http://localhost:4000`. Keep the Pool API key in the environment or a secret manager, not in a repository or URL. The duplicate token variables cover Claude Code and SDK releases that read different standard Anthropic credential names; both contain the same Pool API key, never an upstream credential.
+
+Disabling nonessential traffic prevents Claude Code from probing Anthropic account services that this model gateway intentionally does not implement.
+
+## Run Claude Code
+
+Interactive:
+
+```bash
+claude --model gemma3 --effort max
+```
+
+Headless smoke test:
+
+```bash
+claude -p --model gemma3 --effort max \
+  'Inspect this repository and report the test command.'
+```
+
+The model and effort arguments keep the local UI consistent. The server owns the actual routing decision: client model aliases, thinking budgets, and effort selectors cannot switch the fixed target or lower its fixed reasoning policy.
+
+## Supported Anthropic surface
+
+| Route | Behavior |
+| --- | --- |
+| `POST /v1/messages` | Collected JSON or Anthropic SSE, text, supported images, tool use/results, stop sequences, and cache-control translation |
+| `POST /v1/messages/count_tokens` | Bounded local input-token estimate; it does not dispatch model work |
+
+Send `anthropic-version: 2023-06-01`. The route accepts a Pool API key through `x-api-key` or bearer authentication. If both are present, they must match.
+
+The adapter returns Anthropic-shaped message IDs, content blocks, usage, stop reasons, tool calls, and streaming events. Every message-level model field is `gemma3`; response headers and errors do not expose provider, account, assignment, upstream request IDs, or the server's private target.
+
+## Caching and long sessions
+
+Supported Anthropic `cache_control` breakpoints are translated into prompt-cache controls, then namespaced to the authenticated Pool and Pool API key. They are locality hints, not a response cache or a guaranteed cache hit. Raw prompts, cache identifiers, tool payloads, and model responses are not retained as request-log content.
+
+Claude Code owns its local conversation transcript and tool loop. Resume and interruption behavior therefore depends on both Claude Code's local session state and the gateway's normal continuity/routing path.
+
+## Compatibility boundary
+
+This is bounded Anthropic Messages compatibility, not a general Anthropic API proxy. Batch, Files, Admin, account, telemetry, and other Anthropic endpoints are absent. Unsupported fields fail before upstream work instead of being guessed.
+
+The adapter does not recreate the Claude model runtime and does not make OpenAI Responses, Anthropic Messages, and Ollama wire formats token-for-token equivalent. It translates supported semantics into the same fixed façade policy. Arbitrary generated prose is not blindly rewritten, so application content that happens to contain a model-like word remains application content; only protocol identity fields, headers, and errors are projected.

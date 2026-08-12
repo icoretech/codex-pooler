@@ -1219,7 +1219,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
         "input" => [%{"type" => "input_file", "file_id" => file_id}]
       })
 
-    assert %{"error" => %{"code" => "not_found", "param" => nil}} =
+    assert %{"error" => %{"code" => "file_not_found", "param" => "file_id"}} =
              json_response(denied_conn, 404)
 
     missing_conn =
@@ -1230,7 +1230,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
         "input" => [%{"type" => "input_file", "file_id" => "file_missing_v1_affinity"}]
       })
 
-    assert %{"error" => %{"code" => "not_found", "param" => nil}} =
+    assert %{"error" => %{"code" => "file_not_found", "param" => "file_id"}} =
              json_response(missing_conn, 404)
 
     assert FakeUpstream.count(owner_response_upstream) == owner_before + 1
@@ -1287,7 +1287,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
         ]
       })
 
-    assert %{"error" => %{"code" => "invalid_request", "param" => nil}} =
+    assert %{
+             "error" => %{
+               "code" => "unsupported_input_image_format",
+               "param" => "input"
+             }
+           } =
              json_response(rejected_conn, 400)
 
     assert FakeUpstream.count(upstream) == create_dispatch_count

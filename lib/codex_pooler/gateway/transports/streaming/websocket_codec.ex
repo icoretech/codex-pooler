@@ -265,6 +265,19 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
     end
   end
 
+  defp coerce_response_payload(
+         _payload,
+         %RequestOptions{openai_compatibility: %{public_openai_responses_stream: true}}
+       ) do
+    {:error,
+     %{
+       status: 400,
+       code: "invalid_request",
+       message: "unsupported websocket message type",
+       param: "type"
+     }}
+  end
+
   defp coerce_response_payload(payload, opts) do
     {:ok, %{endpoint: "/backend-api/codex/responses", payload: payload, request_options: opts}}
   end

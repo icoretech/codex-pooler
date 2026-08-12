@@ -46,10 +46,10 @@ responses_tools='[{"type":"function","name":"inspect_fixture","description":"Ins
 anthropic_tools='[{"name":"inspect_fixture","description":"Inspect a fixture","input_schema":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}]'
 
 post_json 'ollama-chat-json' '/api/chat' 'ollama' \
-  "{\"messages\":[{\"role\":\"user\",\"content\":\"contract\"}],\"tools\":$ollama_tools,\"stream\":false}"
+  "{\"messages\":[{\"role\":\"user\",\"content\":\"You must call inspect_fixture exactly once with path fixture. Do not answer with text.\"}],\"tools\":$ollama_tools,\"stream\":false}"
 
 post_json 'ollama-chat-stream' '/api/chat' 'ollama' \
-  "{\"messages\":[{\"role\":\"user\",\"content\":\"contract\"}],\"tools\":$ollama_tools,\"stream\":true}"
+  "{\"messages\":[{\"role\":\"user\",\"content\":\"You must call inspect_fixture exactly once with path fixture. Do not answer with text.\"}],\"tools\":$ollama_tools,\"stream\":true}"
 
 post_json 'ollama-generate-json' '/api/generate' 'ollama' \
   '{"prompt":"contract","stream":false}'
@@ -64,10 +64,10 @@ post_json 'openai-responses-stream' '/v1/responses' 'openai' \
   "{\"input\":\"contract\",\"tools\":$responses_tools,\"stream\":true}"
 
 post_json 'anthropic-messages-json' '/v1/messages' 'anthropic' \
-  "{\"max_tokens\":128,\"messages\":[{\"role\":\"user\",\"content\":\"contract\"}],\"tools\":$anthropic_tools,\"stream\":false}"
+  "{\"max_tokens\":128,\"messages\":[{\"role\":\"user\",\"content\":\"Call inspect_fixture with path fixture.\"}],\"tools\":$anthropic_tools,\"tool_choice\":{\"type\":\"any\"},\"stream\":false}"
 
 post_json 'anthropic-messages-stream' '/v1/messages' 'anthropic' \
-  "{\"max_tokens\":128,\"messages\":[{\"role\":\"user\",\"content\":\"contract\"}],\"tools\":$anthropic_tools,\"stream\":true}"
+  "{\"max_tokens\":128,\"messages\":[{\"role\":\"user\",\"content\":\"Call inspect_fixture with path fixture.\"}],\"tools\":$anthropic_tools,\"tool_choice\":{\"type\":\"any\"},\"stream\":true}"
 
 CONTRACT_DIR="$contract_dir" FACADE_POOL_API_KEY="$pool_key" python3 - <<'PY'
 import json

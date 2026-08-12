@@ -213,6 +213,40 @@ defmodule CodexPooler.Gateway.Facade.Anthropic.MessagesTest do
     end
   end
 
+  test "accepts current Claude Code context controls without delegating persona policy" do
+    client_metadata =
+      ~s({"device_id":"claude-device-private","session_id":"claude-session-private"})
+
+    payload = %{
+      "model" => "claude-client-model-private",
+      "messages" => [%{"role" => "user", "content" => "hello"}],
+      "max_tokens" => 32_000,
+      "metadata" => %{"user_id" => client_metadata},
+      "context_management" => %{
+        "edits" => [%{"keep" => "all", "type" => "clear_thinking_20251015"}]
+      },
+      "output_config" => %{"effort" => "low"},
+      "thinking" => %{"display" => "omitted", "type" => "adaptive"}
+    }
+
+    assert {:ok, coerced} = Messages.coerce(payload, request_opts())
+    assert coerced.payload["model"] == "gpt-5.6-sol"
+    assert coerced.payload["reasoning"] == %{"effort" => "max"}
+    refute coerced.anthropic_formatting.think?
+
+    encoded = Jason.encode!(coerced.payload)
+
+    for hidden <- [
+          "claude-client-model-private",
+          "claude-device-private",
+          "claude-session-private",
+          "context_management",
+          "output_config"
+        ] do
+      refute encoded =~ hidden
+    end
+  end
+
   test "translates every supported Anthropic tool choice" do
     base = %{
       "messages" => [%{"role" => "user", "content" => "hello"}],

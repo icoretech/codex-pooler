@@ -32,7 +32,7 @@ A Pool controls:
 7. request compression, which can reduce upstream-bound Responses tool-output payloads for eligible route families
 8. image-generation permission for the supported image generation and edit routes
 9. reporting scope for Pool-filtered request logs, audit logs, and traffic summaries
-10. per-model serving mode, which chooses Auto, Lite, or Full backend Responses behavior without changing the model id clients use
+10. target serving mode, which chooses Auto, Lite, or Full backend Responses behavior without changing the public `gemma3` identity
 
 ## Page Metrics
 
@@ -211,7 +211,7 @@ Routing settings are split into selection policy, continuity, and compatibility.
 
 ### Selection Policy
 
-`Routing strategy` chooses how eligible upstreams are ordered. Strategy does not bypass eligibility. An upstream must still be active, assigned to the Pool, compatible with the requested model and route shape, and usable according to quota and health evidence.
+`Routing strategy` chooses how eligible upstreams are ordered. Strategy does not bypass eligibility. An upstream must still be active, assigned to the Pool, compatible with the fixed target and route shape, and usable according to quota and health evidence.
 
 `Ring size` controls how many ordered upstreams Codex Pooler prepares for a request. A ring size of `3` means the route plan can include up to three eligible upstreams. If the first attempt fails in a retryable way, Codex Pooler can try the next eligible upstream in that plan.
 
@@ -278,7 +278,7 @@ The edit Routing step uses the same routing controls as create. Changes apply to
 
 ### Model Serving Modes
 
-The edit-only `Models` step controls the serving mode for each model available to the Pool. A saved choice belongs to one Pool-model pair. The same model can therefore use different modes in different Pools, while each Pool continues to expose one client-visible model id.
+The edit-only `Models` step controls serving mode for real operator-side catalog targets. A saved choice belongs to one Pool-model pair, while clients continue to see only `gemma3`.
 
 ![Edit Pool model serving modes step](/operators/pools/pools-edit-dialog-models.png)
 
@@ -311,7 +311,7 @@ Use `Auto` unless a provider-specific requirement calls for an override:
   </tbody>
 </table>
 
-Codex, OpenCode, and other supported public OpenAI-compatible clients keep their existing Pool API key, base URL, configuration, and model id. Codex Pooler changes only the backend request selected for that Pool-model pair. `GET /v1/models` remains unchanged and does not expose serving-mode fields; public `POST /v1/responses/compact` remains unsupported.
+Codex, Claude Code, Ollama, OpenCode, and other supported clients keep their Pool API key, protocol base URL, and `gemma3` model id. Codex Pooler changes only operator-side target behavior. `GET /v1/models` remains `gemma3`-only and does not expose serving-mode fields; public `POST /v1/responses/compact` remains unsupported.
 
 One HTTP request or one websocket `response.create` turn keeps the mode it started with across retries, assignment failover, and cross-node owner forwarding. A later websocket turn can pick up a saved change. Mode selection does not remove otherwise eligible assignments from the candidate set.
 
@@ -327,7 +327,7 @@ When a Pool is not behaving as expected, check it in this order:
 2. confirm the client is using an active Pool API key assigned to this Pool
 3. confirm the Pool has active upstream assignments
 4. confirm those upstreams are not paused, disabled, archived, or reauth-required
-5. confirm the requested model and route shape are supported by the assigned upstreams
+5. confirm the fixed target and route shape are supported by assigned upstreams
 6. inspect recent Requests 5h, TPS 5h, and Traffic 24h for changes in load
 7. open Request logs filtered from the card footer for request-level metadata
 8. for request-compression questions, inspect `payload_compression` status, reason, route class, candidate counts, and savings display in the Request log row

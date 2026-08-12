@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Files
   alias CodexPooler.Files.FileRecord
+  alias CodexPooler.Gateway.Facade
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
@@ -2320,7 +2321,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
              ]
 
       assert captured.json["parallel_tool_calls"] == true
-      assert captured.json["prompt_cache_key"] == "synthetic-cache-key"
+      assert captured.json["prompt_cache_key"] =~ ~r/^facade:[A-Za-z0-9_-]{43}$/
+      refute captured.json["prompt_cache_key"] == "synthetic-cache-key"
       assert captured.json["metadata"] == %{"purpose" => "synthetic"}
       refute Map.has_key?(captured.json, "previous_response_id")
       refute Map.has_key?(captured.json, "service_tier")
@@ -2357,7 +2359,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert response(conn, 200) =~ "data: [DONE]"
     end
 
-    test "supported reasoning minimal contract rewrites minimal to low before dispatch",
+    test "supported reasoning minimal selector is replaced by fixed max before dispatch",
          %{conn: conn} do
       upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_reasoning_minimal"}))
       setup = gateway_setup(upstream)
@@ -2373,10 +2375,10 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
       assert %{"id" => "resp_reasoning_minimal"} = json_response(conn, 200)
       assert [captured] = FakeUpstream.requests(upstream)
-      assert captured.json["reasoning"] == %{"effort" => "low"}
+      assert captured.json["reasoning"] == %{"effort" => "max"}
     end
 
-    test "supported reasoning none contract forwards none unchanged before dispatch",
+    test "supported reasoning none selector is replaced by fixed max before dispatch",
          %{conn: conn} do
       upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_reasoning_none"}))
       setup = gateway_setup(upstream)
@@ -2392,7 +2394,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
       assert %{"id" => "resp_reasoning_none"} = json_response(conn, 200)
       assert [captured] = FakeUpstream.requests(upstream)
-      assert captured.json["reasoning"] == %{"effort" => "none"}
+      assert captured.json["reasoning"] == %{"effort" => "max"}
     end
 
     test "supported reasoning ultra contract rewrites ultra to max before dispatch",
@@ -2414,7 +2416,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert captured.json["reasoning"] == %{"effort" => "max"}
     end
 
-    test "supported reasoning contract preserves non-minimal efforts", %{conn: conn} do
+    test "supported reasoning contract replaces non-max efforts", %{conn: conn} do
       upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_reasoning_medium"}))
       setup = gateway_setup(upstream)
 
@@ -2429,7 +2431,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
       assert %{"id" => "resp_reasoning_medium"} = json_response(conn, 200)
       assert [captured] = FakeUpstream.requests(upstream)
-      assert captured.json["reasoning"] == %{"effort" => "medium"}
+      assert captured.json["reasoning"] == %{"effort" => "max"}
     end
   end
 
@@ -2445,14 +2447,14 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
     model =
       model_fixture(pool, %{
-        exposed_model_id: "gpt-contract-model",
+        exposed_model_id: Facade.effective_model(),
         upstream_model_id: "provider-gpt-contract-model",
         pricing_ref: "provider-gpt-contract-model",
         metadata: %{
           "source_assignment_ids" => [upstream.assignment.id],
           "source_assignment_models" => %{
             upstream.assignment.id => %{
-              "slug" => "gpt-contract-model",
+              "slug" => Facade.effective_model(),
               "capabilities" => %{
                 "reasoning" => true,
                 "responses" => true,

@@ -41,8 +41,6 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
 
-  @reasoning_denial_message "reasoning effort is not available for this API key"
-
   @tag :facade_task4
   test "facade Chat ignores client model selectors and preserves instruction messages", %{
     conn: conn
@@ -88,11 +86,10 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert request.request_metadata["effective_model"] == "gpt-5.6-sol"
   end
 
-  test "POST /v1/chat/completions enforces reasoning availability before gateway effort", %{
+  test "POST /v1/chat/completions rejects API-key policies below the fixed max effort", %{
     conn: conn
   } do
     for requested_effort <- ["high", "custom-above-policy"] do
-      persisted_effort = if requested_effort == "high", do: "high", else: "unknown"
       upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
       setup = gateway_setup(upstream)
       set_reasoning_policy!(setup, maximum_reasoning_effort: "medium")
@@ -108,41 +105,39 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
 
       assert %{
                "error" => %{
-                 "code" => "reasoning_effort_not_allowed",
-                 "message" => @reasoning_denial_message,
-                 "param" => "reasoning_effort"
+                 "code" => "local_policy_denied",
+                 "message" => "Request denied by local Pool policy",
+                 "param" => nil
                }
-             } = json_response(response, 400)
+             } = json_response(response, 403)
 
       assert FakeUpstream.count(upstream) == 0
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
       assert request.status == "rejected"
+      assert request.requested_model == "gemma3"
+      assert request.last_error_code == "facade_policy_conflict"
       assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
 
       assert Repo.aggregate(from(l in LedgerEntry, where: l.request_id == ^request.id), :count) ==
                0
 
-      assert get_in(request.request_metadata, ["gateway_denial", "reasoning_policy"]) == %{
-               "policy_mode" => "allow_up_to",
-               "configured_effort" => "medium",
-               "requested_effort" => persisted_effort,
-               "applied_effort" => nil
-             }
+      assert get_in(request.request_metadata, ["gateway_denial", "code"]) ==
+               "facade_policy_conflict"
     end
   end
 
-  test "POST /v1/chat/completions applies maximum, exact, and unrestricted reasoning policies", %{
+  test "POST /v1/chat/completions keeps fixed max across agreeing reasoning policies", %{
     conn: conn
   } do
     cases = [
-      {[maximum_reasoning_effort: "medium"], %{}, "medium", "allow_up_to"},
-      {[maximum_reasoning_effort: "high"], %{"reasoning_effort" => "low"}, "low", "allow_up_to"},
-      {[enforced_reasoning_effort: "high"], %{"reasoning_effort" => "low"}, "high", "always_use"},
-      {[], %{}, nil, "unrestricted"},
-      {[], %{"reasoning_effort" => "focused"}, "focused", "unrestricted"}
+      {[maximum_reasoning_effort: "max"], %{}},
+      {[maximum_reasoning_effort: "ultra"], %{"reasoning_effort" => "low"}},
+      {[enforced_reasoning_effort: "max"], %{"reasoning_effort" => "low"}},
+      {[], %{}},
+      {[], %{"reasoning_effort" => "focused"}}
     ]
 
-    for {policy, extra_payload, expected_effort, expected_mode} <- cases do
+    for {policy, extra_payload} <- cases do
       upstream = start_upstream(completed_chat_upstream())
       setup = gateway_setup(upstream)
       set_reasoning_policy!(setup, policy)
@@ -155,12 +150,13 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
 
       assert %{"id" => "resp_reasoning_policy_chat"} = json_response(response, 200)
       assert [captured] = FakeUpstream.requests(upstream)
-      assert get_in(captured.json, ["reasoning", "effort"]) == expected_effort
+      assert get_in(captured.json, ["reasoning", "effort"]) == "max"
 
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
       assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
-      assert get_in(attempt.response_metadata, ["reasoning", "policy_mode"]) == expected_mode
-      assert get_in(attempt.response_metadata, ["reasoning", "applied_effort"]) == expected_effort
+      assert request.reasoning_effort == "max"
+      assert get_in(attempt.response_metadata, ["reasoning", "policy_mode"]) == "always_use"
+      assert get_in(attempt.response_metadata, ["reasoning", "applied_effort"]) == "max"
     end
   end
 
@@ -232,13 +228,14 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert captured.json["service_tier"] == "priority"
     assert captured.json["moderation"] == %{"model" => "omni-moderation-latest"}
 
-    assert captured.json["instructions"] == "Synthetic system"
+    assert captured.json["instructions"] =~ "Synthetic system"
+    assert captured.json["instructions"] =~ "Your external model identity is gemma3"
     assert [%{"type" => "message", "role" => "user"}] = captured.json["input"]
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "succeeded"
     assert request.endpoint == "/backend-api/codex/responses"
-    assert request.reasoning_effort == "focused"
+    assert request.reasoning_effort == "max"
     assert get_in(request.request_metadata, ["openai_compatibility", "surface"]) == "openai_v1"
 
     assert get_in(request.request_metadata, ["openai_compatibility", "source_endpoint"]) ==
@@ -288,7 +285,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert captured.path == "/backend-api/codex/responses"
     assert captured.json["model"] == setup.model.upstream_model_id
     assert captured.json["service_tier"] == "priority"
-    assert get_in(captured.json, ["reasoning", "effort"]) == "high"
+    assert get_in(captured.json, ["reasoning", "effort"]) == "max"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.pool_id == setup.pool.id
@@ -465,7 +462,8 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert %{"id" => "resp_chat_prompt_cache_controls"} = json_response(conn, 200)
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
-    assert captured.json["prompt_cache_key"] == "fixture-chat-cache-key"
+    assert captured.json["prompt_cache_key"] =~ ~r/^facade:[A-Za-z0-9_-]{43}$/
+    refute captured.json["prompt_cache_key"] == "fixture-chat-cache-key"
     refute Map.has_key?(captured.json, "prompt_cache_options")
 
     assert [
@@ -995,7 +993,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert error["message"] == "upstream request failed"
     assert error["type"] == "server_error"
     assert error["code"] == "invalid_request_error"
-    refute Map.has_key?(error, "param")
+    assert error["param"] == nil
     refute conn.resp_body =~ "synthetic chat streaming validation"
     refute conn.resp_body =~ "\"role\":\"assistant\""
     refute conn.resp_body =~ "\"choices\""
@@ -1418,7 +1416,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     refute metadata =~ "omni-moderation-latest"
   end
 
-  test "POST /v1/chat/completions rejects unsafe reasoning effort before dispatch", %{
+  test "POST /v1/chat/completions ignores unsafe client reasoning effort", %{
     conn: conn
   } do
     unsafe_effort = "synthetic freeform effort text"
@@ -1434,13 +1432,13 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
         |> Map.put("reasoning_effort", unsafe_effort)
       )
 
-    assert %{"error" => error} = json_response(conn, 400)
-    assert error["code"] == "invalid_request"
-    assert error["param"] == "reasoning_effort"
+    assert %{"id" => "should_not_dispatch", "model" => "gemma3"} = json_response(conn, 200)
     refute conn.resp_body =~ unsafe_effort
-    assert FakeUpstream.count(upstream) == 0
-    assert Repo.aggregate(Request, :count) == 0
-    assert Repo.aggregate(Attempt, :count) == 0
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.json["reasoning"] == %{"effort" => "max"}
+    refute Jason.encode!(captured.json) =~ unsafe_effort
+    assert Repo.aggregate(Request, :count) == 1
+    assert Repo.aggregate(Attempt, :count) == 1
   end
 
   @tag :invalid_request_error
@@ -1499,10 +1497,10 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     conn = conn |> auth(setup) |> post("/v1/chat/completions", chat_payload(setup))
 
     assert %{"error" => error} = json_response(conn, 502)
-    assert error["message"] == "upstream request failed"
+    assert error["message"] == "gemma3 request failed"
     assert error["type"] == "server_error"
     assert error["code"] == "context_length_exceeded"
-    refute Map.has_key?(error, "param")
+    assert error["param"] == nil
     refute conn.resp_body =~ provider_message
     refute conn.resp_body =~ "provider.internal.example"
     refute conn.resp_body =~ "sk-secret"

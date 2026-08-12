@@ -722,9 +722,18 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          endpoint,
          %RequestOptions{} = request_options
        ) do
-    case CandidateEligibility.visible_model_context(pool, requested_model) do
+    lookup_model =
+      case request_options.persona do
+        %RequestOptions.Persona{effective_model: effective_model} -> effective_model
+        nil -> requested_model
+      end
+
+    case CandidateEligibility.visible_model_context(pool, lookup_model) do
       %{visible_model: %Model{}} = context ->
         context
+
+      nil when not is_nil(request_options.persona) ->
+        nil
 
       nil ->
         media_host_model_context(pool, requested_model, endpoint, request_options)

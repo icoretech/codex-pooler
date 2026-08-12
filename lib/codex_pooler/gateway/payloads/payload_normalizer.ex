@@ -7,7 +7,6 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   alias CodexPooler.Gateway.Payloads.DebugPayloadSummary
   alias CodexPooler.Gateway.Payloads.ReasoningEffort
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.Payloads.RequestOptions.Persona
   alias CodexPooler.Gateway.Payloads.ToolResultShape
   alias CodexPooler.Gateway.Payloads.ToolSchemaLowering
 
@@ -869,23 +868,6 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   end
 
   defp remove_client_supplied_responses_lite_metadata(payload), do: payload
-
-  defp maybe_strip_unsupported_upstream_fields(
-         payload,
-         "/backend-api/codex/responses",
-         %RequestOptions{persona: %Persona{protocol: :openai_completions}}
-       ) do
-    Map.drop(payload, @unsupported_upstream_fields -- ~w(max_output_tokens temperature top_p))
-  end
-
-  defp maybe_strip_unsupported_upstream_fields(
-         payload,
-         "/backend-api/codex/responses",
-         %RequestOptions{persona: %Persona{protocol: protocol}}
-       )
-       when protocol in [:ollama_chat, :ollama_generate, :anthropic_messages] do
-    Map.drop(payload, @unsupported_upstream_fields -- ~w(max_output_tokens temperature top_p))
-  end
 
   defp maybe_strip_unsupported_upstream_fields(
          payload,

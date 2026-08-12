@@ -1,840 +1,189 @@
 ---
 title: Runtime Routes
-description: Codex Pooler runtime route map for /backend-api/codex, backend bridges, narrow /v1 SDK compatibility, usage routes, MCP metadata, and unsupported boundaries.
+description: Exact routes, authentication, identity, caching, streaming, and unsupported boundaries for the gemma3 façade.
 ---
 
-Codex Pooler exposes a deliberately narrow runtime surface. It is not a wildcard proxy and it does not claim full OpenAI API parity. Each route below is either a Codex backend compatibility route, a backend bridge route, a translated `/v1` compatibility route, an operator metadata route, or an explicit unsupported boundary.
+Codex Pooler presents one authenticated virtual model named `gemma3` through four client protocol families. All supported reasoning requests enter the same Pool routing, quota, health, continuity, retry, and accounting path.
 
-Use this page when you need to answer three questions before wiring a client:
+Clients cannot choose the private target, provider, account, assignment, or reasoning policy. The server fixes reasoning work to its private target at `max`; if that target is not both policy-authorized and routable, the request fails closed rather than falling back. Dedicated file and media routes retain their bounded server-owned helpers, which are never client-selectable or advertised.
 
-- Which endpoint should the client call?
-- Which upstream route does Codex Pooler call after admission and routing?
-- Is the request passed through as Codex backend traffic, translated into Codex work, partially supported, or blocked?
+## Base URLs
 
-All runtime endpoints require Pool API key bearer auth unless noted otherwise. A Pool API key represents a Pool, not one upstream account. Codex Pooler still applies Pool policy, model support, limits, account health, route class admission, session continuity, and accounting before dispatching supported work upstream.
+| Client | Base URL | Public model |
+| --- | --- | --- |
+| Ollama clients | `https://codex-pooler.example.com` | `gemma3` |
+| OpenAI-compatible SDKs | `https://codex-pooler.example.com/v1` | `gemma3` |
+| Claude Code and Anthropic SDKs | `https://codex-pooler.example.com` | `gemma3` |
+| Codex CLI and Codex Desktop | `https://codex-pooler.example.com/backend-api/codex` | `gemma3` |
 
-## Which Runtime Route Should I Use?
+Use `http://localhost:4000` for a local instance. Every runtime family requires a Pool API key. OpenAI, Codex, and Ollama clients send `Authorization: Bearer <pool-api-key>`. Anthropic clients can send `x-api-key: <pool-api-key>` or the bearer header; if both are present, they must match.
 
-Use `/backend-api/codex` for Codex backend-compatible clients, `/v1` for selected OpenAI SDK-compatible clients, and `/mcp` only for operator metadata tools. Runtime work on `/backend-api` and `/v1` uses Pool API key bearer auth. MCP uses operator-owned MCP tokens and does not accept Pool API keys.
+The root `/mcp` operator endpoint uses a different operator MCP token. A Pool API key never authenticates MCP, and upstream account credentials never authenticate client routes.
 
-## Quick map
+## Identity contract
 
-<table>
-  <thead>
-    <tr>
-      <th>Route family</th>
-      <th>Use it for</th>
-      <th>Auth boundary</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><code>/backend-api/codex</code></td>
-      <td>Codex backend compatibility route for Codex-compatible clients</td>
-      <td>Pool API key bearer auth</td>
-    </tr>
-    <tr>
-      <td><code>/backend-api</code></td>
-      <td>Backend file bridge, audio transcription, and backend usage routes</td>
-      <td>Pool API key bearer auth</td>
-    </tr>
-    <tr>
-      <td><code>/v1</code></td>
-      <td>Narrow OpenAI-compatible /v1 support for selected SDK routes</td>
-      <td>Pool API key bearer auth</td>
-    </tr>
-    <tr>
-      <td><code>/mcp</code></td>
-      <td>Read-only operator MCP endpoint for metadata lookup</td>
-      <td>Operator-owned MCP bearer token</td>
-    </tr>
-    <tr>
-      <td>Usage routes</td>
-      <td>Runtime usage checks exposed on compatibility paths</td>
-      <td>Pool API key bearer auth</td>
-    </tr>
-  </tbody>
-</table>
+The public identity is structural and immutable:
 
-## Status labels
+- catalog and discovery routes return zero or one model, and its name is `gemma3`
+- client model selectors are discarded before target-model validation
+- client reasoning, effort, thinking-budget, and equivalent selectors cannot change the fixed `max` policy
+- response model fields are projected to `gemma3`
+- provider, account, assignment, upstream target, upstream endpoint, request IDs, fingerprints, and provider rate-limit headers are removed at the response boundary
+- arbitrary user text, assistant prose, filenames, and tool arguments are not searched and rewritten
 
-<table>
-  <thead>
-    <tr>
-      <th>Status</th>
-      <th>Meaning</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><strong>Supported</strong></td>
-      <td>The route is an active public route and enters the normal authenticated gateway path.</td>
-    </tr>
-    <tr>
-      <td><strong>Translated</strong></td>
-      <td>The client calls an OpenAI-shaped <code>/v1</code> route, and Codex Pooler converts the request to Codex-compatible work before dispatch.</td>
-    </tr>
-    <tr>
-      <td><strong>Partial</strong></td>
-      <td>The route exists, but only a narrower behavior is supported than the name may imply.</td>
-    </tr>
-    <tr>
-      <td><strong>Unsupported</strong></td>
-      <td>The route is blocked with a deterministic unsupported response or intentionally absent from the route surface.</td>
-    </tr>
-  </tbody>
-</table>
+The final point matters: identity projection is not a generic content filter. If generated prose contains a model-like or provider-like word because the prompt asks for it, Codex Pooler preserves that application content. Use normal data-loss-prevention controls for content policy.
+
+## Ollama routes
+
+| Route | Status | Behavior |
+| --- | --- | --- |
+| `POST /api/chat` | Supported | Native Ollama chat JSON or streaming NDJSON, tools, images, thinking, and structured output |
+| `POST /api/generate` | Supported | Native generation JSON or NDJSON, prompt/suffix, images, thinking, and structured output |
+| `GET /api/tags` | Supported | Lists `gemma3` only when routable |
+| `POST /api/show` | Supported | Stable virtual `gemma3` metadata |
+| `GET /api/ps` | Supported | Available virtual-model status |
+| `GET /api/version` | Supported | Façade protocol version |
+| `POST /api/pull` | Supported no-op | `gemma3` and `gemma3:latest` succeed without download or upstream work |
+| `POST /api/create` | Unsupported | Virtual model is immutable |
+| `POST /api/copy` | Unsupported | Virtual model is immutable |
+| `POST /api/push` | Unsupported | Virtual model is immutable |
+| `DELETE /api/delete` | Unsupported | Virtual model is immutable |
+| `GET`, `HEAD`, or `POST /api/blobs/:digest` | Unsupported | No local blob store |
+| `POST /api/embed` | Unsupported | No embeddings for the virtual model |
+| `POST /api/embeddings` | Unsupported | No embeddings for the virtual model |
+
+Unsupported management routes authenticate first and perform no model dispatch or accounting work. Codex Pooler is not an Ollama daemon and does not download or store local model weights.
+
+## Anthropic Messages routes
+
+| Route | Status | Behavior |
+| --- | --- | --- |
+| `POST /v1/messages` | Supported | Anthropic Messages JSON or SSE, supported text/images, tools, tool results, stop behavior, thinking projection, and cache controls |
+| `POST /v1/messages/count_tokens` | Supported locally | Bounded local input-token estimate with no model dispatch |
+
+`anthropic-version: 2023-06-01` is required. Supported `anthropic-beta` headers are parsed as bounded token lists; the header does not enable arbitrary unimplemented API features.
+
+Batch, Files, Admin, account, telemetry, and all other Anthropic API families are absent. See [Claude Code](/clients/claude-code/) for environment configuration.
+
+## OpenAI-compatible routes
+
+This is bounded compatibility, not full OpenAI API parity.
+
+### Inference, discovery, and usage
+
+| Route | Status | Behavior |
+| --- | --- | --- |
+| `GET /v1/models` | Supported | Zero or one model; only `gemma3` |
+| `GET /v1/models/gemma3` | Supported | Virtual model detail |
+| `POST /v1/responses` | Supported | Collected JSON or Responses SSE |
+| `GET /v1/responses` | Supported, narrow | Responses websocket transport; not OpenAI Realtime |
+| `POST /v1/chat/completions` | Supported | Collected JSON or Chat Completions SSE |
+| `POST /v1/completions` | Supported, bounded | Legacy Completions JSON or SSE |
+| `GET /v1/usage` | Supported | Pool-key-scoped usage metadata |
+
+Model-detail path selectors are identity-neutral: any selector resolves to the same available `gemma3` descriptor. Supported inference routes likewise normalize missing, `gemma3`, and arbitrary client model values to the same server-owned decision.
+
+### Files and media
+
+| Route | Status | Behavior |
+| --- | --- | --- |
+| `GET /v1/files` | Supported | Lists owned file metadata |
+| `POST /v1/files` | Supported | Starts an upstream-backed upload flow |
+| `GET /v1/files/:file_id` | Supported | Reads owned file metadata |
+| `GET /v1/files/:file_id/content` | Unsupported after ownership check | No public content relay |
+| `DELETE /v1/files/:file_id` | Unsupported after ownership check | No public delete bridge |
+| `POST /v1/audio/transcriptions` | Supported | Bounded transcription adapter with a fixed server helper |
+| `POST /v1/images/generations` | Supported | Bounded image-generation adapter with a fixed server helper |
+| `POST /v1/images/edits` | Supported | Bounded image-edit adapter with a fixed server helper |
+
+Media helpers are implementation details in operator diagnostics. Public requests and responses remain `gemma3`, and clients cannot choose or discover helper identifiers.
+
+### Explicitly routed but unsupported
+
+These routes return deterministic OpenAI-shaped unsupported errors and do not dispatch model work:
+
+- `POST /v1/responses/compact`
+- `POST /v1/images/variations`
+- `POST /v1/content_provenance_checks`
+- `POST /v1/embeddings`
+- `POST /v1/batches`
+- `POST /v1/moderations`
+- `POST /v1/fine_tuning/jobs`
+- `GET /v1/responses/:response_id`
+- `POST /v1/responses/:response_id/cancel`
+- `DELETE /v1/responses/:response_id`
+
+`GET /v1/files/:file_id/content` and `DELETE /v1/files/:file_id` are also unsupported, but perform ownership checks first.
+
+OpenAI Realtime routes under `/v1/realtime` are absent. `GET /v1/responses` is the narrow Responses websocket route only. OpenAI remote MCP tool definitions inside a Responses request are unsupported request shapes and fail before dispatch; they are not bridged to `/mcp`.
 
 ## Codex backend compatibility
 
-Use `/backend-api/codex` for Codex-compatible clients:
+Codex CLI and Codex Desktop use this explicit route family:
 
-```text
-https://codex-pooler.example.com/backend-api/codex
-```
+| Route | Status |
+| --- | --- |
+| `GET /backend-api/codex/models` | Supported; provider-neutral `gemma3` catalog |
+| `GET /backend-api/codex/v1/models` | Supported alias |
+| `POST /backend-api/codex/responses` | Supported backend Responses SSE |
+| `GET /backend-api/codex/responses` | Supported backend Responses websocket |
+| `POST /backend-api/codex/v1/responses` | Supported alias |
+| `GET /backend-api/codex/v1/responses` | Supported websocket alias |
+| `POST /backend-api/codex/responses/compact` | Supported backend compact |
+| `POST /backend-api/codex/v1/responses/compact` | Supported compact alias |
+| `POST /backend-api/codex/v1/chat/completions` | Supported translated alias |
+| `POST /backend-api/codex/images/generations` | Supported native image bridge |
+| `POST /backend-api/codex/images/edits` | Supported native image bridge |
 
-These endpoints keep Codex backend semantics and do not translate through the public OpenAI SDK adapter.
+Additional explicit bridges are `POST /backend-api/files`, `POST /backend-api/files/:file_id/uploaded`, `POST /backend-api/transcribe`, and the authenticated usage routes `GET /backend-api/wham/usage`, `GET /api/codex/usage`, and `GET /wham/usage`.
 
-<table>
-  <thead>
-    <tr>
-      <th>Exposed endpoint</th>
-      <th>Upstream destination</th>
-      <th>Translation</th>
-      <th>Support</th>
-      <th>Notes</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><code>GET /backend-api/codex/models</code></td>
-      <td>Model metadata served from Pool/catalog state</td>
-      <td>No Codex request translation</td>
-      <td>Supported</td>
-      <td>Lists models visible to the authenticated Pool, including backend Codex metadata such as context windows and optional <code>comp_hash</code>.</td>
-    </tr>
-    <tr>
-      <td><code>POST /backend-api/codex/responses</code></td>
-      <td><code>/backend-api/codex/responses</code>, or <code>/backend-api/codex/responses/compact</code> for terminal compaction triggers</td>
-      <td>No; backend payload is proxied through gateway normalization</td>
-      <td>Supported</td>
-      <td>Primary Codex Responses route for JSON and SSE work. A valid terminal <code>compaction_trigger</code> bridges through compact handling and returns backend Responses SSE with encrypted compaction output. The bridge selects the first valid <code>compaction</code> or <code>compaction_summary</code> item in output, then falls back to a valid top-level <code>compaction_summary</code>. Strict variant validation and a fixed safe allowlist rebuild a canonical <code>compaction</code> item from encrypted content, a string source item <code>id</code> when present, and structurally validated opaque replay data. The response-level <code>id</code> remains separate from the item <code>id</code>. Malformed or missing optional values are omitted, all other compact-result fields are dropped, and the same canonical item appears in both terminal events. This is terminal-item fidelity only and does not widen the metadata-only privacy boundary. The compact bridge strips compact-unsupported controls such as <code>store</code>, <code>stream</code>, and <code>include</code> before upstream dispatch.</td>
-    </tr>
-    <tr>
-      <td><code>GET /backend-api/codex/responses</code></td>
-      <td>Persistent upstream Codex websocket response session</td>
-      <td>No HTTP adapter translation</td>
-      <td>Supported</td>
-      <td>Narrow backend websocket route. It preserves websocket session continuity, uses <code>x-codex-turn-state</code>, and applies the admin-managed <code>websocket_idle_timeout_ms</code> downstream idle window.</td>
-    </tr>
-    <tr>
-      <td><code>POST /backend-api/codex/responses/compact</code></td>
-      <td><code>/backend-api/codex/responses/compact</code></td>
-      <td>No</td>
-      <td>Supported</td>
-      <td>Backend compact compatibility route.</td>
-    </tr>
-    <tr>
-      <td><code>POST /backend-api/codex/images/generations</code></td>
-      <td><code>/backend-api/codex/images/generations</code></td>
-      <td>No public <code>/v1</code> image translation</td>
-      <td>Supported</td>
-      <td>Explicit authenticated native image proxy route. Pool image permission applies before body parsing. On either native image route, a policy-authorized effective image model that is genuinely absent from the Pool catalog may use eligible visible host capacity while its effective identifier is preserved exactly. A catalog-present but invisible target remains invalid. Image prompt and source fields stay image-specific.</td>
-    </tr>
-    <tr>
-      <td><code>POST /backend-api/codex/images/edits</code></td>
-      <td><code>/backend-api/codex/images/edits</code></td>
-      <td>No public <code>/v1</code> image translation</td>
-      <td>Supported</td>
-      <td>Explicit authenticated native image edit proxy route. Pool image permission applies before body parsing. The same policy-authorized, catalog-absent native image routing applies: eligible visible host capacity anchors the request while the effective image identifier is preserved exactly. A catalog-present but invisible target remains invalid.</td>
-    </tr>
-  </tbody>
-</table>
+This is not a wildcard app-server proxy. Account, identity, analytics, threads, goals, memory, search, general realtime, and other helper APIs are outside the route family.
 
-### Backend `/v1` aliases
+## Cache and continuity semantics
 
-Some Codex clients use `/backend-api/codex/v1` as their base URL. Codex Pooler exposes exact aliases for that shape. These are still backend routes, not the public OpenAI-compatible `/v1` surface.
+Codex Pooler does not store and replay completed responses as a cache. Its cache behavior is routing locality for provider-side prompt caching:
 
-<table>
-  <thead>
-    <tr>
-      <th>Exposed endpoint</th>
-      <th>Canonical gateway target</th>
-      <th>Translation</th>
-      <th>Support</th>
-      <th>Notes</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><code>GET /backend-api/codex/v1/models</code></td>
-      <td><code>/backend-api/codex/models</code></td>
-      <td>No</td>
-      <td>Supported</td>
-      <td>Alias for backend model listing, including backend-only fields such as optional <code>comp_hash</code>.</td>
-    </tr>
-    <tr>
-      <td><code>POST /backend-api/codex/v1/responses</code></td>
-      <td><code>/backend-api/codex/responses</code>, or <code>/backend-api/codex/responses/compact</code> for terminal compaction triggers</td>
-      <td>No</td>
-      <td>Supported</td>
-      <td>Alias for backend Responses. Prompt-cache routing locality can apply here. Terminal compaction triggers follow the canonical compact bridge: it selects the first valid <code>compaction</code> or <code>compaction_summary</code> output item, then a valid top-level <code>compaction_summary</code> fallback. Strict variant validation and a fixed safe allowlist rebuild a canonical <code>compaction</code> item from encrypted content, a string source item <code>id</code> when present, and structurally validated opaque replay data; the response-level <code>id</code> remains separate. Missing or malformed optional values are omitted, other compact-result fields are dropped, and both terminal events contain the identical item. This is terminal-item fidelity only and does not widen the metadata-only privacy boundary.</td>
-    </tr>
-    <tr>
-      <td><code>GET /backend-api/codex/v1/responses</code></td>
-      <td>Backend websocket response session</td>
-      <td>No</td>
-      <td>Supported</td>
-      <td>Alias for the backend websocket route. Prompt-cache routing locality is excluded, and the same <code>websocket_idle_timeout_ms</code> downstream idle window applies.</td>
-    </tr>
-    <tr>
-      <td><code>POST /backend-api/codex/v1/responses/compact</code></td>
-      <td><code>/backend-api/codex/responses/compact</code></td>
-      <td>No</td>
-      <td>Supported</td>
-      <td>Alias for backend compact. Prompt-cache routing locality is excluded.</td>
-    </tr>
-    <tr>
-      <td><code>POST /backend-api/codex/v1/chat/completions</code></td>
-      <td><code>/backend-api/codex/responses</code></td>
-      <td>Chat payload is coerced to backend Responses work</td>
-      <td>Supported</td>
-      <td>Backend alias for chat-completion-shaped Codex clients. Prompt-cache routing locality can apply here.</td>
-    </tr>
-  </tbody>
-</table>
+1. client cache/session material is accepted only on documented fields or headers
+2. façade-specific values are converted to one-way digests scoped by Pool, Pool API key, source, and target
+3. only the scoped value may influence routing or upstream cache identity
+4. changing Pool or key creates a different namespace
 
-## Backend app-server helper routes
+This applies to OpenAI `prompt_cache_key`, translated Anthropic cache controls, and `x-ollama-session-id`. Raw façade cache/session values are not persisted or forwarded. Existing Codex continuity and opaque response-item handles follow their established bounded continuity paths.
 
-Codex Pooler is a model-provider runtime boundary. It does not proxy Codex
-account helpers, analytics posting, thread-goal helpers, memory summaries,
-search helpers, realtime helper calls, safety helper calls, identity JWKS, or
-reset-credit consume operations. Configure Codex clients by pointing
-`model_providers.*.base_url` at `/backend-api/codex`.
-Supported Responses stream event metadata is relayed on model-provider streams as upstream sends it. Codex Pooler does not synthesize app-server notifications such as `turn/safetyBuffering/updated`.
+Affinity is a preference, not a guarantee. Eligibility, policy, quota, health, retry state, and assignment availability can move a request. A provider cache hit and cached-token accounting are never promised.
 
-## Backend bridge and usage routes
+## Retry and stream semantics
 
-These routes live under `/backend-api` or legacy usage paths. They are still Pool API key routes. The backend file bridge stores metadata only; file bytes stay upstream-backed.
+All supported inference protocols share one visibility boundary:
 
-<table>
-  <thead>
-    <tr>
-      <th>Exposed endpoint</th>
-      <th>Upstream destination</th>
-      <th>Translation</th>
-      <th>Support</th>
-      <th>Notes</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><code>POST /backend-api/files</code></td>
-      <td>Upstream file create/upload-url flow</td>
-      <td>No OpenAI multipart translation</td>
-      <td>Supported</td>
-      <td>Accepts JSON metadata only and returns upstream file metadata plus upload URL. Codex Pooler stores metadata only.</td>
-    </tr>
-    <tr>
-      <td><code>POST /backend-api/files/:file_id/uploaded</code></td>
-      <td>Upstream file finalization flow</td>
-      <td>No</td>
-      <td>Supported</td>
-      <td>Marks an upstream-backed file upload as complete.</td>
-    </tr>
-    <tr>
-      <td><code>POST /backend-api/transcribe</code></td>
-      <td><code>/backend-api/transcribe</code></td>
-      <td>Separate public <code>/v1</code> audio transcription translation</td>
-      <td>Supported</td>
-      <td>Backend multipart transcription route. It forces the backend transcription model and preserves safe multipart fields.</td>
-    </tr>
-    <tr>
-      <td><code>GET /api/codex/usage</code></td>
-      <td>Codex usage resolver</td>
-      <td>No</td>
-      <td>Supported</td>
-      <td>Compatibility usage route.</td>
-    </tr>
-    <tr>
-      <td><code>GET /wham/usage</code></td>
-      <td>Codex usage resolver</td>
-      <td>No</td>
-      <td>Supported</td>
-      <td>Compatibility usage route.</td>
-    </tr>
-    <tr>
-      <td><code>GET /backend-api/wham/usage</code></td>
-      <td>Codex usage resolver</td>
-      <td>No</td>
-      <td>Supported</td>
-      <td>Backend usage alias.</td>
-    </tr>
-  </tbody>
-</table>
+- before client-visible output, a retryable failure can move to another eligible assignment
+- after client-visible output, the request is never replayed
+- an interrupted translated stream emits at most one sanitized terminal in its native protocol
+- incomplete source frames and tool arguments are bounded and are not released partially
+- a terminal event is unique; later upstream frames are ignored
 
-The app-server JSON-RPC reset-credit method
-`account/rateLimitResetCredit/consume` remains unsupported. Codex Pooler does
-not add a wildcard backend app-server proxy for reset-credit methods.
+Ollama uses JSON or NDJSON, Anthropic uses Messages JSON or SSE, OpenAI uses its JSON/SSE/websocket shapes, and Codex backend routes retain their backend-compatible framing. These formats are semantically adapted, not byte-for-byte or token-for-token equivalents.
 
-## OpenAI-compatible `/v1` routes
+## Error and header cloaking
 
-Use `/v1` only for clients that require an OpenAI-shaped base URL:
+Authentication, validation, policy, routing, quota, upstream, timeout, and stream errors use the active protocol's public shape. Server-class errors use fixed safe messages. The boundary strips or replaces:
 
-```text
-https://codex-pooler.example.com/v1
-```
+- private target and provider identifiers
+- account, assignment, and upstream labels or IDs
+- upstream request IDs and system fingerprints
+- raw upstream messages and unsafe error fields
+- provider rate-limit and diagnostic headers
 
-Supported work is translated into Codex-compatible requests and then routed through the same Pool policy, limit, account-selection, accounting, and session-continuity machinery as backend traffic. Codex Pooler does not provide full OpenAI API parity.
+Locally generated request correlation can remain local. Codex-only safe continuation/model-catalog headers are allowlisted. No response header is copied merely because an upstream supplied it.
 
-<table>
-  <thead>
-    <tr>
-      <th>Exposed endpoint</th>
-      <th>Gateway/upstream destination</th>
-      <th>Translated to Codex?</th>
-      <th>Support</th>
-      <th>Notes</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><code>GET /v1/models</code></td>
-      <td>OpenAI-shaped model metadata from Pool/catalog state</td>
-      <td>No upstream Codex request</td>
-      <td>Supported</td>
-      <td>Returns an OpenAI-shaped model list for the authenticated Pool. Includes effective <code>context_length</code> when Codex context metadata is available; backend-only fields such as <code>context_window</code>, <code>max_context_window</code>, <code>auto_compact_token_limit</code>, and <code>comp_hash</code> are omitted.</td>
-    </tr>
-    <tr>
-      <td><code>POST /v1/responses</code></td>
-      <td><code>/backend-api/codex/responses</code></td>
-      <td>Yes</td>
-      <td>Translated</td>
-      <td>OpenAI Responses payloads are coerced to Codex-compatible work. Input audio uses the public <code>&#123;data, format&#125;</code> shape and accepts <code>WAV</code>, <code>MP3</code>, <code>M4A</code>, <code>WebM</code>, and <code>OGG</code>. The decoded audio ceiling is 50 MiB (52,428,800 bytes), while the configured request envelope may reject a request earlier. Malformed, unsupported, or oversized audio returns a sanitized <code>invalid_request</code> before upstream dispatch. System/developer input-message text is lifted into top-level instructions. Encrypted <code>type: "compaction"</code> replay items from prior remote compaction turns are forwarded. Remote MCP tool definitions are rejected before dispatch. Streaming responses use the public Responses stream adapter, and early terminal errors emit first without synthetic success prefixes. For public HTTP SSE only, if upstream has already emitted public Responses-visible data and an ordinary interruption ends the stream before a terminal Responses event, Codex Pooler emits the sequence-valid sanitized hybrid <code>type: "error"</code> / nested <code>server_error</code> terminal. A committed websocket-bridge turn aborted at the post-budget owner-drain deadline emits the same wire frame byte-for-byte; only accounting distinguishes <code>owner_drained</code> from <code>upstream_stream_error</code>. Precommit drain admission still follows the existing HTTP fallback or websocket refusal path, and client disconnects keep their existing classification. Native/backend raw streams and backend websocket surfaces are not rewritten.</td>
-    </tr>
-    <tr>
-      <td><code>GET /v1/responses</code></td>
-      <td>Backend Codex websocket response session</td>
-      <td>Partial</td>
-      <td>Partial</td>
-      <td>Narrow Responses websocket compatibility only. It is not OpenAI Realtime SDK support. Replay-verified encrypted compaction items follow the same exact preservation, ordering, and new-chain contract as <code>POST /v1/responses</code>. It uses the same downstream idle and frame guardrails as backend Codex websockets. Malformed JSON and JSON non-object provider frames are dropped without consuming a public sequence number or creating a local terminal, including on accepted owner-forwarded turns.</td>
-    </tr>
-    <tr>
-      <td><code>POST /v1/chat/completions</code></td>
-      <td><code>/backend-api/codex/responses</code></td>
-      <td>Yes</td>
-      <td>Translated</td>
-      <td>Chat Completions payloads are coerced to Codex Responses work and normalized back to Chat Completions shape. Input audio uses the public <code>&#123;data, format&#125;</code> shape and accepts <code>WAV</code>, <code>MP3</code>, <code>M4A</code>, <code>WebM</code>, and <code>OGG</code>. The decoded audio ceiling is 50 MiB (52,428,800 bytes), while the configured request envelope may reject a request earlier. Malformed, unsupported, or oversized audio returns a sanitized <code>invalid_request</code> before upstream dispatch. Early streaming terminal errors emit one public error chunk before any assistant role chunk. After visible output, a stream that ends without an upstream terminal emits one nested <code>data: &#123;"error":&#123;...&#125;&#125;</code> chunk with no following <code>[DONE]</code>; the translated <code>POST /backend-api/codex/v1/chat/completions</code> alias has the same OpenAI-compatible HTTP SSE behavior.</td>
-    </tr>
-    <tr>
-      <td><code>GET /v1/usage</code></td>
-      <td>Codex usage resolver</td>
-      <td>No upstream Codex work request</td>
-      <td>Supported</td>
-      <td>OpenAI-compatible usage read surface for the authenticated Pool.</td>
-    </tr>
-    <tr>
-      <td><code>GET /v1/files</code></td>
-      <td>Codex Pooler file metadata</td>
-      <td>No</td>
-      <td>Supported</td>
-      <td>Lists metadata for upstream-backed files visible to the Pool.</td>
-    </tr>
-    <tr>
-      <td><code>POST /v1/files</code></td>
-      <td>Upstream-backed file metadata create flow</td>
-      <td>Partial</td>
-      <td>Partial</td>
-      <td>Creates metadata for Codex-compatible upstream file storage. Backend <code>/backend-api/files</code> remains JSON-only; this is the OpenAI-compatible file-create surface.</td>
-    </tr>
-    <tr>
-      <td><code>GET /v1/files/:file_id</code></td>
-      <td>Codex Pooler file metadata</td>
-      <td>No</td>
-      <td>Supported</td>
-      <td>Retrieves metadata only.</td>
-    </tr>
-    <tr>
-      <td><code>GET /v1/files/:file_id/content</code></td>
-      <td>No upstream content read</td>
-      <td>No</td>
-      <td>Partial</td>
-      <td>Checks ownership, records an unsupported operation, then returns an OpenAI-shaped unsupported endpoint response. File bytes are not served by Codex Pooler.</td>
-    </tr>
-    <tr>
-      <td><code>DELETE /v1/files/:file_id</code></td>
-      <td>No upstream delete</td>
-      <td>No</td>
-      <td>Partial</td>
-      <td>Checks ownership, records an unsupported operation, then returns an OpenAI-shaped unsupported endpoint response.</td>
-    </tr>
-    <tr>
-      <td><code>POST /v1/audio/transcriptions</code></td>
-      <td><code>/backend-api/transcribe</code></td>
-      <td>Yes</td>
-      <td>Translated</td>
-      <td>OpenAI-style multipart transcription request dispatched through the backend transcription path. <code>gpt-transcribe</code> is a caller alias for canonical <code>gpt-4o-transcribe</code>. Nonempty <code>keywords</code> and <code>languages</code> lists retain order and duplicates, while empty lists are omitted. Responses omit language-detection fields. This is request-shape compatibility, not a transcription-quality, model-discovery, or general Audio API coverage claim.</td>
-    </tr>
-    <tr>
-      <td><code>POST /v1/images/generations</code></td>
-      <td><code>/backend-api/codex/responses</code></td>
-      <td>Yes</td>
-      <td>Translated</td>
-      <td>OpenAI image generation request is converted to Codex Responses-compatible image work. Pool image permission applies before body parsing.</td>
-    </tr>
-    <tr>
-      <td><code>POST /v1/images/edits</code></td>
-      <td><code>/backend-api/codex/responses</code></td>
-      <td>Yes</td>
-      <td>Translated</td>
-      <td>OpenAI image edit request is converted to Codex Responses-compatible image work. Pool image permission applies before body parsing.</td>
-    </tr>
-  </tbody>
-</table>
+## Operator diagnostics
 
-For remote-compaction replay, `POST /v1/responses` and narrow
-`GET /v1/responses` websocket turns preserve accepted encrypted compaction
-items and their input order exactly. Start a new chain without
-`previous_response_id`; the compact response envelope id is not an item id.
-The stable public item fields are `type: "compaction"`, nonblank string
-`encrypted_content`, and optional `id` as absent, string, or `null`. Unknown
-compaction fields and malformed values fail before upstream dispatch. Public
-`POST /v1/responses/compact` remains unsupported.
+The client façade and operator evidence have different purposes. Authenticated clients see only `gemma3`. Authorized operators can still diagnose and account for real work through metadata-only request logs, attempts, routing outcomes, target/helper identity, applied reasoning, assignment, status, timings, quota, token counts, cache/compression summaries, and safe error codes.
 
-### Pool image permission
+Operator diagnostics do not retain raw Pool keys, upstream credentials, prompts, completions, file/media bodies, websocket frames, raw provider payloads, or raw façade cache/session values. This separation is required for truthful operations without leaking routing internals to clients.
 
-One Pool setting, `allow_image_generation`, controls exactly four authenticated
-POST routes: `/backend-api/codex/images/generations`,
-`/backend-api/codex/images/edits`, `/v1/images/generations`, and
-`/v1/images/edits`. It defaults to `true` for new Pools and existing routing
-rows without a stored value. When it is disabled, runtime ingress authenticates
-the Pool API key, then returns `403` with code `image_generation_disabled`
-before decompression, request parsing, compatibility coercion, admission, or
-upstream dispatch.
+## Operator MCP
 
-`POST /v1/responses` accepts `reasoning.context` only for `auto`,
-`current_turn`, and `all_turns` after trimming and lowercasing. Unknown, empty,
-or non-string context values fail before dispatch with
-`param: "reasoning.context"`.
+`POST /mcp` is the read-only operator JSON-RPC endpoint. `GET /mcp` is routed but stateless SSE is unavailable, and `OPTIONS /mcp` reports allowed methods.
 
-Reasoning effort values can come from the client request or API-key policy. The
-policy is derived from its configured fields:
-
-1. **Unrestricted** preserves the current route behavior. Omission stays
-   absent, and any currently accepted explicit effort, including a custom
-   value, passes through this policy.
-2. **Allow up to** permits only known efforts at or below the selected ceiling:
-   `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`.
-   The selected model's effective known levels narrow the permitted set. An
-   omitted effort resolves to the permitted model default, or the highest
-   permitted known effort.
-3. **Always use** applies the legacy exact configured effort. It remains
-   compatible even when the configured effort is absent from model metadata.
-
-Allow up to never clamps or downgrades a request. An above-ceiling, unknown, or
-custom effort, or an omission with no permitted effort, returns `400` with code
-`reasoning_effort_not_allowed` and message
-`reasoning effort is not available for this API key` before reservation or
-upstream dispatch. Responses, backend Responses, and compact routes return
-`param: "reasoning.effort"`; Chat Completions returns
-`param: "reasoning_effort"`. API-key model denial remains first and returns the
-existing `403 model_not_allowed` response.
-
-The same policy runs after websocket upgrade for every `response.create` frame.
-A forbidden frame uses the existing websocket error frame with the same status,
-code, message, and route-native parameter. The connection is not rejected at
-upgrade time.
-
-Authenticated backend Codex model metadata reflects the policy. Unrestricted
-keeps the current levels and default. Allow up to filters to permitted known
-levels and a permitted default. Always use advertises its singleton only when it
-is model-effective, otherwise it returns no levels and no default. Models stay
-visible, and public `/v1/models` remains unchanged.
-
-`minimal` and `ultra` remain distinct for policy evaluation. Backend Codex
-compatibility rewrites them to `low` and `max` respectively before upstream
-dispatch. Safe reasoning summaries retain requested, applied, and effective
-values.
-
-Non-strict function tool schemas are lowered before local validation and
-upstream dispatch for backend Responses HTTP, backend Responses websocket
-`response.create`, and public `/v1/responses` compatibility paths. Lowering is
-limited to function tools, including nested function tools inside accepted
-namespace tools. Strict function tools and strict structured-output schemas stay
-on the strict validation path and are not made looser.
-
-Direct public Responses requests also accept exact executable custom tools on
-`POST /v1/responses` and websocket `response.create`. Exact top-level custom
-definitions and nested custom definitions are accepted in an already-valid
-namespace. `functions` is the
-canonical Codex namespace example, not a restriction: any nonblank valid
-namespace accepts the same flat `function` and exact `custom` children. A custom
-tool requires `type: "custom"` and a nonblank `name`. It may include a
-description, boolean `defer_loading`, nullable `allowed_callers` using `direct`
-or `programmatic`, and omitted, unconstrained text, or a `lark`/`regex` grammar
-format. Hosted, MCP, tool-search, nested-namespace, malformed, and duplicate
-executable-name shapes are rejected; executable names must be globally unique
-across top-level and namespace children.
-
-A typed custom `tool_choice` resolves only a declared same-kind custom tool with
-the same exact name, whether it is top-level or an accepted namespace child.
-Full mode preserves that typed choice. Lite mode rejects every map-shaped
-`tool_choice` before upstream dispatch with `unsupported_parameter` and
-`param: "tool_choice"`; use automatic or explicit Full mode when a client needs
-forced typed selection. That rejection follows the model's serving mode rather
-than the endpoint, so any map-shaped `tool_choice` is rejected on a Lite-served
-model, including a Chat Completions named-function choice. String choices such
-as `auto` are accepted in both modes. This is separate from accepted
-`custom_tool_call` replay input. Chat Completions does not accept executable
-custom definitions or custom choices, and actual execution availability still
-depends on the selected model and upstream account. Smoke verification retains
-metadata only. This narrow contract does not imply backend, Chat, or broad
-OpenAI tool parity.
-
-When an accepted namespace custom declaration has one exact executable name,
-public Responses HTTP, SSE, and direct or owner-forwarded websocket output
-restores that namespace on a `custom_tool_call` only if the provider omits it or
-returns `null`. An explicit provider namespace is preserved. Flat, unknown, and
-non-unique names remain unchanged rather than guessed.
-
-For direct public Responses only, a strict flat function tool whose parameters
-already have an object root may receive a missing nested `object` or `array`
-type when the surrounding schema provides complete, unambiguous structural
-evidence. This covers top-level flat functions and flat function children of an
-accepted namespace, and the same repair applies to websocket `response.create`.
-It does not repair the parameters root, explicit type values, refs, definition
-tables, combinators or their descendants, annotations, unknown keywords,
-ambiguous or incomplete evidence, structured outputs, Chat Completions, the
-older nested `function` wrapper shape, or backend routes. Public Responses and
-Chat reject malformed, duplicate, and unsupported explicit type values. This
-strict compatibility repair is not non-strict schema lowering.
-
-### Catalog revision and final Responses envelope
-
-The authenticated backend model routes return the same effective catalog body
-for the same Pool and catalog snapshot. Both
-`GET /backend-api/codex/models` and `GET /backend-api/codex/v1/models` attach a
-deterministic weak `ETag` derived from that policy-visible body.
-
-Successful backend Responses streams expose the same token as
-`X-Models-Etag`. It appears on HTTP SSE response headers for the canonical and
-backend-alias `POST` routes, and on websocket upgrade headers for the matching
-`GET` routes. The token is produced by Codex Pooler, not relayed from upstream.
-It is not exposed by compact, public `/v1`, usage, or unauthenticated routes.
-Catalog convergence across replicas is eventual, so clients should compare a
-successful Responses token with a later authenticated backend models token.
-
-Every non-compact request that reaches the backend Responses destination has a
-`reasoning` object and exactly one `reasoning.encrypted_content` entry in
-`include` after final normalization. This applies to canonical backend HTTP and
-websocket traffic, backend `/v1` Responses and Chat Completions aliases, and
-translated `POST /v1/responses`, `GET /v1/responses`, and
-`POST /v1/chat/completions` traffic. Compact dispatch is excluded and keeps its
-narrow compact request shape.
-
-When upstream returns a valid parameter path with an error, failed attempt
-detail may expose it as `upstream_error_param`. The value is limited to a
-bounded field or numeric-index path. Invalid values and successful attempts
-omit the field, and raw upstream error messages or rejected values are never
-projected through it.
-
-### Unsupported `/v1` Responses request shapes
-
-These `POST /v1/responses` request shapes return OpenAI-shaped `invalid_request` before gateway dispatch, not `unsupported_endpoint`:
-
-- top-level `tools[].type = "mcp"`
-- nested `input[].type = "additional_tools"` with `tools[].type = "mcp"`
-
-### Routed but unsupported `/v1` endpoints
-
-These routes are deliberately present so clients receive deterministic OpenAI-shaped unsupported endpoint errors before gateway admission or upstream dispatch.
-
-<table>
-  <thead>
-    <tr>
-      <th>Exposed endpoint</th>
-      <th>Upstream destination</th>
-      <th>Translated to Codex?</th>
-      <th>Support</th>
-      <th>Notes</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><code>POST /v1/responses/compact</code></td>
-      <td>None</td>
-      <td>No</td>
-      <td>Unsupported</td>
-      <td>The backend compact route exists under <code>/backend-api/codex</code>; the public <code>/v1</code> compact route returns <code>unsupported_endpoint</code>.</td>
-    </tr>
-    <tr>
-      <td><code>POST /v1/images/variations</code></td>
-      <td>None</td>
-      <td>No</td>
-      <td>Unsupported</td>
-      <td>Image variations are not implemented.</td>
-    </tr>
-    <tr>
-      <td><code>POST /v1/content_provenance_checks</code></td>
-      <td>None</td>
-      <td>No</td>
-      <td>Unsupported</td>
-      <td>Content provenance checks require a Platform API surface that Codex Pooler does not expose.</td>
-    </tr>
-    <tr>
-      <td><code>POST /v1/embeddings</code></td>
-      <td>None</td>
-      <td>No</td>
-      <td>Unsupported</td>
-      <td>Embeddings are outside the Codex Pooler route surface.</td>
-    </tr>
-    <tr>
-      <td><code>POST /v1/batches</code></td>
-      <td>None</td>
-      <td>No</td>
-      <td>Unsupported</td>
-      <td>Batch jobs are not dispatched by Codex Pooler.</td>
-    </tr>
-    <tr>
-      <td><code>POST /v1/moderations</code></td>
-      <td>None</td>
-      <td>No</td>
-      <td>Unsupported</td>
-      <td>Moderations are not implemented.</td>
-    </tr>
-    <tr>
-      <td><code>POST /v1/fine_tuning/jobs</code></td>
-      <td>None</td>
-      <td>No</td>
-      <td>Unsupported</td>
-      <td>Fine-tuning jobs are not implemented.</td>
-    </tr>
-    <tr>
-      <td><code>GET /v1/responses/:response_id</code></td>
-      <td>None</td>
-      <td>No</td>
-      <td>Unsupported</td>
-      <td>Response retrieval by id is not part of the public compatibility surface.</td>
-    </tr>
-    <tr>
-      <td><code>POST /v1/responses/:response_id/cancel</code></td>
-      <td>None</td>
-      <td>No</td>
-      <td>Unsupported</td>
-      <td>Response cancellation by id is not part of the public compatibility surface.</td>
-    </tr>
-    <tr>
-      <td><code>DELETE /v1/responses/:response_id</code></td>
-      <td>None</td>
-      <td>No</td>
-      <td>Unsupported</td>
-      <td>Response deletion by id is not part of the public compatibility surface.</td>
-    </tr>
-  </tbody>
-</table>
-
-### Intentionally absent `/v1` route families
-
-`/v1/realtime` and OpenAI Realtime SDK websocket/session routes are intentionally outside the public route surface. A client calling those paths should treat Codex Pooler as not supporting OpenAI Realtime. Use `GET /v1/responses` only for the narrow Responses websocket compatibility route documented above.
-
-## MCP endpoint
-
-The operator MCP endpoint is rooted at `/mcp`, not under `/backend-api` or `/v1`.
-
-<table>
-  <thead>
-    <tr>
-      <th>Route</th>
-      <th>Meaning</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><code>POST /mcp</code></td>
-      <td>JSON-RPC Streamable HTTP endpoint</td>
-    </tr>
-    <tr>
-      <td><code>GET /mcp</code></td>
-      <td>Routed endpoint, but stateless SSE is unavailable today</td>
-    </tr>
-    <tr>
-      <td><code>OPTIONS /mcp</code></td>
-      <td>Allowed MCP methods response</td>
-    </tr>
-  </tbody>
-</table>
-
-MCP uses operator-owned bearer MCP tokens. It doesn't accept Pool API keys, browser sessions, cookies, query tokens, invite tokens, upstream tokens, or custom headers as authentication.
-
-MCP output is metadata-only and scoped by the operator's owner or assigned-Pool visibility. It is an operator inspection endpoint, not a runtime client endpoint.
-
-The root `/mcp` operator endpoint is not a bridge for `/v1/responses` remote MCP tools.
-
-## Prompt-cache and continuity boundaries
-
-Prompt-cache routing locality is a local routing hint. It can apply on `POST /backend-api/codex/responses`, `POST /backend-api/codex/v1/responses`, `POST /backend-api/codex/v1/chat/completions`, `POST /v1/responses`, and `POST /v1/chat/completions`. It is excluded from websocket, compact, file, audio, image, usage, and app-server helper routes. Locality is always a heuristic: it can improve the chance that compatible work reaches a reusable upstream connection, but it never guarantees a provider cache hit or cached-token accounting.
-
-An otherwise-qualified streaming `POST /v1/responses` request keeps HTTP SSE as
-its downstream contract while first attempting upstream dispatch through the
-continuity owner's websocket. This has no Pool-level enablement toggle.
-Qualification requires websocket owner forwarding, no attached websocket
-writer, and a continuity session that is unpinned or pinned to the selected
-assignment. Pre-commit events that carry no client-rendered content remain
-buffered and do not commit the bridge. The bridge commits on the first
-content-bearing event (text, refusal, reasoning, or tool-argument fragments),
-on any unknown event fail-closed, on any structurally valid terminal, or when
-the bounded pre-commit buffer reaches its caps or its pre-content commit
-deadline.
-
-Before that commit boundary, a peer-initiated websocket death — a close
-without a terminal, a TCP cut, or an explicit peer Close frame — falls back to
-plain HTTP on the same candidate and attempt, with one settlement. A
-pre-commit locally-declared death (a receive or pong timeout) fails once
-without HTTP fallback, because the upstream turn may still be running. After a
-public event has committed the websocket transport, Codex Pooler does not
-replay the turn over HTTP; a later upstream websocket failure ends the request
-as failed. Reusing an owner websocket is a cache-locality heuristic, never a
-cache guarantee.
-
-The pre-commit buffer holds `response.created`, `response.in_progress`,
-`response.queued`, item and part envelope adds (`response.output_item.added`,
-`response.content_part.added`, `response.reasoning_summary_part.added`), and
-internal `codex.*` events. Unknown typed events commit conservatively. Legacy
-typeless success commits as a completed response while backend routes retain
-its original payload.
-
-Backend Responses SSE and websocket routes preserve upstream `response.done`
-and legacy typeless success payloads. Public `POST /v1/responses` SSE and
-`GET /v1/responses` websocket normalize those successful terminals to
-`response.completed`. Synthetic missing-terminal frames are limited to
-OpenAI-compatible HTTP SSE surfaces and never appear on native backend raw
-Responses streams or websocket surfaces. On `POST /v1/responses`, the
-sequence-valid synthetic `error` event uses the hybrid flat-and-nested
-`type: "error"` / `server_error` shape. Absent, blank, and whitespace-only SSE
-event labels are treated as absent before event/data type precedence; nonblank
-mismatches remain rejected. An ordinary incomplete public Responses SSE block
-may retain at most 8 MiB so single large provider events, such as reasoning
-items carrying encrypted content, can finish decoding. A structurally
-recognizable terminal candidate
-may retain up to 64 MiB so large completed responses split across upstream
-chunks can finish decoding. Crossing the applicable bound emits one bounded
-sanitized `error` event, relays none of the overflowing source block, and
-latches later source frames out. Complete blocks are still parsed before that
-overflow decision. A
-post-budget owner-drain abort emits
-the same wire frame byte-for-byte while accounting records `owner_drained`
-instead of `upstream_stream_error`. On `POST /v1/chat/completions` and its
-translated `POST /backend-api/codex/v1/chat/completions` alias, the terminal is
-one `data: {"error":{...}}` chunk with nested `server_error` fields, no top-level
-`type`, and no following `[DONE]`. Public GET keeps its websocket error/close
-behavior, and native backend raw Responses GET or POST does not synthesize a
-terminal. Once hidden bridge traffic has committed the handoff, the request is
-not replayed over HTTP.
-
-During a mixed-release transition, native websocket attachment keeps its two-argument compatibility path against a previous-release owner. The bridge's option-carrying three-argument attachment is unavailable there and fails closed to HTTP before commit. Previous-release owners also retain the legacy five-minute post-detach window and omit connection lifecycle metadata; new or recovered owners use the current 30-minute default.
-
-## Websocket Guardrails
-
-Backend Codex websocket routes and the narrow public `GET /v1/responses` websocket route use bounded downstream guardrails. `websocket_idle_timeout_ms` controls the downstream websocket idle close window for new upgrades. It also bounds owner-forwarded full-turn submit waits for new websocket requests, so healthy long turns are not limited by upstream receive timeout. Its default is `1_800_000` ms, and accepted values are `60_000..3_600_000` ms.
-
-`websocket_owner_idle_timeout_ms` is separate. It controls post-detach owner retention after no downstream or active turn remains, not downstream idle closure. It has the same `1_800_000` ms default and `60_000..3_600_000` ms bounds. Each new or recovered owner captures its node-local value at startup, and existing owners retain the value they captured.
-
-Inbound websocket frames are also bounded by the configured gateway request body limit. Operators should treat `reason_class=max_frame_size_exceeded` as an oversized client frame, `reason_class=timeout` as downstream websocket idle close, and upstream receive timeout errors as separate upstream-side failures. These classifications are metadata-only and must not include raw websocket frames or request bodies.
-
-## Request compression boundaries
-
-Request compression is a per-Pool routing option named `request_compression_enabled`. It is disabled by default. When enabled, Codex Pooler may compress upstream-bound Responses tool-output content before dispatch. This is request-side only: raw outputs and upstream response bodies are not stored, and CCR/retrieval is not implemented.
-
-Supported input shapes are explicit. Search-result compression accepts classic
-`path:line[:column]: text`, grouped heading output when a path-like heading has
-enough line matches below it, and portable NUL-delimited output shaped as
-`path\0line[:column]: text`. Diff compression requires a hunk header and accepts
-additions-only, deletions-only, replacement, minimal unified, combined unified,
-and long-preamble diffs without a leading `diff --git` header. Log-output
-compression keeps every discovered failure block when a summary reports
-failure/error counts, or skips the rewrite. Malformed NUL fragments, prose
-headings, ordinary prose with plus/minus lines, and incomplete failure-summary
-logs stay text/skip.
-
-Protected exact-output tool results stay byte-for-byte upstream-bound before
-rewriting. This includes default function tools `Read`, `Glob`, `Grep`, `Write`,
-`Edit`, `WebSearch`, `WebFetch`, `web_search`, and `web_fetch`, plus external
-retrieval outputs. Output-only function tool results fail closed as protected
-when the tool name is unavailable. Metadata records aggregate skip counts only.
-
-Eligible route families are exact:
-
-<table>
-  <thead>
-    <tr>
-      <th>Family</th>
-      <th>Eligible routes</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>Backend Responses</td>
-      <td><code>POST /backend-api/codex/responses</code></td>
-    </tr>
-    <tr>
-      <td>Backend <code>/v1/responses</code></td>
-      <td><code>POST /backend-api/codex/v1/responses</code></td>
-    </tr>
-    <tr>
-      <td>Translated chat completions</td>
-      <td><code>POST /backend-api/codex/v1/chat/completions</code> and <code>POST /v1/chat/completions</code></td>
-    </tr>
-    <tr>
-      <td>Public <code>/v1/responses</code></td>
-      <td><code>POST /v1/responses</code></td>
-    </tr>
-    <tr>
-      <td>Compact backend routes</td>
-      <td><code>POST /backend-api/codex/responses/compact</code> and <code>POST /backend-api/codex/v1/responses/compact</code></td>
-    </tr>
-    <tr>
-      <td>Responses websocket</td>
-      <td>backend and narrow public websocket <code>response.create</code> payloads that dispatch to backend Responses</td>
-    </tr>
-  </tbody>
-</table>
-
-Unsupported surfaces are multipart, file, audio, image, admin, MCP, usage, and other non-Responses routes. `POST /v1/responses/compact` remains unsupported because the public compact route has no upstream dispatch.
-
-Compression is fail-open. Scanner, tokenizer, compression, and limit errors preserve the original upstream request body and record safe `payload_compression` metadata. JSON request bodies over 1 MiB skip before scanning, and a dispatch processes at most 50 output candidates. Token counting is local and in-process with tokenizer data shipped by the application; it does not call OpenAI or load a local model.
-
-Request logs show safe aggregate savings only. They prefer saved tokens and token savings percent when token counts are available, and fall back to saved bytes and byte savings percent when token counts are unavailable.
-
-Continuity headers are also local routing inputs. Codex Pooler chooses them in this order:
-
-1. `x-codex-window-id`
-2. `x-codex-session-id`
-3. `session-id`
-4. `x-session-id`
-5. `x-session-affinity`
-6. `session_id`
-7. `x-codex-conversation-id`
-
-`session-id`, `x-session-id`, and `x-session-affinity` are not forwarded upstream. If a pinned continuation points at an upstream account that now requires reauthentication, `/v1/responses` HTTP and websocket requests fail closed with a recovery hint to restart with full context and remove stale continuation anchors.
-
-## Related references
-
-- [Routing Strategies](/reference/routing-strategies/) explains Pool routing policy, account selection, and prompt-cache locality.
-
-## Frequently Asked Questions
-
-### Is `/v1` the same as the OpenAI API?
-
-No. `/v1` is narrow OpenAI-compatible support for selected SDK routes. Supported requests are translated into Codex-compatible work and routed through Pool policy. Unsupported routes are either intentionally absent or return deterministic OpenAI-shaped unsupported endpoint errors when explicitly routed.
-
-### Is `GET /v1/responses` OpenAI Realtime support?
-
-No. `GET /v1/responses` is narrow Responses websocket compatibility. It is not `/v1/realtime` support, and OpenAI Realtime SDK websocket or session routes are outside the Codex Pooler route surface.
-
-### Can a Pool API key call `/mcp`?
-
-No. Pool API keys authenticate runtime clients for `/backend-api` and `/v1`. The root `/mcp` endpoint is for operator metadata only and requires an operator-owned MCP bearer token.
-
-### Does Codex Pooler store uploaded file bytes?
-
-No. The backend file bridge stores file metadata and uses upstream-backed upload or download URLs. Raw file bytes, upload URLs, prompts, response bodies, media bodies, credentials, and websocket frames are not stored or exposed as public docs evidence.
+MCP requires an operator-owned bearer MCP token. It does not accept Pool API keys, browser sessions, cookies, query tokens, invite tokens, upstream tokens, or custom authentication headers. It is metadata inspection only and is never invoked as a model tool by `/v1/responses`.

@@ -98,7 +98,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
 
       state = DownstreamStream.initial_state(:websocket, opts)
 
-      assert %{target: :websocket, public_openai_chat: %{buffer: "", model: "gpt-example"}} =
+      assert %{target: :websocket, public_openai_chat: %{buffer: "", model: "gemma3"}} =
                state
 
       split_event =
@@ -584,7 +584,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
 
       assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(chunk)
       assert data["error"]["code"] == "context_length_exceeded"
-      assert data["error"]["message"] == "upstream request failed"
+      assert data["error"]["message"] == "gemma3 request failed"
       refute chunk =~ "large incomplete text"
 
       assert {:failed, %{code: "context_length_exceeded"}} =
@@ -652,7 +652,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
 
       assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(chunk)
       assert data["error"]["code"] == "context_length_exceeded"
-      assert data["error"]["message"] == "upstream request failed"
+      assert data["error"]["message"] == "gemma3 request failed"
       refute chunk =~ "invalid_request_error"
 
       assert {:failed, %{code: "context_length_exceeded"}} =
@@ -694,8 +694,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert failure.event_type == "response.failed"
 
       assert data["response"]["error"] == %{
-               "code" => "upstream_error",
-               "message" => "upstream request failed",
+               "code" => "service_error",
+               "message" => "gemma3 request failed",
                "type" => "server_error"
              }
 
@@ -736,7 +736,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
                "sequence_number" => 0,
                "error" => %{
                  "code" => "context_length_exceeded",
-                 "message" => "upstream request failed",
+                 "message" => "gemma3 request failed",
                  "type" => "server_error"
                },
                "response" => %{
@@ -744,12 +744,12 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
                  "created_at" => 0,
                  "status" => "failed",
                  "error" => %{
-                   "code" => "upstream_error",
-                   "message" => "upstream request failed",
+                   "code" => "service_error",
+                   "message" => "gemma3 request failed",
                    "type" => "server_error"
                  },
                  "incomplete_details" => nil,
-                 "model" => "unknown",
+                 "model" => "gemma3",
                  "object" => "response",
                  "output" => [],
                  "output_text" => "",
@@ -797,7 +797,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
 
       assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(chunk)
       refute Map.has_key?(data, "error")
-      assert data["response"]["error"]["code"] == "nested_safe_code"
+      assert data["response"]["error"]["code"] == "service_error"
 
       assert {:failed, failure} = DownstreamStream.terminal_outcome(state)
       assert failure.code == "nested_safe_code"
@@ -835,8 +835,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
                DownstreamStream.normalize_data(failed, "/v1/responses", opts, state)
 
       assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(chunk)
-      assert data["error"]["code"] == "top_safe_code"
-      assert data["response"]["error"]["code"] == "nested_safe_code"
+      assert data["error"]["code"] == "service_error"
+      assert data["response"]["error"]["code"] == "service_error"
 
       assert {:failed, failure} = DownstreamStream.terminal_outcome(state)
       assert failure.code == "nested_safe_code"

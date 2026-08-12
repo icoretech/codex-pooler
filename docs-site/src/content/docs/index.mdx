@@ -1,135 +1,77 @@
 ---
 title: Codex Pooler
-description: Self-hosted Codex account pooling docs covering Pool API keys, backend compatibility, narrow /v1 SDK routes, MCP metadata, routing, and deployment.
+description: Self-hosted pooled AI gateway with one public gemma3 identity across Ollama, OpenAI, Anthropic Messages, and Codex clients.
 head:
   - tag: script
     attrs:
       type: application/ld+json
     content: |
-      {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Is Codex Pooler a hosted service?","acceptedAnswer":{"@type":"Answer","text":"No. The public docs describe a self-hosted application that can run with Docker Compose or the published Helm chart. It is not documented as a hosted provider. Operators are responsible for their own deployment, credentials, infrastructure, and authorized use of upstream accounts."}},{"@type":"Question","name":"Does Codex Pooler provide full OpenAI API compatibility?","acceptedAnswer":{"@type":"Answer","text":"No. Codex Pooler provides narrow OpenAI-compatible /v1 support for selected SDK routes, then translates supported work into Codex-compatible requests. Unsupported /v1 routes may return deterministic OpenAI-shaped unsupported endpoint errors, and OpenAI Realtime SDK websocket or session routes are not supported."}},{"@type":"Question","name":"Which base URL should an AI coding client use?","acceptedAnswer":{"@type":"Answer","text":"Codex backend-compatible clients should use https://codex-pooler.example.com/backend-api/codex. Selected OpenAI SDK-compatible clients should use https://codex-pooler.example.com/v1. Operator metadata tools should use https://codex-pooler.example.com/mcp with an operator MCP token, not a Pool API key."}}]}
+      {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Which model does a client configure?","acceptedAnswer":{"@type":"Answer","text":"Every supported client configures gemma3. It is the only public model identity; model and reasoning selection are owned by the server."}},{"@type":"Question","name":"Which base URL should a client use?","acceptedAnswer":{"@type":"Answer","text":"Ollama and Anthropic clients use the instance origin, OpenAI-compatible SDKs use /v1, and Codex CLI uses /backend-api/codex. All runtime routes authenticate with a Pool API key."}},{"@type":"Question","name":"Is Codex Pooler a full Ollama, OpenAI, Anthropic, or Codex app-server replacement?","acceptedAnswer":{"@type":"Answer","text":"No. It provides bounded compatibility for documented inference and support routes. Unsupported routes fail explicitly, and Codex CLI or Claude Code retain their own local agent runtimes."}}]}
 ---
 
-## What Is Codex Pooler?
+## One Public Model, Several Client Protocols
 
-Codex Pooler is a self-hosted gateway for sharing Codex account capacity across trusted agents, tools, and teams. Operators add upstream Codex accounts to Pools, issue stable Pool API keys to clients, and let Codex Pooler route supported Codex backend or narrow `/v1` requests without exposing raw account secrets to every workstation or automation host.
+Codex Pooler is a self-hosted pooled gateway for trusted coding agents, SDKs, and automation. Clients authenticate with stable Pool API keys and see one virtual model: `gemma3`.
+
+The server owns the real target, reasoning policy, account selection, retries, continuity, quota handling, and accounting. Changing a client model name cannot change that decision, and private provider/account/assignment details do not cross the client boundary.
 
 ![Codex Pooler gateway overview](/codex-pooler-readme-banner.png)
 
-## What Codex Pooler Helps With
+## Client URLs
 
-Codex Pooler is built for operators who need shared Codex capacity without losing control of accounts, keys, routing, and request evidence.
+| Client family | Base URL | Guide |
+| --- | --- | --- |
+| Ollama | `http://localhost:4000` | [Ollama clients](/clients/ollama/) |
+| OpenAI-compatible SDKs | `http://localhost:4000/v1` | [OpenAI-compatible SDKs](/clients/openai-compatible/) |
+| Claude Code / Anthropic Messages | `http://localhost:4000` | [Claude Code](/clients/claude-code/) |
+| Codex CLI / Desktop | `http://localhost:4000/backend-api/codex` | [Codex CLI and Desktop](/clients/codex-cli/) |
 
-- **Use many accounts through one gateway.** Assign upstream accounts to Pools and let clients authenticate with Pool API keys.
-- **Use Codex subscriptions from API-only harnesses.** Point tools that only support paid API-style Responses endpoints at shared Codex subscriptions without custom plugins, local hacks, or per-client credential juggling.
-- **Keep clients stable while capacity changes.** Rotate accounts, pause upstreams, or adjust Pool policy without reconfiguring every client.
-- **Route with operational context.** Account health, model support, quota evidence, policy, and session continuity all inform account selection.
-- **Inspect what happened without exposing payloads.** Request logs, audit logs, and MCP tools expose sanitized metadata, not prompts, files, tokens, cookies, or raw account secrets.
-- **Run it yourself.** Start locally with Docker Compose or deploy the Helm chart with separate app, worker, scheduler, and migration roles.
+Use `gemma3` in every model field. For a deployed instance, replace `http://localhost:4000` with your origin, such as `https://codex-pooler.example.com`.
 
-## Who It Is For
+All four runtime families require a Pool API key. Never place an upstream account credential in a client. The optional `/mcp` endpoint is a separate read-only operator service and requires a separate operator MCP token.
 
-Codex Pooler fits small expert teams that already operate trusted Codex accounts and want a safer coordination layer around them.
+## What It Provides
 
-It is useful when you need to:
+- **Immutable public identity:** discovery, responses, streams, and protocol-native errors expose only `gemma3`.
+- **Central Pool policy:** health, quota evidence, assignment eligibility, key policy, continuity, and routing determine where work runs.
+- **Pre-visible retries:** retryable failures can move before output; turns are never replayed after visible output.
+- **Scoped cache locality:** client cache/session hints are namespaced to the Pool and API key instead of becoming cross-client identifiers.
+- **Protocol-native adapters:** Ollama JSON/NDJSON, OpenAI JSON/SSE/websocket, Anthropic Messages JSON/SSE, and Codex backend transports keep their documented framing.
+- **Truthful operator evidence:** authorized operators retain sanitized routing and accounting metadata without exposing it to clients.
+- **Content privacy:** request logs do not retain raw prompts, completions, tool payloads, file/media bodies, websocket frames, Pool keys, or upstream credentials.
 
-- Give multiple agents and coding tools access to shared capacity
-- Use harnesses built for paid API Responses with shared Codex subscriptions
-- Avoid custom plugin or adapter setup when a standard OpenAI-style base URL is enough
-- Keep account credentials out of client configuration
-- See which Pool, model, route, and upstream handled a request
-- Keep resumable Codex sessions attached to the right upstream account
-- Give trusted operators read-only metadata access through MCP
+## Compatibility Boundary
 
-It is not a hosted provider, a general OpenAI API clone, or a way to bypass account terms and limits. Operate only accounts you are allowed to use, scope keys to trusted clients, and connect MCP only to hosts you trust with operator metadata.
+Codex Pooler is not a local Ollama daemon and does not download model weights. It is not a full OpenAI or Anthropic API clone, and it is not a wildcard Codex app-server proxy.
 
-## Codex Pooler Vs Direct Account Credentials
+Codex CLI and Claude Code continue to supply their own local agent behavior: repository discovery, tool execution, sandboxing, edits, tests, conversation storage, interruption, and resume. The gateway supplies the model transport and pooling boundary. Adapters preserve supported semantics but do not promise token-for-token equivalence between different wire protocols or with a direct service connection.
 
-<table>
-  <thead>
-    <tr>
-      <th>Question</th>
-      <th>Direct account credentials</th>
-      <th>Codex Pooler</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>Client configuration</td>
-      <td>Each client needs account-specific material</td>
-      <td>Clients use stable Pool API keys</td>
-    </tr>
-    <tr>
-      <td>Capacity changes</td>
-      <td>Every client may need reconfiguration</td>
-      <td>Operators adjust Pool assignments and policy centrally</td>
-    </tr>
-    <tr>
-      <td>Routing decisions</td>
-      <td>Usually fixed by client setup</td>
-      <td>Pool policy, account health, quota evidence, model support, and continuity decide</td>
-    </tr>
-    <tr>
-      <td>Operator visibility</td>
-      <td>Spread across clients and local logs</td>
-      <td>Admin UI and MCP expose sanitized metadata</td>
-    </tr>
-    <tr>
-      <td>Secret exposure</td>
-      <td>More places can hold account secrets</td>
-      <td>Upstream secrets stay inside Codex Pooler secret storage</td>
-    </tr>
-  </tbody>
-</table>
-
-## How It Works
-
-1. **Create a Pool.** A Pool defines the boundary clients authenticate against.
-2. **Add upstream accounts.** Operators connect the Codex accounts the Pool can use.
-3. **Issue Pool API keys.** Clients use stable keys that represent the Pool, not a single account.
-4. **Point clients at the right runtime URL.** Codex backend clients use `/backend-api/codex`; selected SDK clients use `/v1`; operator MCP hosts use `/mcp`.
-5. **Watch sanitized operations data.** The admin UI and MCP endpoint show metadata for routing, usage, requests, audit events, and account readiness.
-
-For local setup examples, use `http://localhost:4000`. For deployed examples, use `https://codex-pooler.example.com`.
+Identity projection applies to protocol fields, safe headers, and errors. Arbitrary generated prose is not blindly rewritten.
 
 ## Start Here
 
-- [Quick Start](./getting-started/quick-start/), run locally with Docker Compose, bootstrap the first owner, check health, and create your first Pool API key
-- [Configuration](./getting-started/configuration/), review release environment variables, runtime URLs, support boundaries, and responsible operation notes
-- [Runtime Routes](./reference/runtime-routes/), choose the right client-facing URL for Codex backend clients, selected SDK clients, or operator MCP hosts
-- [Routing Strategies](./reference/routing-strategies/), understand Pool policy, continuity, quota evidence, and account selection
-
-## Runtime URLs At A Glance
-
-```text
-Codex backend clients: http://localhost:4000/backend-api/codex
-Selected SDK clients:  http://localhost:4000/v1
-Operator MCP hosts:    http://localhost:4000/mcp
-```
-
-For a deployed instance, replace `http://localhost:4000` with your deployed host, for example `https://codex-pooler.example.com`.
-
-The `/v1` surface is intentionally narrow. Supported requests are translated and routed through the same Pool rules as Codex backend traffic; unsupported routes return explicit errors instead of pretending full OpenAI API parity.
-
-## Discovery Answers
-
-These short answer pages restate the public docs for AI search and citation contexts:
-
-- [AI coding agent gateway](/discovery/ai-coding-agent-gateway/)
-- [Self-hosted Codex gateway](/discovery/self-hosted-codex-gateway/)
-- [Codex account pooling](/discovery/codex-account-pooling/)
-- [OpenAI-compatible Codex gateway](/discovery/openai-compatible-codex-gateway/)
-- [Codex Pooler vs direct credentials](/discovery/codex-pooler-vs-direct-credentials/)
+- [Quick Start](/getting-started/quick-start/), deploy with Docker Compose and create a Pool API key
+- [Runtime Routes](/reference/runtime-routes/), see every supported and explicitly unsupported façade route
+- [Codex CLI and Desktop](/clients/codex-cli/), configure backend Responses and websockets
+- [Claude Code](/clients/claude-code/), configure the Anthropic Messages adapter
+- [Ollama clients](/clients/ollama/), use native discovery, chat, generation, and NDJSON
+- [OpenAI-compatible SDKs](/clients/openai-compatible/), configure Responses, Chat Completions, and legacy Completions
+- [Routing Strategies](/reference/routing-strategies/), understand Pool eligibility, continuity, and account selection
 
 ## Frequently Asked Questions
 
-### Is Codex Pooler a hosted service?
+### Which model does a client configure?
 
-No. The public docs describe a self-hosted application that can run with Docker Compose or the published Helm chart. It is not documented as a hosted provider. Operators are responsible for their own deployment, credentials, infrastructure, and authorized use of upstream accounts.
+Always `gemma3`. It is the only public identity. Other or missing model selectors on supported inference routes are normalized before the server validates and routes its fixed decision.
 
-### Does Codex Pooler provide full OpenAI API compatibility?
+### What happens when the fixed target is unavailable?
 
-No. Codex Pooler provides narrow OpenAI-compatible `/v1` support for selected SDK routes, then translates supported work into Codex-compatible requests. Unsupported `/v1` routes may return deterministic OpenAI-shaped unsupported endpoint errors, and OpenAI Realtime SDK websocket or session routes are not supported.
+Catalogs become empty and inference fails closed with a protocol-safe unavailable error. Codex Pooler does not reveal or select a fallback model.
 
-### Which base URL should an AI coding client use?
+### Does it cache responses?
 
-Codex backend-compatible clients should use `https://codex-pooler.example.com/backend-api/codex`. Selected OpenAI SDK-compatible clients should use `https://codex-pooler.example.com/v1`. Operator metadata tools should use `https://codex-pooler.example.com/mcp` with an operator MCP token, not a Pool API key.
+No. It can improve provider-side prompt-cache locality by converting supported cache/session inputs into Pool-and-key-scoped values. That is a routing hint, not stored-response replay or a guaranteed cache hit.
+
+### Can a client discover the provider or account?
+
+No. Client model fields, discovery, response envelopes, error bodies, streams, and response headers are projected to the virtual identity and stripped of provider/account/assignment metadata. Authorized operator diagnostics remain truthful and metadata-only.

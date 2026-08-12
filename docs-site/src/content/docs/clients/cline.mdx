@@ -1,49 +1,23 @@
 ---
 title: Cline
-description: Configure Cline with Codex Pooler's narrow OpenAI-compatible /v1 surface and optional operator MCP metadata access.
+description: Configure Cline for Codex Pooler's bounded OpenAI-compatible gemma3 façade.
 ---
 
-Cline CLI accepts `openai` as shorthand for its OpenAI-compatible provider and stores it as `openai-compatible`. Configure it with the Pool API key, the Codex Pooler `/v1` base URL, and the model id that your assigned Pool can serve.
+Cline's `openai` provider shorthand uses the OpenAI-compatible route. Save one custom model:
 
 ```bash
 cline auth \
   --provider openai \
   --apikey "$CODEX_POOLER_API_KEY" \
   --baseurl https://codex-pooler.example.com/v1 \
-  --modelid gpt-5.6-terra
+  --modelid gemma3
 ```
 
-For local setup, change `--baseurl` to `http://localhost:4000/v1`.
-
-Cline's user-facing model metadata names are `contextWindow`, `maxInputTokens`, and `maxTokens`. If you add a manual Codex Pooler model entry in Cline settings, use `contextWindow: 258400`, `maxInputTokens: 258400`, and `maxTokens: 128000` for `gpt-5.6-terra`. Cline applies its fixed 90% compaction ratio to the effective maximum input, so it starts compaction at 232560 tokens. `maxTokens` remains a separate response cap and does not move the local compaction boundary. When available, `/v1/models.context_length` is the authoritative effective value for `contextWindow`.
-
-Check the headless CLI path after saving auth:
+For local setup, use `http://localhost:4000/v1`.
 
 ```bash
-cline --provider openai \
-  --model gpt-5.6-terra \
-  --json \
-  --auto-approve false \
-  'Reply with exactly: cline ok'
+cline --provider openai --model gemma3 --json --auto-approve false \
+  'Inspect the repository and report the test command.'
 ```
 
-For optional operator MCP in Cline CLI, add the remote server to `~/.cline/mcp.json`. Codex Pooler does not require this for model use. The VS Code extension opens its own MCP settings JSON from the Cline MCP Servers panel; use the same `mcpServers` shape there.
-
-```json
-{
-  "mcpServers": {
-    "codex_pooler": {
-      "url": "https://codex-pooler.example.com/mcp",
-      "headers": {
-        "Authorization": "Bearer <operator-mcp-token>"
-      },
-      "disabled": false,
-      "autoApprove": []
-    }
-  }
-}
-```
-
-For local MCP setup, change the MCP `url` to `http://localhost:4000/mcp`.
-
-Use a Pool API key for `/v1` model requests and an operator MCP token for `/mcp`. Do not reuse the Pool API key for MCP.
+Do not add client-side model fallbacks. `GET /v1/models` is authoritative for the virtual model's exposed context metadata. Cline model traffic uses a Pool API key; optional `/mcp` operator metadata requires a separate operator MCP token.

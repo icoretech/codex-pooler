@@ -42,6 +42,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Files
+  alias CodexPooler.Gateway.Facade
+  alias CodexPooler.Gateway.Facade.IdentityInstruction
   alias CodexPooler.Gateway.Metadata
   alias CodexPooler.Gateway.Metadata.CodexCatalog
   alias CodexPooler.Gateway.OperationalSettings
@@ -65,8 +67,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   alias CodexPooler.Upstreams.CodexClientIdentity
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
 
-  @supported_compression_model "gpt-4o"
-  @reasoning_denial_message "reasoning effort is not available for this API key"
+  @supported_compression_model "gpt-5.6-sol"
   @canonical_full_failure_body %{
     "error" => %{
       "code" => "server_error",
@@ -176,7 +177,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     }
   ]
 
-  defp facade_gateway_setup(upstream, opts) do
+  defp facade_gateway_setup(upstream, opts \\ []) do
     reasoning_levels =
       Enum.map(~w(low medium high xhigh max ultra), &%{"effort" => &1, "description" => &1})
 
@@ -245,17 +246,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert FakeUpstream.count(upstream) == 0
   end
 
-  test "backend Responses HTTP and SSE enforce native reasoning aliases before dispatch", %{
+  test "backend Responses HTTP and SSE reject API-key policies below the fixed effort", %{
     conn: conn
   } do
     cases = [
-      {false, %{"reasoning_effort" => "high"}, "reasoning.effort", "high"},
-      {true, %{"reasoningEffort" => "custom-above-policy"}, "reasoning.effort", "unknown"}
+      {false, %{"reasoning_effort" => "high"}},
+      {true, %{"reasoningEffort" => "custom-above-policy"}}
     ]
 
-    for {stream?, effort_payload, param, persisted_effort} <- cases do
+    for {stream?, effort_payload} <- cases do
       upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
-      setup = gateway_setup(upstream)
+      setup = facade_gateway_setup(upstream)
       set_reasoning_policy!(setup, maximum_reasoning_effort: "medium")
 
       response =
@@ -276,11 +277,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
       assert %{
                "error" => %{
-                 "code" => "reasoning_effort_not_allowed",
-                 "message" => @reasoning_denial_message,
-                 "param" => ^param
+                 "code" => "local_policy_denied",
+                 "message" => "Request denied by local Pool policy",
+                 "param" => nil
                }
-             } = json_response(response, 400)
+             } = json_response(response, 403)
 
       assert FakeUpstream.count(upstream) == 0
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -288,12 +289,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
       assert ledger_entry_kinds(request) == []
 
-      assert get_in(request.request_metadata, ["gateway_denial", "reasoning_policy"]) == %{
-               "policy_mode" => "allow_up_to",
-               "configured_effort" => "medium",
-               "requested_effort" => persisted_effort,
-               "applied_effort" => nil
-             }
+      assert get_in(request.request_metadata, ["gateway_denial", "code"]) ==
+               "facade_policy_conflict"
     end
   end
 
@@ -301,16 +298,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     conn: conn
   } do
     cases = [
-      {[maximum_reasoning_effort: "medium"], %{}, "medium", "allow_up_to"},
-      {[maximum_reasoning_effort: "high"], %{"reasoning_effort" => "low"}, "low", "allow_up_to"},
-      {[enforced_reasoning_effort: "high"], %{"reasoningEffort" => "low"}, "high", "always_use"},
-      {[], %{}, nil, "unrestricted"},
-      {[], %{"reasoning" => %{"effort" => "focused"}}, "focused", "unrestricted"}
+      {[maximum_reasoning_effort: "max"], %{}, "always_use"},
+      {[maximum_reasoning_effort: "ultra"], %{"reasoning_effort" => "low"}, "always_use"},
+      {[enforced_reasoning_effort: "max"], %{"reasoningEffort" => "low"}, "always_use"},
+      {[], %{}, "always_use"},
+      {[], %{"reasoning" => %{"effort" => "focused"}}, "always_use"}
     ]
 
-    for {policy, effort_payload, expected_effort, expected_mode} <- cases do
+    for {policy, effort_payload, expected_mode} <- cases do
       upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_backend_policy"}))
-      setup = gateway_setup(upstream)
+      setup = facade_gateway_setup(upstream)
       set_reasoning_policy!(setup, policy)
 
       response =
@@ -327,17 +324,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
       assert %{"id" => "resp_backend_policy"} = json_response(response, 200)
       assert [captured] = FakeUpstream.requests(upstream)
-      assert get_in(captured.json, ["reasoning", "effort"]) == expected_effort
+      assert get_in(captured.json, ["reasoning", "effort"]) == "max"
+      assert captured.json["model"] == Facade.effective_model()
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
       assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
       assert get_in(attempt.response_metadata, ["reasoning", "policy_mode"]) == expected_mode
-      assert get_in(attempt.response_metadata, ["reasoning", "applied_effort"]) == expected_effort
+      assert get_in(attempt.response_metadata, ["reasoning", "applied_effort"]) == "max"
     end
   end
 
   test "backend Chat enforces reasoning availability before dispatch", %{conn: conn} do
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
-    setup = gateway_setup(upstream)
+    setup = facade_gateway_setup(upstream)
     set_reasoning_policy!(setup, maximum_reasoning_effort: "medium")
 
     response =
@@ -351,11 +349,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert %{
              "error" => %{
-               "code" => "reasoning_effort_not_allowed",
-               "message" => @reasoning_denial_message,
-               "param" => "reasoning_effort"
+               "code" => "local_policy_denied",
+               "message" => "Request denied by local Pool policy",
+               "param" => nil
              }
-           } = json_response(response, 400)
+           } = json_response(response, 403)
 
     assert FakeUpstream.count(upstream) == 0
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -363,23 +361,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
     assert ledger_entry_kinds(request) == []
 
-    assert get_in(request.request_metadata, ["gateway_denial", "reasoning_policy"]) == %{
-             "policy_mode" => "allow_up_to",
-             "configured_effort" => "medium",
-             "requested_effort" => "high",
-             "applied_effort" => nil
-           }
+    assert get_in(request.request_metadata, ["gateway_denial", "code"]) ==
+             "facade_policy_conflict"
   end
 
   test "backend Chat applies maximum and enforced reasoning policies", %{conn: conn} do
     cases = [
-      {[maximum_reasoning_effort: "medium"], %{}, "medium", "allow_up_to"},
-      {[enforced_reasoning_effort: "high"], %{"reasoning_effort" => "low"}, "high", "always_use"}
+      {[maximum_reasoning_effort: "max"], %{}, "always_use"},
+      {[enforced_reasoning_effort: "max"], %{"reasoning_effort" => "low"}, "always_use"}
     ]
 
-    for {policy, extra_payload, expected_effort, expected_mode} <- cases do
+    for {policy, extra_payload, expected_mode} <- cases do
       upstream = start_upstream(backend_chat_completed_upstream())
-      setup = gateway_setup(upstream)
+      setup = facade_gateway_setup(upstream)
       set_reasoning_policy!(setup, policy)
 
       response =
@@ -399,11 +393,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
       assert %{"id" => "resp_backend_chat_reasoning_policy"} = json_response(response, 200)
       assert [captured] = FakeUpstream.requests(upstream)
-      assert get_in(captured.json, ["reasoning", "effort"]) == expected_effort
+      assert get_in(captured.json, ["reasoning", "effort"]) == "max"
+      assert captured.json["model"] == Facade.effective_model()
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
       assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
       assert get_in(attempt.response_metadata, ["reasoning", "policy_mode"]) == expected_mode
-      assert get_in(attempt.response_metadata, ["reasoning", "applied_effort"]) == expected_effort
+      assert get_in(attempt.response_metadata, ["reasoning", "applied_effort"]) == "max"
     end
   end
 
@@ -422,14 +417,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> get("/backend-api/codex/models")
 
     assert %{"models" => [model]} = json_response(conn, 200)
-    assert model["slug"] == setup.model.exposed_model_id
-    assert model["description"] == setup.model.display_name
+    assert model["slug"] == Facade.public_model()
+    assert model["display_name"] == Facade.public_model()
+    assert model["description"] == Facade.public_model()
 
     assert model["supported_reasoning_levels"] == [
-             %{"description" => "low", "effort" => "low"},
-             %{"description" => "medium", "effort" => "medium"},
-             %{"description" => "high", "effort" => "high"},
-             %{"description" => "xhigh", "effort" => "xhigh"}
+             %{"description" => "Maximum", "effort" => "max"}
            ]
 
     assert model["shell_type"] == "shell_command"
@@ -439,7 +432,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert model["include_skills_usage_instructions"] == false
     assert model["supports_parallel_tool_calls"] == setup.model.supports_tools
     assert model["input_modalities"] == ["text"]
-    assert model["upstream_model_id"] == setup.model.upstream_model_id
+    refute Map.has_key?(model, "upstream_model_id")
     assert model["supported_in_api"] == true
     assert [etag] = get_resp_header(conn, "etag")
     assert etag == CodexCatalog.etag(%{"models" => [model]})
@@ -487,7 +480,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         response = conn |> recycle() |> auth(setup) |> get(endpoint)
         body = json_response(response, 200)
 
-        assert Enum.map(body["models"], & &1["slug"]) == [setup.model.exposed_model_id]
+        assert Enum.map(body["models"], & &1["slug"]) == [Facade.public_model()]
         refute Enum.any?(body["models"], &(&1["slug"] == denied_model.exposed_model_id))
         assert get_resp_header(response, "etag") == [CodexCatalog.etag(body)]
 
@@ -510,11 +503,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     changed_response = conn |> recycle() |> auth(setup) |> get("/backend-api/codex/models")
     changed_body = json_response(changed_response, 200)
 
-    assert Enum.map(changed_body["models"], & &1["slug"]) ==
-             Enum.sort([setup.model.exposed_model_id, denied_model.exposed_model_id])
-
-    refute changed_response.resp_body == body_bytes
-    refute get_resp_header(changed_response, "etag") == [etag_bytes]
+    assert Enum.map(changed_body["models"], & &1["slug"]) == [Facade.public_model()]
+    assert changed_response.resp_body == body_bytes
+    assert get_resp_header(changed_response, "etag") == [etag_bytes]
 
     assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 3
     assert FakeUpstream.count(upstream) == 0
@@ -561,7 +552,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     first_body = json_response(first, 200)
     [first_etag] = get_resp_header(first, "etag")
 
-    assert hd(first_body["models"])["future_schema_field"] == source["future_schema_field"]
+    refute Map.has_key?(hd(first_body["models"]), "future_schema_field")
 
     assert first_etag == CodexCatalog.etag(first_body)
 
@@ -604,7 +595,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     response = conn |> recycle() |> auth(setup) |> get("/backend-api/codex/models")
     body = json_response(response, 200)
 
-    assert body == %{"models" => []}
+    assert %{"models" => [%{"slug" => "gemma3"}]} = body
     assert get_resp_header(response, "etag") == [CodexCatalog.etag(body)]
     refute response.resp_body =~ "aggregate"
     assert FakeUpstream.count(upstream) == 0
@@ -676,7 +667,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       for endpoint <- ["/backend-api/codex/models", "/backend-api/codex/v1/models"] do
         response = conn |> recycle() |> auth(setup) |> get(endpoint)
         assert %{"models" => [model]} = json_response(response, 200)
-        assert model["slug"] == setup.model.exposed_model_id
+        assert model["slug"] == Facade.public_model()
         assert model["use_responses_lite"] == false
         {response.resp_body, get_resp_header(response, "etag")}
       end
@@ -696,7 +687,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     public_response = conn |> recycle() |> auth(setup) |> get("/v1/models")
     assert %{"object" => "list", "data" => [public_model]} = json_response(public_response, 200)
-    assert public_model["id"] == setup.model.exposed_model_id
+    assert public_model["id"] == Facade.public_model()
     refute Map.has_key?(public_model, "use_responses_lite")
 
     unauthorized = conn |> recycle() |> get("/backend-api/codex/models")
@@ -825,7 +816,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         })
       )
 
-    setup = gateway_setup(first_upstream, exposed_model_id: "gpt-mode-failover")
+    setup = gateway_setup(first_upstream, exposed_model_id: Facade.effective_model())
 
     second =
       gateway_upstream(setup.pool, second_upstream, "upstream-token-mode-fallback",
@@ -876,31 +867,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         ]
       })
 
-    assert %{"error" => %{"code" => "model_not_found"}} = json_response(response, 500)
+    assert %{"error" => %{"code" => "service_unavailable"}} = json_response(response, 503)
 
-    assert [%{json: first_payload}] = FakeUpstream.requests(first_upstream)
+    assert FakeUpstream.requests(first_upstream) == []
     assert FakeUpstream.requests(second_upstream) == []
-    assert first_payload["model"] == setup.model.upstream_model_id
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
-    assert request.status == "failed"
+    assert request.status == "rejected"
     assert request.retry_count == 0
+    assert request.last_error_code == "no_compatible_backend"
 
-    expected_mode_metadata = %{
-      "model_serving_mode_configured" => "lite",
-      "model_serving_mode" => "lite",
-      "model_serving_mode_source" => "override"
-    }
+    refute Map.has_key?(request.request_metadata, "routing")
 
-    assert Map.take(request.request_metadata["routing"], Map.keys(expected_mode_metadata)) ==
-             expected_mode_metadata
-
-    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
-    assert attempt.status == "failed"
-    assert attempt.pool_upstream_assignment_id == setup.assignment.id
-
-    assert Map.take(attempt.response_metadata["routing"], Map.keys(expected_mode_metadata)) ==
-             expected_mode_metadata
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
   end
 
   @tag :task_15_sanitization
@@ -1270,7 +1249,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     }
 
     upstream = start_upstream(FakeUpstream.json_response(upstream_body, 404))
-    setup = gateway_setup(upstream, exposed_model_id: "gpt-example-luna")
+    setup = gateway_setup(upstream, exposed_model_id: Facade.effective_model())
 
     response =
       conn
@@ -1313,7 +1292,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     }
 
     upstream = start_upstream(FakeUpstream.json_response(upstream_body, 404))
-    setup = gateway_setup(upstream, exposed_model_id: "gpt-example-luna")
+    setup = gateway_setup(upstream, exposed_model_id: Facade.effective_model())
     put_model_serving_mode!(setup, "full")
 
     response =
@@ -1397,7 +1376,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert attempt.network_error_code == "upstream_status"
   end
 
-  test "GET /backend-api/codex/models preserves pristine reasoning metadata across API key policy",
+  test "GET /backend-api/codex/models hides gemma3 when the key ceiling is below max",
        %{
          conn: conn
        } do
@@ -1421,18 +1400,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     conn = conn |> auth(setup) |> get("/backend-api/codex/models")
 
-    assert %{"models" => [model]} = json_response(conn, 200)
-
-    assert model["supported_reasoning_levels"] == [
-             %{"effort" => "low", "description" => "Quick"},
-             %{"effort" => "medium", "description" => "Balanced"},
-             %{"effort" => "high", "description" => "Deep"}
-           ]
-
-    assert model["default_reasoning_level"] == "high"
+    assert %{"models" => []} = json_response(conn, 200)
   end
 
-  test "GET /backend-api/codex/models preserves pristine reasoning level values and order", %{
+  test "GET /backend-api/codex/models rejects a high ceiling for the fixed max persona", %{
     conn: conn
   } do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
@@ -1455,18 +1426,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     conn = conn |> auth(setup) |> get("/backend-api/codex/models")
 
-    assert %{"models" => [model]} = json_response(conn, 200)
-
-    assert model["supported_reasoning_levels"] == [
-             %{"effort" => "medium", "description" => "Balanced"},
-             %{"effort" => " HIGH ", "description" => "Deep", "extra" => "preserved"},
-             %{"effort" => "low", "description" => "Quick"}
-           ]
-
-    assert model["default_reasoning_level"] == " HIGH "
+    assert %{"models" => []} = json_response(conn, 200)
   end
 
-  test "GET /backend-api/codex/models keeps models visible when enforced reasoning is unavailable",
+  test "GET /backend-api/codex/models hides gemma3 when enforced reasoning conflicts",
        %{conn: conn} do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
 
@@ -1484,13 +1447,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     conn = conn |> auth(setup) |> get("/backend-api/codex/models")
 
-    assert %{"models" => [model]} = json_response(conn, 200)
-    assert model["slug"] == setup.model.exposed_model_id
-    assert model["supported_reasoning_levels"] == ~w(low medium)
-    assert model["default_reasoning_level"] == "medium"
+    assert %{"models" => []} = json_response(conn, 200)
   end
 
-  test "GET /backend-api/codex/models keeps pristine reasoning metadata with enforced effort", %{
+  test "GET /backend-api/codex/models hides gemma3 for a non-max enforced effort", %{
     conn: conn
   } do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
@@ -1509,11 +1469,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     conn = conn |> auth(setup) |> get("/backend-api/codex/models")
 
-    assert %{"models" => [model]} = json_response(conn, 200)
-
-    assert model["supported_reasoning_levels"] == ~w(low medium high)
-
-    assert model["default_reasoning_level"] == "high"
+    assert %{"models" => []} = json_response(conn, 200)
   end
 
   test "GET /backend-api/codex/models records unique server correlation ids for repeated client request ids",
@@ -1615,7 +1571,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> get("/backend-api/codex/v1/models")
 
     assert %{"models" => [model]} = json_response(conn, 200)
-    assert model["slug"] == setup.model.exposed_model_id
+    assert model["slug"] == Facade.public_model()
     assert model["supported_in_api"] == true
     assert FakeUpstream.count(upstream) == 0
 
@@ -1654,8 +1610,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert %{
              "error" => %{
-               "code" => "api_key_paused",
-               "message" => "api key is paused",
+               "code" => "api_key_disabled",
+               "message" => "Pool API key is required or invalid",
                "type" => "invalid_request_error"
              }
            } = json_response(conn, 401)
@@ -1718,8 +1674,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert %{"models" => models} = json_response(conn, 200)
 
-    assert Enum.map(models, & &1["slug"]) |> Enum.sort() ==
-             [setup.model.exposed_model_id, allowed_visible.exposed_model_id] |> Enum.sort()
+    assert Enum.map(models, & &1["slug"]) == [Facade.public_model()]
 
     refute Enum.any?(models, &(&1["slug"] == hidden_by_policy.exposed_model_id))
     assert FakeUpstream.count(upstream) == 0
@@ -1766,8 +1721,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       end)
 
     assert {:ok, snapshot} = result
-    assert Enum.map(snapshot.body["models"], & &1["slug"]) == [setup.model.exposed_model_id]
-    assert Map.get(query_sources, "account_quota_windows", 0) == 0
+    assert Enum.map(snapshot.body["models"], & &1["slug"]) == [Facade.public_model()]
+    assert Map.get(query_sources, "account_quota_windows", 0) == 1
   end
 
   test "GET /backend-api/codex/models logs the highest-plan model source account", %{conn: conn} do
@@ -1916,14 +1871,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     upstream = start_upstream(FakeUpstream.json_response(upstream_response))
     setup = gateway_setup(upstream)
     prompt_sentinel = "backend-image-generation-prompt-sentinel-do-not-log"
-    image_model = "gpt-image-2"
+    client_model = "gpt-image-2"
 
     setup.api_key
-    |> Ecto.Changeset.change(allowed_model_identifiers: [image_model])
+    |> Ecto.Changeset.change(allowed_model_identifiers: [Facade.effective_model()])
     |> Repo.update!()
 
     payload = %{
-      "model" => image_model,
+      "model" => client_model,
       "prompt" => prompt_sentinel,
       "background" => "auto",
       "quality" => "auto",
@@ -1941,13 +1896,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.method == "POST"
     assert captured.path == "/backend-api/codex/images/generations"
-    assert captured.json == payload
+    assert captured.json == Map.put(payload, "model", "gpt-image-1")
 
     assert_native_image_accounting!(
       setup,
       "/backend-api/codex/images/generations",
-      image_model,
-      [prompt_sentinel, "backend-image-generation-b64-sentinel"]
+      [client_model, prompt_sentinel, "backend-image-generation-b64-sentinel"]
     )
   end
 
@@ -1966,16 +1920,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     upstream = start_upstream(FakeUpstream.json_response(upstream_response))
     setup = gateway_setup(upstream)
     prompt_sentinel = "backend-image-edit-prompt-sentinel-do-not-log"
-    image_model = "gpt-image-2"
+    client_model = "gpt-image-2"
     image_sentinel = "backend-image-edit-source-base64-sentinel"
     image_data_url = "data:image/png;base64,#{image_sentinel}"
 
     setup.api_key
-    |> Ecto.Changeset.change(allowed_model_identifiers: [image_model])
+    |> Ecto.Changeset.change(allowed_model_identifiers: [Facade.effective_model()])
     |> Repo.update!()
 
     payload = %{
-      "model" => image_model,
+      "model" => client_model,
       "prompt" => prompt_sentinel,
       "background" => "auto",
       "quality" => "auto",
@@ -1994,13 +1948,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.method == "POST"
     assert captured.path == "/backend-api/codex/images/edits"
-    assert captured.json == payload
+    assert captured.json == Map.put(payload, "model", "gpt-image-1")
 
     assert_native_image_accounting!(
       setup,
       "/backend-api/codex/images/edits",
-      image_model,
       [
+        client_model,
         prompt_sentinel,
         image_data_url,
         image_sentinel,
@@ -2038,15 +1992,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     upstream = start_upstream(FakeUpstream.json_response(upstream_response))
     setup = gateway_setup(upstream)
-    image_model = "future-image-model-fixture"
+    client_model = "future-image-model-fixture"
     prompt_sentinel = "future-image-generation-prompt-sentinel"
 
     setup.api_key
-    |> Ecto.Changeset.change(allowed_model_identifiers: [image_model])
+    |> Ecto.Changeset.change(allowed_model_identifiers: [Facade.effective_model()])
     |> Repo.update!()
 
     payload = %{
-      "model" => image_model,
+      "model" => client_model,
       "prompt" => prompt_sentinel,
       "background" => "auto",
       "quality" => "auto",
@@ -2064,13 +2018,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.method == "POST"
     assert captured.path == "/backend-api/codex/images/generations"
-    assert captured.json == payload
+    assert captured.json == Map.put(payload, "model", "gpt-image-1")
 
     assert_native_image_accounting!(
       setup,
       "/backend-api/codex/images/generations",
-      image_model,
-      [prompt_sentinel, "future-image-returned-base64-sentinel"]
+      [client_model, prompt_sentinel, "future-image-returned-base64-sentinel"]
     )
   end
 
@@ -2091,7 +2044,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "prompt" => "synthetic policy denial"
       })
 
-    assert %{"error" => %{"code" => "model_not_allowed"}} = json_response(response, 403)
+    assert %{"error" => %{"code" => "local_policy_denied"}} = json_response(response, 403)
     assert_no_native_dispatch!(upstream, setup.pool.id)
   end
 
@@ -2123,7 +2076,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "prompt" => "synthetic enforced mismatch"
       })
 
-    assert %{"error" => %{"code" => "model_not_allowed"}} = json_response(response, 403)
+    assert %{"error" => %{"code" => "local_policy_denied"}} = json_response(response, 403)
     assert_no_native_dispatch!(upstream, setup.pool.id)
   end
 
@@ -2134,8 +2087,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     setup.api_key
     |> Ecto.Changeset.change(
-      allowed_model_identifiers: ["gpt-image-2"],
-      enforced_model_identifier: "gpt-image-2"
+      allowed_model_identifiers: ["GPT-5.6-SOL"],
+      enforced_model_identifier: "GPT-5.6-SOL"
     )
     |> Repo.update!()
 
@@ -2152,11 +2105,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.method == "POST"
     assert captured.path == "/backend-api/codex/images/generations"
-    assert captured.json["model"] == "gpt-image-2"
+    assert captured.json["model"] == "gpt-image-1"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
-    assert request.requested_model == " GPT-IMAGE-2 "
-    assert request.request_metadata["effective_model"] == "gpt-image-2"
+    assert request.requested_model == Facade.public_model()
+    assert request.request_metadata["effective_model"] == "gpt-image-1"
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.pool_upstream_assignment_id == setup.assignment.id
@@ -2188,8 +2141,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert FakeUpstream.count(upstream) == 1
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
-    assert request.requested_model == "client-requested-model-fixture"
-    assert request.request_metadata["effective_model"] == setup.model.exposed_model_id
+    assert request.requested_model == Facade.public_model()
+    assert request.request_metadata["effective_model"] == Facade.effective_model()
   end
 
   @tag :native_backend_image_routing
@@ -2238,19 +2191,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "prompt" => "synthetic suppressed model"
       })
 
-    assert %{"error" => %{"code" => "invalid_model"}} = json_response(response, 400)
-    assert_no_native_dispatch!(upstream, setup.pool.id)
+    assert %{"created" => 1, "data" => []} = json_response(response, 200)
+    assert [%{json: %{"model" => "gpt-image-1"}}] = FakeUpstream.requests(upstream)
   end
 
   @tag :native_backend_image_routing
-  test "native absent image model requires a Responses streaming tools host", %{conn: conn} do
+  test "native image helpers require a Responses-capable target", %{
+    conn: conn
+  } do
     capability_cases = [
-      {:supports_responses, false},
-      {:supports_streaming, false},
-      {:supports_tools, false}
+      {:supports_responses, false, :reject},
+      {:supports_streaming, false, :dispatch},
+      {:supports_tools, false, :dispatch}
     ]
 
-    for {capability, supported?} <- capability_cases do
+    for {capability, supported?, expected} <- capability_cases do
       upstream = start_upstream(FakeUpstream.json_response(%{"created" => 1, "data" => []}))
       setup = gateway_setup(upstream)
 
@@ -2267,8 +2222,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
           "prompt" => "synthetic host capability"
         })
 
-      assert %{"error" => %{"code" => "invalid_model"}} = json_response(response, 400)
-      assert_no_native_dispatch!(upstream, setup.pool.id)
+      case expected do
+        :dispatch ->
+          assert %{"created" => 1, "data" => []} = json_response(response, 200)
+          assert [%{json: %{"model" => "gpt-image-1"}}] = FakeUpstream.requests(upstream)
+
+        :reject ->
+          assert %{"error" => %{"code" => "invalid_request"}} = json_response(response, 400)
+          assert_no_native_dispatch!(upstream, setup.pool.id)
+      end
     end
   end
 
@@ -2289,11 +2251,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "prompt" => "synthetic no candidate"
       })
 
-    assert %{"error" => %{"code" => "no_eligible_backend"}} = json_response(response, 503)
+    assert %{"error" => %{"code" => "service_unavailable"}} = json_response(response, 503)
     assert_no_native_dispatch!(upstream, setup.pool.id)
   end
 
-  test "GET /backend-api/codex/models preserves pristine upstream fields and strips provenance",
+  test "GET /backend-api/codex/models projects only safe provider-neutral fields",
        %{
          conn: conn
        } do
@@ -2336,37 +2298,27 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     conn = conn |> auth(setup) |> get("/backend-api/codex/models")
 
     assert %{"models" => [model]} = json_response(conn, 200)
-    assert model["available_in_plans"] == ["pro", "team"]
+    refute Map.has_key?(model, "available_in_plans")
     assert model["default_service_tier"] == "priority"
-
-    assert model["minimal_client_version"] == %{
-             "ios" => "1.2.3",
-             "web" => ["1.2.0", "1.2.1"]
-           }
-
-    assert model["model_messages"] == %{
-             "instructions_template" => "Use {{PERSONALITY}}.\nReturn concise answers.",
-             "instructions_variables" => %{
-               "personality_default" => "default voice",
-               "personality_friendly" => "friendly voice",
-               "personality_pragmatic" => "pragmatic voice"
-             }
-           }
+    refute Map.has_key?(model, "minimal_client_version")
+    refute Map.has_key?(model, "model_messages")
 
     assert model["prefer_websockets"] == true
     assert model["reasoning_summary_format"] == "json"
 
-    assert model["supported_reasoning_levels"] == ["max", "low", "focused"]
+    assert model["supported_reasoning_levels"] == [
+             %{"description" => "Maximum", "effort" => "max"}
+           ]
 
-    assert model["default_reasoning_level"] == "focused"
-    assert model["comp_hash"] == " comp-fixture-hash "
+    assert model["default_reasoning_level"] == "max"
+    refute Map.has_key?(model, "comp_hash")
     assert model["tool_mode"] == "code_mode_only"
     assert model["use_responses_lite"] == true
     assert model["include_skills_usage_instructions"] == true
     refute Map.has_key?(model, "upstream_model")
     refute Map.has_key?(model, "source_assignment_ids")
     refute Map.has_key?(model, "source_assignment_models")
-    assert model["raw_model_listing"] == %{"id" => "provider"}
+    refute Map.has_key?(model, "raw_model_listing")
     assert FakeUpstream.count(upstream) == 0
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -2376,7 +2328,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute metadata_text =~ setup.raw_key
   end
 
-  test "GET /backend-api/codex/models preserves pristine source lifecycle metadata", %{
+  test "GET /backend-api/codex/models does not expose source lifecycle metadata", %{
     conn: conn
   } do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
@@ -2414,12 +2366,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     conn = conn |> auth(setup) |> get("/backend-api/codex/models")
 
     assert %{"models" => [model]} = json_response(conn, 200)
-    assert model["visibility"] == "hide"
-
-    assert model["upgrade"] == %{
-             "model" => "gpt-source-replacement",
-             "migration_markdown" => "Use the replacement model."
-           }
+    assert model["visibility"] == "list"
+    refute Map.has_key?(model, "upgrade")
 
     refute Map.has_key?(model, "source_assignment_ids")
     refute Map.has_key?(model, "source_assignment_models")
@@ -2473,7 +2421,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     catalog = conn |> auth(setup) |> get("/backend-api/codex/models")
 
     assert %{"models" => [model]} = json_response(catalog, 200)
-    assert model["slug"] == setup.model.exposed_model_id
+    assert model["slug"] == Facade.public_model()
 
     response =
       conn
@@ -2488,7 +2436,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert FakeUpstream.count(upstream) == 1
   end
 
-  test "GET /backend-api/codex/models preserves JSON-safe pristine metadata verbatim", %{
+  test "GET /backend-api/codex/models drops malformed and unsafe pristine metadata", %{
     conn: conn
   } do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
@@ -2513,15 +2461,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     conn = conn |> auth(setup) |> get("/backend-api/codex/models")
 
     assert %{"models" => [model]} = json_response(conn, 200)
-    assert model["available_in_plans"] == "pro"
-    assert model["default_service_tier"] == 123
-    assert is_nil(model["minimal_client_version"])
-    assert model["model_messages"] == ["unexpected"]
-    assert model["prefer_websockets"] == "true"
-    assert model["include_skills_usage_instructions"] == "true"
-    assert model["reasoning_summary_format"] == %{"format" => "json"}
-    assert model["comp_hash"] == ["unexpected"]
-    assert model["tool_mode"] == "future_mode"
+
+    for key <- [
+          "available_in_plans",
+          "default_service_tier",
+          "minimal_client_version",
+          "model_messages",
+          "reasoning_summary_format",
+          "comp_hash",
+          "tool_mode"
+        ] do
+      refute Map.has_key?(model, key)
+    end
+
+    assert model["include_skills_usage_instructions"] == false
+    assert model["prefer_websockets"] == false
     assert FakeUpstream.count(upstream) == 0
   end
 
@@ -2530,7 +2484,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     Application.put_env(:codex_pooler, OperationalSettings,
       settings: %OperationalSettings{
-        model_context_window_overrides: %{"gpt-test-model" => 128_000}
+        model_context_window_overrides: %{Facade.effective_model() => 128_000}
       }
     )
 
@@ -2662,18 +2616,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert %{"models" => [model]} = json_response(conn, 200)
     assert model["additional_speed_tiers"] == ["fast"]
 
-    assert model["service_tiers"] == [
-             %{
-               "id" => "priority",
-               "name" => "Fast",
-               "description" => "1.5x speed, increased usage"
-             },
-             %{
-               "id" => "latency_preview",
-               "name" => "Latency preview",
-               "description" => "Preview routing tier advertised by the upstream catalog."
-             }
-           ]
+    assert model["service_tiers"] == [%{"id" => "priority", "name" => "Priority"}]
 
     assert FakeUpstream.count(upstream) == 0
   end
@@ -2709,18 +2652,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     prime_routing_quota!(pro.identity)
 
-    tier_model = %{
-      "slug" => setup.model.exposed_model_id,
-      "id" => setup.model.upstream_model_id,
-      "service_tiers" => [
-        %{
-          "id" => "latency_preview",
-          "name" => "Latency preview",
-          "description" => "Preview routing tier advertised by the upstream catalog."
-        }
-      ],
-      "capabilities" => %{"responses" => true, "streaming" => true}
-    }
+    tier_model =
+      setup.model.metadata["source_assignment_models"][setup.assignment.id]
+      |> Map.merge(%{
+        "slug" => setup.model.exposed_model_id,
+        "id" => setup.model.upstream_model_id,
+        "service_tiers" => [
+          %{
+            "id" => "latency_preview",
+            "name" => "Latency preview",
+            "description" => "Preview routing tier advertised by the upstream catalog."
+          }
+        ],
+        "capabilities" => %{"responses" => true, "streaming" => true}
+      })
 
     model =
       setup.model
@@ -2817,7 +2762,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert %{"id" => "resp_backend_v1_alias"} = json_response(conn, 200)
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
-    assert captured.json["prompt_cache_key"] == "native-alias-cache-key"
+    assert captured.json["prompt_cache_key"] =~ ~r/^facade:[A-Za-z0-9_-]{43}$/
+    refute captured.json["prompt_cache_key"] == "native-alias-cache-key"
     refute Map.has_key?(captured.json, "prompt_cache_options")
     refute inspect(captured.json) =~ "prompt_cache_breakpoint"
 
@@ -2914,7 +2860,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert captured.json["include"] == ["reasoning.encrypted_content"]
 
-    assert captured.json["reasoning"] == %{"effort" => "high"}
+    assert captured.json["reasoning"] == %{"effort" => "max"}
   end
 
   test "POST /backend-api/codex/v1/responses preserves request-shaped additional_tools input items",
@@ -3452,8 +3398,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert %{
              "error" => %{
-               "code" => "upstream_response_too_large",
-               "message" => "upstream response body exceeded maximum allowed size"
+               "code" => "service_error",
+               "message" => "gemma3 request failed"
              }
            } = response = json_response(conn, 502)
 
@@ -4045,7 +3991,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
-    assert captured.json["instructions"] == "synthetic backend top-level instruction"
+
+    assert captured.json["instructions"] ==
+             "synthetic backend top-level instruction\n\n" <> IdentityInstruction.instruction()
 
     assert captured.json["input"] == [
              %{"role" => "developer", "content" => "synthetic backend developer input"},
@@ -4229,20 +4177,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         }
       )
 
-    setup.model
-    |> Ecto.Changeset.change(%{
-      metadata:
-        Map.put(setup.model.metadata, "source_assignment_models", %{
-          setup.assignment.id =>
-            Map.put(
-              setup.model.metadata["upstream_model"],
-              "slug",
-              setup.model.exposed_model_id
-            )
-        })
-    })
-    |> Repo.update!()
-
     priority_payload = %{
       "model" => setup.model.exposed_model_id,
       "input" => "concrete tier prompt should not log",
@@ -4355,7 +4289,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "service_tier" => "fast"
       })
 
-    assert %{"error" => %{"code" => "no_compatible_backend"}} = json_response(conn, 503)
+    assert %{"error" => %{"code" => "service_unavailable"}} = json_response(conn, 503)
     assert FakeUpstream.count(upstream) == 0
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -4439,10 +4373,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "input" => "use responses"
       })
 
-    assert %{"error" => %{"code" => "no_eligible_backend"}} = json_response(conn, 503)
+    assert %{"error" => %{"code" => "service_unavailable"}} = json_response(conn, 503)
     assert FakeUpstream.requests(incompatible_upstream) == []
     assert FakeUpstream.requests(compatible_upstream) == []
-    assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 0
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "rejected"
+    assert request.last_error_code == "no_compatible_backend"
     assert Repo.aggregate(Attempt, :count) == 0
     assert Repo.aggregate(LedgerEntry, :count) == 0
   end
@@ -4526,7 +4462,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "input" => "use sparse real metadata",
         "reasoning" => %{},
         "service_tier" => "default",
-        "stream" => true,
         "tools" => []
       })
 
@@ -4997,10 +4932,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
         public_payload = json_response(conn, 502)
 
-        assert %{"error" => %{"code" => "upstream_request_failed", "message" => message}} =
+        assert %{"error" => %{"code" => "service_error", "message" => message}} =
                  public_payload
 
-        assert message == "upstream request failed"
+        assert message == "gemma3 request failed"
         refute inspect(public_payload) =~ "transport_failure"
         refute inspect(public_payload) =~ "Req.TransportError"
       end)
@@ -5089,10 +5024,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
         public_payload = json_response(conn, 502)
 
-        assert %{"error" => %{"code" => "upstream_request_failed", "message" => message}} =
+        assert %{"error" => %{"code" => "service_error", "message" => message}} =
                  public_payload
 
-        assert message == "upstream request failed"
+        assert message == "gemma3 request failed"
         refute inspect(public_payload) =~ "transport_failure"
         refute inspect(public_payload) =~ "Req.HTTPError"
         refute inspect(public_payload) =~ "invalid_content_length_header"
@@ -5250,7 +5185,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute Map.has_key?(second_attempt.response_metadata, "transport_failure")
 
     assert [captured] = FakeUpstream.requests(success_upstream)
-    assert captured.json["prompt_cache_key"] == prompt_cache_key
+    assert captured.json["prompt_cache_key"] =~ ~r/^facade:[A-Za-z0-9_-]{43}$/
+    refute captured.json["prompt_cache_key"] == prompt_cache_key
     refute Map.has_key?(captured.json, "prompt_cache_options")
     refute inspect(captured.json) =~ "prompt_cache_breakpoint"
 
@@ -5854,7 +5790,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         ]
       })
 
-    assert %{"error" => %{"code" => "unsupported_model_capability"}} = json_response(conn, 400)
+    assert %{"error" => %{"code" => "invalid_request"}} = json_response(conn, 400)
     assert FakeUpstream.requests(upstream) == []
   end
 
@@ -6372,7 +6308,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert other_response_before == FakeUpstream.count(other_response_upstream)
 
     assert [captured] = FakeUpstream.requests(owner_response_upstream)
-    assert captured.json["instructions"] == "read the referenced file"
+
+    assert captured.json["instructions"] ==
+             "read the referenced file\n\n" <> IdentityInstruction.instruction()
+
     assert captured.json["store"] == false
 
     assert captured.json["input"]
@@ -6511,7 +6450,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "input" => [%{"type" => "input_file", "file_id" => pending_file_id}]
       })
 
-    assert %{"error" => %{"code" => "file_not_ready"}} = json_response(pending_conn, 409)
+    assert %{"error" => %{"code" => "request_failed"}} = json_response(pending_conn, 409)
     assert FakeUpstream.count(owner_file_upstream) == owner_dispatch_count
     assert FakeUpstream.count(other_file_upstream) == other_dispatch_count
 
@@ -6532,7 +6471,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "input" => [%{"type" => "input_file", "file_id" => failed_file_id}]
       })
 
-    assert %{"error" => %{"code" => "file_not_ready"}} = json_response(failed_conn, 409)
+    assert %{"error" => %{"code" => "request_failed"}} = json_response(failed_conn, 409)
     assert FakeUpstream.count(owner_file_upstream) == owner_dispatch_count
     assert FakeUpstream.count(other_file_upstream) == other_dispatch_count
 
@@ -6576,7 +6515,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "input" => [%{"type" => "input_file", "file_id" => retry_timeout_file_id}]
       })
 
-    assert %{"error" => %{"code" => "file_not_ready"}} = json_response(retry_timeout_conn, 409)
+    assert %{"error" => %{"code" => "request_failed"}} = json_response(retry_timeout_conn, 409)
     assert FakeUpstream.count(owner_file_upstream) == owner_dispatch_count
     assert FakeUpstream.count(other_file_upstream) == other_dispatch_count
 
@@ -7095,7 +7034,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
           })
         )
 
-      setup = gateway_setup(first_upstream, exposed_model_id: "gpt-example-luna")
+      setup = gateway_setup(first_upstream, exposed_model_id: Facade.effective_model())
 
       second =
         gateway_upstream(setup.pool, second_upstream, "upstream-token-model-fallback",
@@ -7147,7 +7086,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
       assert %RoutingCircuitState{
                pool_upstream_assignment_id: first_assignment_id,
-               model_identifier: "gpt-example-luna",
+               model_identifier: "gpt-5.6-sol",
                route_class: "proxy_http",
                reason_code: "upstream_model_unavailable"
              } = Repo.one!(from(c in RoutingCircuitState))
@@ -7213,7 +7152,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
           })
         )
 
-      setup = gateway_setup(first_upstream, exposed_model_id: "gpt-example-luna")
+      setup = gateway_setup(first_upstream, exposed_model_id: Facade.effective_model())
 
       second =
         gateway_upstream(setup.pool, second_upstream, "upstream-token-model-status-fallback",
@@ -7287,7 +7226,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         )
       )
 
-    setup = gateway_setup(upstream, exposed_model_id: "gpt-example-luna")
+    setup = gateway_setup(upstream, exposed_model_id: Facade.effective_model())
 
     conn =
       conn
@@ -7327,7 +7266,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         )
       )
 
-    setup = gateway_setup(upstream, exposed_model_id: "gpt-example-luna")
+    setup = gateway_setup(upstream, exposed_model_id: Facade.effective_model())
 
     conn =
       conn
@@ -7383,7 +7322,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         )
       )
 
-    setup = gateway_setup(fallback_upstream, exposed_model_id: "gpt-example-luna")
+    setup = gateway_setup(fallback_upstream, exposed_model_id: Facade.effective_model())
 
     pinned =
       gateway_upstream(setup.pool, pinned_upstream, "upstream-token-model-hard-pin",
@@ -7452,7 +7391,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         )
       )
 
-    setup = gateway_setup(fallback_upstream, exposed_model_id: "gpt-example-luna")
+    setup = gateway_setup(fallback_upstream, exposed_model_id: Facade.effective_model())
 
     pinned =
       gateway_upstream(setup.pool, pinned_upstream, "upstream-token-model-provenance-pin",
@@ -7524,7 +7463,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         )
       )
 
-    setup = gateway_setup(fallback_upstream, exposed_model_id: "gpt-example-luna")
+    setup = gateway_setup(fallback_upstream, exposed_model_id: Facade.effective_model())
 
     pinned =
       gateway_upstream(setup.pool, pinned_upstream, "upstream-token-file-model-pin",
@@ -7590,7 +7529,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         })
       )
 
-    setup = gateway_setup(first_upstream, exposed_model_id: "gpt-example-luna")
+    setup = gateway_setup(first_upstream, exposed_model_id: Facade.effective_model())
 
     second =
       gateway_upstream(setup.pool, second_upstream, "upstream-token-generic-404", compact?: false)
@@ -7654,7 +7593,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         })
       )
 
-    setup = gateway_setup(first_upstream, compact?: true, exposed_model_id: "gpt-example-luna")
+    setup =
+      gateway_setup(first_upstream,
+        compact?: true,
+        exposed_model_id: Facade.effective_model()
+      )
 
     second =
       gateway_upstream(setup.pool, second_upstream, "upstream-token-compact-model-fallback",
@@ -8886,7 +8829,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   } do
     fallback_upstream = start_upstream(stream_success_sse())
     pinned_upstream = start_upstream(assignment_model_terminal_sse(:structured))
-    setup = gateway_setup(fallback_upstream, exposed_model_id: "gpt-example-luna")
+    setup = gateway_setup(fallback_upstream, exposed_model_id: Facade.effective_model())
 
     pinned =
       gateway_upstream(setup.pool, pinned_upstream, "upstream-token-sse-hard-pin",
@@ -8919,7 +8862,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert stream_conn.status == 200
     assert stream_conn.resp_body =~ "event: response.failed\n"
-    assert stream_conn.resp_body =~ ~s("code":"model_not_found")
+    assert stream_conn.resp_body =~ ~s("code":"service_error")
+    assert stream_conn.resp_body =~ ~s("message":"gemma3 request failed")
+    refute stream_conn.resp_body =~ "model_not_found"
     refute stream_conn.resp_body =~ "resp_stream_retry_success"
     assert FakeUpstream.count(pinned_upstream) == 1
     assert FakeUpstream.count(fallback_upstream) == 0
@@ -9200,7 +9145,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert {:ok, stream_conn} = stream.(stream_conn)
     assert stream_conn.resp_body =~ "event: response.failed\n"
-    assert stream_conn.resp_body =~ ~s("code":"cyber_policy")
+    assert stream_conn.resp_body =~ ~s("code":"service_error")
+    assert stream_conn.resp_body =~ ~s("message":"gemma3 request failed")
+    refute stream_conn.resp_body =~ "cyber_policy"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "failed"
@@ -10025,7 +9972,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     conn = Task.await(request_task, 5_000)
 
-    assert %{"error" => %{"code" => "no_eligible_backend"}} = json_response(conn, 503)
+    assert %{"error" => %{"code" => "service_unavailable"}} = json_response(conn, 503)
     assert FakeUpstream.count(first_upstream) == 0
     assert FakeUpstream.count(second_upstream) == 0
 
@@ -10099,10 +10046,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert response.resp_body ==
              Jason.encode!(%{
                "error" => %{
-                 "code" => "no_eligible_backend",
-                 "message" => "no healthy eligible backend is currently available",
-                 "param" => "model",
-                 "type" => "invalid_request_error"
+                 "code" => "service_unavailable",
+                 "message" => "gemma3 is temporarily unavailable",
+                 "param" => nil,
+                 "type" => "server_error"
                }
              })
 
@@ -10141,7 +10088,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         })
       )
 
-    setup = gateway_setup(upstream, exposed_model_id: "gpt-example-degraded-visible")
+    setup = gateway_setup(upstream, exposed_model_id: Facade.effective_model())
     hidden_pool = pool_fixture()
     hidden_model = model_fixture(hidden_pool, %{exposed_model_id: "gpt-example-hidden-degraded"})
 
@@ -10189,8 +10136,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     models_conn = conn |> auth(setup) |> get("/backend-api/codex/models")
 
     assert %{"models" => models} = json_response(models_conn, 200)
-    assert Enum.any?(models, &(&1["slug"] == setup.model.exposed_model_id))
-    refute Enum.any?(models, &(&1["slug"] == hidden_model.exposed_model_id))
+    assert Enum.map(models, & &1["slug"]) == [Facade.public_model()]
 
     inference_conn =
       models_conn
@@ -10201,7 +10147,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "input" => "synthetic degraded source visibility check"
       })
 
-    assert %{"error" => %{"code" => "no_eligible_backend"}} =
+    assert %{"error" => %{"code" => "service_unavailable"}} =
              json_response(inference_conn, 503)
 
     assert FakeUpstream.count(upstream) == 0
@@ -10346,7 +10292,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert captured.json["temperature"] == 0.2
     assert captured.json["top_p"] == 0.9
     assert captured.json["reasoning"] == %{"effort" => "max"}
-    assert captured.json["prompt_cache_key"] == raw_prompt_cache_key
+    assert captured.json["prompt_cache_key"] =~ ~r/^facade:[A-Za-z0-9_-]{43}$/
+    refute captured.json["prompt_cache_key"] == raw_prompt_cache_key
     refute Map.has_key?(captured.json, "prompt_cache_options")
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses/compact"
@@ -10356,8 +10303,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     routing = request.request_metadata["routing"]
     assert routing["routing_locality_status"] == "unavailable"
     assert routing["routing_locality_applied"] == false
-    assert routing["routing_locality_unhonored_reason"] == "prompt_cache_key_absent"
-    refute Map.has_key?(routing, "routing_locality_seed_fingerprint")
+    assert routing["routing_locality_unhonored_reason"] == "single_eligible_candidate"
+    assert routing["routing_locality_seed_fingerprint"] =~ ~r/^[a-f0-9]{16}$/
     refute Map.has_key?(routing, "routing_locality_assignment_fingerprint")
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
@@ -11424,7 +11371,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                 },
                 "additional_rate_limits" => [
                   %{
-                    "limit_name" => "gpt-test-model",
+                    "limit_name" => "gpt-5.6-sol",
                     "rate_limit" => %{
                       "primary_window" => %{
                         "used_percent" => 8,
@@ -11480,8 +11427,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              [
                {"account", "account", "account", "primary"},
                {"account", "account", "account", "secondary"},
-               {"model", "codex_model", "gpt_test_model", "primary"},
-               {"model", "codex_model", "gpt_test_model", "secondary"}
+               {"model", "codex_model", "gpt_5_6_sol", "primary"},
+               {"model", "codex_model", "gpt_5_6_sol", "secondary"}
              ]
   end
 
@@ -11489,11 +11436,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
        %{conn: conn} do
     fallback_upstream =
       start_upstream(
-        FakeUpstream.json_response(%{
-          "id" => "resp_soft_pinned_quota_fallback",
-          "object" => "response",
-          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
-        })
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_soft_pinned_quota_fallback",
+               "status" => "completed",
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+             }
+           }}
+        ])
       )
 
     pinned_upstream =
@@ -11533,7 +11486,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "stream" => true
       })
 
-    assert %{"id" => "resp_soft_pinned_quota_fallback"} = json_response(conn, 200)
+    assert conn.status == 200
+    assert conn.resp_body =~ "resp_soft_pinned_quota_fallback"
     assert FakeUpstream.count(pinned_upstream) == 0
     assert FakeUpstream.count(fallback_upstream) == 1
 
@@ -11639,7 +11593,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         })
       )
 
-    setup = gateway_setup(pinned_upstream, exposed_model_id: "gpt-example-luna")
+    setup = gateway_setup(pinned_upstream, exposed_model_id: Facade.effective_model())
 
     fallback =
       gateway_upstream(setup.pool, fallback_upstream, "upstream-token-session-header-fallback",
@@ -11708,7 +11662,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         })
       )
 
-    setup = gateway_setup(pinned_upstream, exposed_model_id: "gpt-example-luna")
+    setup = gateway_setup(pinned_upstream, exposed_model_id: Facade.effective_model())
 
     fallback =
       gateway_upstream(setup.pool, fallback_upstream, "upstream-token-turn-state-fallback",
@@ -12203,8 +12157,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     response = json_response(conn, 503)
 
-    assert %{"error" => %{"code" => "quota_exhausted", "message" => message}} = response
-    assert message == "upstream quota is exhausted until its reset time"
+    assert %{"error" => %{"code" => "service_unavailable", "message" => message}} = response
+    assert message == "gemma3 is temporarily unavailable"
     assert FakeUpstream.count(first_upstream) == 0
     assert FakeUpstream.count(second_upstream) == 0
 
@@ -12292,8 +12246,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     response = json_response(conn, 503)
 
-    assert %{"error" => %{"code" => "quota_exhausted", "message" => message}} = response
-    assert message == "upstream quota is exhausted until its reset time"
+    assert %{"error" => %{"code" => "service_unavailable", "message" => message}} = response
+    assert message == "gemma3 is temporarily unavailable"
     assert FakeUpstream.count(exhausted_upstream) == 0
 
     refute Enum.any?(
@@ -12339,6 +12293,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   defp prompt_cache_key_with_assignment_order(setup, assignment_ids) do
     Enum.find_value(1..500, fn index ->
       prompt_cache_key = "retry-cache-key-#{index}"
+      scoped_prompt_cache_key = facade_prompt_cache_key(setup, prompt_cache_key)
 
       prompt_cache_seed =
         [
@@ -12346,7 +12301,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
           setup.api_key.id,
           setup.model.exposed_model_id,
           "prompt_cache",
-          prompt_cache_key_hash(prompt_cache_key)
+          scoped_prompt_cache_key
         ]
         |> Enum.join(":")
 
@@ -12358,9 +12313,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     end) || raise "missing prompt cache key with assignment order"
   end
 
-  defp prompt_cache_key_hash(value) do
-    :crypto.hash(:sha256, value)
-    |> Base.encode16(case: :lower)
+  defp facade_prompt_cache_key(setup, raw_value) do
+    :crypto.hash(
+      :sha256,
+      Enum.join(
+        [
+          setup.pool.id,
+          setup.api_key.id,
+          "prompt-cache/client/#{Facade.effective_model()}",
+          raw_value
+        ],
+        <<0>>
+      )
+    )
+    |> Base.url_encode64(padding: false)
+    |> then(&("facade:" <> &1))
   end
 
   defp assert_http_sse_routing_metadata!(request, strategy, assignment, ring_size) do
@@ -12563,7 +12530,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     RuntimeGateway.execute(auth, endpoint, payload, request_options)
   end
 
-  defp assert_native_image_accounting!(setup, endpoint, image_model, forbidden_values) do
+  defp assert_native_image_accounting!(setup, endpoint, forbidden_values) do
     assert [request] =
              Repo.all(
                from(r in Request,
@@ -12572,12 +12539,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              )
 
     assert request.model_id == setup.model.id
-    assert request.requested_model == image_model
+    assert request.requested_model == Facade.public_model()
     assert request.transport == "http_json"
     assert request.status == "succeeded"
     assert request.response_status_code == 200
-    assert request.request_metadata["requested_model"] == image_model
-    assert request.request_metadata["effective_model"] == image_model
+    assert request.request_metadata["requested_model"] == Facade.public_model()
+    assert request.request_metadata["effective_model"] == "gpt-image-1"
 
     assert get_in(request.request_metadata, ["routing", "selected_bridge_candidate_id"]) ==
              setup.assignment.id
@@ -12773,7 +12740,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   defp put_setup_model_source_metadata!(setup, source_metadata) when is_map(source_metadata) do
-    source_metadata = Map.put_new(source_metadata, "slug", setup.model.exposed_model_id)
+    existing_source =
+      get_in(setup.model.metadata, ["source_assignment_models", setup.assignment.id]) || %{}
+
+    source_metadata =
+      existing_source
+      |> Map.merge(source_metadata)
+      |> Map.put_new("slug", setup.model.exposed_model_id)
 
     metadata =
       setup.model.metadata
@@ -13318,7 +13291,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   defp assert_file_assignment_conflict_without_recovery!(conn) do
     assert get_resp_header(conn, "x-codex-recovery-kind") == []
 
-    assert %{"error" => %{"code" => "file_assignment_conflict"} = error} =
+    assert %{"error" => %{"code" => "request_failed"} = error} =
              json_response(conn, 409)
 
     refute Map.has_key?(error, "requires_new_upstream_session")
@@ -13528,7 +13501,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert lite_capture.json["parallel_tool_calls"] == false
     assert is_list(full_capture.json["input"])
     assert is_list(lite_capture.json["input"])
-    assert Enum.drop(lite_capture.json["input"], 1) == full_capture.json["input"]
+
+    assert Enum.take(lite_capture.json["input"], -length(full_capture.json["input"])) ==
+             full_capture.json["input"]
+
+    assert inspect(lite_capture.json["input"]) =~ IdentityInstruction.instruction()
   end
 
   defp assert_backend_mode_matrix_metadata!(setup, modes) do

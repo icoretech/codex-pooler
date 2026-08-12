@@ -5,7 +5,7 @@ import starlightPageActions from "starlight-page-actions";
 
 const siteUrl = "https://docs.codex-pooler.com";
 const siteDescription =
-  "Codex Pooler docs for self-hosted Codex account pooling, Pool API keys, backend compatibility, narrow /v1 SDK routes, MCP metadata, routing, and deployment.";
+  "Codex Pooler docs for a self-hosted gemma3 facade across Ollama, OpenAI, Anthropic Messages, and Codex clients.";
 
 const softwareStructuredData = {
   "@context": "https://schema.org",

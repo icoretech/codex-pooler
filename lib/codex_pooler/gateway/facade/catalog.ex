@@ -46,18 +46,34 @@ defmodule CodexPooler.Gateway.Facade.Catalog do
   @spec resolve(map(), map(), CandidateEligibility.model_visibility_hydration()) :: resolution()
   def resolve(auth, policy, hydration)
       when is_map(auth) and is_map(policy) and is_map(hydration) do
+    resolve(auth, policy, hydration, nil)
+  end
+
+  @spec resolve(
+          map(),
+          map(),
+          CandidateEligibility.model_visibility_hydration(),
+          PartitionRoutability.routable_assignment_ids_by_model_id() | nil
+        ) :: resolution()
+  def resolve(auth, policy, hydration, routable_assignment_ids_by_model_id)
+      when is_map(auth) and is_map(policy) and is_map(hydration) and
+             (is_map(routable_assignment_ids_by_model_id) or
+                is_nil(routable_assignment_ids_by_model_id)) do
     model = fixed_target_model(hydration.visible_models)
     candidates_by_model_id = Map.get(hydration, :candidates_by_model_id, %{})
 
     routable_assignment_ids_by_model_id =
-      case model do
-        %Model{} ->
+      case {model, routable_assignment_ids_by_model_id} do
+        {%Model{}, %{} = supplied} ->
+          supplied
+
+        {%Model{}, nil} ->
           PartitionRoutability.routable_assignment_ids_by_model_id(
             [model],
             candidates_by_model_id
           )
 
-        nil ->
+        {nil, _supplied} ->
           %{}
       end
 

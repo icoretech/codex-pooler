@@ -1,25 +1,9 @@
 ---
 title: Continue
-description: Configure Continue with Codex Pooler's narrow OpenAI-compatible /v1 surface, local config.yaml file locations, model capabilities, and optional operator MCP metadata access.
+description: Configure Continue for Codex Pooler's bounded OpenAI-compatible gemma3 façade.
 ---
 
-Continue can use Codex Pooler as an OpenAI-compatible provider by setting `provider: openai`, `apiBase` to `/v1`, and the Pool API key as a Continue secret. For `gpt-5*` models, Continue uses the Responses API by default.
-
-## Config file path
-
-For local Continue configs, put the Codex Pooler assistant in `config.yaml`:
-
-| OS | Local config file |
-| --- | --- |
-| macOS | `~/.continue/config.yaml` |
-| Linux | `~/.continue/config.yaml` |
-| Windows | `%USERPROFILE%\.continue\config.yaml` |
-
-In the IDE extension, open the Continue chat sidebar, use the config selector above the chat input, then click the gear icon beside **Local Config**. Continue creates this file on first use and reloads it after saves.
-
-Continue CLI resolves config from `--config` first, then the saved last-used config, then the default assistant or `~/.continue/config.yaml` when not logged in.
-
-Hub configs live in Continue Mission Control instead of this local file. For Codex Pooler examples, local `config.yaml` is the clearest setup because it keeps the Pool route, capabilities, and optional MCP entry inspectable.
+Add one OpenAI provider model to `~/.continue/config.yaml`:
 
 ```yaml
 name: Codex Pooler
@@ -27,46 +11,15 @@ version: 1.0.0
 schema: v1
 
 models:
-  - name: GPT-5.6 Terra via Codex Pooler
+  - name: gemma3 via Codex Pooler
     provider: openai
-    model: gpt-5.6-terra
+    model: gemma3
     apiBase: https://codex-pooler.example.com/v1
     apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
-    contextLength: 258400
-    defaultCompletionOptions:
-      maxTokens: 128000
-    roles:
-      - chat
-      - edit
-      - apply
-      - summarize
-    capabilities:
-      - tool_use
-      - image_input
-
-# Optional operator-only MCP metadata add-on. Omit for model/runtime use.
-mcpServers:
-  - name: codex_pooler
-    type: streamable-http
-    url: https://codex-pooler.example.com/mcp
-    requestOptions:
-      timeout: 30000
-      headers:
-        Authorization: "Bearer ${{ secrets.CODEX_POOLER_MCP_KEY }}"
+    roles: [chat, edit, apply, summarize]
+    capabilities: [tool_use, image_input]
 ```
 
-For local setup, change `apiBase` to `http://localhost:4000/v1`. If you keep the optional operator MCP add-on locally, change the MCP `url` to `http://localhost:4000/mcp`.
+For local setup, use `http://localhost:4000/v1`. If Continue requires a manual `contextLength`, copy the authenticated `GET /v1/models` value rather than inventing another model entry.
 
-Continue uses `contextLength` for request pruning and `defaultCompletionOptions.maxTokens` for the completion budget. It prunes request messages before sending instead of doing Codex-style local compaction, so keep the context length at Codex Pooler's exposed model window. When available, `/v1/models.context_length` is the authoritative effective value for `contextLength`; the 128000-token completion cap leaves 130400 tokens for input.
-
-Check the headless CLI path after saving the config:
-
-```bash
-export CODEX_POOLER_API_KEY=<pool-api-key>
-npx -y @continuedev/cli@latest -p \
-  --config ~/.continue/config.yaml \
-  --silent \
-  'Reply with exactly: continue ok'
-```
-
-The Pool API key authenticates model requests. The MCP token authenticates only the operator metadata endpoint.
+The Pool API key authenticates model work. Optional `/mcp` operator metadata is separate and requires an operator MCP token.

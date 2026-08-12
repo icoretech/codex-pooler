@@ -87,8 +87,8 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
          "ordinary_response_sibling" => %{"credential" => "response-sibling-sentinel"}
        },
        "ordinary_sibling" => %{"credential" => "event-sibling-sentinel"}
-     }, "upstream_error"},
-    {:typeless_detail, %{"detail" => "synthetic upstream detail"}, "upstream_terminal_failure"}
+     }, "service_error"},
+    {:typeless_detail, %{"detail" => "synthetic upstream detail"}, "service_error"}
   ]
 
   setup do
@@ -337,7 +337,7 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
   end
 
   defp post_terminal_error_code(:failed_without_nested_code, _websocket_code),
-    do: "upstream_error"
+    do: "service_error"
 
   defp post_terminal_error_code(_shape, shared_code), do: shared_code
 
@@ -350,12 +350,12 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
         "created_at" => 0,
         "status" => "failed",
         "error" => %{
-          "code" => "upstream_error",
-          "message" => "upstream request failed",
+          "code" => "service_error",
+          "message" => "gemma3 request failed",
           "type" => "server_error"
         },
         "incomplete_details" => %{"reason" => "content_filter"},
-        "model" => "unknown",
+        "model" => "gemma3",
         "object" => "response",
         "output" => [],
         "output_text" => "",

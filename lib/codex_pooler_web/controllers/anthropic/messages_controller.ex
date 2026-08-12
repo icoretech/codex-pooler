@@ -13,11 +13,13 @@ defmodule CodexPoolerWeb.Anthropic.MessagesController do
   @http_token ~r/\A[!#$%&'*+\-.^_`|~0-9A-Za-z]+\z/
 
   def create(conn, params) do
+    payload = request_payload(conn, params)
+
     PublicGatewayDispatch.coerced(
       conn,
       fn ->
         with :ok <- validate_headers(conn) do
-          Messages.coerce(params, request_opts(conn))
+          Messages.coerce(payload, request_opts(conn))
         end
       end,
       fn decoded, %{anthropic_formatting: formatting} ->
@@ -28,10 +30,12 @@ defmodule CodexPoolerWeb.Anthropic.MessagesController do
   end
 
   def count_tokens(conn, params) do
+    payload = request_payload(conn, params)
+
     case GatewayHelpers.authenticate_facade(conn) do
       {:ok, _auth} ->
         with :ok <- validate_headers(conn),
-             {:ok, result} <- TokenCount.count(params) do
+             {:ok, result} <- TokenCount.count(payload) do
           json(conn, result)
         else
           {:error, reason} -> GatewayHelpers.send_error(conn, reason)
@@ -48,6 +52,11 @@ defmodule CodexPoolerWeb.Anthropic.MessagesController do
     |> Map.put(:upstream_endpoint, Messages.backend_endpoint())
     |> Map.put(:collect_openai_response_stream, true)
   end
+
+  defp request_payload(%Plug.Conn{body_params: %Plug.Conn.Unfetched{}}, params), do: params
+
+  defp request_payload(%Plug.Conn{body_params: body_params}, _params) when is_map(body_params),
+    do: body_params
 
   defp validate_headers(conn) do
     with :ok <- validate_version(Plug.Conn.get_req_header(conn, "anthropic-version")) do

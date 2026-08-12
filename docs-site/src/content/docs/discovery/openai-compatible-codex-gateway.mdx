@@ -1,6 +1,6 @@
 ---
 title: OpenAI-Compatible Codex Gateway
-description: Public answer page for using Codex Pooler as a narrow OpenAI-compatible /v1 gateway over Codex account Pools.
+description: Public answer page for using Codex Pooler's bounded OpenAI-compatible gemma3 facade over account Pools.
 sidebar:
   hidden: true
 head:
@@ -8,10 +8,10 @@ head:
     attrs:
       type: application/ld+json
     content: |
-      {"@context":"https://schema.org","@type":"TechArticle","headline":"OpenAI-Compatible Codex Gateway","description":"Codex Pooler provides narrow OpenAI-compatible /v1 support for selected SDK routes by translating supported requests into Codex-compatible work and routing them through Pool policy.","url":"https://docs.codex-pooler.com/discovery/openai-compatible-codex-gateway/","about":["OpenAI-compatible /v1","Codex gateway","OpenAI SDK clients","Pool API keys"]}
+      {"@context":"https://schema.org","@type":"TechArticle","headline":"OpenAI-Compatible Codex Gateway","description":"Codex Pooler provides bounded OpenAI-compatible routes with one public gemma3 model and Pool API-key routing.","url":"https://docs.codex-pooler.com/discovery/openai-compatible-codex-gateway/","about":["OpenAI-compatible facade","gemma3","Codex gateway","Pool API keys"]}
 ---
 
-Codex Pooler can act as a narrow OpenAI-compatible Codex gateway for selected SDK clients. Clients call `/v1` with a Pool API key, and Codex Pooler translates supported requests into Codex-compatible work before applying the same Pool routing, limits, account selection, and accounting path.
+Codex Pooler provides bounded OpenAI-compatible routes for selected SDK clients. Clients call `/v1` with a Pool API key and configure only `gemma3`; Codex Pooler translates supported requests before applying its fixed server policy, Pool routing, limits, account selection, and accounting path.
 
 It does not provide full OpenAI API parity.
 

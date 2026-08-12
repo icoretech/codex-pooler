@@ -466,10 +466,10 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
       assert json_response(conn, 503) == %{
                "error" => %{
-                 "code" => "settings_unavailable",
-                 "message" => "runtime settings are temporarily unavailable",
+                 "code" => "service_unavailable",
+                 "message" => "gemma3 is temporarily unavailable",
                  "param" => nil,
-                 "type" => "invalid_request_error"
+                 "type" => "server_error"
                }
              }
 
@@ -1001,10 +1001,10 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
 
       assert json_response(conn, 503) == %{
                "error" => %{
-                 "code" => "settings_unavailable",
-                 "message" => "runtime settings are temporarily unavailable",
+                 "code" => "service_unavailable",
+                 "message" => "gemma3 is temporarily unavailable",
                  "param" => nil,
-                 "type" => "invalid_request_error"
+                 "type" => "server_error"
                }
              }
 
@@ -1399,7 +1399,7 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngressTest do
       assert %{
                "error" => %{
                  "code" => "unsupported_endpoint",
-                 "message" => "Endpoint is not supported",
+                 "message" => "Unsupported OpenAI /v1 endpoint",
                  "param" => nil,
                  "type" => "invalid_request_error"
                }

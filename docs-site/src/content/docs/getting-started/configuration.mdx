@@ -216,12 +216,22 @@ Use only the surface that matches your client.
   </thead>
   <tbody>
     <tr>
+      <td>Ollama client</td>
+      <td><code>http://localhost:4000</code></td>
+      <td><code>https://codex-pooler.example.com</code></td>
+    </tr>
+    <tr>
+      <td>Claude Code or Anthropic Messages client</td>
+      <td><code>http://localhost:4000</code></td>
+      <td><code>https://codex-pooler.example.com</code></td>
+    </tr>
+    <tr>
       <td>Codex backend client</td>
       <td><code>http://localhost:4000/backend-api/codex</code></td>
       <td><code>https://codex-pooler.example.com/backend-api/codex</code></td>
     </tr>
     <tr>
-      <td>Narrow OpenAI-compatible SDK client</td>
+      <td>Bounded OpenAI-compatible SDK client</td>
       <td><code>http://localhost:4000/v1</code></td>
       <td><code>https://codex-pooler.example.com/v1</code></td>
     </tr>
@@ -233,7 +243,7 @@ Use only the surface that matches your client.
   </tbody>
 </table>
 
-Use `Authorization: Bearer <pool-api-key>` for `/backend-api` and `/v1`. Use `Authorization: Bearer <operator-mcp-token>` for `/mcp`.
+Every client model field is `gemma3`. Use a Pool API key for `/api`, `/v1`, and `/backend-api`; Anthropic clients may carry that key through their standard auth variables. Use `Authorization: Bearer <operator-mcp-token>` only for `/mcp`.
 
 The operator MCP endpoint is metadata-only and read-only. It doesn't accept Pool API keys, browser sessions, cookies, invite tokens, upstream tokens, or query tokens.
 
@@ -262,6 +272,6 @@ For responsible operation:
 
 ## Compatibility Notes
 
-The Codex backend compatibility route is rooted at `/backend-api/codex/*`. The `/v1` surface provides narrow OpenAI-compatible support for selected SDK routes, then routes supported requests through the same Pool policy and accounting path.
+The Codex backend compatibility route is rooted at `/backend-api/codex/*`. The instance root also serves the Ollama `/api/*` and Anthropic Messages `/v1/messages*` adapters, while the remaining documented `/v1` routes provide bounded OpenAI compatibility. Every client configures only `gemma3`; supported reasoning work follows the same fixed server policy, Pool routing, and accounting path.
 
 It does not provide full OpenAI API parity. OpenAI Realtime SDK websocket and session routes are not supported. `GET /v1/responses` is narrow Responses websocket compatibility, not `/v1/realtime` support.

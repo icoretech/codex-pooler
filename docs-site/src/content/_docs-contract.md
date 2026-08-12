@@ -1,64 +1,96 @@
 # Public Docs Contract And Source Map
 
-This private planning file is for docs authors. Keep it under an underscore-prefixed path so Starlight does not publish it as a public page.
+This underscore-prefixed authoring contract is removed from the built site. It may name implementation facts that public client pages must not reveal.
 
 ## Audience And Scope
 
-Write public docs for operators and client integrators who are setting up Codex Pooler. The public docs may explain setup, runtime surfaces, compatibility limits, and privacy boundaries. They must not become an operator runbook, incident log, internal architecture dump, or exhaustive Phoenix route listing.
+Public docs serve operators and client integrators deploying the immutable `gemma3` façade. They may explain setup, exact route support, Pool API-key authentication, protocol behavior, compatibility limits, privacy, and the separation between public identity and operator diagnostics.
 
-Root static files in `docs-site/public`, such as `llms.txt`, `answers.md`, `pricing.md`, and `robots.txt`, are public docs too. Keep them short, extractable, public-safe, and consistent with the same route, credential, host, and privacy boundaries as the Starlight pages.
+Root files in `docs-site/public`, the repository README, examples, screenshots, and generated search/answer assets are public too. They must follow this contract.
 
-## Allowed Hosts
+## Immutable Façade Contract
 
-Use only these hosts in public examples:
+The implementation constants are:
 
-- `http://localhost:4000`, only for local setup and local smoke examples
-- `https://codex-pooler.example.com`, for deployed product examples
-- `https://docs.codex-pooler.com`, for the public docs site canonical URL
+- public model: `gemma3`
+- private reasoning target: `gpt-5.6-sol`
+- private reasoning effort: `max`
+- fixed transcription helper: `gpt-4o-transcribe`
+- fixed image helper: `gpt-image-1`
 
-Do not use private hostnames, cluster names, pod names, tenant names, real account identifiers, raw OpenAI user subjects, real repository evidence paths, or private service URLs in public docs.
+Public client-facing material may advertise or configure only `gemma3`. It must not name the private reasoning target, helper identifiers, provider, upstream account, assignment, or private endpoint. It may state that reasoning uses a server-owned fixed target at `max` and that dedicated media endpoints use non-selectable server helpers.
+
+Every reasoning protocol normalizes documented client selectors before model/policy validation. A missing, public, or arbitrary client model cannot select a target. Client effort, reasoning, thinking-budget, or alias values cannot lower or replace the fixed policy. If the fixed target is not policy-authorized and routable, discovery is empty and inference fails closed; there is no model fallback.
+
+Model identity projection is structural. Public docs must not claim arbitrary generated prose is rewritten. User/assistant text, filenames, and tool arguments remain application content.
+
+## Allowed Hosts And Credentials
+
+Use only:
+
+- `http://localhost:4000` for local examples
+- `https://codex-pooler.example.com` for deployed examples
+- `https://docs.codex-pooler.com` for docs links
+
+Use `<pool-api-key>` for runtime credentials and `<operator-mcp-token>` for MCP. Never publish real hosts, keys, tokens, cookies, callback URLs, account identifiers, subjects, assignments, raw request IDs, or private infrastructure names.
+
+A Pool API key represents a Pool and authenticates supported `/api`, `/v1`, and `/backend-api` runtime routes. Anthropic routes accept `x-api-key` or bearer auth; if both are supplied, they must agree. All other façade routes use bearer auth. Upstream credentials are never client credentials.
+
+The root `/mcp` endpoint accepts only an operator-owned MCP bearer token. Do not imply Pool API keys or upstream credentials work there.
 
 ## Route Vocabulary
 
-### `/backend-api`
+Use `Ollama-compatible façade` for `/api/*`, `Anthropic Messages adapter` for `/v1/messages*`, `OpenAI-compatible façade` for the remaining documented `/v1/*` routes, and `Codex backend compatibility` for `/backend-api/codex/*`.
 
-Use `Codex backend compatibility route` for `/backend-api/codex/*`. This is an explicit authenticated Codex backend compatibility surface, not a wildcard proxy and not a general OpenAI SDK surface.
+Do not call any family a wildcard proxy or claim full Ollama, Anthropic, OpenAI, or Codex app-server parity. Prefer `bounded compatibility` to the obsolete generic phrase `narrow /v1 support`.
 
-Allowed public claims:
+### Ollama-compatible façade
 
-- `GET /backend-api/codex/models` lists Codex backend models visible to the authenticated Pool
-- `POST /backend-api/codex/responses` sends backend Responses requests through Pool routing and accounting
-- `GET /backend-api/codex/responses` is backend websocket response-stream compatibility
-- `POST /backend-api/codex/responses/compact` is backend compact compatibility
-- `POST /backend-api/codex/images/generations` and `POST /backend-api/codex/images/edits` are explicit authenticated native image JSON proxy routes. On either exact route, any policy-authorized effective image model genuinely absent from the Pool catalog may use eligible visible host capacity while retaining its effective identifier. A catalog-present but invisible target remains invalid. This native behavior does not extend public `/v1` image support
-- `/backend-api/codex/v1/*` routes are explicit backend aliases for clients that use `/backend-api/codex/v1` as a base URL
-- `POST /backend-api/files` creates upstream-backed file metadata and returns an upstream upload URL
-- `POST /backend-api/files/:file_id/uploaded` finalizes an upstream-backed file upload
-- `POST /backend-api/transcribe` is backend audio transcription compatibility
-- `GET /backend-api/wham/usage`, `GET /api/codex/usage`, and `GET /wham/usage` are usage routes
+Supported:
 
-Do not describe Codex app-server helper routes as supported backend
-compatibility. Codex Pooler is a model-provider runtime boundary, not an
-account, analytics, thread-goal, memory, search, realtime, safety, identity, or
-reset-credit proxy.
+- `POST /api/chat`
+- `POST /api/generate`
+- `GET /api/tags`
+- `POST /api/show`
+- `GET /api/ps`
+- `GET /api/version`
+- `POST /api/pull`, immutable no-op only for `gemma3` and `gemma3:latest`
 
-Pruned app-server helper candidates are not supported routes. Do not describe
-their fixed HTML `404` as unconditional: ingress evaluates settings availability
-and the runtime firewall first. An admitted or firewall-disabled request receives
-the fixed `404`; a denial or unavailable settings state uses the corresponding
-runtime ingress response instead.
+Routed but unsupported:
 
-### `/v1`
+- `POST /api/create`
+- `POST /api/copy`
+- `POST /api/push`
+- `DELETE /api/delete`
+- `GET`, `HEAD`, and `POST /api/blobs/:digest`
+- `POST /api/embed`
+- `POST /api/embeddings`
 
-Use `OpenAI-compatible /v1 surface` only with the qualifier `narrow compatibility`. The `/v1` surface translates supported requests into Codex-compatible work, then sends them through the same Pool routing, limit checks, account selection, and accounting path. It is not full OpenAI API parity.
+Do not claim local weights, downloads, a blob store, local inference, or embeddings. Discovery returns one `gemma3` model only when the fixed target is available.
 
-Allowed public claims:
+### Anthropic Messages adapter
+
+Supported:
+
+- `POST /v1/messages`
+- `POST /v1/messages/count_tokens`, bounded local estimate with no dispatch
+
+Require `anthropic-version: 2023-06-01`. All other Anthropic API families are absent. Do not claim Claude model parity; Claude Code remains the local agent runtime and uses translated Messages traffic.
+
+### OpenAI-compatible façade
+
+Supported inference, catalog, and usage routes:
 
 - `GET /v1/models`
+- `GET /v1/models/gemma3`
 - `POST /v1/responses`
-- `GET /v1/responses`, narrow Responses websocket compatibility only
+- `GET /v1/responses`, bounded Responses websocket only
 - `POST /v1/chat/completions`
+- `POST /v1/completions`
 - `GET /v1/usage`
+
+Supported file/media routes:
+
 - `GET /v1/files`
 - `POST /v1/files`
 - `GET /v1/files/:file_id`
@@ -66,78 +98,13 @@ Allowed public claims:
 - `POST /v1/images/generations`
 - `POST /v1/images/edits`
 
-OpenAI Responses remote MCP tool definitions are unsupported request shapes inside `POST /v1/responses`, not unsupported routes. This includes top-level `tools[type=mcp]` and nested `input[type=additional_tools].tools[type=mcp]`.
+Deterministic unsupported routes:
 
-Direct `POST /v1/responses` and narrow Responses websocket `response.create`
-accept exact top-level custom definitions and nested custom definitions in an
-already-valid namespace. `functions` is the canonical Codex namespace
-example, not a namespace-name restriction: every nonblank valid namespace uses
-the same child contract. A custom definition requires exact `type=custom` and a
-nonblank name; optional fields are description, boolean `defer_loading`, nullable
-`allowed_callers` limited to `direct` or `programmatic`, and omitted, text,
-`lark`, or `regex` grammar format. Namespace children are exact flat `function`
-or `custom` definitions. Hosted, MCP, tool-search, nested-namespace, malformed,
-and globally colliding executable-name shapes are rejected before dispatch.
-
-An exact typed custom `tool_choice` resolves only a declared same-kind, same-name
-custom definition, including an accepted namespace child. Full mode preserves
-that choice. Lite mode rejects every map-shaped `tool_choice` before upstream
-dispatch with `unsupported_parameter` and `param: "tool_choice"`. Keep this
-separate from accepted custom-tool replay input. Chat does not accept executable
-custom definitions or choices. Provider execution availability remains selected
-model and account dependent; smoke verification records metadata only. Never
-claim backend, Chat, or broad OpenAI tool parity.
-
-For those accepted namespace children, public Responses HTTP, SSE, and direct or
-owner-forwarded websocket output restore a missing or null `custom_tool_call`
-`namespace` only when its exact name maps to one declared namespace custom tool.
-An explicit provider namespace is preserved; flat, unknown, and non-unique names
-remain unchanged rather than guessed.
-
-Responses `function_call_output` replay accepts optional nullable, nonblank string
-`name` and `namespace` metadata over direct HTTP and the narrow Responses
-websocket surface. Omitted or `null` values are accepted; blank or non-string
-values are rejected before dispatch. The legacy `result` branch follows the same
-metadata contract.
-
-Direct public Responses may repair only a missing nested object or array type in
-strict flat-function parameters with a typed object root and complete,
-unambiguous structural evidence. This applies to top-level flat functions and
-namespace-child flat functions over HTTP and narrow Responses websocket turns.
-Do not extend the claim to a missing root type, explicit type values, refs,
-definitions, combinators, annotations, unknown keywords, ambiguous or
-incomplete evidence, structured outputs, Chat, the older nested `function`
-wrapper shape, or backend routes. Public Responses and Chat reject malformed,
-duplicate, or unsupported explicit type vocabulary. Strict schemas remain
-outside non-strict lowering.
-
-`web_search.filters` accepts only `allowed_domains` and `blocked_domains`. Each
-supplied field is a list of 1 through 100 nonblank strings without leading-
-whitespace, case-insensitive HTTP(S) schemes; the two fields may coexist.
-Accepted values preserve order, case, duplicates, and bytes.
-`external_web_access` is optional. Public docs must describe this as local
-validation and forwarding only, never as a guarantee of upstream web search
-availability or domain-filter enforcement.
-
-### Service-tier vocabulary
-
-For new public client configuration, document `priority` as the canonical
-`service_tier` spelling. Document `fast` only as an accepted equivalent request
-spelling. Backend `/backend-api/codex` relay routes preserve provider bytes,
-frames, and service-tier vocabulary unchanged. The narrow `/v1` surface
-translates supported request and response shapes, while any projected provider
-`service_tier` value retains its literal provider vocabulary.
-
-Routed public `/v1` endpoints that must be described as deterministic unsupported behavior:
-
-- `POST /v1/responses/compact`, deterministic unsupported compact route before gateway dispatch
-- `GET /v1/files/:file_id/content`, deterministic unsupported content read after ownership checks
-- `DELETE /v1/files/:file_id`, deterministic unsupported delete after ownership checks
-
-Unsupported public `/v1` routes that may be named as unsupported:
-
+- `POST /v1/responses/compact`
+- `GET /v1/files/:file_id/content`, after ownership checks
+- `DELETE /v1/files/:file_id`, after ownership checks
 - `POST /v1/images/variations`
-- `POST /v1/content_provenance_checks`, deliberately routed to deterministic OpenAI-shaped `unsupported_endpoint`
+- `POST /v1/content_provenance_checks`
 - `POST /v1/embeddings`
 - `POST /v1/batches`
 - `POST /v1/moderations`
@@ -145,182 +112,142 @@ Unsupported public `/v1` routes that may be named as unsupported:
 - `GET /v1/responses/:response_id`
 - `POST /v1/responses/:response_id/cancel`
 - `DELETE /v1/responses/:response_id`
-- `/v1/realtime` and OpenAI Realtime SDK websocket or session routes
 
-### API Key Observatory
+`/v1/realtime` is absent. `GET /v1/responses` is not OpenAI Realtime. OpenAI remote MCP definitions are unsupported request shapes inside Responses and are not routed to `/mcp`.
 
-The Observatory is a separate read-only browser surface for a single eligible
-Pool API key. It is not part of the instance-admin session and it is not a
-runtime compatibility API.
+### Codex backend compatibility
 
-Allowed public claims:
+Supported:
 
-- `GET /observatory/login` renders the access-key form
-- `POST /observatory/login` exchanges an eligible Pool API key for a dashboard browser session
-- `DELETE /observatory/logout` ends the dashboard browser session
-- authenticated `GET /observatory` serves the key-local Observatory LiveView
-- Dashboard access is a separate per-key capability and does not grant `/admin/*` access
-- Observatory values are bounded, sanitized usage metadata for the authenticated key only
+- `GET /backend-api/codex/models`
+- `GET /backend-api/codex/v1/models`
+- `POST` and `GET /backend-api/codex/responses`
+- `POST` and `GET /backend-api/codex/v1/responses`
+- `POST /backend-api/codex/responses/compact`
+- `POST /backend-api/codex/v1/responses/compact`
+- `POST /backend-api/codex/v1/chat/completions`
+- `POST /backend-api/codex/images/generations`
+- `POST /backend-api/codex/images/edits`
+- `POST /backend-api/files`
+- `POST /backend-api/files/:file_id/uploaded`
+- `POST /backend-api/transcribe`
+- `GET /backend-api/wham/usage`
+- `GET /api/codex/usage`
+- `GET /wham/usage`
 
-Do not document raw credentials in URLs, query strings, cookies, screenshots, or
-client-side storage. Do not describe the Observatory as exposing Pool-wide
-analytics, other keys, prompts, payloads, or administration controls.
+Do not document account, identity, analytics, thread/goal, memory, general search, realtime, or other app-server helpers as compatibility routes.
 
-### `/mcp`
+## Cache, Continuity, Retry, And Error Claims
 
-Use `operator MCP endpoint` for `/mcp`. It is a root metadata-only, read-only operator endpoint. It is not under `/backend-api` or `/v1`.
+Allowed cache claims:
 
-Allowed public claims:
+- Codex Pooler does not cache completed responses for replay.
+- OpenAI prompt-cache keys, translated Anthropic cache controls, and Ollama session IDs are converted into Pool/API-key-scoped one-way values before routing or dispatch.
+- Raw façade cache/session values are not persisted or forwarded.
+- Locality is a heuristic, not a provider cache-hit or cached-token guarantee.
+- Existing Codex and opaque response/item continuity follow their bounded established paths.
 
-- `POST /mcp` is the JSON-RPC Streamable HTTP endpoint
-- `GET /mcp` is routed but stateless SSE is unavailable today
-- `OPTIONS /mcp` returns the allowed MCP methods
-- MCP uses operator-owned bearer MCP tokens
-- MCP does not accept Pool API keys, browser sessions, cookies, query tokens, invite tokens, upstream tokens, or custom headers as authentication
-- MCP output is metadata-only and scoped by the operator's owner or assigned-Pool visibility
-- `/mcp` is not used to execute or proxy OpenAI Responses remote MCP tools
+Allowed stream/retry claims:
 
-## Glossary
+- retry can change assignments only before visible output
+- after visible output, the request is never replayed
+- translated streams emit at most one protocol-safe terminal failure
+- incomplete frames and assembled tool arguments are bounded and never partially leaked
+- JSON, NDJSON, SSE, and websocket protocols remain distinct and are not byte/token equivalent
 
-- `Pool`: A routing and policy boundary that groups upstream account assignments and exposes stable Pool API keys to runtime clients
-- `upstream`: A Codex account identity or assignment that Codex Pooler can route eligible work to
-- `Pool API key`: A bearer credential used by runtime clients for `/backend-api` and `/v1` requests. It represents a Pool, not one upstream account
-- `MCP token`: An operator-owned bearer credential used only for `/mcp`. It is separate from Pool API keys and browser sessions
-- `subject reference`: A sanitized fingerprint of an upstream OpenAI user subject. Public docs may describe this reference, but must never include raw subject values
-- `backend API`: The Codex backend compatibility surface rooted at `/backend-api`, especially `/backend-api/codex/*`
-- `/v1`: The narrow OpenAI-compatible SDK surface rooted at `/v1`. It is compatibility over Codex routing, not full OpenAI parity
-- `metadata-only logging`: Request, route, accounting, audit, and MCP records may keep identifiers, route names, counts, statuses, timings, model names, safe error codes, and sanitized summaries. They must not store or show raw payloads or credentials
+Allowed error/header claims:
 
-## Placeholder Rules
+- public errors use the active protocol's shape and fixed safe server messages
+- private model/provider/account/assignment/request identifiers and unsafe upstream messages are removed
+- response headers use exact local allowlists; provider diagnostic and rate-limit headers are not relayed
 
-Use placeholders that are clearly fake and generic:
+## Operator Diagnostics And Privacy
 
-- Hosts: `http://localhost:4000`, `https://codex-pooler.example.com`, `https://docs.codex-pooler.com`
-- Pool API key placeholder: `<pool-api-key>` or `sk-example-redacted`
-- MCP token placeholder: `<operator-mcp-token>`
-- Account labels: `example-upstream`, `example-operator`, `example-pool`
-- Email-like examples: `operator@example.com`
-- Model ids: use documented sample ids only when the surrounding page explains that the Pool must expose them
+Public clients see only `gemma3`. Authorized operator surfaces may truthfully retain metadata needed to route, reconcile, and diagnose real work: private target/helper identity, assignment, route, applied effort, attempt/retry outcome, status, safe error code, timing, quota, token counts, cache/compression summaries, and synthetic/local request references.
 
-Never include raw tokens, raw prompts, request bodies, response bodies, file bodies, audio bodies, image bodies, cookies, `auth.json`, access tokens, refresh tokens, raw idempotency keys, raw upload URLs, internal evidence snippets, internal logs, private hostnames, callback URLs, real account ids, raw OpenAI user subjects, or real user identifiers.
+Do not retain or document raw prompts, completions, tool payloads, request/response bodies, file/audio/image bytes, websocket frames, raw provider payloads, Pool keys, upstream credentials, cookies, authorization codes, callback URLs, or raw façade affinity values.
 
-If a docs example needs an Authorization header, write `Authorization: Bearer <pool-api-key>` for runtime routes or `Authorization: Bearer <operator-mcp-token>` for `/mcp`.
-
-## Unsupported-Feature Language
-
-Use precise unsupported language:
-
-- Say `Codex Pooler provides narrow OpenAI-compatible /v1 support for selected SDK routes`
-- Say `It does not provide full OpenAI API parity`
-- Say `OpenAI Realtime SDK websocket and session routes are not supported`
-- Say `GET /v1/responses is narrow Responses websocket compatibility, not /v1/realtime support`
-- Say `Codex Pooler does not proxy Codex app-server realtime helper routes`
-- Say `unsupported /v1 routes return deterministic OpenAI-shaped unsupported endpoint errors when explicitly routed`
-- Say `OpenAI Responses remote MCP tool definitions are unsupported request shapes inside POST /v1/responses, not unsupported routes`
-
-Do not write `OpenAI-compatible` without a nearby qualifier when the page could imply full parity.
-
-## Privacy Boundaries
-
-Public docs may describe the metadata-only model, but must not quote private evidence or logs. Keep examples synthetic.
-
-Safe fields to mention:
-
-- Route family and endpoint path
-- HTTP method and status class
-- Pool label or placeholder
-- Upstream label or placeholder
-- Sanitized upstream subject reference or fingerprint
-- Model name
-- Request-log id only when synthetic
-- Error code, retry count, duration, token count, and timestamp examples
-
-Forbidden fields and examples:
-
-- Raw prompts and completions
-- Request bodies, response bodies, multipart bodies, websocket frames, file bytes, audio bytes, image bytes, data URLs, and transcripts
-- Bearer tokens, Pool API keys, MCP tokens, cookies, access tokens, refresh tokens, `auth.json`, TOTP secrets, SMTP secrets, signing secrets, and raw idempotency keys
-- Internal incident procedures, cluster names, pod names, private hostnames, real account identifiers, raw OpenAI user subjects, raw emails, and private IP addresses
+This is `metadata-only logging`: bounded operational facts without content or credentials.
 
 ## Runtime ingress firewall contract
 
 Public configuration may describe the runtime firewall only as an ingress policy
-for runtime API families and `/mcp`. It may say that an empty allowlist disables
-the policy, forwarded-client configuration has exactly `peer`,
-`x_forwarded_for`, and `x_real_ip` sources, and the defaults are
-`forwarded_client_ip_source = x_forwarded_for` with `forwarded_proxy_depth = 0`.
-It must not describe an implicit, mixed, or fallback source selection.
+for runtime API families and `/mcp`. An empty allowlist disables the policy.
+Forwarded-client configuration has exactly `peer`, `x_forwarded_for`, and
+`x_real_ip` sources. The defaults are
+`forwarded_client_ip_source = x_forwarded_for` and
+`forwarded_proxy_depth = 0`; there is no mixed or fallback source selection.
 
 Every forwarded source requires a trusted directly connected peer before its
 header is used. `peer` accepts depth `0` and ignores forwarding headers.
-`x_real_ip` accepts depth `0`, ignores XFF, and requires one X-Real-IP field.
-`x_forwarded_for` at depth `0` uses the bounded trusted-CIDR walk. At depth
-`1..16`, the documented position is the numbered XFF entry from the right after
-duplicate field occurrences are combined in wire order. The directly connected
-peer counts toward configured proxy depth, but is not an XFF entry.
+`x_real_ip` accepts depth `0`, ignores XFF, and requires exactly one X-Real-IP
+field. `x_forwarded_for` at depth `0` uses the bounded trusted-CIDR walk. At
+depth `1..16`, select the numbered XFF entry from the right after duplicate XFF
+field occurrences are combined in wire order. The directly connected peer
+counts toward configured proxy depth, but is not an XFF entry.
 
-Public docs may describe strict IPv4/IPv6 and CIDR parsing, the cold settings
-`503` response, websocket revocation after a locally applied firewall update,
-and `codex_pooler_ingress_firewall_denied_count` with only `scope` and `reason`
-labels. Do not publish raw forwarded header values, client addresses, internal
-recovery steps, or unbounded reason data.
+Public docs may describe strict IP/CIDR parsing, a `503` when settings are
+unavailable on cold start, websocket revocation after a locally applied
+firewall update, and `codex_pooler_ingress_firewall_denied_count` with only
+`scope` and `reason` labels. The bounded machine-readable denial reasons are
+`settings_unavailable` and `websocket_revoked`. Do not publish raw forwarded
+headers, client addresses, internal recovery steps, or unbounded reason data.
 
-The machine-readable denial reasons for those two operational outcomes are
-`settings_unavailable` and `websocket_revoked`. They are bounded diagnostic
-terms, not client-address or forwarding-header data.
-
-The source map for this claim is
+The source map is
 `lib/codex_pooler_web/plugs/runtime_ingress/forwarded_client_ip.ex`,
 `lib/codex_pooler_web/plugs/runtime_ingress/firewall.ex`,
 `lib/codex_pooler/gateway/operational_settings/ip_rules.ex`,
 `test/codex_pooler_web/plugs/runtime_ingress/forwarded_client_ip_test.exs`, and
 `test/codex_pooler_web/controllers/runtime/backend_codex_websocket_test.exs`.
 
-## Metrics and operator-session boundaries
+`/metrics` is outside the runtime firewall. It is open when no metrics bearer
+is configured, bearer-protected when one is configured, and unavailable when
+settings cannot be read. Do not imply the runtime firewall protects metrics.
 
-`/metrics` is outside the runtime firewall. Public operator docs may describe
-only its three states: **open** when no metrics bearer is configured,
-**bearer-protected** when one is configured, and **unavailable** when settings
-cannot be read and the endpoint fails closed. Do not imply that the runtime
-firewall protects metrics.
+## Compatibility Language
 
-The System page may be described as showing only the signed-in operator's
-current active, unexpired browser-session IP. It is not a session inventory and
-must not expose other-session provenance.
+Public docs must say:
 
-## Source Map For Public Route Claims
+- `gemma3` is the only public model
+- model and reasoning selection are server-owned
+- adapters provide bounded protocol compatibility
+- Codex CLI and Claude Code keep their own local agent runtimes
+- protocol translation is not token-for-token equivalence
+- arbitrary generated prose is not blindly rewritten
+- unsupported routes fail explicitly instead of being guessed
 
-Use these tracked sources as the source of truth for public route claims. Do not promote claims from ignored root `docs/` material or internal runbooks unless the claim is also present in a tracked source below.
+Public docs must not claim:
 
-| Public claim area | Tracked sources | Public-safe claim |
-| --- | --- | --- |
-| Root route split | `lib/codex_pooler_web/router.ex`, `test/codex_pooler_web/route_surface_test.exs` | `/backend-api`, `/v1`, `/mcp`, browser auth, admin LiveViews, usage, health, and metrics are separate route families |
-| Runtime ingress firewall and limits | `lib/codex_pooler_web/plugs/runtime_ingress.ex`, `lib/codex_pooler_web/plugs/runtime_ingress/path.ex`, `lib/codex_pooler_web/plugs/runtime_ingress/forwarded_client_ip.ex`, `lib/codex_pooler_web/plugs/runtime_ingress/firewall.ex`, `test/codex_pooler_web/plugs/runtime_ingress_test.exs`, `test/codex_pooler_web/plugs/runtime_ingress/path_test.exs`, `test/codex_pooler_web/plugs/runtime_ingress/forwarded_client_ip_test.exs` | Runtime and MCP ingress use one decoded path view, one settings snapshot, and one bounded client-IP resolution. Trusted forwarding is right-to-left and fail-closed for malformed or over-bound runtime/MCP input; non-runtime routes retain the peer. Compressed JSON and the four exact image actions are guarded before body parsing. |
-| Metrics and current-session status | `lib/codex_pooler_web/controllers/operations/metrics_controller.ex`, `lib/codex_pooler_web/live/admin/components/pages/system/page_components/metrics.ex`, `lib/codex_pooler_web/live/admin/pages/system_live.ex`, `test/codex_pooler_web/live/admin/pages/system_live_test.exs` | `/metrics` has separate open, bearer-protected, and unavailable fail-closed states outside the runtime firewall. The System page shows only the signed-in operator's current active, unexpired browser-session IP. |
-| Pruned app-server helper candidates | `lib/codex_pooler_web/plugs/runtime_ingress/path.ex`, `test/support/compatibility_matrix.ex`, `test/codex_pooler_web/plugs/runtime_ingress_test.exs` | Pruned helper candidates remain unsupported and preserve their fixed `404` only after settings and firewall admission; they never authenticate, parse a body, dispatch upstream work, reserve capacity, or create accounting. |
-| Backend Codex routes | `lib/codex_pooler_web/router.ex`, `test/support/compatibility_matrix.ex`, `test/codex_pooler_web/controllers/runtime/compatibility_contract_test.exs` | `/backend-api/codex/*` is explicit authenticated Codex backend compatibility, not wildcard proxy |
-| Native backend image routes | `lib/codex_pooler_web/router.ex`, `test/support/compatibility_matrix.ex`, `test/codex_pooler_web/controllers/runtime/compatibility_contract_test.exs`, `test/codex_pooler_web/controllers/runtime/backend_codex_controller_test.exs` | Exact native image generation and edit routes may route any policy-authorized effective image model that is genuinely absent from the Pool catalog through eligible visible host capacity while preserving that effective identifier. Catalog-present invisible targets remain invalid, and this does not change public `/v1` image translation |
-| Backend file bridge | `lib/codex_pooler_web/router.ex`, `test/support/compatibility_matrix.ex`, `test/codex_pooler_web/controllers/runtime/compatibility_contract_test.exs` | `/backend-api/files` stores metadata only and returns upstream upload or download URLs. Bytes are not stored locally |
-| OpenAI-compatible `/v1` supported routes | `lib/codex_pooler_web/router.ex`, `test/support/compatibility_matrix.ex`, `test/codex_pooler_web/route_surface_test.exs`, `test/codex_pooler_web/controllers/responses_terminal_compatibility_test.exs`, `test/codex_pooler_web/controllers/v1/route_auth_test.exs`, `test/codex_pooler_web/controllers/v1/responses_controller_test.exs`, `test/codex_pooler_web/controllers/v1/responses_websocket_bridge_terminal_test.exs`, `test/codex_pooler_web/controllers/v1/chat_completions_controller_test.exs`, `test/codex_pooler_web/controllers/runtime/compatibility_contract_test.exs` | `/v1` is narrow authenticated compatibility, not full OpenAI parity. `GET /v1/responses` is narrow Responses websocket compatibility only. OpenAI-compatible HTTP SSE synthesizes route-specific terminals when a visible stream ends without an upstream terminal: `POST /v1/responses` emits a sequence-valid sanitized `type: "error"` event, while `POST /v1/chat/completions` and its translated backend alias emit one nested `data: {"error":{...}}` chunk with no top-level `type` or following `[DONE]`. Public SSE treats absent, blank, and whitespace-only event labels identically while rejecting nonblank event/data mismatches. Ordinary incomplete public Responses SSE blocks are capped at 8 MiB so single large provider events can finish decoding; structurally recognizable terminal candidates may retain up to 64 MiB so split large terminals can finish decoding. Crossing the applicable cap emits one bounded sanitized error and relays no source bytes. Direct and accepted owner-forwarded public Responses websockets drop malformed JSON and JSON non-object provider frames without advancing sequence state. Native backend raw Responses streams and websocket surfaces do not synthesize these terminals. Public POST SSE and GET websocket normalize successful `response.done` or legacy typeless terminals to `response.completed`, while backend raw GET/POST surfaces preserve them. Both `POST /v1/responses` and `POST /v1/chat/completions` accept WAV, MP3, M4A, WebM, and OGG input audio with bounded decoded input |
-| Catalog revision and Responses envelope | `lib/codex_pooler/gateway/metadata/codex_catalog.ex`, `lib/codex_pooler/gateway/payloads/payload_normalizer.ex`, `test/support/compatibility_matrix.ex`, `test/codex_pooler/compatibility_matrix_test.exs`, `test/codex_pooler_web/controllers/runtime/compatibility_contract_test.exs` | Backend model aliases share a deterministic policy-visible weak ETag from one selected canonical partition. Backend Codex catalog-driven turns use that selected partition, while translated OpenAI Responses capacity includes all valid canonical assignments after concrete request compatibility. Successful backend Responses streams expose the token in backend-only headers; final non-compact backend envelopes cover canonical, alias, and translated public Responses destinations while compact stays excluded; failed-attempt parameter detail is bounded and sanitized |
-| OpenAI Responses request-shape rejections | `lib/codex_pooler/gateway/openai_compatibility/responses.ex`, `lib/codex_pooler/gateway/openai_compatibility/responses/input.ex`, `test/support/compatibility_matrix.ex`, `test/fixtures/openai_compatibility/sdk_shapes/MATRIX.md`, `test/codex_pooler/gateway/openai_compatibility/core_test.exs`, `test/codex_pooler_web/controllers/v1/responses_controller_test.exs`, `test/codex_pooler_web/controllers/v1/chat_completions_controller_test.exs` | OpenAI Responses remote MCP tool definitions are rejected before upstream dispatch in both top-level `tools` and nested `additional_tools.tools` locations |
-| OpenAI Responses custom tools and strict repair | `lib/codex_pooler/gateway/openai_compatibility/responses.ex`, `lib/codex_pooler/gateway/openai_compatibility/chat.ex`, `lib/codex_pooler/gateway/payloads/strict_schema.ex`, `test/support/compatibility_matrix.ex`, `test/fixtures/openai_compatibility/sdk_shapes/MATRIX.md`, `test/codex_pooler/gateway/openai_compatibility/core_test.exs`, `test/codex_pooler/gateway/payloads/strict_schema_repair_test.exs`, `test/codex_pooler_web/controllers/v1/responses_controller_test.exs`, `test/codex_pooler_web/controllers/v1/responses_websocket_programmatic_test.exs`, `test/codex_pooler_web/controllers/v1/chat_completions_controller_test.exs`, `test/codex_pooler_web/controllers/runtime/compatibility_contract_test.exs` | Direct public Responses HTTP and narrow websocket turns accept exact custom definitions top-level or in any already-valid nonblank namespace; `functions` is the canonical example, not a restriction. Full resolves exact same-kind custom choices from either location, while Lite rejects map-shaped choices before dispatch. Hosted, MCP, tool-search, nested-namespace, malformed, and global executable-name collision shapes remain excluded. Separately, strict flat-function parameters may receive only structurally proven missing nested object or array types. Chat custom tools and strict repair, structured-output repair, root repair, refs/definitions/combinators, backend routes, and broad OpenAI tool parity remain excluded |
-| OpenAI Responses web-search domain filters | `lib/codex_pooler/gateway/openai_compatibility/responses.ex`, `test/codex_pooler/gateway/openai_compatibility/core_test.exs` | `web_search.filters` accepts only optional `allowed_domains` and `blocked_domains` lists, each bounded to 1 through 100 nonblank strings without leading-whitespace, case-insensitive HTTP(S) schemes. Both lists may coexist and accepted values are forwarded unchanged. `external_web_access` is optional. This is local validation and forwarding, not an upstream availability or enforcement guarantee |
-| Unsupported `/v1` routes | `lib/codex_pooler_web/controllers/v1/unsupported_routes.ex`, `test/support/compatibility_matrix.ex`, `test/codex_pooler_web/controllers/v1/route_auth_test.exs`, `test/codex_pooler_web/controllers/runtime/compatibility_contract_test.exs` | Explicit unsupported `/v1` routes return deterministic OpenAI-shaped unsupported endpoint errors before gateway dispatch |
-| Realtime exclusion | `lib/codex_pooler_web/router.ex`, `test/support/compatibility_matrix.ex`, `test/codex_pooler_web/route_surface_test.exs`, `test/codex_pooler_web/controllers/v1/route_auth_test.exs` | `/v1/realtime` and OpenAI Realtime SDK websocket or session routes are not supported |
-| MCP endpoint | `lib/codex_pooler_web/router.ex`, `test/codex_pooler_web/route_surface_test.exs`, `test/codex_pooler_web/controllers/mcp_contract_test.exs`, `test/codex_pooler_web/controllers/mcp_controller_test.exs` | `/mcp` is a root metadata-only, read-only operator endpoint using operator MCP bearer tokens, not Pool API keys or browser sessions |
-| API Key Observatory | `lib/codex_pooler_web/router.ex`, `lib/codex_pooler_web/controllers/observatory/login_controller.ex`, `lib/codex_pooler_web/plugs/observatory_auth.ex`, `lib/codex_pooler_web/observatory_auth.ex`, `lib/codex_pooler/access/dashboard_sessions.ex`, `lib/codex_pooler/accounting/usage/observatory.ex`, `test/codex_pooler_web/route_surface_test.exs`, `test/codex_pooler_web/controllers/browser/observatory_login_controller_test.exs`, `test/codex_pooler/access/api_key_dashboard_sessions_test.exs`, `test/codex_pooler/accounting/observatory_contract_test.exs`, `test/codex_pooler_web/live/observatory_live_test.exs` | `/observatory` is a separate key-local read-only browser surface using an eligible Pool API key, a dedicated opaque dashboard token, and a minimal signed LiveView handoff; it does not grant runtime or `/admin/*` authority and exposes only bounded sanitized usage metadata |
-| Upstream identity linking | `lib/codex_pooler/upstreams/lifecycle/identity_lifecycle.ex`, `lib/codex_pooler/upstreams/token_linking.ex`, `lib/codex_pooler/upstreams/auth/codex_auth.ex`, `lib/codex_pooler/upstreams/auth/codex_auth_json.ex`, `lib/codex_pooler_web/live/admin/read_models/upstream_accounts_read_model.ex`, `lib/codex_pooler_web/live/admin/read_models/upstream_cockpit_read_model.ex`, `test/codex_pooler/upstreams/oauth_browser_linking_test.exs`, `test/codex_pooler/upstreams/oauth_device_linking_test.exs`, `test/codex_pooler/upstreams/oauth_relink_test.exs`, `test/codex_pooler/upstreams_test.exs`, `test/codex_pooler_web/live/admin/pages/upstreams_live_test.exs`, `test/codex_pooler_web/live/admin/pages/upstream_cockpit_live_test.exs` | OAuth links, relinks, and auth.json imports can use an OpenAI user subject, when returned, to separate same-account and same-workspace upstream credentials. Public docs may mention only sanitized subject references or fingerprints, never raw subjects |
-| Privacy and redaction | `README.md`, `test/codex_pooler_web/controllers/runtime/compatibility_contract_test.exs`, `test/codex_pooler_web/controllers/mcp_contract_test.exs`, `test/codex_pooler_web/controllers/mcp_controller_test.exs` | Public docs must keep prompts, bodies, bearer tokens, cookies, `auth.json`, upstream secrets, and private identifiers out of examples and evidence |
+- the façade is a local Ollama daemon
+- it exposes a Claude model or full Anthropic API
+- it is a full OpenAI API clone
+- it proxies the complete Codex app server
+- cache hits, uninterrupted sessions, or direct-service physical equivalence are guaranteed
+- every operation uses the reasoning target when a dedicated media endpoint requires a fixed helper
+
+## Source Map
+
+| Claim | Tracked source |
+| --- | --- |
+| Fixed public/private identity and effort | `lib/codex_pooler/gateway/facade.ex`, `lib/codex_pooler/gateway/payloads/request_options.ex` |
+| Normalize before validation and dispatch invariants | `lib/codex_pooler/gateway/facade/request_normalizer.ex`, `lib/codex_pooler/gateway/facade/dispatch.ex` |
+| Catalog projection and availability | `lib/codex_pooler/gateway/facade/catalog.ex`, `lib/codex_pooler/gateway/facade/ollama/catalog.ex` |
+| Response and header cloaking | `lib/codex_pooler/gateway/facade/public_projection.ex`, `lib/codex_pooler/gateway/facade/header_policy.ex`, `lib/codex_pooler/gateway/facade/error.ex` |
+| Pool/key-scoped cache and session identity | `lib/codex_pooler/gateway/facade/affinity.ex` |
+| Ollama adapters | `lib/codex_pooler/gateway/facade/ollama`, `lib/codex_pooler_web/controllers/ollama` |
+| Anthropic Messages adapters | `lib/codex_pooler/gateway/facade/anthropic`, `lib/codex_pooler_web/controllers/anthropic/messages_controller.ex` |
+| Public route list | `lib/codex_pooler_web/router.ex`, `test/codex_pooler_web/route_surface_test.exs` |
+| Cross-protocol leakage and fault behavior | `test/codex_pooler_web/controllers/facade_*_test.exs`, `test/codex_pooler/gateway/facade` |
+| Real client verification | `scripts/verification/facade`, `test/codex_pooler/facade/client_contract_test.exs` |
 
 ## Author Checklist
 
-Before publishing or editing a public page:
+Before publishing:
 
-1. Check every route claim against the source map above
-2. Use only allowed hosts and placeholders
-3. Include narrow `/v1` compatibility language when mentioning OpenAI SDKs
-4. Keep Codex app-server helper routes outside the supported runtime surface
-5. Keep `/mcp` token language separate from Pool API key language
-6. Remove raw payloads, secrets, callback URLs, raw OpenAI user subjects, private hosts, and internal evidence from examples
-7. If the route claim isn't in the tracked sources above, don't publish it yet
+1. Search public sources for private target/helper/provider/account/assignment identifiers.
+2. Confirm every client model example is exactly `gemma3`.
+3. Confirm runtime examples use Pool API keys, never upstream credentials.
+4. Confirm MCP examples use only operator MCP tokens.
+5. Match route tables against `router.ex` and controller behavior.
+6. State media-helper, cache, continuity, retry, and local-agent-runtime boundaries truthfully.
+7. Build the docs and run the façade contract, leakage, transport, and full application tests.

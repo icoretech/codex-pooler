@@ -294,7 +294,7 @@ defmodule CodexPooler.Admin.UpstreamQuotaReadinessTest do
                label: "Quota exhausted",
                tone: :error,
                routing_ready_now?: false,
-               reason_codes: ["quota_window_unusable", "exhausted"],
+               reason_codes: ["quota_weekly_exhausted", "exhausted"],
                primary_window: ^primary,
                primary_30d_window: nil,
                weekly_window: ^weekly

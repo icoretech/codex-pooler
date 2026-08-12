@@ -296,7 +296,9 @@ defmodule CodexPooler.Gateway.Facade.RoutingRobustnessTest do
         "input" => [%{"type" => "input_file", "file_id" => file.file_id}]
       })
 
-    assert %{"error" => %{"code" => "not_found"}} = json_response(denied, 404)
+    assert %{"error" => %{"code" => "file_not_found", "param" => "file_id"}} =
+             json_response(denied, 404)
+
     assert FakeUpstream.count(setup.first_upstream) == 0
     assert FakeUpstream.count(setup.second_upstream) == 1
     assert_cloaked_json(json_response(denied, 404))

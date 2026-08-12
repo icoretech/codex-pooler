@@ -133,7 +133,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                revoked_state
              )
 
-    assert Jason.decode!(final_frame)["error"]["code"] == "upstream_failed"
+    assert Jason.decode!(final_frame)["error"]["code"] == "service_error"
     assert closed_state.firewall_close_sent?
     assert MapSet.size(closed_state.tasks) == 0
     assert :queue.is_empty(closed_state.queued_response_payloads)
@@ -720,10 +720,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                  "type" => "error",
                  "status" => 502,
                  "error" => %{
-                   "type" => "invalid_request_error",
+                   "type" => "server_error",
                    "code" => "server_error",
-                   "message" =>
-                     "upstream request failed: stream interrupted before terminal response event",
+                   "message" => "gemma3 request failed",
                    "param" => nil
                  }
                }
@@ -838,7 +837,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         assert {:push, {:text, payload}, aborted_state} =
                  CodexResponsesSocket.handle_info(drain_frame, state)
 
-        assert Jason.decode!(payload)["error"]["code"] == "owner_drained"
+        assert Jason.decode!(payload)["error"]["code"] == "service_unavailable"
         assert aborted_state.public_turn_aborted?
         assert aborted_state.websocket_owner_drain_observed?
         assert :queue.len(aborted_state.queued_response_payloads) == 0
@@ -898,7 +897,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         assert {:push, {:text, payload}, drained_state} =
                  CodexResponsesSocket.handle_info(drain_frame, state)
 
-        assert Jason.decode!(payload)["error"]["code"] == "owner_drained"
+        assert Jason.decode!(payload)["error"]["code"] == "service_unavailable"
 
         assert {:ok, done_state} =
                  CodexResponsesSocket.handle_info(
@@ -946,7 +945,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         assert {:push, {:text, payload}, drained_state} =
                  CodexResponsesSocket.handle_info(drain_frame, state)
 
-        assert Jason.decode!(payload)["error"]["code"] == "owner_drained"
+        assert Jason.decode!(payload)["error"]["code"] == "service_unavailable"
 
         assert {:ok, done_state} =
                  CodexResponsesSocket.handle_info(
@@ -1001,7 +1000,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
           assert {:push, {:text, error_payload}, aborted_state} =
                    CodexResponsesSocket.handle_info(drain_frame, state)
 
-          assert Jason.decode!(error_payload)["error"]["code"] == "owner_drained"
+          assert Jason.decode!(error_payload)["error"]["code"] == "service_unavailable"
           assert aborted_state.public_turn_aborted?
           assert aborted_state.websocket_owner_drain_observed?
           assert :queue.len(aborted_state.queued_response_payloads) == 0
@@ -1134,14 +1133,36 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   test "websocket error frames leave unrelated errors without recovery fields" do
     {_result, logs} =
       with_native_turn_log(:warning, fn ->
-        for reason <- [
-              %{
-                status: 503,
-                code: "session_assignment_unavailable",
-                message: "session unavailable"
-              },
-              %{status: 400, code: "unsupported_model_capability", message: "model unsupported"},
-              %{status: 400, code: "invalid_request", message: "request invalid"}
+        for {reason, public_error} <- [
+              {%{
+                 status: 503,
+                 code: "session_assignment_unavailable",
+                 message: "session unavailable"
+               },
+               %{
+                 "message" => "gemma3 is temporarily unavailable",
+                 "type" => "server_error",
+                 "code" => "service_unavailable",
+                 "param" => nil
+               }},
+              {%{
+                 status: 400,
+                 code: "unsupported_model_capability",
+                 message: "model unsupported"
+               },
+               %{
+                 "message" => "Request is invalid",
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_request",
+                 "param" => nil
+               }},
+              {%{status: 400, code: "invalid_request", message: "request invalid"},
+               %{
+                 "message" => "request invalid",
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_request",
+                 "param" => nil
+               }}
             ] do
           assert {:push, {:text, payload}, _state} =
                    CodexResponsesSocket.handle_info(
@@ -1151,12 +1172,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
           decoded = Jason.decode!(payload)
 
-          assert decoded["error"] == %{
-                   "message" => reason.message,
-                   "type" => "invalid_request_error",
-                   "code" => reason.code,
-                   "param" => nil
-                 }
+          assert decoded["error"] == public_error
 
           refute Map.has_key?(decoded["error"], "recovery")
           refute Map.has_key?(decoded["error"], "recovery_kind")
@@ -1192,9 +1208,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         decoded = Jason.decode!(payload)
         assert decoded["type"] == "error"
         assert decoded["status"] == 500
-        assert decoded["error"]["message"] == "websocket request failed: non_atom_reason"
+        assert decoded["error"]["message"] == "gemma3 request failed"
         assert decoded["error"]["code"] == "websocket_request_failed"
-        assert decoded["error"]["type"] == "invalid_request_error"
+        assert decoded["error"]["type"] == "server_error"
 
         refute payload =~ "raw-idempotency-key-secret"
         refute payload =~ "raw websocket prompt"

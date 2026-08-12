@@ -153,7 +153,7 @@ Dashboard data is metadata-only. It excludes prompts, completions, file or media
 
 ## Models
 
-The Models step chooses model scope and optional enforced request fields.
+The Models step authorizes the façade's server-owned target. It does not give a client a model picker: every client still sees and sends only `gemma3`.
 
 ![Create API key models step](/operators/api-keys/api-keys-create-models-dialog.png)
 
@@ -169,11 +169,11 @@ Model modes are:
   <tbody>
     <tr>
       <td>All models</td>
-      <td>Allows current and future routable models for the Pool, subject to upstream eligibility.</td>
+      <td>Authorizes the fixed target when it is routable, subject to upstream eligibility.</td>
     </tr>
     <tr>
       <td>Selected</td>
-      <td>Allows only checked catalog models and any manual model identifiers saved on the key.</td>
+      <td>Authorizes the fixed target only when the operator includes its real catalog identifier.</td>
     </tr>
     <tr>
       <td>Deny all</td>
@@ -182,23 +182,9 @@ Model modes are:
   </tbody>
 </table>
 
-Catalog models are derived from current routable model metadata. Manual model identifiers support controlled exceptions when a model is not yet present in the catalog.
+Catalog models are real operator-side routing metadata. They are intentionally different from the client-visible virtual model. A Selected policy that omits the fixed target, an enforced model that names anything else, an exact reasoning effort other than `max`, or a maximum reasoning ceiling below `max` conflicts with the façade and fails closed before upstream work.
 
-Enforced request fields let the key override selected client request values:
-
-1. enforced model
-2. reasoning policy
-3. enforced service tier
-
-The reasoning policy offers three modes:
-
-1. **Unrestricted** leaves omission absent and preserves any effort the route already accepts. This is the default for keys with neither reasoning value configured.
-2. **Allow up to** permits only known efforts through the selected ceiling: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`. The selected model's available known levels can narrow the result further. An omitted request uses the permitted model default, or the highest permitted known level.
-3. **Always use** applies one exact effort to every request. Existing keys that already have an enforced reasoning effort stay in this mode.
-
-Allow up to rejects rather than changes a disallowed request. An effort above the ceiling, an unknown or custom effort, or an omission with no permitted level returns `400 reasoning_effort_not_allowed` before upstream work. Backend Responses and public Responses identify `reasoning.effort`; Chat Completions identifies `reasoning_effort`.
-
-`none` is an explicit configured value. Leaving the policy Unrestricted is different because it leaves client control intact. `minimal` and `ultra` are evaluated as their own client-facing values, then backend dispatch rewrites them to `low` and `max` respectively when required by the upstream target. Safe policy and reasoning summaries can distinguish the requested, applied, and effective values.
+An unrestricted key authorizes the server-owned decision without restoring client control. `Always use max` is also compatible. Service-tier enforcement remains an independent Pool-key policy. Request logs can show the real target and applied effort to authorized operators, while client catalogs, responses, and errors remain `gemma3`-only.
 
 ## Limits
 
@@ -289,7 +275,7 @@ When client traffic is rejected or not behaving as expected, check API keys in t
 2. confirm the key belongs to the expected Pool
 3. confirm the key status is `active`
 4. confirm the key is not expired
-5. confirm model policy allows the requested model
+5. confirm model policy authorizes the façade's fixed target and `max` reasoning
 6. confirm enforced request fields are expected
 7. confirm request and token limits are not exceeded
 8. check the owning Pool for active upstream assignments

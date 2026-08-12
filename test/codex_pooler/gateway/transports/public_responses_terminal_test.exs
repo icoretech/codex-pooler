@@ -148,7 +148,7 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
 
       assert [%{event: "response.failed", data: decoded}] = public_events(output)
       assert decoded["response"]["status"] == "failed"
-      assert decoded["response"]["error"]["message"] == "upstream request failed"
+      assert decoded["response"]["error"]["message"] == "gemma3 request failed"
       refute output =~ "private-prompt-sentinel"
       refute output =~ "private-response-sentinel"
       assert state.sequence.terminal_latched?
@@ -177,9 +177,9 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
 
     test "public SSE and websocket sanitize #{value_class} terminal errors at both locations" do
       fallback = %{
-        "message" => "upstream request failed",
+        "message" => "gemma3 request failed",
         "type" => "server_error",
-        "code" => "upstream_error"
+        "code" => "service_error"
       }
 
       observations =
@@ -263,8 +263,8 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
     for transport <- [:sse, :websocket] do
       {_wire, decoded} = normalize_completed_public_wire(transport, terminal)
 
-      assert decoded["response"]["error"]["code"] == "insufficient_quota",
-             "#{transport} copied the real top-level error instead of fabricating one from nil"
+      assert decoded["response"]["error"]["code"] == "service_error",
+             "#{transport} cloaked the real top-level error instead of fabricating one from nil"
     end
   end
 
@@ -710,14 +710,14 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
       "type" => "response.failed",
       "sequence_number" => 7,
       "error" => %{
-        "code" => "top_safe_code",
+        "code" => "service_error",
         "type" => "server_error",
-        "message" => "upstream request failed"
+        "message" => "gemma3 request failed"
       },
       "response" =>
         expected_failed_response(
           id: "resp_safe_123",
-          code: "nested_safe_code",
+          code: "service_error",
           incomplete_details: %{"reason" => "content_filter"},
           usage: %{
             "input_tokens" => 11,
@@ -797,19 +797,19 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
       {wire, decoded} = normalize_public_wire(transport, terminal)
 
       assert decoded["error"] == %{
-               "code" => "top_safe_code",
+               "code" => "service_error",
                "type" => "server_error",
-               "message" => "upstream request failed"
+               "message" => "gemma3 request failed"
              }
 
       assert decoded["response"]["error"] == %{
-               "code" => "nested_safe_code",
+               "code" => "service_error",
                "type" => "server_error",
-               "message" => "upstream request failed"
+               "message" => "gemma3 request failed"
              }
 
       assert decoded["response"] ==
-               expected_failed_response(id: "resp_distinct_codes", code: "nested_safe_code")
+               expected_failed_response(id: "resp_distinct_codes", code: "service_error")
 
       refute wire =~ "top_provider_type"
       refute wire =~ "nested_provider_type"
@@ -982,7 +982,7 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
     assert decoded["sequence_number"] == 0
 
     assert decoded["error"] == %{
-             "message" => "upstream request failed",
+             "message" => "gemma3 request failed",
              "type" => "server_error",
              "code" => "context_length_exceeded"
            }
@@ -1034,9 +1034,9 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
     assert decoded["sequence_number"] == 0
 
     assert decoded["error"] == %{
-             "message" => "upstream request failed",
+             "message" => "gemma3 request failed",
              "type" => "server_error",
-             "code" => "upstream_error"
+             "code" => "service_error"
            }
 
     assert decoded["response"] ==
@@ -1163,12 +1163,12 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
       "created_at" => 0,
       "status" => "failed",
       "error" => %{
-        "code" => Keyword.get(overrides, :code, "upstream_error"),
-        "message" => "upstream request failed",
+        "code" => Keyword.get(overrides, :code, "service_error"),
+        "message" => "gemma3 request failed",
         "type" => "server_error"
       },
       "incomplete_details" => Keyword.get(overrides, :incomplete_details),
-      "model" => "unknown",
+      "model" => "gemma3",
       "object" => "response",
       "output" => [],
       "output_text" => "",

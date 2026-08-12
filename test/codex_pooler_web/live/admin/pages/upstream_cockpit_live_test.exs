@@ -2868,7 +2868,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert contradiction_item.state == contradiction.charts.quota_health.state
     assert "exhausted" in contradiction_item.reason_codes
-    assert contradiction_item.reason_codes == ["quota_window_unusable", "exhausted"]
+    assert contradiction_item.reason_codes == ["quota_weekly_exhausted", "exhausted"]
     assert contradiction_item.routing_usable? == false
     assert contradiction_item.primary_5h.routing_usable? == true
     assert contradiction_item.primary_5h.reason_codes == ["unknown_unusable"]

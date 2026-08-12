@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.EventSummary
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.UpstreamErrorParam
   alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ConnectionUpgrade
@@ -1139,8 +1140,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     do: %{receive_state | terminal_seen?: true}
 
   defp maybe_put_terminal_upstream_error(%{} = decoded, %ReceiveState{} = receive_state) do
-    case Map.get(decoded, "type") do
-      type when type in ["response.failed", "response.incomplete", "error"] ->
+    cond do
+      EventSummary.typeless_detail_error?(decoded) ->
+        %{
+          receive_state
+          | terminal_upstream_error_code:
+              receive_state.terminal_upstream_error_code || "upstream_terminal_failure"
+        }
+
+      Map.get(decoded, "type") in ["response.failed", "response.incomplete", "error"] ->
         %{
           receive_state
           | terminal_upstream_error_code:
@@ -1150,7 +1158,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
               receive_state.terminal_upstream_error_param || UpstreamErrorParam.extract(decoded)
         }
 
-      _other ->
+      true ->
         receive_state
     end
   end

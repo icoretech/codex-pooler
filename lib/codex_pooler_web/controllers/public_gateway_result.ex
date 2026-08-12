@@ -2,9 +2,10 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
   @moduledoc false
 
   import Phoenix.Controller, only: [json: 2]
-  import Plug.Conn, only: [put_status: 2]
+  import Plug.Conn, only: [put_resp_header: 3, put_status: 2]
 
   alias CodexPooler.Gateway.Contracts
+  alias CodexPooler.Gateway.Facade.Error, as: FacadeError
   alias CodexPooler.Gateway.Facade.PublicProjection
   alias CodexPooler.Gateway.OpenAICompatibility.PublicResponse
   alias CodexPoolerWeb.GatewayControllerHelpers, as: GatewayHelpers
@@ -54,9 +55,37 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
   def send(conn, {:ok, %{body: _body} = result}, _success_normalizer),
     do: GatewayHelpers.send_gateway_result(conn, result)
 
-  def send(conn, {:error, %{status: _status} = reason}, _success_normalizer),
-    do: GatewayHelpers.send_error(conn, reason)
+  def send(conn, {:error, %{status: status} = reason}, _success_normalizer) do
+    body =
+      conn
+      |> IngressPath.protocol()
+      |> FacadeError.body(status, reason)
+      |> merge_recovery_error_fields(reason)
+
+    conn
+    |> put_recovery_headers(reason)
+    |> put_status(status)
+    |> json(body)
+  end
 
   def send(conn, {:error, reason}, _success_normalizer),
     do: GatewayHelpers.send_error(conn, reason)
+
+  defp put_recovery_headers(conn, reason) do
+    Enum.reduce(Contracts.recovery_response_headers(reason), conn, fn {key, value}, conn ->
+      put_resp_header(conn, key, value)
+    end)
+  end
+
+  defp merge_recovery_error_fields(%{"error" => %{} = public_error} = body, reason) do
+    case Contracts.recovery_error_fields(reason) do
+      recovery when map_size(recovery) > 0 ->
+        Map.put(body, "error", Map.merge(public_error, recovery))
+
+      _recovery ->
+        body
+    end
+  end
+
+  defp merge_recovery_error_fields(body, _reason), do: body
 end

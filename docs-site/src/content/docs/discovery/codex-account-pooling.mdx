@@ -43,7 +43,7 @@ Use this checklist when you want to know whether a Pool can route supported Code
     </tr>
     <tr>
       <td>Model and route are compatible</td>
-      <td>The requested model and route shape must be supported for the assignment</td>
+      <td>The façade's fixed target and route shape must be supported for the assignment</td>
       <td><a href="/reference/runtime-routes/">Runtime Routes</a></td>
     </tr>
     <tr>
@@ -63,7 +63,7 @@ Use this checklist when you want to know whether a Pool can route supported Code
 
 A Pool is the routing and policy boundary that clients authenticate against. It groups upstream account assignments, Pool API keys, routing behavior, compatibility settings, and metadata scope for request and audit evidence.
 
-The routing strategy orders only accounts that already passed eligibility checks. It cannot choose a paused account, an unassigned account, an account without the requested model, or an account blocked by continuity or quota evidence.
+The routing strategy orders only accounts that already passed eligibility checks. It cannot choose a paused account, an unassigned account, an account without the fixed target, or an account blocked by continuity or quota evidence.
 
 ## What Stays Metadata-Only
 

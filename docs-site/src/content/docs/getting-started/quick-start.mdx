@@ -6,14 +6,14 @@ head:
     attrs:
       type: application/ld+json
     content: |
-      {"@context":"https://schema.org","@type":"HowTo","name":"Start Codex Pooler locally","description":"Start Codex Pooler with Docker Compose, create the first owner, create a Pool, add an upstream account, create a Pool API key, and point a client at /backend-api/codex or /v1.","tool":[{"@type":"HowToTool","name":"Docker with Compose"},{"@type":"HowToTool","name":"Git"},{"@type":"HowToTool","name":"openssl"}],"step":[{"@type":"HowToStep","name":"Start Codex Pooler","text":"Clone the repository, generate local secrets with scripts/self-host/generate-env.sh, pull images, and start the Docker Compose stack."},{"@type":"HowToStep","name":"Create the owner account","text":"Open http://localhost:4000, complete the bootstrap screen, and sign in as the instance owner."},{"@type":"HowToStep","name":"Create a Pool","text":"Open http://localhost:4000/admin/pools and create the Pool that clients will authenticate against."},{"@type":"HowToStep","name":"Add an upstream account","text":"Open http://localhost:4000/admin/upstreams and link, import, or invite a Codex account, then assign it to the Pool when needed."},{"@type":"HowToStep","name":"Create a Pool API key","text":"Open http://localhost:4000/admin/api-keys, create a key for the Pool, copy it once, and store it in the client environment."},{"@type":"HowToStep","name":"Point a client at the gateway","text":"Use http://localhost:4000/backend-api/codex for Codex backend clients, http://localhost:4000/v1 for selected OpenAI-compatible SDK clients, and http://localhost:4000/mcp only for operator metadata with an operator MCP token."}]}
+      {"@context":"https://schema.org","@type":"HowTo","name":"Start Codex Pooler locally","description":"Start Codex Pooler, add authorized upstream capacity, create a Pool API key, and configure a supported client with gemma3.","tool":[{"@type":"HowToTool","name":"Docker with Compose"},{"@type":"HowToTool","name":"Git"},{"@type":"HowToTool","name":"openssl"}],"step":[{"@type":"HowToStep","name":"Start Codex Pooler","text":"Clone the repository, generate local secrets, pull images, and start Docker Compose."},{"@type":"HowToStep","name":"Create the owner account","text":"Open http://localhost:4000 and complete bootstrap."},{"@type":"HowToStep","name":"Create a Pool","text":"Create the Pool that clients authenticate against."},{"@type":"HowToStep","name":"Add an upstream account","text":"Link or import an authorized Codex account and assign it to the Pool."},{"@type":"HowToStep","name":"Create a Pool API key","text":"Create a key, copy it once, and keep it in the client environment."},{"@type":"HowToStep","name":"Point a client at the gateway","text":"Choose the documented Ollama, Anthropic Messages, OpenAI, or Codex base URL and configure only gemma3."}]}
 ---
 
-Use this guide to get from a fresh checkout to a local Pool API key you can put in a Codex or OpenAI-compatible client.
+Use this guide to get from a fresh checkout to a local Pool API key you can put in an Ollama, Claude Code, OpenAI-compatible, or Codex client.
 
 ## Quick Setup Summary
 
-To start Codex Pooler locally, generate a private `.env`, start the Docker Compose stack, create the first owner, create a Pool, assign one upstream account, create a Pool API key, and point a client at `/backend-api/codex` or `/v1`. Use `/mcp` only for operator metadata with a separate MCP token.
+To start Codex Pooler locally, generate a private `.env`, start Docker Compose, create the first owner and Pool, assign one upstream account, create a Pool API key, and configure a supported client with `gemma3`. Use `/mcp` only for operator metadata with a separate MCP token.
 
 ## What You Need
 
@@ -108,19 +108,17 @@ The Pool API key represents the Pool, not one upstream account. Do not use this 
 
 ## 6. Point Your First Client At The Gateway
 
-For Codex backend clients, use the backend compatibility route:
+Choose the base URL for the client protocol and configure only `gemma3`:
 
-```text
-Base URL: http://localhost:4000/backend-api/codex
-Authorization: Bearer <pool-api-key>
-```
+| Client | Local base URL | Credential |
+| --- | --- | --- |
+| Ollama | `http://localhost:4000` | Pool API key bearer |
+| Claude Code / Anthropic | `http://localhost:4000` | Pool API key through Anthropic auth variables |
+| OpenAI SDK | `http://localhost:4000/v1` | Pool API key bearer |
+| Codex CLI | `http://localhost:4000/backend-api/codex` | Pool API key bearer |
 
-For OpenAI-compatible SDK clients, use the narrow `/v1` route:
-
-```text
-Base URL: http://localhost:4000/v1
-Authorization: Bearer <pool-api-key>
-```
+The server owns the target and fixed reasoning policy. Do not configure another
+model, fallback model, or upstream account credential.
 
 For trusted operator metadata tools, use `/mcp` with an operator MCP token, not a Pool API key:
 
@@ -142,7 +140,7 @@ curl -fsS http://localhost:4000/healthz
 curl -fsS http://localhost:4000/readyz
 ```
 
-If the app is running but client requests fail, check the Pool assignment first: the Pool needs an active API key, at least one usable upstream assignment, and a model the upstream account can serve.
+If the app is running but client requests fail, check the Pool assignment first: the Pool needs an active API key and at least one usable assignment that can route the server-owned fixed target.
 
 To stop the local stack:
 

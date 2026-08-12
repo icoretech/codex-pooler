@@ -12,8 +12,23 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.Path do
     ["api", "codex", "usage"],
     ["wham", "usage"],
     ["backend-api", "wham", "usage"],
-    ["v1"],
-    ["api"]
+    ["v1"]
+  ]
+
+  @ollama_runtime_paths [
+    ["api", "chat"],
+    ["api", "generate"],
+    ["api", "tags"],
+    ["api", "show"],
+    ["api", "ps"],
+    ["api", "version"],
+    ["api", "pull"],
+    ["api", "create"],
+    ["api", "copy"],
+    ["api", "push"],
+    ["api", "delete"],
+    ["api", "embed"],
+    ["api", "embeddings"]
   ]
 
   @pruned_runtime_paths [
@@ -96,6 +111,8 @@ defmodule CodexPoolerWeb.Plugs.RuntimeIngress.Path do
 
   defp classify(candidate_segments) do
     if candidate_segments in @pruned_runtime_paths or
+         candidate_segments in @ollama_runtime_paths or
+         List.starts_with?(candidate_segments, ["api", "blobs"]) or
          Enum.any?(@runtime_prefixes, &List.starts_with?(candidate_segments, &1)) do
       :runtime
     else

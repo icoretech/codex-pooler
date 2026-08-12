@@ -451,7 +451,9 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
 
   defp json_success(%Req.Response{status: status}, operation) do
     {:error,
-     safe_error(status, :upstream_file_bridge_failed, "upstream file #{operation} failed")}
+     safe_error(502, :upstream_file_bridge_failed, "upstream file #{operation} failed",
+       response_status: status
+     )}
   end
 
   defp retry_options(opts) do

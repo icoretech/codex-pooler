@@ -73,7 +73,13 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
     assert %{"object" => "list", "data" => []} = json_response(list, 200)
 
     detail = conn |> recycle() |> auth(setup) |> get("/v1/models/gemma3")
-    assert %{"error" => %{"code" => "facade_model_unavailable"}} = json_response(detail, 503)
+
+    assert %{
+             "error" => %{
+               "code" => "model_unavailable",
+               "message" => "gemma3 is temporarily unavailable"
+             }
+           } = json_response(detail, 503)
 
     setup.api_key
     |> Ecto.Changeset.change(allowed_model_identifiers: nil)

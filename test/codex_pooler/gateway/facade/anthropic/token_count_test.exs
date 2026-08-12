@@ -133,10 +133,21 @@ defmodule CodexPooler.Gateway.Facade.Anthropic.TokenCountTest do
     assert tool_count > one_count
   end
 
-  test "fails closed when a normalized segment exceeds the bounded local tokenizer" do
+  test "chunks current Claude Code long-message count probes inside the aggregate bound" do
     payload = %{
       "messages" => [
-        %{"role" => "user", "content" => String.duplicate("x", 8_193)}
+        %{"role" => "user", "content" => String.duplicate("long context line\n", 1_556)}
+      ]
+    }
+
+    assert {:ok, %{"input_tokens" => count}} = TokenCount.count(payload)
+    assert is_integer(count) and count > 0
+  end
+
+  test "fails closed when normalized input exceeds the aggregate count bound" do
+    payload = %{
+      "messages" => [
+        %{"role" => "user", "content" => String.duplicate("x", 8 * 1_024 * 1_024)}
       ]
     }
 

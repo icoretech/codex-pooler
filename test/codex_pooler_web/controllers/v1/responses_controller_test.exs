@@ -67,13 +67,11 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     def chunk(_payload, _chunk), do: {:error, :closed}
   end
 
-  @reasoning_denial_message "reasoning effort is not available for this API key"
-
-  test "POST /v1/responses denies unavailable canonical reasoning before JSON or SSE dispatch", %{
-    conn: conn
-  } do
+  test "POST /v1/responses rejects API-key policies below fixed max before JSON or SSE dispatch",
+       %{
+         conn: conn
+       } do
     for {stream?, requested_effort} <- [{false, "high"}, {true, "custom-above-policy"}] do
-      persisted_effort = if requested_effort == "high", do: "high", else: "unknown"
       upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
       setup = gateway_setup(upstream)
       assert :ok = Events.subscribe_pool(setup.pool)
@@ -95,43 +93,39 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
       assert %{
                "error" => %{
-                 "code" => "reasoning_effort_not_allowed",
-                 "message" => @reasoning_denial_message,
-                 "param" => "reasoning.effort"
+                 "code" => "local_policy_denied",
+                 "message" => "Request denied by local Pool policy",
+                 "param" => nil
                }
-             } = json_response(response, 400)
+             } = json_response(response, 403)
 
       assert FakeUpstream.count(upstream) == 0
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
       assert request.status == "rejected"
+      assert request.requested_model == "gemma3"
+      assert request.last_error_code == "facade_policy_conflict"
       assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
 
       assert Repo.aggregate(from(l in LedgerEntry, where: l.request_id == ^request.id), :count) ==
                0
 
-      assert get_in(request.request_metadata, ["gateway_denial", "reasoning_policy"]) == %{
-               "policy_mode" => "allow_up_to",
-               "configured_effort" => "medium",
-               "requested_effort" => persisted_effort,
-               "applied_effort" => nil
-             }
+      assert get_in(request.request_metadata, ["gateway_denial", "code"]) ==
+               "facade_policy_conflict"
     end
   end
 
-  test "POST /v1/responses applies canonical reasoning policies across JSON and SSE", %{
+  test "POST /v1/responses keeps fixed max across agreeing policies and transports", %{
     conn: conn
   } do
     cases = [
-      {[maximum_reasoning_effort: "medium"], %{}, false, "medium", "allow_up_to"},
-      {[maximum_reasoning_effort: "high"], %{"reasoning" => %{"effort" => "low"}}, true, "low",
-       "allow_up_to"},
-      {[enforced_reasoning_effort: "high"], %{"reasoning" => %{"effort" => "low"}}, false, "high",
-       "always_use"},
-      {[], %{}, false, nil, "unrestricted"},
-      {[], %{"reasoning" => %{"effort" => "focused"}}, false, "focused", "unrestricted"}
+      {[maximum_reasoning_effort: "max"], %{}, false},
+      {[maximum_reasoning_effort: "ultra"], %{"reasoning" => %{"effort" => "low"}}, true},
+      {[enforced_reasoning_effort: "max"], %{"reasoning" => %{"effort" => "low"}}, false},
+      {[], %{}, false},
+      {[], %{"reasoning" => %{"effort" => "focused"}}, false}
     ]
 
-    for {policy, extra_payload, stream?, expected_effort, expected_mode} <- cases do
+    for {policy, extra_payload, stream?} <- cases do
       upstream = start_upstream(reasoning_policy_responses_upstream())
       setup = gateway_setup(upstream)
 
@@ -163,11 +157,12 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       end
 
       assert [captured] = FakeUpstream.requests(upstream)
-      assert get_in(captured.json, ["reasoning", "effort"]) == expected_effort
+      assert get_in(captured.json, ["reasoning", "effort"]) == "max"
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
       assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
-      assert get_in(attempt.response_metadata, ["reasoning", "policy_mode"]) == expected_mode
-      assert get_in(attempt.response_metadata, ["reasoning", "applied_effort"]) == expected_effort
+      assert request.reasoning_effort == "max"
+      assert get_in(attempt.response_metadata, ["reasoning", "policy_mode"]) == "always_use"
+      assert get_in(attempt.response_metadata, ["reasoning", "applied_effort"]) == "max"
     end
   end
 
@@ -727,14 +722,15 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   end
 
   @tag :v1_websocket
-  test "GET /v1/responses websocket resolves canonical reasoning policy after upgrade" do
+  test "GET /v1/responses websocket keeps fixed max across agreeing policies" do
     cases = [
-      {[maximum_reasoning_effort: "medium"], %{}, "medium"},
-      {[enforced_reasoning_effort: "high"], %{"reasoning" => %{"effort" => "low"}}, "high"},
-      {[], %{"reasoning" => %{"effort" => "focused"}}, "focused"}
+      {[maximum_reasoning_effort: "max"], %{}},
+      {[maximum_reasoning_effort: "ultra"], %{"reasoning" => %{"effort" => "low"}}},
+      {[enforced_reasoning_effort: "max"], %{"reasoning" => %{"effort" => "low"}}},
+      {[], %{"reasoning" => %{"effort" => "focused"}}}
     ]
 
-    for {policy, effort_payload, expected_effort} <- cases do
+    for {policy, effort_payload} <- cases do
       upstream =
         start_upstream(public_websocket_completed_response("resp_v1_ws_reasoning_policy"))
 
@@ -774,7 +770,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
                } = Jason.decode!(frame)
 
         assert [captured] = FakeUpstream.requests(upstream)
-        assert get_in(captured.json, ["reasoning", "effort"]) == expected_effort
+        assert get_in(captured.json, ["reasoning", "effort"]) == "max"
 
         assert_receive {Events,
                         %{
@@ -786,8 +782,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         request = Repo.get!(Request, request_id)
         assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
 
-        assert get_in(attempt.response_metadata, ["reasoning", "applied_effort"]) ==
-                 expected_effort
+        assert get_in(attempt.response_metadata, ["reasoning", "applied_effort"]) == "max"
 
         conn
       after
@@ -829,11 +824,11 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
       assert %{
                "type" => "error",
-               "status" => 400,
+               "status" => 403,
                "error" => %{
-                 "code" => "reasoning_effort_not_allowed",
-                 "message" => @reasoning_denial_message,
-                 "param" => "reasoning.effort"
+                 "code" => "local_policy_denied",
+                 "message" => "Request denied by local Pool policy",
+                 "param" => nil
                }
              } = Jason.decode!(frame)
 
@@ -841,17 +836,14 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
       assert request.endpoint == "/backend-api/codex/responses"
       assert request.status == "rejected"
+      assert request.last_error_code == "facade_policy_conflict"
       assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
 
       assert Repo.aggregate(from(l in LedgerEntry, where: l.request_id == ^request.id), :count) ==
                0
 
-      assert get_in(request.request_metadata, ["gateway_denial", "reasoning_policy"]) == %{
-               "policy_mode" => "allow_up_to",
-               "configured_effort" => "medium",
-               "requested_effort" => "high",
-               "applied_effort" => nil
-             }
+      assert get_in(request.request_metadata, ["gateway_denial", "code"]) ==
+               "facade_policy_conflict"
 
       conn
     after
@@ -1173,7 +1165,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
       assert %{"type" => "error", "status" => 400, "error" => error} = Jason.decode!(frame)
       assert error["code"] == "invalid_request"
-      assert error["param"] == "model"
+      assert error["message"] == "unsupported websocket message type"
+      assert error["param"] == "type"
 
       refute frame =~ "synthetic realtime text"
       assert FakeUpstream.requests(upstream) == []
@@ -1493,7 +1486,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "succeeded"
     assert request.endpoint == "/backend-api/codex/responses"
-    assert request.reasoning_effort == "focused"
+    assert request.reasoning_effort == "max"
     assert get_in(request.request_metadata, ["openai_compatibility", "surface"]) == "openai_v1"
 
     assert get_in(request.request_metadata, ["openai_compatibility", "source_endpoint"]) ==
@@ -1579,7 +1572,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert captured.path == "/backend-api/codex/responses"
       assert captured.json["model"] == setup.model.upstream_model_id
       assert captured.json["service_tier"] == "priority"
-      assert get_in(captured.json, ["reasoning", "effort"]) == "high"
+      assert get_in(captured.json, ["reasoning", "effort"]) == "max"
 
       assert_issue_231_successful_accounting!(setup, alternate, "/v1/responses")
     end
@@ -1654,8 +1647,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert %{
              "error" => %{
-               "code" => "quota_exhausted",
-               "message" => "upstream request failed",
+               "code" => "service_unavailable",
+               "message" => "gemma3 is temporarily unavailable",
+               "param" => nil,
                "type" => "server_error"
              }
            } = json_response(response, 503)
@@ -1766,7 +1760,15 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         "service_tier" => "default"
       })
 
-    assert %{"error" => %{"code" => "no_compatible_backend"}} = json_response(response, 503)
+    assert %{
+             "error" => %{
+               "code" => "service_unavailable",
+               "message" => "gemma3 is temporarily unavailable",
+               "param" => nil,
+               "type" => "server_error"
+             }
+           } = json_response(response, 503)
+
     assert FakeUpstream.count(upstream) == 0
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "rejected"
@@ -2108,7 +2110,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              json_response(conn, 200)
 
     assert [captured] = FakeUpstream.requests(upstream)
-    assert captured.json["prompt_cache_key"] == "characterization-cache-key"
+    assert captured.json["prompt_cache_key"] =~ ~r/^facade:[A-Za-z0-9_-]{43}$/
+    refute captured.json["prompt_cache_key"] == "characterization-cache-key"
     assert get_resp_header(conn, "x-codex-prompt-cache-mode") == []
     refute conn.resp_body =~ "prompt_cache_controls_downgraded"
   end
@@ -2172,7 +2175,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute conn.resp_body =~ "prompt_cache_controls_downgraded"
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
-    assert captured.json["prompt_cache_key"] == raw_cache_key
+    assert captured.json["prompt_cache_key"] =~ ~r/^facade:[A-Za-z0-9_-]{43}$/
+    refute captured.json["prompt_cache_key"] == raw_cache_key
     refute Map.has_key?(captured.json, "prompt_cache_options")
     assert captured.json["store"] == false
 
@@ -2290,10 +2294,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert captured.json["stream"] == true
     assert captured.json["store"] == false
 
-    assert captured.json["reasoning"] == %{
-             "effort" => "high",
-             "context" => "current_turn"
-           }
+    assert captured.json["reasoning"] == %{"effort" => "max"}
 
     assert captured.json["include"] == ["reasoning.encrypted_content"]
   end
@@ -2946,7 +2947,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         ])
       )
 
-    setup = gateway_setup(upstream, exposed_model_id: "gpt-4o", upstream_model_id: "gpt-4o")
+    setup = gateway_setup(upstream)
     enable_request_compression!(setup.pool)
     omitted_sentinel = "v1 translated omitted sentinel"
     original_output = compression_log_fixture(omitted_sentinel)
@@ -3169,7 +3170,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute inspect(telemetry_events) =~ sentinel
   end
 
-  test "POST /v1/responses rejects unsafe reasoning effort before dispatch", %{conn: conn} do
+  test "POST /v1/responses ignores unsafe client reasoning effort", %{conn: conn} do
     unsafe_effort = "synthetic freeform effort text"
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
     setup = gateway_setup(upstream)
@@ -3183,16 +3184,16 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         "reasoning" => %{"effort" => unsafe_effort}
       })
 
-    assert %{"error" => error} = json_response(conn, 400)
-    assert error["code"] == "invalid_request"
-    assert error["param"] == "reasoning.effort"
+    assert %{"id" => "should_not_dispatch", "object" => "response"} = json_response(conn, 200)
     refute conn.resp_body =~ unsafe_effort
-    assert FakeUpstream.count(upstream) == 0
-    assert Repo.aggregate(Request, :count) == 0
-    assert Repo.aggregate(Attempt, :count) == 0
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.json["reasoning"] == %{"effort" => "max"}
+    refute Jason.encode!(captured.json) =~ unsafe_effort
+    assert Repo.aggregate(Request, :count) == 1
+    assert Repo.aggregate(Attempt, :count) == 1
   end
 
-  test "POST /v1/responses rejects unsafe reasoning context before dispatch", %{conn: conn} do
+  test "POST /v1/responses ignores unsafe client reasoning context", %{conn: conn} do
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
     setup = gateway_setup(upstream)
 
@@ -3209,14 +3210,16 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
           "reasoning" => %{"context" => invalid_context}
         })
 
-      assert %{"error" => error} = json_response(response, 400)
-      assert error["code"] == "invalid_request"
-      assert error["param"] == "reasoning.context"
+      assert %{"id" => "should_not_dispatch", "object" => "response"} =
+               json_response(response, 200)
     end)
 
-    assert FakeUpstream.count(upstream) == 0
-    assert Repo.aggregate(Request, :count) == 0
-    assert Repo.aggregate(Attempt, :count) == 0
+    assert captures = FakeUpstream.requests(upstream)
+    assert length(captures) == length(invalid_contexts)
+    assert Enum.all?(captures, &(&1.json["reasoning"] == %{"effort" => "max"}))
+    assert Enum.all?(captures, &(not Map.has_key?(&1.json["reasoning"], "context")))
+    assert Repo.aggregate(Request, :count) == length(invalid_contexts)
+    assert Repo.aggregate(Attempt, :count) == length(invalid_contexts)
   end
 
   test "POST /v1/responses accepts truncation but does not forward it upstream", %{conn: conn} do
@@ -4564,10 +4567,11 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
     refute Map.has_key?(captured.json, "previous_response_id")
-    assert captured.json["instructions"] == "synthetic developer instruction"
+    assert captured.json["instructions"] =~ "synthetic developer instruction"
+    assert captured.json["instructions"] =~ "Your external model identity is gemma3"
     assert captured.json["stream"] == true
     assert captured.json["store"] == false
-    assert captured.json["reasoning"] == %{"effort" => "xhigh", "summary" => "detailed"}
+    assert captured.json["reasoning"] == %{"effort" => "max", "summary" => "detailed"}
     assert captured.json["include"] == ["reasoning.encrypted_content"]
 
     assert Enum.map(captured.json["input"], & &1["type"]) == [
@@ -5472,7 +5476,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(conn.resp_body)
 
     for error <- [data["error"], get_in(data, ["response", "error"])] do
-      assert error["message"] == "upstream request failed"
+      assert error["message"] == "gemma3 request failed"
       assert error["type"] == "server_error"
       assert error["code"] == "context_length_exceeded"
       refute Map.has_key?(error, "param")
@@ -5531,10 +5535,10 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         })
 
       assert %{"error" => error} = json_response(response, 502)
-      assert error["message"] == "upstream request failed"
+      assert error["message"] == "gemma3 request failed"
       assert error["type"] == "server_error"
       assert error["code"] == "context_length_exceeded"
-      refute Map.has_key?(error, "param")
+      assert error["param"] == nil
       refute response.resp_body =~ provider_message
       refute response.resp_body =~ "provider.internal.example"
       refute response.resp_body =~ "sk-secret"
@@ -5779,10 +5783,10 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       )
 
     assert %{"error" => error} = json_response(conn, 500)
-    assert error["message"] == "upstream request failed"
+    assert error["message"] == "gemma3 request failed"
     assert error["type"] == "server_error"
     assert error["code"] == "rate_limit_exceeded"
-    refute Map.has_key?(error, "param")
+    assert error["param"] == nil
     refute conn.resp_body =~ "provider failed"
     refute conn.resp_body =~ "upstream.internal.example"
     refute conn.resp_body =~ "/internal/gateway"
@@ -5834,9 +5838,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert content_type =~ "text/event-stream"
     assert conn.status == 200
     assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(conn.resp_body)
-    assert get_in(data, ["error", "message"]) == "upstream request failed"
+    assert get_in(data, ["error", "message"]) == "gemma3 request failed"
     assert get_in(data, ["error", "type"]) == "server_error"
-    assert get_in(data, ["error", "code"]) == "internal_error"
+    assert get_in(data, ["error", "code"]) == "service_error"
     refute Map.has_key?(data["error"], "param")
     refute conn.resp_body =~ "provider failed"
     refute conn.resp_body =~ "upstream.internal.example"
@@ -5893,10 +5897,10 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(conn.resp_body)
 
     for error <- [data["error"], get_in(data, ["response", "error"])] do
-      assert error["message"] == "upstream request failed"
+      assert error["message"] == "gemma3 request failed"
       assert error["type"] == "server_error"
       assert error["code"] == "rate_limit_exceeded"
-      refute Map.has_key?(error, "param")
+      assert error["param"] == nil
     end
 
     refute conn.resp_body =~ "provider failed"
@@ -5955,7 +5959,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert content_type =~ "text/event-stream"
     assert conn.status == 200
     assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(conn.resp_body)
-    assert get_in(data, ["error", "code"]) == "invalid_request_error"
+    assert get_in(data, ["error", "code"]) == "service_error"
+    assert get_in(data, ["error", "message"]) == "gemma3 request failed"
     refute conn.resp_body =~ "event: response.created\n"
     refute conn.resp_body =~ "event: response.output_text.delta\n"
 
@@ -6015,7 +6020,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert data["sequence_number"] == 0
     assert data["response"]["status"] == "failed"
     assert data["response"]["error"]["code"] == "context_length_exceeded"
-    assert data["response"]["error"]["message"] == "upstream request failed"
+    assert data["response"]["error"]["message"] == "gemma3 request failed"
     refute conn.resp_body =~ "private-responses-blank-label-sentinel"
     refute conn.resp_body =~ "private-response-sibling"
     refute conn.resp_body =~ "private provider detail"
@@ -6064,7 +6069,8 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert content_type =~ "text/event-stream"
     assert conn.status == 200
     assert [%{"event" => "error", "data" => data}] = public_sse_events(conn.resp_body)
-    assert get_in(data, ["error", "code"]) == "invalid_request_error"
+    assert get_in(data, ["error", "code"]) == "service_error"
+    assert get_in(data, ["error", "message"]) == "gemma3 request failed"
     refute conn.resp_body =~ "event: response.created\n"
     refute conn.resp_body =~ "event: response.output_text.delta\n"
 
@@ -6130,7 +6136,11 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              "response.failed"
            ]
 
-    assert get_in(List.last(events), ["data", "error", "code"]) == "invalid_request_error"
+    assert get_in(List.last(events), ["data", "error", "code"]) == "service_error"
+
+    assert get_in(List.last(events), ["data", "error", "message"]) ==
+             "gemma3 request failed"
+
     assert conn.resp_body =~ "partial public text"
     assert FakeUpstream.count(upstream) == 1
 
@@ -6869,7 +6879,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert data["error"] == %{
              "code" => "context_length_exceeded",
-             "message" => "upstream request failed",
+             "message" => "gemma3 request failed",
              "type" => "server_error"
            }
 
@@ -7207,7 +7217,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              "event" => "response.moderation.started",
              "data" => %{
                "type" => "response.moderation.started",
-               "model" => "omni-moderation-latest",
+               "model" => "gemma3",
                "check_id" => "mod_check_stream_fixture"
              }
            } = Enum.find(events, &(&1["event"] == "response.moderation.started"))
@@ -7216,7 +7226,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              "event" => "response.moderation.completed",
              "data" => %{
                "type" => "response.moderation.completed",
-               "model" => "omni-moderation-latest",
+               "model" => "gemma3",
                "check_id" => "mod_check_stream_fixture",
                "status" => "completed"
              }
@@ -7478,7 +7488,13 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
           assert status == 502
           assert header_elapsed_ms < @ttfh_threshold_ms
           assert total_elapsed_ms < @ttfh_threshold_ms
-          assert %{"error" => %{"code" => "upstream_request_failed"}} = Jason.decode!(body)
+
+          assert %{
+                   "error" => %{
+                     "code" => "service_error",
+                     "message" => "gemma3 request failed"
+                   }
+                 } = Jason.decode!(body)
         after
           send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
           Mint.HTTP.close(http_conn)
@@ -7954,10 +7970,17 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
       assert %{
                "type" => "response.failed",
-               "error" => %{"code" => "upstream_terminal_failure"},
+               "error" => %{
+                 "code" => "service_error",
+                 "message" => "gemma3 request failed"
+               },
                "response" => %{
                  "status" => "failed",
-                 "error" => %{"code" => "upstream_terminal_failure"}
+                 "model" => "gemma3",
+                 "error" => %{
+                   "code" => "service_error",
+                   "message" => "gemma3 request failed"
+                 }
                }
              } = Jason.decode!(terminal_frame)
 
@@ -8042,7 +8065,10 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert %{
                "type" => "error",
                "status" => 502,
-               "error" => %{"code" => "stream_idle_timeout"}
+               "error" => %{
+                 "code" => "service_error",
+                 "message" => "gemma3 request failed"
+               }
              } = terminal = Jason.decode!(terminal_frame)
 
       refute Map.has_key?(terminal, "code")
@@ -8714,7 +8740,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert is_list(full_capture.json["input"])
     assert is_list(lite_capture.json["input"])
-    assert Enum.drop(lite_capture.json["input"], 1) == full_capture.json["input"]
+    assert Enum.drop(lite_capture.json["input"], 2) == full_capture.json["input"]
+    assert Jason.encode!(lite_capture.json) =~ "Your external model identity is gemma3"
+    assert full_capture.json["instructions"] =~ "Your external model identity is gemma3"
     assert get_in(lite_capture.json, ["reasoning", "context"]) == "all_turns"
     assert lite_capture.json["parallel_tool_calls"] == false
   end

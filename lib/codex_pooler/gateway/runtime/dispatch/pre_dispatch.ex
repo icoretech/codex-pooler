@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   alias CodexPooler.Access
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Contracts, as: GatewayContracts
+  alias CodexPooler.Gateway.Facade.Catalog, as: FacadeCatalog
   alias CodexPooler.Gateway.Facade.Dispatch, as: FacadeDispatch
   alias CodexPooler.Gateway.Metadata.CodexCatalog
   alias CodexPooler.Gateway.OperationalSettings
@@ -159,7 +160,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
              quota_snapshot_at: quota_snapshot_at,
              routing_settings: PoolRouting.routing_settings_with_defaults(auth.pool)
            })
-           |> maybe_put_codex_models_etag(endpoint, request_options),
+           |> maybe_put_codex_models_etag(auth, endpoint, request_options),
          {:ok, candidates} <-
            CandidateEligibility.filter_runtime_compatible_candidates(
              CandidateEligibility.FilterInput.new(%{
@@ -452,36 +453,38 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
 
   defp maybe_put_codex_models_etag(
          %RouteState{} = route_state,
+         auth,
          endpoint,
          %RequestOptions{} = request_options
        ) do
     if codex_models_etag_eligible?(endpoint, request_options) do
       policy = request_options.routing.api_key_policy
-
-      visible_models = policy_visible_models(route_state.visible_models, policy)
-
-      pricing_buckets = CodexPooler.Catalog.pricing_buckets_by_identifier(visible_models)
       context_window_overrides = OperationalSettings.current().model_context_window_overrides
 
       candidates_by_model_id =
         Map.get(route_state.visible_model_context, :candidates_by_model_id, %{})
 
-      %{etag: etag} =
-        CodexCatalog.build_canonical(
-          visible_models,
+      routable_assignment_ids_by_model_id =
+        PartitionRoutability.routable_assignment_ids_by_model_id(
+          route_state.visible_models,
           candidates_by_model_id,
+          route_state.quota_window_snapshots,
+          route_state.quota_snapshot_at
+        )
+
+      resolution =
+        FacadeCatalog.resolve(
+          auth,
           policy,
-          pricing_buckets,
+          route_state.visible_model_context,
+          routable_assignment_ids_by_model_id
+        )
+
+      %{etag: etag} =
+        FacadeCatalog.codex_catalog(
+          resolution,
           context_window_overrides,
-          route_state.effective_model_serving_modes,
-          routable_assignment_ids_by_model_id: fn ->
-            PartitionRoutability.routable_assignment_ids_by_model_id(
-              visible_models,
-              candidates_by_model_id,
-              route_state.quota_window_snapshots,
-              route_state.quota_snapshot_at
-            )
-          end
+          route_state.effective_model_serving_modes
         )
 
       RouteState.put_codex_models_etag(route_state, etag)

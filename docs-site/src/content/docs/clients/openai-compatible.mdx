@@ -1,71 +1,26 @@
 ---
-title: OpenAI-Compatible SDKs
-description: Configure selected OpenAI SDK-compatible clients through Codex Pooler's narrow /v1 surface, Pool API keys, supported routes, and unsupported boundaries.
-head:
-  - tag: script
-    attrs:
-      type: application/ld+json
-    content: |
-      {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Can I use the official OpenAI SDK with Codex Pooler?","acceptedAnswer":{"@type":"Answer","text":"Yes, for selected SDK routes. Set the SDK base_url or baseURL to https://codex-pooler.example.com/v1, use a Pool API key as the bearer credential, and keep requests on supported route shapes such as responses, chat completions, models, usage, files, audio transcription, and image generation or edits."}},{"@type":"Question","name":"Should Codex backend clients use /v1?","acceptedAnswer":{"@type":"Answer","text":"No. Codex backend-compatible clients should use /backend-api/codex. The /v1 surface is for selected OpenAI SDK-compatible clients and translates supported requests into Codex-compatible work."}},{"@type":"Question","name":"Does /v1 support OpenAI Realtime?","acceptedAnswer":{"@type":"Answer","text":"No. /v1/realtime and OpenAI Realtime SDK websocket or session routes are unsupported. GET /v1/responses is narrow Responses websocket compatibility only, not OpenAI Realtime support."}},{"@type":"Question","name":"Does /v1/responses/compact work?","acceptedAnswer":{"@type":"Answer","text":"No. POST /v1/responses/compact is routed only so clients receive a deterministic OpenAI-shaped unsupported_endpoint error. Codex backend-compatible compact requests should use POST /backend-api/codex/responses/compact."}},{"@type":"Question","name":"Can I use the same key for /v1 and /mcp?","acceptedAnswer":{"@type":"Answer","text":"No. /v1 uses Pool API keys for runtime work. /mcp uses operator-owned MCP bearer tokens for metadata-only lookup. Keep those credentials separate in client configuration and storage."}}]}
+title: OpenAI-compatible SDKs
+description: Configure OpenAI SDK clients for Codex Pooler's authenticated single-model gemma3 façade.
 ---
 
-Codex Pooler provides narrow OpenAI-compatible `/v1` support for selected SDK routes. It translates supported requests into Codex-compatible work, then sends them through the same Pool routing, limit checks, account selection, and accounting path used by Codex backend clients.
+Codex Pooler provides bounded OpenAI-compatible routes for SDKs and agent clients. The public catalog contains at most one model, `gemma3`. Client-supplied model and reasoning selectors are normalized before authorization and cannot select another model or reasoning policy.
 
-It doesn't provide full OpenAI API parity.
-
-For a short citable summary, see [OpenAI-compatible Codex gateway](/discovery/openai-compatible-codex-gateway/).
-
-## What OpenAI-Compatible Means Here
-
-OpenAI-compatible means selected SDK request shapes can use a `/v1` base URL and a Pool API key. Codex Pooler still routes the request through Codex account Pools, not through a separate OpenAI engine. Unsupported OpenAI API areas remain unsupported, including embeddings, batches, fine-tuning, moderation, response retrieve/cancel/delete, image variations, OpenAI Responses remote MCP tool definitions, and OpenAI Realtime SDK routes.
+This is not full OpenAI API parity. Use only the routes documented here.
 
 ## Base URL and authentication
 
-Use the `/v1` base URL and a Pool API key:
-
 ```text
-Base URL:
-https://codex-pooler.example.com/v1
-
-Authorization:
-Bearer <pool-api-key>
+Base URL:     https://codex-pooler.example.com/v1
+Authorization: Bearer <pool-api-key>
+Model:         gemma3
 ```
 
-For local setup, use `http://localhost:4000/v1`.
-
-## Service tier compatibility
-
-Use `service_tier: "priority"` for priority processing. `fast` is an accepted
-equivalent request spelling, but `priority` is the canonical spelling for new
-configuration. On `/v1`, Codex Pooler translates supported OpenAI request and
-response shapes while preserving any projected provider `service_tier` value in
-its literal provider vocabulary. Codex backend relay routes under
-`/backend-api/codex` preserve provider bytes, frames, and service-tier
-vocabulary unchanged.
-
-## Tool-specific setup pages
-
-Use the dedicated setup pages when configuring an agent or editor that has its own provider shape:
-
-- [Aider](/clients/aider/)
-- [Continue](/clients/continue/)
-- [Cline](/clients/cline/)
-- [Goose](/clients/goose/)
-- [Hermes Agent](/clients/hermes/)
-- [Kilo](/clients/kilo/)
-- [OpenCode](/clients/opencode/)
-- [OpenClaw](/clients/openclaw/)
-- [OpenHands](/clients/openhands/)
-- [OMP](/clients/omp/)
-- [Pi](/clients/pi/)
-- [Trae](/clients/trae/)
-- [Windmill AI](/clients/windmill/)
+For local setup, use `http://localhost:4000/v1`. A Pool API key represents a Pool; never configure an upstream account token in a client.
 
 ## Python SDK
 
 ```python
 import os
-
 from openai import OpenAI
 
 client = OpenAI(
@@ -74,8 +29,8 @@ client = OpenAI(
 )
 
 response = client.responses.create(
-    model="gpt-5.6-terra",
-    input="Write a short setup confirmation.",
+    model="gemma3",
+    input="Reply with: connected",
 )
 
 print(response.output_text)
@@ -92,245 +47,90 @@ const client = new OpenAI({
 });
 
 const response = await client.responses.create({
-  model: "gpt-5.6-terra",
-  input: "Write a short setup confirmation.",
+  model: "gemma3",
+  input: "Reply with: connected",
 });
 
 console.log(response.output_text);
 ```
 
-## Vercel AI SDK
+Streaming uses the SDK's normal Responses stream API. Public SSE events, final response envelopes, Chat Completions chunks, and legacy Completions all expose `gemma3` when a model field is present.
 
-```ts
-import { createOpenAI } from "@ai-sdk/openai";
-import { generateText } from "ai";
+## Curl smoke test
 
-const pooler = createOpenAI({
-  apiKey: process.env.CODEX_POOLER_API_KEY,
-  baseURL: "https://codex-pooler.example.com/v1",
-});
-
-const { text } = await generateText({
-  model: pooler.responses("gpt-5.6-terra"),
-  providerOptions: {
-    openai: {
-      promptCacheOptions: { mode: "explicit", ttl: "30m" },
-    },
-  },
-  messages: [
-    {
-      role: "system",
-      content: "Keep setup guidance concise.",
-      providerOptions: {
-        openai: { promptCacheBreakpoint: { mode: "explicit" } },
-      },
-    },
-    { role: "user", content: "Write a short setup confirmation." },
-  ],
-});
-
-console.log(text);
+```bash
+curl -sS https://codex-pooler.example.com/v1/models \
+  -H 'Authorization: Bearer <pool-api-key>'
 ```
 
-Codex Pooler accepts these OpenAI cache controls as public input. For
-account-backed requests, it adapts the explicit controls automatically before
-upstream dispatch while preserving `prompt_cache_key` independently from Pool
-routing affinity. GPT-5.6 model ids are passed through to the Pool catalog and
-assignment policy; naming one here does not guarantee that every Pool has an
-eligible account for that model.
+An available Pool returns exactly one `data` entry whose `id` is `gemma3`. If the server-owned target is not policy-authorized and routable, the list is empty; Codex Pooler does not advertise a fallback.
 
-### Programmatic tools and stateless replay
-
-For Vercel AI SDK programmatic tools, set `providerOptions.openai.store: false`
-on every generation that participates in the tool loop:
-
-```ts
-const result = await generateText({
-  model: pooler.responses("gpt-5.6-terra"),
-  providerOptions: {
-    openai: { store: false },
-  },
-  // Your programmatic tool and tool-choice configuration goes here.
-  prompt: appPrompt,
-});
+```bash
+curl -sS https://codex-pooler.example.com/v1/responses \
+  -H 'Authorization: Bearer <pool-api-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gemma3","input":"Reply with: connected","stream":false}'
 ```
 
-Vercel chooses complete stateless replay or a stored `item_reference` before
-the request reaches Codex Pooler. `store: false` is therefore required for the
-complete stateless replay path. Independently, Codex Pooler forces upstream
-`stream: true` and `store: false`.
+## Supported inference and discovery routes
 
-This is narrow, closed-world compatibility, not general OpenAI programmatic-tool
-or Responses parity. Supported shapes are `program` and `program_output`,
-caller-enabled `function_call` and `function_call_output`, the type-only
-`programmatic_tool_calling` tool and tool choice, plus `allowed_callers` and
-map-only `output_schema`. Reference-only and ordinary stored-response
-continuations are not supported. Codex Pooler does not locally persist raw
-program code, results, schemas, or identifiers. A request accepted by the
-gateway can still be rejected when its selected upstream model or account lacks
-the required capability.
+| Route | Support |
+| --- | --- |
+| `GET /v1/models` | Lists only the routable virtual `gemma3` model |
+| `GET /v1/models/gemma3` | Returns the virtual model descriptor |
+| `POST /v1/responses` | Collected JSON or Responses SSE; text, supported multimodal input, function tools, and continuity |
+| `GET /v1/responses` | Narrow Responses websocket transport, not OpenAI Realtime |
+| `POST /v1/chat/completions` | Collected JSON or Chat Completions SSE |
+| `POST /v1/completions` | Bounded legacy Completions JSON or SSE |
+| `GET /v1/usage` | Pool-key-scoped usage metadata |
 
-Responses `function_call_output` replay accepts optional nullable, nonblank string
-`name` and `namespace` metadata. Omitted or `null` values are accepted; blank or
-non-string values are rejected before dispatch. This applies to both `output` and
-legacy `result` items over HTTP and the narrow Responses websocket bridge.
+The server accepts omitted, `gemma3`, or arbitrary client model selectors on supported inference routes and replaces them with its immutable routing decision. Reasoning selectors are also server-owned. Model-detail path selectors are identity-neutral too: any selector resolves to the same available `gemma3` descriptor instead of discovering another model.
 
-`GET /v1/models` may include `context_length` for clients that probe OpenAI-compatible model lists, such as Hermes. The official OpenAI SDK request APIs and Vercel AI SDK generation APIs do not expose Codex model-catalog context controls. Use their output-budget fields only when your application needs one: `max_output_tokens` in OpenAI Responses, `max_completion_tokens` in Chat Completions, and `maxOutputTokens` at the Vercel AI SDK layer. Codex Pooler's public `/v1/responses` currently rejects `context_management`, and public `/v1/responses/compact` is routed but unsupported, so do not document SDK-side compaction as a Codex Pooler feature.
+## Supported file and media routes
 
-### Replay a remote-compaction item
+| Route | Support |
+| --- | --- |
+| `GET /v1/files` | Lists authenticated Pool-owned file metadata |
+| `POST /v1/files` | Creates upstream-backed file metadata/upload flow |
+| `GET /v1/files/:file_id` | Reads owned file metadata |
+| `POST /v1/audio/transcriptions` | Audio transcription compatibility |
+| `POST /v1/images/generations` | Image generation compatibility |
+| `POST /v1/images/edits` | Image editing compatibility |
 
-When a remote compaction response supplies an encrypted `type: "compaction"`
-output item, submit that item unchanged at the start of the next
-`POST /v1/responses` input, followed by the new user item. Start a new chain:
-omit `previous_response_id` rather than using the compact response id. Codex
-Pooler preserves accepted compaction items and their input order over collected
-JSON, public SSE, and narrow Responses websocket turns.
+Dedicated media endpoints use fixed server-owned media helpers where the reasoning target cannot perform that endpoint. Clients still send only `gemma3` and cannot select or discover those helpers. Raw file, audio, and image bodies are not stored in request logs.
 
-The stable public replay fields are `type`, a nonblank string
-`encrypted_content`, and optional `id`. The `id` key may be absent, a string, or
-explicitly `null`; key presence is preserved exactly. Unknown compaction fields
-or malformed values are rejected before upstream dispatch. Treat encrypted
-content as opaque and do not log or persist it in application telemetry.
+## Tools and structured output
 
-This is replay compatibility only. `POST /v1/responses/compact` remains
-unsupported, and Codex Pooler does not claim general SDK-side compaction.
+Supported function tools, tool calls/results, JSON object output, and bounded JSON Schema output are translated through the Responses path. Unsupported tool families and ambiguous schemas fail locally instead of being guessed. In particular, OpenAI remote MCP tool definitions are not bridged to Codex Pooler's operator MCP endpoint.
 
-## Supported or translated route support
+The root `/mcp` endpoint is a separate read-only operator service with a separate operator MCP token. Pool API keys do not authenticate it.
 
-The OpenAI-compatible `/v1` surface supports or translates selected routes only:
+## Cache and continuity behavior
 
-- `GET /v1/models`
-- `POST /v1/responses`
-- `GET /v1/responses`, narrow Responses websocket compatibility only
-- `POST /v1/chat/completions`
-- `GET /v1/usage`
-- `GET /v1/files`
-- `POST /v1/files`
-- `GET /v1/files/:file_id`
-- `POST /v1/audio/transcriptions`
-- `POST /v1/images/generations`
-- `POST /v1/images/edits`
+Codex Pooler is not a response cache. It preserves provider-side prompt-cache locality without allowing client identifiers to collide across tenants:
 
-The `/v1` surface is compatibility over Codex routing, not a separate OpenAI engine. Supported requests still require a Pool API key and a Pool with eligible upstream capacity for the requested model.
+- `prompt_cache_key` is converted to a Pool-and-key-scoped digest before routing or upstream dispatch.
+- supported Anthropic-style cache breakpoints use the same scoped cache path after translation.
+- session and continuity headers affect routing only through bounded, authenticated continuity handling.
+- `previous_response_id` and response item IDs are opaque continuation handles; the gateway does not expose provider/account metadata through them.
 
-### Audio transcriptions
+Locality can improve the chance of a cache hit but never guarantees one. Normal account eligibility, health, quota, policy, retry, and continuity rules still apply.
 
-`POST /v1/audio/transcriptions` accepts `gpt-transcribe` as a caller alias. The
-gateway uses the fixed canonical backend identity `gpt-4o-transcribe`. The alias
-is not a model-list entry or a model-discovery guarantee.
+## Streaming and errors
 
-```js
-import fs from "node:fs";
-import OpenAI from "openai";
+Before any visible stream content, a retryable failure can move to another eligible assignment. After visible content has been emitted, the request is never replayed; the stream ends with exactly one protocol-safe terminal error.
 
-const client = new OpenAI({
-  apiKey: process.env.CODEX_POOLER_API_KEY,
-  baseURL: "http://localhost:4000/v1",
-});
+Errors use OpenAI-shaped envelopes and sanitized messages. Provider, upstream account, assignment, hidden model, upstream request IDs, and rate-limit headers are not relayed. Clients should treat error codes as open strings and keep a fallback for unknown codes.
 
-const transcription = await client.audio.transcriptions.create({
-  file: fs.createReadStream("audio.mp3"),
-  model: "gpt-transcribe",
-  keywords: ["example", "example"],
-  languages: ["en", "it"],
-});
+## Routed but unsupported endpoints
 
-console.log(transcription.text);
-```
-
-```python
-import os
-
-from openai import OpenAI
-
-client = OpenAI(
-    api_key=os.environ["CODEX_POOLER_API_KEY"],
-    base_url="http://localhost:4000/v1",
-)
-
-with open("audio.mp3", "rb") as audio_file:
-    transcription = client.audio.transcriptions.create(
-        file=audio_file,
-        model="gpt-transcribe",
-        keywords=["example", "example"],
-        languages=["en", "it"],
-    )
-
-print(transcription.text)
-```
-
-`keywords` and `languages` are optional nonempty string lists. Empty lists are
-omitted. Nonempty lists retain caller order and duplicate entries. Responses omit
-language-detection fields. This documents the accepted request shape only, not
-transcription quality, model discovery, or general Audio API coverage.
-
-`POST /v1/responses` lifts system and developer input-message text into top-level `instructions` before dispatching to Codex-compatible work. Streaming `/v1/responses` and `/v1/chat/completions` return early upstream terminal errors as the first public SSE event or data chunk, without synthetic assistant/success prefixes. Non-streaming failures remain OpenAI-shaped JSON errors.
-
-Streaming `/v1/responses` clients must also handle a terminal `type: "error"` SSE event whose flat fields and nested `error` object both carry the sanitized `server_error` code.
-
-Streaming `/v1/chat/completions` clients must separately handle a terminal `data: {"error":{...}}` chunk with nested `server_error` fields and no top-level `type`; no `[DONE]` chunk follows that terminal.
-
-For public SSE, an absent, blank, or whitespace-only `event:` label is treated as absent before the label is compared with the JSON `type`. A nonblank mismatch is still rejected. Ordinary incomplete `POST /v1/responses` SSE blocks are capped at 8 MiB so single large provider events, such as reasoning items carrying encrypted content, can finish decoding; structurally recognizable terminal candidates may retain up to 64 MiB so a large terminal split across upstream chunks can finish decoding. Crossing the applicable cap sends one bounded sanitized `type: "error"` event, relays none of that source block, and drops later source frames.
-
-On narrow `GET /v1/responses` websocket compatibility, malformed JSON and JSON values that are not objects are ignored without consuming a sequence number or creating a local terminal. This applies to direct and accepted owner-forwarded public clients; native backend websocket behavior is unchanged.
-
-### Relayed terminal errors
-
-When the Codex backend returns a genuine terminal error, Codex Pooler preserves its trimmed `error.code` only when
-the value is at most 80 bytes and matches `^[A-Za-z0-9_.-]+$`. Other code values are redacted to `upstream_error`.
-A surviving code may be a Codex-backend value that is not part of the OpenAI platform `ResponseError` enum.
-
-Upstream error messages are replaced with `upstream request failed`, and upstream error types are replaced with
-`server_error`. Clients must therefore treat `error.code` as an open string: handle the values they understand and
-keep an unknown-code fallback rather than validating against the platform enum.
-
-Public relays construct each `response.failed` envelope from a named-field projection. Unknown event, response,
-error, and usage siblings are excluded. The response identifier is retained only when it is a valid `resp_`
-identifier; otherwise it becomes `resp_failed`. Usage is either `null` or a bounded projection of the declared token
-counters. Content-bearing response fields are empty or `null`: `output` and `tools` are empty arrays, `output_text`
-is an empty string, and `instructions`, `metadata`, `temperature`, and `top_p` are `null`.
-
-Top-level and nested errors are sanitized independently and are never copied between locations. A safe code remains
-unchanged at its original location, while every invalid code becomes `upstream_error`; message and type remain the
-fixed `upstream request failed` and `server_error` values.
-
-Schema-strict clients that enforce the platform enum cannot accept every relayed Codex-backend code. In
-`openai-python`, leave `_strict_response_validation` at its default `false` when using this compatibility surface.
-
-Ordinary OpenAI Responses incomplete terminals are preserved. If an upstream returns `response.incomplete` with `status: "incomplete"` for output limits or content filtering and no embedded error, `/v1/responses` streaming and websocket clients receive that incomplete terminal instead of a synthetic failure. Error-coded incomplete terminals, such as context overflow or stale continuation anchors, are still returned through the sanitized failure path.
-
-Accepted `POST /v1/responses` tool definitions are narrow. OpenAI Responses remote MCP tool definitions are rejected before dispatch.
-
-### Web search domain filters
-
-`web_search.filters` accepts only `allowed_domains` and `blocked_domains`. Each
-supplied field is a list of 1 through 100 nonblank strings without leading-
-whitespace, case-insensitive HTTP(S) schemes. Both fields can appear together.
-Codex Pooler forwards accepted values unchanged, including their order, case,
-duplicates, and bytes.
-
-`external_web_access` is optional. Codex Pooler guarantees local validation and
-forwarding of this accepted shape only. Web search availability and any
-allow-list or block-list enforcement can vary by selected upstream model and
-account.
-
-## Request compression behavior
-
-Per-Pool request compression can apply to `POST /v1/responses`, `POST /v1/chat/completions`, and narrow Responses websocket `response.create` traffic. It is transparent to SDK clients and does not require a client flag. Operators enable it with the Pool setting `request_compression_enabled`.
-
-The feature is request-side only. Codex Pooler may compress upstream-bound Responses tool-output payloads before dispatch, but it does not store raw outputs, does not store upstream response bodies, and does not implement CCR/retrieval. Public `/v1/responses/compact` remains unsupported.
-
-If compression is enabled but savings do not appear, check the request log's `payload_compression` status and reason. The UI prefers saved token count and token savings percent when local token counts are available, then falls back to saved bytes and byte savings percent.
-
-## Routed but unsupported boundaries
-
-These `/v1` routes are unsupported and may return deterministic OpenAI-shaped unsupported endpoint errors when explicitly routed:
+These exact routes authenticate and return deterministic OpenAI-shaped unsupported errors without model dispatch:
 
 - `POST /v1/responses/compact`
 - `GET /v1/files/:file_id/content`, after ownership checks
 - `DELETE /v1/files/:file_id`, after ownership checks
 - `POST /v1/images/variations`
-- `POST /v1/content_provenance_checks`, deliberately routed to deterministic OpenAI-shaped `unsupported_endpoint`
+- `POST /v1/content_provenance_checks`
 - `POST /v1/embeddings`
 - `POST /v1/batches`
 - `POST /v1/moderations`
@@ -338,48 +138,11 @@ These `/v1` routes are unsupported and may return deterministic OpenAI-shaped un
 - `GET /v1/responses/:response_id`
 - `POST /v1/responses/:response_id/cancel`
 - `DELETE /v1/responses/:response_id`
-- `/v1/realtime` and OpenAI Realtime SDK websocket or session routes
 
-`GET /v1/responses` is narrow Responses websocket compatibility, not `/v1/realtime` support. OpenAI Realtime SDK websocket and session routes are not supported.
+`/v1/realtime` and OpenAI Realtime websocket/session routes are absent. `GET /v1/responses` is only the bounded Responses websocket transport.
 
-Within `POST /v1/responses`, OpenAI Responses remote MCP tool definitions are unsupported. A top-level `tools` entry with `type: "mcp"`, or an `input` item with `type: "additional_tools"` whose `tools` list contains `type: "mcp"`, is rejected before upstream dispatch with an OpenAI-shaped `invalid_request` error.
+## Compatibility boundary
 
-## MCP stays separate
+OpenAI Responses, Ollama, and Anthropic Messages are different wire formats. Their adapters share routing policy; they are not token-for-token transformations and do not recreate each vendor's local agent runtime.
 
-The operator MCP endpoint is rooted at `/mcp`, not under `/v1`. It uses operator-owned MCP bearer tokens and returns metadata only.
-
-The root `/mcp` endpoint is not a `/v1/responses` remote MCP bridge and is not invoked by Responses `tools[type=mcp]` definitions.
-
-```text
-MCP URL:
-https://codex-pooler.example.com/mcp
-
-Authorization:
-Bearer <operator-mcp-token>
-```
-
-Don't use Pool API keys, browser sessions, cookies, query tokens, invite tokens, upstream tokens, or custom headers as MCP authentication.
-
-## Frequently Asked Questions
-
-### Can I use the official OpenAI SDK with Codex Pooler?
-
-Yes, for selected SDK routes. Set the SDK `base_url` or `baseURL` to `https://codex-pooler.example.com/v1`, use a Pool API key as the bearer credential, and keep requests on supported route shapes such as responses, chat completions, models, usage, files, audio transcription, and image generation or edits.
-
-### Should Codex backend clients use `/v1`?
-
-No. Codex backend-compatible clients should use `/backend-api/codex`. The `/v1` surface is for selected OpenAI SDK-compatible clients and translates supported requests into Codex-compatible work.
-
-### Does `/v1` support OpenAI Realtime?
-
-No. `/v1/realtime` and OpenAI Realtime SDK websocket or session routes are unsupported. `GET /v1/responses` is narrow Responses websocket compatibility only, not OpenAI Realtime support.
-
-### Does `/v1/responses/compact` work?
-
-No. `POST /v1/responses/compact` is routed only so clients receive a deterministic OpenAI-shaped `unsupported_endpoint` error. Codex backend-compatible compact requests should use `POST /backend-api/codex/responses/compact`.
-
-Codex backend clients that send a terminal `compaction_trigger` to `POST /backend-api/codex/responses` or `/backend-api/codex/v1/responses` are bridged through the backend compact route and receive backend Responses SSE compaction output.
-
-### Can I use the same key for `/v1` and `/mcp`?
-
-No. `/v1` uses Pool API keys for runtime work. `/mcp` uses operator-owned MCP bearer tokens for metadata-only lookup. Keep those credentials separate in client configuration and storage.
+Identity projection is structural. Codex Pooler rewrites protocol identity fields and strips unsafe headers and error details, but it does not blindly search or alter user text, assistant prose, filenames, or tool arguments. Applications should never rely on content rewriting as a data-loss-prevention control.

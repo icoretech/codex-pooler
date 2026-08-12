@@ -138,8 +138,8 @@ defmodule CodexPooler.Gateway.Transports.AISDKResponsesContractTest do
              "type" => "response.failed",
              "sequence_number" => 9,
              "error" => %{
-               "code" => "top_relayed_code",
-               "message" => "upstream request failed",
+               "code" => "service_error",
+               "message" => "gemma3 request failed",
                "type" => "server_error"
              },
              "response" => %{
@@ -147,12 +147,12 @@ defmodule CodexPooler.Gateway.Transports.AISDKResponsesContractTest do
                "created_at" => 0,
                "status" => "failed",
                "error" => %{
-                 "code" => "nested_relayed_code",
-                 "message" => "upstream request failed",
+                 "code" => "service_error",
+                 "message" => "gemma3 request failed",
                  "type" => "server_error"
                },
                "incomplete_details" => nil,
-               "model" => "unknown",
+               "model" => "gemma3",
                "object" => "response",
                "output" => [],
                "output_text" => "",

@@ -77,7 +77,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   @blocking_owner_receive_timeout_ms 1_000
   @queued_owner_upstream_start_timeout_ms 1_000
   @response_task_stop_timeout_ms 1_000
-  @reasoning_denial_message "reasoning effort is not available for this API key"
   @responses_lite_client_metadata_key "ws_request_header_x_openai_internal_codex_responses_lite"
   @model_serving_metadata_keys ~w(
     model_serving_mode_configured
@@ -352,7 +351,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     assert {:push, {:text, error_frame}, failed_state} = result
 
-    assert %{"type" => "error", "error" => %{"code" => "owner_drained"}} =
+    assert %{"type" => "error", "error" => %{"code" => "service_unavailable"}} =
              Jason.decode!(error_frame)
 
     assert failed_state.native_turn_output_task_pids == MapSet.new()
@@ -376,7 +375,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     assert {:push, {:text, error_frame}, failed_state} = result
 
-    assert %{"type" => "error", "error" => %{"code" => "owner_drained"}} =
+    assert %{"type" => "error", "error" => %{"code" => "service_unavailable"}} =
              Jason.decode!(error_frame)
 
     assert failed_state.native_turn_output_task_pids == MapSet.new()
@@ -509,9 +508,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                "type" => "error",
                "status" => 400,
                "error" => %{
-                 "code" => "reasoning_effort_not_allowed",
-                 "message" => @reasoning_denial_message,
-                 "param" => "reasoning.effort"
+                 "code" => "invalid_request",
+                 "message" => "Request is invalid",
+                 "param" => nil
                }
              } = Jason.decode!(error_frame)
 
@@ -762,7 +761,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       assert {:push, {:text, error_frame}, _state} = receive_socket_done(state)
 
-      assert %{"type" => "error", "error" => %{"code" => "upstream_request_failed"}} =
+      assert %{"type" => "error", "error" => %{"code" => "service_error"}} =
                Jason.decode!(error_frame)
 
       assert [request_log] = request_logs(setup.pool.id)
@@ -3924,10 +3923,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       assert %{
                "type" => "error",
-               "error" => %{"code" => "upstream_websocket_forward_failed", "message" => message}
+               "error" => %{"code" => "service_error", "message" => "gemma3 request failed"}
              } = Jason.decode!(error_frame)
 
-      assert message =~ "owner_unavailable"
       refute error_frame =~ "pinned_continuation_reauth_required"
       assert FakeUpstream.count(upstream) == 0
     after
@@ -3955,8 +3953,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert %{
                "status" => 409,
                "error" => %{
-                 "code" => "stale_owner",
-                 "message" => "websocket owner lease is stale"
+                 "code" => "request_failed",
+                 "message" => "Request failed"
                }
              } = Jason.decode!(error_frame)
 
@@ -4000,10 +3998,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       assert %{
                "status" => 502,
-               "error" => %{"code" => "upstream_websocket_forward_failed", "message" => message}
+               "error" => %{"code" => "service_error", "message" => "gemma3 request failed"}
              } = Jason.decode!(error_frame)
 
-      assert message =~ "stale_owner"
       assert FakeUpstream.count(upstream) == 0
       assert FakeUpstream.websocket_connection_count(upstream) == 0
       assert [] = request_logs(setup.pool.id)
@@ -4572,10 +4569,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       assert {:push, {:text, error_frame}, _state} = receive_socket_done(stale_state)
 
-      assert %{"error" => %{"code" => "stale_owner", "message" => message}} =
+      assert %{"error" => %{"code" => "request_failed", "message" => message}} =
                Jason.decode!(error_frame)
 
-      assert message == "websocket owner lease is stale"
+      assert message == "Request failed"
       assert FakeUpstream.count(upstream) == 0
     after
       CodexResponsesSocket.terminate(
@@ -6123,7 +6120,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
           assert %{
                    "type" => "response.failed",
-                   "error" => %{"code" => "synthetic_upstream_failure"}
+                   "error" => %{"code" => "service_error", "message" => "gemma3 request failed"}
                  } = Jason.decode!(error_frame)
 
           assert {:ok, _state} = receive_socket_done(state)
@@ -6562,7 +6559,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
           assert %{
                    "type" => "error",
-                   "error" => %{"code" => "websocket_response_task_failed"}
+                   "error" => %{"code" => "service_error", "message" => "gemma3 request failed"}
                  } = Jason.decode!(error_frame)
         after
           CodexResponsesSocket.terminate(:closed, state)

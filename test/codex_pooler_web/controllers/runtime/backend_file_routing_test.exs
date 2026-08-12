@@ -241,7 +241,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
         "file_size" => 21
       })
 
-    assert json_response(conn, 503)["error"]["code"] == "no_eligible_backend"
+    assert json_response(conn, 503)["error"]["code"] == "service_unavailable"
     assert FakeUpstream.requests(upstream) == []
   end
 
@@ -583,7 +583,13 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
       |> put_req_header("content-type", "application/json")
       |> post(~p"/backend-api/files", %{"file_name" => "quota.txt", "file_size" => 12})
 
-    assert %{"error" => %{"code" => "quota_exhausted"}} = json_response(conn, 503)
+    assert %{
+             "error" => %{
+               "code" => "service_unavailable",
+               "message" => "gemma3 is temporarily unavailable"
+             }
+           } = json_response(conn, 503)
+
     assert FakeUpstream.requests(first_upstream) == []
     assert FakeUpstream.requests(second_upstream) == []
 
@@ -636,9 +642,9 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
         "use_case" => "codex"
       })
 
-    body = json_response(conn, 401)
-    assert body["error"]["code"] == "upstream_file_bridge_failed"
-    assert body["error"]["message"] == "upstream file create failed"
+    body = json_response(conn, 502)
+    assert body["error"]["code"] == "service_error"
+    assert body["error"]["message"] == "gemma3 request failed"
     refute inspect(body) =~ "invalid_api_key"
     refute inspect(body) =~ "redacted-marker"
     refute Repo.get_by(FileRecord, file_id: "file_auth_error")
@@ -680,8 +686,9 @@ defmodule CodexPoolerWeb.Runtime.BackendFileRoutingTest do
         "use_case" => "codex"
       })
 
-    body = json_response(conn, 500)
-    assert body["error"]["code"] == "upstream_file_bridge_failed"
+    body = json_response(conn, 502)
+    assert body["error"]["code"] == "service_error"
+    assert body["error"]["message"] == "gemma3 request failed"
 
     assert %BridgeDemotion{reason_code: "file_bridge_upstream_file_bridge_failed"} =
              Repo.get_by(BridgeDemotion,

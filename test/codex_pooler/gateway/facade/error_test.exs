@@ -39,12 +39,76 @@ defmodule CodexPooler.Gateway.Facade.ErrorTest do
       assert %{
                "error" => %{
                  "message" => "gemma3 is temporarily unavailable",
-                 "type" => "invalid_request_error",
+                 "type" => "server_error",
                  "code" => "service_unavailable",
                  "param" => nil
                }
              } = Error.body(protocol, 503, @secret_error)
     end
+  end
+
+  test "preserves bounded local validation contracts but never trusts provider-shaped text" do
+    local = %{
+      status: 400,
+      code: "invalid_function_parameters",
+      message: "function schema is invalid",
+      param: "tools.0.parameters"
+    }
+
+    assert Error.body(:openai, 400, local) == %{
+             "error" => %{
+               "message" => "function schema is invalid",
+               "type" => "invalid_request_error",
+               "code" => "invalid_function_parameters",
+               "param" => "tools.0.parameters"
+             }
+           }
+
+    untrusted = %{local | message: "provider account acct_secret rejected the target"}
+    body = Error.body(:openai, 400, untrusted, origin: :untrusted)
+
+    assert body["error"]["message"] == "Request is invalid"
+    assert body["error"]["code"] == "invalid_request"
+    assert body["error"]["param"] == nil
+    refute Jason.encode!(body) =~ "acct_secret"
+  end
+
+  test "keeps client recovery codes without exposing private routing language" do
+    body =
+      Error.body(:codex, 503, %{
+        status: 503,
+        code: "pinned_continuation_reauth_required",
+        message: "the pinned upstream account requires reauthentication"
+      })
+
+    assert body["error"] == %{
+             "message" => "Conversation continuation is temporarily unavailable",
+             "type" => "server_error",
+             "code" => "pinned_continuation_reauth_required",
+             "param" => nil
+           }
+
+    refute Jason.encode!(body) =~ "upstream"
+    refute Jason.encode!(body) =~ "account"
+  end
+
+  test "cloaks local infrastructure failures behind the virtual model" do
+    body =
+      Error.body(:openai, 503, %{
+        status: 503,
+        code: "settings_unavailable",
+        message: "runtime settings are temporarily unavailable"
+      })
+
+    assert body["error"] == %{
+             "message" => "gemma3 is temporarily unavailable",
+             "type" => "server_error",
+             "code" => "service_unavailable",
+             "param" => nil
+           }
+
+    refute Jason.encode!(body) =~ "settings"
+    refute Jason.encode!(body) =~ "runtime"
   end
 
   test "preserves status classes with fixed safe messages" do

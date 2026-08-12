@@ -1,67 +1,23 @@
 ---
 title: Goose
-description: Configure Goose with Codex Pooler's narrow OpenAI-compatible /v1 chat completions path, config.yaml file locations, and optional operator MCP metadata access.
+description: Configure Goose for Codex Pooler's bounded OpenAI chat-completions gemma3 façade.
 ---
 
-Configure Goose's OpenAI provider with `OPENAI_HOST` and `OPENAI_BASE_PATH`. Point the host at Codex Pooler and keep the Pool API key in the `OPENAI_API_KEY` environment variable or Goose's secret storage.
-
-## Config file path
-
-Put persistent Goose provider and extension settings in `config.yaml`:
-
-| OS | Config file |
-| --- | --- |
-| macOS | `~/.config/goose/config.yaml` |
-| Linux | `~/.config/goose/config.yaml` |
-| Windows | `%APPDATA%\Block\goose\config\config.yaml` |
-
-Goose also keeps related files in the same config area: `permission.yaml` for tool permission levels, `secrets.yaml` when file-based secret storage is used, `permissions/tool_permissions.json` for runtime permission decisions, and `prompts/` for prompt templates. Direct edits usually require restarting existing Goose sessions; `goose info -v` shows the active settings.
-
-You can also manage settings from Goose Desktop **Settings** or by running `goose configure` in Goose CLI. Environment variables have higher precedence than the config file, so `OPENAI_API_KEY` can stay outside YAML.
+Configure Goose's OpenAI chat path in `~/.config/goose/config.yaml`:
 
 ```yaml
 GOOSE_PROVIDER: openai
-GOOSE_MODEL: gpt-5.6-terra
+GOOSE_MODEL: gemma3
 OPENAI_HOST: https://codex-pooler.example.com
 OPENAI_BASE_PATH: v1/chat/completions
-GOOSE_CONTEXT_LIMIT: 258400
-GOOSE_MAX_TOKENS: 128000
-GOOSE_AUTO_COMPACT_THRESHOLD: 0.95
 ```
 
-For local setup, change `OPENAI_HOST` to `http://localhost:4000`.
-
-Goose reads `GOOSE_CONTEXT_LIMIT` and `GOOSE_MAX_TOKENS` into its model config. Its auto-compaction threshold is a ratio of the context limit, not an output reserve, so `0.95` starts compaction at 245480 tokens, 95% of Codex Pooler's 258400-token `gpt-5.6-terra` window. When available, `/v1/models.context_length` is the authoritative effective value for `GOOSE_CONTEXT_LIMIT`.
-
-Check the headless CLI path with tool access enabled:
+Keep the Pool key outside YAML:
 
 ```bash
 export OPENAI_API_KEY="$CODEX_POOLER_API_KEY"
-goose run \
-  --no-session \
-  --provider openai \
-  --model gpt-5.6-terra \
-  --with-builtin developer \
-  --text 'Use your developer tool to create goose-ok.txt containing exactly: goose ok. Then reply with exactly: goose ok'
+goose run --no-session --provider openai --model gemma3 \
+  --text 'Inspect the repository and report the test command.'
 ```
 
-For optional operator MCP metadata access, add a remote Streamable HTTP extension. Codex Pooler model use does not require this. Goose stores remote extension headers in its config, so use a dedicated MCP token.
-
-```yaml
-# Optional operator-only MCP metadata add-on. Omit for model/runtime use.
-extensions:
-  codex_pooler:
-    enabled: true
-    type: streamable_http
-    name: codex_pooler
-    uri: https://codex-pooler.example.com/mcp
-    headers:
-      Authorization: "Bearer <operator-mcp-token>"
-    timeout: 300
-    bundled: null
-    available_tools: []
-```
-
-For local MCP setup, change the extension `uri` to `http://localhost:4000/mcp`.
-
-Use a Pool API key for OpenAI-compatible model requests and an operator MCP token for `/mcp`. Do not reuse the Pool API key for MCP.
+For local setup, use `OPENAI_HOST: http://localhost:4000`. Configure no alternate model or fallback. Optional `/mcp` metadata uses a separate operator MCP token.

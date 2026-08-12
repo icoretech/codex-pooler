@@ -8,10 +8,10 @@ head:
     attrs:
       type: application/ld+json
     content: |
-      {"@context":"https://schema.org","@type":"TechArticle","headline":"AI Coding Agent Gateway","description":"Codex Pooler can serve as a self-hosted gateway for trusted AI coding agents by giving clients stable Pool API keys, routing Codex backend or narrow /v1 traffic through account Pools, and keeping operator evidence metadata-only.","url":"https://docs.codex-pooler.com/discovery/ai-coding-agent-gateway/","about":["AI coding agent gateway","Codex Pooler","Codex backend clients","OpenAI-compatible /v1","Pool API keys"]}
+      {"@context":"https://schema.org","@type":"TechArticle","headline":"AI Coding Agent Gateway","description":"Codex Pooler gives trusted AI coding agents stable Pool API keys and one public gemma3 identity across Ollama, OpenAI, Anthropic Messages, and Codex routes.","url":"https://docs.codex-pooler.com/discovery/ai-coding-agent-gateway/","about":["AI coding agent gateway","Codex Pooler","gemma3 facade","Pool API keys"]}
 ---
 
-Codex Pooler can act as a self-hosted gateway for trusted AI coding agents. Operators run Codex Pooler themselves, connect authorized upstream Codex accounts to Pools, issue stable Pool API keys to agent clients, and route supported Codex backend or narrow `/v1` requests through Pool policy without exposing upstream account secrets to every workstation or automation host.
+Codex Pooler can act as a self-hosted gateway for trusted AI coding agents. Operators connect authorized upstream Codex accounts to Pools, issue stable Pool API keys, and expose one public `gemma3` identity through supported Ollama, Anthropic Messages, OpenAI-compatible, or Codex routes.
 
 ## What Is An AI Coding Agent Gateway?
 
@@ -32,13 +32,25 @@ The gateway does not replace account authorization. It coordinates accounts you 
   </thead>
   <tbody>
     <tr>
+      <td>Ollama agents and SDKs</td>
+      <td><code>/api</code></td>
+      <td>Pool API key</td>
+      <td><a href="/clients/ollama/">Ollama clients</a></td>
+    </tr>
+    <tr>
+      <td>Claude Code and Anthropic SDKs</td>
+      <td><code>/v1/messages</code></td>
+      <td>Pool API key</td>
+      <td><a href="/clients/claude-code/">Claude Code</a></td>
+    </tr>
+    <tr>
       <td>Codex CLI and Codex Desktop</td>
       <td><code>/backend-api/codex</code></td>
       <td>Pool API key</td>
       <td><a href="/clients/codex-cli/">Codex CLI and Codex Desktop</a></td>
     </tr>
     <tr>
-      <td>Selected OpenAI SDK-compatible agents</td>
+      <td>OpenAI SDK-compatible agents</td>
       <td><code>/v1</code></td>
       <td>Pool API key</td>
       <td><a href="/clients/openai-compatible/">OpenAI-compatible SDKs</a></td>
@@ -65,7 +77,7 @@ The gateway does not replace account authorization. It coordinates accounts you 
 3. Add or import authorized upstream Codex accounts and assign usable accounts to the Pool.
 4. Create a Pool API key for runtime clients and store the raw key in each trusted agent environment.
 5. Configure Codex backend clients with `https://codex-pooler.example.com/backend-api/codex`.
-6. Configure selected OpenAI SDK-compatible clients with `https://codex-pooler.example.com/v1`.
+6. Choose the protocol-specific base URL and configure every client model alias as `gemma3`.
 7. Add `/mcp` only for trusted operator metadata hosts, using an operator MCP token instead of the Pool API key.
 
 ## What Codex Pooler Does Not Claim

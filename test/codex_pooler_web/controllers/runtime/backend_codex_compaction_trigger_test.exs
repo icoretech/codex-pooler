@@ -10,10 +10,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Facade.IdentityInstruction
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
 
-  test "compaction trigger aliases enforce reasoning before compact dispatch", %{conn: conn} do
+  test "compaction trigger aliases reject API-key reasoning policies below the fixed maximum", %{
+    conn: conn
+  } do
     for path <- ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"] do
       upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
       setup = gateway_setup(upstream, compact?: true)
@@ -35,11 +38,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
       assert %{
                "error" => %{
-                 "code" => "reasoning_effort_not_allowed",
-                 "message" => "reasoning effort is not available for this API key",
-                 "param" => "reasoning.effort"
+                 "code" => "local_policy_denied",
+                 "message" => "Request denied by local Pool policy",
+                 "param" => nil
                }
-             } = json_response(response, 400)
+             } = json_response(response, 403)
 
       assert FakeUpstream.count(upstream) == 0
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -68,7 +71,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       setup = gateway_setup(upstream, compact?: true)
 
       setup.api_key
-      |> Ecto.Changeset.change(enforced_reasoning_effort: "high")
+      |> Ecto.Changeset.change(enforced_reasoning_effort: "max")
       |> Repo.update!()
 
       response =
@@ -85,11 +88,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       assert response.status == 200
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.path == "/backend-api/codex/responses/compact"
-      assert captured.json["reasoning"] == %{"effort" => "high"}
+      assert captured.json["reasoning"] == %{"effort" => "max"}
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
       assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
       assert get_in(attempt.response_metadata, ["reasoning", "policy_mode"]) == "always_use"
-      assert get_in(attempt.response_metadata, ["reasoning", "applied_effort"]) == "high"
+      assert get_in(attempt.response_metadata, ["reasoning", "applied_effort"]) == "max"
     end
   end
 
@@ -273,7 +276,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     assert captured.path == "/backend-api/codex/responses/compact"
     assert Map.new(captured.headers)["x-codex-turn-state"] == request_turn_state
     assert captured.json["model"] == setup.model.upstream_model_id
-    assert captured.json["instructions"] == "compact bridge instruction"
+
+    assert captured.json["instructions"] ==
+             "compact bridge instruction\n\n#{IdentityInstruction.instruction()}"
 
     assert captured.json["input"] == [
              %{
@@ -286,10 +291,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
              }
            ]
 
-    assert captured.json["reasoning"] == %{"effort" => "low"}
+    assert captured.json["reasoning"] == %{"effort" => "max"}
     refute Map.has_key?(captured.json, "store")
     assert captured.json["service_tier"] == "priority"
-    assert captured.json["prompt_cache_key"] == "compact-camel-cache-key"
+    assert captured.json["prompt_cache_key"] =~ ~r/^facade:[A-Za-z0-9_-]{43}$/
+    refute captured.json["prompt_cache_key"] == "compact-camel-cache-key"
     assert captured.json["previous_response_id"] == "resp_previous_compact"
     assert captured.json["conversation"] == "conv_compact_fixture"
     refute Map.has_key?(captured.json, "stream")
@@ -689,10 +695,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     cases = [
       {FakeUpstream.malformed_json("{malformed-compact-json", 200),
        %{
-         "code" => "invalid_upstream_response",
-         "message" => "upstream response was not valid json",
+         "code" => "service_error",
+         "message" => "gemma3 request failed",
          "param" => nil,
-         "type" => "invalid_request_error"
+         "type" => "server_error"
        }},
       {FakeUpstream.json_response(%{
          "id" => "resp_missing_encrypted_content",
@@ -700,10 +706,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
          "compaction_summary" => %{"id" => "cmp-fallback-without-content"}
        }),
        %{
-         "code" => "invalid_compaction_response",
-         "message" => "upstream compact response did not include encrypted compaction content",
+         "code" => "service_error",
+         "message" => "gemma3 request failed",
          "param" => nil,
-         "type" => "invalid_request_error"
+         "type" => "server_error"
        }}
     ]
 

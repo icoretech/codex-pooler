@@ -228,6 +228,7 @@ defmodule CodexPooler.Gateway.Facade.DispatchTest do
     refute Jason.encode!(canonical) =~ client_selector
     assert trusted_options.routing.requested_model == Facade.public_model()
     assert trusted_options.routing.effective_model == Images.canonical_model()
+
     assert :ok = Dispatch.verify(canonical, trusted_options, fixture.model)
 
     for untrusted_opts <- [

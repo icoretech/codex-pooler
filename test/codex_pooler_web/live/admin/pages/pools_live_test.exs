@@ -16,6 +16,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
   alias CodexPooler.Catalog.SyncRun
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Facade
   alias CodexPooler.Pools
   alias CodexPooler.Pools.{ModelServingOverride, OperatorPoolAssignment, Pool}
   alias CodexPooler.Pools.Routing, as: PoolRouting
@@ -1518,13 +1519,14 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     model =
       model_fixture(pool, %{
-        exposed_model_id: "gpt-task-15-red",
+        exposed_model_id: Facade.effective_model(),
         upstream_model_id: "provider-gpt-task-15-red",
         metadata: %{
           "source_assignment_ids" => [upstream_ref.assignment.id],
           "source_assignment_models" => %{
             upstream_ref.assignment.id => %{
-              "slug" => "gpt-task-15-red",
+              "slug" => Facade.effective_model(),
+              "supported_reasoning_levels" => [%{"effort" => "max"}],
               "use_responses_lite" => false
             }
           }
@@ -1567,7 +1569,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     catalog_response = build_conn() |> auth(setup) |> get("/backend-api/codex/models")
 
-    assert %{"models" => [%{"slug" => "gpt-task-15-red", "use_responses_lite" => true}]} =
+    assert %{"models" => [%{"slug" => "gemma3", "use_responses_lite" => true}]} =
              json_response(catalog_response, 200)
 
     response =
@@ -1627,7 +1629,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     full_catalog_response = build_conn() |> auth(setup) |> get("/backend-api/codex/models")
 
-    assert %{"models" => [%{"slug" => "gpt-task-15-red", "use_responses_lite" => false}]} =
+    assert %{"models" => [%{"slug" => "gemma3", "use_responses_lite" => false}]} =
              json_response(full_catalog_response, 200)
 
     full_payloads = [
@@ -1776,7 +1778,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     retained_catalog = build_conn() |> auth(setup) |> get("/backend-api/codex/models")
 
-    assert %{"models" => [%{"slug" => "gpt-task-15-red", "use_responses_lite" => false}]} =
+    assert %{"models" => [%{"slug" => "gemma3", "use_responses_lite" => false}]} =
              json_response(retained_catalog, 200)
   end
 
@@ -2146,18 +2148,20 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     model =
       model_fixture(pool, %{
-        exposed_model_id: "gpt-auto-routability",
+        exposed_model_id: Facade.effective_model(),
         upstream_model_id: "provider-gpt-auto-routability",
         display_name: "Auto routability",
         metadata: %{
           "source_assignment_ids" => [ineligible_lite.id, active_full.assignment.id],
           "source_assignment_models" => %{
             ineligible_lite.id => %{
-              "slug" => "gpt-auto-routability",
+              "slug" => Facade.effective_model(),
+              "supported_reasoning_levels" => [%{"effort" => "max"}],
               "use_responses_lite" => true
             },
             active_full.assignment.id => %{
-              "slug" => "gpt-auto-routability",
+              "slug" => Facade.effective_model(),
+              "supported_reasoning_levels" => [%{"effort" => "max"}],
               "use_responses_lite" => false
             }
           },

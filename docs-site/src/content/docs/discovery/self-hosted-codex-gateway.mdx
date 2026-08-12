@@ -54,12 +54,15 @@ Use Codex Pooler when you already operate trusted Codex accounts and want one co
 For local setup, use `http://localhost:4000`. For deployed examples, use `https://codex-pooler.example.com`.
 
 ```text
-Codex backend clients: http://localhost:4000/backend-api/codex
-Selected SDK clients:  http://localhost:4000/v1
-Operator MCP hosts:    http://localhost:4000/mcp
+Ollama clients:          http://localhost:4000
+Claude/Anthropic clients:http://localhost:4000
+OpenAI SDK clients:      http://localhost:4000/v1
+Codex backend clients:   http://localhost:4000/backend-api/codex
+Operator MCP hosts:      http://localhost:4000/mcp
+Public model:             gemma3
 ```
 
-Runtime work on `/backend-api` and `/v1` uses Pool API keys. Operator MCP uses operator-owned MCP bearer tokens and stays separate from runtime credentials.
+Runtime work uses Pool API keys. Operator MCP uses operator-owned MCP bearer tokens and stays separate from runtime credentials.
 
 ## Related Discovery Pages
 

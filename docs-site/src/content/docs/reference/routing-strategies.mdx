@@ -19,7 +19,7 @@ Every runtime request follows the same broad path:
 
 1. Codex Pooler authenticates the bearer token as a Pool API key.
 2. It admits the request into the route family and route class, such as normal HTTP, stream, websocket, compact, file upload, or audio transcription.
-3. It classifies the requested model and route surface, either the Codex backend compatibility route or the narrow OpenAI-compatible `/v1` surface.
+3. It classifies the client protocol, normalizes the public `gemma3` persona, and installs the server-owned target before model validation.
 4. It finds the authenticated Pool and starts from that Pool's configured upstream assignments.
 5. It applies hard eligibility checks for assignment status, upstream status, model support, requested capabilities, quota, health, route-class circuit state, file affinity, and session continuity.
 6. It orders the remaining eligible upstream accounts using the Pool's routing strategy and routing preferences.
@@ -54,7 +54,7 @@ Hard eligibility checks remove upstream accounts from consideration before strat
     </tr>
     <tr>
       <td>Model availability</td>
-      <td>The requested model must be exposed to the Pool and mapped to the assignment</td>
+      <td>The façade's fixed target must be visible to the Pool and mapped to the assignment</td>
     </tr>
     <tr>
       <td>Capability support</td>
@@ -103,7 +103,7 @@ After eligibility, Codex Pooler orders the remaining accounts. The Pool's strate
     </tr>
     <tr>
       <td>Quota first</td>
-      <td>Prefers eligible accounts with more usable remaining quota evidence for the requested model. A fresh reset-bearing report at 100% used counts as zero capacity, while eligibility confidence remains a separate check</td>
+      <td>Prefers eligible accounts with more usable remaining quota evidence for the fixed target. A fresh reset-bearing report at 100% used counts as zero capacity, while eligibility confidence remains a separate check</td>
     </tr>
   </tbody>
 </table>
@@ -244,7 +244,7 @@ The admin UI doesn't expose raw prompts, completions, request bodies, response b
 
 ### Can a routing strategy bypass eligibility checks?
 
-No. Routing strategies only order upstream accounts that already passed hard eligibility checks. A strategy cannot choose a paused upstream, an unassigned upstream, an account without the requested model, an account with unusable quota evidence, or an account that conflicts with session or file continuity.
+No. Routing strategies only order upstream accounts that already passed hard eligibility checks. A strategy cannot choose a paused upstream, an unassigned upstream, an account without the fixed target, an account with unusable quota evidence, or an account that conflicts with session or file continuity.
 
 ### Why does session continuity override stateless routing?
 

@@ -1,85 +1,23 @@
 ---
 title: Aider
-description: Configure Aider with Codex Pooler's narrow OpenAI-compatible /v1 surface and a Pool API key.
+description: Configure Aider for Codex Pooler's bounded OpenAI-compatible gemma3 façade.
 ---
 
-Aider uses the OpenAI-compatible route with the `openai/` model prefix. Put the stable route settings in `.aider.conf.yml`; Aider loads this file from your home directory, then the git repo root, then the current directory, with later files taking priority. Use `--config <filename>` only when you want one explicit config file.
-
-For a deployed instance, use:
+Aider uses the `/v1` base URL and its `openai/` model prefix. Configure only the public virtual model:
 
 ```yaml
 # ~/.aider.conf.yml or <repo>/.aider.conf.yml
-model: openai/gpt-5.6-terra
+model: openai/gemma3
 openai-api-base: https://codex-pooler.example.com/v1
 ```
 
-For local setup, use:
-
-```yaml
-# ~/.aider.conf.yml or <repo>/.aider.conf.yml
-model: openai/gpt-5.6-terra
-openai-api-base: http://localhost:4000/v1
-```
-
-Aider's `.aider.conf.yml` route settings do not carry context or output limits. If your installed Aider version does not recognize `gpt-5.6-terra`, use Aider's separate model metadata JSON file for model behavior and limits instead of adding unsupported context fields to the main config.
-
-```jsonc
-// .aider.model.metadata.json
-{
-  "openai/gpt-5.6-luna": {
-    "max_tokens": 258400,
-    "max_input_tokens": 130400,
-    "max_output_tokens": 128000,
-    "litellm_provider": "openai",
-    "mode": "chat",
-    "supports_function_calling": true,
-    "supports_vision": true,
-    "supports_reasoning": true
-  },
-  "openai/gpt-5.6-terra": {
-    "max_tokens": 258400,
-    "max_input_tokens": 130400,
-    "max_output_tokens": 128000,
-    "litellm_provider": "openai",
-    "mode": "chat",
-    "supports_function_calling": true,
-    "supports_vision": true,
-    "supports_reasoning": true
-  },
-  "openai/gpt-5.6-sol": {
-    "max_tokens": 258400,
-    "max_input_tokens": 130400,
-    "max_output_tokens": 128000,
-    "litellm_provider": "openai",
-    "mode": "chat",
-    "supports_function_calling": true,
-    "supports_vision": true,
-    "supports_reasoning": true
-  }
-}
-```
-
-When the Pool's `/v1/models` entry provides `context_length`, use that effective value as the authoritative `max_tokens` value; the explicit input and output limits must still add up to it.
-
-Keep the Pool API key out of the YAML file. Export it in the shell, or put it in a gitignored `.env` file that Aider can load:
+For local setup, use `http://localhost:4000/v1`. Keep the Pool API key outside YAML:
 
 ```bash
 export OPENAI_API_KEY="$CODEX_POOLER_API_KEY"
+aider --message 'Inspect the repository and report the test command.'
 ```
 
-Check Aider from a repository with a real file edit. The command should only need the one-off prompt when the config file is present:
+Do not configure fallback model IDs: the gateway advertises only `gemma3` and owns the target and fixed reasoning policy. If Aider needs manual model metadata, create one `openai/gemma3` entry and take its context length from authenticated `GET /v1/models`.
 
-```bash
-aider \
-  --message 'Create a file named aider-ok.txt containing exactly: aider ok. After the file exists, reply with exactly: aider ok' \
-  --yes-always \
-  --no-auto-commits \
-  --no-git \
-  --no-browser \
-  --no-gui \
-  --no-analytics
-```
-
-The check is only useful if `aider-ok.txt` exists with the expected content; a text reply alone does not prove Aider can edit through the configured model path.
-
-The Pool API key authenticates `/v1` model requests. Do not use an operator MCP token as the OpenAI API key.
+This is bounded OpenAI compatibility. A Pool API key authenticates model work; an operator MCP token is unrelated.

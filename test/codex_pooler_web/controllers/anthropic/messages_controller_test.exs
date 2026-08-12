@@ -47,7 +47,7 @@ defmodule CodexPoolerWeb.Anthropic.MessagesControllerTest do
     assert captured.path == "/backend-api/codex/responses"
     assert captured.json["model"] == "gpt-5.6-sol"
     assert captured.json["reasoning"] == %{"effort" => "max", "summary" => "detailed"}
-    assert captured.json["max_output_tokens"] == 96
+    refute Map.has_key?(captured.json, "max_output_tokens")
     assert captured.json["stream"] == true
     assert captured.json["store"] == false
     refute Jason.encode!(captured.json) =~ "claude-opus-client-alias"
@@ -87,6 +87,25 @@ defmodule CodexPoolerWeb.Anthropic.MessagesControllerTest do
     end
 
     assert FakeUpstream.count(upstream) == 3
+  end
+
+  test "accepts Claude Code's beta route selector without treating it as message input", %{
+    conn: conn
+  } do
+    upstream = start_upstream(completed_response())
+    setup = facade_gateway_setup(upstream)
+
+    response =
+      conn
+      |> put_req_header("x-api-key", setup.raw_key)
+      |> put_req_header("anthropic-version", @version)
+      |> put_req_header("anthropic-beta", "claude-code-20250219")
+      |> post("/v1/messages?beta=true", minimal_message())
+
+    assert %{"model" => "gemma3"} = json_response(response, 200)
+    assert [captured] = FakeUpstream.requests(upstream)
+    refute Map.has_key?(captured.json, "beta")
+    refute Map.has_key?(Map.new(captured.headers), "anthropic-beta")
   end
 
   @tag :facade_task13
@@ -595,7 +614,7 @@ defmodule CodexPoolerWeb.Anthropic.MessagesControllerTest do
     assert Repo.aggregate(Attempt, :count) == 0
   end
 
-  test "returns an Anthropic 400 for unbounded local count input without dispatch", %{conn: conn} do
+  test "returns an Anthropic 400 for invalid bounded count input without dispatch", %{conn: conn} do
     upstream = start_upstream(completed_response())
     setup = facade_gateway_setup(upstream)
 
@@ -604,16 +623,17 @@ defmodule CodexPoolerWeb.Anthropic.MessagesControllerTest do
       |> put_req_header("authorization", setup.authorization)
       |> put_req_header("anthropic-version", @version)
       |> post("/v1/messages/count_tokens", %{
-        "messages" => [
-          %{"role" => "user", "content" => String.duplicate("x", 8_193)}
-        ]
+        "messages" => [%{"role" => "user", "content" => "count me"}],
+        "context_management" => %{
+          "edits" => List.duplicate(%{"type" => "clear_thinking_20251015"}, 17)
+        }
       })
 
     assert %{
              "type" => "error",
              "error" => %{
                "type" => "invalid_request_error",
-               "message" => "request cannot be represented by the bounded local token counter"
+               "message" => "array exceeds the supported bound"
              }
            } = json_response(response, 400)
 

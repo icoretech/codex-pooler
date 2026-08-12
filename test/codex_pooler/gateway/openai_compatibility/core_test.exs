@@ -107,6 +107,21 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
       assert IdentityInstruction.install(%{"instructions" => nil})["instructions"] ==
                IdentityInstruction.instruction()
+
+      lite_payload = %{
+        "input" => [
+          %{
+            "type" => "message",
+            "role" => "developer",
+            "content" => [
+              %{"type" => "input_text", "text" => IdentityInstruction.instruction()}
+            ]
+          },
+          %{"type" => "message", "role" => "user", "content" => "hello"}
+        ]
+      }
+
+      assert IdentityInstruction.install(lite_payload) == lite_payload
     end
 
     test "persona-enabled Responses accepts an omitted model and forces the fixed target" do
@@ -1538,7 +1553,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
              param: "size"
            }
 
-    assert {:error, %{code: "invalid_model", param: "model"}} =
+    assert {:ok, %{image_payload: %{"model" => "gpt-image-1"}}} =
              Images.coerce_generation(%{
                "model" => "unknown-image-model",
                "prompt" => "synthetic image request"
@@ -2885,11 +2900,11 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   @tag :unsupported_fields
-  test "invalid audio model and missing file metadata are rejected" do
-    assert {:error, %{code: "invalid_model", param: "model"}} =
+  test "audio model selectors are canonicalized while missing file metadata is rejected" do
+    assert {:ok, %{"model" => "gpt-4o-transcribe"}} =
              Audio.validate_transcription(%{"model" => "whisper-1", "file" => upload_metadata()})
 
-    assert {:error, %{code: "invalid_model", param: "model"}} =
+    assert {:ok, %{audio_payload: %{"model" => "gpt-4o-transcribe"}}} =
              Audio.coerce_transcription(%{"model" => "whisper-1", "file" => upload_metadata()})
 
     assert {:error, %{code: "invalid_request", param: "file"}} =

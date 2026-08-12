@@ -11,6 +11,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketFrameDifferentialTest do
   defmodule Reference do
     @moduledoc false
 
+    alias CodexPooler.Gateway.Facade.PublicProjection
     alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
     alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses
 
@@ -19,6 +20,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketFrameDifferentialTest do
         {:ok, %{"type" => "response.failed"} = decoded} ->
           "response.failed"
           |> PublicResponses.normalize_terminal_errors(decoded)
+          |> PublicProjection.responses_event()
           |> Jason.encode!()
 
         {:ok, %{} = decoded} ->
@@ -48,7 +50,11 @@ defmodule CodexPooler.Gateway.Transports.WebsocketFrameDifferentialTest do
         {:ok, %{} = canonical} ->
           type = clean_string(Map.get(canonical, "type"))
           normalized = PublicResponses.normalize_terminal_errors(type, canonical)
-          if normalized == canonical, do: canonical_data, else: Jason.encode!(normalized)
+          projected = PublicProjection.responses_event(normalized)
+
+          if projected == canonical,
+            do: canonical_data,
+            else: Jason.encode!(projected)
 
         _invalid ->
           original_data

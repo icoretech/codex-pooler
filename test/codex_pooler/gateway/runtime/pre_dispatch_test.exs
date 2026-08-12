@@ -22,11 +22,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway
   alias CodexPooler.Gateway.Metadata
-  alias CodexPooler.Gateway.Metadata.CodexCatalog
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Routing.CandidateEligibility
-  alias CodexPooler.Gateway.Routing.PartitionRoutability
   alias CodexPooler.Gateway.Runtime.Dispatch.PreDispatch
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Pools
@@ -74,24 +72,19 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert [_window] = Map.fetch!(route_state.quota_window_snapshots, identity.id)
     assert Map.fetch!(route_state.circuit_snapshots, assignment.id).eligible? == true
     assert Map.fetch!(route_state.circuit_eligibility_snapshots, assignment.id).eligible? == true
-    {:ok, policy} = Access.normalize_api_key_policy(auth.api_key)
-    pricing = CodexPooler.Catalog.pricing_buckets_by_identifier([setup.model])
 
-    catalog =
-      CodexCatalog.build_canonical(
-        [setup.model],
-        route_state.visible_model_context.candidates_by_model_id,
-        policy,
-        pricing,
-        %{},
-        route_state.effective_model_serving_modes
-      )
+    assert {:ok, catalog} =
+             Metadata.codex_catalog_snapshot(
+               auth,
+               "/backend-api/codex/models",
+               RequestOptions.build(%{}, "/backend-api/codex/models", %{})
+             )
 
     %{"models" => [catalog_model]} = catalog.body
 
     assert RouteState.codex_models_etag(route_state) == catalog.etag
 
-    assert catalog_model["slug"] == setup.model.exposed_model_id
+    assert catalog_model["slug"] == "gemma3"
 
     assert %{
              pool_id: pool_id,
@@ -403,7 +396,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
              )
 
     assert RouteState.codex_models_etag(prepared.route_state) == expected.etag
-    assert Enum.map(expected.body["models"], & &1["slug"]) == [setup.model.exposed_model_id]
+    assert Enum.map(expected.body["models"], & &1["slug"]) == ["gemma3"]
 
     inherited = RouteState.put_candidates(prepared.route_state, Enum.reverse(prepared.candidates))
     assert RouteState.codex_models_etag(inherited) == expected.etag
@@ -424,26 +417,13 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
              PreDispatch.prepare(auth, @endpoint_path, payload, options, setup.model, context)
 
     route_state = prepared.route_state
-    policy = prepared.request_options.routing.api_key_policy
-    pricing = CodexPooler.Catalog.pricing_buckets_by_identifier([setup.model])
 
-    expected_catalog =
-      CodexCatalog.build_canonical(
-        [setup.model],
-        route_state.visible_model_context.candidates_by_model_id,
-        policy,
-        pricing,
-        %{},
-        route_state.effective_model_serving_modes,
-        routable_assignment_ids_by_model_id: fn ->
-          PartitionRoutability.routable_assignment_ids_by_model_id(
-            [setup.model],
-            route_state.visible_model_context.candidates_by_model_id,
-            route_state.quota_window_snapshots,
-            route_state.quota_snapshot_at
-          )
-        end
-      )
+    assert {:ok, expected_catalog} =
+             Metadata.codex_catalog_snapshot(
+               auth,
+               "/backend-api/codex/models",
+               RequestOptions.build(%{}, "/backend-api/codex/models", %{})
+             )
 
     assert route_state.visible_models == [setup.model]
     assert Map.keys(route_state.quota_window_snapshots) == [setup.identity.id]
@@ -503,20 +483,13 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     assert Map.get(queries, "pool_model_serving_overrides", 0) == 1
 
-    pricing = CodexPooler.Catalog.pricing_buckets_by_identifier(context.visible_models)
-
-    expected_catalog =
-      CodexCatalog.build_canonical(
-        context.visible_models,
-        context.candidates_by_model_id,
-        policy,
-        pricing,
-        %{},
-        %{
-          requested_model.exposed_model_id => "lite",
-          setup.model.exposed_model_id => "full"
-        }
-      )
+    assert {:ok, expected_catalog} =
+             Metadata.codex_catalog_snapshot(
+               auth,
+               "/backend-api/codex/models",
+               RequestOptions.build(%{}, "/backend-api/codex/models", %{})
+               |> RequestOptions.put_routing(api_key_policy: policy)
+             )
 
     assert RouteState.codex_models_etag(prepared.route_state) == expected_catalog.etag
   end
@@ -609,7 +582,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     models_conn = conn |> auth(setup) |> get("/backend-api/codex/models")
     assert %{"models" => [%{"slug" => slug}]} = json_response(models_conn, 200)
-    assert slug == requested_model.exposed_model_id
+    assert slug == "gemma3"
 
     dispatch_etag = RouteState.codex_models_etag(prepared.route_state)
     assert [restricted_get_etag] = get_resp_header(models_conn, "etag")
@@ -786,9 +759,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert {:ok, snapshot} =
              Metadata.codex_catalog_snapshot(auth, "/backend-api/codex/models", options)
 
-    catalog_model = Enum.find(snapshot.body["models"], &(&1["slug"] == "GPT-5"))
+    assert [%{"slug" => "gemma3"} = catalog_model] = snapshot.body["models"]
 
-    # Then clients see the configured Full mode rather than the source Lite default
+    # Then clients see only the fixed facade and never the hidden source model.
     assert catalog_model["use_responses_lite"] == false
   end
 
@@ -1455,24 +1428,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     # selections resolve from the same observation by construction.
     assert Map.get(queries, "account_quota_windows", 0) == 1
 
-    policy = prepared.request_options.routing.api_key_policy
-    pricing = CodexPooler.Catalog.pricing_buckets_by_identifier(context.visible_models)
-
-    expected_catalog =
-      CodexCatalog.build_canonical(
-        context.visible_models,
-        context.candidates_by_model_id,
-        policy,
-        pricing,
-        %{},
-        prepared.route_state.effective_model_serving_modes,
-        routable_assignment_ids_by_model_id: fn ->
-          PartitionRoutability.routable_assignment_ids_by_model_id(
-            context.visible_models,
-            context.candidates_by_model_id
-          )
-        end
-      )
+    assert {:ok, expected_catalog} =
+             Metadata.codex_catalog_snapshot(
+               auth,
+               "/backend-api/codex/models",
+               RequestOptions.build(%{}, "/backend-api/codex/models", %{})
+             )
 
     assert RouteState.codex_models_etag(prepared.route_state) == expected_catalog.etag
   end

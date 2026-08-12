@@ -211,7 +211,7 @@ defmodule CodexPooler.Files do
              "operation" => "retrieve",
              "error_code" => "file_not_found"
            }) do
-      {:error, error(404, :file_not_found, "file was not found")}
+      {:error, error(404, :file_not_found, "file was not found", "file_id")}
     end
   end
 

@@ -203,6 +203,37 @@ defmodule CodexPooler.Gateway.Facade.PublicProjectionTest do
     end
   end
 
+  test "keeps protocol-significant terminal classes while cloaking their text" do
+    projected =
+      PublicProjection.responses_event(%{
+        "type" => "response.failed",
+        "error" => %{
+          "type" => "server_error",
+          "code" => "context_length_exceeded",
+          "message" => "upstream request failed"
+        },
+        "response" => %{
+          "model" => @hidden_model,
+          "error" => %{
+            "type" => "server_error",
+            "code" => "context_length_exceeded",
+            "message" => "provider #{@hidden_account} failed"
+          }
+        }
+      })
+
+    assert projected["error"] == %{
+             "type" => "server_error",
+             "code" => "context_length_exceeded",
+             "message" => "gemma3 request failed"
+           }
+
+    assert projected["response"]["model"] == "gemma3"
+    assert projected["response"]["error"] == projected["error"]
+    refute Jason.encode!(projected) =~ @hidden_account
+    refute Jason.encode!(projected) =~ @hidden_model
+  end
+
   test "header policy retains only protocol-safe response headers" do
     headers = [
       {"Content-Type", "text/event-stream; charset=utf-8"},

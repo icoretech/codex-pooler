@@ -99,7 +99,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.method == "WEBSOCKET"
       assert captured.path == "/backend-api/codex/responses"
-      assert captured.json["prompt_cache_key"] == "v1-websocket-cache-key"
+      assert captured.json["prompt_cache_key"] =~ ~r/^facade:[A-Za-z0-9_-]{43}$/
+      refute captured.json["prompt_cache_key"] == "v1-websocket-cache-key"
       refute Map.has_key?(captured.json, "prompt_cache_options")
       refute inspect(captured.json) =~ "prompt_cache_breakpoint"
 
@@ -1470,10 +1471,9 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
                "type" => "error",
                "status" => 502,
                "error" => %{
-                 "type" => "invalid_request_error",
+                 "type" => "server_error",
                  "code" => "server_error",
-                 "message" =>
-                   "upstream request failed: stream interrupted before terminal response event",
+                 "message" => "gemma3 request failed",
                  "param" => nil
                }
              }

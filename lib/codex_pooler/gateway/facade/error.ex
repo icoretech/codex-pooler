@@ -2,6 +2,8 @@ defmodule CodexPooler.Gateway.Facade.Error do
   @moduledoc false
 
   @type protocol :: :ollama | :anthropic | :openai | :codex | :runtime_metadata
+  @type origin :: :local | :untrusted
+  @type opts :: [origin: origin()]
 
   @authentication_codes ~w(
     api_key_missing
@@ -17,9 +19,18 @@ defmodule CodexPooler.Gateway.Facade.Error do
   @local_message_codes ~w(
     invalid_request
     invalid_model
+    invalid_function_parameters
+    invalid_json_schema
     unsupported_parameter
+    unsupported_tool
+    unsupported_input_file_format
+    unsupported_input_image_format
+    unsupported_multipart_file_create
+    unsupported_endpoint
+    websocket_upgrade_required
+    file_not_found
+    file_expired
     access_denied
-    settings_unavailable
     image_generation_disabled
     request_decompression_timeout
     unsupported_content_encoding
@@ -29,70 +40,90 @@ defmodule CodexPooler.Gateway.Facade.Error do
     unsupported_media_type
   )
 
+  @safe_local_codes Enum.uniq(
+                      @local_message_codes ++
+                        ~w(
+                          unsupported_endpoint
+                          v1_compatibility_disabled
+                          pinned_continuation_reauth_required
+                          pinned_continuation_unavailable
+                          response_sequence_exhausted
+                          websocket_sequence_exhausted
+                          websocket_request_failed
+                          websocket_stream_error
+                        )
+                    )
+
   @safe_protocol_codes ~w(
     previous_response_not_found
     stream_incomplete
-    upstream_request_timeout
     server_error
-    upstream_error
     context_length_exceeded
     overloaded_error
     server_is_overloaded
     websocket_connection_limit_reached
     rate_limit_exceeded
-    upstream_websocket_terminal_failure
-    upstream_request_failed
-    websocket_request_failed
+    response_sequence_exhausted
   )
 
   @previous_response_not_found_message "Previous response was not found. Retrying the full request."
 
-  @spec body(protocol(), pos_integer(), map()) :: map()
-  def body(:ollama, status, error) do
-    %{"error" => public_message(status, error)}
+  @spec body(protocol(), pos_integer(), map(), opts()) :: map()
+  def body(protocol, status, error, opts \\ [])
+
+  def body(:ollama, status, error, opts) do
+    %{"error" => public_message(status, error, origin(opts))}
   end
 
-  def body(:anthropic, status, error) do
+  def body(:anthropic, status, error, opts) do
     %{
       "type" => "error",
       "error" => %{
         "type" => anthropic_type(status),
-        "message" => public_message(status, error)
+        "message" => public_message(status, error, origin(opts))
       }
     }
   end
 
-  def body(protocol, status, error)
+  def body(protocol, status, error, opts)
       when protocol in [:openai, :codex, :runtime_metadata] do
+    origin = origin(opts)
+
     %{
       "error" => %{
-        "message" => public_message(status, error),
-        "type" => "invalid_request_error",
-        "code" => public_code(status, error),
-        "param" => public_param(error)
+        "message" => public_message(status, error, origin),
+        "type" => openai_type(status, error),
+        "code" => public_code(status, error, origin),
+        "param" => public_param(status, error, origin)
       }
     }
   end
 
   @spec public_message(pos_integer(), map()) :: String.t()
-  def public_message(status, error) when is_map(error) do
+  def public_message(status, error) when is_map(error), do: public_message(status, error, :local)
+
+  defp public_message(status, error, origin) when is_map(error) do
     code = normalized_code(error)
 
     cond do
-      code in @authentication_codes ->
+      origin == :local and code in @authentication_codes ->
         "Pool API key is required or invalid"
 
-      code == "v1_compatibility_disabled" ->
+      origin == :local and code == "v1_compatibility_disabled" ->
         "Compatibility access is disabled for this Pool"
 
-      code in ["facade_policy_conflict", "facade_invariant_failed"] ->
+      origin == :local and code in ["facade_policy_conflict", "facade_invariant_failed"] ->
         "Request denied by local Pool policy"
 
-      code == "facade_model_unavailable" ->
+      origin == :local and code == "facade_model_unavailable" ->
         "gemma3 is temporarily unavailable"
 
-      code == "unsupported_endpoint" ->
-        "Endpoint is not supported"
+      origin == :local and
+          code in [
+            "pinned_continuation_reauth_required",
+            "pinned_continuation_unavailable"
+          ] ->
+        "Conversation continuation is temporarily unavailable"
 
       code == "previous_response_not_found" ->
         @previous_response_not_found_message
@@ -100,7 +131,7 @@ defmodule CodexPooler.Gateway.Facade.Error do
       code in @safe_protocol_codes ->
         generic_message(status)
 
-      code in @local_message_codes ->
+      origin == :local and status < 500 and code in @local_message_codes ->
         local_message(error, generic_message(status))
 
       true ->
@@ -108,30 +139,56 @@ defmodule CodexPooler.Gateway.Facade.Error do
     end
   end
 
-  defp public_code(status, error) do
+  defp public_code(status, error, origin) do
     code = normalized_code(error)
 
     cond do
-      code in @authentication_codes -> code
-      code == "v1_compatibility_disabled" -> code
-      code in ["facade_policy_conflict", "facade_invariant_failed"] -> "local_policy_denied"
-      code == "facade_model_unavailable" -> code
-      code == "unsupported_endpoint" -> code
-      code in @local_message_codes -> code
-      code in @safe_protocol_codes -> code
-      true -> generic_code(status)
+      origin == :local and code in @authentication_codes ->
+        code
+
+      origin == :local and code == "v1_compatibility_disabled" ->
+        code
+
+      origin == :local and code in ["facade_policy_conflict", "facade_invariant_failed"] ->
+        "local_policy_denied"
+
+      origin == :local and code == "facade_model_unavailable" ->
+        "model_unavailable"
+
+      origin == :local and code in @safe_local_codes ->
+        code
+
+      code in @safe_protocol_codes ->
+        code
+
+      true ->
+        generic_code(status)
     end
   end
 
-  defp public_param(error) do
+  defp public_param(status, error, :local) when status < 500 do
     code = normalized_code(error)
     param = Map.get(error, :param) || Map.get(error, "param")
 
-    if code in @local_message_codes and is_binary(param) and
+    if code in @safe_local_codes and is_binary(param) and
          Regex.match?(~r/^[A-Za-z0-9_.\[\]-]{1,128}$/, param) do
       param
     end
   end
+
+  defp public_param(_status, _error, _origin), do: nil
+
+  defp origin(opts), do: Keyword.get(opts, :origin, :local)
+
+  defp openai_type(status, error) do
+    if status >= 500 or normalized_type(error) == "server_error",
+      do: "server_error",
+      else: "invalid_request_error"
+  end
+
+  defp normalized_type(%{type: type}) when is_binary(type), do: type
+  defp normalized_type(%{"type" => type}) when is_binary(type), do: type
+  defp normalized_type(_error), do: nil
 
   defp normalized_code(%{code: code}) when is_atom(code), do: Atom.to_string(code)
   defp normalized_code(%{code: code}) when is_binary(code), do: code

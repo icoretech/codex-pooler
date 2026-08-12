@@ -1,190 +1,101 @@
 ---
 title: Codex CLI and Codex Desktop
-description: Configure Codex CLI and Codex Desktop with Codex Pooler backend compatibility, shared CODEX_HOME/config.toml provider settings, HTTP/SSE fallback, optional operator MCP access, and local session migration.
-head:
-  - tag: script
-    attrs:
-      type: application/ld+json
-    content: |
-      {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Does Codex Pooler work with Codex CLI and Codex Desktop?","acceptedAnswer":{"@type":"Answer","text":"Yes. Codex CLI and Codex Desktop share Codex configuration layers. Put the Codex Pooler provider in CODEX_HOME/config.toml, set model_provider to codex-pooler-ws, and point base_url at https://codex-pooler.example.com/backend-api/codex."}},{"@type":"Question","name":"Should Codex CLI or Codex Desktop use /v1 with Codex Pooler?","acceptedAnswer":{"@type":"Answer","text":"No. Codex backend clients should use /backend-api/codex. The /v1 surface is for selected OpenAI SDK-compatible clients, not Codex CLI or Codex Desktop backend traffic."}},{"@type":"Question","name":"Where should Codex Pooler provider settings live for Codex?","acceptedAnswer":{"@type":"Answer","text":"Use the user-level CODEX_HOME/config.toml file for provider and auth settings. Project-local .codex/config.toml files are trust-gated and cannot override machine-local provider keys such as model_provider and model_providers."}}]}
+description: Configure Codex CLI and Codex Desktop for Codex Pooler's authenticated gemma3 backend façade.
 ---
 
-![Codex Pooler integration for Codex CLI and Codex Desktop](/codex-pooler-codex.png)
+Codex CLI and Codex Desktop should use the Codex backend compatibility route. The client runs its normal local agent loop, tools, sandbox, session storage, compaction, and resume behavior while the gateway exposes one public model, `gemma3`.
 
-Codex Pooler supports both Codex CLI and Codex Desktop through the Codex backend compatibility route. Both Codex surfaces share the same configuration layers and user-level `CODEX_HOME/config.toml`, so one provider block can serve the terminal and desktop/IDE experience.
+Use `/backend-api/codex`, not the SDK `/v1` base URL.
 
-Use `/backend-api/codex`, not the OpenAI-compatible `/v1` SDK surface. Put provider and auth settings in the user-level config file; Codex's project-local `.codex/config.toml` layers are trust-gated and do not override machine-local provider keys such as `model_provider` or `model_providers`.
+## Configuration
 
-## Config file path
-
-Codex resolves `CODEX_HOME` first. If `CODEX_HOME` is unset, current Codex sources default it to `$HOME/.codex` on every OS, so the user config file is `CODEX_HOME/config.toml`.
-
-| OS | Default config file |
-| --- | --- |
-| macOS | `$HOME/.codex/config.toml` |
-| Linux | `$HOME/.codex/config.toml` |
-| Windows | `$HOME\.codex\config.toml`, normally `%USERPROFILE%\.codex\config.toml` |
-
-Codex Desktop and the IDE extension open the same file from **Codex Settings > Open config.toml**.
-
-For a deployed instance, the Codex backend base URL is:
-
-```text
-https://codex-pooler.example.com/backend-api/codex
-```
-
-For local setup and local connection checks, use:
-
-```text
-http://localhost:4000/backend-api/codex
-```
-
-Keep your Pool API key in an environment variable. Don't paste raw keys into `CODEX_HOME/config.toml`.
-
-## Websocket provider for Codex CLI and Desktop
-
-Use the websocket-capable provider for normal Codex backend behavior in Codex CLI and Codex Desktop. Keep the provider id as `codex-pooler-ws`, but keep `name = "OpenAI"` exactly. In current Codex sources, `name` is not just a display label: exact `OpenAI` matching enables OpenAI-family behavior such as remote compaction, web search/image availability, and Codex backend request-body compression.
+Put provider settings in the user-level `CODEX_HOME/config.toml`. If `CODEX_HOME` is unset, Codex normally uses `$HOME/.codex`.
 
 ```toml
-model_provider = "codex-pooler-ws"
+model = "gemma3"
+model_provider = "codex-pooler"
+model_reasoning_effort = "max"
 
-[model_providers.codex-pooler-ws]
+[model_providers.codex-pooler]
 name = "OpenAI"
 base_url = "https://codex-pooler.example.com/backend-api/codex"
 env_key = "CODEX_POOLER_API_KEY"
 wire_api = "responses"
 supports_websockets = true
-requires_openai_auth = true
+requires_openai_auth = false
 ```
 
-With a local Codex Pooler instance, change `base_url` to `http://localhost:4000/backend-api/codex`.
+For local setup, change `base_url` to `http://localhost:4000/backend-api/codex`.
 
-## HTTP/SSE provider
+Keep `name = "OpenAI"` exactly so Codex enables its OpenAI-family Responses behavior. `requires_openai_auth = false` makes this a gateway-only provider: the Pool API key authenticates model requests and no direct account sign-in is required for the provider.
 
-Keep an HTTP/SSE provider when you need to force non-websocket behavior for a client check or when a Codex runtime cannot open backend websocket streams.
+Export the Pool key separately:
+
+```bash
+export CODEX_POOLER_API_KEY="<pool-api-key>"
+```
+
+Do not paste the key into `config.toml`, and never put an upstream account credential on the Codex client.
+
+## Run
+
+```bash
+codex -m gemma3
+```
+
+For a noninteractive check:
+
+```bash
+codex exec -m gemma3 \
+  'Inspect this repository and report the test command.'
+```
+
+The client setting keeps the local UI and session metadata on `gemma3`. The gateway independently normalizes every request before model validation, so another or missing client model selector cannot alter the fixed routing decision or its fixed reasoning policy.
+
+## Websocket and HTTP/SSE modes
+
+The configuration above enables backend Responses websockets for long-running turns and session locality. To force HTTP/SSE for diagnosis, create a second provider whose block is identical except for:
 
 ```toml
-model_provider = "codex-pooler-http"
-
-[model_providers.codex-pooler-http]
-name = "OpenAI"
-base_url = "https://codex-pooler.example.com/backend-api/codex"
-env_key = "CODEX_POOLER_API_KEY"
-wire_api = "responses"
 supports_websockets = false
-requires_openai_auth = true
 ```
 
-Both providers use the same Pool API key and the same Codex backend compatibility route in Codex CLI and Codex Desktop. Codex Pooler routes each request through Pool policy, account eligibility, limits, session continuity, and request accounting.
+Both transports use the same Pool API key, model identity, policy, retries, continuity, and accounting. A request may retry only before client-visible output. Once output is visible, the gateway never replays the turn and emits one sanitized terminal failure if the upstream stream breaks.
 
-Leave `requires_openai_auth = true` unless you are deliberately running Codex Pooler as a gateway-only provider. With `true`, Codex still shows the local OpenAI/ChatGPT account as signed in, which keeps Codex Desktop and app-server features that depend on account state available. The Pool API key in `env_key` still authenticates requests to Codex Pooler.
+## What the Codex client sees
 
-If Codex repeatedly enters a broken login/account state with a Pooler provider, advanced users can change the provider to `requires_openai_auth = false`. That makes Codex treat the provider as gateway-only and use only `env_key` for runtime auth, but Codex will no longer appear signed in for that provider and account-dependent features, including mobile/app-server features, may be unavailable.
+Authenticated backend model discovery contains at most one model:
 
-When Codex Pooler serves current model metadata, Codex CLI and Codex Desktop derive their effective context window and automatic compaction boundary from that metadata. Leave context sizing automatic so the client follows catalog changes without stale local overrides.
+- slug and display name: `gemma3`
+- one supported reasoning level: `max`
+- provider-neutral capabilities derived from the routable target
+- no provider, account, assignment, upstream model, or upstream request identifier
 
-## Request compression behavior
+Response envelopes, stream identity fields, errors, and allowed response headers preserve that same public identity. When the fixed target is unavailable or prohibited by Pool API-key policy, discovery is empty and inference fails closed; no other model is advertised or selected.
 
-Codex CLI and Codex Desktop do not need a client-side switch for Codex Pooler's per-Pool request compression. When an operator enables `request_compression_enabled`, eligible backend Responses, backend compact, backend `/v1/responses` aliases, translated backend chat, and websocket `response.create` requests may have upstream-bound Responses tool-output payloads compressed before dispatch.
+## Continuity, caching, and compaction
 
-The feature is request-side only. Codex Pooler does not store raw outputs, does not store upstream response bodies, and does not implement CCR/retrieval. Request logs may show safe aggregate `payload_compression` savings, preferring saved token count and token savings percent when token counts are available and falling back to byte savings when they are not.
+Codex session and conversation headers continue through the existing authenticated continuity path. Prompt-cache identifiers are scoped before they can influence account affinity. These mechanisms prefer a compatible connection or assignment but do not guarantee a cache hit.
 
-## Optional operator MCP endpoint
+Backend compact routes remain available to Codex clients. Request-side compression, when enabled for the Pool, can reduce eligible tool-output payloads before upstream dispatch. Neither feature stores raw prompts or model response bodies in request logs.
 
-Codex Pooler also exposes an operator MCP endpoint at `/mcp`. This is an optional operator-only metadata add-on. Omit it for normal Codex runtime use. MCP uses an operator-owned MCP token, not a Pool API key.
+## Route boundary
 
-```toml
-[mcp_servers.codex_pooler]
-url = "https://codex-pooler.example.com/mcp"
-bearer_token_env_var = "CODEX_POOLER_MCP_KEY"
-```
+The main Codex routes are:
 
-Set the token separately:
+- `GET /backend-api/codex/models`
+- `GET /backend-api/codex/v1/models`
+- `POST /backend-api/codex/responses`
+- `POST /backend-api/codex/v1/responses`
+- matching `GET` Responses websocket routes
+- `POST /backend-api/codex/responses/compact`
+- `POST /backend-api/codex/v1/responses/compact`
+- `POST /backend-api/codex/v1/chat/completions`
 
-```bash
-export CODEX_POOLER_MCP_KEY="<operator-mcp-token>"
-```
+Explicit backend file and media bridges are documented in [Runtime Routes](/reference/runtime-routes/). Codex Pooler is not a wildcard proxy for account, identity, analytics, realtime, memory, or other Codex app-server APIs. Features that require those direct account services are outside this provider configuration.
 
-Use `http://localhost:4000/mcp` only for local setup.
+## Robustness boundary
 
-## Existing session migration
+This path preserves the Codex CLI's local agent runtime and uses Codex backend-compatible Responses transports, which is the closest supported integration to direct Codex model traffic. The gateway adds Pool authorization, routing, retries, continuity, accounting, protocol projection, and fault isolation.
 
-Codex filters resumable conversations by `model_provider` in local Codex state. If you already have Codex CLI or Codex Desktop sessions created with the built-in `openai` provider and want them to appear under `codex-pooler-ws`, re-tag both the JSONL transcripts and the newer SQLite state database.
-
-Close Codex first; these commands edit local Codex state in place. If you made the HTTP provider your default, replace only the destination value `codex-pooler-ws` with `codex-pooler-http` before copying.
-
-### macOS (zsh)
-
-Run these two zsh one-liners:
-
-```zsh
-if [ -d "$HOME/.codex/sessions" ]; then find "$HOME/.codex/sessions" -type f -name '*.jsonl' -exec perl -0pi -e 's/("model_provider"\s*:\s*)"openai"/$1"codex-pooler-ws"/g' {} +; fi
-```
-
-```zsh
-for db in "$HOME"/.codex/state_*.sqlite(N); do sqlite3 "$db" "UPDATE threads SET model_provider = 'codex-pooler-ws' WHERE model_provider = 'openai';"; done
-```
-
-### Linux (bash)
-
-Run these two bash one-liners:
-
-```bash
-if [ -d "$HOME/.codex/sessions" ]; then find "$HOME/.codex/sessions" -type f -name '*.jsonl' -exec perl -0pi -e 's/("model_provider"\s*:\s*)"openai"/$1"codex-pooler-ws"/g' {} +; fi
-```
-
-```bash
-for db in "$HOME"/.codex/state_*.sqlite; do [ -e "$db" ] || continue; sqlite3 "$db" "UPDATE threads SET model_provider = 'codex-pooler-ws' WHERE model_provider = 'openai';"; done
-```
-
-### Windows (PowerShell)
-
-Run the same migration from PowerShell. This expects `sqlite3` to be available on `PATH`.
-
-```powershell
-$ErrorActionPreference = "Stop"
-
-$FromProvider = "openai"
-$ToProvider = "codex-pooler-ws"
-$CodexHome = Join-Path $HOME ".codex"
-
-$FromJson = '"model_provider":"' + $FromProvider + '"'
-$ToJson = '"model_provider":"' + $ToProvider + '"'
-
-Get-ChildItem -Path (Join-Path $CodexHome "sessions") -Recurse -Filter "*.jsonl" |
-  ForEach-Object {
-    $Path = $_.FullName
-    $TempPath = "$Path.tmp"
-    $Reader = [System.IO.StreamReader]::new($Path)
-    $Writer = [System.IO.StreamWriter]::new(
-      $TempPath,
-      $false,
-      [System.Text.UTF8Encoding]::new($false)
-    )
-
-    try {
-      while (($Line = $Reader.ReadLine()) -ne $null) {
-        $Writer.WriteLine($Line.Replace($FromJson, $ToJson))
-      }
-    } finally {
-      $Reader.Dispose()
-      $Writer.Dispose()
-    }
-
-    Move-Item -Force $TempPath $Path
-  }
-
-Get-ChildItem -Path $CodexHome -Filter "state_*.sqlite" |
-  ForEach-Object {
-    sqlite3 $_.FullName `
-      "UPDATE threads SET model_provider = '$ToProvider' WHERE model_provider = '$FromProvider';"
-  }
-```
-
-## Route boundaries
-
-`/backend-api/codex/*` is an authenticated Codex backend compatibility surface for Codex CLI and Codex Desktop. It is not a wildcard proxy and it is not the OpenAI-compatible `/v1` SDK surface.
-
-The backend route family includes `GET /backend-api/codex/models`, `POST /backend-api/codex/responses`, backend websocket response-stream compatibility on `GET /backend-api/codex/responses`, and `POST /backend-api/codex/responses/compact`.
-
-Codex Pooler supports Codex model-provider traffic only. Do not point `chatgpt_base_url` at Codex Pooler for account, realtime, identity, or other app-server helper calls.
+It cannot make a pooled, translated hop physically identical to a direct connection. Account capacity, network failures, policy, and gateway deployment health still matter. Use the repository's live-client verification gate after deployment to exercise repo reads, shell tools, edits, tests, interruption/resume, streaming, and long-session traffic through the actual instance.

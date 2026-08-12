@@ -98,7 +98,7 @@ actions. At a high level, Pools answer operator questions such as:
 4. Which models and limits the Pool is expected to serve
 5. Whether a Pool should stay active, be paused, or be archived
 
-A Pool API key represents the Pool, not a single upstream. Runtime clients send the key to `/backend-api` or the narrow OpenAI-compatible `/v1` surface, then Codex Pooler chooses an eligible upstream based on Pool policy, model support, health, limit evidence, and session continuity.
+A Pool API key represents the Pool, not a single upstream. Runtime clients send the key to the documented Ollama, Anthropic Messages, OpenAI-compatible, or Codex backend route, then Codex Pooler applies its fixed `gemma3` facade policy and chooses an eligible upstream using Pool policy, health, limit evidence, and session continuity.
 
 ## Upstreams
 

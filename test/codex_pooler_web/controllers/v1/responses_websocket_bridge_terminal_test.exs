@@ -629,12 +629,12 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTerminalTest do
         "created_at" => 0,
         "status" => "failed",
         "error" => %{
-          "code" => "upstream_error",
-          "message" => "upstream request failed",
+          "code" => "service_error",
+          "message" => "gemma3 request failed",
           "type" => "server_error"
         },
         "incomplete_details" => nil,
-        "model" => "unknown",
+        "model" => "gemma3",
         "object" => "response",
         "output" => [],
         "output_text" => "",

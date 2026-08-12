@@ -44,7 +44,7 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
         })
       )
 
-    setup = gateway_setup(first_upstream, exposed_model_id: "gpt-example-mode-snapshot")
+    setup = gateway_setup(first_upstream, [])
 
     second =
       gateway_upstream(setup.pool, second_upstream, "upstream-token-mode-fallback",
@@ -54,6 +54,11 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
     prime_routing_quota!(second.identity)
     use_routing_strategy!(setup.pool, "bridge_ring", 2)
 
+    source_model =
+      setup.model.metadata
+      |> get_in(["source_assignment_models", setup.assignment.id])
+      |> Map.put("use_responses_lite", false)
+
     model =
       setup.model
       |> Ecto.Changeset.change(%{
@@ -61,14 +66,8 @@ defmodule CodexPooler.Gateway.Transports.AssignmentModelServingFailoverTest do
         metadata: %{
           "source_assignment_ids" => [setup.assignment.id, second.assignment.id],
           "source_assignment_models" => %{
-            setup.assignment.id => %{
-              "slug" => setup.model.exposed_model_id,
-              "use_responses_lite" => false
-            },
-            second.assignment.id => %{
-              "slug" => setup.model.exposed_model_id,
-              "use_responses_lite" => false
-            }
+            setup.assignment.id => source_model,
+            second.assignment.id => source_model
           }
         }
       })

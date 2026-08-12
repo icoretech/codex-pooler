@@ -13,11 +13,14 @@ defmodule CodexPooler.Gateway.Facade.IdentityInstruction do
 
   @spec install(map()) :: map()
   def install(%{} = payload) do
-    case Map.fetch(payload, "instructions") do
-      :error ->
+    case {Map.fetch(payload, "instructions"), installed_in_input?(payload)} do
+      {:error, true} ->
+        payload
+
+      {:error, false} ->
         Map.put(payload, "instructions", @instruction)
 
-      {:ok, instructions} when is_binary(instructions) ->
+      {{:ok, instructions}, _installed?} when is_binary(instructions) ->
         client_instructions =
           instructions
           |> String.replace(@instruction, "")
@@ -25,10 +28,25 @@ defmodule CodexPooler.Gateway.Facade.IdentityInstruction do
 
         Map.put(payload, "instructions", join(client_instructions, @instruction))
 
-      {:ok, _invalid_instructions} ->
+      {{:ok, _invalid_instructions}, _installed?} ->
         Map.put(payload, "instructions", @instruction)
     end
   end
+
+  defp installed_in_input?(%{"input" => input}) when is_list(input) do
+    Enum.any?(input, &identity_instruction_message?/1)
+  end
+
+  defp installed_in_input?(_payload), do: false
+
+  defp identity_instruction_message?(%{
+         "type" => "message",
+         "role" => "developer",
+         "content" => [%{"type" => "input_text", "text" => @instruction}]
+       }),
+       do: true
+
+  defp identity_instruction_message?(_item), do: false
 
   defp join("", server_instruction), do: server_instruction
 

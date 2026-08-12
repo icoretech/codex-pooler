@@ -37,8 +37,8 @@ defmodule CodexPoolerWeb.Runtime.GatewayAdmissionTest do
       })
 
     assert %{"error" => error} = json_response(conn, 503)
-    assert error["code"] == "bulkhead_rejected"
-    assert error["message"] == "gateway route class is temporarily overloaded"
+    assert error["code"] == "service_unavailable"
+    assert error["message"] == "gemma3 is temporarily unavailable"
     refute inspect(error) =~ "private prompt"
     refute inspect(error) =~ setup.authorization
 

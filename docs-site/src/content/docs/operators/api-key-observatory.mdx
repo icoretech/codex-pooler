@@ -7,7 +7,7 @@ The API Key Observatory is a read-only view of activity for one Pool API key. It
 
 Dashboard access must be enabled for the key by the person who manages that key. It is separate from both runtime permission and the instance-admin browser session:
 
-- The Pool API key continues to authenticate runtime requests through the configured `/backend-api` or narrow `/v1` routes.
+- The Pool API key continues to authenticate documented Ollama, Anthropic Messages, OpenAI-compatible, and Codex backend runtime routes.
 - Dashboard access only permits this key to open the Observatory.
 - Observatory access does not grant `/admin/*` access, expose other keys, or change the key's runtime policy.
 

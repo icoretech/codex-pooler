@@ -211,11 +211,57 @@ defmodule CodexPooler.Gateway.Facade.Anthropic.TokenCount do
 
   defp count_segments(segments) do
     Enum.reduce_while(segments, {:ok, 0}, fn segment, {:ok, total} ->
-      case TokenCounter.count(@target_model, segment) do
-        {:ok, count, _private_metadata} -> {:cont, {:ok, total + count}}
+      case count_segment(segment) do
+        {:ok, count} -> {:cont, {:ok, total + count}}
         {:error, _reason} -> {:halt, unrepresentable(segment_param(segment))}
       end
     end)
+  end
+
+  defp count_segment(segment) do
+    with {:ok, chunks} <- utf8_chunks(segment, TokenCounter.max_bpe_chunk_bytes()) do
+      Enum.reduce_while(chunks, {:ok, 0}, fn chunk, {:ok, total} ->
+        case TokenCounter.count(@target_model, chunk) do
+          {:ok, count, _private_metadata} -> {:cont, {:ok, total + count}}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+    end
+  end
+
+  defp utf8_chunks(value, maximum_bytes) when is_binary(value) and maximum_bytes > 0 do
+    if String.valid?(value) do
+      {:ok, do_utf8_chunks(value, maximum_bytes, [])}
+    else
+      {:error, :invalid_utf8}
+    end
+  end
+
+  defp do_utf8_chunks("", _maximum_bytes, chunks), do: Enum.reverse(chunks)
+
+  defp do_utf8_chunks(value, maximum_bytes, chunks)
+       when byte_size(value) <= maximum_bytes,
+       do: Enum.reverse([value | chunks])
+
+  defp do_utf8_chunks(value, maximum_bytes, chunks) do
+    chunk_bytes = valid_prefix_bytes(value, maximum_bytes)
+    chunk = binary_part(value, 0, chunk_bytes)
+    rest = binary_part(value, chunk_bytes, byte_size(value) - chunk_bytes)
+    do_utf8_chunks(rest, maximum_bytes, [chunk | chunks])
+  end
+
+  defp valid_prefix_bytes(value, maximum_bytes) do
+    candidate = binary_part(value, 0, maximum_bytes)
+    trim_invalid_suffix(candidate, maximum_bytes)
+  end
+
+  defp trim_invalid_suffix(candidate, bytes) do
+    if String.valid?(candidate) do
+      bytes
+    else
+      next_bytes = bytes - 1
+      trim_invalid_suffix(binary_part(candidate, 0, next_bytes), next_bytes)
+    end
   end
 
   defp segment_param("<tool_definition" <> _rest), do: "tools"

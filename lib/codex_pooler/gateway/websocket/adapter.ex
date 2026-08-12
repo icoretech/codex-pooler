@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
 
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.ErrorSanitizer
+  alias CodexPooler.Gateway.Facade.Error, as: FacadeError
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
@@ -128,15 +129,21 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
     %{
       "type" => "error",
       "status" => status,
-      "error" => error_payload(reason)
+      "error" => error_payload(status, reason)
     }
   end
 
   def websocket_error(reason) do
+    reason = %{
+      status: 500,
+      code: ErrorCodes.websocket_request_failed_code(),
+      message: "websocket request failed: #{ErrorSanitizer.safe_reason(reason)}"
+    }
+
     %{
       "type" => "error",
       "status" => 500,
-      "error" => error_payload(reason)
+      "error" => error_payload(500, reason)
     }
   end
 
@@ -181,25 +188,11 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
     }
   end
 
-  defp error_payload(%{code: code, message: message} = reason) do
-    Map.merge(
-      %{
-        "message" => message,
-        "type" => "invalid_request_error",
-        "code" => to_string(code),
-        "param" => Map.get(reason, :param)
-      },
-      Contracts.recovery_error_fields(reason)
-    )
-  end
-
-  defp error_payload(reason) do
-    %{
-      "message" => "websocket request failed: #{ErrorSanitizer.safe_reason(reason)}",
-      "type" => "invalid_request_error",
-      "code" => ErrorCodes.websocket_request_failed_code(),
-      "param" => nil
-    }
+  defp error_payload(status, %{code: _code, message: _message} = reason) do
+    :codex
+    |> FacadeError.body(status, reason)
+    |> Map.fetch!("error")
+    |> Map.merge(Contracts.recovery_error_fields(reason))
   end
 
   defp metadata_endpoint(%RequestOptions{transport: %{upstream_endpoint: endpoint}})

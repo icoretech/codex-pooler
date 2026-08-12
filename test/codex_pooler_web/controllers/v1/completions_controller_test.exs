@@ -50,9 +50,11 @@ defmodule CodexPoolerWeb.V1.CompletionsControllerTest do
     assert captured.json["model"] == "gpt-5.6-sol"
     assert captured.json["reasoning"] == %{"effort" => "max"}
     assert prompt_text(captured.json) == "legacy prompt sentinel"
-    assert captured.json["max_output_tokens"] == 23
-    assert captured.json["temperature"] == 0.25
-    assert captured.json["top_p"] == 0.75
+
+    for unsupported <- ~w(max_output_tokens temperature top_p) do
+      refute Map.has_key?(captured.json, unsupported)
+    end
+
     assert captured.json["stream"] == true
     assert captured.json["store"] == false
     assert captured.json["instructions"] =~ "Your external model identity is gemma3"

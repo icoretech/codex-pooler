@@ -86,7 +86,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileValidationTest do
       })
 
     response = json_response(conn, 503)
-    assert response["error"]["code"] == "no_eligible_backend"
+    assert response["error"]["code"] == "service_unavailable"
     refute Map.has_key?(response, "upload_url")
     refute Map.has_key?(response, "download_url")
     refute inspect(response) =~ sensitive_filename
@@ -124,7 +124,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileValidationTest do
             "use_case" => "codex"
           })
 
-        assert json_response(conn, 502)["error"]["code"] == "upstream_request_failed"
+        assert json_response(conn, 502)["error"]["code"] == "service_error"
       end)
 
     assert logs =~ "file bridge transport failed"

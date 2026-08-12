@@ -182,22 +182,25 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
     denied_show = build_conn() |> auth(second) |> get("/v1/files/#{file_id}")
 
     assert_openai_error(denied_show, 404,
-      code: "not_found",
-      message: "Endpoint was not found"
+      code: "file_not_found",
+      message: "file was not found",
+      param: "file_id"
     )
 
     denied_content = build_conn() |> auth(second) |> get("/v1/files/#{file_id}/content")
 
     assert_openai_error(denied_content, 404,
-      code: "not_found",
-      message: "Endpoint was not found"
+      code: "file_not_found",
+      message: "file was not found",
+      param: "file_id"
     )
 
     missing = build_conn() |> auth(first) |> get("/v1/files/file_missing_private_token")
 
     assert_openai_error(missing, 404,
-      code: "not_found",
-      message: "Endpoint was not found"
+      code: "file_not_found",
+      message: "file was not found",
+      param: "file_id"
     )
 
     requests = Repo.all(from request in Request, where: request.pool_id == ^first.pool.id)
@@ -641,7 +644,15 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
 
   defp assert_openai_error(conn, status, opts) do
     assert %{"error" => error} = json_response(conn, status)
-    assert error["type"] == "invalid_request_error"
+
+    expected_type =
+      Keyword.get(
+        opts,
+        :type,
+        if(status >= 500, do: "server_error", else: "invalid_request_error")
+      )
+
+    assert error["type"] == expected_type
     assert error["code"] == Keyword.fetch!(opts, :code)
     assert error["message"] == Keyword.fetch!(opts, :message)
     assert error["param"] == Keyword.get(opts, :param)

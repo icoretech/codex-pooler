@@ -13,10 +13,12 @@ defmodule CodexPooler.Gateway.Facade.Anthropic.Messages do
   @backend_endpoint "/backend-api/codex/responses"
   @create_fields ~w(
     cache_control
+    context_management
     max_tokens
     messages
     metadata
     model
+    output_config
     service_tier
     stop_sequences
     stream
@@ -27,10 +29,12 @@ defmodule CodexPooler.Gateway.Facade.Anthropic.Messages do
     tools
     top_p
   )
-  @count_fields ~w(cache_control messages model system thinking tool_choice tools)
+  @count_fields ~w(cache_control context_management messages model output_config system thinking tool_choice tools)
   @image_mimes ~w(image/gif image/jpeg image/png image/webp)
+  @max_context_edits 16
   @max_messages 100_000
   @max_content_blocks 10_000
+  @max_metadata_user_id_bytes 4_096
   @max_tools 128
   @max_stop_sequences 16
 
@@ -75,6 +79,8 @@ defmodule CodexPooler.Gateway.Facade.Anthropic.Messages do
          :ok <- reject_unknown_fields(payload, mode),
          :ok <- validate_metadata(payload),
          :ok <- validate_service_tier(payload),
+         :ok <- validate_context_management(payload),
+         :ok <- validate_output_config(payload),
          {:ok, system_items, system_cached?} <- translate_system(payload),
          {:ok, message_items, message_cached?} <- translate_messages(payload),
          {:ok, tools, tools_cached?} <- translate_tools(payload),
@@ -93,6 +99,7 @@ defmodule CodexPooler.Gateway.Facade.Anthropic.Messages do
         |> maybe_put("max_output_tokens", max_tokens)
         |> maybe_put("stream", if(mode == :create, do: stream?))
         |> maybe_put("reasoning", if(think?, do: %{"summary" => "detailed"}))
+        |> maybe_put("prompt_cache_key", metadata_cache_identity(payload))
         |> Map.merge(sampling)
         |> maybe_put_cache_options(
           system_cached? or message_cached? or tools_cached?,
@@ -141,12 +148,81 @@ defmodule CodexPooler.Gateway.Facade.Anthropic.Messages do
 
   defp validate_service_tier(_payload), do: :ok
 
-  defp validate_optional_string(map, key, param) do
-    case Map.get(map, key) do
-      value when is_binary(value) and value != "" -> :ok
-      _value -> invalid("#{param} must be a non-empty string", param)
+  defp validate_context_management(%{
+         "context_management" => %{"edits" => edits} = context_management
+       })
+       when is_list(edits) do
+    with :ok <- exact_keys(context_management, ["edits"], "context_management"),
+         :ok <- bounded_list(edits, @max_context_edits, "context_management.edits") do
+      validate_context_edits(edits)
     end
   end
+
+  defp validate_context_management(%{"context_management" => _context_management}),
+    do:
+      invalid(
+        "context_management must contain an edits array",
+        "context_management"
+      )
+
+  defp validate_context_management(_payload), do: :ok
+
+  defp validate_context_edits(edits) do
+    edits
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn
+      {%{"type" => type}, _index}, :ok
+      when is_binary(type) and type != "" and byte_size(type) <= 128 ->
+        {:cont, :ok}
+
+      {_edit, index}, :ok ->
+        {:halt,
+         invalid(
+           "context management edit requires a bounded type",
+           "context_management.edits[#{index}].type"
+         )}
+    end)
+  end
+
+  defp validate_output_config(%{"output_config" => %{} = output_config}) do
+    with :ok <- exact_keys(output_config, ["effort"], "output_config") do
+      case Map.get(output_config, "effort") do
+        nil -> :ok
+        effort when effort in ~w(low medium high xhigh max) -> :ok
+        _effort -> invalid("output_config effort is not supported", "output_config.effort")
+      end
+    end
+  end
+
+  defp validate_output_config(%{"output_config" => _output_config}),
+    do: invalid("output_config must be an object", "output_config")
+
+  defp validate_output_config(_payload), do: :ok
+
+  defp validate_optional_string(map, key, param) do
+    case Map.get(map, key) do
+      value
+      when is_binary(value) and value != "" and byte_size(value) <= @max_metadata_user_id_bytes ->
+        :ok
+
+      value when is_binary(value) and byte_size(value) > @max_metadata_user_id_bytes ->
+        invalid("#{param} exceeds the supported bound", param)
+
+      _value ->
+        invalid("#{param} must be a non-empty string", param)
+    end
+  end
+
+  defp metadata_cache_identity(%{"metadata" => %{"user_id" => user_id}})
+       when is_binary(user_id) do
+    digest =
+      :crypto.hash(:sha256, ["anthropic-metadata", <<0>>, user_id])
+      |> Base.url_encode64(padding: false)
+
+    "anthropic:" <> digest
+  end
+
+  defp metadata_cache_identity(_payload), do: nil
 
   defp translate_system(%{"system" => system}) when is_binary(system) do
     if system == "" do
@@ -714,7 +790,14 @@ defmodule CodexPooler.Gateway.Facade.Anthropic.Messages do
     do: invalid("thinking budget_tokens must be a positive integer", "thinking.budget_tokens")
 
   defp thinking_requested(%{"thinking" => %{"type" => "adaptive"} = thinking}) do
-    with :ok <- exact_keys(thinking, ["type"], "thinking"), do: {:ok, true}
+    with :ok <- exact_keys(thinking, ["type", "display"], "thinking") do
+      case Map.get(thinking, "display") do
+        nil -> {:ok, true}
+        "summarized" -> {:ok, true}
+        "omitted" -> {:ok, false}
+        _display -> invalid("adaptive thinking display is not supported", "thinking.display")
+      end
+    end
   end
 
   defp thinking_requested(%{"thinking" => %{"type" => "disabled"} = thinking}) do

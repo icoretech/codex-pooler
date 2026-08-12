@@ -1,0 +1,103 @@
+---
+title: Ollama clients
+description: Use Codex Pooler as an authenticated Ollama server whose only virtual model is gemma3.
+---
+
+Codex Pooler exposes a native Ollama-compatible HTTP surface at the instance root. It is a virtual server: clients see one model named `gemma3`, while Pool routing, account selection, retries, continuity, and accounting remain server-side.
+
+## Base URL and authentication
+
+Use the instance origin, without `/api` or `/v1` on the configured host:
+
+```text
+Ollama host:   https://codex-pooler.example.com
+Authorization: Bearer <pool-api-key>
+Model:         gemma3
+```
+
+For local setup, use `http://localhost:4000`.
+
+Every Ollama route requires a Pool API key. Use a client that can attach an `Authorization` header; do not put the key in the URL. Upstream account credentials are never client credentials.
+
+## JavaScript SDK
+
+```js
+import { Ollama } from "ollama";
+
+const client = new Ollama({
+  host: "https://codex-pooler.example.com",
+  headers: {
+    Authorization: `Bearer ${process.env.CODEX_POOLER_API_KEY}`,
+  },
+});
+
+const response = await client.chat({
+  model: "gemma3",
+  messages: [{ role: "user", content: "Reply with: connected" }],
+  stream: false,
+});
+
+console.log(response.message.content);
+```
+
+Streaming uses Ollama NDJSON:
+
+```js
+const stream = await client.chat({
+  model: "gemma3",
+  messages: [{ role: "user", content: "Count to three." }],
+  stream: true,
+});
+
+for await (const part of stream) {
+  process.stdout.write(part.message?.content ?? "");
+}
+```
+
+## Curl smoke test
+
+```bash
+curl -sS https://codex-pooler.example.com/api/tags \
+  -H 'Authorization: Bearer <pool-api-key>'
+```
+
+An available Pool returns exactly one model entry named `gemma3`. An unavailable fixed target returns an empty `models` list rather than advertising a fallback.
+
+```bash
+curl -sS https://codex-pooler.example.com/api/chat \
+  -H 'Authorization: Bearer <pool-api-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "gemma3",
+    "messages": [{"role": "user", "content": "Reply with: connected"}],
+    "stream": false
+  }'
+```
+
+## Supported routes
+
+| Route | Behavior |
+| --- | --- |
+| `POST /api/chat` | Chat, images, tools, structured output, collected JSON, or streaming NDJSON |
+| `POST /api/generate` | Prompt generation, optional prefix/suffix fill, images, collected JSON, or streaming NDJSON |
+| `GET /api/tags` | Lists only `gemma3` when it is routable |
+| `POST /api/show` | Returns the stable virtual `gemma3` descriptor |
+| `GET /api/ps` | Reports only the available virtual model |
+| `GET /api/version` | Reports the façade contract version |
+| `POST /api/pull` | Authenticated no-op for `gemma3` or `gemma3:latest` |
+
+The request `model` selector is normalized before routing. Omitting it or sending another value cannot select another target. Responses, discovery, streams, and protocol-native errors expose only `gemma3`.
+
+## Deliberately unsupported Ollama operations
+
+`/api/create`, `/api/copy`, `/api/push`, `/api/delete`, and `/api/blobs/:digest` cannot mutate the virtual model. `/api/embed` and `/api/embeddings` are unsupported and never fabricate vectors. These routes authenticate first and return stable Ollama-shaped errors without upstream work.
+
+## Cache and session behavior
+
+Codex Pooler does not cache complete responses. It can preserve provider-side prompt-cache locality by deriving Pool-key-scoped cache identifiers. A client-supplied `x-ollama-session-id` is converted to a one-way, Pool-and-key-scoped value before it can affect routing; the raw value is not persisted or forwarded.
+
+This improves locality but does not guarantee a provider cache hit. Changing Pool, Pool API key, or virtual target changes the namespace.
+
+## Compatibility boundary
+
+The adapter preserves supported Ollama request and response semantics, including native JSON/NDJSON framing. It does not run a local Ollama daemon, download weights, recreate Ollama's local scheduler, or promise token-for-token equivalence with a locally hosted `gemma3` model.

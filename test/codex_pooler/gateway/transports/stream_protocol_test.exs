@@ -509,9 +509,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
                "created_at" => 0,
                "status" => "failed",
                "error" => %{
-                 "code" => "upstream_error",
+                 "code" => "service_error",
                  "message" => "gemma3 request failed",
-                 "type" => "invalid_request_error"
+                 "type" => "server_error"
                },
                "incomplete_details" => nil,
                "model" => "gemma3",
@@ -767,12 +767,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
         refute mapped =~ "provider.param"
         refute mapped =~ "provider-secret-sentinel"
 
-        assert get_in(mapped_decoded, error_path(location) ++ ["code"]) == "upstream_error"
+        assert get_in(mapped_decoded, error_path(location) ++ ["code"]) == "service_error"
 
         state = Adapter.public_responses_turn_state()
         assert {:push, pushed, next_state} = Adapter.downstream_response_chunk(mapped, state)
         assert Jason.decode!(pushed)["sequence_number"] == 0
-        assert get_in(Jason.decode!(pushed), error_path(location) ++ ["code"]) == "upstream_error"
+        assert get_in(Jason.decode!(pushed), error_path(location) ++ ["code"]) == "service_error"
         assert next_state.terminal_latched?
       end
     end

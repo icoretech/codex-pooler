@@ -132,7 +132,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
 
         assert_openai_error(conn, 401,
           code: "api_key_missing",
-          message: "api key is required"
+          message: "Pool API key is required or invalid"
         )
       end
 
@@ -162,7 +162,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
 
         assert_openai_error(conn, 401,
           code: "api_key_missing",
-          message: "api key is required"
+          message: "Pool API key is required or invalid"
         )
 
         assert FakeUpstream.count(upstream) == 0
@@ -187,7 +187,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
 
         assert_openai_error(conn, 401,
           code: "api_key_missing",
-          message: "api key is required"
+          message: "Pool API key is required or invalid"
         )
       end
 
@@ -203,7 +203,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
 
       assert_openai_error(missing_bearer, 401,
         code: "api_key_missing",
-        message: "api key is required"
+        message: "Pool API key is required or invalid"
       )
 
       invalid_bearer =
@@ -214,7 +214,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
 
       assert_openai_error(invalid_bearer, 401,
         code: "api_key_missing",
-        message: "api key is required"
+        message: "Pool API key is required or invalid"
       )
 
       assert get_resp_header(missing_bearer, "sec-websocket-accept") == []
@@ -232,7 +232,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
 
       assert_openai_error(conn, 401,
         code: "api_key_disabled",
-        message: "api key is disabled"
+        message: "Pool API key is required or invalid"
       )
 
       assert_no_gateway_side_effects()
@@ -274,7 +274,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
 
       assert_openai_error(conn, 401,
         code: "api_key_missing",
-        message: "api key is required"
+        message: "Pool API key is required or invalid"
       )
 
       assert_no_gateway_side_effects()
@@ -291,7 +291,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
 
       assert_openai_error(conn, 403,
         code: "v1_compatibility_disabled",
-        message: "OpenAI /v1 compatibility is disabled for this pool"
+        message: "Compatibility access is disabled for this Pool"
       )
 
       assert_no_gateway_side_effects()
@@ -308,7 +308,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
 
       assert_openai_error(conn, 401,
         code: "api_key_missing",
-        message: "api key is required"
+        message: "Pool API key is required or invalid"
       )
 
       assert_no_gateway_side_effects()
@@ -326,7 +326,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
 
       assert_openai_error(conn, 403,
         code: "v1_compatibility_disabled",
-        message: "OpenAI /v1 compatibility is disabled for this pool"
+        message: "Compatibility access is disabled for this Pool"
       )
 
       assert_no_gateway_side_effects()
@@ -349,7 +349,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
 
         assert_openai_error(supported, 403,
           code: "v1_compatibility_disabled",
-          message: "OpenAI /v1 compatibility is disabled for this pool"
+          message: "Compatibility access is disabled for this Pool"
         )
 
         unsupported =
@@ -359,7 +359,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
 
         assert_openai_error(unsupported, 403,
           code: "v1_compatibility_disabled",
-          message: "OpenAI /v1 compatibility is disabled for this pool"
+          message: "Compatibility access is disabled for this Pool"
         )
 
         multipart =
@@ -370,7 +370,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
 
         assert_openai_error(multipart, 403,
           code: "v1_compatibility_disabled",
-          message: "OpenAI /v1 compatibility is disabled for this pool"
+          message: "Compatibility access is disabled for this Pool"
         )
 
         websocket =
@@ -381,7 +381,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
 
         assert_openai_error(websocket, 403,
           code: "v1_compatibility_disabled",
-          message: "OpenAI /v1 compatibility is disabled for this pool"
+          message: "Compatibility access is disabled for this Pool"
         )
 
         assert get_resp_header(websocket, "sec-websocket-accept") == []
@@ -498,7 +498,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
 
       assert_openai_error(unauthenticated, 401,
         code: "api_key_missing",
-        message: "api key is required"
+        message: "Pool API key is required or invalid"
       )
 
       setup.pool
@@ -513,7 +513,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
 
       assert_openai_error(disabled_pool, 401,
         code: "api_key_missing",
-        message: "api key is required"
+        message: "Pool API key is required or invalid"
       )
 
       assert_no_gateway_side_effects()
@@ -567,7 +567,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
 
         assert_openai_error(unauthenticated, 401,
           code: "api_key_missing",
-          message: "api key is required"
+          message: "Pool API key is required or invalid"
         )
 
         disabled_pool =
@@ -577,7 +577,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
 
         assert_openai_error(disabled_pool, 401,
           code: "api_key_missing",
-          message: "api key is required"
+          message: "Pool API key is required or invalid"
         )
 
         compatibility_disabled =
@@ -587,7 +587,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
 
         assert_openai_error(compatibility_disabled, 403,
           code: "v1_compatibility_disabled",
-          message: "OpenAI /v1 compatibility is disabled for this pool"
+          message: "Compatibility access is disabled for this Pool"
         )
 
         assert_no_gateway_side_effects()
@@ -672,7 +672,7 @@ defmodule CodexPoolerWeb.V1.RouteAuthTest do
     assert error == %{
              status: 403,
              code: "v1_compatibility_disabled",
-             message: "OpenAI /v1 compatibility is disabled for this pool"
+             message: "Compatibility access is disabled for this Pool"
            }
   end
 

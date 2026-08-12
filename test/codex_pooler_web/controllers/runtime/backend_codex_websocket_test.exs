@@ -60,7 +60,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   # Detection budget for a server-side connection teardown the test only
   # observes, never a scenario timeout.
   @connection_shutdown_timeout_ms 15_000
-  @reasoning_denial_message "reasoning effort is not available for this API key"
   @responses_lite_client_metadata_key "ws_request_header_x_openai_internal_codex_responses_lite"
   @model_serving_metadata_keys ~w(
     model_serving_mode_configured
@@ -786,7 +785,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert_received {:websocket_frame, frame}
     assert websocket_response_id(frame) == "resp_ws_mode_cross_assignment_failover"
     assert [fallback_request] = FakeUpstream.requests(fallback_upstream)
-    assert_canonical_full_websocket_request!(fallback_request)
+    assert_canonical_full_websocket_request!(fallback_request, "current_turn")
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "succeeded"
@@ -1035,7 +1034,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.method == "WEBSOCKET"
       assert captured.path == "/backend-api/codex/responses"
-      assert captured.json["prompt_cache_key"] == "backend-websocket-cache-key"
+      assert captured.json["prompt_cache_key"] =~ ~r/^facade:[A-Za-z0-9_-]{43}$/
+      refute captured.json["prompt_cache_key"] == "backend-websocket-cache-key"
       refute Map.has_key?(captured.json, "prompt_cache_options")
       refute inspect(captured.json) =~ "prompt_cache_breakpoint"
       refute inspect({request.request_metadata, captured.json}) =~ setup.authorization
@@ -1490,12 +1490,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
   test "backend websocket routes resolve reasoning policy after upgrade" do
     cases = [
-      {"/backend-api/codex/responses", [maximum_reasoning_effort: "medium"], %{}, "medium"},
-      {"/backend-api/codex/v1/responses", [maximum_reasoning_effort: "high"],
-       %{"reasoning_effort" => "low"}, "low"},
-      {"/backend-api/codex/responses", [enforced_reasoning_effort: "high"],
-       %{"reasoningEffort" => "low"}, "high"},
-      {"/backend-api/codex/v1/responses", [], %{"reasoning_effort" => "focused"}, "focused"}
+      {"/backend-api/codex/responses", [maximum_reasoning_effort: "max"], %{}, "max"},
+      {"/backend-api/codex/v1/responses", [maximum_reasoning_effort: "ultra"],
+       %{"reasoning_effort" => "low"}, "max"},
+      {"/backend-api/codex/responses", [enforced_reasoning_effort: "max"],
+       %{"reasoningEffort" => "low"}, "max"},
+      {"/backend-api/codex/v1/responses", [], %{"reasoning_effort" => "focused"}, "max"}
     ]
 
     for {path, policy, effort_payload, expected_effort} <- cases do
@@ -1561,11 +1561,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
   test "backend websocket routes deny unavailable reasoning after upgrade without reservation" do
     cases = [
-      {"/backend-api/codex/responses", %{"reasoning_effort" => "high"}, "high"},
-      {"/backend-api/codex/v1/responses", %{"reasoningEffort" => "custom-effort"}, "unknown"}
+      {"/backend-api/codex/responses", %{"reasoning_effort" => "high"}},
+      {"/backend-api/codex/v1/responses", %{"reasoningEffort" => "custom-effort"}}
     ]
 
-    for {path, effort_payload, persisted_effort} <- cases do
+    for {path, effort_payload} <- cases do
       upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
       setup = gateway_setup(upstream)
 
@@ -1596,11 +1596,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
             assert %{
                      "type" => "error",
-                     "status" => 400,
+                     "status" => 403,
                      "error" => %{
-                       "code" => "reasoning_effort_not_allowed",
-                       "message" => @reasoning_denial_message,
-                       "param" => "reasoning.effort"
+                       "code" => "local_policy_denied",
+                       "message" => "Request denied by local Pool policy",
+                       "param" => nil
                      }
                    } = Jason.decode!(frame)
 
@@ -1617,11 +1617,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                    ) ==
                      0
 
-            assert get_in(request.request_metadata, ["gateway_denial", "reasoning_policy"]) == %{
-                     "policy_mode" => "allow_up_to",
-                     "configured_effort" => "medium",
-                     "requested_effort" => persisted_effort,
-                     "applied_effort" => nil
+            assert request.request_metadata["gateway_denial"] == %{
+                     "code" => "facade_policy_conflict",
+                     "message" => "API key policy does not permit gemma3"
                    }
 
             conn
@@ -1717,12 +1715,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       assert %{
                "type" => "error",
                "status" => 503,
-               "error" => %{"code" => "no_eligible_backend"}
+               "error" => %{"code" => "service_unavailable"}
              } = Jason.decode!(frame)
 
       assert FakeUpstream.count(selected_upstream) == 0
       assert FakeUpstream.count(divergent_upstream) == 0
-      assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 0
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.status == "rejected"
+      assert request.response_status_code == 503
+      assert request.last_error_code == "no_compatible_backend"
       assert Repo.aggregate(Attempt, :count) == 0
       assert Repo.aggregate(LedgerEntry, :count) == 0
 
@@ -4084,7 +4085,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
              "response" => %{
                "id" => "resp_usage_limit_terminal",
                "status" => "failed",
-               "error" => %{"code" => "usage_limit_exceeded"}
+               "error" => %{"code" => "service_error"}
              }
            } = Jason.decode!(frame)
 
@@ -4977,7 +4978,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       refute logs =~ "fake upstream closed after partial frame"
       refute logs =~ "resp_ws_partial_close"
 
-      assert %{"type" => "error", "error" => %{"code" => "upstream_request_failed"}} =
+      assert %{"type" => "error", "error" => %{"code" => "service_error"}} =
                Jason.decode!(error_frame)
 
       assert [first_request, second_request] = FakeUpstream.requests(upstream)
@@ -7978,7 +7979,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     assert %{
              "type" => "response.failed",
-             "response" => %{"error" => %{"code" => "invalid_api_key"}}
+             "response" => %{"error" => %{"code" => "service_error"}}
            } =
              Jason.decode!(frame)
 
@@ -8054,7 +8055,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
       assert %{
                "type" => "response.failed",
-               "response" => %{"error" => %{"code" => "invalid_authentication"}}
+               "response" => %{"error" => %{"code" => "service_error"}}
              } = Jason.decode!(frame)
 
       assert [first_request, refresh_request] = FakeUpstream.requests(upstream)
@@ -8279,7 +8280,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       receive_websocket_frames_by_type(["response.output_text.delta", "response.failed"], 1_000)
 
     assert frames["response.output_text.delta"]["delta"] == "partial"
-    assert frames["response.failed"]["response"]["error"]["code"] == "invalid_api_key"
+    assert frames["response.failed"]["response"]["error"]["code"] == "service_error"
 
     assert [first_request] = FakeUpstream.requests(upstream)
     assert first_request.method == "WEBSOCKET"
@@ -8705,7 +8706,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       )
 
     assert frames["response.output_text.delta"]["delta"] == "visible"
-    assert frames["response.failed"]["response"]["error"]["code"] == "model_not_found"
+    assert frames["response.failed"]["response"]["error"]["code"] == "service_error"
     assert FakeUpstream.count(first_upstream) == 1
     assert FakeUpstream.count(fallback_upstream) == 0
 
@@ -9825,7 +9826,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert %{
              "type" => "response.failed",
              "response" => %{
-               "error" => %{"code" => "server_error", "message" => "upstream failed"}
+               "error" => %{"code" => "server_error", "message" => "gemma3 request failed"}
              }
            } = Jason.decode!(frame)
 
@@ -10056,7 +10057,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                  "response" => %{
                    "error" => %{
                      "code" => "stream_incomplete",
-                     "message" => "upstream stream incomplete"
+                     "message" => "gemma3 request failed"
                    }
                  }
                } = decoded_frame
@@ -10182,7 +10183,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
              "response" => %{
                "error" => %{
                  "code" => "stream_incomplete",
-                 "message" => "upstream stream incomplete"
+                 "message" => "gemma3 request failed"
                }
              }
            } = Jason.decode!(terminal_frame)
@@ -10416,9 +10417,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                  "type" => "error",
                  "status" => 500,
                  "error" => %{
-                   "message" => "websocket response task failed",
-                   "type" => "invalid_request_error",
-                   "code" => "websocket_response_task_failed",
+                   "message" => "gemma3 request failed",
+                   "type" => "server_error",
+                   "code" => "service_error",
                    "param" => nil
                  }
                }
@@ -10479,9 +10480,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                  "type" => "error",
                  "status" => 502,
                  "error" => %{
-                   "message" => "upstream request failed",
-                   "type" => "invalid_request_error",
-                   "code" => "upstream_request_failed",
+                   "message" => "gemma3 request failed",
+                   "type" => "server_error",
+                   "code" => "service_error",
                    "param" => nil
                  }
                }
@@ -10555,9 +10556,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       end)
 
     assert error_frame ==
-             ~s({"error":{"code":"upstream_request_failed",) <>
-               ~s("message":"upstream request failed","param":null,) <>
-               ~s("type":"invalid_request_error"},"status":502,"type":"error"})
+             ~s({"error":{"code":"service_error",) <>
+               ~s("message":"gemma3 request failed","param":null,) <>
+               ~s("type":"server_error"},"status":502,"type":"error"})
 
     # Exactly one authored frame: nothing else is queued for the client. The
     # chunk pattern must carry the task pid, which is the arity production
@@ -10655,7 +10656,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         error_frame
       end)
 
-    assert %{"type" => "error", "error" => %{"code" => "upstream_request_failed"}} =
+    assert %{"type" => "error", "error" => %{"code" => "service_error"}} =
              Jason.decode!(error_frame)
 
     assert_native_turn_warnings(logs, 1)
@@ -11761,12 +11762,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert get_in(captured.json, ["reasoning", "context"]) == "all_turns"
   end
 
-  defp assert_canonical_full_websocket_request!(captured) do
+  defp assert_canonical_full_websocket_request!(captured, expected_context \\ nil) do
     assert captured.method == "WEBSOCKET"
 
     refute get_in(captured.json, ["client_metadata", @responses_lite_client_metadata_key])
     assert captured.json["parallel_tool_calls"] == true
-    assert get_in(captured.json, ["reasoning", "context"]) == "current_turn"
+    assert get_in(captured.json, ["reasoning", "context"]) == expected_context
   end
 
   defp backend_namespace_tool do

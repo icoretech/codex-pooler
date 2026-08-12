@@ -488,7 +488,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
       prime_routing_quota!(upstream.identity)
     end
 
-    exposed_model_id = Keyword.get(opts, :exposed_model_id, "gpt-test-model")
+    exposed_model_id = Keyword.get(opts, :exposed_model_id, "gpt-5.6-sol")
     upstream_model_id = Keyword.get(opts, :upstream_model_id, "provider-gpt-test-model")
     display_name = Keyword.get(opts, :display_name, "GPT 5.4 Mini")
 
@@ -797,7 +797,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
 
     Map.merge(
       %{
-        quota_key: "gpt_test_model",
+        quota_key:
+          model.exposed_model_id
+          |> String.downcase()
+          |> String.replace(~r/[^a-z0-9]+/u, "_")
+          |> String.trim("_"),
         window_kind: window_kind,
         window_minutes: window_minutes,
         used_percent: Decimal.new("1"),

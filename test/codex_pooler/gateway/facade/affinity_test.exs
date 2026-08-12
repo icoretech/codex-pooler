@@ -83,6 +83,61 @@ defmodule CodexPooler.Gateway.Facade.AffinityTest do
     refute first_payload["prompt_cache_key"] == other_key_payload["prompt_cache_key"]
   end
 
+  test "keeps Claude session cache affinity stable while the marked conversation grows" do
+    session_metadata =
+      ~s({"device_id":"claude-device-private","session_id":"claude-session-private"})
+
+    first = growing_anthropic_request(session_metadata, "first turn")
+
+    second =
+      growing_anthropic_request(session_metadata, "second turn")
+      |> update_in(["messages"], fn messages ->
+        [
+          %{"role" => "user", "content" => "first turn"},
+          %{"role" => "assistant", "content" => "first answer"}
+          | messages
+        ]
+      end)
+
+    other_session =
+      growing_anthropic_request(
+        ~s({"device_id":"claude-device-private","session_id":"other-session-private"}),
+        "first turn"
+      )
+
+    assert {:ok, first_coerced} = Messages.coerce(first, anthropic_options())
+    assert {:ok, second_coerced} = Messages.coerce(second, anthropic_options())
+    assert {:ok, other_coerced} = Messages.coerce(other_session, anthropic_options())
+
+    {first_payload, _first_options} =
+      Affinity.scope(
+        auth("pool-a", "key-a"),
+        first_coerced.payload,
+        first_coerced.request_options
+      )
+
+    {second_payload, _second_options} =
+      Affinity.scope(
+        auth("pool-a", "key-a"),
+        second_coerced.payload,
+        second_coerced.request_options
+      )
+
+    {other_payload, _other_options} =
+      Affinity.scope(
+        auth("pool-a", "key-a"),
+        other_coerced.payload,
+        other_coerced.request_options
+      )
+
+    assert first_payload["prompt_cache_key"] == second_payload["prompt_cache_key"]
+    refute first_payload["prompt_cache_key"] == other_payload["prompt_cache_key"]
+
+    encoded = inspect([first_coerced, second_coerced, first_payload, second_payload])
+    refute encoded =~ "claude-device-private"
+    refute encoded =~ "claude-session-private"
+  end
+
   test "namespaces only Ollama session headers and preserves stronger continuity inputs" do
     payload = canonical_payload(nil)
 
@@ -159,6 +214,26 @@ defmodule CodexPooler.Gateway.Facade.AffinityTest do
         }
       ],
       "messages" => [%{"role" => "user", "content" => suffix}]
+    }
+  end
+
+  defp growing_anthropic_request(metadata, suffix) do
+    %{
+      "model" => "claude-client-model",
+      "max_tokens" => 64,
+      "metadata" => %{"user_id" => metadata},
+      "messages" => [
+        %{
+          "role" => "user",
+          "content" => [
+            %{
+              "type" => "text",
+              "text" => suffix,
+              "cache_control" => %{"type" => "ephemeral"}
+            }
+          ]
+        }
+      ]
     }
   end
 

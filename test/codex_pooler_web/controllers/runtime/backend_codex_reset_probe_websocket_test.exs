@@ -35,7 +35,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
 
     assert %{
              "type" => "response.failed",
-             "response" => %{"error" => %{"code" => "usage_limit_exceeded"}}
+             "response" => %{"error" => %{"code" => "service_error"}}
            } = Jason.decode!(terminal_frame)
 
     assert_reset_probe_outcome!(
@@ -405,9 +405,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
   defp assert_receive_failed_frame(error_code) do
     assert_receive {:websocket_frame, failed_frame}, @websocket_frame_timeout
 
+    public_code =
+      if error_code == "websocket_connection_limit_reached",
+        do: error_code,
+        else: "service_error"
+
     assert %{
              "type" => failure_type,
-             "response" => %{"error" => %{"code" => ^error_code}}
+             "response" => %{"error" => %{"code" => ^public_code}}
            } = Jason.decode!(failed_frame)
 
     assert failure_type in ["error", "response.failed"]

@@ -89,7 +89,8 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
   def gateway_body(%{} = body), do: project_known_root(body)
 
   @spec error_body(Error.protocol(), pos_integer(), map()) :: map()
-  def error_body(protocol, status, %{} = error), do: Error.body(protocol, status, error)
+  def error_body(protocol, status, %{} = error),
+    do: Error.body(protocol, status, error, origin: :untrusted)
 
   @spec json_message(binary()) :: binary()
   def json_message(data) when is_binary(data) do
@@ -175,7 +176,8 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
   defp public_error(error), do: public_error(error, integer_field(error, "status") || 502)
 
   defp public_error(error, status) do
-    public_error = Error.body(:openai, status, atomize_known_error(error))["error"]
+    public_error =
+      Error.body(:openai, status, atomize_known_error(error), origin: :untrusted)["error"]
 
     if Map.has_key?(error, "param") or Map.has_key?(error, :param) do
       public_error
@@ -198,6 +200,7 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
   defp atomize_known_error(error) do
     %{
       code: Map.get(error, "code") || Map.get(error, :code),
+      type: Map.get(error, "type") || Map.get(error, :type),
       message: Map.get(error, "message") || Map.get(error, :message),
       param: Map.get(error, "param") || Map.get(error, :param)
     }

@@ -1,38 +1,15 @@
 ---
 title: OpenCode
-description: Configure OpenCode and optional OMO model routing with Codex Pooler's narrow OpenAI-compatible /v1 surface.
+description: Configure OpenCode and OMO for Codex Pooler's bounded OpenAI Responses gemma3 façade.
 ---
 
-![Codex Pooler OpenCode integration](/codex-pooler-opencode.png)
-
-OpenCode should use Codex Pooler through the narrow OpenAI-compatible `/v1` surface. Keep the provider id as `openai` for this setup so OpenCode continues to use its OpenAI provider-family behavior. The Pool API key authenticates model requests. A separate operator MCP token authenticates the optional remote MCP endpoint. MCP is not required for OpenCode to use Codex Pooler; it only gives an operator MCP host read-only metadata tools.
-
-OpenCode websocket support is the narrow Responses websocket route at `GET /v1/responses`, not OpenAI Realtime SDK compatibility.
-
-For a deployed instance, use these URLs:
-
-```text
-OpenCode provider base URL:
-https://codex-pooler.example.com/v1
-
-Remote MCP URL:
-https://codex-pooler.example.com/mcp
-```
-
-For local setup, replace the host with `http://localhost:4000`.
-
-## Provider example
-
-Store the Pool API key outside the config and read it through environment expansion.
+Use OpenCode's OpenAI provider family and define exactly one model:
 
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "small_model": "openai/gpt-5.6-luna",
-  "compaction": {
-    "auto": true,
-    "reserved": 7080
-  },
+  "model": "openai/gemma3",
+  "small_model": "openai/gemma3",
   "provider": {
     "openai": {
       "npm": "@ai-sdk/openai",
@@ -42,83 +19,15 @@ Store the Pool API key outside the config and read it through environment expans
         "apiKey": "{env:CODEX_POOLER_API_KEY}"
       },
       "models": {
-        "gpt-5.6-luna": {
-          "id": "gpt-5.6-luna",
-          "name": "GPT-5.6 Luna via Codex Pooler",
-          "family": "gpt",
+        "gemma3": {
+          "id": "gemma3",
+          "name": "gemma3",
           "attachment": true,
           "reasoning": true,
           "tool_call": true,
           "temperature": false,
-          "options": {
-            "reasoningEffort": "high",
-            "reasoningSummary": "auto",
-            "textVerbosity": "medium",
-            "include": ["reasoning.encrypted_content"],
-            // Optional: priority processing may cost more than the default tier.
-            // "serviceTier": "priority"
-          },
-          "modalities": {
-            "input": ["text", "image"],
-            "output": ["text"]
-          },
-          "limit": {
-            "context": 258400,
-            "input": 252560,
-            "output": 64000
-          }
-        },
-        "gpt-5.6-terra": {
-          "id": "gpt-5.6-terra",
-          "name": "GPT-5.6 Terra via Codex Pooler",
-          "family": "gpt",
-          "attachment": true,
-          "reasoning": true,
-          "tool_call": true,
-          "temperature": false,
-          "options": {
-            "reasoningEffort": "high",
-            "reasoningSummary": "auto",
-            "textVerbosity": "medium",
-            "include": ["reasoning.encrypted_content"],
-            // Optional: priority processing may cost more than the default tier.
-            // "serviceTier": "priority"
-          },
-          "modalities": {
-            "input": ["text", "image"],
-            "output": ["text"]
-          },
-          "limit": {
-            "context": 258400,
-            "input": 252560,
-            "output": 64000
-          }
-        },
-        "gpt-5.6-sol": {
-          "id": "gpt-5.6-sol",
-          "name": "GPT-5.6 Sol via Codex Pooler",
-          "family": "gpt",
-          "attachment": true,
-          "reasoning": true,
-          "tool_call": true,
-          "temperature": false,
-          "options": {
-            "reasoningEffort": "high",
-            "reasoningSummary": "auto",
-            "textVerbosity": "medium",
-            "include": ["reasoning.encrypted_content"],
-            // Optional: priority processing may cost more than the default tier.
-            // "serviceTier": "priority"
-          },
-          "modalities": {
-            "input": ["text", "image"],
-            "output": ["text"]
-          },
-          "limit": {
-            "context": 258400,
-            "input": 252560,
-            "output": 64000
-          }
+          "modalities": {"input": ["text", "image"], "output": ["text"]},
+          "limit": {"context": 258400, "input": 252560, "output": 64000}
         }
       }
     }
@@ -126,166 +35,8 @@ Store the Pool API key outside the config and read it through environment expans
 }
 ```
 
-Define only model ids your assigned Pool can serve. If you run Codex Pooler locally, set `baseURL` to `http://localhost:4000/v1`.
+For local setup, use `http://localhost:4000/v1`. Keeping `small_model` on `gemma3` prevents title/background helpers from inventing another model. Authenticated catalog metadata is authoritative when it differs from the static limits.
 
-OpenCode uses `small_model` for background helpers such as automatic session titles. Without an explicit override, it may infer a nano model that Codex Pools do not serve. Point `small_model` at a lightweight model assigned to your Pool. The setting remains effective when OMO is loaded.
+For Oh My OpenAgent, set every agent and category model to `openai/gemma3` and remove `fallback_models`. Variants may remain as local UI/budget hints, but the gateway always owns the fixed reasoning policy.
 
-Request-time OpenAI options belong under each model's `options` block. Keep only connection settings such as `baseURL` and `apiKey` in provider-level `options`. Use `serviceTier: "priority"` for priority processing. `fast` is an accepted equivalent request spelling, but `priority` is the canonical spelling for new configuration. Enable it only when your Pool and upstream offer it and you intentionally accept the potentially higher cost; leave it commented to use the default tier. This `/v1` route translates the request shape, while any projected provider `service_tier` response value keeps the provider's literal vocabulary.
-Do not add `store`: Codex Pooler sets `store: false` on its upstream streaming request.
-
-OpenCode subtracts its compaction reserve from `limit.input` before declaring the session full. These examples set `limit.input` to `252560` and reserve `7080`, so OpenCode starts compaction at `245480` tokens: 95% of the effective 258400-token Pooler window. `limit.input` is the local pre-compaction boundary, not a simultaneous input-plus-output envelope. OpenCode caps request output at 32k by default; set `OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=64000` only when you want OpenCode to request the full 64k cap. When available, `/v1/models.context_length` is the authoritative effective value for `limit.context`.
-
-## Oh My OpenAgent (OMO) routing
-
-If you use Oh My OpenAgent, keep the native `openai` provider configuration above and add model overrides in `~/.config/opencode/oh-my-openagent.jsonc`. Keep the `openai/` prefix on every OMO model so delegated agents continue to use the same Codex Pooler provider.
-
-This example assigns Luna to lightweight and background work, Terra to daily agent work, and Sol to planning and deep-reasoning roles. Each explicit fallback stays inside the model ids assigned to the Pool and preserves the primary reasoning variant.
-
-```jsonc
-{
-  "agents": {
-    "sisyphus": {
-      "model": "openai/gpt-5.6-terra",
-      "variant": "high",
-      "fallback_models": [{ "model": "openai/gpt-5.6-sol", "variant": "high" }]
-    },
-    "hephaestus": {
-      "model": "openai/gpt-5.6-sol",
-      "variant": "xhigh",
-      "fallback_models": [{ "model": "openai/gpt-5.6-terra", "variant": "xhigh" }]
-    },
-    "oracle": {
-      "model": "openai/gpt-5.6-sol",
-      "variant": "high",
-      "fallback_models": [{ "model": "openai/gpt-5.6-terra", "variant": "high" }]
-    },
-    "librarian": {
-      "model": "openai/gpt-5.6-luna",
-      "variant": "low",
-      "fallback_models": [{ "model": "openai/gpt-5.6-terra", "variant": "low" }]
-    },
-    "explore": {
-      "model": "openai/gpt-5.6-luna",
-      "variant": "low",
-      "fallback_models": [{ "model": "openai/gpt-5.6-terra", "variant": "low" }]
-    },
-    "multimodal-looker": {
-      "model": "openai/gpt-5.6-terra",
-      "variant": "medium",
-      "fallback_models": [{ "model": "openai/gpt-5.6-sol", "variant": "medium" }]
-    },
-    "prometheus": {
-      "model": "openai/gpt-5.6-sol",
-      "variant": "high",
-      "fallback_models": [{ "model": "openai/gpt-5.6-terra", "variant": "high" }]
-    },
-    "metis": {
-      "model": "openai/gpt-5.6-sol",
-      "variant": "high",
-      "fallback_models": [{ "model": "openai/gpt-5.6-terra", "variant": "high" }]
-    },
-    "momus": {
-      "model": "openai/gpt-5.6-sol",
-      "variant": "xhigh",
-      "fallback_models": [{ "model": "openai/gpt-5.6-terra", "variant": "xhigh" }]
-    },
-    "atlas": {
-      "model": "openai/gpt-5.6-terra",
-      "variant": "medium",
-      "fallback_models": [{ "model": "openai/gpt-5.6-sol", "variant": "medium" }]
-    },
-    "sisyphus-junior": {
-      "model": "openai/gpt-5.6-terra",
-      "variant": "medium",
-      "fallback_models": [{ "model": "openai/gpt-5.6-sol", "variant": "medium" }]
-    }
-  },
-  "categories": {
-    "visual-engineering": {
-      "model": "openai/gpt-5.6-terra",
-      "variant": "high",
-      "fallback_models": [{ "model": "openai/gpt-5.6-sol", "variant": "high" }]
-    },
-    "ultrabrain": {
-      "model": "openai/gpt-5.6-sol",
-      "variant": "xhigh",
-      "fallback_models": [{ "model": "openai/gpt-5.6-terra", "variant": "xhigh" }]
-    },
-    "deep": {
-      "model": "openai/gpt-5.6-sol",
-      "variant": "medium",
-      "fallback_models": [{ "model": "openai/gpt-5.6-terra", "variant": "medium" }]
-    },
-    "artistry": {
-      "model": "openai/gpt-5.6-sol",
-      "variant": "xhigh",
-      "fallback_models": [{ "model": "openai/gpt-5.6-terra", "variant": "xhigh" }]
-    },
-    "quick": {
-      "model": "openai/gpt-5.6-luna",
-      "variant": "low",
-      "fallback_models": [{ "model": "openai/gpt-5.6-terra", "variant": "low" }]
-    },
-    "unspecified-low": {
-      "model": "openai/gpt-5.6-luna",
-      "variant": "low",
-      "fallback_models": [{ "model": "openai/gpt-5.6-terra", "variant": "low" }]
-    },
-    "unspecified-high": {
-      "model": "openai/gpt-5.6-terra",
-      "variant": "high",
-      "fallback_models": [{ "model": "openai/gpt-5.6-sol", "variant": "high" }]
-    },
-    "writing": {
-      "model": "openai/gpt-5.6-terra",
-      "variant": "medium",
-      "fallback_models": [{ "model": "openai/gpt-5.6-sol", "variant": "medium" }]
-    }
-  }
-}
-```
-
-OMO tries configured `fallback_models` before its built-in model chains. Define only model ids your assigned Pool can serve; if one tier is unavailable, replace it in both primary and fallback entries instead of leaving an unreachable model in the routing map.
-
-Validate the OMO configuration after editing the routing map:
-
-```bash
-bunx oh-my-openagent doctor --platform=opencode --json
-```
-
-The doctor validates plugin loading, schema, and model resolution, but it does not prove that an upstream can serve the selected model. Send one bounded request through the installed OpenCode headless workflow for every model tier assigned to OMO before relying on the routing map.
-
-## Remote MCP example
-
-Add Codex Pooler as a remote MCP server only when the OpenCode host should inspect metadata that the operator can already see in the admin UI.
-
-```jsonc
-{
-  "mcp": {
-    "codex_pooler": {
-      "type": "remote",
-      "url": "https://codex-pooler.example.com/mcp",
-      "oauth": false,
-      "headers": {
-        "Authorization": "Bearer <operator-mcp-token>"
-      },
-      "enabled": true,
-      "timeout": 30000
-    }
-  }
-}
-```
-
-Use a dedicated operator MCP token for hosts that persist remote MCP headers. Don't use a Pool API key for `/mcp`.
-
-## Compatibility notes
-
-If you automate OpenCode from scripts, use OpenCode's own documented headless command shape for your installed version and verify both the final response and the expected file changes. The examples on this page focus on configuration, not a full automation workflow.
-
-Codex Pooler provides narrow OpenAI-compatible `/v1` support for selected SDK routes. Supported OpenCode traffic should stay on `/v1/responses` or `/v1/chat/completions`, depending on the OpenAI provider path OpenCode uses.
-
-`GET /v1/responses` is narrow Responses websocket compatibility, not `/v1/realtime` support. `/v1/realtime` and OpenAI Realtime SDK websocket or session routes are unsupported.
-
-Continuity headers such as `session-id`, `x-session-id`, and `x-session-affinity` are local routing inputs only and are not forwarded upstream.
-
-Unsupported `/v1` routes return deterministic OpenAI-shaped unsupported endpoint errors when explicitly routed. Don't treat Codex Pooler as full OpenAI API parity.
+OpenCode model use does not require `/mcp`; optional operator metadata uses a separate operator MCP token.
