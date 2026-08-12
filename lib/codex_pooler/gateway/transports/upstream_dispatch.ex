@@ -55,6 +55,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defmodule Request do
     @moduledoc false
 
+    alias CodexPooler.Accounting.Attempt, as: AccountingAttempt
     alias CodexPooler.Accounting.Request, as: AccountingRequest
     alias CodexPooler.Gateway.Payloads.RequestOptions
     alias CodexPooler.Gateway.Payloads.RequestOptions.Transport
@@ -68,6 +69,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       :identity,
       :routing_hint_authorized?,
       :accounting_request,
+      :accounting_attempt,
       :writer,
       :assignment_advertised?,
       :request_options
@@ -81,6 +83,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
             identity: UpstreamIdentity.t(),
             routing_hint_authorized?: boolean(),
             accounting_request: AccountingRequest.t() | nil,
+            accounting_attempt: AccountingAttempt.t() | nil,
             writer: Transport.websocket_writer(),
             assignment_advertised?: boolean(),
             request_options: RequestOptions.t()
@@ -381,6 +384,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         identity: identity,
         routing_hint_authorized?: routing_hint_authorized?,
         accounting_request: request,
+        accounting_attempt: attempt,
         writer: writer,
         assignment_advertised?: assignment_advertised?,
         request_options: %RequestOptions{} = request_options
@@ -397,14 +401,16 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     timeouts = request_options.timeout_config
     message_mapper = websocket_message_mapper(request_options)
 
+    observation = task14_observation_context(request, attempt, request_options)
+
     upstream_request = %UpstreamWebsocketSession.Request{
       url: url,
       headers: headers,
       payload: payload_body,
       timeouts: timeouts,
-      writer: writer,
+      writer: task14_observing_writer(writer, observation),
       message_mapper: message_mapper,
-      frame_observer: websocket_frame_observer(identity),
+      frame_observer: websocket_frame_observer(identity, observation),
       reset_probe: request_options.routing.reset_probe,
       assignment_advertised?: assignment_advertised?,
       connection_bound_continuation?: connection_bound_continuation?(request_options),
@@ -899,10 +905,96 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     result
   end
 
-  defp websocket_frame_observer(identity) do
+  defp websocket_frame_observer(identity, observation) do
     fn
-      _frame, %{} = decoded -> RateLimitObserver.record_complete_event(identity, decoded)
-      frame, _decoded -> RateLimitObserver.record_complete_events(identity, frame)
+      _frame, %{} = decoded ->
+        RateLimitObserver.record_complete_event(identity, decoded)
+        emit_task14_product_observation(observation, :provider_to_pooler, decoded)
+
+      frame, _decoded ->
+        RateLimitObserver.record_complete_events(identity, frame)
+    end
+  end
+
+  defp task14_observing_writer(nil, _observation), do: nil
+
+  defp task14_observing_writer(writer, observation) when is_function(writer, 2) do
+    fn text, terminal_discriminator ->
+      result = writer.(text, terminal_discriminator)
+      emit_task14_downstream_observation(observation, text)
+      result
+    end
+  end
+
+  defp task14_observing_writer(writer, observation) when is_function(writer, 1) do
+    fn text ->
+      result = writer.(text)
+      emit_task14_downstream_observation(observation, text)
+      result
+    end
+  end
+
+  defp task14_observation_context(request, attempt, %RequestOptions{} = request_options) do
+    %{
+      request_id: task14_request_id(request, request_options),
+      client_request_id: request_options.request_metadata.client_request_id,
+      attempt_id: if(is_map(attempt), do: Map.get(attempt, :id)),
+      route: "backend_websocket",
+      mode: RequestOptions.model_serving_mode(request_options)
+    }
+  end
+
+  defp task14_request_id(%{id: id}, _request_options) when is_binary(id), do: id
+
+  defp task14_request_id(_request, %RequestOptions{} = request_options),
+    do: request_options.request_metadata.request_id
+
+  defp emit_task14_downstream_observation(observation, text) when is_binary(text) do
+    case Jason.decode(text) do
+      {:ok, %{} = decoded} ->
+        emit_task14_product_observation(observation, :pooler_to_codex, decoded)
+
+      _not_json ->
+        :ok
+    end
+  end
+
+  defp emit_task14_product_observation(observation, direction, decoded) do
+    if Application.get_env(:codex_pooler, :task14_product_observation_enabled, false) do
+      case Map.get(decoded, "type") do
+        event_type when event_type in ["response.output_text.delta", "response.completed"] ->
+          metadata =
+            observation
+            |> Map.put(:direction, direction)
+            |> Map.put(:event_type, event_type)
+            |> Map.put(:response_fingerprint, task14_response_fingerprint(decoded))
+
+          :telemetry.execute(
+            [:codex_pooler, :gateway, :task14, :product_stage],
+            %{count: 1},
+            metadata
+          )
+
+        _other ->
+          :ok
+      end
+    end
+  end
+
+  defp task14_response_fingerprint(decoded) do
+    response_id =
+      case decoded do
+        %{"response" => %{"id" => id}} when is_binary(id) -> id
+        %{"response_id" => id} when is_binary(id) -> id
+        %{"id" => id} when is_binary(id) -> id
+        _other -> nil
+      end
+
+    if is_binary(response_id) do
+      :sha256
+      |> :crypto.hash(response_id)
+      |> Base.encode16(case: :lower)
+      |> binary_part(0, 12)
     end
   end
 

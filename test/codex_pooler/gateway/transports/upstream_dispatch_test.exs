@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   import ExUnit.CaptureLog
   import Ecto.Query
 
+  alias CodexPooler.Accounting.Attempt
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -339,6 +340,94 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     Application.put_env(:codex_pooler, :task10_egress_observation_enabled, false)
     assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(http_request)
     refute_receive {:egress_observation, _silent}, 100
+  end
+
+  test "Task 14 product observation emits bounded websocket stage metadata only" do
+    {:ok, websocket_upstream} =
+      FakeUpstream.start_link(
+        {:sequence,
+         [
+           FakeUpstream.websocket_text_frames([
+             Jason.encode!(%{
+               "type" => "response.output_text.delta",
+               "delta" => "forbidden raw text"
+             }),
+             Jason.encode!(%{
+               "type" => "response.completed",
+               "response" => %{"id" => "task14-product-observer"}
+             })
+           ])
+         ]}
+      )
+
+    on_exit(fn -> FakeUpstream.stop(websocket_upstream) end)
+    handler_id = "task14-product-observation-test"
+    parent = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :task14, :product_stage],
+        fn _event, _measurements, metadata, _config ->
+          send(parent, {:task14_product_observation, metadata})
+        end,
+        nil
+      )
+
+    Application.put_env(:codex_pooler, :task14_product_observation_enabled, true)
+
+    on_exit(fn ->
+      Application.put_env(:codex_pooler, :task14_product_observation_enabled, false)
+      :telemetry.detach(handler_id)
+    end)
+
+    request_options =
+      RequestOptions.build(
+        %{
+          receive_timeout_ms: 1_000,
+          request_id: "request-1",
+          client_request_id: "client-1"
+        },
+        "/backend-api/codex/responses",
+        %{"model" => "upstream-routing-model", "input" => []}
+      )
+      |> RequestOptions.put_model_serving_mode(%{
+        configured_mode: "full",
+        effective_mode: "full",
+        source: "override"
+      })
+
+    request = websocket_dispatch_request(websocket_upstream, request_options)
+    request = %{request | accounting_attempt: %Attempt{id: "attempt-1"}}
+    assert {:ok, _response} = UpstreamDispatch.websocket_request(request)
+
+    observations = collect_task14_observations([])
+    assert length(observations) == 4
+
+    assert Enum.frequencies_by(observations, &{&1.direction, &1.event_type}) == %{
+             {:provider_to_pooler, "response.output_text.delta"} => 1,
+             {:provider_to_pooler, "response.completed"} => 1,
+             {:pooler_to_codex, "response.output_text.delta"} => 1,
+             {:pooler_to_codex, "response.completed"} => 1
+           }
+
+    completed = Enum.filter(observations, &(&1.event_type == "response.completed"))
+    assert Enum.uniq(Enum.map(completed, & &1.response_fingerprint)) |> length() == 1
+    assert Enum.all?(completed, &Regex.match?(~r/^[0-9a-f]{12}$/, &1.response_fingerprint))
+    assert Enum.all?(observations -- completed, &is_nil(&1.response_fingerprint))
+    refute inspect(observations) =~ "forbidden raw text"
+
+    for observation <- observations do
+      assert observation.request_id == "request-1"
+      assert observation.client_request_id == "client-1"
+      assert observation.attempt_id == "attempt-1"
+      assert observation.route == "backend_websocket"
+      assert observation.mode == "full"
+      assert observation.event_type in ["response.output_text.delta", "response.completed"]
+      refute Map.has_key?(observation, :payload)
+      refute Map.has_key?(observation, :frame)
+      refute Map.has_key?(observation, :token)
+    end
   end
 
   test "native Responses websocket dispatch derives the model-only routing hint, including prewarm payloads" do
@@ -849,6 +938,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       identity: upstream_identity(),
       routing_hint_authorized?: true,
       accounting_request: nil,
+      accounting_attempt: nil,
       writer: fn _message -> :ok end,
       request_options: request_options
     }
@@ -985,6 +1075,15 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     opts = %{receive_timeout_ms: 1_000}
     opts = if is_pid(session), do: Map.put(opts, :upstream_websocket_session, session), else: opts
     RequestOptions.for_websocket(opts, %{"model" => "example-model"})
+  end
+
+  defp collect_task14_observations(observations) do
+    receive do
+      {:task14_product_observation, observation} ->
+        collect_task14_observations([observation | observations])
+    after
+      0 -> Enum.reverse(observations)
+    end
   end
 
   defp async_response(notify, cancel_fun \\ nil, stream_fun \\ nil) do

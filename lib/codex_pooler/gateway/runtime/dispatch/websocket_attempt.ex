@@ -693,6 +693,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
         upstream_payload: prepared_context.upstream_payload,
         original_payload: context.payload,
         identity: context.identity,
+        accounting_attempt: context.attempt,
         request_options: context.request_options
     }
   end

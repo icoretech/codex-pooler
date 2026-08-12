@@ -20,6 +20,7 @@ defmodule CodexPoolerWeb.DevRoutes do
         # the Task 10 observer is armed via POST and must not require CSRF.
         scope "/dev" do
           forward "/task10/egress-capture", CodexPooler.Dev.Task10EgressObserver.Plug
+          forward "/task14/product-capture", CodexPooler.Dev.Task14ProductObserver.Plug
         end
       end
     end
