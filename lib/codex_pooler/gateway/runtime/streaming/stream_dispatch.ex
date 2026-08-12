@@ -17,7 +17,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   alias CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle
   alias CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver
   alias CodexPooler.Gateway.Runtime.Streaming.Types, as: StreamTypes
+  alias CodexPooler.Gateway.Transports.ModelUnavailability
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.Streaming.StreamRelay
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
@@ -111,10 +113,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     )
     |> Map.merge(%{
       write_chunk: http_stream_writer(response_context),
-      write_keepalive: http_sse_keepalive_writer(response_context.response),
+      write_keepalive: http_sse_keepalive_writer(response_context),
       before_finalize_failure: http_stream_terminal_failure_writer(response_context),
       before_finalize_success: http_stream_terminal_success_hook(response_context),
-      keepalive_interval_ms: sse_keepalive_interval_ms(response_context.response)
+      keepalive_interval_ms: sse_keepalive_interval_ms(response_context)
     })
   end
 
@@ -226,6 +228,14 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   # lives in StreamLifecycle.first_event_retry_handler (compact model misses
   # finalize without retry or health mutation).
   defp http_stream_writer(%ResponseContext{response: response} = response_context) do
+    if DownstreamStream.public_ollama_stream?(response_context.context.request_options) do
+      ollama_http_stream_writer(response_context)
+    else
+      standard_http_stream_writer(response_context, response)
+    end
+  end
+
+  defp standard_http_stream_writer(response_context, response) do
     sse_response? = sse_response?(response)
 
     assignment_source? =
@@ -255,6 +265,106 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
         write_stream_data(response_context, conn, data)
       end
     end
+  end
+
+  defp ollama_http_stream_writer(%ResponseContext{context: context} = response_context) do
+    assignment_advertised? =
+      ModelMetadata.assignment_source?(context.model, context.assignment.id)
+
+    fn state, data ->
+      visible_before? = DownstreamStream.public_ollama_visible_seen?(state)
+
+      {downstream_data, next_state} =
+        observe_and_normalize_stream_data(response_context, state, data)
+
+      visible_after? = DownstreamStream.public_ollama_visible_seen?(next_state)
+
+      case DownstreamStream.terminal_outcome(next_state) do
+        {:failed, failure}
+        when not visible_after? and not visible_before? ->
+          if retryable_ollama_first_failure?(failure, assignment_advertised?) do
+            {:retry_first_event, failure}
+          else
+            write_ollama_terminal_failure(
+              response_context,
+              next_state,
+              downstream_data,
+              failure,
+              visible_before?,
+              visible_after?
+            )
+          end
+
+        {:failed, failure} ->
+          write_ollama_terminal_failure(
+            response_context,
+            next_state,
+            downstream_data,
+            failure,
+            visible_before?,
+            visible_after?
+          )
+
+        _outcome ->
+          write_ollama_data(
+            response_context,
+            next_state,
+            downstream_data,
+            visible_before?,
+            visible_after?
+          )
+      end
+    end
+  end
+
+  defp write_ollama_terminal_failure(
+         response_context,
+         state,
+         data,
+         failure,
+         visible_before?,
+         visible_after?
+       ) do
+    case write_ollama_data(
+           response_context,
+           state,
+           data,
+           visible_before?,
+           visible_after?
+         ) do
+      {:ok, state} -> {:terminal_stream_failure, state, failure}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp write_ollama_data(
+         %ResponseContext{context: context},
+         state,
+         data,
+         visible_before?,
+         visible_after?
+       ) do
+    case write_normalized_stream_data(context.request_options, state, data) do
+      {:ok, state} ->
+        state =
+          if not visible_before? and visible_after? do
+            mark_visible_output(context.reserved.request)
+            Map.put(state, :visible_output_marked?, true)
+          else
+            state
+          end
+
+        {:ok, state}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp retryable_ollama_first_failure?(failure, assignment_advertised?) do
+    not ErrorCodes.previous_response_miss_code?(Map.get(failure, :upstream_code)) and
+      (ErrorCodes.retryable_first_event_code?(Map.get(failure, :code)) or
+         ModelUnavailability.terminal_failure?(failure, assignment_advertised?))
   end
 
   # The relay retains every streamed part — including non-visible blocks that
@@ -411,8 +521,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     end
   end
 
-  defp http_sse_keepalive_writer(response) do
-    if sse_response?(response) do
+  defp http_sse_keepalive_writer(%ResponseContext{} = response_context) do
+    if not DownstreamStream.public_ollama_stream?(response_context.context.request_options) and
+         sse_response?(response_context.response) do
       &write_sse_keepalive/1
     else
       fn conn -> {:ok, conn} end
@@ -431,10 +542,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     first_event_state(state).buffer == "" and DownstreamStream.keepalive_allowed?(state)
   end
 
-  defp sse_keepalive_interval_ms(response) do
-    if sse_response?(response),
-      do: OperationalSettings.current().sse_keepalive_interval_ms,
-      else: 0
+  defp sse_keepalive_interval_ms(%ResponseContext{} = response_context) do
+    if not DownstreamStream.public_ollama_stream?(response_context.context.request_options) and
+         sse_response?(response_context.response),
+       do: OperationalSettings.current().sse_keepalive_interval_ms,
+       else: 0
   end
 
   defp handle_classified_stream_data(
@@ -484,11 +596,32 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     {downstream_data, conn} =
       normalize_stream_data(response_context, conn, data, &StreamProtocol.stream_data_visible?/1)
 
-    if downstream_data == "" do
-      {:ok, conn}
+    write_normalized_stream_data(
+      response_context.context.request_options,
+      conn,
+      downstream_data
+    )
+  end
+
+  defp write_normalized_stream_data(_request_options, state, ""), do: {:ok, state}
+
+  defp write_normalized_stream_data(request_options, state, data) do
+    if DownstreamStream.public_ollama_stream?(request_options) do
+      write_ndjson_lines(state, data)
     else
-      update_relay_target(conn, &Plug.Conn.chunk(&1, downstream_data))
+      update_relay_target(state, &Plug.Conn.chunk(&1, data))
     end
+  end
+
+  defp write_ndjson_lines(state, data) do
+    data
+    |> String.split("\n", trim: true)
+    |> Enum.reduce_while({:ok, state}, fn line, {:ok, state} ->
+      case update_relay_target(state, &Plug.Conn.chunk(&1, line <> "\n")) do
+        {:ok, state} -> {:cont, {:ok, state}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
   end
 
   defp reset_first_event_retry_state(conn) do
@@ -545,13 +678,28 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   defp stream_candidate_result({:error, reason}, _conn), do: {:error, reason}
 
   defp normalize_stream_data(
-         %ResponseContext{context: context},
+         %ResponseContext{context: context} = response_context,
          state,
          data,
          visible_data?
        )
        when is_function(visible_data?, 1) do
-    %{reserved: reserved, identity: identity, payload: payload, request_options: opts} = context
+    %{reserved: reserved} = context
+
+    {downstream_data, state} =
+      observe_and_normalize_stream_data(response_context, state, data)
+
+    state = maybe_mark_visible_output(state, reserved.request, downstream_data, visible_data?)
+
+    {downstream_data, state}
+  end
+
+  defp observe_and_normalize_stream_data(
+         %ResponseContext{context: context},
+         state,
+         data
+       ) do
+    %{identity: identity, payload: payload, request_options: opts} = context
 
     {:ok, rate_limit_state} =
       RateLimitObserver.record_events(identity, data, rate_limit_state(state))
@@ -559,8 +707,6 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     state = put_rate_limit_state(state, rate_limit_state)
 
     state = put_usage_state(state, StreamUsageObserver.observe(usage_state(state), data))
-
-    state = maybe_mark_visible_output(state, reserved.request, data, visible_data?)
 
     DownstreamStream.normalize_data(
       data,
@@ -588,7 +734,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   end
 
   defp stream_headers(response, %SelectedCandidateContext{} = context) do
-    content_type = header(response, "content-type") || "text/event-stream"
+    content_type =
+      if DownstreamStream.public_ollama_stream?(context.request_options),
+        do: "application/x-ndjson",
+        else: header(response, "content-type") || "text/event-stream"
 
     [{"cache-control", "no-cache"}, {"content-type", content_type}]
     |> maybe_put_backend_turn_state_response_header(response, context.request_options)

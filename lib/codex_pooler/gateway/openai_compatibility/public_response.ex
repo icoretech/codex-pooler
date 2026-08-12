@@ -10,10 +10,15 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   @server_error_tokens ~w(internal_error server_error upstream_error)
 
   @spec stream_headers([{term(), term()}]) :: [{String.t(), String.t()} | {term(), term()}]
-  def stream_headers(headers) do
+  def stream_headers(headers), do: stream_headers(headers, "text/event-stream")
+
+  @spec stream_headers([{term(), term()}], String.t()) ::
+          [{String.t(), String.t()} | {term(), term()}]
+  def stream_headers(headers, content_type)
+      when content_type in ["text/event-stream", "application/x-ndjson"] do
     headers
     |> Enum.reject(fn {key, _value} -> String.downcase(to_string(key)) == "content-type" end)
-    |> Kernel.++([{"content-type", "text/event-stream"}])
+    |> Kernel.++([{"content-type", content_type}])
   end
 
   @spec normalize_raw_body(pos_integer(), term(), success_normalizer()) ::

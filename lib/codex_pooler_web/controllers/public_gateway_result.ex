@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
   alias CodexPooler.Gateway.Facade.PublicProjection
   alias CodexPooler.Gateway.OpenAICompatibility.PublicResponse
   alias CodexPoolerWeb.GatewayControllerHelpers, as: GatewayHelpers
+  alias CodexPoolerWeb.Plugs.RuntimeIngress.Path, as: IngressPath
 
   @type success_normalizer :: (map() -> map())
   @type gateway_call_result ::
@@ -15,9 +16,18 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
 
   @spec send(Plug.Conn.t(), gateway_call_result(), success_normalizer()) :: Plug.Conn.t()
   def send(conn, {:ok, %{stream: _stream} = result}, _success_normalizer) do
+    content_type =
+      if IngressPath.protocol(conn) == :ollama,
+        do: "application/x-ndjson",
+        else: "text/event-stream"
+
     GatewayHelpers.send_gateway_result(conn, %{
       result
-      | headers: PublicResponse.stream_headers(GatewayHelpers.result_headers(result))
+      | headers:
+          PublicResponse.stream_headers(
+            GatewayHelpers.result_headers(result),
+            content_type
+          )
     })
   end
 

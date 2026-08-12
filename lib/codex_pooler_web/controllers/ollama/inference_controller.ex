@@ -27,6 +27,5 @@ defmodule CodexPoolerWeb.Ollama.InferenceController do
     conn
     |> GatewayHelpers.request_opts()
     |> Map.put(:upstream_endpoint, Request.backend_endpoint())
-    |> Map.put(:collect_openai_response_stream, true)
   end
 end

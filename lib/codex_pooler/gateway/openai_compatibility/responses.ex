@@ -136,7 +136,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   defp backend_streaming_required?(%RequestOptions{openai_compatibility: compatibility}) do
     compatibility.collect_openai_response_stream or compatibility.public_openai_responses_stream or
       compatibility.public_openai_chat_stream or
-      compatibility.public_openai_completions_stream
+      compatibility.public_openai_completions_stream or compatibility.public_ollama_stream
   end
 
   defp backend_streaming_required?(opts) when is_map(opts) do
@@ -145,7 +145,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
         :collect_openai_response_stream,
         :public_openai_responses_stream,
         :public_openai_chat_stream,
-        :public_openai_completions_stream
+        :public_openai_completions_stream,
+        :public_ollama_stream
       ],
       &Map.get(opts, &1)
     )

@@ -2,7 +2,7 @@ defmodule CodexPooler.Gateway.Facade.Ollama.Request do
   @moduledoc false
 
   alias CodexPooler.Gateway.OpenAICompatibility.{Error, Matrix, Responses, Validation}
-  alias CodexPooler.Gateway.Payloads.StrictSchema
+  alias CodexPooler.Gateway.Payloads.{RequestOptions, StrictSchema}
 
   @backend_endpoint "/backend-api/codex/responses"
   @noop_options ~w(
@@ -45,8 +45,23 @@ defmodule CodexPooler.Gateway.Facade.Ollama.Request do
   def coerce(payload, canonical, surface, opts)
       when is_map(payload) and is_map(canonical) and surface in [:chat, :generate] do
     with {:ok, canonical, formatting} <- apply_common(payload, canonical, surface),
-         {:ok, coerced} <- Responses.coerce(canonical, opts) do
-      {:ok, Map.put(coerced, :ollama_formatting, formatting)}
+         {:ok, coerced} <- Responses.coerce(canonical, stream_options(opts, formatting)) do
+      request_options =
+        if formatting.stream? do
+          RequestOptions.put_openai_compatibility(
+            coerced.request_options,
+            public_ollama_stream: true,
+            ollama_surface: surface,
+            ollama_formatting: formatting
+          )
+        else
+          coerced.request_options
+        end
+
+      {:ok,
+       coerced
+       |> Map.put(:request_options, request_options)
+       |> Map.put(:ollama_formatting, formatting)}
     end
   end
 
@@ -109,6 +124,27 @@ defmodule CodexPooler.Gateway.Facade.Ollama.Request do
   end
 
   defp validate_stream(_payload), do: :ok
+
+  defp stream_options(%RequestOptions{} = opts, %{stream?: stream?}) do
+    RequestOptions.put_openai_compatibility(opts,
+      public_ollama_stream: stream?,
+      collect_openai_response_stream: not stream?
+    )
+  end
+
+  defp stream_options(opts, %{stream?: stream?}) when is_list(opts) do
+    opts
+    |> Keyword.put(:public_ollama_stream, stream?)
+    |> Keyword.put(:collect_openai_response_stream, not stream?)
+  end
+
+  defp stream_options(opts, %{stream?: stream?}) when is_map(opts) do
+    opts
+    |> Map.put(:public_ollama_stream, stream?)
+    |> Map.put(:collect_openai_response_stream, not stream?)
+  end
+
+  defp stream_options(opts, _formatting), do: opts
 
   defp thinking_requested(%{"think" => value}) when is_boolean(value), do: {:ok, value}
 

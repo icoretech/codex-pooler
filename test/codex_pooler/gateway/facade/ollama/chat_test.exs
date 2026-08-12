@@ -172,6 +172,33 @@ defmodule CodexPooler.Gateway.Facade.Ollama.ChatTest do
     end
   end
 
+  test "installs typed native stream formatting without enabling collection" do
+    payload = %{
+      "messages" => [%{"role" => "user", "content" => "hello"}],
+      "stream" => true,
+      "think" => true,
+      "options" => %{"stop" => ["<END>"]}
+    }
+
+    opts = %{
+      persona: Persona.fixed(:ollama_chat),
+      upstream_endpoint: "/backend-api/codex/responses"
+    }
+
+    assert {:ok, coerced} = Chat.coerce(payload, opts)
+    compatibility = coerced.request_options.openai_compatibility
+
+    assert compatibility.public_ollama_stream
+    refute compatibility.collect_openai_response_stream
+    assert compatibility.ollama_surface == :chat
+    assert compatibility.ollama_formatting.surface == :chat
+    assert compatibility.ollama_formatting.stream?
+    assert compatibility.ollama_formatting.think?
+    assert compatibility.ollama_formatting.stops == ["<END>"]
+    assert coerced.payload["stream"] == true
+    assert coerced.payload["store"] == false
+  end
+
   test "rejects ambiguous or unsupported chat controls with precise local parameters" do
     base = %{"messages" => [%{"role" => "user", "content" => "hello"}]}
 
