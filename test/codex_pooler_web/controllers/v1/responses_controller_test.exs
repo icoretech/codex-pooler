@@ -4507,6 +4507,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
             "type" => "reasoning",
             "id" => "rs_v1_http_store_false_replay",
             "summary" => [%{"type" => "summary_text", "text" => "synthetic summary"}],
+            "content" => [
+              %{"type" => "reasoning_text", "text" => "synthetic reasoning replay"}
+            ],
             "encrypted_content" => "synthetic-encrypted-reasoning"
           },
           %{
@@ -4552,9 +4555,14 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert Enum.at(captured.json["input"], 2)["call_id"] == "call_v1_http_store_false_replay"
     assert Enum.at(captured.json["input"], 3)["call_id"] == "call_v1_http_store_false_replay"
 
+    assert Enum.at(captured.json["input"], 0)["content"] == [
+             %{"type" => "reasoning_text", "text" => "synthetic reasoning replay"}
+           ]
+
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     metadata = inspect(request.request_metadata)
     refute metadata =~ "synthetic summary"
+    refute metadata =~ "synthetic reasoning replay"
     refute metadata =~ "synthetic assistant replay"
     refute metadata =~ "synthetic tool output"
     refute metadata =~ "resp_v1_http_store_false_previous"
@@ -4613,6 +4621,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
           },
           %{
             "type" => "reasoning",
+            "content" => [
+              %{"type" => "reasoning_text", "text" => "synthetic stateless reasoning"}
+            ],
             "summary" => [%{"type" => "summary_text", "text" => "synthetic summary"}],
             "encrypted_content" => "synthetic-encrypted-reasoning"
           },
@@ -4661,6 +4672,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
            ]
 
     refute inspect(captured.json["input"]) =~ "synthetic-encrypted-reasoning"
+    refute inspect(captured.json["input"]) =~ "synthetic stateless reasoning"
     assert %{"role" => "assistant", "phase" => "commentary"} = Enum.at(captured.json["input"], 1)
     refute Map.has_key?(Enum.at(captured.json["input"], 1), "id")
     assert Enum.at(captured.json["input"], 2)["id"] == "fc_v1_http_replay"
@@ -6907,7 +6919,18 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     payload = %{
       "model" => setup.model.exposed_model_id,
-      "input" => "synthetic closed-client flushed terminal request",
+      "input" => [
+        %{
+          "type" => "message",
+          "role" => "user",
+          "content" => [
+            %{
+              "type" => "input_text",
+              "text" => "synthetic closed-client flushed terminal request"
+            }
+          ]
+        }
+      ],
       "stream" => true
     }
 
@@ -6983,7 +7006,18 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     payload = %{
       "model" => setup.model.exposed_model_id,
-      "input" => "synthetic closed-client flushed failed terminal request",
+      "input" => [
+        %{
+          "type" => "message",
+          "role" => "user",
+          "content" => [
+            %{
+              "type" => "input_text",
+              "text" => "synthetic closed-client flushed failed terminal request"
+            }
+          ]
+        }
+      ],
       "stream" => true
     }
 

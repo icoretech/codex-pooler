@@ -1986,6 +1986,14 @@ defmodule CodexPooler.CompatibilityMatrix do
         requires_previous_response_id: true,
         metadata_only: true
       },
+      open_responses_reasoning_replay: %{
+        input_type: "reasoning",
+        content_part_type: "reasoning_text",
+        preserves_with_previous_response_id: true,
+        stateless_behavior: "dropped_before_dispatch",
+        continuation_malformed_content: "reject_before_dispatch",
+        metadata_only: true
+      },
       openclaw_assistant_thinking_replay: %{
         input_role: "assistant",
         dropped_content_part_type: "thinking",

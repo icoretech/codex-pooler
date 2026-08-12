@@ -238,12 +238,10 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
   end
 
   defp normalize_input_item(%{"type" => "reasoning", "encrypted_content" => nil} = item) do
-    {:ok, Map.drop(item, ["content", "encrypted_content"])}
+    {:ok, Map.delete(item, "encrypted_content")}
   end
 
-  defp normalize_input_item(%{"type" => "reasoning"} = item) do
-    {:ok, Map.drop(item, ["content"])}
-  end
+  defp normalize_input_item(%{"type" => "reasoning"} = item), do: {:ok, item}
 
   defp normalize_input_item(%{"type" => "compaction"} = item), do: {:ok, item}
 

@@ -2417,7 +2417,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
           "type" => "reasoning",
           "id" => "rs_fixture_passthrough",
           "summary" => [],
-          "encrypted_content" => nil,
           passthrough_key => %{"turn_id" => "turn_fixture_reasoning"}
         },
         %{
@@ -2639,6 +2638,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
           "summary" => [%{"type" => "summary_text", "text" => "bad"}],
           "encrypted_content" => "synthetic-encrypted-reasoning",
           "status" => "completed"
+        },
+        %{
+          "type" => "reasoning",
+          "summary" => [%{"type" => "summary_text", "text" => "bad"}],
+          "content" => [%{"type" => "reasoning_text", "text" => 42}],
+          "encrypted_content" => "synthetic-encrypted-reasoning"
         },
         %{
           "type" => "reasoning",
@@ -4640,6 +4645,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
           "type" => "reasoning",
           "id" => "rs_fixture_replay",
           "summary" => [%{"type" => "summary_text", "text" => "synthetic summary"}],
+          "content" => [
+            %{"type" => "reasoning_text", "text" => "synthetic reasoning replay"}
+          ],
           "encrypted_content" => "synthetic-encrypted-reasoning"
         },
         %{
@@ -4680,6 +4688,61 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
     assert Enum.at(result.payload["input"], 2)["call_id"] == "call_fixture_replay"
     assert Enum.at(result.payload["input"], 3)["call_id"] == "call_fixture_replay"
+
+    assert Enum.at(result.payload["input"], 0)["content"] == [
+             %{"type" => "reasoning_text", "text" => "synthetic reasoning replay"}
+           ]
+  end
+
+  @tag :responses_coercion
+  test "Responses preserves Open Responses reasoning_text items in tool continuations" do
+    payload = %{
+      "model" => "gpt-fixture-text",
+      "previous_response_id" => "resp_fixture_reasoning_text",
+      "input" => [
+        %{
+          "type" => "reasoning",
+          "summary" => [],
+          "content" => [
+            %{"type" => "reasoning_text", "text" => "synthetic reasoning text"}
+          ]
+        },
+        %{
+          "type" => "function_call",
+          "call_id" => "call_fixture_reasoning_text",
+          "name" => "lookup_fixture",
+          "arguments" => "{}"
+        },
+        %{
+          "type" => "function_call_output",
+          "call_id" => "call_fixture_reasoning_text",
+          "output" => "synthetic tool output"
+        }
+      ]
+    }
+
+    assert {:ok, %{payload: coerced}} = Responses.coerce(payload)
+
+    assert coerced["input"] == [
+             %{
+               "type" => "reasoning",
+               "summary" => [],
+               "content" => [
+                 %{"type" => "reasoning_text", "text" => "synthetic reasoning text"}
+               ]
+             },
+             %{
+               "type" => "function_call",
+               "call_id" => "call_fixture_reasoning_text",
+               "name" => "lookup_fixture",
+               "arguments" => "{}"
+             },
+             %{
+               "type" => "function_call_output",
+               "call_id" => "call_fixture_reasoning_text",
+               "output" => "synthetic tool output"
+             }
+           ]
   end
 
   test "Responses preserves item metadata and Codex internal turn metadata on replay items" do

@@ -288,6 +288,25 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
 
   defp validate_optional_assistant_status(_item), do: :ok
 
+  defp validate_reasoning_replay_item(%{"summary" => summary, "content" => content} = item) do
+    with :ok <-
+           validate_exact_item_keys(item, [
+             "type",
+             "id",
+             "summary",
+             "content",
+             "encrypted_content",
+             "metadata",
+             @metadata_passthrough_key
+           ]),
+         :ok <- validate_optional_id(item),
+         :ok <- validate_optional_item_metadata(item),
+         :ok <- validate_reasoning_replay_encrypted_content(Map.get(item, "encrypted_content")),
+         :ok <- validate_reasoning_replay_content(content) do
+      validate_reasoning_replay_summary(summary)
+    end
+  end
+
   defp validate_reasoning_replay_item(%{"id" => id, "summary" => summary} = item)
        when is_binary(id) do
     with :ok <-
@@ -346,6 +365,23 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
   end
 
   defp validate_reasoning_replay_summary_part(_part),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp validate_reasoning_replay_content(content) when is_list(content) do
+    validate_each(content, &validate_reasoning_replay_content_part/1)
+  end
+
+  defp validate_reasoning_replay_content(_content),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp validate_reasoning_replay_content_part(
+         %{"type" => "reasoning_text", "text" => text} = part
+       )
+       when is_binary(text) do
+    validate_exact_item_keys(part, ["type", "text"])
+  end
+
+  defp validate_reasoning_replay_content_part(_part),
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
   defp validate_compaction_replay_item(
