@@ -16,6 +16,8 @@ defmodule CodexPooler.Gateway.Facade.Error do
 
   @local_message_codes ~w(
     invalid_request
+    invalid_model
+    unsupported_parameter
     access_denied
     settings_unavailable
     image_generation_disabled
@@ -67,7 +69,7 @@ defmodule CodexPooler.Gateway.Facade.Error do
         "message" => public_message(status, error),
         "type" => "invalid_request_error",
         "code" => public_code(status, error),
-        "param" => nil
+        "param" => public_param(error)
       }
     }
   end
@@ -118,6 +120,16 @@ defmodule CodexPooler.Gateway.Facade.Error do
       code in @local_message_codes -> code
       code in @safe_protocol_codes -> code
       true -> generic_code(status)
+    end
+  end
+
+  defp public_param(error) do
+    code = normalized_code(error)
+    param = Map.get(error, :param) || Map.get(error, "param")
+
+    if code in @local_message_codes and is_binary(param) and
+         Regex.match?(~r/^[A-Za-z0-9_.\[\]-]{1,128}$/, param) do
+      param
     end
   end
 

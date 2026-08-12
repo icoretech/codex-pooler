@@ -6,13 +6,14 @@ defmodule CodexPooler.Gateway.Metadata do
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Denials
+  alias CodexPooler.Gateway.Facade.Catalog, as: FacadeCatalog
+  alias CodexPooler.Gateway.Facade.Dispatch, as: FacadeDispatch
   alias CodexPooler.Gateway.Metadata.Accounting, as: MetadataAccounting
   alias CodexPooler.Gateway.Metadata.CodexCatalog
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Routing.ModelMetadata
-  alias CodexPooler.Gateway.Routing.PartitionRoutability
   alias CodexPooler.Pools
   alias CodexPooler.Pools.ModelServingMode
   alias CodexPooler.Pools.ModelServingOverride
@@ -48,44 +49,24 @@ defmodule CodexPooler.Gateway.Metadata do
       when is_binary(endpoint) do
     with {:ok, policy} <- normalize_policy_or_log(auth, endpoint, request_options) do
       hydration = CandidateEligibility.hydrate_model_visibility(auth.pool)
-
-      visible_models =
-        CandidateEligibility.policy_visible_models(hydration.visible_models, policy)
-
-      pricing_buckets = Catalog.pricing_buckets_by_identifier(visible_models)
+      resolution = FacadeCatalog.resolve(auth, policy, hydration)
+      visible_models = resolution.models
       context_window_overrides = OperationalSettings.current().model_context_window_overrides
 
       effective_model_serving_modes =
         effective_model_serving_modes(auth, hydration, visible_models)
 
-      # The advertised catalog and the routing cap must select the same
-      # partition: a client told about partition A and then served by partition
-      # B would see metadata that does not describe its own turn, and the ETag
-      # computed during dispatch would never match this body. Both sides
-      # therefore apply the same quota-aware anchor rule, which is why this
-      # body and its ETag can legitimately change when the anchor partition
-      # flips. The contract is recorded under the `:backend_models_etag` entry
-      # in `CodexPooler.CompatibilityMatrix`.
       catalog =
-        CodexCatalog.build_canonical(
-          visible_models,
-          hydration.candidates_by_model_id,
-          policy,
-          pricing_buckets,
+        FacadeCatalog.codex_catalog(
+          resolution,
           context_window_overrides,
-          effective_model_serving_modes,
-          routable_assignment_ids_by_model_id: fn ->
-            PartitionRoutability.routable_assignment_ids_by_model_id(
-              visible_models,
-              hydration.candidates_by_model_id
-            )
-          end
+          effective_model_serving_modes
         )
 
       {:ok,
        Map.merge(catalog, %{
          visible_models: visible_models,
-         source_identity: CandidateEligibility.model_source_identity(hydration, visible_models)
+         source_identity: resolution.source_identity
        })}
     end
   end
@@ -135,18 +116,42 @@ defmodule CodexPooler.Gateway.Metadata do
   def serve_openai_models(auth, %RequestOptions{} = request_options) do
     request_options = request_options(request_options, "/v1/models", %{})
 
-    with {:ok, visibility} <- policy_visible_models(auth, "/v1/models", request_options),
+    with {:ok, visibility} <- facade_catalog(auth, "/v1/models", request_options),
          :ok <- record_metadata_request(auth, "/v1/models", request_options, visibility) do
-      pricing_buckets = Catalog.pricing_buckets_by_identifier(visibility.visible_models)
-
-      models = Enum.map(visibility.visible_models, &openai_model_payload(&1, pricing_buckets))
-
       {:ok,
        %{
          status: 200,
          headers: json_headers(),
-         body: %{"object" => "list", "data" => models}
+         body:
+           FacadeCatalog.openai_body(
+             visibility,
+             OperationalSettings.current().model_context_window_overrides
+           )
        }}
+    end
+  end
+
+  @spec serve_openai_model(auth(), opts()) :: {:ok, gateway_result()} | {:error, gateway_error()}
+  def serve_openai_model(auth, %RequestOptions{} = request_options) do
+    endpoint = "/v1/models"
+    request_options = request_options(request_options, endpoint, %{})
+
+    with {:ok, visibility} <- facade_catalog(auth, endpoint, request_options) do
+      model =
+        FacadeCatalog.openai_detail(
+          visibility,
+          OperationalSettings.current().model_context_window_overrides
+        )
+
+      status = if is_map(model), do: 200, else: 503
+
+      with :ok <- record_metadata_request(auth, endpoint, request_options, visibility, status) do
+        if is_map(model) do
+          {:ok, %{status: 200, headers: json_headers(), body: model}}
+        else
+          {:error, FacadeDispatch.unavailable_error()}
+        end
+      end
     end
   end
 
@@ -154,7 +159,8 @@ defmodule CodexPooler.Gateway.Metadata do
          auth,
          endpoint,
          %RequestOptions{} = request_options,
-         %{source_identity: source_identity}
+         %{source_identity: source_identity},
+         response_status_code \\ 200
        ) do
     request_metadata = request_options.request_metadata
 
@@ -165,7 +171,7 @@ defmodule CodexPooler.Gateway.Metadata do
       idempotency_key: request_metadata.idempotency_key,
       client_ip: request_metadata.client_ip,
       user_agent: request_metadata.user_agent,
-      response_status_code: 200,
+      response_status_code: response_status_code,
       upstream_identity: source_identity,
       request_metadata:
         %{
@@ -180,18 +186,10 @@ defmodule CodexPooler.Gateway.Metadata do
     })
   end
 
-  defp policy_visible_models(auth, endpoint, %RequestOptions{} = request_options) do
+  defp facade_catalog(auth, endpoint, %RequestOptions{} = request_options) do
     with {:ok, policy} <- normalize_policy_or_log(auth, endpoint, request_options) do
       hydration = CandidateEligibility.hydrate_model_visibility(auth.pool)
-
-      visible_models =
-        CandidateEligibility.policy_visible_models(hydration.visible_models, policy)
-
-      {:ok,
-       %{
-         visible_models: visible_models,
-         source_identity: CandidateEligibility.model_source_identity(hydration, visible_models)
-       }}
+      {:ok, FacadeCatalog.resolve(auth, policy, hydration)}
     end
   end
 
@@ -215,40 +213,6 @@ defmodule CodexPooler.Gateway.Metadata do
       payload: %{},
       opts: request_options
     }
-  end
-
-  defp openai_model_payload(%Model{} = model, pricing_buckets) do
-    metadata =
-      model
-      |> ModelMetadata.metadata()
-      |> ModelMetadata.apply_context_window_policy(model, pricing_buckets)
-
-    %{
-      "id" => model.exposed_model_id,
-      "object" => "model",
-      "created" => openai_model_created_at(model),
-      "owned_by" => "codex-pooler",
-      "permission" => [],
-      "input_modalities" => ModelMetadata.input_modalities(metadata),
-      "display_name" => model.display_name,
-      "supports_streaming" => model.supports_streaming,
-      "supports_tools" => model.supports_tools,
-      "supports_reasoning" => model.supports_reasoning
-    }
-    |> maybe_put_context_length(metadata)
-  end
-
-  defp maybe_put_context_length(payload, %{"context_window" => context_length})
-       when is_integer(context_length) and context_length > 0 do
-    Map.put(payload, "context_length", context_length)
-  end
-
-  defp maybe_put_context_length(payload, _metadata), do: payload
-
-  defp openai_model_created_at(%Model{} = model) do
-    model.first_seen_at
-    |> Kernel.||(DateTime.utc_now() |> DateTime.truncate(:second))
-    |> DateTime.to_unix(:second)
   end
 
   defp request_endpoint(%RequestOptions{transport: %{upstream_endpoint: endpoint}}, _default)

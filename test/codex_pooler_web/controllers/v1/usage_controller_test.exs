@@ -16,6 +16,74 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
   alias CodexPooler.Gateway.Usage
   alias CodexPooler.Repo
 
+  @tag :facade_task6
+  test "usage projection preserves totals and collapses identity dimensions to gemma3" do
+    source = %{
+      request_count: 7,
+      total_tokens: 123,
+      cached_input_tokens: 45,
+      total_cost_usd: 1.25,
+      total_cost_status: "priced",
+      provider: "provider-hidden-usage",
+      account_id: "account-hidden-usage",
+      assignment_id: "assignment-hidden-usage",
+      model_buckets: [
+        %{model: "gpt-5.6-sol", total_tokens: 100},
+        %{model: "helper-hidden-model", total_tokens: 23}
+      ],
+      limits: [
+        %{
+          limit_type: "total_tokens",
+          limit_window: "daily",
+          max_value: 1_000,
+          current_value: 123,
+          remaining_value: 877,
+          model_filter: "gpt-5.6-sol",
+          reset_at: "2026-08-13T00:00:00Z",
+          source: "api_key_limit",
+          upstream_identity_id: "identity-hidden-usage"
+        }
+      ],
+      upstream_limits: [
+        %{
+          limit_type: "credits",
+          limit_window: "5h",
+          max_value: 100,
+          current_value: 25,
+          remaining_value: 75,
+          model_filter: "helper-hidden-model",
+          reset_at: "2026-08-13T01:00:00Z",
+          source: "upstream_usage",
+          account_label: "account-label-hidden-usage"
+        }
+      ]
+    }
+
+    projected = Usage.project_v1_usage(source)
+    assert projected.request_count == 7
+    assert projected.total_tokens == 123
+    assert projected.cached_input_tokens == 45
+    assert projected.model_buckets == [%{model: "gemma3", total_tokens: 123}]
+    assert get_in(projected, [:limits, Access.at(0), :model_filter]) == "gemma3"
+    assert get_in(projected, [:upstream_limits, Access.at(0), :model_filter]) == "gemma3"
+    assert get_in(projected, [:upstream_limits, Access.at(0), :source]) == "pool_capacity"
+
+    serialized = Jason.encode!(projected)
+
+    for hidden <- [
+          "gpt-5.6-sol",
+          "helper-hidden-model",
+          "provider-hidden-usage",
+          "account-hidden-usage",
+          "assignment-hidden-usage",
+          "identity-hidden-usage",
+          "account-label-hidden-usage",
+          "upstream_usage"
+        ] do
+      refute serialized =~ hidden
+    end
+  end
+
   test "GET /v1/usage returns zeroed scoped usage with sanitized metadata logging", %{conn: conn} do
     setup = active_api_key_fixture()
 
@@ -202,7 +270,7 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
                "current_value" => 77,
                "remaining_value" => 923,
                "model_filter" => nil,
-               "source" => "api_key_compatibility"
+               "source" => "pool_limit"
              },
              %{
                "limit_type" => "total_tokens",
@@ -211,7 +279,7 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
                "current_value" => 77,
                "remaining_value" => 923,
                "model_filter" => nil,
-               "source" => "api_key_limit"
+               "source" => "pool_limit"
              },
              %{
                "limit_type" => "request_count",
@@ -220,7 +288,7 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
                "current_value" => 2,
                "remaining_value" => 58,
                "model_filter" => nil,
-               "source" => "api_key_limit"
+               "source" => "pool_limit"
              }
            ]
 
@@ -243,7 +311,7 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
                "current_value" => 12,
                "remaining_value" => 108,
                "model_filter" => nil,
-               "source" => "upstream_usage"
+               "source" => "pool_capacity"
              },
              %{
                "limit_type" => "credits",
@@ -252,7 +320,7 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
                "current_value" => 150,
                "remaining_value" => 1050,
                "model_filter" => nil,
-               "source" => "upstream_usage"
+               "source" => "pool_capacity"
              }
            ]
 
@@ -303,7 +371,7 @@ defmodule CodexPoolerWeb.V1.UsageControllerTest do
     assert monthly_limit["current_value"] == nil
     assert monthly_limit["remaining_value"] == nil
     assert monthly_limit["model_filter"] == nil
-    assert monthly_limit["source"] == "upstream_usage"
+    assert monthly_limit["source"] == "pool_capacity"
 
     response_text = conn.resp_body
     refute response_text =~ "1134"

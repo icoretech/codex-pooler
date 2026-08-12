@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Usage do
   alias CodexPooler.Accounting
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Denials
+  alias CodexPooler.Gateway.Facade
   alias CodexPooler.Gateway.Metadata.Accounting, as: MetadataAccounting
   alias CodexPooler.Gateway.OpenAICompatibility.Error
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -31,7 +32,7 @@ defmodule CodexPooler.Gateway.Usage do
         :ok ->
           auth.pool
           |> Accounting.build_codex_usage_for_api_key(auth.api_key)
-          |> usage_result()
+          |> usage_result(&project_codex_usage/1)
 
         {:error, reason} ->
           {:error, usage_error(reason)}
@@ -49,7 +50,7 @@ defmodule CodexPooler.Gateway.Usage do
         :ok ->
           auth.pool
           |> Accounting.build_v1_usage_for_api_key(auth.api_key)
-          |> usage_result()
+          |> usage_result(&project_v1_usage/1)
 
         {:error, reason} ->
           {:error, usage_error(reason)}
@@ -92,7 +93,7 @@ defmodule CodexPooler.Gateway.Usage do
     with :ok <- record_chatgpt_usage_request(identity, endpoint, request_options) do
       identity
       |> Accounting.build_codex_usage_for_upstream_identity()
-      |> usage_result()
+      |> usage_result(&project_codex_usage/1)
     end
   end
 
@@ -225,8 +226,149 @@ defmodule CodexPooler.Gateway.Usage do
     {:error, Error.unsupported_parameter(field)}
   end
 
-  defp usage_result({:ok, usage}), do: {:ok, %{status: 200, headers: json_headers(), body: usage}}
-  defp usage_result({:error, reason}), do: {:error, usage_error(reason)}
+  @spec project_v1_usage(map()) :: map()
+  def project_v1_usage(usage) when is_map(usage) do
+    %{
+      request_count: field(usage, :request_count, 0),
+      total_tokens: field(usage, :total_tokens, 0),
+      cached_input_tokens: field(usage, :cached_input_tokens, 0),
+      total_cost_usd: field(usage, :total_cost_usd),
+      total_cost_status: field(usage, :total_cost_status, "unpriced"),
+      limits: project_limits(field(usage, :limits, []), :local),
+      upstream_limits: project_limits(field(usage, :upstream_limits, []), :capacity)
+    }
+    |> maybe_put_model_buckets(usage)
+  end
+
+  @spec project_codex_usage(map()) :: map()
+  def project_codex_usage(usage) when is_map(usage) do
+    %{
+      plan_type: "api_key",
+      rate_limit: project_rate_limit(field(usage, :rate_limit, %{}))
+    }
+    |> maybe_put_credits(field(usage, :credits))
+  end
+
+  defp project_limits(limits, kind) when is_list(limits) do
+    Enum.flat_map(limits, fn
+      %{} = limit -> [project_limit(limit, kind)]
+      _limit -> []
+    end)
+  end
+
+  defp project_limits(_limits, _kind), do: []
+
+  defp project_limit(limit, kind) do
+    %{
+      limit_type: field(limit, :limit_type),
+      limit_window: field(limit, :limit_window),
+      max_value: field(limit, :max_value),
+      current_value: field(limit, :current_value),
+      remaining_value: field(limit, :remaining_value),
+      model_filter: public_model_filter(field(limit, :model_filter)),
+      reset_at: field(limit, :reset_at),
+      source: public_limit_source(kind)
+    }
+  end
+
+  defp public_model_filter(nil), do: nil
+  defp public_model_filter(_model), do: Facade.public_model()
+
+  defp public_limit_source(:local), do: "pool_limit"
+  defp public_limit_source(:capacity), do: "pool_capacity"
+
+  defp maybe_put_model_buckets(projected, usage) do
+    case field(usage, :model_buckets) do
+      buckets when is_list(buckets) and buckets != [] ->
+        Map.put(projected, :model_buckets, [collapse_model_buckets(buckets)])
+
+      _buckets ->
+        projected
+    end
+  end
+
+  defp collapse_model_buckets(buckets) do
+    numeric_keys = [
+      :request_count,
+      :input_tokens,
+      :cached_input_tokens,
+      :output_tokens,
+      :reasoning_tokens,
+      :total_tokens,
+      :total_cost_usd
+    ]
+
+    totals =
+      Map.new(numeric_keys, fn key ->
+        total =
+          Enum.reduce(buckets, 0, fn
+            %{} = bucket, acc -> add_number(acc, field(bucket, key, 0))
+            _bucket, acc -> acc
+          end)
+
+        {key, total}
+      end)
+
+    totals
+    |> Enum.reject(fn {_key, value} -> value == 0 end)
+    |> Map.new()
+    |> Map.put(:model, Facade.public_model())
+  end
+
+  defp add_number(left, right) when is_number(left) and is_number(right), do: left + right
+  defp add_number(left, _right), do: left
+
+  defp project_rate_limit(rate_limit) when is_map(rate_limit) do
+    %{
+      allowed: field(rate_limit, :allowed, true) == true,
+      limit_reached: field(rate_limit, :limit_reached, false) == true,
+      primary_window: project_rate_window(field(rate_limit, :primary_window)),
+      secondary_window: project_rate_window(field(rate_limit, :secondary_window))
+    }
+  end
+
+  defp project_rate_limit(_rate_limit) do
+    %{allowed: true, limit_reached: false, primary_window: nil, secondary_window: nil}
+  end
+
+  defp project_rate_window(%{} = window) do
+    %{
+      used_percent: field(window, :used_percent),
+      limit_window_seconds: field(window, :limit_window_seconds),
+      reset_after_seconds: field(window, :reset_after_seconds),
+      reset_at: field(window, :reset_at)
+    }
+  end
+
+  defp project_rate_window(_window), do: nil
+
+  defp maybe_put_credits(projected, %{} = credits) do
+    Map.put(projected, :credits, %{
+      has_credits: field(credits, :has_credits, false) == true,
+      unlimited: field(credits, :unlimited, false) == true,
+      balance: safe_balance(field(credits, :balance))
+    })
+  end
+
+  defp maybe_put_credits(projected, _credits), do: projected
+
+  defp safe_balance(balance) when is_binary(balance) do
+    case Integer.parse(balance) do
+      {value, ""} when value >= 0 -> Integer.to_string(value)
+      _invalid -> "0"
+    end
+  end
+
+  defp safe_balance(balance) when is_integer(balance) and balance >= 0,
+    do: Integer.to_string(balance)
+
+  defp safe_balance(_balance), do: "0"
+
+  defp usage_result({:ok, usage}, projector) when is_function(projector, 1) do
+    {:ok, %{status: 200, headers: json_headers(), body: projector.(usage)}}
+  end
+
+  defp usage_result({:error, reason}, _projector), do: {:error, usage_error(reason)}
 
   defp usage_error(%{status: status, code: code, message: message} = reason) do
     Error.reason(status, code, message, Map.get(reason, :param))
@@ -263,6 +405,10 @@ defmodule CodexPooler.Gateway.Usage do
   end
 
   defp present?(value), do: is_binary(value) and String.trim(value) != ""
+
+  defp field(map, key, default \\ nil) when is_map(map) and is_atom(key) do
+    Map.get(map, key, Map.get(map, Atom.to_string(key), default))
+  end
 
   defp request_options(%RequestOptions{} = request_options, endpoint, payload),
     do: RequestOptions.for_payload(request_options, endpoint, payload)

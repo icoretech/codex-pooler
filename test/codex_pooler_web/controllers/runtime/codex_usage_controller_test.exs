@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
 
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Accounting.UsageResponses
+  alias CodexPooler.Gateway.Usage
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
@@ -21,6 +22,51 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
     "/wham/rate-limit-reset-credits/consume",
     "/backend-api/wham/rate-limit-reset-credits/consume"
   ]
+
+  @tag :facade_task6
+  test "Codex usage projection keeps client controls without exposing account identity" do
+    projected =
+      Usage.project_codex_usage(%{
+        plan_type: "provider-enterprise-hidden",
+        upstream_identity_id: "identity-hidden-codex-usage",
+        assignment_id: "assignment-hidden-codex-usage",
+        rate_limit: %{
+          allowed: true,
+          limit_reached: false,
+          primary_window: %{
+            used_percent: 12,
+            limit_window_seconds: 18_000,
+            reset_after_seconds: 120,
+            reset_at: 1_786_000_000,
+            provider: "provider-hidden-codex-usage"
+          },
+          secondary_window: nil
+        },
+        credits: %{has_credits: true, unlimited: false, balance: "88"},
+        additional_rate_limits: [
+          %{quota_key: "provider-tool-hidden", display_label: "Provider hidden tool"}
+        ]
+      })
+
+    assert projected.plan_type == "api_key"
+    assert projected.rate_limit.allowed == true
+    assert projected.rate_limit.primary_window.used_percent == 12
+    assert projected.credits == %{has_credits: true, unlimited: false, balance: "88"}
+    refute Map.has_key?(projected, :additional_rate_limits)
+
+    serialized = Jason.encode!(projected)
+
+    for hidden <- [
+          "provider-enterprise-hidden",
+          "identity-hidden-codex-usage",
+          "assignment-hidden-codex-usage",
+          "provider-hidden-codex-usage",
+          "provider-tool-hidden",
+          "Provider hidden tool"
+        ] do
+      refute serialized =~ hidden
+    end
+  end
 
   test "GET /api/codex/usage returns API-key Codex usage shape", %{conn: conn} do
     setup = active_api_key_fixture()
@@ -92,7 +138,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
       |> get("/backend-api/wham/usage")
 
     assert %{
-             "plan_type" => "pro",
+             "plan_type" => "api_key",
              "rate_limit" => %{
                "allowed" => true,
                "limit_reached" => false,
@@ -789,7 +835,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
     response = json_response(conn, 200)
 
     assert %{
-             "plan_type" => "unknown",
+             "plan_type" => "api_key",
              "rate_limit" =>
                %{"primary_window" => %{"limit_window_seconds" => 2_592_000} = primary_window} =
                  rate_limit

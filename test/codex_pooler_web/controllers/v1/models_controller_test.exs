@@ -7,7 +7,6 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [
       auth: 2,
-      gateway_setup: 1,
       gateway_setup: 2,
       start_upstream: 1
     ]
@@ -17,18 +16,90 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
 
+  @tag :facade_task6
+  test "GET /v1/models and model detail expose only the routable gemma3 facade", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+
+    setup =
+      gateway_setup(upstream,
+        exposed_model_id: "gpt-5.6-sol",
+        upstream_model_id: "provider-model-hidden-catalog-sentinel",
+        display_name: "Provider Hidden Catalog Sentinel",
+        model_metadata: %{
+          "upstream_model" => %{
+            "context_window" => 272_000,
+            "input_modalities" => ["text", "image"],
+            "raw_model_listing" => %{"provider" => "hidden-catalog-provider"}
+          }
+        }
+      )
+
+    list = conn |> auth(setup) |> get("/v1/models")
+
+    assert %{"object" => "list", "data" => [model]} = json_response(list, 200)
+    assert model["id"] == "gemma3"
+    assert model["display_name"] == "gemma3"
+    assert model["owned_by"] == "ollama"
+    assert model["context_length"] == 258_400
+
+    detail = conn |> recycle() |> auth(setup) |> get("/v1/models/arbitrary-client-model")
+    assert json_response(detail, 200) == model
+
+    for hidden <- [
+          "gpt-5.6-sol",
+          "provider-model-hidden-catalog-sentinel",
+          "Provider Hidden Catalog Sentinel",
+          "hidden-catalog-provider"
+        ] do
+      refute list.resp_body =~ hidden
+      refute detail.resp_body =~ hidden
+    end
+
+    assert FakeUpstream.count(upstream) == 0
+  end
+
+  @tag :facade_task6
+  test "GET /v1/models fails closed to an empty catalog when fixed target policy disagrees", %{
+    conn: conn
+  } do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    setup = gateway_setup(upstream, exposed_model_id: "gpt-5.6-sol")
+
+    setup.api_key
+    |> Ecto.Changeset.change(allowed_model_identifiers: ["some-other-model"])
+    |> Repo.update!()
+
+    list = conn |> auth(setup) |> get("/v1/models")
+    assert %{"object" => "list", "data" => []} = json_response(list, 200)
+
+    detail = conn |> recycle() |> auth(setup) |> get("/v1/models/gemma3")
+    assert %{"error" => %{"code" => "facade_model_unavailable"}} = json_response(detail, 503)
+
+    setup.api_key
+    |> Ecto.Changeset.change(allowed_model_identifiers: nil)
+    |> Repo.update!()
+
+    setup.assignment
+    |> Ecto.Changeset.change(health_status: "errored")
+    |> Repo.update!()
+
+    unhealthy = conn |> recycle() |> auth(setup) |> get("/v1/models")
+    assert %{"object" => "list", "data" => []} = json_response(unhealthy, 200)
+    assert FakeUpstream.count(upstream) == 0
+  end
+
   test "GET /v1/models returns an OpenAI-compatible list without upstream dispatch", %{conn: conn} do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
-    setup = gateway_setup(upstream)
+    setup = facade_catalog_setup(upstream)
 
     conn = conn |> auth(setup) |> get("/v1/models")
 
     assert %{"object" => "list", "data" => [model]} = json_response(conn, 200)
-    assert model["id"] == setup.model.exposed_model_id
+    assert model["id"] == "gemma3"
     assert model["object"] == "model"
-    assert model["owned_by"] == "codex-pooler"
+    assert model["owned_by"] == "ollama"
     assert model["permission"] == []
-    assert model["display_name"] == setup.model.display_name
+    assert model["display_name"] == "gemma3"
     assert model["supports_streaming"] == true
     assert model["supports_tools"] == true
     assert model["supports_reasoning"] == true
@@ -45,13 +116,13 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
     assert request.request_metadata["model_source"]["upstream_identity_id"] == setup.identity.id
   end
 
-  test "GET /v1/models keeps its schema unchanged for reasoning-restricted API keys", %{
+  test "GET /v1/models fails closed for reasoning-restricted API keys", %{
     conn: conn
   } do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
 
     setup =
-      gateway_setup(upstream,
+      facade_catalog_setup(upstream,
         model_metadata: %{
           "supported_reasoning_levels" => ~w(low medium high),
           "default_reasoning_level" => "high"
@@ -64,20 +135,17 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
 
     conn = conn |> auth(setup) |> get("/v1/models")
 
-    assert %{"object" => "list", "data" => [model]} = json_response(conn, 200)
-    assert model["id"] == setup.model.exposed_model_id
-    refute Map.has_key?(model, "supported_reasoning_levels")
-    refute Map.has_key?(model, "default_reasoning_level")
+    assert %{"object" => "list", "data" => []} = json_response(conn, 200)
   end
 
   @tag :model_serving_modes
   test "GET /v1/models is unchanged while the Pool model mode switches", %{conn: conn} do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
-    setup = gateway_setup(upstream)
+    setup = facade_catalog_setup(upstream)
 
     baseline = conn |> auth(setup) |> get("/v1/models")
 
-    assert %{"object" => "list", "data" => [%{"id" => exposed_model_id} = baseline_model]} =
+    assert %{"object" => "list", "data" => [%{"id" => "gemma3"} = baseline_model]} =
              json_response(baseline, 200)
 
     for mode <- ["full", "lite"] do
@@ -86,7 +154,7 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
 
       assert %{"object" => "list", "data" => [model]} = json_response(response, 200)
       assert model == baseline_model
-      assert model["id"] == exposed_model_id
+      assert model["id"] == "gemma3"
       refute Map.has_key?(model, "use_responses_lite")
       refute model["id"] =~ "-lite"
       refute model["id"] =~ "-full"
@@ -97,7 +165,7 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
 
   test "GET /v1/models only exposes policy-authorized visible models", %{conn: conn} do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
-    setup = gateway_setup(upstream)
+    setup = facade_catalog_setup(upstream)
 
     %{assignment: allowed_assignment} =
       active_upstream_assignment_fixture(setup.pool, %{
@@ -163,10 +231,7 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
 
     assert %{"object" => "list", "data" => data} = json_response(conn, 200)
 
-    assert Enum.map(data, & &1["id"]) == [
-             setup.model.exposed_model_id,
-             allowed_visible.exposed_model_id
-           ]
+    assert Enum.map(data, & &1["id"]) == ["gemma3"]
 
     refute Enum.any?(data, &(&1["id"] == "gpt-policy-hidden"))
     refute Enum.any?(data, &(&1["id"] == "gpt-unroutable"))
@@ -184,7 +249,7 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
 
     setup =
-      gateway_setup(upstream,
+      facade_catalog_setup(upstream,
         model_metadata: %{
           "upstream_model" => %{
             "context_window" => 272_000,
@@ -198,11 +263,11 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
     conn = conn |> auth(setup) |> get("/v1/models")
 
     assert %{"object" => "list", "data" => [model]} = json_response(conn, 200)
-    assert model["id"] == setup.model.exposed_model_id
+    assert model["id"] == "gemma3"
     assert model["object"] == "model"
-    assert model["owned_by"] == "codex-pooler"
+    assert model["owned_by"] == "ollama"
     assert model["permission"] == []
-    assert model["display_name"] == setup.model.display_name
+    assert model["display_name"] == "gemma3"
     assert model["supports_streaming"] == true
     assert model["supports_tools"] == true
     assert model["supports_reasoning"] == true
@@ -232,7 +297,7 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
 
     setup =
-      gateway_setup(upstream,
+      facade_catalog_setup(upstream,
         model_metadata: %{
           "upstream_model" => %{
             "context_window" => 272_000,
@@ -279,5 +344,16 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
         |> Ecto.Changeset.change(mode: mode, updated_at: timestamp)
         |> Repo.update!()
     end
+  end
+
+  defp facade_catalog_setup(upstream, opts \\ []) do
+    gateway_setup(
+      upstream,
+      Keyword.merge(opts,
+        exposed_model_id: "gpt-5.6-sol",
+        upstream_model_id: "provider-gpt-5.6-sol",
+        display_name: "Hidden fixed target"
+      )
+    )
   end
 end

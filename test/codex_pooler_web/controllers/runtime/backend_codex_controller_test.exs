@@ -195,6 +195,56 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     )
   end
 
+  @tag :facade_task6
+  test "both backend catalog aliases expose one provider-neutral gemma3 model", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+
+    setup =
+      gateway_setup(upstream,
+        exposed_model_id: "gpt-5.6-sol",
+        upstream_model_id: "backend-provider-model-hidden-sentinel",
+        display_name: "Backend Provider Hidden Sentinel",
+        model_metadata: %{
+          "upstream_model" => %{
+            "context_window" => 272_000,
+            "input_modalities" => ["text", "image"],
+            "raw_model_listing" => %{"provider" => "backend-hidden-provider"}
+          }
+        }
+      )
+
+    responses =
+      for endpoint <- ["/backend-api/codex/models", "/backend-api/codex/v1/models"] do
+        response = conn |> recycle() |> auth(setup) |> get(endpoint)
+        assert %{"models" => [model]} = body = json_response(response, 200)
+        assert model["slug"] == "gemma3"
+        assert model["display_name"] == "gemma3"
+        assert model["description"] == "gemma3"
+        assert model["default_reasoning_level"] == "max"
+
+        assert model["supported_reasoning_levels"] == [
+                 %{"description" => "Maximum", "effort" => "max"}
+               ]
+
+        refute Map.has_key?(model, "upstream_model_id")
+        assert get_resp_header(response, "etag") == [CodexCatalog.etag(body)]
+
+        for hidden <- [
+              "gpt-5.6-sol",
+              "backend-provider-model-hidden-sentinel",
+              "Backend Provider Hidden Sentinel",
+              "backend-hidden-provider"
+            ] do
+          refute response.resp_body =~ hidden
+        end
+
+        {response.resp_body, get_resp_header(response, "etag")}
+      end
+
+    assert [{body, etag}, {body, etag}] = responses
+    assert FakeUpstream.count(upstream) == 0
+  end
+
   test "backend Responses HTTP and SSE enforce native reasoning aliases before dispatch", %{
     conn: conn
   } do

@@ -13,9 +13,18 @@ defmodule CodexPoolerWeb.V1.ModelsController do
     end)
   end
 
-  defp request_options(conn) do
+  def show(conn, _params) do
+    PublicGatewayDispatch.authenticated(
+      conn,
+      RouteClass.proxy_http(),
+      "/v1/models",
+      fn auth -> Metadata.serve_openai_model(auth, request_options(conn, "/v1/models")) end
+    )
+  end
+
+  defp request_options(conn, endpoint \\ "/v1/models") do
     conn
     |> GatewayHelpers.request_opts()
-    |> RequestOptions.from_conn_metadata("/v1/models", %{})
+    |> RequestOptions.from_conn_metadata(endpoint, %{})
   end
 end

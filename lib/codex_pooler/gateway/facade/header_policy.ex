@@ -36,6 +36,7 @@ defmodule CodexPooler.Gateway.Facade.HeaderPolicy do
       "cache-control" -> exact_value(name, value, ["no-cache"])
       "connection" -> exact_value(name, value, @connection_values)
       @local_recovery_header -> safe_recovery_value(value)
+      "etag" when protocol == :codex -> safe_models_etag(value)
       name when protocol == :codex and name in @codex_headers -> safe_opaque(name, value)
       _name -> nil
     end
@@ -66,6 +67,14 @@ defmodule CodexPooler.Gateway.Facade.HeaderPolicy do
 
   defp safe_recovery_value(value) do
     exact_value(@local_recovery_header, value, ["restart_with_full_context"])
+  end
+
+  defp safe_models_etag(value) do
+    value = String.trim(value)
+
+    if Regex.match?(~r/^W\/"cp-models-v1-[0-9a-f]{64}"$/, value),
+      do: {"etag", value},
+      else: nil
   end
 
   defp deduplicate(headers) do
