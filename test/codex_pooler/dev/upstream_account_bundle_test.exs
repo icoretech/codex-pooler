@@ -412,6 +412,20 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
     %{user: other_owner} =
       operator_fixture(owner, %{"email" => unique_user_email(), "role" => "instance_owner"})
 
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    owner =
+      owner
+      |> Ecto.Changeset.change(created_at: now)
+      |> Repo.update!()
+
+    other_owner =
+      other_owner
+      |> Ecto.Changeset.change(created_at: DateTime.add(now, -1, :microsecond))
+      |> Repo.update!()
+
+    assert DateTime.compare(other_owner.created_at, owner.created_at) == :lt
+
     %{user: operator} = operator_fixture(owner, %{"email" => unique_user_email()})
 
     assert {:ok, %Scope{user: selected}} = UpstreamAccountBundle.resolve_owner_scope(nil)
