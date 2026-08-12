@@ -366,7 +366,20 @@ defmodule CodexPooler.Upstreams.Quota.Windows.Routing do
         ]
 
       windows ->
-        Enum.map(windows, &window_exclusion(&1, timestamp))
+        Enum.map(windows, &blocked_window_exclusion(&1, timestamp))
+    end
+  end
+
+  # Preserve the specific account-weekly exhaustion classification even when
+  # a usable primary window is present. Saved-reset redemption and reset-probe
+  # routing intentionally key off this precise reason; the generic unusable
+  # shape would otherwise make a normal primary+weekly snapshot impossible to
+  # recover automatically.
+  defp blocked_window_exclusion(%Quota.AccountQuotaWindow{} = window, timestamp) do
+    if account_weekly_window?(window) and exhausted?(window) do
+      quota_exhausted_exclusion(window, timestamp)
+    else
+      window_exclusion(window, timestamp)
     end
   end
 

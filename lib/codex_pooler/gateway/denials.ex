@@ -123,7 +123,7 @@ defmodule CodexPooler.Gateway.Denials do
       idempotency_key: request_options.request_metadata.idempotency_key,
       client_ip: request_options.request_metadata.client_ip,
       user_agent: request_options.request_metadata.user_agent,
-      requested_model: requested_model(model, payload, endpoint),
+      requested_model: requested_model(model, payload, endpoint, request_options),
       response_status_code: status,
       last_error_code: reason_code,
       request_metadata:
@@ -196,9 +196,19 @@ defmodule CodexPooler.Gateway.Denials do
 
   defp operator_action(_metadata), do: @pinned_continuation_reauth_operator_action
 
-  defp requested_model(%Model{} = model, _payload, _endpoint), do: model.exposed_model_id
+  defp requested_model(
+         _model,
+         _payload,
+         _endpoint,
+         %RequestOptions{routing: %{requested_model: requested_model}}
+       )
+       when is_binary(requested_model) and requested_model != "",
+       do: String.trim(requested_model)
 
-  defp requested_model(_model, payload, endpoint) when is_map(payload) do
+  defp requested_model(%Model{} = model, _payload, _endpoint, %RequestOptions{}),
+    do: model.exposed_model_id
+
+  defp requested_model(_model, payload, endpoint, %RequestOptions{}) when is_map(payload) do
     case Map.get(payload, "model") || Map.get(payload, :model) do
       value when is_binary(value) and value != "" -> String.trim(value)
       _value -> endpoint
