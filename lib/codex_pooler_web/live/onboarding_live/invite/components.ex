@@ -25,9 +25,9 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
       <section class="mx-auto grid min-h-[calc(100svh-4rem)] w-full max-w-6xl items-center px-4 py-8 sm:px-6 lg:px-8">
         <div
           id="invite-page"
-          class="grid overflow-hidden rounded-box border border-base-300 bg-base-100 shadow-sm lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]"
+          class="grid overflow-hidden rounded-box border border-base-300 bg-base-100 shadow-sm lg:grid-cols-[minmax(18rem,0.72fr)_minmax(0,1.28fr)]"
         >
-          <div class="grid content-between gap-8 border-b border-base-300 bg-base-200/60 p-6 sm:p-8 lg:border-b-0 lg:border-r">
+          <div class="grid gap-8 border-b border-base-300 bg-base-200/60 p-6 sm:p-8 lg:border-b-0 lg:border-r">
             <div class="space-y-4">
               <p class="font-mono text-xs font-semibold uppercase tracking-[0.2em] text-primary">
                 device onboarding
@@ -55,33 +55,42 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
                   </p>
                 </div>
 
-                <div class="rounded-box border border-base-300 bg-base-200/40 p-4">
+                <div class="min-w-0 rounded-box border border-base-300 bg-base-200/40 p-4">
                   <p class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
                     Target Pool
                   </p>
-                  <p id="invite-pool-name" class="mt-1 text-lg font-semibold text-base-content">
+                  <p
+                    id="invite-pool-name"
+                    class="mt-1 min-w-0 [overflow-wrap:anywhere] text-lg font-semibold text-base-content"
+                  >
                     {@contract.pool_name}
                   </p>
                 </div>
 
-                <dl class="grid gap-3 sm:grid-cols-2">
-                  <div class="rounded-box border border-base-300 bg-base-100 p-4">
+                <dl class="grid min-w-0 gap-3 sm:grid-cols-2">
+                  <div class="min-w-0 rounded-box border border-base-300 bg-base-100 p-4">
                     <dt class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
                       Invited by
                     </dt>
-                    <dd id="invite-inviter" class="mt-2 font-semibold text-base-content">
+                    <dd
+                      id="invite-inviter"
+                      class="mt-2 min-w-0 [overflow-wrap:anywhere] font-semibold text-base-content"
+                    >
                       {@contract.inviter_label}
                     </dd>
                   </div>
-                  <div class="rounded-box border border-base-300 bg-base-100 p-4">
+                  <div class="min-w-0 rounded-box border border-base-300 bg-base-100 p-4">
                     <dt class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
                       Invited email
                     </dt>
-                    <dd id="invite-invited-email" class="mt-2 font-semibold text-base-content">
+                    <dd
+                      id="invite-invited-email"
+                      class="mt-2 min-w-0 [overflow-wrap:anywhere] font-semibold text-base-content"
+                    >
                       {invited_email_label(@contract.invited_email)}
                     </dd>
                   </div>
-                  <div class="rounded-box border border-base-300 bg-base-100 p-4">
+                  <div class="min-w-0 rounded-box border border-base-300 bg-base-100 p-4">
                     <dt class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
                       Invite status
                     </dt>
@@ -89,7 +98,7 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
                       {invite_status_label(@contract.status)}
                     </dd>
                   </div>
-                  <div class="rounded-box border border-base-300 bg-base-100 p-4">
+                  <div class="min-w-0 rounded-box border border-base-300 bg-base-100 p-4">
                     <dt class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
                       Expires
                     </dt>

@@ -91,6 +91,83 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
     end
   end
 
+  test "public invite identity values keep an overflow-safe wrapping contract" do
+    long_value = String.duplicate("identity", 20)
+
+    html =
+      render_component(&Components.invite_page/1,
+        flash: %{},
+        current_scope: nil,
+        contract: %{
+          pool_name: long_value,
+          inviter_label: "#{long_value}@example.com",
+          invited_email: "#{long_value}@example.com",
+          status: "active",
+          expires_at: DateTime.add(DateTime.utc_now(), 3_600, :second)
+        },
+        device_authorization: nil,
+        device_poll_status: "",
+        completed_onboarding: nil,
+        invite_state: :ready,
+        error_message: nil,
+        now: DateTime.utc_now()
+      )
+
+    document = LazyHTML.from_fragment(html)
+
+    for selector <- ["#invite-pool-name", "#invite-inviter", "#invite-invited-email"] do
+      classes =
+        document |> LazyHTML.query(selector) |> LazyHTML.attribute("class") |> List.first()
+
+      assert "min-w-0" in String.split(classes)
+      assert "[overflow-wrap:anywhere]" in String.split(classes)
+    end
+  end
+
+  test "refreshes the idle countdown without competing with device polling" do
+    configure_codex_auth_client!(%{
+      poll_result:
+        {:error,
+         %{
+           code: :codex_device_authorization_pending,
+           message: "pending",
+           retry_after_seconds: 7
+         }}
+    })
+
+    {token, _pool} =
+      invite_fixture(%{expires_at: DateTime.utc_now() |> DateTime.add(3_600, :second)})
+
+    {:ok, view, _html} = live(build_conn(), ~p"/onboarding/invites/#{token}")
+
+    countdown_ref = current_device_poll_ref(view)
+    assert is_reference(countdown_ref)
+
+    now_before = current_invite_assign(view, :now)
+    send(view.pid, {:invite_workflow_tick, countdown_ref})
+    _ = :sys.get_state(view.pid)
+    now_after = current_invite_assign(view, :now)
+
+    assert DateTime.compare(now_after, now_before) == :gt
+    next_countdown_ref = current_device_poll_ref(view)
+    assert is_reference(next_countdown_ref)
+    refute next_countdown_ref == countdown_ref
+    assert poll_count() == 0
+
+    view |> element("#device-onboarding-button") |> render_click()
+
+    poll_ref = current_device_poll_ref(view)
+    assert is_reference(poll_ref)
+    refute poll_ref == next_countdown_ref
+
+    send(view.pid, {:invite_workflow_tick, next_countdown_ref})
+    _ = :sys.get_state(view.pid)
+    assert poll_count() == 0
+
+    send_current_device_poll(view)
+    assert poll_count() == 1
+  end
+
   test "bootstrap and login use the public auth chrome" do
     {:ok, bootstrap_view, _html} = live(build_conn(), ~p"/bootstrap")
 
@@ -738,6 +815,14 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
     |> :sys.get_state()
     |> Map.fetch!(:socket)
     |> then(& &1.assigns.invite_timer_ref)
+  end
+
+  defp current_invite_assign(view, key) do
+    view.pid
+    |> :sys.get_state()
+    |> Map.fetch!(:socket)
+    |> Map.fetch!(:assigns)
+    |> Map.fetch!(key)
   end
 
   defp poll_count do

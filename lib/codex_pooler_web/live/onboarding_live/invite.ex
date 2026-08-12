@@ -17,27 +17,31 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
       completed_onboarding={@completed_onboarding}
       invite_state={@invite_state}
       error_message={@error_message}
+      now={@now}
     />
     """
   end
 
   @impl true
   def mount(%{"invite_token" => token}, _session, socket) do
-    {:ok,
-     socket
-     |> assign(
-       page_title: "Codex account onboarding",
-       current_origin: nil,
-       invite_token: token,
-       device_authorization: nil,
-       invite_timer: nil,
-       invite_timer_ref: nil,
-       device_poll_status: "Waiting for approval.",
-       completed_onboarding: nil,
-       invite_state: :loading,
-       error_message: nil
-     )
-     |> assign_invite(token)}
+    socket =
+      socket
+      |> assign(
+        page_title: "Codex account onboarding",
+        current_origin: nil,
+        invite_token: token,
+        device_authorization: nil,
+        invite_timer: nil,
+        invite_timer_ref: nil,
+        device_poll_status: "Waiting for approval.",
+        completed_onboarding: nil,
+        invite_state: :loading,
+        error_message: nil,
+        now: DateTime.utc_now()
+      )
+      |> assign_invite(token)
+
+    {:ok, if(connected?(socket), do: schedule_invite_countdown(socket), else: socket)}
   end
 
   @impl true
@@ -88,10 +92,15 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
     {:noreply, socket}
   end
 
-  defp handle_invite_workflow_tick(%{assigns: %{invite_state: :device_pending}} = socket),
-    do: poll_device_authorization(socket)
+  defp handle_invite_workflow_tick(socket) do
+    socket = assign(socket, :now, DateTime.utc_now())
 
-  defp handle_invite_workflow_tick(socket), do: socket
+    case socket.assigns.invite_state do
+      :device_pending -> poll_device_authorization(socket)
+      state when state in [:ready, :device_error] -> refresh_invite_countdown(socket)
+      _state -> socket
+    end
+  end
 
   defp poll_device_authorization(socket) do
     with %{account_id: account_id} <- socket.assigns.device_authorization,
@@ -125,17 +134,7 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
     case {socket.assigns.invite_state, socket.assigns.device_authorization} do
       {:device_pending, %{poll_interval_seconds: interval_seconds}} ->
         retry_seconds = Map.get(reason, :retry_after_seconds) || interval_seconds
-        ref = make_ref()
-        socket = clear_invite_timer(socket)
-
-        timer =
-          Process.send_after(
-            self(),
-            {:invite_workflow_tick, ref},
-            max(retry_seconds, 0) * 1_000
-          )
-
-        assign(socket, invite_timer: timer, invite_timer_ref: ref)
+        schedule_invite_workflow_tick(socket, retry_seconds)
 
       _state ->
         transition_device_error(socket, "Start device authorization again.")
@@ -148,6 +147,79 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
     end
 
     assign(socket, invite_timer: nil, invite_timer_ref: nil)
+  end
+
+  defp schedule_invite_countdown(socket) do
+    with true <- connected?(socket),
+         state when state in [:ready, :device_error] <- socket.assigns.invite_state,
+         %{expires_at: expires_at} <- socket.assigns.contract do
+      case countdown_refresh_seconds(expires_at, socket.assigns.now) do
+        0 ->
+          transition_invite_expired(socket)
+
+        refresh_seconds when is_integer(refresh_seconds) ->
+          schedule_invite_workflow_tick(socket, refresh_seconds)
+
+        _unavailable ->
+          socket
+      end
+    else
+      _state -> socket
+    end
+  end
+
+  defp schedule_invite_workflow_tick(socket, delay_seconds) do
+    ref = make_ref()
+    socket = clear_invite_timer(socket)
+
+    timer =
+      Process.send_after(
+        self(),
+        {:invite_workflow_tick, ref},
+        max(delay_seconds, 0) * 1_000
+      )
+
+    assign(socket, invite_timer: timer, invite_timer_ref: ref)
+  end
+
+  defp refresh_invite_countdown(socket) do
+    case countdown_refresh_seconds(socket.assigns.contract.expires_at, socket.assigns.now) do
+      0 -> transition_invite_expired(socket)
+      _refresh_seconds -> schedule_invite_countdown(socket)
+    end
+  end
+
+  defp countdown_refresh_seconds(expires_at, now) when is_binary(expires_at) do
+    case DateTime.from_iso8601(expires_at) do
+      {:ok, expires_at, _offset} -> countdown_refresh_seconds(expires_at, now)
+      _error -> nil
+    end
+  end
+
+  defp countdown_refresh_seconds(%DateTime{} = expires_at, %DateTime{} = now) do
+    if DateTime.compare(expires_at, now) == :gt do
+      seconds = max(DateTime.diff(expires_at, now, :second), 1)
+
+      cond do
+        seconds < 60 -> seconds
+        seconds < 3_600 -> seconds_until_label_change(seconds, 60)
+        seconds < 86_400 -> seconds_until_label_change(seconds, 3_600)
+        true -> seconds_until_label_change(seconds, 86_400)
+      end
+    else
+      0
+    end
+  end
+
+  defp countdown_refresh_seconds(_expires_at, _now), do: nil
+
+  defp seconds_until_label_change(seconds, unit) when seconds == unit, do: 1
+
+  defp seconds_until_label_change(seconds, unit) do
+    case rem(seconds, unit) do
+      0 -> unit
+      remainder -> remainder
+    end
   end
 
   defp transition_device_pending(socket, authorization, status) do
@@ -168,6 +240,7 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
       device_authorization: nil,
       device_poll_status: status
     )
+    |> schedule_invite_countdown()
   end
 
   defp transition_accepted(socket, completed_onboarding) do
@@ -179,6 +252,18 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
       device_authorization: nil,
       device_poll_status: "Codex account connected.",
       completed_onboarding: completed_onboarding
+    )
+  end
+
+  defp transition_invite_expired(socket) do
+    socket
+    |> clear_invite_timer()
+    |> assign(
+      invite_state: :expired,
+      contract: nil,
+      device_authorization: nil,
+      completed_onboarding: nil,
+      error_message: nil
     )
   end
 
