@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser do
   # so the ordinary bound must stay comfortably above real provider event sizes.
   @max_incomplete_sse_block_bytes 8_388_608
   @max_incomplete_terminal_sse_block_bytes 64 * 1024 * 1024
+  @overflowed_incomplete_sse_block <<0, "codex-pooler-sse-overflow", 0>>
 
   @spec max_incomplete_sse_block_bytes() :: pos_integer()
   def max_incomplete_sse_block_bytes, do: @max_incomplete_sse_block_bytes
@@ -13,6 +14,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser do
   @spec oversized_incomplete_sse_block?(binary()) :: boolean()
   def oversized_incomplete_sse_block?(buffer) when is_binary(buffer),
     do: byte_size(buffer) > @max_incomplete_sse_block_bytes
+
+  @spec overflowed_incomplete_sse_block?(term()) :: boolean()
+  def overflowed_incomplete_sse_block?(@overflowed_incomplete_sse_block), do: true
+  def overflowed_incomplete_sse_block?(_buffer), do: false
 
   @spec max_incomplete_terminal_sse_block_bytes() :: pos_integer()
   def max_incomplete_terminal_sse_block_bytes,
@@ -33,6 +38,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser do
   # preserves that invariant and a later full scan finds exactly the blocks it
   # would have found without the shortcut.
   @spec complete_sse_blocks(binary(), binary(), keyword()) :: {[binary()], binary()}
+  def complete_sse_blocks(@overflowed_incomplete_sse_block, _data, _opts),
+    do: {[], @overflowed_incomplete_sse_block}
+
   def complete_sse_blocks(residue, data, opts)
       when is_binary(residue) and is_binary(data) do
     if appendable_without_scan?(residue, data) do
@@ -153,6 +161,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser do
   defp maybe_bound_incomplete_sse_block(buffer, false), do: buffer
 
   defp maybe_bound_incomplete_sse_block(buffer, true) do
-    if oversized_incomplete_sse_block?(buffer), do: "", else: buffer
+    if oversized_incomplete_sse_block?(buffer),
+      do: @overflowed_incomplete_sse_block,
+      else: buffer
   end
 end

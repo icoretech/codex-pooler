@@ -21,6 +21,8 @@ defmodule CodexPooler.Files do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Pools
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
+  alias CodexPooler.Upstreams.Secrets
 
   @default_file_ttl_seconds 24 * 60 * 60
 
@@ -349,7 +351,13 @@ defmodule CodexPooler.Files do
     with %FileRecord{} = file <- file,
          true <- capability_file_state?(file, kind, now),
          %APIKey{} = api_key <- usable_capability_api_key(api_key_id, pool_id, now),
-         %{status: "active"} = pool <- Pools.get_active_pool(pool_id) do
+         %{status: "active"} = pool <- Pools.get_active_pool(pool_id),
+         %PoolUpstreamAssignment{} <-
+           usable_capability_assignment(assignment_id, identity_id, pool_id),
+         %UpstreamIdentity{} = identity <- usable_capability_identity(identity_id),
+         :present <- Secrets.secret_status(identity),
+         {:ok, token} when is_binary(token) and byte_size(token) > 0 <-
+           Secrets.decrypt_active_secret(identity, "access_token") do
       {:ok,
        %{
          file: file,
@@ -387,6 +395,23 @@ defmodule CodexPooler.Files do
       _invalid ->
         nil
     end
+  end
+
+  defp usable_capability_assignment(assignment_id, identity_id, pool_id) do
+    Repo.one(
+      from assignment in PoolUpstreamAssignment,
+        where:
+          assignment.id == ^assignment_id and assignment.pool_id == ^pool_id and
+            assignment.upstream_identity_id == ^identity_id and
+            assignment.status == ^PoolUpstreamAssignment.active_status()
+    )
+  end
+
+  defp usable_capability_identity(identity_id) do
+    Repo.get_by(UpstreamIdentity,
+      id: identity_id,
+      status: UpstreamIdentity.active_status()
+    )
   end
 
   defp capability_not_found_error,

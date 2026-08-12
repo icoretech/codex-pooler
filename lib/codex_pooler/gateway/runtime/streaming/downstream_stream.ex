@@ -168,6 +168,17 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
 
   def terminal_outcome(_state), do: nil
 
+  @spec finalize_eof(state()) :: state()
+  def finalize_eof(%{codex_responses_failure: %{} = _failure} = state), do: state
+
+  def finalize_eof(%{codex_responses_sse_buffer: buffer} = state)
+      when is_binary(buffer) and buffer != "" do
+    {_data, state} = fail_codex_stream(state, "upstream_stream_invalid")
+    state
+  end
+
+  def finalize_eof(state), do: state
+
   @spec synthetic_terminal_failure(state(), term()) :: {binary() | nil, state()}
   def synthetic_terminal_failure(%{public_anthropic: stream_state} = state, _reason) do
     {data, stream_state} = AnthropicStream.synthetic_terminal_failure(stream_state)
@@ -433,7 +444,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
           {blocks, buffer} =
             StreamProtocol.complete_sse_blocks(previous_buffer, data, bounded?: true)
 
-          if oversized_incomplete_sse_prefix?(blocks, buffer, buffered_size) do
+          if StreamProtocol.overflowed_incomplete_sse_block?(buffer) do
             BufferTelemetry.record_oversized_incomplete(
               "codex_responses_sse",
               buffered_size,
@@ -574,11 +585,6 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
       String.starts_with?(data, prefix) or String.starts_with?(prefix, data)
     end)
   end
-
-  defp oversized_incomplete_sse_prefix?([], "", buffered_size),
-    do: buffered_size > StreamProtocol.max_incomplete_sse_block_bytes()
-
-  defp oversized_incomplete_sse_prefix?(_blocks, _buffer, _buffered_size), do: false
 
   defp public_openai_chat_stream?(%RequestOptions{
          openai_compatibility: %{public_openai_chat_stream: true}

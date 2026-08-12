@@ -486,6 +486,162 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert request.request_metadata["codex_session_id"] == anchored_session.id
   end
 
+  test "owner-forwarded websocket rejects raw and tampered frame turn state without mutation" do
+    previous_owner_forwarding =
+      Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled, false)
+
+    Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
+
+    on_exit(fn ->
+      Application.put_env(
+        :codex_pooler,
+        :websocket_owner_forwarding_enabled,
+        previous_owner_forwarding
+      )
+    end)
+
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "must_not_dispatch_invalid_owner_turn_state",
+          "object" => "response"
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert {:ok, anchored_session} =
+             Gateway.start_codex_session(auth, %{
+               accepted_turn_state: "owner-invalid-state-anchor",
+               owner_instance_id: Atom.to_string(node())
+             })
+
+    assert {:ok, opaque} =
+             TurnState.mint("private-owner-state", auth, setup.assignment.id,
+               session_id: anchored_session.id
+             )
+
+    port = start_public_endpoint!()
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, "")
+
+    try do
+      session_ids_before =
+        Repo.all(
+          from(session in CodexSession,
+            where: session.pool_id == ^setup.pool.id,
+            select: session.id
+          )
+        )
+
+      Enum.reduce(
+        [raw: "unknown-raw-owner-state", tampered: opaque <> "x"],
+        {conn, websocket},
+        fn {label, turn_state}, {conn, websocket} ->
+          payload =
+            Jason.encode!(%{
+              "type" => "response.create",
+              "model" => setup.model.exposed_model_id,
+              "input" => "invalid owner frame #{label}",
+              "stream" => true,
+              "generate" => true,
+              "client_metadata" => %{"x-codex-turn-state" => turn_state}
+            })
+
+          {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+          {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+          assert %{
+                   "type" => "error",
+                   "status" => 400,
+                   "error" => %{"code" => "invalid_turn_state"}
+                 } = Jason.decode!(frame)
+
+          {conn, websocket}
+        end
+      )
+
+      assert FakeUpstream.count(upstream) == 0
+      assert Repo.aggregate(Request, :count) == 0
+      assert Repo.aggregate(Attempt, :count) == 0
+
+      assert Repo.all(
+               from(session in CodexSession,
+                 where: session.pool_id == ^setup.pool.id,
+                 select: session.id
+               )
+             ) == session_ids_before
+
+      refute Repo.exists?(
+               from(alias_record in BridgeSessionAlias,
+                 where:
+                   alias_record.alias_kind == "turn_state" and
+                     alias_record.alias_hash in ^[
+                       :crypto.hash(:sha256, "unknown-raw-owner-state"),
+                       :crypto.hash(:sha256, opaque <> "x")
+                     ]
+               )
+             )
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "server websocket session marker remains internal and is not sent upstream or stored raw" do
+    marker_sentinel = "marker-not-known-before-upgrade"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_internal_ws_marker",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref, response_headers} =
+      public_websocket_connect_with_headers!(port, setup, "")
+
+    assert {"x-codex-turn-state", marker} =
+             List.keyfind(response_headers, "x-codex-turn-state", 0)
+
+    assert {:ok, marker} = Ecto.UUID.cast(marker)
+    refute marker == marker_sentinel
+
+    try do
+      payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => "no client turn state",
+          "stream" => true,
+          "generate" => true
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {_conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+      assert %{"id" => "resp_internal_ws_marker"} = Jason.decode!(frame)
+    after
+      Mint.HTTP.close(conn)
+    end
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    refute captured.body =~ marker
+    refute inspect(captured.headers) =~ marker
+
+    persistence =
+      inspect({
+        Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id)),
+        Repo.all(from(session in CodexSession, where: session.pool_id == ^setup.pool.id)),
+        Repo.all(from(turn in CodexTurn))
+      })
+
+    refute persistence =~ marker
+  end
+
   test "one authenticated catalog ETag is identical across every backend alias surface" do
     upstream =
       start_upstream(
@@ -3136,7 +3292,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   end
 
   @tag :client_metadata
-  test "websocket request-scoped x-codex-turn-state from client_metadata participates in continuity without upgrade state" do
+  test "websocket rejects a raw request-scoped turn state before dispatch or persistence" do
     upstream =
       start_upstream(
         FakeUpstream.json_response(%{
@@ -3151,7 +3307,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     {:ok, session} = Gateway.start_codex_session(auth, %{})
     request_turn_state = "ws-request-scoped-turn-state-#{System.unique_integer([:positive])}"
 
-    assert :ok =
+    assert {:error, %{code: "invalid_turn_state"}} =
              execute_websocket_response(
                auth,
                Jason.encode!(%{
@@ -3163,28 +3319,26 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                  "client_metadata" => %{"x-codex-turn-state" => request_turn_state}
                }),
                %{request_id: "ws-request-scoped-turn-state", codex_session: session},
-               fn frame -> send(self(), {:websocket_frame, frame}) end
+               fn _frame -> flunk("raw client turn state must fail before output") end
              )
 
-    assert_received {:websocket_frame, frame}
-    assert %{"id" => "resp_ws_request_scoped_turn_state"} = Jason.decode!(frame)
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
 
-    assert [turn_alias] =
-             Repo.all(
-               from(alias_record in BridgeSessionAlias,
-                 where:
-                   alias_record.codex_session_id == ^session.id and
-                     alias_record.alias_kind == "turn_state" and
-                     alias_record.status == "active"
-               )
+    refute Repo.exists?(
+             from(alias_record in BridgeSessionAlias,
+               where:
+                 alias_record.codex_session_id == ^session.id and
+                   alias_record.alias_kind == "turn_state"
              )
+           )
 
-    assert turn_alias.alias_hash == :crypto.hash(:sha256, request_turn_state)
     assert_websocket_turn_state_not_persisted!(setup, request_turn_state)
   end
 
   @tag :client_metadata
-  test "websocket ignores malformed request-scoped x-codex-turn-state client metadata" do
+  test "websocket rejects malformed request-scoped x-codex-turn-state client metadata" do
     upstream =
       start_upstream(
         FakeUpstream.json_response(%{
@@ -3205,7 +3359,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     ]
 
     for {label, client_metadata} <- metadata_cases do
-      assert :ok =
+      assert {:error, %{code: "invalid_turn_state"}} =
                execute_websocket_response(
                  auth,
                  Jason.encode!(%{
@@ -3217,12 +3371,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                    "client_metadata" => client_metadata
                  }),
                  %{request_id: "ws-malformed-turn-state-#{label}", codex_session: session},
-                 fn frame -> send(self(), {:websocket_frame, label, frame}) end
+                 fn _frame -> flunk("malformed frame turn state must fail before output") end
                )
-
-      assert_received {:websocket_frame, ^label, frame}
-      assert %{"id" => "resp_ws_malformed_turn_state"} = Jason.decode!(frame)
     end
+
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
 
     refute Repo.exists?(
              from(alias_record in BridgeSessionAlias,

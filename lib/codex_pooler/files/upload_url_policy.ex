@@ -43,6 +43,11 @@ defmodule CodexPooler.Files.UploadUrlPolicy do
 
   def validate(_upload_url), do: invalid_response()
 
+  @doc false
+  @spec public_ip?(term()) :: boolean()
+  def public_ip?(ip) when is_tuple(ip), do: not unsafe_ip?(ip)
+  def public_ip?(_ip), do: false
+
   @spec safe_url_characters(binary()) :: :ok | {:error, file_error()}
   defp safe_url_characters(upload_url) do
     if raw_control_or_whitespace?(upload_url), do: invalid_response(), else: :ok

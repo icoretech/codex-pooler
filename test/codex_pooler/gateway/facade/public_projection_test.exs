@@ -1,7 +1,8 @@
 defmodule CodexPooler.Gateway.Facade.PublicProjectionTest do
   use ExUnit.Case, async: true
 
-  alias CodexPooler.Gateway.Facade.{HeaderPolicy, PublicProjection}
+  alias CodexPooler.Files.FileRecord
+  alias CodexPooler.Gateway.Facade.{FileCapability, HeaderPolicy, PublicProjection}
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesWebsocket
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
@@ -274,34 +275,35 @@ defmodule CodexPooler.Gateway.Facade.PublicProjectionTest do
            }
   end
 
-  test "projects chat completions recursively and drops wrong-typed nested envelopes" do
+  test "projects chat completions recursively and drops unknown nested envelopes" do
     arguments = Jason.encode!(%{"provider" => @hidden_provider})
 
     assert {:ok, projected} =
              PublicProjection.gateway_body_result(%{
-               "id" => %{"provider" => @hidden_provider},
+               "id" => "chatcmpl_recursive_projection",
                "object" => "chat.completion",
-               "created" => [@hidden_account],
+               "created" => 1_723_000_000,
                "model" => @hidden_model,
-               "service_tier" => %{"provider" => @hidden_provider},
+               "provider" => @hidden_provider,
                "choices" => [
-                 @hidden_assignment,
                  %{
-                   "index" => %{"account" => @hidden_account},
+                   "index" => 0,
                    "finish_reason" => "stop",
+                   "account" => @hidden_account,
                    "message" => %{
-                     "role" => %{"provider" => @hidden_provider},
+                     "role" => "assistant",
                      "content" => "literal #{@hidden_provider} remains content",
                      "audio" => %{
-                       "id" => %{"account" => @hidden_account},
-                       "transcript" => "visible transcript"
+                       "id" => "audio_safe",
+                       "transcript" => "visible transcript",
+                       "account" => @hidden_account
                      },
                      "tool_calls" => [
                        %{
                          "id" => "call_safe",
                          "type" => "function",
                          "function" => %{
-                           "name" => %{"provider" => @hidden_provider},
+                           "name" => "safe_tool",
                            "arguments" => arguments,
                            "account" => @hidden_account
                          }
@@ -311,35 +313,32 @@ defmodule CodexPooler.Gateway.Facade.PublicProjectionTest do
                  }
                ],
                "usage" => %{
-                 "prompt_tokens" => %{"provider" => @hidden_provider},
+                 "prompt_tokens" => 3,
                  "completion_tokens" => 2,
                  "prompt_tokens_details" => %{
-                   "cached_tokens" => [@hidden_account],
                    "audio_tokens" => 1,
-                   "provider" => @hidden_provider
+                   "provider_token_count" => 7
                  }
                }
              })
 
     assert projected["model"] == "gemma3"
-    refute Map.has_key?(projected, "id")
-    refute Map.has_key?(projected, "created")
+    assert projected["id"] == "chatcmpl_recursive_projection"
+    assert projected["created"] == 1_723_000_000
     refute Map.has_key?(projected, "service_tier")
     assert [choice] = projected["choices"]
-    refute Map.has_key?(choice, "index")
-    refute Map.has_key?(choice["message"], "role")
-    refute Map.has_key?(choice["message"]["audio"], "id")
+    assert choice["index"] == 0
+    assert choice["message"]["role"] == "assistant"
+    assert choice["message"]["audio"]["id"] == "audio_safe"
     assert choice["message"]["audio"]["transcript"] == "visible transcript"
 
     assert get_in(choice, ["message", "tool_calls", Access.at(0), "function", "arguments"]) ==
              arguments
 
-    refute Map.has_key?(
-             get_in(choice, ["message", "tool_calls", Access.at(0), "function"]),
-             "name"
-           )
+    assert get_in(choice, ["message", "tool_calls", Access.at(0), "function", "name"]) ==
+             "safe_tool"
 
-    refute Map.has_key?(projected["usage"], "prompt_tokens")
+    assert projected["usage"]["prompt_tokens"] == 3
     assert projected["usage"]["completion_tokens"] == 2
     assert projected["usage"]["prompt_tokens_details"] == %{"audio_tokens" => 1}
 
@@ -347,6 +346,380 @@ defmodule CodexPooler.Gateway.Facade.PublicProjectionTest do
     assert serialized =~ "literal #{@hidden_provider} remains content"
     refute serialized =~ @hidden_account
     refute serialized =~ @hidden_assignment
+  end
+
+  test "rejects malformed required and nested chat completion protocol fields" do
+    valid = %{
+      "id" => "chatcmpl_shape_guard",
+      "object" => "chat.completion",
+      "created" => 1_723_000_000,
+      "model" => @hidden_model,
+      "choices" => [
+        %{
+          "index" => 0,
+          "finish_reason" => "stop",
+          "message" => %{"role" => "assistant", "content" => "safe content"}
+        }
+      ]
+    }
+
+    malformed = [
+      put_in(valid, ["choices"], %{"provider" => @hidden_provider}),
+      put_in(valid, ["choices", Access.at(0), "index"], %{"account" => @hidden_account}),
+      put_in(valid, ["choices", Access.at(0), "message"], [@hidden_assignment]),
+      put_in(valid, ["choices", Access.at(0), "message"], nil),
+      put_in(
+        valid,
+        ["choices", Access.at(0), "message", "tool_calls"],
+        %{"provider" => @hidden_provider}
+      ),
+      Map.put(valid, "usage", %{"prompt_tokens" => [@hidden_account]})
+    ]
+
+    for body <- malformed do
+      assert :error = PublicProjection.gateway_body_result(body)
+    end
+  end
+
+  test "rejects wrong-typed fields across response items content usage and events" do
+    valid_response = %{
+      "id" => "resp_shape_guard",
+      "object" => "response",
+      "status" => "completed",
+      "output" => [],
+      "usage" => %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}
+    }
+
+    malformed = [
+      put_in(valid_response, ["id"], %{"provider" => @hidden_provider}),
+      put_in(valid_response, ["usage"], [@hidden_account]),
+      put_in(valid_response, ["usage", "input_tokens"], %{"account" => @hidden_account}),
+      put_in(valid_response, ["incomplete_details"], [@hidden_assignment]),
+      put_in(valid_response, ["output"], [
+        %{
+          "id" => "item_shape_guard",
+          "type" => "computer_call",
+          "action" => [@hidden_provider]
+        }
+      ]),
+      %{
+        "type" => "response.output_item.added",
+        "output_index" => %{"provider" => @hidden_provider},
+        "item" => %{"id" => "item_event_guard", "type" => "message", "content" => []}
+      },
+      %{
+        "type" => "response.content_part.added",
+        "output_index" => 0,
+        "content_index" => 0,
+        "part" => %{
+          "type" => "output_text",
+          "text" => "safe",
+          "annotations" => %{"account" => @hidden_account}
+        }
+      }
+    ]
+
+    for body <- malformed do
+      assert :error = PublicProjection.gateway_body_result(body)
+    end
+
+    assert {:ok, nullable} =
+             PublicProjection.gateway_body_result(%{
+               "id" => "resp_nullable_shape_guard",
+               "object" => "response",
+               "status" => "incomplete",
+               "incomplete_details" => nil,
+               "reasoning" => nil,
+               "usage" => nil,
+               "output" => []
+             })
+
+    assert nullable["incomplete_details"] == nil
+    assert nullable["usage"] == nil
+  end
+
+  test "rejects wrong-typed protocol fields across every supported envelope family" do
+    cases = [
+      chat: fn ->
+        PublicProjection.gateway_body_result(%{
+          "id" => "chatcmpl_family_guard",
+          "object" => "chat.completion",
+          "created" => 1_723_000_000,
+          "model" => @hidden_model,
+          "choices" => [],
+          "usage" => [@hidden_account]
+        })
+      end,
+      response: fn ->
+        PublicProjection.gateway_body_result(%{
+          "id" => "resp_family_guard",
+          "object" => "response",
+          "status" => %{"provider" => @hidden_provider},
+          "output" => []
+        })
+      end,
+      item: fn ->
+        PublicProjection.gateway_body_result(%{
+          "id" => "resp_item_family_guard",
+          "object" => "response",
+          "output" => [
+            %{
+              "type" => "computer_call",
+              "action" => %{
+                "type" => "click",
+                "x" => %{"account" => @hidden_account},
+                "y" => 12
+              }
+            }
+          ]
+        })
+      end,
+      content: fn ->
+        PublicProjection.gateway_body_result(%{
+          "id" => "resp_content_family_guard",
+          "object" => "response",
+          "output" => [
+            %{
+              "type" => "message",
+              "content" => [
+                %{"type" => "output_text", "text" => %{"provider" => @hidden_provider}}
+              ]
+            }
+          ]
+        })
+      end,
+      usage: fn ->
+        PublicProjection.gateway_body_result(%{
+          "id" => "resp_usage_family_guard",
+          "object" => "response",
+          "output" => [],
+          "usage" => %{"input_tokens" => [@hidden_account]}
+        })
+      end,
+      model: fn ->
+        PublicProjection.gateway_body_result(%{
+          "id" => @hidden_model,
+          "object" => "model",
+          "created" => %{"provider" => @hidden_provider}
+        })
+      end,
+      file: fn ->
+        PublicProjection.gateway_body_result(%{
+          "id" => "file_family_guard",
+          "object" => "file",
+          "bytes" => %{"account" => @hidden_account},
+          "filename" => "safe.txt",
+          "purpose" => "user_data",
+          "status" => "uploaded"
+        })
+      end,
+      ollama: fn ->
+        PublicProjection.ollama_body_result("/api/tags", %{
+          "models" => [
+            %{
+              "name" => "gemma3",
+              "model" => "gemma3",
+              "modified_at" => "2026-08-11T00:00:00Z",
+              "size" => 0,
+              "digest" => "sha256:safe",
+              "details" => %{
+                "family" => %{"provider" => @hidden_provider},
+                "parameter_size" => "virtual"
+              }
+            }
+          ]
+        })
+      end
+    ]
+
+    results = Map.new(cases, fn {family, project} -> {family, project.()} end)
+    assert results == Map.new(cases, fn {family, _project} -> {family, :error} end)
+  end
+
+  test "rejects malformed typed optional and nested schemas instead of deleting fields" do
+    response_with_item = fn item ->
+      %{
+        "id" => "resp_nested_mutation_guard",
+        "object" => "response",
+        "output" => [item]
+      }
+    end
+
+    cases = [
+      compaction: %{
+        "id" => "compact_mutation_guard",
+        "object" => "response.compaction",
+        "created_at" => %{"provider" => @hidden_provider},
+        "output" => []
+      },
+      text_completion: %{
+        "id" => "cmpl_mutation_guard",
+        "object" => "text_completion",
+        "created" => %{"account" => @hidden_account},
+        "choices" => [
+          %{"text" => "safe", "index" => 0, "finish_reason" => "stop", "logprobs" => nil}
+        ]
+      },
+      image: %{
+        "created" => 1,
+        "quality" => %{"provider" => @hidden_provider},
+        "data" => [%{"b64_json" => "safe-image"}]
+      },
+      catalog: %{
+        "models" => [
+          %{
+            "slug" => "gemma3",
+            "supports_streaming" => %{"provider" => @hidden_provider}
+          }
+        ]
+      },
+      rate_limit: %{
+        "type" => "codex.rate_limits",
+        "rate_limits" => %{
+          "primary" => %{"used_percent" => %{"account" => @hidden_account}}
+        }
+      },
+      caller:
+        response_with_item.(%{
+          "type" => "function_call",
+          "caller" => %{"type" => "program", "caller_id" => [@hidden_assignment]}
+        }),
+      file_search_result:
+        response_with_item.(%{
+          "type" => "file_search_call",
+          "queries" => ["safe"],
+          "results" => [%{"file_id" => "file-safe", "score" => [@hidden_account]}]
+        }),
+      web_search_source:
+        response_with_item.(%{
+          "type" => "web_search_call",
+          "action" => %{
+            "type" => "search",
+            "query" => "safe",
+            "sources" => [%{"type" => "url", "url" => %{"provider" => @hidden_provider}}]
+          }
+        }),
+      code_output:
+        response_with_item.(%{
+          "type" => "code_interpreter_call",
+          "code" => "print('safe')",
+          "outputs" => [%{"type" => "logs", "logs" => %{"account" => @hidden_account}}]
+        }),
+      reasoning_summary:
+        response_with_item.(%{
+          "type" => "reasoning",
+          "summary" => [
+            %{"type" => "summary_text", "text" => %{"provider" => @hidden_provider}}
+          ]
+        }),
+      shell_action:
+        response_with_item.(%{
+          "type" => "local_shell_call",
+          "action" => %{"type" => "exec", "timeout_ms" => [@hidden_account]}
+        }),
+      mcp_tool:
+        response_with_item.(%{
+          "type" => "mcp_list_tools",
+          "tools" => [%{"name" => %{"provider" => @hidden_provider}}]
+        }),
+      patch_operation:
+        response_with_item.(%{
+          "type" => "apply_patch_call",
+          "operation" => %{"type" => "update", "path" => [@hidden_assignment]}
+        }),
+      compaction_metadata:
+        response_with_item.(%{
+          "type" => "compaction",
+          "encrypted_content" => "safe-encrypted-content",
+          "internal_chat_message_metadata_passthrough" => %{
+            "turn_id" => %{"account" => @hidden_account}
+          }
+        })
+    ]
+
+    results =
+      Map.new(cases, fn {family, body} -> {family, PublicProjection.gateway_body_result(body)} end)
+
+    assert results == Map.new(cases, fn {family, _body} -> {family, :error} end)
+  end
+
+  test "rejects malformed optional fields in a valid local file finalize envelope" do
+    assert {:ok, download_url} =
+             FileCapability.mint(
+               "https://files.example.com/download?sig=safe",
+               %FileRecord{
+                 pool_id: Ecto.UUID.generate(),
+                 api_key_id: Ecto.UUID.generate(),
+                 file_id: "file_finalize_shape_guard",
+                 byte_size: 12,
+                 pool_upstream_assignment_id: Ecto.UUID.generate(),
+                 upstream_identity_id: Ecto.UUID.generate(),
+                 expires_at: DateTime.add(DateTime.utc_now(), 60, :second)
+               },
+               :download,
+               origin: "http://127.0.0.1:4000"
+             )
+
+    assert :error =
+             PublicProjection.gateway_body_result(%{
+               "status" => "processed",
+               "download_url" => download_url,
+               "file_name" => %{"provider" => @hidden_provider},
+               "mime_type" => "text/plain"
+             })
+  end
+
+  test "accepts nullable tool namespaces only at their typed item location" do
+    base = %{
+      "id" => "resp_nullable_namespace_guard",
+      "object" => "response",
+      "output" => [
+        %{
+          "type" => "custom_tool_call",
+          "call_id" => "call_nullable_namespace_guard",
+          "name" => "safe_tool",
+          "namespace" => nil,
+          "input" => "safe input"
+        }
+      ]
+    }
+
+    assert {:ok, projected} = PublicProjection.gateway_body_result(base)
+    assert get_in(projected, ["output", Access.at(0), "namespace"]) == nil
+
+    assert :error =
+             base
+             |> put_in(
+               ["output", Access.at(0), "namespace"],
+               %{"provider" => @hidden_provider}
+             )
+             |> PublicProjection.gateway_body_result()
+  end
+
+  test "validates moderation status as a string without weakening numeric failure status" do
+    assert {:ok, projected} =
+             PublicProjection.gateway_body_result(%{
+               "type" => "response.moderation.completed",
+               "model" => @hidden_model,
+               "check_id" => "check_shape_guard",
+               "status" => "completed"
+             })
+
+    assert projected["status"] == "completed"
+
+    assert :error =
+             PublicProjection.gateway_body_result(%{
+               "type" => "response.moderation.completed",
+               "check_id" => "check_shape_guard",
+               "status" => %{"provider" => @hidden_provider}
+             })
+
+    assert :error =
+             PublicProjection.gateway_body_result(%{
+               "type" => "response.failed",
+               "status" => "502",
+               "message" => "wrong typed status"
+             })
   end
 
   test "projects compact and upstream error envelopes without retaining unknown fields" do
@@ -450,7 +823,7 @@ defmodule CodexPooler.Gateway.Facade.PublicProjectionTest do
                      "limit" => 16_384,
                      "account" => @hidden_account
                    },
-                   "input_modalities" => ["text", "image", %{"provider" => @hidden_provider}],
+                   "input_modalities" => ["text", "image", @hidden_provider],
                    "service_tiers" => [
                      %{"id" => "priority", "name" => "Priority", "account" => @hidden_account}
                    ],
@@ -652,6 +1025,7 @@ defmodule CodexPooler.Gateway.Facade.PublicProjectionTest do
              PublicProjection.gateway_body_result(%{
                "id" => "chat_private_tier",
                "object" => "chat.completion",
+               "created" => 1_723_000_000,
                "model" => @hidden_model,
                "service_tier" => @hidden_provider,
                "choices" => []
@@ -820,7 +1194,7 @@ defmodule CodexPooler.Gateway.Facade.PublicProjectionTest do
   test "recursively projects nested tool execution envelopes" do
     projected =
       PublicProjection.gateway_body(%{
-        "id" => %{"provider" => @hidden_provider},
+        "id" => "resp_nested_tool_projection",
         "object" => "response",
         "model" => @hidden_model,
         "metadata" => %{"provider" => @hidden_provider},
@@ -850,7 +1224,7 @@ defmodule CodexPooler.Gateway.Facade.PublicProjectionTest do
 
     refute Map.has_key?(projected, "metadata")
     refute Map.has_key?(projected, "tools")
-    refute Map.has_key?(projected, "id")
+    assert projected["id"] == "resp_nested_tool_projection"
 
     [call] = projected["output"]
 
@@ -884,13 +1258,13 @@ defmodule CodexPooler.Gateway.Facade.PublicProjectionTest do
         "usage" => [@hidden_account]
       })
 
-    refute Map.has_key?(wrong_typed, "usage")
-    assert get_in(wrong_typed, ["output", Access.at(0), "action"]) == %{}
+    assert wrong_typed["type"] == "error"
+    assert wrong_typed["code"] == "server_error"
     refute Jason.encode!(wrong_typed) =~ @hidden_provider
     refute Jason.encode!(wrong_typed) =~ @hidden_account
   end
 
-  test "drops container-shaped values from typed tool and reasoning scalar fields" do
+  test "projects typed tool and reasoning scalar fields without unknown siblings" do
     projected =
       PublicProjection.gateway_body(%{
         "object" => "response",
@@ -902,28 +1276,35 @@ defmodule CodexPooler.Gateway.Facade.PublicProjectionTest do
         "output" => [
           %{
             "type" => "file_search_call",
-            "queries" => [%{"provider" => @hidden_provider}, "visible query"]
+            "queries" => ["visible query"],
+            "provider" => @hidden_provider
           },
           %{
             "type" => "code_interpreter_call",
-            "code" => %{"account" => @hidden_account},
+            "code" => "print('safe')",
+            "account" => @hidden_account,
             "outputs" => []
           },
           %{
             "type" => "image_generation_call",
-            "result" => [@hidden_assignment]
+            "result" => "visible-image-result",
+            "assignment" => @hidden_assignment
           },
           %{
             "type" => "reasoning",
-            "encrypted_content" => %{"provider" => @hidden_provider}
+            "encrypted_content" => "visible-encrypted-content",
+            "provider" => @hidden_provider
           }
         ]
       })
 
     assert get_in(projected, ["output", Access.at(0), "queries"]) == ["visible query"]
-    refute Map.has_key?(get_in(projected, ["output", Access.at(1)]), "code")
-    refute Map.has_key?(get_in(projected, ["output", Access.at(2)]), "result")
-    refute Map.has_key?(get_in(projected, ["output", Access.at(3)]), "encrypted_content")
+    assert get_in(projected, ["output", Access.at(1), "code"]) == "print('safe')"
+    assert get_in(projected, ["output", Access.at(2), "result"]) == "visible-image-result"
+
+    assert get_in(projected, ["output", Access.at(3), "encrypted_content"]) ==
+             "visible-encrypted-content"
+
     refute Map.has_key?(projected["reasoning"], "encrypted_content")
 
     serialized = Jason.encode!(projected)

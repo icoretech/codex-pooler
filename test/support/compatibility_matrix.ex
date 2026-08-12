@@ -32,7 +32,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :file_upload,
       contract:
-        "authenticated backend file create and finalize return only exact public schemas with encrypted local upload and download capabilities; the bounded capability proxy verifies Pool, API-key, file, operation, expiry, ownership, status, assignment, and declared bytes before server-side provider transfer, never redirects to or persists the provider URL, suppresses bearer-capability request paths from logs, rejects OpenAI /v1/files multipart semantics, and stores metadata only"
+        "authenticated backend file create and finalize return only exact public schemas with encrypted local upload and download capabilities; the bounded capability proxy is the sole headerless bearer-auth exception for signed-URL client compatibility, binds and verifies active Pool, active API key, owned file, operation, expiry, status, active assignment, active identity, usable credential, and declared bytes before a DNS-validated address-pinned server-side provider transfer, requires any optionally presented Pool Authorization to match the encrypted scope, never redirects to or persists the provider URL, suppresses bearer-capability request paths from logs, rejects OpenAI /v1/files multipart semantics, and stores metadata only"
     },
     %{
       slug: :backend_transcription,
@@ -701,7 +701,10 @@ defmodule CodexPooler.CompatibilityMatrix do
         provider_url_exposed: false,
         provider_url_persisted: false,
         redirects: false,
-        bearer_auth_optional: true,
+        auth: "headerless_single_purpose_bearer_capability_exception",
+        optional_pool_authorization: "must_match_encrypted_pool_and_api_key_scope",
+        dns: "all_A_and_AAAA_public_then_connect_to_validated_address_with_original_TLS_hostname",
+        use_time_state: "active_pool_key_assignment_identity_and_usable_credential",
         encrypted_scope: [
           "pool_id",
           "api_key_id",
@@ -1255,9 +1258,12 @@ defmodule CodexPooler.CompatibilityMatrix do
       },
       turn_state_precedence: "response.create.client_metadata_over_upgrade_header",
       privacy: "raw_value_restored_only_upstream_and_not_persisted",
+      accepted_client_frame_state: "cpts_<encrypted-frame-state>_only",
+      server_session_marker: "connection_internal_only_never_forwarded_or_persisted_raw",
       opaque_resolution: %{
         cross_pool_or_key: "invalid_turn_state_before_dispatch",
         tamper_or_expiry: "invalid_turn_state_before_dispatch",
+        unknown_raw_frame_value: "invalid_turn_state_before_dispatch",
         assignment: "hard_pinned",
         session: "exact_reconnectable_anchor_for_upgrade_owner_and_frame_retarget"
       },

@@ -149,13 +149,12 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     |> StreamLifecycle.lifecycle_handlers(callbacks,
       first_event_retry: StreamLifecycle.fail_first_event_handler(response_context)
     )
-    # D7 surface isolation: absence of `before_finalize_failure` and
-    # `before_finalize_success` keys prevents the HTTP synthetic terminal from
-    # leaking onto the GET /v1/responses websocket. Do not add either key here.
     |> Map.merge(%{
       keepalive_interval_ms: 0,
       write_keepalive: fn state -> {:ok, state} end,
-      write_chunk: websocket_stream_writer(response_context, writer)
+      write_chunk: websocket_stream_writer(response_context, writer),
+      before_finalize_failure: websocket_stream_terminal_failure_hook(response_context, writer),
+      before_finalize_success: websocket_stream_terminal_success_hook(response_context, writer)
     })
   end
 
@@ -173,20 +172,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
       case DownstreamStream.terminal_outcome(state) do
         {:failed, %{code: code} = failure}
         when code in ["upstream_stream_invalid", "upstream_stream_too_large"] ->
-          {messages, failed_buffer} =
-            WebsocketCodec.stream_messages(request, "", websocket_sse_buffer(state))
+          {state, settlement_failure} =
+            emit_websocket_terminal_failure(state, request, failure, writer)
 
-          Enum.each(messages, writer)
-
-          settlement_failure = %{
-            failure
-            | code: "upstream_stream_error",
-              upstream_code: nil,
-              upstream_error_param: nil
-          }
-
-          {:terminal_stream_failure, put_websocket_sse_buffer(state, failed_buffer),
-           settlement_failure}
+          {:terminal_stream_failure, state, settlement_failure}
 
         nil when data == "" ->
           # A valid SSE record may span several upstream chunks. The native
@@ -208,6 +197,66 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
           end
       end
     end
+  end
+
+  defp websocket_stream_terminal_success_hook(
+         %ResponseContext{context: context},
+         writer
+       ) do
+    request = context.reserved.request
+
+    fn state ->
+      state = DownstreamStream.finalize_eof(state)
+
+      case DownstreamStream.terminal_outcome(state) do
+        {:failed, %{} = failure} ->
+          {state, settlement_failure} =
+            emit_websocket_terminal_failure(state, request, failure, writer)
+
+          {:failure, state, "", {:terminal_stream_failure, settlement_failure}}
+
+        _outcome ->
+          {:ok, state, ""}
+      end
+    end
+  end
+
+  defp websocket_stream_terminal_failure_hook(
+         %ResponseContext{context: context},
+         writer
+       ) do
+    request = context.reserved.request
+
+    fn state, reason ->
+      state = DownstreamStream.finalize_eof(state)
+
+      case DownstreamStream.terminal_outcome(state) do
+        {:failed, %{} = failure} ->
+          {state, settlement_failure} =
+            emit_websocket_terminal_failure(state, request, failure, writer)
+
+          {:failure, state, "", {:terminal_stream_failure, settlement_failure}}
+
+        _outcome ->
+          {:failure, state, "", reason}
+      end
+    end
+  end
+
+  defp emit_websocket_terminal_failure(state, request, failure, writer) do
+    {messages, failed_buffer} =
+      WebsocketCodec.stream_messages(request, "", websocket_sse_buffer(state))
+
+    Enum.each(messages, writer)
+
+    settlement_failure = %{
+      failure
+      | code: "upstream_stream_error",
+        upstream_code: nil,
+        upstream_error_param: nil
+    }
+
+    {put_websocket_sse_buffer(state, failed_buffer), settlement_failure}
   end
 
   defp mark_visible_output(request) do

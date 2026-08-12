@@ -350,6 +350,98 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
       assert is_binary(route_class)
     end
 
+    test "latches an oversized native residue even after a complete block in the same chunk" do
+      opts = RequestOptions.build(%{}, "/backend-api/codex/responses", %{"stream" => true})
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      complete =
+        "event: response.in_progress\n" <>
+          "data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_before_tail\",\"status\":\"in_progress\"}}\n\n"
+
+      oversized_tail =
+        "data: " <>
+          String.duplicate("private-overflow-tail", 450_000)
+
+      assert {"", failed} =
+               DownstreamStream.normalize_data(
+                 complete <> oversized_tail,
+                 "/backend-api/codex/responses",
+                 opts,
+                 state
+               )
+
+      assert {:failed, %{code: "upstream_stream_too_large"}} =
+               DownstreamStream.terminal_outcome(failed)
+
+      assert {terminal, emitted} =
+               DownstreamStream.synthetic_terminal_failure(failed, :oversized_stream)
+
+      assert terminal =~ "event: error"
+      refute terminal =~ "private-overflow-tail"
+
+      assert {nil, _emitted} =
+               DownstreamStream.synthetic_terminal_failure(emitted, :duplicate_failure)
+    end
+
+    test "latches a fragmented oversized native tail after projecting only the earlier block" do
+      opts = RequestOptions.build(%{}, "/backend-api/codex/responses", %{"stream" => true})
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      complete =
+        "event: response.in_progress\n" <>
+          "data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_fragmented_tail\",\"status\":\"in_progress\"}}\n\n"
+
+      assert {visible, buffered} =
+               DownstreamStream.normalize_data(
+                 complete <> "data: private-fragmented-tail",
+                 "/backend-api/codex/responses",
+                 opts,
+                 state
+               )
+
+      assert visible =~ "resp_fragmented_tail"
+      refute visible =~ "private-fragmented-tail"
+
+      assert {"", failed} =
+               DownstreamStream.normalize_data(
+                 String.duplicate("x", 8_388_609),
+                 "/backend-api/codex/responses",
+                 opts,
+                 buffered
+               )
+
+      assert {:failed, %{code: "upstream_stream_too_large"}} =
+               DownstreamStream.terminal_outcome(failed)
+    end
+
+    test "marks nonempty native SSE residue as failed at clean EOF" do
+      opts = RequestOptions.build(%{}, "/backend-api/codex/responses", %{"stream" => true})
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      assert {"", buffered} =
+               DownstreamStream.normalize_data(
+                 "event: response.completed\ndata: {\"type\":\"response.completed\"}",
+                 "/backend-api/codex/responses",
+                 opts,
+                 state
+               )
+
+      assert DownstreamStream.terminal_outcome(buffered) == nil
+
+      failed = DownstreamStream.finalize_eof(buffered)
+
+      assert {:failed, %{code: "upstream_stream_invalid"}} =
+               DownstreamStream.terminal_outcome(failed)
+
+      assert {terminal, emitted} =
+               DownstreamStream.synthetic_terminal_failure(failed, :clean_eof)
+
+      assert terminal =~ "event: error"
+
+      assert {nil, _emitted} =
+               DownstreamStream.synthetic_terminal_failure(emitted, :duplicate_failure)
+    end
+
     test "discards malformed native Codex SSE and records a settled failure" do
       opts = RequestOptions.build(%{}, "/backend-api/codex/responses", %{"stream" => true})
       state = DownstreamStream.initial_state(:relay, opts)

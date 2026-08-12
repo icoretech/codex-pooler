@@ -343,20 +343,15 @@ defmodule CodexPooler.Gateway.Transports.SSEParserIncrementalTest do
              StreamProtocol.complete_sse_blocks("data: a\r\r\r\r\r\n\n", bounded?: false)
   end
 
-  test "bounded incremental accumulation drops an oversized residue like the reference" do
+  test "bounded incremental accumulation latches the overflow marker across later chunks" do
     cap = StreamProtocol.max_incomplete_sse_block_bytes()
     piece = "data: " <> String.duplicate("x", 1_048_576)
     chunks = List.duplicate(piece, div(cap, byte_size(piece)) + 2)
 
     {incremental_blocks, incremental_residue} = fold_incremental(chunks, true)
-    {reference_blocks, reference_residue} = fold_reference(chunks, true)
 
-    assert incremental_blocks == reference_blocks
-    assert incremental_residue == reference_residue
     assert incremental_blocks == []
-
-    # The accumulated residue crossed the bound mid-fold and was dropped, so
-    # only the post-drop refill survives instead of the full accumulation.
-    assert byte_size(incremental_residue) == byte_size(piece)
+    assert StreamProtocol.overflowed_incomplete_sse_block?(incremental_residue)
+    refute incremental_residue =~ "data:"
   end
 end

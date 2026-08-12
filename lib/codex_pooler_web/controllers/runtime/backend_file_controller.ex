@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileController do
 
   alias CodexPooler.Access
   alias CodexPooler.Files
+  alias CodexPooler.Files.CapabilitySpool
   alias CodexPooler.Gateway.Facade.FileCapability
   alias CodexPooler.Gateway
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -172,7 +173,7 @@ defmodule CodexPoolerWeb.Runtime.BackendFileController do
             {:error, reason, read_conn}
         end
       after
-        File.rm(path)
+        CapabilitySpool.remove(path)
       end
     else
       {:error, reason, %Plug.Conn{} = read_conn} -> {:error, reason, read_conn}
@@ -270,30 +271,22 @@ defmodule CodexPoolerWeb.Runtime.BackendFileController do
           {:ok, path, read_conn}
 
         {:ok, read_conn, _short} ->
-          File.rm(path)
+          CapabilitySpool.remove(path)
           {:error, upload_size_mismatch(), read_conn}
 
         {:error, reason, read_conn} ->
-          File.rm(path)
+          CapabilitySpool.remove(path)
           {:error, reason, read_conn}
       end
     end
   end
 
-  defp open_temp_upload(attempts \\ 3)
-
-  defp open_temp_upload(attempts) when attempts > 0 do
-    suffix = 18 |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
-    path = Path.join(System.tmp_dir!(), "codex-pooler-file-capability-#{suffix}")
-
-    case File.open(path, [:write, :binary, :exclusive]) do
-      {:ok, io} -> {:ok, path, io}
-      {:error, :eexist} -> open_temp_upload(attempts - 1)
-      {:error, _reason} -> {:error, upload_unavailable()}
+  defp open_temp_upload do
+    case CapabilitySpool.open() do
+      {:ok, path, io} -> {:ok, path, io}
+      {:error, :unavailable} -> {:error, upload_unavailable()}
     end
   end
-
-  defp open_temp_upload(0), do: {:error, upload_unavailable()}
 
   defp read_upload_body(conn, io, expected_bytes, seen_bytes) do
     remaining = max(expected_bytes - seen_bytes, 0)

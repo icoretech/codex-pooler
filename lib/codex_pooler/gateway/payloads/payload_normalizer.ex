@@ -63,6 +63,30 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   def backend_client_metadata_turn_state(%{}), do: nil
 
+  @doc false
+  @spec fetch_backend_client_metadata_turn_state(map()) ::
+          :absent | {:ok, String.t()} | {:error, :invalid}
+  def fetch_backend_client_metadata_turn_state(%{"client_metadata" => %{} = metadata}) do
+    case Map.fetch(metadata, @backend_turn_state_client_metadata_key) do
+      :error ->
+        :absent
+
+      {:ok, value} when is_binary(value) ->
+        case clean_string(value) do
+          nil -> {:error, :invalid}
+          turn_state -> {:ok, turn_state}
+        end
+
+      {:ok, _value} ->
+        {:error, :invalid}
+    end
+  end
+
+  def fetch_backend_client_metadata_turn_state(%{"client_metadata" => _wrong_type}),
+    do: {:error, :invalid}
+
+  def fetch_backend_client_metadata_turn_state(%{}), do: :absent
+
   @spec normalize(map()) :: {:ok, map()}
   def normalize(%{} = payload) do
     {:ok, normalize_backend_codex_websocket_input(payload)}

@@ -126,13 +126,10 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
 
   @spec chat_completion(map()) :: map()
   def chat_completion(%{} = completion) do
-    completion
-    |> Map.take(~w(id object created model choices usage service_tier))
-    |> Map.put("model", Facade.public_model())
-    |> drop_container_values(~w(id object created service_tier))
-    |> keep_enum_value("service_tier", @safe_public_service_tiers)
-    |> update_list_value("choices", &project_chat_choice/1)
-    |> update_map_value("usage", &project_usage/1)
+    case project_chat_completion_result(completion) do
+      {:ok, projected} -> projected
+      :error -> sanitized_failure_event()
+    end
   end
 
   @spec gateway_body(map()) :: map()
@@ -150,7 +147,13 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
 
   def gateway_body(%{"object" => "response"} = body), do: openai_response(body)
   def gateway_body(%{"object" => "response.compaction"} = body), do: project_compaction(body)
-  def gateway_body(%{"object" => "file"} = body), do: project_file_object(body)
+
+  def gateway_body(%{"object" => "file"} = body) do
+    case project_file_object_result(body) do
+      {:ok, projected} -> projected
+      :error -> sanitized_failure_event()
+    end
+  end
 
   def gateway_body(%{"object" => "model"} = body) do
     case project_openai_model_result(body) do
@@ -166,11 +169,19 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
     end
   end
 
-  def gateway_body(%{"file_id" => _file_id, "upload_url" => _url} = body),
-    do: project_file_create(body)
+  def gateway_body(%{"file_id" => _file_id, "upload_url" => _url} = body) do
+    case project_file_create_result(body) do
+      {:ok, projected} -> projected
+      :error -> sanitized_failure_event()
+    end
+  end
 
-  def gateway_body(%{"status" => _status, "download_url" => _url} = body),
-    do: project_file_finalize(body)
+  def gateway_body(%{"status" => _status, "download_url" => _url} = body) do
+    case project_file_finalize_result(body) do
+      {:ok, projected} -> projected
+      :error -> sanitized_failure_event()
+    end
+  end
 
   def gateway_body(%{"status" => status} = body) when status == "retry",
     do: Map.take(body, ~w(status))
@@ -252,7 +263,7 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
 
   def gateway_body_result(%{"object" => object} = body)
       when object in ["chat.completion", "chat.completion.chunk"],
-      do: {:ok, chat_completion(body)}
+      do: project_chat_completion_result(body)
 
   def gateway_body_result(%{"object" => "response"} = body),
     do: openai_response_result(body)
@@ -261,7 +272,7 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
     do: project_compaction_result(body)
 
   def gateway_body_result(%{"object" => "file"} = body),
-    do: {:ok, project_file_object(body)}
+    do: project_file_object_result(body)
 
   def gateway_body_result(%{"object" => "model"} = body),
     do: project_openai_model_result(body)
@@ -278,13 +289,13 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
 
   def gateway_body_result(%{"file_id" => file_id, "upload_url" => url} = body)
       when is_binary(file_id) and is_binary(url) do
-    if FileCapability.local_url?(url, :upload), do: {:ok, project_file_create(body)}, else: :error
+    if FileCapability.local_url?(url, :upload), do: project_file_create_result(body), else: :error
   end
 
   def gateway_body_result(%{"status" => status, "download_url" => url} = body)
       when is_binary(status) and is_binary(url) do
     if FileCapability.local_url?(url, :download),
-      do: {:ok, project_file_finalize(body)},
+      do: project_file_finalize_result(body),
       else: :error
   end
 
@@ -403,23 +414,37 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
     "event: #{projected["type"]}\ndata: #{Jason.encode!(projected)}\n\n"
   end
 
-  defp project_file_create(body) do
-    body
-    |> Map.take(~w(file_id upload_url))
-    |> drop_container_values(~w(file_id upload_url))
+  defp project_file_create_result(%{"file_id" => file_id, "upload_url" => upload_url})
+       when is_binary(file_id) and is_binary(upload_url) do
+    {:ok, %{"file_id" => file_id, "upload_url" => upload_url}}
   end
 
-  defp project_file_finalize(body) do
-    body
-    |> Map.take(~w(status download_url file_name mime_type))
-    |> drop_container_values(~w(status download_url file_name mime_type))
+  defp project_file_create_result(_body), do: :error
+
+  defp project_file_finalize_result(%{"status" => status, "download_url" => download_url} = body)
+       when is_binary(status) and is_binary(download_url) do
+    with :ok <- validate_optional_binaries(body, ~w(file_name mime_type)) do
+      {:ok, Map.take(body, ~w(status download_url file_name mime_type))}
+    else
+      _invalid -> :error
+    end
   end
 
-  defp project_file_object(body) do
-    body
-    |> Map.take(~w(id object bytes created_at filename purpose status expires_at))
-    |> drop_container_values(~w(id object bytes created_at filename purpose status expires_at))
+  defp project_file_finalize_result(_body), do: :error
+
+  defp project_file_object_result(%{"object" => "file", "id" => id} = body)
+       when is_binary(id) do
+    with :ok <- optional_non_negative_integer_field(body, "bytes"),
+         :ok <- optional_non_negative_integer_field(body, "created_at"),
+         :ok <- validate_optional_binaries(body, ~w(filename purpose status)),
+         :ok <- optional_non_negative_integer_or_nil_field(body, "expires_at") do
+      {:ok, Map.take(body, ~w(id object bytes created_at filename purpose status expires_at))}
+    else
+      _invalid -> :error
+    end
   end
+
+  defp project_file_object_result(_body), do: :error
 
   defp project_compaction(body) do
     case project_compaction_result(body) do
@@ -429,13 +454,17 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
   end
 
   defp project_compaction_result(body) do
-    projected =
-      body
-      |> Map.take(~w(id object created_at output usage))
-      |> drop_container_values(~w(id object created_at))
-
-    with {:ok, projected} <- project_output(projected) do
-      {:ok, update_map_value(projected, "usage", &project_usage/1)}
+    with :ok <- validate_optional_binaries(body, ~w(id object)),
+         :ok <- optional_non_negative_integer_field(body, "created_at"),
+         :ok <- optional_list(body, "output"),
+         {:ok, usage} <- optional_projected_map(body, "usage", &project_usage_result/1),
+         {:ok, projected} <-
+           body
+           |> Map.take(~w(id object created_at output))
+           |> project_output() do
+      {:ok, maybe_put(projected, "usage", usage)}
+    else
+      _invalid -> :error
     end
   end
 
@@ -449,7 +478,7 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
   defp project_list_body_result(_body), do: :error
 
   defp project_list_item_result(%{"object" => "file"} = item),
-    do: {:ok, project_file_object(item)}
+    do: project_file_object_result(item)
 
   defp project_list_item_result(%{"object" => "model"} = item) do
     project_openai_model_result(item)
@@ -459,49 +488,63 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
 
   defp project_openai_model_result(%{"object" => "model", "id" => id} = item)
        when is_binary(id) do
-    projected = %{
-      "id" => Facade.public_model(),
-      "object" => "model",
-      "owned_by" => "ollama",
-      "permission" => [],
-      "display_name" => Facade.public_model()
-    }
+    with :ok <- optional_non_negative_integer_field(item, "created"),
+         :ok <-
+           validate_optional_booleans(
+             item,
+             ~w(supports_streaming supports_tools supports_reasoning)
+           ),
+         :ok <- optional_string_list(item, "input_modalities"),
+         :ok <- optional_positive_integer_field(item, "context_length") do
+      projected = %{
+        "id" => Facade.public_model(),
+        "object" => "model",
+        "owned_by" => "ollama",
+        "permission" => [],
+        "display_name" => Facade.public_model()
+      }
 
-    projected =
-      case Map.get(item, "created") do
-        value when is_integer(value) and value >= 0 -> Map.put(projected, "created", value)
-        _value -> projected
-      end
-
-    projected =
-      Enum.reduce(~w(supports_streaming supports_tools supports_reasoning), projected, fn key,
-                                                                                          result ->
-        case Map.get(item, key) do
-          value when is_boolean(value) -> Map.put(result, key, value)
-          _value -> result
+      projected =
+        case Map.get(item, "created") do
+          value when is_integer(value) and value >= 0 -> Map.put(projected, "created", value)
+          _value -> projected
         end
-      end)
 
-    projected =
-      case Map.get(item, "input_modalities") do
-        values when is_list(values) ->
-          Map.put(
-            projected,
-            "input_modalities",
-            values |> Enum.filter(&(&1 in @safe_catalog_modalities)) |> Enum.uniq()
-          )
+      projected =
+        Enum.reduce(~w(supports_streaming supports_tools supports_reasoning), projected, fn key,
+                                                                                            result ->
+          case Map.get(item, key) do
+            value when is_boolean(value) -> Map.put(result, key, value)
+            _value -> result
+          end
+        end)
 
-        _value ->
-          projected
-      end
+      projected =
+        case Map.get(item, "input_modalities") do
+          values when is_list(values) ->
+            Map.put(
+              projected,
+              "input_modalities",
+              values |> Enum.filter(&(&1 in @safe_catalog_modalities)) |> Enum.uniq()
+            )
 
-    projected =
-      case Map.get(item, "context_length") do
-        value when is_integer(value) and value > 0 -> Map.put(projected, "context_length", value)
-        _value -> projected
-      end
+          _value ->
+            projected
+        end
 
-    {:ok, projected}
+      projected =
+        case Map.get(item, "context_length") do
+          value when is_integer(value) and value > 0 ->
+            Map.put(projected, "context_length", value)
+
+          _value ->
+            projected
+        end
+
+      {:ok, projected}
+    else
+      _invalid -> :error
+    end
   end
 
   defp project_openai_model_result(_item), do: :error
@@ -514,7 +557,11 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
          } = body
        )
        when is_binary(id) and is_list(choices) do
-    with {:ok, projected_choices} <- map_results(choices, &project_text_completion_choice/1) do
+    with :ok <- optional_non_negative_integer_field(body, "created"),
+         :ok <- optional_binary(body, "model"),
+         {:ok, usage} <-
+           optional_projected_map_or_nil(body, "usage", &project_usage_result/1),
+         {:ok, projected_choices} <- map_results(choices, &project_text_completion_choice/1) do
       projected = %{
         "id" => id,
         "object" => "text_completion",
@@ -528,19 +575,9 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
           _value -> projected
         end
 
-      {:ok, update_map_value(projected, "usage", &project_usage/1)}
-      |> then(fn
-        {:ok, without_usage} when is_map_key(body, "usage") ->
-          {:ok,
-           update_map_value(
-             Map.put(without_usage, "usage", body["usage"]),
-             "usage",
-             &project_usage/1
-           )}
-
-        result ->
-          result
-      end)
+      {:ok, maybe_put(projected, "usage", usage)}
+    else
+      _invalid -> :error
     end
   end
 
@@ -555,18 +592,22 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
        )
        when is_binary(text) and is_integer(index) and
               (is_binary(finish_reason) or is_nil(finish_reason)) do
-    projected = %{
-      "text" => text,
-      "index" => index,
-      "finish_reason" => finish_reason
-    }
+    with :ok <- optional_nil(choice, "logprobs") do
+      projected = %{
+        "text" => text,
+        "index" => index,
+        "finish_reason" => finish_reason
+      }
 
-    projected =
-      if Map.get(choice, "logprobs") == nil,
-        do: Map.put(projected, "logprobs", nil),
-        else: projected
+      projected =
+        if Map.has_key?(choice, "logprobs"),
+          do: Map.put(projected, "logprobs", nil),
+          else: projected
 
-    {:ok, projected}
+      {:ok, projected}
+    else
+      _invalid -> :error
+    end
   end
 
   defp project_text_completion_choice(_choice), do: :error
@@ -692,57 +733,82 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
   end
 
   defp project_codex_model_result(%{"slug" => slug} = source) when is_binary(slug) do
-    projected = %{
-      "slug" => Facade.public_model(),
-      "display_name" => Facade.public_model(),
-      "description" => Facade.public_model(),
-      "default_reasoning_level" => Facade.reasoning_effort(),
-      "supported_reasoning_levels" => [
-        %{"effort" => Facade.reasoning_effort(), "description" => "Maximum"}
-      ],
-      "shell_type" => safe_enum(Map.get(source, "shell_type"), @safe_catalog_shell_types),
-      "visibility" => "list",
-      "base_instructions" => ""
-    }
+    with :ok <- validate_codex_model_source(source) do
+      projected = %{
+        "slug" => Facade.public_model(),
+        "display_name" => Facade.public_model(),
+        "description" => Facade.public_model(),
+        "default_reasoning_level" => Facade.reasoning_effort(),
+        "supported_reasoning_levels" => [
+          %{"effort" => Facade.reasoning_effort(), "description" => "Maximum"}
+        ],
+        "shell_type" => safe_enum(Map.get(source, "shell_type"), @safe_catalog_shell_types),
+        "visibility" => "list",
+        "base_instructions" => ""
+      }
 
-    projected =
-      Enum.reduce(@catalog_boolean_keys, projected, fn key, result ->
-        case Map.get(source, key) do
-          value when is_boolean(value) -> Map.put(result, key, value)
-          _value -> result
-        end
-      end)
+      projected =
+        Enum.reduce(@catalog_boolean_keys, projected, fn key, result ->
+          case Map.get(source, key) do
+            value when is_boolean(value) -> Map.put(result, key, value)
+            _value -> result
+          end
+        end)
 
-    projected =
-      Enum.reduce(@catalog_positive_integer_keys, projected, fn key, result ->
-        case Map.get(source, key) do
-          value when is_integer(value) and value > 0 -> Map.put(result, key, value)
-          _value -> result
-        end
-      end)
+      projected =
+        Enum.reduce(@catalog_positive_integer_keys, projected, fn key, result ->
+          case Map.get(source, key) do
+            value when is_integer(value) and value > 0 -> Map.put(result, key, value)
+            _value -> result
+          end
+        end)
 
-    projected =
-      projected
-      |> maybe_put_catalog_enum(
-        "reasoning_summary_format",
-        source,
-        @safe_catalog_summary_formats
-      )
-      |> maybe_put_catalog_enum("tool_mode", source, @safe_catalog_tool_modes)
-      |> maybe_put_catalog_enum(
-        "default_service_tier",
-        source,
-        @safe_catalog_service_tiers
-      )
-      |> maybe_put_catalog_truncation(source)
-      |> maybe_put_catalog_modalities(source)
-      |> maybe_put_catalog_service_tiers(source)
-      |> maybe_put_catalog_speed_tiers(source)
+      projected =
+        projected
+        |> maybe_put_catalog_enum(
+          "reasoning_summary_format",
+          source,
+          @safe_catalog_summary_formats
+        )
+        |> maybe_put_catalog_enum("tool_mode", source, @safe_catalog_tool_modes)
+        |> maybe_put_catalog_enum(
+          "default_service_tier",
+          source,
+          @safe_catalog_service_tiers
+        )
+        |> maybe_put_catalog_truncation(source)
+        |> maybe_put_catalog_modalities(source)
+        |> maybe_put_catalog_service_tiers(source)
+        |> maybe_put_catalog_speed_tiers(source)
 
-    {:ok, projected}
+      {:ok, projected}
+    else
+      _invalid -> :error
+    end
   end
 
   defp project_codex_model_result(_model), do: :error
+
+  defp validate_codex_model_source(source) do
+    enum_keys = ~w(shell_type reasoning_summary_format tool_mode default_service_tier)
+
+    with :ok <-
+           validate_optional_binaries(
+             source,
+             ~w(slug display_name description default_reasoning_level visibility base_instructions) ++
+               enum_keys
+           ),
+         :ok <- validate_optional_booleans(source, @catalog_boolean_keys),
+         :ok <- validate_optional_positive_integers(source, @catalog_positive_integer_keys),
+         :ok <- optional_catalog_truncation(source, "truncation_policy"),
+         :ok <- optional_string_list(source, "input_modalities"),
+         :ok <- optional_catalog_service_tiers(source, "service_tiers"),
+         :ok <- optional_string_list(source, "additional_speed_tiers") do
+      :ok
+    else
+      _invalid -> :error
+    end
+  end
 
   defp safe_enum(value, [fallback | _allowed] = allowed) do
     if value in allowed, do: value, else: fallback
@@ -807,34 +873,77 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
     end
   end
 
+  defp optional_catalog_truncation(map, key) do
+    case Map.fetch(map, key) do
+      :error ->
+        :ok
+
+      {:ok, %{"mode" => mode, "limit" => limit}}
+      when is_binary(mode) and is_integer(limit) and limit > 0 ->
+        :ok
+
+      {:ok, _wrong_type} ->
+        :error
+    end
+  end
+
+  defp optional_catalog_service_tiers(map, key) do
+    case Map.fetch(map, key) do
+      :error ->
+        :ok
+
+      {:ok, tiers} when is_list(tiers) ->
+        if Enum.all?(tiers, fn
+             %{"id" => id} when is_binary(id) -> true
+             _wrong_type -> false
+           end),
+           do: :ok,
+           else: :error
+
+      {:ok, _wrong_type} ->
+        :error
+    end
+  end
+
   defp public_service_tier_name("priority"), do: "Priority"
   defp public_service_tier_name("fast"), do: "Fast"
   defp public_service_tier_name("flex"), do: "Flex"
   defp public_service_tier_name(value), do: String.capitalize(value)
 
   defp project_image_body_result(%{"data" => data} = body) do
-    with {:ok, projected_data} <- map_results(data, &project_image_data_result/1) do
+    with :ok <- optional_non_negative_integer_field(body, "created"),
+         :ok <-
+           validate_optional_binaries(body, ~w(background output_format quality size)),
+         {:ok, usage} <-
+           optional_projected_map_or_nil(body, "usage", &project_usage_result/1),
+         {:ok, projected_data} <- map_results(data, &project_image_data_result/1) do
       projected =
         body
-        |> Map.take(~w(created background output_format quality size usage))
+        |> Map.take(~w(created background output_format quality size))
         |> keep_image_scalar_values()
         |> Map.put("data", projected_data)
-        |> update_map_value("usage", &project_usage/1)
+        |> maybe_put("usage", usage)
 
       {:ok, projected}
+    else
+      _invalid -> :error
     end
   end
 
   defp project_image_data_result(%{"b64_json" => encoded} = data) when is_binary(encoded) do
-    projected = %{"b64_json" => encoded}
+    with :ok <- optional_binary(data, "revised_prompt") do
+      projected = %{"b64_json" => encoded}
 
-    projected =
-      case Map.get(data, "revised_prompt") do
-        value when is_binary(value) -> Map.put(projected, "revised_prompt", value)
-        _value -> projected
-      end
+      projected =
+        case Map.get(data, "revised_prompt") do
+          value when is_binary(value) -> Map.put(projected, "revised_prompt", value)
+          _value -> projected
+        end
 
-    {:ok, projected}
+      {:ok, projected}
+    else
+      _invalid -> :error
+    end
   end
 
   defp project_image_data_result(_data), do: :error
@@ -872,7 +981,8 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
   defp openai_response_result(response) do
     projected = Map.take(response, @response_keys)
 
-    with {:ok, projected} <- project_output(projected),
+    with :ok <- validate_openai_response_fields(response),
+         {:ok, projected} <- project_output(projected),
          {:ok, projected} <- project_optional_response_error(projected) do
       projected =
         projected
@@ -897,6 +1007,47 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
       {:ok, projected}
     end
   end
+
+  defp validate_openai_response_fields(response) do
+    with :ok <- validate_optional_binaries(response, ~w(id object status model output_text)),
+         :ok <-
+           validate_optional_binary_or_nils(
+             response,
+             ~w(previous_response_id prompt_cache_retention truncation)
+           ),
+         :ok <-
+           validate_optional_integer_or_nils(
+             response,
+             ~w(created_at max_output_tokens max_tool_calls top_logprobs)
+           ),
+         :ok <- optional_integer_or_nil(response, "completed_at"),
+         :ok <- validate_optional_booleans(response, ~w(background parallel_tool_calls store)),
+         :ok <- validate_optional_number_or_nils(response, ~w(temperature top_p)),
+         :ok <- optional_list(response, "output"),
+         :ok <- optional_map_or_nil(response, "incomplete_details"),
+         :ok <- optional_map_or_nil(response, "reasoning"),
+         :ok <- optional_map_or_nil(response, "error"),
+         {:ok, _usage} <-
+           optional_projected_map_or_nil(response, "usage", &project_usage_result/1),
+         :ok <- validate_incomplete_details(Map.get(response, "incomplete_details")),
+         :ok <- validate_reasoning(Map.get(response, "reasoning")),
+         :ok <- optional_non_container(response, "service_tier") do
+      :ok
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp validate_incomplete_details(nil), do: :ok
+  defp validate_incomplete_details(%{} = details), do: optional_binary(details, "reason")
+  defp validate_incomplete_details(_details), do: :error
+
+  defp validate_reasoning(nil), do: :ok
+
+  defp validate_reasoning(%{} = reasoning),
+    do: validate_optional_binaries(reasoning, ~w(effort summary generate_summary summary_format))
+
+  defp validate_reasoning(_reasoning), do: :error
 
   defp project_v1_usage_result(body) do
     with {:ok, request_count} <- required_non_negative_integer(body, :request_count),
@@ -1053,19 +1204,19 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
   defp identity_item_result(%{"type" => type} = item) when is_binary(type) do
     case Map.fetch(@response_item_keys, type) do
       {:ok, keys} ->
-        projected =
-          item
-          |> Map.take(keys)
-          |> drop_container_values(
-            ~w(id type status call_id name namespace server_label approval_request_id approve reason)
-          )
-          |> then(fn projected ->
-            if Map.has_key?(item, "model"),
-              do: Map.put(projected, "model", Facade.public_model()),
-              else: projected
-          end)
-
-        with {:ok, projected} <- project_item_content(projected),
+        with :ok <- validate_identity_item_fields(type, item),
+             projected =
+               item
+               |> Map.take(keys)
+               |> drop_container_values(
+                 ~w(id type status call_id name namespace server_label approval_request_id approve reason)
+               )
+               |> then(fn projected ->
+                 if Map.has_key?(item, "model"),
+                   do: Map.put(projected, "model", Facade.public_model()),
+                   else: projected
+               end),
+             {:ok, projected} <- project_item_content(projected),
              {:ok, projected} <- project_item_nested(type, projected),
              {:ok, projected} <- project_item_error(projected) do
           {:ok, projected}
@@ -1078,6 +1229,48 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
 
   defp identity_item_result(_item), do: :error
 
+  defp validate_identity_item_fields(type, item) do
+    with :ok <-
+           validate_optional_binaries(
+             item,
+             ~w(id type status call_id name server_label approval_request_id reason)
+           ),
+         :ok <- validate_item_namespace(type, item),
+         :ok <- optional_boolean(item, "approve"),
+         :ok <-
+           validate_optional_binaries(
+             item,
+             ~w(arguments input code fingerprint encrypted_content)
+           ),
+         :ok <-
+           validate_optional_maps(
+             item,
+             ~w(action caller operation internal_chat_message_metadata_passthrough)
+           ),
+         :ok <- optional_map_or_nil(item, "error"),
+         :ok <-
+           validate_optional_lists(
+             item,
+             ~w(content pending_safety_checks acknowledged_safety_checks results outputs summary tools)
+           ),
+         :ok <- validate_optional_string_or_string_lists(item, ~w(queries command commands)) do
+      :ok
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp validate_item_namespace(type, item)
+       when type in [
+              "function_call",
+              "function_call_output",
+              "custom_tool_call",
+              "custom_tool_call_output"
+            ],
+       do: optional_binary_or_nil(item, "namespace")
+
+  defp validate_item_namespace(_type, _item), do: :ok
+
   defp project_item_content(%{"content" => content} = item) when is_list(content) do
     case map_results(content, &content_part_result/1) do
       {:ok, projected} -> {:ok, Map.put(item, "content", projected)}
@@ -1089,21 +1282,48 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
   defp project_item_content(_item), do: :error
 
   defp project_item_nested("computer_call", item) do
-    item =
-      item
-      |> update_map_value("action", &project_computer_action/1)
-      |> update_list_value("pending_safety_checks", &project_safety_check/1)
-
-    {:ok, item}
+    with {:ok, action} <-
+           optional_projected_map(item, "action", &project_computer_action_result/1),
+         {:ok, checks} <-
+           optional_projected_list(
+             item,
+             "pending_safety_checks",
+             &project_safety_check_result/1
+           ) do
+      {:ok,
+       item
+       |> Map.drop(~w(action pending_safety_checks))
+       |> maybe_put("action", action)
+       |> maybe_put("pending_safety_checks", checks)}
+    else
+      _invalid -> :error
+    end
   end
 
   defp project_item_nested("computer_call_output", item) do
-    {:ok, update_list_value(item, "acknowledged_safety_checks", &project_safety_check/1)}
+    with {:ok, checks} <-
+           optional_projected_list(
+             item,
+             "acknowledged_safety_checks",
+             &project_safety_check_result/1
+           ) do
+      {:ok,
+       item
+       |> Map.delete("acknowledged_safety_checks")
+       |> maybe_put("acknowledged_safety_checks", checks)}
+    else
+      _invalid -> :error
+    end
   end
 
   defp project_item_nested(type, item)
        when type in ["function_call", "function_call_output"] do
-    {:ok, update_map_value(item, "caller", &project_program_caller/1)}
+    with {:ok, caller} <-
+           optional_projected_map(item, "caller", &project_program_caller_result/1) do
+      {:ok, item |> Map.delete("caller") |> maybe_put("caller", caller)}
+    else
+      _invalid -> :error
+    end
   end
 
   defp project_item_nested(type, item)
@@ -1112,42 +1332,44 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
   end
 
   defp project_item_nested("file_search_call", item) do
-    item =
-      item
-      |> update_string_list_value("queries")
-      |> update_list_value("results", &project_file_search_result/1)
-
-    {:ok, item}
+    with {:ok, results} <-
+           optional_projected_list(item, "results", &project_file_search_result/1) do
+      {:ok, item |> Map.delete("results") |> maybe_put("results", results)}
+    else
+      _invalid -> :error
+    end
   end
 
   defp project_item_nested("web_search_call", item) do
-    {:ok, update_map_value(item, "action", &project_web_search_action/1)}
+    with {:ok, action} <-
+           optional_projected_map(item, "action", &project_web_search_action_result/1) do
+      {:ok, item |> Map.delete("action") |> maybe_put("action", action)}
+    else
+      _invalid -> :error
+    end
   end
 
   defp project_item_nested("code_interpreter_call", item) do
-    item =
-      item
-      |> drop_container_values(~w(code container_id))
-      |> update_list_value("outputs", &project_code_interpreter_output/1)
-
-    {:ok, item}
+    with :ok <- optional_binary(item, "container_id"),
+         {:ok, outputs} <-
+           optional_projected_list(item, "outputs", &project_code_interpreter_output_result/1) do
+      {:ok, item |> Map.delete("outputs") |> maybe_put("outputs", outputs)}
+    else
+      _invalid -> :error
+    end
   end
 
-  defp project_item_nested("image_generation_call", item),
-    do: {:ok, drop_container_values(item, ~w(result))}
+  defp project_item_nested("image_generation_call", item) do
+    if optional_binary(item, "result") == :ok, do: {:ok, item}, else: :error
+  end
 
   defp project_item_nested("reasoning", item) do
-    item =
-      item
-      |> drop_container_values(~w(encrypted_content))
-      |> update_list_value("summary", fn part ->
-        case content_part_result(part) do
-          {:ok, projected} -> projected
-          :error -> %{}
-        end
-      end)
-
-    {:ok, item}
+    with {:ok, summary} <-
+           optional_projected_list(item, "summary", &content_part_result/1) do
+      {:ok, item |> Map.delete("summary") |> maybe_put("summary", summary)}
+    else
+      _invalid -> :error
+    end
   end
 
   defp project_item_nested("program", item),
@@ -1156,107 +1378,207 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
   defp project_item_nested("program_output", item), do: {:ok, item}
 
   defp project_item_nested("local_shell_call", item) do
-    {:ok, update_map_value(item, "action", &project_shell_action/1)}
+    with {:ok, action} <-
+           optional_projected_map(item, "action", &project_shell_action_result/1) do
+      {:ok, item |> Map.delete("action") |> maybe_put("action", action)}
+    else
+      _invalid -> :error
+    end
   end
 
   defp project_item_nested("mcp_list_tools", item) do
-    {:ok, update_list_value(item, "tools", &project_mcp_tool/1)}
+    with {:ok, tools} <- optional_projected_list(item, "tools", &project_mcp_tool_result/1) do
+      {:ok, item |> Map.delete("tools") |> maybe_put("tools", tools)}
+    else
+      _invalid -> :error
+    end
   end
 
   defp project_item_nested("apply_patch_call", item) do
-    {:ok, update_map_value(item, "operation", &project_patch_operation/1)}
+    with {:ok, operation} <-
+           optional_projected_map(item, "operation", &project_patch_operation_result/1) do
+      {:ok, item |> Map.delete("operation") |> maybe_put("operation", operation)}
+    else
+      _invalid -> :error
+    end
   end
 
   defp project_item_nested("compaction", item) do
-    item =
-      update_map_value(item, "internal_chat_message_metadata_passthrough", fn metadata ->
-        metadata
-        |> Map.take(~w(turn_id))
-        |> drop_container_values(~w(turn_id))
-      end)
-
-    {:ok, drop_container_values(item, ~w(encrypted_content))}
+    with {:ok, metadata} <-
+           optional_projected_map(
+             item,
+             "internal_chat_message_metadata_passthrough",
+             &project_compaction_metadata_result/1
+           ) do
+      {:ok,
+       item
+       |> Map.delete("internal_chat_message_metadata_passthrough")
+       |> maybe_put("internal_chat_message_metadata_passthrough", metadata)}
+    else
+      _invalid -> :error
+    end
   end
 
   defp project_item_nested(_type, item), do: {:ok, item}
 
-  defp project_program_caller(%{"type" => type} = caller)
+  defp project_program_caller_result(%{"type" => type} = caller)
        when type in ["direct", "program"] do
-    caller
-    |> Map.take(~w(type caller_id))
-    |> drop_container_values(~w(type caller_id))
+    with :ok <- optional_binary(caller, "caller_id") do
+      {:ok, Map.take(caller, ~w(type caller_id))}
+    else
+      _invalid -> :error
+    end
   end
 
-  defp project_program_caller(_caller), do: %{}
+  defp project_program_caller_result(_caller), do: :error
 
-  defp project_computer_action(action) do
-    action
-    |> Map.take(~w(type button x y keys text scroll_x scroll_y path command timeout_ms))
-    |> drop_container_values(~w(type button x y text scroll_x scroll_y timeout_ms))
-    |> update_string_list_value("keys")
-    |> update_string_list_value("command")
-    |> update_point_list_value("path")
+  defp project_computer_action_result(%{} = action) do
+    with :ok <- validate_optional_binaries(action, ~w(type button text)),
+         :ok <- validate_optional_numbers(action, ~w(x y scroll_x scroll_y)),
+         :ok <- optional_non_negative_integer_field(action, "timeout_ms"),
+         :ok <- optional_string_list(action, "keys"),
+         :ok <- optional_string_or_string_list(action, "command"),
+         {:ok, path} <- optional_projected_list(action, "path", &project_point_result/1) do
+      projected =
+        action
+        |> Map.take(~w(type button x y keys text scroll_x scroll_y command timeout_ms))
+        |> maybe_put("path", path)
+
+      {:ok, projected}
+    else
+      _invalid -> :error
+    end
   end
 
-  defp project_safety_check(check),
-    do: check |> Map.take(~w(id code message)) |> drop_container_values(~w(id code message))
+  defp project_computer_action_result(_action), do: :error
 
-  defp project_file_search_result(result) do
-    result
-    |> Map.take(~w(file_id filename score text))
-    |> drop_container_values(~w(file_id filename score text))
+  defp project_point_result(%{} = point) do
+    with :ok <- validate_optional_numbers(point, ~w(x y)) do
+      {:ok, Map.take(point, ~w(x y))}
+    else
+      _invalid -> :error
+    end
   end
 
-  defp project_web_search_action(action) do
-    action
-    |> Map.take(~w(type query queries url sources))
-    |> drop_container_values(~w(type query url))
-    |> update_string_list_value("queries")
-    |> update_list_value("sources", fn source ->
-      source |> Map.take(~w(type url title)) |> drop_container_values(~w(type url title))
-    end)
+  defp project_point_result(_point), do: :error
+
+  defp project_safety_check_result(%{} = check) do
+    with :ok <- validate_optional_binaries(check, ~w(id code message)) do
+      {:ok, Map.take(check, ~w(id code message))}
+    else
+      _invalid -> :error
+    end
   end
 
-  defp project_code_interpreter_output(output) do
-    output |> Map.take(~w(type logs text)) |> drop_container_values(~w(type logs text))
+  defp project_safety_check_result(_check), do: :error
+
+  defp project_file_search_result(%{} = result) do
+    with :ok <- validate_optional_binaries(result, ~w(file_id filename text)),
+         :ok <- optional_number(result, "score") do
+      {:ok, Map.take(result, ~w(file_id filename score text))}
+    else
+      _invalid -> :error
+    end
   end
 
-  defp project_shell_action(action) do
-    action
-    |> Map.take(~w(type command commands timeout_ms user working_directory))
-    |> drop_container_values(~w(type timeout_ms user working_directory))
-    |> update_string_list_value("command")
-    |> update_string_list_value("commands")
+  defp project_file_search_result(_result), do: :error
+
+  defp project_web_search_action_result(%{} = action) do
+    with :ok <- validate_optional_binaries(action, ~w(type query url)),
+         :ok <- optional_string_or_string_list(action, "queries"),
+         {:ok, sources} <-
+           optional_projected_list(action, "sources", &project_web_search_source_result/1) do
+      {:ok,
+       action
+       |> Map.take(~w(type query queries url))
+       |> maybe_put("sources", sources)}
+    else
+      _invalid -> :error
+    end
   end
 
-  defp project_mcp_tool(tool),
-    do: tool |> Map.take(~w(name title)) |> drop_container_values(~w(name title))
+  defp project_web_search_action_result(_action), do: :error
 
-  defp project_patch_operation(operation) do
-    operation
-    |> Map.take(~w(type path diff old_path new_path))
-    |> drop_container_values(~w(type path diff old_path new_path))
+  defp project_web_search_source_result(%{} = source) do
+    with :ok <- validate_optional_binaries(source, ~w(type url title)) do
+      {:ok, Map.take(source, ~w(type url title))}
+    else
+      _invalid -> :error
+    end
   end
+
+  defp project_web_search_source_result(_source), do: :error
+
+  defp project_code_interpreter_output_result(%{} = output) do
+    with :ok <- validate_optional_binaries(output, ~w(type logs text)) do
+      {:ok, Map.take(output, ~w(type logs text))}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp project_code_interpreter_output_result(_output), do: :error
+
+  defp project_shell_action_result(%{} = action) do
+    with :ok <- validate_optional_binaries(action, ~w(type user working_directory)),
+         :ok <- optional_non_negative_integer_field(action, "timeout_ms"),
+         :ok <- optional_string_or_string_list(action, "command"),
+         :ok <- optional_string_or_string_list(action, "commands") do
+      {:ok, Map.take(action, ~w(type command commands timeout_ms user working_directory))}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp project_shell_action_result(_action), do: :error
+
+  defp project_mcp_tool_result(%{} = tool) do
+    with :ok <- validate_optional_binaries(tool, ~w(name title)) do
+      {:ok, Map.take(tool, ~w(name title))}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp project_mcp_tool_result(_tool), do: :error
+
+  defp project_patch_operation_result(%{} = operation) do
+    with :ok <- validate_optional_binaries(operation, ~w(type path diff old_path new_path)) do
+      {:ok, Map.take(operation, ~w(type path diff old_path new_path))}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp project_patch_operation_result(_operation), do: :error
+
+  defp project_compaction_metadata_result(%{} = metadata) do
+    with :ok <- optional_binary(metadata, "turn_id") do
+      {:ok, Map.take(metadata, ~w(turn_id))}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp project_compaction_metadata_result(_metadata), do: :error
 
   defp content_part_result(%{"type" => type} = part) when is_binary(type) do
     case Map.fetch(@content_part_keys, type) do
       {:ok, keys} ->
-        projected = Map.take(part, keys)
-
-        projected =
-          if type == "output_text" do
-            projected
-            |> update_list_value("annotations", &project_annotation/1)
+        with :ok <- validate_content_part_fields(part),
+             {:ok, annotations} <-
+               optional_projected_list(part, "annotations", &project_annotation_result/1) do
+          projected =
+            part
+            |> Map.take(keys)
+            |> Map.delete("annotations")
             |> Map.delete("logprobs")
-          else
-            projected
-          end
+            |> maybe_put("annotations", annotations)
 
-        {:ok,
-         drop_container_values(
-           projected,
-           ~w(type text refusal image_url detail file_id file_data file_url filename)
-         )}
+          {:ok, projected}
+        else
+          _invalid -> :error
+        end
 
       :error ->
         :error
@@ -1265,20 +1587,19 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
 
   defp content_part_result(_part), do: :error
 
-  defp project_annotation(%{"type" => type} = annotation)
-       when type in ["file_citation", "container_file_citation", "file_path"] do
-    annotation
-    |> Map.take(~w(type index start_index end_index file_id container_id filename))
-    |> drop_container_values(~w(type index start_index end_index file_id container_id filename))
+  defp validate_content_part_fields(part) do
+    with :ok <-
+           validate_optional_binaries(
+             part,
+             ~w(type text refusal image_url detail file_id file_data file_url filename)
+           ),
+         :ok <- optional_list(part, "annotations"),
+         :ok <- optional_list(part, "logprobs") do
+      :ok
+    else
+      _invalid -> :error
+    end
   end
-
-  defp project_annotation(%{"type" => "url_citation"} = annotation) do
-    annotation
-    |> Map.take(~w(type start_index end_index title url))
-    |> drop_container_values(~w(type start_index end_index title url))
-  end
-
-  defp project_annotation(_annotation), do: %{}
 
   defp project_item_error(%{"error" => %{} = error} = item),
     do: {:ok, Map.put(item, "error", public_error(error))}
@@ -1312,7 +1633,8 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
       |> Map.take(event_keys(type))
       |> drop_container_values(event_scalar_keys(type))
 
-    with {:ok, projected} <- project_event_response(projected),
+    with :ok <- validate_event_fields(type, event),
+         {:ok, projected} <- project_event_response(projected),
          {:ok, projected} <- project_event_item(projected),
          {:ok, projected} <- project_event_part(projected),
          {:ok, projected} <- project_event_error_result(projected),
@@ -1322,6 +1644,54 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
   end
 
   defp responses_event_result(_event), do: :error
+
+  defp validate_event_fields(type, event) do
+    scalar_keys = event_scalar_keys(type)
+
+    with :ok <- validate_event_scalar_types(type, event, scalar_keys),
+         :ok <- optional_map(event, "response"),
+         :ok <- optional_map(event, "item"),
+         :ok <- optional_map(event, "part"),
+         :ok <- optional_map_or_nil(event, "error") do
+      :ok
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp validate_event_scalar_types(type, event, keys) do
+    integer_keys =
+      ~w(sequence_number output_index content_index summary_index partial_image_index)
+
+    Enum.reduce_while(keys, :ok, fn key, :ok ->
+      result =
+        cond do
+          key == "model" ->
+            optional_binary(event, key)
+
+          key == "status" and
+              type in ~w(response.moderation.started response.moderation.completed) ->
+            optional_binary(event, key)
+
+          key == "status" ->
+            optional_integer(event, key)
+
+          key in integer_keys ->
+            optional_integer(event, key)
+
+          key in ~w(type item_id check_id delta text arguments input code partial_image_b64 message param) ->
+            optional_binary_or_nil(event, key)
+
+          key == "code" ->
+            optional_binary_or_nil(event, key)
+
+          true ->
+            optional_non_container(event, key)
+        end
+
+      if result == :ok, do: {:cont, :ok}, else: {:halt, :error}
+    end)
+  end
 
   defp event_scalar_keys(type) do
     event_keys(type) -- ~w(response item part error)
@@ -1471,7 +1841,13 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
           {:cont, {:ok, projected}}
 
         {:ok, %{} = window} ->
-          {:cont, {:ok, Map.put(projected, key, project_rate_limit_window(window))}}
+          case project_rate_limit_window_result(window) do
+            {:ok, safe_window} ->
+              {:cont, {:ok, Map.put(projected, key, safe_window)}}
+
+            :error ->
+              {:halt, :error}
+          end
 
         {:ok, _wrong_type} ->
           {:halt, :error}
@@ -1479,79 +1855,459 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
     end)
   end
 
-  defp project_rate_limit_window(window) do
-    window
-    |> Map.take(~w(used_percent window_minutes reset_at reset_after_seconds))
-    |> keep_number_values()
+  defp project_rate_limit_window_result(window) do
+    with :ok <-
+           validate_optional_numbers(
+             window,
+             ~w(used_percent window_minutes reset_at reset_after_seconds)
+           ) do
+      {:ok,
+       window
+       |> Map.take(~w(used_percent window_minutes reset_at reset_after_seconds))
+       |> keep_number_values()}
+    else
+      _invalid -> :error
+    end
   end
 
-  defp project_chat_choice(%{} = choice) do
-    choice
-    |> Map.take(~w(index finish_reason message delta))
-    |> drop_container_values(~w(index finish_reason))
-    |> update_map_value("message", &project_chat_message/1)
-    |> update_map_value("delta", &project_chat_message/1)
+  defp project_chat_completion_result(
+         %{
+           "id" => id,
+           "object" => object,
+           "created" => created,
+           "model" => model,
+           "choices" => choices
+         } = completion
+       )
+       when is_binary(id) and object in ["chat.completion", "chat.completion.chunk"] and
+              is_integer(created) and created >= 0 and is_binary(model) and is_list(choices) do
+    with {:ok, projected_choices} <- map_results(choices, &project_chat_choice_result/1),
+         {:ok, projected_usage} <-
+           optional_projected_map_or_nil(completion, "usage", &project_usage_result/1),
+         :ok <- optional_non_container(completion, "service_tier") do
+      projected = %{
+        "id" => id,
+        "object" => object,
+        "created" => created,
+        "model" => Facade.public_model(),
+        "choices" => projected_choices
+      }
+
+      projected =
+        case Map.get(completion, "service_tier") do
+          tier when tier in @safe_public_service_tiers -> Map.put(projected, "service_tier", tier)
+          _tier -> projected
+        end
+
+      {:ok, maybe_put(projected, "usage", projected_usage)}
+    else
+      _invalid -> :error
+    end
   end
 
-  defp project_chat_choice(_choice), do: %{}
+  defp project_chat_completion_result(_completion), do: :error
 
-  defp project_chat_message(%{} = message) do
-    message
-    |> Map.take(~w(role content refusal annotations audio tool_calls function_call))
-    |> drop_container_values(~w(role refusal))
-    |> project_chat_content()
-    |> update_list_value("annotations", &project_annotation/1)
-    |> update_map_value("audio", fn audio ->
-      audio
-      |> Map.take(~w(id data transcript expires_at))
-      |> drop_container_values(~w(id data transcript expires_at))
+  defp project_chat_choice_result(%{"index" => index} = choice) when is_integer(index) do
+    with :ok <- optional_binary_or_nil(choice, "finish_reason"),
+         {:ok, message} <-
+           optional_projected_map(choice, "message", &project_chat_message_result/1),
+         {:ok, delta} <- optional_projected_map(choice, "delta", &project_chat_message_result/1),
+         true <- not is_nil(message) or not is_nil(delta) do
+      projected = %{"index" => index}
+
+      projected =
+        projected
+        |> maybe_put("finish_reason", Map.get(choice, "finish_reason"))
+        |> maybe_put("message", message)
+        |> maybe_put("delta", delta)
+
+      {:ok, projected}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp project_chat_choice_result(_choice), do: :error
+
+  defp project_chat_message_result(%{} = message) do
+    with :ok <- optional_binary(message, "role"),
+         :ok <- optional_binary_or_nil(message, "refusal"),
+         {:ok, projected_content} <- project_optional_chat_content(message),
+         {:ok, annotations} <-
+           optional_projected_list(message, "annotations", &project_annotation_result/1),
+         {:ok, audio} <- optional_projected_map(message, "audio", &project_chat_audio_result/1),
+         {:ok, tool_calls} <-
+           optional_projected_list(message, "tool_calls", &project_chat_tool_call_result/1),
+         {:ok, function_call} <-
+           optional_projected_map(message, "function_call", &project_chat_function_result/1) do
+      projected = %{}
+
+      projected =
+        projected
+        |> maybe_put("role", Map.get(message, "role"))
+        |> maybe_put("content", projected_content)
+        |> maybe_put("refusal", Map.get(message, "refusal"))
+        |> maybe_put("annotations", annotations)
+        |> maybe_put("audio", audio)
+        |> maybe_put("tool_calls", tool_calls)
+        |> maybe_put("function_call", function_call)
+
+      {:ok, projected}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp project_optional_chat_content(message) do
+    case Map.fetch(message, "content") do
+      :error ->
+        {:ok, nil}
+
+      {:ok, content} when is_binary(content) or is_nil(content) ->
+        {:ok, content}
+
+      {:ok, content} when is_list(content) ->
+        map_results(content, &content_part_result/1)
+
+      {:ok, _wrong_type} ->
+        :error
+    end
+  end
+
+  defp project_chat_audio_result(%{} = audio) do
+    with :ok <- optional_binary(audio, "id"),
+         :ok <- optional_binary(audio, "data"),
+         :ok <- optional_binary(audio, "transcript"),
+         :ok <- optional_integer(audio, "expires_at") do
+      {:ok, Map.take(audio, ~w(id data transcript expires_at))}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp project_chat_function_result(%{} = function) do
+    with :ok <- optional_binary(function, "name"),
+         :ok <- optional_binary(function, "arguments") do
+      {:ok, Map.take(function, ~w(name arguments))}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp project_chat_custom_result(%{} = custom) do
+    with :ok <- optional_binary(custom, "name"),
+         :ok <- optional_binary(custom, "input") do
+      {:ok, Map.take(custom, ~w(name input))}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp project_chat_tool_call_result(%{} = tool_call) do
+    with :ok <- optional_integer(tool_call, "index"),
+         :ok <- optional_binary(tool_call, "id"),
+         :ok <- optional_binary(tool_call, "type"),
+         {:ok, function} <-
+           optional_projected_map(tool_call, "function", &project_chat_function_result/1),
+         {:ok, custom} <-
+           optional_projected_map(tool_call, "custom", &project_chat_custom_result/1) do
+      {:ok,
+       tool_call
+       |> Map.take(~w(index id type))
+       |> maybe_put("function", function)
+       |> maybe_put("custom", custom)}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp project_annotation_result(%{"type" => type} = annotation)
+       when type in ["file_citation", "container_file_citation", "file_path"] do
+    with :ok <- optional_integer(annotation, "index"),
+         :ok <- optional_integer(annotation, "start_index"),
+         :ok <- optional_integer(annotation, "end_index"),
+         :ok <- optional_binary(annotation, "file_id"),
+         :ok <- optional_binary(annotation, "container_id"),
+         :ok <- optional_binary(annotation, "filename") do
+      {:ok,
+       Map.take(annotation, ~w(type index start_index end_index file_id container_id filename))}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp project_annotation_result(%{"type" => "url_citation"} = annotation) do
+    with :ok <- optional_integer(annotation, "start_index"),
+         :ok <- optional_integer(annotation, "end_index"),
+         :ok <- optional_binary(annotation, "title"),
+         :ok <- optional_binary(annotation, "url") do
+      {:ok, Map.take(annotation, ~w(type start_index end_index title url))}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp project_annotation_result(_annotation), do: :error
+
+  defp project_usage_result(%{} = usage) do
+    number_keys =
+      ~w(input_tokens cached_input_tokens output_tokens reasoning_tokens total_tokens prompt_tokens completion_tokens)
+
+    detail_keys =
+      ~w(input_tokens_details output_tokens_details prompt_tokens_details completion_tokens_details)
+
+    with :ok <- validate_optional_numbers(usage, number_keys),
+         :ok <- validate_optional_number_maps(usage, detail_keys) do
+      {:ok, project_usage(usage)}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp validate_optional_number_maps(map, keys) do
+    if Enum.all?(keys, fn key ->
+         case Map.fetch(map, key) do
+           :error -> true
+           {:ok, %{} = details} -> Enum.all?(Map.values(details), &is_number/1)
+           {:ok, _wrong_type} -> false
+         end
+       end),
+       do: :ok,
+       else: :error
+  end
+
+  defp optional_projected_map(map, key, fun) do
+    case Map.fetch(map, key) do
+      :error -> {:ok, nil}
+      {:ok, %{} = value} -> fun.(value)
+      {:ok, _wrong_type} -> :error
+    end
+  end
+
+  defp optional_projected_map_or_nil(map, key, fun) do
+    case Map.fetch(map, key) do
+      :error -> {:ok, nil}
+      {:ok, nil} -> {:ok, nil}
+      {:ok, %{} = value} -> fun.(value)
+      {:ok, _wrong_type} -> :error
+    end
+  end
+
+  defp optional_projected_list(map, key, fun) do
+    case Map.fetch(map, key) do
+      :error -> {:ok, nil}
+      {:ok, values} when is_list(values) -> map_results(values, fun)
+      {:ok, _wrong_type} -> :error
+    end
+  end
+
+  defp optional_non_container(map, key) do
+    case Map.fetch(map, key) do
+      :error -> :ok
+      {:ok, value} when not is_map(value) and not is_list(value) -> :ok
+      {:ok, _wrong_type} -> :error
+    end
+  end
+
+  defp optional_binary(map, key) do
+    case Map.fetch(map, key) do
+      :error -> :ok
+      {:ok, value} when is_binary(value) -> :ok
+      {:ok, _wrong_type} -> :error
+    end
+  end
+
+  defp optional_binary_or_nil(map, key) do
+    case Map.fetch(map, key) do
+      :error -> :ok
+      {:ok, value} when is_binary(value) or is_nil(value) -> :ok
+      {:ok, _wrong_type} -> :error
+    end
+  end
+
+  defp optional_integer(map, key) do
+    case Map.fetch(map, key) do
+      :error -> :ok
+      {:ok, value} when is_integer(value) -> :ok
+      {:ok, _wrong_type} -> :error
+    end
+  end
+
+  defp optional_integer_or_nil(map, key) do
+    case Map.fetch(map, key) do
+      :error -> :ok
+      {:ok, value} when is_integer(value) or is_nil(value) -> :ok
+      {:ok, _wrong_type} -> :error
+    end
+  end
+
+  defp optional_number(map, key) do
+    case Map.fetch(map, key) do
+      :error -> :ok
+      {:ok, value} when is_number(value) -> :ok
+      {:ok, _wrong_type} -> :error
+    end
+  end
+
+  defp optional_number_or_nil(map, key) do
+    case Map.fetch(map, key) do
+      :error -> :ok
+      {:ok, value} when is_number(value) or is_nil(value) -> :ok
+      {:ok, _wrong_type} -> :error
+    end
+  end
+
+  defp optional_boolean(map, key) do
+    case Map.fetch(map, key) do
+      :error -> :ok
+      {:ok, value} when is_boolean(value) -> :ok
+      {:ok, _wrong_type} -> :error
+    end
+  end
+
+  defp optional_list(map, key) do
+    case Map.fetch(map, key) do
+      :error -> :ok
+      {:ok, value} when is_list(value) -> :ok
+      {:ok, _wrong_type} -> :error
+    end
+  end
+
+  defp optional_map(map, key) do
+    case Map.fetch(map, key) do
+      :error -> :ok
+      {:ok, %{} = _value} -> :ok
+      {:ok, _wrong_type} -> :error
+    end
+  end
+
+  defp optional_map_or_nil(map, key) do
+    case Map.fetch(map, key) do
+      :error -> :ok
+      {:ok, nil} -> :ok
+      {:ok, %{} = _value} -> :ok
+      {:ok, _wrong_type} -> :error
+    end
+  end
+
+  defp optional_nil(map, key) do
+    case Map.fetch(map, key) do
+      :error -> :ok
+      {:ok, nil} -> :ok
+      {:ok, _wrong_type} -> :error
+    end
+  end
+
+  defp optional_non_negative_integer_field(map, key) do
+    case Map.fetch(map, key) do
+      :error -> :ok
+      {:ok, value} when is_integer(value) and value >= 0 -> :ok
+      {:ok, _wrong_type} -> :error
+    end
+  end
+
+  defp optional_non_negative_integer_or_nil_field(map, key) do
+    case Map.fetch(map, key) do
+      :error -> :ok
+      {:ok, nil} -> :ok
+      {:ok, value} when is_integer(value) and value >= 0 -> :ok
+      {:ok, _wrong_type} -> :error
+    end
+  end
+
+  defp optional_positive_integer_field(map, key) do
+    case Map.fetch(map, key) do
+      :error -> :ok
+      {:ok, value} when is_integer(value) and value > 0 -> :ok
+      {:ok, _wrong_type} -> :error
+    end
+  end
+
+  defp optional_string_list(map, key) do
+    case Map.fetch(map, key) do
+      :error ->
+        :ok
+
+      {:ok, values} when is_list(values) ->
+        if Enum.all?(values, &is_binary/1), do: :ok, else: :error
+
+      {:ok, _wrong_type} ->
+        :error
+    end
+  end
+
+  defp optional_string_or_string_list(map, key) do
+    case Map.fetch(map, key) do
+      :error ->
+        :ok
+
+      {:ok, value} when is_binary(value) ->
+        :ok
+
+      {:ok, values} when is_list(values) ->
+        if Enum.all?(values, &is_binary/1), do: :ok, else: :error
+
+      {:ok, _wrong_type} ->
+        :error
+    end
+  end
+
+  defp validate_optional_binaries(map, keys),
+    do: validate_optional_fields(map, keys, &optional_binary/2)
+
+  defp validate_optional_binary_or_nils(map, keys),
+    do: validate_optional_fields(map, keys, &optional_binary_or_nil/2)
+
+  defp validate_optional_integer_or_nils(map, keys),
+    do: validate_optional_fields(map, keys, &optional_integer_or_nil/2)
+
+  defp validate_optional_numbers(map, keys),
+    do: validate_optional_fields(map, keys, &optional_number/2)
+
+  defp validate_optional_number_or_nils(map, keys),
+    do: validate_optional_fields(map, keys, &optional_number_or_nil/2)
+
+  defp validate_optional_booleans(map, keys),
+    do: validate_optional_fields(map, keys, &optional_boolean/2)
+
+  defp validate_optional_positive_integers(map, keys),
+    do: validate_optional_fields(map, keys, &optional_positive_integer_field/2)
+
+  defp validate_optional_lists(map, keys),
+    do: validate_optional_fields(map, keys, &optional_list/2)
+
+  defp validate_optional_maps(map, keys),
+    do: validate_optional_fields(map, keys, &optional_map/2)
+
+  defp validate_optional_string_or_string_lists(map, keys) do
+    Enum.reduce_while(keys, :ok, fn key, :ok ->
+      result =
+        case Map.fetch(map, key) do
+          :error ->
+            :ok
+
+          {:ok, value} when is_binary(value) ->
+            :ok
+
+          {:ok, values} when is_list(values) ->
+            if Enum.all?(values, &is_binary/1), do: :ok, else: :error
+
+          {:ok, _wrong_type} ->
+            :error
+        end
+
+      if result == :ok, do: {:cont, :ok}, else: {:halt, :error}
     end)
-    |> update_list_value("tool_calls", &project_chat_tool_call/1)
-    |> update_map_value("function_call", fn function ->
-      function
-      |> Map.take(~w(name arguments))
-      |> drop_container_values(~w(name arguments))
+  end
+
+  defp validate_optional_fields(map, keys, validator) do
+    Enum.reduce_while(keys, :ok, fn key, :ok ->
+      if validator.(map, key) == :ok, do: {:cont, :ok}, else: {:halt, :error}
     end)
   end
 
-  defp project_chat_content(%{"content" => content} = message) when is_binary(content),
-    do: message
-
-  defp project_chat_content(%{"content" => content} = message) when is_list(content) do
-    projected =
-      Enum.flat_map(content, fn
-        %{} = part ->
-          case content_part_result(part) do
-            {:ok, value} -> [value]
-            :error -> []
-          end
-
-        _part ->
-          []
-      end)
-
-    Map.put(message, "content", projected)
-  end
-
-  defp project_chat_content(message), do: Map.delete(message, "content")
-
-  defp project_chat_tool_call(%{} = tool_call) do
-    tool_call
-    |> Map.take(~w(index id type function custom))
-    |> drop_container_values(~w(index id type))
-    |> update_map_value("function", fn function ->
-      function
-      |> Map.take(~w(name arguments))
-      |> drop_container_values(~w(name arguments))
-    end)
-    |> update_map_value("custom", fn custom ->
-      custom
-      |> Map.take(~w(name input))
-      |> drop_container_values(~w(name input))
-    end)
-  end
-
-  defp project_chat_tool_call(_tool_call), do: %{}
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp project_usage(%{} = usage) do
     usage
@@ -1672,56 +2428,6 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
       {:ok, %{} = nested} -> Map.put(map, key, fun.(nested))
       {:ok, _wrong_type} -> Map.delete(map, key)
       :error -> map
-    end
-  end
-
-  defp update_list_value(map, key, fun) do
-    case Map.fetch(map, key) do
-      {:ok, list} when is_list(list) ->
-        projected =
-          Enum.flat_map(list, fn
-            %{} = item -> [fun.(item)]
-            _wrong_type -> []
-          end)
-
-        Map.put(map, key, projected)
-
-      {:ok, _wrong_type} ->
-        Map.delete(map, key)
-
-      :error ->
-        map
-    end
-  end
-
-  defp update_string_list_value(map, key) do
-    case Map.fetch(map, key) do
-      {:ok, value} when is_binary(value) -> map
-      {:ok, list} when is_list(list) -> Map.put(map, key, Enum.filter(list, &is_binary/1))
-      {:ok, _wrong_type} -> Map.delete(map, key)
-      :error -> map
-    end
-  end
-
-  defp update_point_list_value(map, key) do
-    case Map.fetch(map, key) do
-      {:ok, list} when is_list(list) ->
-        points =
-          Enum.flat_map(list, fn
-            %{} = point ->
-              [point |> Map.take(~w(x y)) |> drop_container_values(~w(x y))]
-
-            _wrong_type ->
-              []
-          end)
-
-        Map.put(map, key, points)
-
-      {:ok, _wrong_type} ->
-        Map.delete(map, key)
-
-      :error ->
-        map
     end
   end
 

@@ -1836,17 +1836,27 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
              request_websocket_frames([frame])
   end
 
-  test "ignores malformed, disallowed, repeated, and conflicting response identities" do
-    first_response_id = "response-identity-first"
-
+  test "fails closed on a wrong-typed response identity" do
     frames = [
       ~s({"type":"response.created","id":"typed-top-level-id"}),
       ~s({"type":"response.created","response":{"id":"   "}}),
-      Jason.encode!(%{"type" => "response.created", "response" => %{"id" => 1}}),
-      Jason.encode!(%{
-        "type" => "response.created",
-        "response" => %{"id" => String.duplicate("x", 1_025)}
-      }),
+      Jason.encode!(%{"type" => "response.created", "response" => %{"id" => 1}})
+    ]
+
+    assert {:error, %{reason: :invalid_upstream_websocket_stream_data, body: body}} =
+             request_websocket_frames(frames,
+               message_mapper: &StreamProtocol.canonicalize_native_codex_responses_json_message/1
+             )
+
+    refute body =~ "typed-top-level-id"
+    refute body =~ ~s("id":1)
+    assert body =~ ~s("code":"server_error")
+  end
+
+  test "retains the first valid response identity across repeats and conflicts" do
+    first_response_id = "response-identity-first"
+
+    frames = [
       Jason.encode!(%{
         "type" => "response.created",
         "response" => %{"id" => first_response_id}

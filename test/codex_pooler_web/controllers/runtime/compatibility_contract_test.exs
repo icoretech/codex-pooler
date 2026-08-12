@@ -118,7 +118,12 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert fixture.capability.provider_url_exposed == false
       assert fixture.capability.provider_url_persisted == false
       assert fixture.capability.redirects == false
-      assert fixture.capability.bearer_auth_optional == true
+
+      assert fixture.capability.auth ==
+               "headerless_single_purpose_bearer_capability_exception"
+
+      assert fixture.capability.optional_pool_authorization ==
+               "must_match_encrypted_pool_and_api_key_scope"
     end
 
     test "has no pending compatibility gaps" do
@@ -1398,6 +1403,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert fixture.opaque_resolution == %{
                cross_pool_or_key: "invalid_turn_state_before_dispatch",
                tamper_or_expiry: "invalid_turn_state_before_dispatch",
+               unknown_raw_frame_value: "invalid_turn_state_before_dispatch",
                assignment: "hard_pinned",
                session: "exact_reconnectable_anchor_for_upgrade_owner_and_frame_retarget"
              }

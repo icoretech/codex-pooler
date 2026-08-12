@@ -183,3 +183,87 @@ All production, test, documentation, and report changes are contained in one des
 
 - The full suite is not completely green because the same unrelated `DevServerLifecycleTest` process-liveness failure exists at baseline and persists in isolation. All 1,211 changed/new tests pass, and every other full-suite test passes.
 - No live provider/client smoke test, deployment, or live-key revocation was authorized in this fix wave. Root will handle post-review/live verification.
+
+## Second review fix wave (frozen baseline `3f4cffca`)
+
+### Status and scope
+
+DONE_WITH_CONCERNS. The consolidated second review was applied as a new fix wave on frozen commit `3f4cffcad38df69a010978e392e615868804e5ce`. The wave closes every technically confirmed projection, native SSE, websocket turn-state, signed-file transport, capability-liveness, private-spool, and logging item. It preserves the documented headerless single-purpose file capability as the one authentication exception while binding it to active Pool, key, file, assignment, identity, operation, declared size, and expiry. Optional presented Pool authorization must match the capability scope.
+
+No deployment, live-provider request, credential revocation, or other live-state change was performed.
+
+### Confirmed findings and repairs
+
+#### Strict public schemas
+
+- Supported response families now validate required and nested protocol fields before projection. A wrong-typed identity, discriminator, list, object, enum, numeric, boolean, or nullable field produces a local projection failure instead of being silently deleted from an upstream 2xx.
+- Exact nullable locations remain nullable; analogous map/list mutations fail. The audit covers chat, Responses envelopes, items, content, usage, models, files, Ollama, compaction, text completion, images, catalog/discovery, rate limits, file search, web search, code execution, reasoning, shell, MCP, patch, namespace, and moderation families.
+- Arbitrary data remains only at explicit content-bearing locations such as text and tool arguments. Unknown envelope siblings are dropped, while malformed identity-bearing fields fail before upstream dispatch.
+- Collected HTTP, SSE, direct websocket, and owner-forwarded websocket tests assert one local safe failure and failed request/attempt/turn settlement, with later source bytes suppressed.
+
+#### Native SSE overflow and EOF
+
+- The bounded incremental parser emits a dedicated opaque overflow marker even when complete blocks precede an oversized tail.
+- Once emitted, the marker is a terminal parser state: later chunks cannot append raw residue or erase its exact identity.
+- Same-chunk and fragmented valid-plus-overflow tails fail exactly once. Any nonempty native residue at clean EOF, including an under-limit fragment, also emits one safe terminal and settles request, attempt, and Codex turn failed.
+- Complete valid native blocks remain visible before the terminal local failure; no raw malformed/oversized residue is relayed.
+
+#### Websocket frame turn state
+
+- Client-supplied frame continuity accepts only authenticated `cpts_` handles. Unknown raw strings, malformed metadata containers, cross-key handles, and tampered handles fail before dispatch, alias mutation, or session mutation in direct and owner-forwarded paths.
+- Resolution restores the exact upstream raw token only in the upstream frame, applies the embedded active assignment hard pin, and consumes the exact embedded session anchor.
+- Server-issued local websocket session markers remain internal and are stripped from upstream/public payloads and persistence. Reconnect tests mint through the real `TurnState` path and assert exact session and assignment continuity; stale raw-forward/register expectations were removed.
+
+#### Signed file transport and capability liveness
+
+- Every signed URL use validates syntax/scheme/port and resolves both A and AAAA. The whole answer set must be public; mixed public/private, private IPv6, malformed answers, and rebinding are rejected locally.
+- The selected validated address is placed in the connection URL so the HTTP client cannot re-resolve the provider hostname. The original hostname remains the HTTP Host value and the explicit TLS verification/SNI hostname. Redirects and retries remain disabled, and resolution is repeated for each use.
+- Deterministic resolver/adapter tests assert pinned-IP dispatch, original Host/hostname, mixed A/AAAA rejection, private rebind rejection before adapter invocation, and no fallback connection.
+- Capability use-time resolution requires the owned operation-specific file state plus active/nonexpired API key, active Pool, active matching assignment and identity, present usable credential, exact declared size, and decryptable nonempty secret.
+- Upload spooling creates a randomized private `0700` directory, then an exclusive `0600` file before body bytes are written. Body size and content encoding remain bounded/rejected at the controller boundary.
+- Transport logs retain only a constant `transport_error` reason and safe class/context. Tests prove arbitrary reason, signed query, URL hostname, signature sentinel, and capability bearer do not appear in transport or request logs.
+- The public contract explicitly documents the headerless capability exception and its scope/liveness restrictions; optional presented authorization must match.
+
+### Second-wave TDD evidence
+
+Each confirmed production change followed a focused red/green cycle:
+
+- Projection/native SSE starting slice: `67/70 passed` before fixes; the malformed chat/nested-type and overflow cases were the expected failures. After strict schemas and overflow handling: `71/71 passed`, then the EOF lifecycle regression failed `0/1` with successful settlement before its repair and the expanded slice passed `73/73`.
+- Frame-scoped state: arbitrary raw state initially dispatched (`0/1`); after the `cpts_`-only gate the focused test passed `1/1`, and the direct/owner marker slice passed `4/4`.
+- DNS validation module: `0/4` before `SignedUrlTarget`; `4/4` after. Connection-boundary adapter tests were `0/2` before pin wiring and the combined resolver/connection slice passed `6/6` after.
+- Capability liveness: `0/3` before active assignment/identity/key/credential checks; `3/3` after.
+- Private spool: `0/1` before the module existed; `1/1` after creation-before-write permission enforcement.
+- Transport secrecy: the new arbitrary-reason test was `0/1` because its signature sentinel appeared in the log; it passed `1/1` after constant-reason normalization.
+- Schema mutation audit: the initial eight-family table exposed item, model, and file silent deletion; the fourteen-family follow-up exposed compaction, completion, image, catalog, rate-limit, caller, search, code, reasoning, shell, MCP, patch, and turn-ID cases. Both tables passed after exact validators. Nullable-versus-container and file-finalize mutations also failed before their exact validators and passed afterward.
+- First changed/new ledger: `331/332 passed`; the remaining stale malformed-frame case exposed a list-valued metadata dispatch. After its fail-before-dispatch clause: `332/332 passed` (seed `0`). Auth/count regressions passed `146/146` (seed `0`).
+- Expanded compatibility ledger initially passed `1228/1235`; the seven failures were intentional stale/exact-schema expectations (overflow residue, nullable namespace, moderation status, malformed numeric identity, and owner raw turn state). After exact fixes and minted-handle fixtures: `1238/1238 passed` (seed `0`, 77.1s).
+- Final incremental overflow latch regression: `docker exec -w /workspace codex-pooler-facade-dev mix test test/codex_pooler/gateway/transports/sse_parser_incremental_test.exs:346 --seed 0` failed `0/1` because later chunks produced `overflow-marker <> raw`; after the terminal marker clause the full file passed `9/9` (seed `0`).
+
+### Final second-wave verification
+
+- Changed/new files after the final parser repair:
+
+  `docker exec -w /workspace codex-pooler-facade-dev mix test test/codex_pooler/files/capability_resolution_test.exs test/codex_pooler/files/capability_spool_test.exs test/codex_pooler/files/signed_url_target_test.exs test/codex_pooler/gateway/facade/public_projection_test.exs test/codex_pooler/gateway/runtime/streaming/downstream_stream_test.exs test/codex_pooler/gateway/runtime/streaming/stream_lifecycle_test.exs test/codex_pooler/gateway/transports/file_bridge_test.exs test/codex_pooler/gateway/transports/sse_parser_incremental_test.exs test/codex_pooler/gateway/transports/stream_protocol_test.exs test/codex_pooler/gateway/transports/upstream_websocket_session_test.exs test/codex_pooler_web/controllers/facade_transport_leakage_test.exs test/codex_pooler_web/controllers/runtime/backend_codex_websocket_owner_forwarding_test.exs test/codex_pooler_web/controllers/runtime/backend_codex_websocket_test.exs test/codex_pooler_web/controllers/runtime/compatibility_contract_test.exs --seed 0`
+
+  Result: `536 passed` (seed `0`, 35.9s).
+
+- Final full suite:
+
+  `docker exec -w /workspace codex-pooler-facade-dev mix test --seed 0`
+
+  Result: `6409/6410 passed` (seed `0`, 297.5s). The sole failure is the same baseline `CodexPooler.MixTasks.DevServerLifecycleTest` line 48 process-liveness teardown exception already documented in the first wave. The first second-wave full run was `6408/6410`: it contained that baseline exception plus the stale incremental reference assertion; the final parser test/repair removed the latter.
+
+- `git diff --check` — PASS.
+- `docker exec -w /workspace codex-pooler-facade-dev mix format --check-formatted` — PASS.
+- `docker exec -w /workspace codex-pooler-facade-dev sh -lc 'MIX_ENV=test mix compile --warnings-as-errors'` — PASS; one final changed file compiled.
+- `docker exec -w /workspace codex-pooler-facade-dev mix quality.xref` — PASS.
+- `cd docs-site && npm ci` — PASS; 580 packages audited, 0 vulnerabilities.
+- `cd docs-site && npm run check` — PASS; 11 files, 0 errors/warnings/hints; dashboard and ingress contract checks pass.
+- `cd docs-site && npm run build` — PASS; 42 pages built.
+- `for script in $(git ls-files '*.sh'); do bash -n "$script"; done` — PASS for eight tracked scripts.
+- `rg -n --hidden 'gpt-5\\.6-sol|gpt-4o-transcribe|gpt-image-1' README.md README.zh-CN.md docs-site/src docs-site/public` — expected no-match exit 1; zero private identifiers in tracked public sources.
+
+### Second-wave concern
+
+- The full suite remains `6409/6410`, not completely green, solely because the same unrelated dev-server lifecycle process-liveness teardown assertion failed on the original baseline and in both review waves. No façade/security regression failed in the final full run.
+- DNS pinning, TLS hostname retention, proxy byte flow, and rebinding rejection are deterministically covered with injected resolvers/adapters. A real live provider signed-URL transfer was not authorized, so live provider DNS/TLS behavior remains a post-review smoke-test concern for root.

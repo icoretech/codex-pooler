@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
 
   require Logger
 
+  alias CodexPooler.Files.SignedUrlTarget
   alias CodexPooler.Gateway.OpenAICompatibility.Error
   alias CodexPooler.Gateway.Payloads.{RequestOptions, TransportEnvelope}
   alias CodexPooler.Gateway.Routing.RoutingSelection
@@ -65,11 +66,20 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
 
   def upload_file(upload_url, %{"path" => path, "content_type" => content_type}, opts)
       when is_binary(upload_url) do
-    with {:ok, body} <- readable_file_stream(path) do
-      upload_url
+    request_options = configured_upload_req_options()
+
+    with {:ok, body} <- readable_file_stream(path),
+         {:ok, target} <- signed_url_target(upload_url, request_options) do
+      target.url
       |> upload_request()
-      |> Req.put(upload_req_options(body, content_type))
+      |> Req.put(upload_req_options(body, content_type, target, request_options))
       |> normalize_upload_response(opts)
+    else
+      {:error, :invalid_target} ->
+        {:error, Error.reason(502, "upstream_file_upload_failed", "upstream file upload failed")}
+
+      {:error, %{} = reason} ->
+        {:error, reason}
     end
   rescue
     exception in [
@@ -93,22 +103,36 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
 
   def open_download(download_url, opts) when is_binary(download_url) do
     timeouts = TransportEnvelope.timeout_config(opts, @timeout_defaults)
+    configured_options = configured_download_req_options()
 
-    request_options =
-      configured_download_req_options()
+    base_request_options =
+      configured_options
       |> Keyword.merge(
         decode_body: false,
-        headers: [{"accept", "application/octet-stream"}],
         into: :self,
         redirect: false,
         retry: false
       )
       |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts))
 
-    download_url
-    |> download_request()
-    |> Req.get(request_options)
-    |> normalize_download_response(opts)
+    with {:ok, target} <- signed_url_target(download_url, configured_options) do
+      request_options =
+        base_request_options
+        |> Keyword.put(
+          :headers,
+          signed_url_headers(target, [{"accept", "application/octet-stream"}])
+        )
+        |> maybe_put_connect_options(target)
+
+      target.url
+      |> download_request()
+      |> Req.get(request_options)
+      |> normalize_download_response(opts)
+    else
+      {:error, :invalid_target} ->
+        {:error,
+         Error.reason(502, "upstream_file_download_failed", "upstream file download failed")}
+    end
   rescue
     exception in [
       Req.TransportError,
@@ -305,17 +329,48 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
     path == root or String.starts_with?(path, root <> "/")
   end
 
-  defp upload_req_options(body, content_type) do
-    configured_upload_req_options()
+  defp upload_req_options(body, content_type, target, configured_options) do
+    configured_options
     |> Keyword.merge(
       body: body,
-      headers: [
-        {"content-type", content_type || "application/octet-stream"},
-        {"x-ms-blob-type", "BlockBlob"}
-      ],
+      headers:
+        signed_url_headers(target, [
+          {"content-type", content_type || "application/octet-stream"},
+          {"x-ms-blob-type", "BlockBlob"}
+        ]),
       redirect: false,
       retry: false
     )
+    |> maybe_put_connect_options(target)
+  end
+
+  defp signed_url_headers(%{host_header: host_header}, headers) when is_binary(host_header),
+    do: [{"host", host_header} | headers]
+
+  defp signed_url_headers(_target, headers), do: headers
+
+  defp maybe_put_connect_options(options, %{connect_options: connect_options})
+       when is_list(connect_options),
+       do: Keyword.put(options, :connect_options, connect_options)
+
+  defp maybe_put_connect_options(options, _target), do: options
+
+  defp signed_url_target(url, configured_options) do
+    resolver = Keyword.get(config(), :signed_url_resolver)
+
+    cond do
+      is_function(resolver, 2) ->
+        SignedUrlTarget.pin(url, resolver: resolver)
+
+      Keyword.has_key?(configured_options, :plug) ->
+        # Configured adapters are process-local test seams and do not open a
+        # network connection. Production Finch requests always take the
+        # resolve-and-pin path below.
+        {:ok, %{url: url, host_header: nil, connect_options: nil}}
+
+      true ->
+        SignedUrlTarget.pin(url)
+    end
   end
 
   @spec upload_request(String.t()) :: Req.Request.t()
@@ -476,7 +531,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
       endpoint: safe_log_value(file_bridge.endpoint),
       request_id: safe_log_value(request_options.request_metadata.request_id),
       exception: exception |> TransportFailureReason.safe_exception() |> safe_log_value(),
-      reason: exception |> TransportFailureReason.safe_reason() |> safe_log_value(),
+      reason: "transport_error",
       pool_upstream_assignment_id: safe_log_value(file_bridge.pool_upstream_assignment_id),
       upstream_identity_id:
         safe_log_value(file_bridge.upstream_identity_id || identity_id(identity)),
@@ -490,7 +545,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
   defp transport_exception_metadata(_opts, exception, identity) do
     [
       exception: exception |> TransportFailureReason.safe_exception() |> safe_log_value(),
-      reason: exception |> TransportFailureReason.safe_reason() |> safe_log_value(),
+      reason: "transport_error",
       upstream_identity_id: identity |> identity_id() |> safe_log_value()
     ]
     |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)

@@ -40,6 +40,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.AgentV2ContractFixture
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Facade.TurnState
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
@@ -2460,6 +2461,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       end
 
     target_session = target_state.codex_session
+
+    assert {:ok, target_turn_state_handle} =
+             TurnState.mint(target_turn_state, auth, setup.assignment.id,
+               session_id: target_session.id
+             )
+
+    assert String.starts_with?(target_turn_state_handle, "cpts_")
+
     {:ok, origin_state} = owner_socket(auth, "ws-owner-turn-state-origin", origin_turn_state)
     origin_session = origin_state.codex_session
 
@@ -2467,7 +2476,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       try do
         continuation_payload =
           websocket_payload(setup, "owner turn-state retarget continuation", %{
-            "client_metadata" => %{"x-codex-turn-state" => target_turn_state},
+            "client_metadata" => %{
+              "x-codex-turn-state" => target_turn_state_handle
+            },
             "request_id" => "ws-owner-turn-state-retarget-continuation"
           })
 
@@ -2479,6 +2490,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
         assert retargeted_state.codex_session.id == target_session.id
         refute retargeted_state.codex_session.id == origin_session.id
+
+        assert retargeted_state.codex_session.pool_upstream_assignment_id ==
+                 setup.assignment.id
+
         assert retargeted_state.websocket_owner_lease_token == target_session.owner_lease_token
         assert retargeted_state.websocket_owner_downstream.epoch > 0
 
@@ -2495,6 +2510,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
         assert retargeted_request.json["client_metadata"]["x-codex-turn-state"] ==
                  target_turn_state
+
+        refute retargeted_request.body =~ target_turn_state_handle
 
         assert [anchor_log, retargeted_log] = request_logs(setup.pool.id)
         assert anchor_log.status == "succeeded"

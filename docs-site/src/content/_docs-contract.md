@@ -36,6 +36,8 @@ Use `<pool-api-key>` for runtime credentials and `<operator-mcp-token>` for MCP.
 
 A Pool API key represents a Pool and authenticates supported `/api`, `/v1`, and `/backend-api` runtime routes. Anthropic routes accept `x-api-key` or bearer auth; if both are supplied, they must agree. All other façade routes use bearer auth. Upstream credentials are never client credentials.
 
+The one runtime-auth exception is the single-purpose local file-capability URL returned by authenticated backend file create/finalize. `PUT` or `GET /file-capabilities/:capability` may be used without an Authorization header because signed-URL clients do not reliably preserve Pool headers. The opaque capability is itself a short-lived bearer credential bound to the active Pool, API key, owned file, operation, assignment, identity, declared bytes, and expiry. Any Authorization header that is supplied must authenticate the same Pool/API-key scope. The proxy rechecks current Pool, key, assignment, identity, and credential usability, resolves every provider A/AAAA address as public, connects to a validated pinned address while retaining the original TLS hostname, disables redirects, bounds bytes, and never exposes the provider URL. Capability paths and values must never be logged.
+
 The root `/mcp` endpoint accepts only an operator-owned MCP bearer token. Do not imply Pool API keys or upstream credentials work there.
 
 ## Route Vocabulary
@@ -130,6 +132,8 @@ Supported:
 - `POST /backend-api/codex/images/edits`
 - `POST /backend-api/files`
 - `POST /backend-api/files/:file_id/uploaded`
+- `PUT /file-capabilities/:capability`, single-purpose upload bearer returned by file create
+- `GET /file-capabilities/:capability`, single-purpose download bearer returned by file finalize
 - `POST /backend-api/transcribe`
 - `GET /backend-api/wham/usage`
 - `GET /api/codex/usage`

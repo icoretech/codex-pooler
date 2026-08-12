@@ -11,7 +11,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
     test "bounds oversized incomplete SSE blocks when requested" do
       oversized = String.duplicate("data: unavailable-upstream-prefix", 260_000)
 
-      assert {[], ""} = StreamProtocol.complete_sse_blocks(oversized, bounded?: true)
+      assert {[], overflow} = StreamProtocol.complete_sse_blocks(oversized, bounded?: true)
+      assert StreamProtocol.overflowed_incomplete_sse_block?(overflow)
+      refute overflow =~ "unavailable-upstream-prefix"
     end
   end
 

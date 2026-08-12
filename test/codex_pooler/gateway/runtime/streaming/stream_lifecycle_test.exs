@@ -233,6 +233,70 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     assert turn.final_attempt_id == attempt.id
   end
 
+  test "clean websocket EOF with native SSE residue emits one local error and fails settlement" do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+    parent = self()
+
+    request_options =
+      request_options(auth, payload, setup, websocket?: true)
+      |> RequestOptions.put_transport(websocket_writer: &send(parent, {:downstream_frame, &1}))
+
+    assert {:ok, session} = SessionContinuity.start_codex_session(auth, request_options)
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, payload, %{
+               endpoint: @endpoint_path,
+               transport: "websocket",
+               correlation_id:
+                 "websocket-clean-eof-residue-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    assert {:ok, turn} =
+             SessionContinuity.start_codex_turn(session, reserved.request, request_options)
+
+    context =
+      retry_context(setup, auth, request_options, reserved.request,
+        candidates: [{setup.assignment, setup.identity}],
+        attempt: attempt
+      )
+
+    stream = WebsocketBridgeStream.start("websocket-clean-eof-residue")
+
+    send(
+      self(),
+      {stream.ref,
+       {:data,
+        "event: response.completed\ndata: {\"type\":\"response.completed\",\"private\":\"eof-sentinel\"}"}}
+    )
+
+    send(self(), {stream.ref, :done})
+
+    result =
+      StreamDispatch.streaming_result(
+        %{sse_response() | body: stream},
+        context,
+        %{finalization_callbacks: finalization_callbacks()}
+      )
+
+    assert {:error, %{code: "upstream_stream_error"}} = result.websocket_stream.()
+
+    assert_receive {:downstream_frame, failure_frame}
+    assert %{"type" => "error", "code" => "server_error"} = Jason.decode!(failure_frame)
+    refute failure_frame =~ "eof-sentinel"
+    refute_receive {:downstream_frame, _duplicate}
+
+    assert Repo.reload!(reserved.request).status == "failed"
+    assert Repo.reload!(attempt).status == "failed"
+    assert Repo.get!(CodexTurn, turn.id).status == "failed"
+  end
+
   test "shared stream finalization helpers resolve bounded transports and emit exact labels" do
     request_options = %{transport: %{transport: "http_sse"}}
     parent = self()

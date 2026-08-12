@@ -1,16 +1,105 @@
 defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   import ExUnit.CaptureLog
 
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Transports.FileBridge
 
+  setup do
+    old_config = Application.get_env(:codex_pooler, FileBridge, [])
+    on_exit(fn -> Application.put_env(:codex_pooler, FileBridge, old_config) end)
+    :ok
+  end
+
+  test "upload and download connect to a validated pinned address with the signed TLS hostname" do
+    test_pid = self()
+    stub = {:file_bridge_pinned_target, System.unique_integer([:positive])}
+
+    Req.Test.stub(stub, fn conn ->
+      send(test_pid, {:pinned_request, conn.method, conn.host, conn.req_headers})
+
+      case conn.method do
+        "PUT" -> Plug.Conn.send_resp(conn, 201, "")
+        "GET" -> Plug.Conn.send_resp(conn, 200, "download")
+      end
+    end)
+
+    resolver = fn
+      "signed-files.example.invalid", :inet -> {:ok, [{93, 184, 216, 34}]}
+      "signed-files.example.invalid", :inet6 -> {:error, :nxdomain}
+    end
+
+    Application.put_env(
+      :codex_pooler,
+      FileBridge,
+      upload_req_options: [plug: {Req.Test, stub}],
+      download_req_options: [plug: {Req.Test, stub}],
+      signed_url_resolver: resolver
+    )
+
+    path = upload_tempfile!("upload")
+    signed_url = "https://signed-files.example.invalid/file?sig=secret-query"
+    request_options = RequestOptions.build(%{}, "/file-capabilities/download", %{})
+
+    assert :ok =
+             FileBridge.upload_file(signed_url, %{
+               "path" => path,
+               "content_type" => "application/octet-stream"
+             })
+
+    assert {:ok, %Req.Response{body: %Req.Response.Async{}}} =
+             FileBridge.open_download(signed_url, request_options)
+
+    for method <- ["PUT", "GET"] do
+      assert_receive {:pinned_request, ^method, "93.184.216.34", headers}
+      assert {"host", "signed-files.example.invalid"} in headers
+    end
+  end
+
+  test "a private rebinding answer fails locally before the configured adapter is invoked" do
+    test_pid = self()
+    stub = {:file_bridge_rebinding_target, System.unique_integer([:positive])}
+
+    Req.Test.stub(stub, fn conn ->
+      send(test_pid, :unexpected_rebinding_request)
+      Plug.Conn.send_resp(conn, 201, "")
+    end)
+
+    resolver = fn
+      "rebind-files.example.invalid", :inet -> {:ok, [{10, 0, 0, 7}]}
+      "rebind-files.example.invalid", :inet6 -> {:error, :nxdomain}
+    end
+
+    Application.put_env(
+      :codex_pooler,
+      FileBridge,
+      upload_req_options: [plug: {Req.Test, stub}],
+      signed_url_resolver: resolver
+    )
+
+    assert {:error, %{code: "upstream_file_upload_failed"}} =
+             FileBridge.upload_file(
+               "https://rebind-files.example.invalid/file?sig=never-log-this",
+               %{
+                 "path" => upload_tempfile!("upload"),
+                 "content_type" => "application/octet-stream"
+               }
+             )
+
+    refute_receive :unexpected_rebinding_request
+  end
+
   test "logs upload transport failures with safe request context" do
     request_id = Ecto.UUID.generate()
     assignment_id = Ecto.UUID.generate()
     identity_id = Ecto.UUID.generate()
     path = upload_tempfile!("sample upload")
+    stub = {:file_bridge_transport_failure, System.unique_integer([:positive])}
+
+    Req.Test.stub(stub, fn _conn -> raise Req.TransportError, reason: :econnrefused end)
+
+    configure_signed_test_adapter!(stub)
 
     request_options =
       %{request_id: request_id}
@@ -27,7 +116,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
       capture_log(fn ->
         assert {:error, %{code: "upstream_file_upload_failed"}} =
                  FileBridge.upload_file(
-                   "http://127.0.0.1:1/upload",
+                   "https://signed-files.example.invalid/upload",
                    %{"path" => path, "content_type" => "text/plain"},
                    request_options
                  )
@@ -42,7 +131,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
     assert log =~ "route_class=file_upload"
     assert log =~ "routing_strategy=test_strategy"
     assert log =~ "exception="
-    assert log =~ "reason="
+    assert log =~ "reason=transport_error"
     refute log =~ "sample upload"
   end
 
@@ -51,9 +140,13 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
     assignment_id = Ecto.UUID.generate()
     identity_id = Ecto.UUID.generate()
     path = upload_tempfile!(String.duplicate("x", 32_768))
+    stub = {:file_bridge_http_failure, System.unique_integer([:positive])}
 
-    %{url: upload_url, served_ref: served_ref, server_pid: server_pid} =
-      start_invalid_content_length_server!()
+    Req.Test.stub(stub, fn _conn ->
+      raise Req.HTTPError, protocol: :http1, reason: :invalid_content_length_header
+    end)
+
+    configure_signed_test_adapter!(stub)
 
     request_options =
       %{request_id: request_id}
@@ -70,13 +163,11 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
       capture_log(fn ->
         assert {:error, %{code: "upstream_file_upload_failed"}} =
                  FileBridge.upload_file(
-                   upload_url,
+                   "https://signed-files.example.invalid/upload",
                    %{"path" => path, "content_type" => "text/plain"},
                    request_options
                  )
       end)
-
-    assert_receive {^served_ref, :served}, 1_000
 
     assert log =~ "file bridge transport failed"
     assert log =~ "operation=upload"
@@ -87,9 +178,49 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
     assert log =~ "route_class=file_upload"
     assert log =~ "routing_strategy=test_strategy"
     assert log =~ "exception=Req.HTTPError"
-    assert log =~ "reason=invalid_content_length_header"
+    assert log =~ "reason=transport_error"
     refute log =~ "authorization"
-    send(server_pid, :close)
+  end
+
+  test "never logs an arbitrary transport reason or signed URL query" do
+    signature = "SUPER_PRIVATE_FILE_SIGNATURE_SENTINEL"
+    reason = "reason-leaks-#{signature}"
+    stub = {:file_bridge_secret_transport_reason, System.unique_integer([:positive])}
+
+    Req.Test.stub(stub, fn _conn ->
+      raise Req.TransportError, reason: reason
+    end)
+
+    resolver = fn
+      "signed-secret.example.invalid", :inet -> {:ok, [{93, 184, 216, 34}]}
+      "signed-secret.example.invalid", :inet6 -> {:error, :nxdomain}
+    end
+
+    Application.put_env(
+      :codex_pooler,
+      FileBridge,
+      upload_req_options: [plug: {Req.Test, stub}],
+      signed_url_resolver: resolver
+    )
+
+    log =
+      capture_log(fn ->
+        assert {:error, %{code: "upstream_file_upload_failed"}} =
+                 FileBridge.upload_file(
+                   "https://signed-secret.example.invalid/file?sig=#{signature}",
+                   %{
+                     "path" => upload_tempfile!("upload"),
+                     "content_type" => "application/octet-stream"
+                   },
+                   RequestOptions.build(%{}, "/file-capabilities/upload", %{})
+                 )
+      end)
+
+    assert log =~ "file bridge transport failed"
+    assert log =~ "reason=transport_error"
+    refute log =~ signature
+    refute log =~ reason
+    refute log =~ "signed-secret.example.invalid"
   end
 
   defp upload_tempfile!(contents) do
@@ -104,77 +235,17 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
     path
   end
 
-  defp start_invalid_content_length_server! do
-    {:ok, listen_socket} =
-      :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}, reuseaddr: true])
-
-    {:ok, port} = :inet.port(listen_socket)
-    parent = self()
-    served_ref = make_ref()
-
-    pid =
-      spawn_link(fn ->
-        {:ok, socket} = :gen_tcp.accept(listen_socket)
-        _request = read_raw_http_request(socket)
-
-        :ok =
-          :gen_tcp.send(socket, [
-            "HTTP/1.1 200 OK\r\n",
-            "content-type: application/json\r\n",
-            "content-length: +0\r\n",
-            "connection: close\r\n\r\n"
-          ])
-
-        send(parent, {served_ref, :served})
-
-        receive do
-          :close -> :ok
-        end
-
-        :gen_tcp.close(socket)
-        :gen_tcp.close(listen_socket)
-      end)
-
-    ExUnit.Callbacks.on_exit(fn ->
-      if Process.alive?(pid), do: Process.exit(pid, :kill)
-      :gen_tcp.close(listen_socket)
-    end)
-
-    %{
-      url: "http://127.0.0.1:#{port}/upload",
-      served_ref: served_ref,
-      server_pid: pid
-    }
-  end
-
-  defp read_raw_http_request(socket, acc \\ "") do
-    case :gen_tcp.recv(socket, 0, 1_000) do
-      {:ok, data} ->
-        acc = acc <> data
-
-        if raw_http_request_complete?(acc) do
-          acc
-        else
-          read_raw_http_request(socket, acc)
-        end
-
-      {:error, _reason} ->
-        acc
+  defp configure_signed_test_adapter!(stub) do
+    resolver = fn
+      "signed-files.example.invalid", :inet -> {:ok, [{93, 184, 216, 34}]}
+      "signed-files.example.invalid", :inet6 -> {:error, :nxdomain}
     end
-  end
 
-  defp raw_http_request_complete?(data) do
-    case :binary.split(data, "\r\n\r\n") do
-      [headers, body] ->
-        case Regex.run(~r/\r\ncontent-length:\s*(\d+)/i, "\r\n" <> headers,
-               capture: :all_but_first
-             ) do
-          [length] -> byte_size(body) >= String.to_integer(length)
-          nil -> true
-        end
-
-      _incomplete ->
-        false
-    end
+    Application.put_env(
+      :codex_pooler,
+      FileBridge,
+      upload_req_options: [plug: {Req.Test, stub}],
+      signed_url_resolver: resolver
+    )
   end
 end

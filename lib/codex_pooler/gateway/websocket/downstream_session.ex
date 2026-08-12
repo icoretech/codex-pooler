@@ -122,8 +122,8 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
   defp resolve_retarget_options(auth, payload, state) do
     opts = Map.get(state, :opts, %{}) |> RequestOptions.for_websocket()
 
-    case PayloadNormalizer.backend_client_metadata_turn_state(payload) do
-      "cpts_" <> _opaque = public ->
+    case PayloadNormalizer.fetch_backend_client_metadata_turn_state(payload) do
+      {:ok, "cpts_" <> _opaque = public} ->
         case TurnState.resolve(public, auth) do
           {:ok, resolution} ->
             {:ok,
@@ -139,8 +139,14 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
             {:skip, :invalid_turn_state}
         end
 
-      _local_or_absent ->
+      :absent ->
         {:ok, opts}
+
+      {:ok, _unknown_raw} ->
+        {:skip, :invalid_turn_state}
+
+      {:error, :invalid} ->
+        {:skip, :invalid_turn_state}
     end
   end
 

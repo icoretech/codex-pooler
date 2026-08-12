@@ -520,8 +520,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   end
 
   defp resolve_websocket_turn_state(auth, payload, %RequestOptions{} = opts) do
-    case PayloadNormalizer.backend_client_metadata_turn_state(payload) do
-      "cpts_" <> _opaque = public ->
+    case PayloadNormalizer.fetch_backend_client_metadata_turn_state(payload) do
+      {:ok, "cpts_" <> _opaque = public} ->
         case TurnState.resolve(public, auth) do
           {:ok, resolution} ->
             request_options =
@@ -543,9 +543,25 @@ defmodule CodexPooler.Gateway.Runtime.Service do
              )}
         end
 
-      _local_or_absent ->
+      :absent ->
         {:ok, payload, opts}
+
+      {:ok, _unknown_raw} ->
+        invalid_websocket_turn_state()
+
+      {:error, :invalid} ->
+        invalid_websocket_turn_state()
     end
+  end
+
+  defp invalid_websocket_turn_state do
+    {:error,
+     error(
+       400,
+       "invalid_turn_state",
+       "x-codex-turn-state is invalid or expired",
+       "client_metadata.x-codex-turn-state"
+     )}
   end
 
   defp put_upstream_turn_state(%{"client_metadata" => %{} = metadata} = payload, upstream) do
