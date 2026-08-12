@@ -174,9 +174,15 @@ defmodule CodexPooler.Admin.Stats.Tables do
   defp assignment_status_rank("deleted"), do: 9
   defp assignment_status_rank(_status), do: 10
 
+  # Ties break on the same name the row displays; see `upstream_label/1` in
+  # `StatsPresentation` for why the live account name wins over the copy the
+  # assignment took at creation time.
   @spec upstream_table_label(map()) :: String.t()
   defp upstream_table_label(row) do
-    safe_string(row.assignment_label || row.upstream_label)
+    label =
+      if blank_value?(row.upstream_label), do: row.assignment_label, else: row.upstream_label
+
+    safe_string(label)
   end
 
   @spec upstream_table_sort_key(map()) :: {integer(), integer(), String.t(), String.t()}

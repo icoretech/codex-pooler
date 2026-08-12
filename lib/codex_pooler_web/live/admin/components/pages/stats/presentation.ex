@@ -435,8 +435,22 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation do
     "Share of accounted requests across #{scope_label} in the #{String.downcase(window_label)}."
   end
 
-  defp upstream_label(row),
-    do: row.assignment_label || row.upstream_label || "upstream account"
+  # The live account name wins over the assignment label, the same precedence
+  # `RequestLogsDisplay.format_upstream_account_label/1` applies. `assignment_label`
+  # reads like a nickname but is a copy of the account name taken when the
+  # assignment was created (`InviteOnboarding`, `TokenLinking`) and never
+  # re-synced, so preferring it renders the name the account had before it was
+  # renamed — in practice the onboarding email.
+  defp upstream_label(row) do
+    present_label(row.upstream_label) || present_label(row.assignment_label) ||
+      "upstream account"
+  end
+
+  defp present_label(value) when is_binary(value) do
+    if String.trim(value) == "", do: nil, else: value
+  end
+
+  defp present_label(_value), do: nil
 
   defp format_traffic_share(value), do: "#{format_traffic_share_value(value)}%"
 

@@ -572,11 +572,17 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
              |> LazyHTML.query("[data-role='upstream-traffic-lane']")
              |> Enum.count() == 1
 
+      # The fixture gives the identity and its assignment different labels on
+      # purpose. The lane names the live account ("Stats upstream"), never the
+      # assignment's copy of it ("Stats assignment"), which is taken at creation
+      # and left behind when the account is renamed.
       assert has_element?(
                view,
                "#stats-upstream-lane-1[data-role='upstream-traffic-lane'][data-leader='true']",
-               "Stats assignment"
+               "Stats upstream"
              )
+
+      refute upstream_surface_html =~ "Stats assignment"
 
       assert has_element?(
                view,
@@ -586,7 +592,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
 
       assert has_element?(
                view,
-               "#stats-upstream-rail-1[data-role='upstream-traffic-rail'][max='100'][value='100.0'][aria-label='Stats assignment traffic share']"
+               "#stats-upstream-rail-1[data-role='upstream-traffic-rail'][max='100'][value='100.0'][aria-label='Stats upstream traffic share']"
              )
 
       assert has_element?(view, "#stats-upstream-lane-1 [data-role='upstream-requests']", "1")
