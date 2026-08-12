@@ -9,6 +9,7 @@ defmodule CodexPooler.Dev.Task14ProductObserver do
   """
 
   @store __MODULE__.Store
+  @stats __MODULE__.Stats
   @handler_id "codex-pooler-task14-product-observer"
   @event [:codex_pooler, :gateway, :task14, :product_stage]
   @flag :task14_product_observation_enabled
@@ -25,11 +26,12 @@ defmodule CodexPooler.Dev.Task14ProductObserver do
 
   @spec arm() :: :ok
   def arm do
-    ensure_store()
+    ensure_stores()
     :telemetry.detach(@handler_id)
     :ok = :telemetry.attach(@handler_id, @event, &__MODULE__.handle_event/4, nil)
     Application.put_env(:codex_pooler, @flag, true)
     Agent.update(@store, fn _state -> %{} end)
+    Agent.update(@stats, fn _state -> empty_stats() end)
   end
 
   @spec disarm() :: :ok
@@ -48,24 +50,37 @@ defmodule CodexPooler.Dev.Task14ProductObserver do
 
   @spec captures() :: map()
   def captures do
-    ensure_store()
+    ensure_stores()
     Agent.get(@store, & &1)
   end
 
   @spec status() :: map()
   def status do
+    ensure_stores()
+
     %{
       "armed" => armed?(),
       "telemetryHandlers" => length(:telemetry.list_handlers(@event)),
-      "captureEntries" => map_size(captures())
+      "captureEntries" => map_size(captures()),
+      "eventReceipts" => stats_value("eventReceipts"),
+      "acceptedObservations" => stats_value("acceptedObservations"),
+      "rejectedObservations" => stats_value("rejectedObservations")
     }
   end
 
   @doc false
   def handle_event(@event, _measurements, metadata, _config) do
-    with true <- armed?(),
-         {:ok, observation} <- observation(metadata) do
-      Agent.update(@store, &record(&1, observation))
+    if armed?() do
+      increment_stat("eventReceipts")
+
+      case observation(metadata) do
+        {:ok, observation} ->
+          increment_stat("acceptedObservations")
+          Agent.update(@store, &record(&1, observation))
+
+        :error ->
+          increment_stat("rejectedObservations")
+      end
     end
 
     :ok
@@ -210,10 +225,31 @@ defmodule CodexPooler.Dev.Task14ProductObserver do
 
   defp response_fingerprint(_value), do: :error
 
-  defp ensure_store do
-    case Process.whereis(@store) do
+  defp stats_value(key) do
+    Agent.get(@stats, &Map.fetch!(&1, key))
+  end
+
+  defp increment_stat(key) do
+    Agent.update(@stats, &Map.update!(&1, key, fn count -> count + 1 end))
+  end
+
+  defp empty_stats do
+    %{
+      "eventReceipts" => 0,
+      "acceptedObservations" => 0,
+      "rejectedObservations" => 0
+    }
+  end
+
+  defp ensure_stores do
+    ensure_agent(@store, fn -> %{} end)
+    ensure_agent(@stats, &empty_stats/0)
+  end
+
+  defp ensure_agent(name, initial_state) do
+    case Process.whereis(name) do
       nil ->
-        case Agent.start(fn -> %{} end, name: @store) do
+        case Agent.start(initial_state, name: name) do
           {:ok, _pid} -> :ok
           {:error, {:already_started, _pid}} -> :ok
         end

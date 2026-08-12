@@ -129,6 +129,39 @@ defmodule CodexPooler.Dev.Task14ProductObserverTest do
            } = Task14ProductObserver.captures()
   end
 
+  test "reports bounded accepted and rejected observation counts after disarm" do
+    :ok = Task14ProductObserver.arm()
+
+    emit(:provider_to_pooler, "response.completed", response_fingerprint: "a1b2c3d4e5f6")
+
+    :telemetry.execute(@event, %{count: 1}, %{
+      request_id: "request-1",
+      client_request_id: "client-1",
+      attempt_id: "attempt-1",
+      direction: :provider_to_pooler,
+      event_type: "response.completed",
+      response_fingerprint: "not-a-fingerprint",
+      route: "backend_websocket",
+      mode: "full"
+    })
+
+    assert %{
+             "eventReceipts" => 2,
+             "acceptedObservations" => 1,
+             "rejectedObservations" => 1
+           } = Task14ProductObserver.status()
+
+    :ok = Task14ProductObserver.disarm()
+
+    assert %{
+             "armed" => false,
+             "captureEntries" => 0,
+             "eventReceipts" => 2,
+             "acceptedObservations" => 1,
+             "rejectedObservations" => 1
+           } = Task14ProductObserver.status()
+  end
+
   test "retains every request of a real multi-turn round and still bounds the window" do
     :ok = Task14ProductObserver.arm()
 
