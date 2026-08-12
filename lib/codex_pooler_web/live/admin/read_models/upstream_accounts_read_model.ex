@@ -28,6 +28,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     TokenBurnProjection
   }
 
+  alias CodexPoolerWeb.Admin.UpstreamNaming
   alias CodexPoolerWeb.DateTimeDisplay
 
   @type assignment_advertised_state :: :advertised | :not_advertised
@@ -387,7 +388,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
 
     account = %{
       identity: identity,
-      label: account_label(identity),
+      label: UpstreamNaming.account_name(identity),
       workspace_ref: workspace_ref(identity.workspace_id),
       workspace_label: safe_workspace_label(identity.workspace_label),
       subject_ref: subject_ref(identity.chatgpt_user_id),
@@ -465,8 +466,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
     })
   end
 
+  # A lane label only earns its place when an operator plausibly chose it, and
+  # the schema cannot say whether one did: `assignment_label` is defaulted to
+  # `account_label` at creation and never re-synced. These two heuristics are
+  # how the page approximates the answer — drop a stored label that still looks
+  # like the account identifier it was seeded from, and otherwise trust it.
+  # A rename to a name that is not identifier-shaped defeats both.
   defp assignment_display_label(identity, assignment) do
-    current_label = account_label(identity)
+    current_label = UpstreamNaming.account_name(identity)
 
     stored_label =
       Formatting.present_string(Map.get(assignment, :stored_assignment_label)) ||
@@ -529,12 +536,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel do
 
         "subj:" <> digest
     end
-  end
-
-  defp account_label(identity) do
-    Formatting.present_string(identity.account_label) ||
-      Formatting.present_string(identity.chatgpt_account_id) ||
-      "Upstream account"
   end
 
   defp account_plan_label(%{plan_label: label}) when is_binary(label) and label != "", do: label
