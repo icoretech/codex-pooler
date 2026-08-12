@@ -4,7 +4,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
   alias CodexPooler.Gateway
   alias CodexPooler.Gateway.Facade.RequestNormalizer
   alias CodexPooler.Gateway.Metadata
-  alias CodexPooler.Gateway.OpenAICompatibility.{Chat, ChatCompletions}
+  alias CodexPooler.Gateway.OpenAICompatibility.{Chat, ChatCompletions, Images}
   alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
   alias CodexPooler.RouteClass
   alias CodexPoolerWeb.GatewayControllerHelpers, as: GatewayHelpers
@@ -24,6 +24,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
       "/backend-api/codex/images/generations",
       "/backend-api/codex/images/generations",
       native_image_request?: true,
+      forced_image_model: Images.canonical_model(),
       image_generation_permission_required?: true
     )
   end
@@ -34,6 +35,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
       "/backend-api/codex/images/edits",
       "/backend-api/codex/images/edits",
       native_image_request?: true,
+      forced_image_model: Images.canonical_model(),
       image_generation_permission_required?: true
     )
   end

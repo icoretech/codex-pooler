@@ -10,7 +10,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
     "x-session-id",
     "x-session-affinity",
     "session_id",
-    "x-codex-conversation-id"
+    "x-codex-conversation-id",
+    "x-ollama-session-id"
   ]
 
   defstruct [

@@ -5,11 +5,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
 
-  @supported_models ~w(gpt-image-1 gpt-image-1.5 gpt-image-1-mini gpt-image-2)
+  @canonical_model "gpt-image-1"
   @sizes ~w(auto 1024x1024 1024x1536 1536x1024)
   @qualities ~w(auto low medium high)
   @backgrounds ~w(auto transparent opaque)
   @input_fidelities ~w(low high)
+
+  @spec canonical_model() :: String.t()
+  def canonical_model, do: @canonical_model
 
   @spec validate_generation(term()) :: {:ok, map()} | {:error, Error.reason()}
   def validate_generation(payload) do
@@ -32,7 +35,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
   def coerce_generation(payload, opts \\ %{}) do
     with {:ok, %{image_payload: image_payload, response_payload: response_payload}} <-
            prepare_generation(payload),
-         {:ok, response} <- Responses.coerce(response_payload, opts) do
+         {:ok, response} <- Responses.coerce(response_payload, force_image_model(opts)) do
       {:ok, Map.put(response, :image_payload, image_payload)}
     end
   end
@@ -64,7 +67,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
             mask: mask
           }} <-
            prepare_edit(payload),
-         {:ok, response} <- Responses.coerce(response_payload, opts) do
+         {:ok, response} <- Responses.coerce(response_payload, force_image_model(opts)) do
       response_payload = put_edit_images(response.payload, image_payload["prompt"], images, mask)
 
       {:ok,
@@ -128,7 +131,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
     with {:ok, payload} <- Validation.normalize_payload(payload),
          :ok <- Validation.reject_high_impact_fields(payload),
          :ok <- Validation.reject_unsupported_fields(payload, :images),
-         :ok <- validate_model(payload),
+         payload = Map.put(payload, "model", @canonical_model),
          :ok <- validate_one_of(payload, "size", @sizes),
          :ok <- validate_one_of(payload, "quality", @qualities),
          :ok <- validate_one_of(payload, "background", @backgrounds),
@@ -145,13 +148,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
     do: {:error, Error.invalid_request("image is only supported for image edits", "image")}
 
   defp validate_generation_only(_payload), do: :ok
-
-  defp validate_model(%{"model" => model}) when model in @supported_models, do: :ok
-
-  defp validate_model(%{"model" => _model}),
-    do: {:error, Error.invalid_model("image model is not supported")}
-
-  defp validate_model(_payload), do: {:error, Error.invalid_request("model is required", "model")}
 
   defp require_prompt(%{"prompt" => prompt}) when is_binary(prompt) and prompt != "", do: :ok
 
@@ -257,6 +253,16 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Images do
        "stream" => true
      }}
   end
+
+  defp force_image_model(%RequestOptions{} = options) do
+    RequestOptions.put_payload_context(options, forced_image_model: @canonical_model)
+  end
+
+  defp force_image_model(options) when is_list(options),
+    do: Keyword.put(options, :forced_image_model, @canonical_model)
+
+  defp force_image_model(options) when is_map(options),
+    do: Map.put(options, :forced_image_model, @canonical_model)
 
   defp put_edit_images(response_payload, prompt, images, nil) do
     Map.put(response_payload, "input", [message_input(prompt, images)])

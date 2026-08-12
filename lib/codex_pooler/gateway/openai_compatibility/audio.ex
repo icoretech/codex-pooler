@@ -7,7 +7,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Audio do
 
   @backend_transcription_endpoint "/backend-api/transcribe"
   @canonical_model "gpt-4o-transcribe"
-  @supported_models [@canonical_model, "gpt-transcribe"]
   @decoded_list_fields ~w(keywords languages)
 
   @spec validate_transcription(term()) :: {:ok, map()} | {:error, Error.reason()}
@@ -66,14 +65,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Audio do
     Validation.reject_unsupported_fields(payload, :audio)
   end
 
-  defp canonicalize_model(%{"model" => model} = payload) when model in @supported_models,
-    do: {:ok, Map.put(payload, "model", @canonical_model)}
-
-  defp canonicalize_model(%{"model" => _model}),
-    do: {:error, Error.invalid_model("audio transcription model is not supported")}
-
-  defp canonicalize_model(_payload),
-    do: {:error, Error.invalid_request("model is required", "model")}
+  defp canonicalize_model(payload), do: {:ok, Map.put(payload, "model", @canonical_model)}
 
   defp normalize_decoded_lists(payload) do
     Enum.reduce_while(@decoded_list_fields, {:ok, payload}, fn field, {:ok, payload} ->

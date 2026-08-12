@@ -593,6 +593,7 @@ defmodule CodexPooler.Gateway.Facade.Anthropic.Messages do
         %{"type" => "function", "name" => name, "parameters" => schema}
         |> maybe_copy(tool, "description")
         |> maybe_copy(tool, "strict")
+        |> maybe_put_breakpoint(marked?)
 
       {:ok, translated, marked?}
     end

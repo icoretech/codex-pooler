@@ -9,6 +9,8 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
   alias CodexPooler.Access
   alias CodexPooler.Accounting.Request
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Facade
+  alias CodexPooler.Gateway.OpenAICompatibility.Images
   alias CodexPooler.Pools
   alias CodexPooler.Repo
 
@@ -70,7 +72,7 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
       conn
       |> auth(setup)
       |> post("/v1/images/generations", %{
-        "model" => setup.model.exposed_model_id,
+        "model" => "private-client-image-selector",
         "prompt" => "synthetic image request",
         "size" => "1024x1024",
         "quality" => "low",
@@ -89,12 +91,15 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
     assert captured.path == "/backend-api/codex/responses"
     assert captured.json["model"] == setup.model.upstream_model_id
     assert captured.json["stream"] == true
-    assert [%{"type" => "image_generation", "model" => "gpt-image-1"}] = captured.json["tools"]
+    assert [%{"type" => "image_generation", "model" => helper_model}] = captured.json["tools"]
+    assert helper_model == Images.canonical_model()
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses"
     assert request.transport == "http_sse"
     assert request.status == "succeeded"
+    assert request.requested_model == Facade.public_model()
+    assert request.request_metadata["effective_model"] == Facade.effective_model()
     assert get_in(request.request_metadata, ["openai_compatibility", "surface"]) == "openai_v1"
 
     assert get_in(request.request_metadata, ["openai_compatibility", "source_endpoint"]) ==
@@ -105,6 +110,7 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
 
     refute inspect(request.request_metadata) =~ "synthetic image request"
     refute inspect(request.request_metadata) =~ "B64_GENERATED"
+    refute inspect(json_response(conn, 200)) =~ Images.canonical_model()
   end
 
   test "POST /v1/images/generations accepts idless image generation output items", %{
@@ -117,7 +123,6 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
       conn
       |> auth(setup)
       |> post("/v1/images/generations", %{
-        "model" => setup.model.exposed_model_id,
         "prompt" => "synthetic idless image request",
         "size" => "1024x1024",
         "quality" => "low",
@@ -132,14 +137,15 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
     refute inspect(request.request_metadata) =~ "B64_IDLESS"
   end
 
-  test "POST /v1/images/generations routes through a visible host model when image model is not listed",
+  test "POST /v1/images/generations fixes the hidden helper when client selector is not listed",
        %{conn: conn} do
     upstream = start_upstream(image_success_stream("B64_HIDDEN", "hidden prompt"))
 
     setup =
       upstream
       |> gateway_setup()
-      |> allow_models!(["gpt-image-2"])
+      |> use_image_model!("gpt-image-1")
+      |> allow_models!([Facade.effective_model()])
 
     conn =
       conn
@@ -158,12 +164,13 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
     assert captured.json["model"] == setup.model.upstream_model_id
-    assert [%{"type" => "image_generation", "model" => "gpt-image-2"}] = captured.json["tools"]
+    assert [%{"type" => "image_generation", "model" => helper_model}] = captured.json["tools"]
+    assert helper_model == Images.canonical_model()
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "succeeded"
-    assert request.request_metadata["requested_model"] == "gpt-image-2"
-    assert request.request_metadata["effective_model"] == "gpt-image-2"
+    assert request.request_metadata["requested_model"] == Facade.public_model()
+    assert request.request_metadata["effective_model"] == Facade.effective_model()
     refute inspect(request.request_metadata) =~ "synthetic hidden image request"
     refute inspect(request.request_metadata) =~ "B64_HIDDEN"
   end
@@ -177,7 +184,7 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
       conn
       |> auth(setup)
       |> post("/v1/images/edits", %{
-        "model" => setup.model.exposed_model_id,
+        "model" => %{"arbitrary" => "nested-client-image-selector"},
         "prompt" => "synthetic edit request",
         "size" => "1024x1024",
         "input_fidelity" => "high",
@@ -197,6 +204,8 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
            end)
 
     refute captured.body =~ "source-private.png"
+    assert [%{"type" => "image_generation", "model" => helper_model}] = captured.json["tools"]
+    assert helper_model == Images.canonical_model()
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     refute inspect(request.request_metadata) =~ "source-private.png"
@@ -238,11 +247,11 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
     assert Repo.aggregate(Request, :count) == 0
   end
 
-  defp use_image_model!(setup, model_id) do
+  defp use_image_model!(setup, _model_id) do
     model =
       setup.model
       |> Ecto.Changeset.change(%{
-        exposed_model_id: model_id,
+        exposed_model_id: Facade.effective_model(),
         upstream_model_id: "provider-host-responses-model",
         supports_responses: true,
         supports_streaming: true,
@@ -251,7 +260,7 @@ defmodule CodexPoolerWeb.V1.ImagesControllerTest do
           |> Map.put("source_assignment_ids", [setup.assignment.id])
           |> put_in(
             ["source_assignment_models", setup.assignment.id, "slug"],
-            model_id
+            Facade.effective_model()
           )
           |> put_in(
             ["source_assignment_models", setup.assignment.id, "input_modalities"],

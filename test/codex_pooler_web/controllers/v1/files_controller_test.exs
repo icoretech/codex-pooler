@@ -180,17 +180,25 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
     assert_upload_put(file_id, "/upload/#{file_id}", file_contents, "text/plain")
 
     denied_show = build_conn() |> auth(second) |> get("/v1/files/#{file_id}")
-    assert_openai_error(denied_show, 404, code: "file_not_found", message: "file was not found")
+
+    assert_openai_error(denied_show, 404,
+      code: "not_found",
+      message: "Endpoint was not found"
+    )
 
     denied_content = build_conn() |> auth(second) |> get("/v1/files/#{file_id}/content")
 
     assert_openai_error(denied_content, 404,
-      code: "file_not_found",
-      message: "file was not found"
+      code: "not_found",
+      message: "Endpoint was not found"
     )
 
     missing = build_conn() |> auth(first) |> get("/v1/files/file_missing_private_token")
-    assert_openai_error(missing, 404, code: "file_not_found", message: "file was not found")
+
+    assert_openai_error(missing, 404,
+      code: "not_found",
+      message: "Endpoint was not found"
+    )
 
     requests = Repo.all(from request in Request, where: request.pool_id == ^first.pool.id)
     refute inspect(requests) =~ file_contents
@@ -275,8 +283,8 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
       })
 
     assert_openai_error(conn, 502,
-      code: "upstream_file_upload_failed",
-      message: "upstream file upload failed with status 415"
+      code: "service_error",
+      message: "gemma3 request failed"
     )
 
     assert [create_request] = FakeUpstream.requests(upstream)
@@ -418,8 +426,8 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
     refute log =~ injected_header
 
     assert_openai_error(conn, 502,
-      code: "upstream_file_bridge_invalid_response",
-      message: "upstream file create returned an invalid upload_url"
+      code: "service_error",
+      message: "gemma3 request failed"
     )
 
     assert [%{path: "/backend-api/files"}] = FakeUpstream.requests(upstream)
@@ -582,8 +590,8 @@ defmodule CodexPoolerWeb.V1.FilesControllerTest do
       })
 
     assert_openai_error(conn, 502,
-      code: "upstream_file_upload_failed",
-      message: "upstream file upload failed with status #{status}"
+      code: "service_error",
+      message: "gemma3 request failed"
     )
 
     assert_receive {:upload_redirect, ^file_id, "PUT", :https, "upload.example.invalid",

@@ -17,6 +17,7 @@ defmodule CodexPoolerWeb.Ollama.InferenceControllerTest do
 
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Repo
 
   @tag :facade_task9
@@ -198,6 +199,46 @@ defmodule CodexPoolerWeb.Ollama.InferenceControllerTest do
     assert captured_input =~ "result = "
     assert captured_input =~ "SUFFIX"
     assert captured_input =~ "return result"
+  end
+
+  @tag :facade_task13
+  test "x-ollama-session-id persists only authenticated scoped affinity", %{conn: conn} do
+    upstream =
+      start_upstream(
+        completed_response([
+          %{
+            "type" => "message",
+            "content" => [%{"type" => "output_text", "text" => "session answer"}]
+          }
+        ])
+      )
+
+    setup = facade_gateway_setup(upstream)
+    raw_session_id = "raw-ollama-session-id-must-not-survive"
+
+    response =
+      conn
+      |> put_req_header("x-ollama-session-id", raw_session_id)
+      |> auth(setup)
+      |> post("/api/chat", %{
+        "stream" => false,
+        "messages" => [%{"role" => "user", "content" => "session fixture"}]
+      })
+
+    assert %{"model" => "gemma3", "message" => %{"content" => "session answer"}} =
+             json_response(response, 200)
+
+    assert [session] = Repo.all(from(s in CodexSession, where: s.pool_id == ^setup.pool.id))
+    assert session.api_key_id == setup.api_key.id
+    assert session.session_key =~ ~r/\Afacade:[A-Za-z0-9_-]{43}\z/
+    refute inspect(session) =~ raw_session_id
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    refute inspect(request.request_metadata) =~ raw_session_id
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    refute inspect(captured.headers) =~ raw_session_id
+    refute captured.body =~ raw_session_id
   end
 
   @tag :facade_task9

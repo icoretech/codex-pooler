@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Denials
+  alias CodexPooler.Gateway.Facade.Affinity
   alias CodexPooler.Gateway.Facade.Dispatch, as: FacadeDispatch
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
@@ -157,6 +158,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
           execute_client_selected_model(auth, endpoint, payload, opts)
 
         {:ok, facade_payload, request_options} ->
+          {facade_payload, request_options} =
+            Affinity.scope(auth, facade_payload, request_options)
+
           execute_effective_model(
             auth,
             endpoint,

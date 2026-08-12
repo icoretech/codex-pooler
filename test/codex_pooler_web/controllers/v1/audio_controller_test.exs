@@ -11,6 +11,7 @@ defmodule CodexPoolerWeb.V1.AudioControllerTest do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway
+  alias CodexPooler.Gateway.Facade
   alias CodexPooler.Repo
 
   @tag :transcription_success
@@ -75,9 +76,9 @@ defmodule CodexPoolerWeb.V1.AudioControllerTest do
     assert [request] = Repo.all(from r in Request, where: r.pool_id == ^setup.pool.id)
     assert request.endpoint == "/backend-api/transcribe"
     assert request.status == "succeeded"
-    assert request.requested_model == Gateway.backend_transcription_model()
+    assert request.requested_model == Facade.public_model()
     assert request.model_id == setup.model.id
-    assert request.request_metadata["requested_model"] == Gateway.backend_transcription_model()
+    assert request.request_metadata["requested_model"] == Facade.public_model()
     assert request.request_metadata["effective_model"] == Gateway.backend_transcription_model()
 
     assert [attempt] = Repo.all(from a in Attempt, where: a.request_id == ^request.id)
@@ -180,7 +181,8 @@ defmodule CodexPoolerWeb.V1.AudioControllerTest do
     setup =
       upstream
       |> gateway_setup()
-      |> allow_models!([Gateway.backend_transcription_model()])
+      |> use_transcription_model!()
+      |> allow_models!([Facade.effective_model()])
 
     conn =
       conn
@@ -203,29 +205,53 @@ defmodule CodexPoolerWeb.V1.AudioControllerTest do
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/transcribe"
     assert request.status == "succeeded"
-    assert request.request_metadata["requested_model"] == Gateway.backend_transcription_model()
+    assert request.request_metadata["requested_model"] == Facade.public_model()
     assert request.request_metadata["effective_model"] == Gateway.backend_transcription_model()
     assert request.request_metadata["upload_bytes"] == byte_size(audio_bytes)
     refute inspect(request.request_metadata) =~ audio_bytes
   end
 
-  test "POST /v1/audio/transcriptions rejects invalid model before dispatch", %{conn: conn} do
-    upstream = start_upstream(FakeUpstream.json_response(%{"text" => "should not dispatch"}))
+  test "POST /v1/audio/transcriptions ignores arbitrary and missing client model selectors", %{
+    conn: conn
+  } do
+    transcript = "selector-independent transcript"
+    arbitrary_model = "private-client-audio-selector"
+    upstream = start_upstream(FakeUpstream.json_response(%{"text" => transcript}))
     setup = upstream |> gateway_setup() |> use_transcription_model!()
 
-    conn =
-      conn
-      |> auth(setup)
-      |> post("/v1/audio/transcriptions", %{
-        "model" => "whisper-1",
-        "file" => upload_fixture("invalid.wav", "audio/wav", "invalid audio")
-      })
+    for selector <- [:missing, arbitrary_model] do
+      payload = %{
+        "file" =>
+          upload_fixture(
+            "selector-private.wav",
+            "audio/wav",
+            "selector-independent audio"
+          )
+      }
 
-    assert %{"error" => %{"code" => "invalid_model", "param" => "model"}} =
-             json_response(conn, 400)
+      payload = if selector == :missing, do: payload, else: Map.put(payload, "model", selector)
 
-    assert FakeUpstream.requests(upstream) == []
-    assert Repo.aggregate(Request, :count) == 0
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/audio/transcriptions", payload)
+
+      assert %{"text" => ^transcript} = body = json_response(response, 200)
+      refute inspect(body) =~ Gateway.backend_transcription_model()
+    end
+
+    assert [first, second] = FakeUpstream.requests(upstream)
+
+    for captured <- [first, second] do
+      assert captured.path == "/backend-api/transcribe"
+      refute captured.body =~ arbitrary_model
+      refute captured.body =~ Gateway.backend_transcription_model()
+    end
+
+    persisted = Repo.all(Request) |> inspect()
+    refute persisted =~ arbitrary_model
+    assert Repo.aggregate(Request, :count) == 2
   end
 
   test "POST /v1/audio/transcriptions rejects malformed decoded lists without effects", %{
@@ -268,22 +294,21 @@ defmodule CodexPoolerWeb.V1.AudioControllerTest do
     model =
       setup.model
       |> Ecto.Changeset.change(%{
-        exposed_model_id: Gateway.backend_transcription_model(),
-        upstream_model_id: "provider-gpt-4o-transcribe",
-        supports_responses: false,
-        supports_streaming: false,
-        metadata: %{
-          "source_assignment_ids" => [setup.assignment.id],
-          "source_assignment_models" => %{
-            setup.assignment.id => %{
-              "slug" => Gateway.backend_transcription_model(),
-              "input_modalities" => ["audio"],
-              "modes" => ["transcription"]
-            }
-          },
-          "input_modalities" => ["audio"],
-          "modes" => ["transcription"]
-        }
+        exposed_model_id: Facade.effective_model(),
+        upstream_model_id: "provider-host-responses-model",
+        supports_responses: true,
+        supports_streaming: true,
+        metadata:
+          setup.model.metadata
+          |> Map.put("source_assignment_ids", [setup.assignment.id])
+          |> put_in(
+            ["source_assignment_models", setup.assignment.id, "slug"],
+            Facade.effective_model()
+          )
+          |> put_in(
+            ["source_assignment_models", setup.assignment.id, "input_modalities"],
+            ["text", "audio"]
+          )
       })
       |> Repo.update!()
 

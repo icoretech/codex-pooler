@@ -94,6 +94,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :file_bridge_route_metadata,
     :finalize_retry_interval_ms,
     :finalize_retry_timeout_ms,
+    :forced_image_model,
     :forced_transcription_model,
     :forwarded_headers,
     :gateway_debug_payload,

@@ -586,7 +586,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
        ) do
     policy = opts.routing.api_key_policy
 
-    model_identifier = opts.routing.effective_model || model.exposed_model_id
+    model_identifier =
+      case opts.persona do
+        %RequestOptions.Persona{} = persona -> persona.effective_model
+        nil -> opts.routing.effective_model || model.exposed_model_id
+      end
 
     case Access.authorize_api_key_policy(policy, %{model_identifier: model_identifier}) do
       {:ok, _policy} ->

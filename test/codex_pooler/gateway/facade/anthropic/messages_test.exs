@@ -303,6 +303,24 @@ defmodule CodexPooler.Gateway.Facade.Anthropic.MessagesTest do
              Access.at(0),
              "prompt_cache_breakpoint"
            ]) == %{"mode" => "explicit"}
+
+    tool_cached = %{
+      "messages" => [%{"role" => "user", "content" => "use the tool"}],
+      "max_tokens" => 32,
+      "tools" => [
+        %{
+          "name" => "cached_lookup",
+          "input_schema" => %{"type" => "object", "properties" => %{}},
+          "cache_control" => %{"type" => "ephemeral"}
+        }
+      ]
+    }
+
+    assert {:ok, tool_canonical, _formatting} = Messages.to_responses(tool_cached)
+    assert tool_canonical["prompt_cache_options"] == %{"mode" => "explicit"}
+
+    assert get_in(tool_canonical, ["tools", Access.at(0), "prompt_cache_breakpoint"]) ==
+             %{"mode" => "explicit"}
   end
 
   test "rejects unsupported or malformed request shapes locally" do

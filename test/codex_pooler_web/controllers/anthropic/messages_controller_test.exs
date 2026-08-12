@@ -89,6 +89,58 @@ defmodule CodexPoolerWeb.Anthropic.MessagesControllerTest do
     assert FakeUpstream.count(upstream) == 3
   end
 
+  @tag :facade_task13
+  test "Anthropic cache blocks keep scoped prefix affinity across uncached suffixes", %{
+    conn: conn
+  } do
+    upstream = start_upstream(completed_response())
+    setup = facade_gateway_setup(upstream)
+    second_key = active_api_key_fixture(setup.pool)
+
+    request = fn credential, suffix, client_model ->
+      conn
+      |> recycle()
+      |> put_req_header("x-api-key", credential)
+      |> put_req_header("anthropic-version", @version)
+      |> post("/v1/messages", %{
+        "model" => client_model,
+        "max_tokens" => 32,
+        "stream" => false,
+        "system" => [
+          %{
+            "type" => "text",
+            "text" => "stable cached controller prefix",
+            "cache_control" => %{"type" => "ephemeral"}
+          }
+        ],
+        "messages" => [%{"role" => "user", "content" => suffix}]
+      })
+    end
+
+    first = request.(setup.raw_key, "first uncached suffix", "claude-client-cache-a")
+    repeat = request.(setup.raw_key, "different uncached suffix", "claude-client-cache-b")
+    other_key = request.(second_key.raw_key, "first uncached suffix", "claude-client-cache-c")
+
+    for response <- [first, repeat, other_key] do
+      assert %{"model" => "gemma3"} = json_response(response, 200)
+    end
+
+    assert [first_capture, repeat_capture, other_key_capture] = FakeUpstream.requests(upstream)
+    assert first_capture.json["prompt_cache_key"] == repeat_capture.json["prompt_cache_key"]
+
+    refute first_capture.json["prompt_cache_key"] ==
+             other_key_capture.json["prompt_cache_key"]
+
+    assert first_capture.json["prompt_cache_key"] =~ ~r/\Afacade:[A-Za-z0-9_-]{43}\z/
+
+    captured = inspect([first_capture, repeat_capture, other_key_capture])
+
+    for hidden <- ["claude-client-cache-a", "claude-client-cache-b", "claude-client-cache-c"] do
+      refute captured =~ hidden
+      refute inspect(Repo.all(Request)) =~ hidden
+    end
+  end
+
   test "returns a collected Anthropic message with only local IDs and gemma3 identity", %{
     conn: conn
   } do

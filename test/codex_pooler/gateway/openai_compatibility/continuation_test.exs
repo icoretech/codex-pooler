@@ -5,7 +5,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
   import CodexPooler.PoolerFixtures
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
-    only: [auth: 2, gateway_setup: 1, gateway_setup: 2, start_upstream: 1]
+    only: [auth: 2, gateway_setup: 2, start_upstream: 1]
 
   alias CodexPooler.Accounting.Request
   alias CodexPooler.FakeUpstream
@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
   alias CodexPooler.Gateway.Payloads.ToolResultShape
   alias CodexPooler.Gateway.Transports.FileBridge
   alias CodexPooler.Repo
+  alias CodexPoolerWeb.GatewayControllerHelpers
   alias CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
   setup do
@@ -37,6 +38,28 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
     :ok
   end
 
+  test "Ollama session IDs enter continuity without overriding existing Codex headers", %{
+    conn: conn
+  } do
+    ollama_opts =
+      conn
+      |> put_req_header("x-ollama-session-id", "ollama-session-fixture")
+      |> GatewayControllerHelpers.request_opts()
+
+    assert ollama_opts.session_header_source == "x-ollama-session-id"
+    assert ollama_opts.session_header == "ollama-session-fixture"
+
+    codex_opts =
+      conn
+      |> recycle()
+      |> put_req_header("x-ollama-session-id", "ollama-session-fixture")
+      |> put_req_header("x-codex-session-id", "codex-session-authoritative")
+      |> GatewayControllerHelpers.request_opts()
+
+    assert codex_opts.session_header_source == "x-codex-session-id"
+    assert codex_opts.session_header == "codex-session-authoritative"
+  end
+
   describe "Task 4 Responses continuation and input-reference behavior" do
     test "v1 Responses forwards stateless programmatic replay in order for collected responses",
          %{
@@ -51,7 +74,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
           })
         )
 
-      setup = gateway_setup(upstream)
+      setup = facade_gateway_setup(upstream)
       input = programmatic_replay_input()
 
       response_conn =
@@ -91,7 +114,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
           })
         )
 
-      setup = gateway_setup(upstream)
+      setup = facade_gateway_setup(upstream)
       input = programmatic_replay_input()
 
       response_conn =
@@ -160,7 +183,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
           )
         )
 
-      setup = gateway_setup(upstream)
+      setup = facade_gateway_setup(upstream)
       program_output = programmatic_replay_input() |> List.last()
 
       response_conn =
@@ -200,7 +223,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
           )
         )
 
-      setup = gateway_setup(upstream)
+      setup = facade_gateway_setup(upstream)
 
       response_conn =
         conn
@@ -280,7 +303,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
           )
         )
 
-      setup = gateway_setup(upstream)
+      setup = facade_gateway_setup(upstream)
 
       response_conn =
         conn
@@ -336,7 +359,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
         )
 
       setup =
-        gateway_setup(upstream, model_metadata: %{"input_modalities" => ["text", "image"]})
+        facade_gateway_setup(upstream, model_metadata: %{"input_modalities" => ["text", "image"]})
 
       passthrough_key = "internal_chat_message_metadata_passthrough"
 
@@ -436,7 +459,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
           })
         )
 
-      setup = gateway_setup(upstream)
+      setup = facade_gateway_setup(upstream)
 
       response_conn =
         conn
@@ -493,7 +516,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
           })
         )
 
-      setup = gateway_setup(upstream)
+      setup = facade_gateway_setup(upstream)
 
       response_conn =
         conn
@@ -561,7 +584,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
           })
         )
 
-      setup = gateway_setup(upstream)
+      setup = facade_gateway_setup(upstream)
 
       response_conn =
         conn
@@ -612,7 +635,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
           })
         )
 
-      setup = gateway_setup(upstream)
+      setup = facade_gateway_setup(upstream)
 
       response_conn =
         conn
@@ -693,7 +716,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
           })
         )
 
-      setup = gateway_setup(upstream)
+      setup = facade_gateway_setup(upstream)
 
       response_conn =
         conn
@@ -777,7 +800,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
           })
         )
 
-      setup = gateway_setup(upstream)
+      setup = facade_gateway_setup(upstream)
 
       response_conn =
         conn
@@ -842,7 +865,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
           })
         )
 
-      setup = gateway_setup(upstream)
+      setup = facade_gateway_setup(upstream)
 
       response_conn =
         conn
@@ -902,7 +925,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
           })
         )
 
-      setup = gateway_setup(upstream)
+      setup = facade_gateway_setup(upstream)
 
       response_conn =
         conn
@@ -986,7 +1009,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
           })
         )
 
-      setup = gateway_setup(upstream)
+      setup = facade_gateway_setup(upstream)
 
       invalid_payloads = [
         {%{
@@ -1104,7 +1127,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
       )
     )
 
-    setup = gateway_setup(file_upstream)
+    setup = facade_gateway_setup(file_upstream)
 
     create_conn =
       conn
@@ -1196,7 +1219,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
         "input" => [%{"type" => "input_file", "file_id" => file_id}]
       })
 
-    assert %{"error" => %{"code" => "file_not_found", "param" => "file_id"}} =
+    assert %{"error" => %{"code" => "not_found", "param" => nil}} =
              json_response(denied_conn, 404)
 
     missing_conn =
@@ -1207,7 +1230,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
         "input" => [%{"type" => "input_file", "file_id" => "file_missing_v1_affinity"}]
       })
 
-    assert %{"error" => %{"code" => "file_not_found", "param" => "file_id"}} =
+    assert %{"error" => %{"code" => "not_found", "param" => nil}} =
              json_response(missing_conn, 404)
 
     assert FakeUpstream.count(owner_response_upstream) == owner_before + 1
@@ -1234,7 +1257,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
       )
     )
 
-    setup = gateway_setup(upstream)
+    setup = facade_gateway_setup(upstream)
 
     create_conn =
       conn
@@ -1264,7 +1287,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
         ]
       })
 
-    assert %{"error" => %{"code" => "unsupported_input_image_format", "param" => "input"}} =
+    assert %{"error" => %{"code" => "invalid_request", "param" => nil}} =
              json_response(rejected_conn, 400)
 
     assert FakeUpstream.count(upstream) == create_dispatch_count
@@ -1314,6 +1337,30 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
         "status" => "completed"
       }
     ]
+  end
+
+  defp facade_gateway_setup(upstream, opts \\ []) do
+    reasoning_levels =
+      Enum.map(~w(low medium high xhigh max ultra), &%{"effort" => &1, "description" => &1})
+
+    model_metadata =
+      %{
+        "supported_reasoning_levels" => reasoning_levels,
+        "default_reasoning_level" => "max",
+        "input_modalities" => ["text", "image"]
+      }
+      |> Map.merge(Keyword.get(opts, :model_metadata, %{}))
+
+    gateway_setup(
+      upstream,
+      Keyword.merge(opts,
+        exposed_model_id: "gpt-5.6-sol",
+        upstream_model_id: "gpt-5.6-sol",
+        pricing_ref: "gpt-5.6-sol",
+        display_name: "Facade fixed target",
+        model_metadata: model_metadata
+      )
+    )
   end
 
   defp stub_upload_put(file_id) do

@@ -418,7 +418,8 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
       "x-session-id",
       "x-session-affinity",
       "session_id",
-      "x-codex-conversation-id"
+      "x-codex-conversation-id",
+      "x-ollama-session-id"
     ]
     |> Enum.find_value({nil, nil}, fn header ->
       case conn |> get_req_header(header) |> List.first() |> blank_to_nil() do
