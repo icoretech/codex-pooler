@@ -154,6 +154,9 @@ defmodule CodexPoolerWeb.Router do
   scope "/v1", CodexPoolerWeb do
     pipe_through :api
 
+    post "/messages/count_tokens", Anthropic.MessagesController, :count_tokens
+    post "/messages", Anthropic.MessagesController, :create
+
     get "/models", V1.ModelsController, :index
     get "/models/:model", V1.ModelsController, :show
     get "/responses", V1.ResponsesController, :websocket

@@ -95,6 +95,10 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.OpenAICompatibility do
        when endpoint in ["/api/chat", "/api/generate"],
        do: "ollama"
 
+  defp surface(%__MODULE__{source_endpoint: endpoint})
+       when endpoint in ["/v1/messages", "/v1/messages/count_tokens"],
+       do: "anthropic"
+
   defp surface(%__MODULE__{source_endpoint: endpoint}) when is_binary(endpoint), do: "openai_v1"
   defp surface(_compatibility), do: nil
 end

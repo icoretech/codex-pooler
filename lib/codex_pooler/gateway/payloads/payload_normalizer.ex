@@ -883,7 +883,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
          "/backend-api/codex/responses",
          %RequestOptions{persona: %Persona{protocol: protocol}}
        )
-       when protocol in [:ollama_chat, :ollama_generate] do
+       when protocol in [:ollama_chat, :ollama_generate, :anthropic_messages] do
     Map.drop(payload, @unsupported_upstream_fields -- ~w(max_output_tokens temperature top_p))
   end
 
