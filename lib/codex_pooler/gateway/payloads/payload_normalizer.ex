@@ -881,6 +881,15 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   defp maybe_strip_unsupported_upstream_fields(
          payload,
          "/backend-api/codex/responses",
+         %RequestOptions{persona: %Persona{protocol: protocol}}
+       )
+       when protocol in [:ollama_chat, :ollama_generate] do
+    Map.drop(payload, @unsupported_upstream_fields -- ~w(max_output_tokens temperature top_p))
+  end
+
+  defp maybe_strip_unsupported_upstream_fields(
+         payload,
+         "/backend-api/codex/responses",
          %RequestOptions{}
        ) do
     Map.drop(payload, @unsupported_upstream_fields)

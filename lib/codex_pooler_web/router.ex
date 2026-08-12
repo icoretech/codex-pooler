@@ -131,6 +131,9 @@ defmodule CodexPoolerWeb.Router do
   scope "/api", CodexPoolerWeb do
     pipe_through :api
 
+    post "/chat", Ollama.InferenceController, :chat
+    post "/generate", Ollama.InferenceController, :generate
+
     get "/tags", Ollama.DiscoveryController, :tags
     post "/show", Ollama.DiscoveryController, :show
     get "/ps", Ollama.DiscoveryController, :ps
