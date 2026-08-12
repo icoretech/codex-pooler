@@ -2,7 +2,7 @@ name: codex-pooler-smoke
 
 services:
   codex-smoke:
-    image: ${CODEX_SMOKE_IMAGE:-ghcr.io/icoretech/codex-docker:0.139.0}
+    image: ${CODEX_SMOKE_IMAGE:-ghcr.io/icoretech/codex-docker:0.147.0}
     working_dir: /workspace
     environment:
       CODEX_HOME: /home/codex/.codex
