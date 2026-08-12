@@ -25,7 +25,13 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
 
     payload = %{
       "model" => setup.model.exposed_model_id,
-      "input" => "pre-attempt rollback regression",
+      "input" => [
+        %{
+          "type" => "message",
+          "role" => "user",
+          "content" => [%{"type" => "input_text", "text" => "pre-attempt rollback regression"}]
+        }
+      ],
       "stream" => true
     }
 

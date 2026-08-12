@@ -2177,7 +2177,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         |> auth(setup)
         |> post(~p"/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "upstream validation secret text",
+          "input" => native_text_input("upstream validation secret text"),
           "stream" => true
         })
 
@@ -2239,7 +2239,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         |> auth(setup)
         |> post(~p"/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic oversized context request",
+          "input" => native_text_input("synthetic oversized context request"),
           "stream" => false
         })
 
@@ -2296,7 +2296,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         |> auth(setup)
         |> post(~p"/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic safe field request",
+          "input" => native_text_input("synthetic safe field request"),
           "text" => %{"format" => %{"type" => "json_object"}},
           "store" => false,
           "include" => ["message.input_image.image_url"],
@@ -2350,7 +2350,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         |> auth(setup)
         |> post(~p"/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic chat",
+          "input" => native_text_input("synthetic chat"),
           "stream" => true
         })
 
@@ -2367,7 +2367,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         |> auth(setup)
         |> post(~p"/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic reasoning request",
+          "input" => native_text_input("synthetic reasoning request"),
           "reasoning" => %{"effort" => "minimal"}
         })
 
@@ -2386,7 +2386,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         |> auth(setup)
         |> post(~p"/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic reasoning request",
+          "input" => native_text_input("synthetic reasoning request"),
           "reasoning" => %{"effort" => "none"}
         })
 
@@ -2405,7 +2405,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         |> auth(setup)
         |> post(~p"/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic reasoning request",
+          "input" => native_text_input("synthetic reasoning request"),
           "reasoning" => %{"effort" => "ultra"}
         })
 
@@ -2423,7 +2423,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         |> auth(setup)
         |> post(~p"/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic reasoning request",
+          "input" => native_text_input("synthetic reasoning request"),
           "reasoning" => %{"effort" => "medium"}
         })
 
@@ -2581,6 +2581,16 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
   end
 
   defp multipart_boundary, do: "codex-pooler-compat-boundary"
+
+  defp native_text_input(text) do
+    [
+      %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "input_text", "text" => text}]
+      }
+    ]
+  end
 
   defp multipart_body(filename, contents) do
     [

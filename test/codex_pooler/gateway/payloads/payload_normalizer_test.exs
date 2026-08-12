@@ -272,7 +272,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       model = %Model{upstream_model_id: "provider-model"}
 
       for aliases <- cases do
-        payload = Map.merge(%{"model" => "gpt-4.1", "input" => "hello"}, aliases)
+        payload =
+          Map.merge(%{"model" => "gpt-4.1", "input" => native_text_input("hello")}, aliases)
+
         request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
 
         assert {:ok, encoded} =
@@ -1056,9 +1058,17 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       model = %Model{upstream_model_id: "provider-model"}
 
       for payload <- [
-            %{"model" => "gpt-4.1", "input" => "hello"},
-            %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => "auto"},
-            %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => "default"}
+            %{"model" => "gpt-4.1", "input" => native_text_input("hello")},
+            %{
+              "model" => "gpt-4.1",
+              "input" => native_text_input("hello"),
+              "service_tier" => "auto"
+            },
+            %{
+              "model" => "gpt-4.1",
+              "input" => native_text_input("hello"),
+              "service_tier" => "default"
+            }
           ] do
         request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
 
@@ -1074,7 +1084,12 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       end
 
       for tier <- ["priority", " PRIORITY ", "flex", "scale", "latency_preview", " "] do
-        payload = %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => tier}
+        payload = %{
+          "model" => "gpt-4.1",
+          "input" => native_text_input("hello"),
+          "service_tier" => tier
+        }
+
         request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
 
         assert {:ok, encoded} =
@@ -1089,7 +1104,12 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       end
 
       for tier <- ["fast", " FAST ", "Fast"] do
-        payload = %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => tier}
+        payload = %{
+          "model" => "gpt-4.1",
+          "input" => native_text_input("hello"),
+          "service_tier" => tier
+        }
+
         request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
 
         assert {:ok, encoded} =
@@ -1104,7 +1124,12 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       end
 
       for tier <- [123, nil, ["fast"], %{"id" => "fast"}] do
-        payload = %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => tier}
+        payload = %{
+          "model" => "gpt-4.1",
+          "input" => native_text_input("hello"),
+          "service_tier" => tier
+        }
+
         request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
 
         assert {:ok, encoded} =
@@ -1260,14 +1285,14 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         RequestOptions.build(
           %{request_id: "payload-debug-explicit"},
           "/backend-api/codex/responses",
-          %{"model" => "gpt-4.1", "input" => "hello"}
+          %{"model" => "gpt-4.1", "input" => native_text_input("hello")}
         )
 
       model = %Model{upstream_model_id: "provider-model"}
 
       assert {:ok, encoded, updated_options} =
                PayloadNormalizer.prepare_upstream_payload(
-                 %{"model" => "gpt-4.1", "input" => "hello"},
+                 %{"model" => "gpt-4.1", "input" => native_text_input("hello")},
                  model,
                  "/backend-api/codex/responses",
                  request_options
@@ -1291,7 +1316,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
             "/backend-api/codex/images/edits"
           ],
           effective_model <- ["gpt-image-2", "future-image-model-fixture"] do
-        payload = %{"model" => "client-controlled-model", "input" => "hello"}
+        payload = %{"model" => "client-controlled-model", "input" => native_text_input("hello")}
 
         request_options =
           RequestOptions.build(
@@ -1318,7 +1343,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
             {"/backend-api/codex/images/edits",
              %{native_image_request?: true, effective_model: ""}}
           ] do
-        payload = %{"model" => "client-controlled-model", "input" => "hello"}
+        payload = %{"model" => "client-controlled-model", "input" => native_text_input("hello")}
         request_options = RequestOptions.build(options, endpoint, payload)
 
         assert {:ok, encoded} =
@@ -1510,7 +1535,12 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       model = %Model{upstream_model_id: "provider-model"}
 
       for effort <- ["max", "ultra"] do
-        payload = %{"model" => "gpt-5.6-sol", "input" => "hello", "thinking" => effort}
+        payload = %{
+          "model" => "gpt-5.6-sol",
+          "input" => native_text_input("hello"),
+          "thinking" => effort
+        }
+
         request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
 
         assert {:ok, encoded} =
@@ -1528,7 +1558,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
     test "maps minimal reasoning effort to low before backend dispatch" do
       payload = %{
         "model" => "gpt-4.1",
-        "input" => "hello",
+        "input" => native_text_input("hello"),
         "reasoning" => %{"effort" => "minimal"}
       }
 
@@ -1549,7 +1579,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
     test "passes none reasoning effort through unchanged" do
       payload = %{
         "model" => "gpt-4.1",
-        "input" => "hello",
+        "input" => native_text_input("hello"),
         "reasoning" => %{"effort" => "none"}
       }
 
@@ -1568,7 +1598,12 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
     end
 
     test "maps client-facing ultra reasoning effort to max for backend Codex HTTP, compact, and websocket JSON" do
-      payload = %{"model" => "gpt-4.1", "input" => "hello", "reasoning" => %{"effort" => "ultra"}}
+      payload = %{
+        "model" => "gpt-4.1",
+        "input" => native_text_input("hello"),
+        "reasoning" => %{"effort" => "ultra"}
+      }
+
       model = %Model{upstream_model_id: "provider-model"}
 
       http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
@@ -1591,7 +1626,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
     test "adds required Responses Lite controls for HTTP, compact, and websocket JSON" do
       payload = %{
         "model" => "gpt-5.6-terra",
-        "input" => "hello",
+        "input" => native_text_input("hello"),
         "parallel_tool_calls" => true,
         "reasoning" => %{"effort" => "max", "summary" => "auto"}
       }
@@ -1636,7 +1671,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
     end
 
     test "adds Responses Lite reasoning context when the client omits reasoning" do
-      payload = %{"model" => "gpt-5.6-terra", "input" => "hello"}
+      payload = %{"model" => "gpt-5.6-terra", "input" => native_text_input("hello")}
 
       request_options =
         RequestOptions.build(
@@ -1747,7 +1782,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
     test "effective snapshot survives compact and websocket retargeting without legacy flag control" do
       payload = %{
         "model" => "gpt-5.6-terra",
-        "input" => "hello",
+        "input" => native_text_input("hello"),
         "parallel_tool_calls" => true,
         "client_metadata" => %{
           "ws_request_header_x_openai_internal_codex_responses_lite" => "client-value"
@@ -1864,7 +1899,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
           Map.merge(
             %{
               "model" => "gpt-5.6-terra",
-              "input" => "hello",
+              "input" => native_text_input("hello"),
               "reasoning" => %{
                 "effort" => "high",
                 "summary" => "auto",
@@ -1897,7 +1932,12 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       end
 
       for reasoning <- [nil, "unsupported", ["unsupported"]] do
-        payload = %{"model" => "gpt-5.6-terra", "input" => "hello", "reasoning" => reasoning}
+        payload = %{
+          "model" => "gpt-5.6-terra",
+          "input" => native_text_input("hello"),
+          "reasoning" => reasoning
+        }
+
         options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
 
         assert {:ok, encoded} =
@@ -1925,7 +1965,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
           ] do
         payload = %{
           "model" => "gpt-5.6-terra",
-          "input" => "hello",
+          "input" => native_text_input("hello"),
           "include" => [
             "output_text.logprobs",
             "reasoning.encrypted_content",
@@ -2305,9 +2345,12 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
       for {requested, payload, expected_reasoning} <- [
             {"high",
-             %{"model" => "gpt-4.1", "input" => "hello", "reasoning" => %{"effort" => "high"}},
-             %{"effort" => "high"}},
-            {nil, %{"model" => "gpt-4.1", "input" => "hello"}, %{}}
+             %{
+               "model" => "gpt-4.1",
+               "input" => native_text_input("hello"),
+               "reasoning" => %{"effort" => "high"}
+             }, %{"effort" => "high"}},
+            {nil, %{"model" => "gpt-4.1", "input" => native_text_input("hello")}, %{}}
           ] do
         decision = %CodexPooler.Access.APIKeys.ReasoningEffortPolicy.Decision{
           mode: :unrestricted,
@@ -2343,10 +2386,10 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
             {"high",
              %{
                "model" => "gpt-4.1",
-               "input" => "hello",
+               "input" => native_text_input("hello"),
                "reasoning" => %{"effort" => "high"}
              }, "client"},
-            {nil, %{"model" => "gpt-4.1", "input" => "hello"}, nil}
+            {nil, %{"model" => "gpt-4.1", "input" => native_text_input("hello")}, nil}
           ] do
         decision = %CodexPooler.Access.APIKeys.ReasoningEffortPolicy.Decision{
           mode: :unrestricted,
@@ -2383,7 +2426,11 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
     end
 
     test "always-use decision overwrites an explicit client effort" do
-      payload = %{"model" => "gpt-4.1", "input" => "hello", "reasoning" => %{"effort" => "low"}}
+      payload = %{
+        "model" => "gpt-4.1",
+        "input" => native_text_input("hello"),
+        "reasoning" => %{"effort" => "low"}
+      }
 
       decision = %CodexPooler.Access.APIKeys.ReasoningEffortPolicy.Decision{
         mode: :always_use,
@@ -2411,7 +2458,11 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
     end
 
     test "maps legacy directly-normalized enforced ultra effort to backend max" do
-      payload = %{"model" => "gpt-4.1", "input" => "hello", "reasoning" => %{"effort" => "low"}}
+      payload = %{
+        "model" => "gpt-4.1",
+        "input" => native_text_input("hello"),
+        "reasoning" => %{"effort" => "low"}
+      }
 
       request_options =
         RequestOptions.build(
@@ -2439,7 +2490,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       cases = [
         {%{
            "model" => "gpt-4.1",
-           "input" => "hello",
+           "input" => native_text_input("hello"),
            "reasoning" => %{"effort" => "minimal"}
          }, %{},
          %{
@@ -2451,7 +2502,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
          }},
         {%{
            "model" => "gpt-4.1",
-           "input" => "hello",
+           "input" => native_text_input("hello"),
            "reasoning" => %{"effort" => "ultra"}
          }, %{},
          %{
@@ -2463,7 +2514,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
          }},
         {%{
            "model" => "gpt-4.1",
-           "input" => "hello",
+           "input" => native_text_input("hello"),
            "reasoning" => %{"effort" => "low"}
          }, %{api_key_policy: %{enforced_reasoning_effort: "ultra"}},
          %{
@@ -2475,7 +2526,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
          }},
         {%{
            "model" => "gpt-4.1",
-           "input" => "hello",
+           "input" => native_text_input("hello"),
            "reasoning" => %{"effort" => "none"}
          }, %{},
          %{
@@ -2509,12 +2560,20 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
           RequestOptions.build(
             %{api_key_policy: %{enforced_service_tier: tier}},
             "/backend-api/codex/responses",
-            %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => "priority"}
+            %{
+              "model" => "gpt-4.1",
+              "input" => native_text_input("hello"),
+              "service_tier" => "priority"
+            }
           )
 
         assert {:ok, encoded} =
                  PayloadNormalizer.upstream_payload(
-                   %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => "priority"},
+                   %{
+                     "model" => "gpt-4.1",
+                     "input" => native_text_input("hello"),
+                     "service_tier" => "priority"
+                   },
                    model,
                    "/backend-api/codex/responses",
                    request_options
@@ -2532,12 +2591,16 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
           RequestOptions.build(
             %{},
             "/backend-api/codex/responses",
-            %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => tier}
+            %{"model" => "gpt-4.1", "input" => native_text_input("hello"), "service_tier" => tier}
           )
 
         assert {:ok, encoded} =
                  PayloadNormalizer.upstream_payload(
-                   %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => tier},
+                   %{
+                     "model" => "gpt-4.1",
+                     "input" => native_text_input("hello"),
+                     "service_tier" => tier
+                   },
                    model,
                    "/backend-api/codex/responses",
                    request_options
@@ -2552,14 +2615,22 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         RequestOptions.build(
           %{api_key_policy: %{enforced_service_tier: "priority"}},
           "/backend-api/codex/responses",
-          %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => "default"}
+          %{
+            "model" => "gpt-4.1",
+            "input" => native_text_input("hello"),
+            "service_tier" => "default"
+          }
         )
 
       model = %Model{upstream_model_id: "provider-model"}
 
       assert {:ok, encoded} =
                PayloadNormalizer.upstream_payload(
-                 %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => "default"},
+                 %{
+                   "model" => "gpt-4.1",
+                   "input" => native_text_input("hello"),
+                   "service_tier" => "default"
+                 },
                  model,
                  "/backend-api/codex/responses",
                  request_options
@@ -2569,7 +2640,11 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
     end
 
     test "canonicalizes an enforced binary fast tier after it overrides the client tier" do
-      payload = %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => "latency_preview"}
+      payload = %{
+        "model" => "gpt-4.1",
+        "input" => native_text_input("hello"),
+        "service_tier" => "latency_preview"
+      }
 
       request_options =
         RequestOptions.build(
@@ -2728,33 +2803,29 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       end
     end
 
-    test "leaves non-list or missing backend Codex input unchanged for HTTP and websocket" do
+    test "rejects non-list backend Codex input and leaves missing input unchanged" do
       model = %Model{upstream_model_id: "provider-model"}
 
-      for payload <- [
-            %{"model" => "gpt-5.5", "input" => %{"id" => "msg-1"}},
-            %{"model" => "gpt-5.5", "metadata" => %{"id" => "msg-1"}}
-          ] do
+      invalid_payload = %{"model" => "gpt-5.5", "input" => %{"id" => "msg-1"}}
+      missing_payload = %{"model" => "gpt-5.5", "metadata" => %{"id" => "msg-1"}}
+
+      for payload <- [invalid_payload, missing_payload] do
         http_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
 
-        for request_options <- [
-              http_options,
-              RequestOptions.for_websocket(http_options, payload)
-            ] do
-          assert {:ok, encoded} =
-                   PayloadNormalizer.upstream_payload(
-                     payload,
-                     model,
-                     "/backend-api/codex/responses",
-                     request_options
-                   )
+        for request_options <- [http_options, RequestOptions.for_websocket(http_options, payload)] do
+          result =
+            PayloadNormalizer.upstream_payload(
+              payload,
+              model,
+              "/backend-api/codex/responses",
+              request_options
+            )
 
-          upstream = Jason.decode!(encoded)
-
-          if Map.has_key?(payload, "input") do
-            assert upstream["input"] == payload["input"]
+          if payload == invalid_payload do
+            assert {:error, %{status: 400, code: "invalid_request", param: "input"}} = result
           else
-            refute Map.has_key?(upstream, "input")
+            assert {:ok, encoded} = result
+            refute Map.has_key?(Jason.decode!(encoded), "input")
           end
         end
       end
@@ -3121,6 +3192,16 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
              )
 
     Jason.decode!(encoded)
+  end
+
+  defp native_text_input(text) do
+    [
+      %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "input_text", "text" => text}]
+      }
+    ]
   end
 
   defp serving_mode_opts(mode) when mode in ["lite", "full"] do

@@ -73,7 +73,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
                "/backend-api/codex/responses",
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "stream retry fixture",
+                 "input" => native_text_input("stream retry fixture"),
                  "stream" => true
                },
                RequestOptions.build(
@@ -84,7 +84,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
                  "/backend-api/codex/responses",
                  %{
                    "model" => setup.model.exposed_model_id,
-                   "input" => "stream retry fixture",
+                   "input" => native_text_input("stream retry fixture"),
                    "stream" => true
                  }
                )
@@ -592,7 +592,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   def strict_text_format_payload(schema, strict \\ true) do
     %{
       "model" => "gpt-test-model",
-      "input" => "answer in json",
+      "input" => native_text_input("answer in json"),
       "text" => %{
         "format" => %{
           "type" => "json_schema",
@@ -602,6 +602,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
         }
       }
     }
+  end
+
+  def native_text_input(text) do
+    [
+      %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "input_text", "text" => text}]
+      }
+    ]
   end
 
   def prime_routing_quota!(identity, overrides \\ %{}) do

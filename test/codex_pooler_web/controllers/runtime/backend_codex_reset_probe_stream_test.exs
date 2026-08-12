@@ -311,7 +311,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeStreamTest do
     %{
       "model" => setup.model.exposed_model_id,
       "stream" => true,
-      "input" => "reset probe stream fixture"
+      "input" => native_text_input("reset probe stream fixture")
     }
   end
 

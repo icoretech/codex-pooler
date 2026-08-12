@@ -147,7 +147,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
           Map.merge(
             %{
               "model" => setup.model.exposed_model_id,
-              "input" => "synthetic",
+              "input" => native_text_input("synthetic"),
               "stream" => stream?
             },
             effort_payload
@@ -200,7 +200,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         |> post(
           "/backend-api/codex/responses",
           Map.merge(
-            %{"model" => setup.model.exposed_model_id, "input" => "synthetic"},
+            %{"model" => setup.model.exposed_model_id, "input" => native_text_input("synthetic")},
             effort_payload
           )
         )
@@ -855,7 +855,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         |> auth(setup)
         |> post("/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic Full failure request"
+          "input" => native_text_input("synthetic Full failure request")
         })
       end)
 
@@ -921,7 +921,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         |> auth(setup)
         |> post("/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic malformed Full failure request"
+          "input" => native_text_input("synthetic malformed Full failure request")
         })
       end)
 
@@ -982,7 +982,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         |> auth(setup)
         |> post("/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic Full rejection request"
+          "input" => native_text_input("synthetic Full rejection request")
         })
       end)
 
@@ -1050,7 +1050,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         |> auth(setup)
         |> post("/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic Full rate-limit request"
+          "input" => native_text_input("synthetic Full rate-limit request")
         })
       end)
 
@@ -1098,7 +1098,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic rejection request",
+        "input" => native_text_input("synthetic rejection request"),
         "stream" => true
       })
 
@@ -1136,7 +1136,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     payload = %{
       "model" => setup.model.exposed_model_id,
-      "input" => "synthetic streaming Full rejection request",
+      "input" => native_text_input("synthetic streaming Full rejection request"),
       "stream" => true
     }
 
@@ -1170,7 +1170,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic Auto compatibility request"
+        "input" => native_text_input("synthetic Auto compatibility request")
       })
 
     assert response.status == 422
@@ -1211,7 +1211,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic Auto model-miss request"
+        "input" => native_text_input("synthetic Auto model-miss request")
       })
 
     assert response.status == 404
@@ -1255,7 +1255,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic Full model-miss compatibility request"
+        "input" => native_text_input("synthetic Full model-miss compatibility request")
       })
 
     assert response.status == 404
@@ -1283,7 +1283,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic Lite compatibility request"
+        "input" => native_text_input("synthetic Lite compatibility request")
       })
 
     assert response.status == 422
@@ -1316,7 +1316,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses/compact", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic compact compatibility request"
+        "input" => native_text_input("synthetic compact compatibility request")
       })
 
     assert response.status == 422
@@ -1507,7 +1507,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "first duplicate request id fixture"
+        "input" => native_text_input("first duplicate request id fixture")
       })
 
     second_conn =
@@ -1516,7 +1516,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "second duplicate request id fixture"
+        "input" => native_text_input("second duplicate request id fixture")
       })
 
     assert %{"id" => "resp_duplicate_request_id"} = json_response(first_conn, 200)
@@ -1821,7 +1821,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic ordinary image tool request",
+        "input" => native_text_input("synthetic ordinary image tool request"),
         "tools" => [%{"type" => "image_generation"}]
       })
 
@@ -1846,7 +1846,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic unclassified native credential request"
+        "input" => native_text_input("synthetic unclassified native credential request")
       })
 
     assert %{"id" => "resp_unclassified_credential"} = json_response(response, 200)
@@ -2139,7 +2139,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => "client-requested-model-fixture",
-        "input" => "synthetic enforced override"
+        "input" => native_text_input("synthetic enforced override")
       })
 
     assert %{"id" => "resp_enforced_override"} = json_response(response, 200)
@@ -2155,7 +2155,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     upstream = start_upstream(FakeUpstream.json_response(%{"created" => 1, "data" => []}))
     setup = gateway_setup(upstream)
     {:ok, auth_context} = Access.authenticate_authorization_header(setup.authorization)
-    payload = %{"model" => "future-image-model-fixture", "input" => "synthetic"}
+
+    payload = %{
+      "model" => "future-image-model-fixture",
+      "input" => native_text_input("synthetic")
+    }
 
     assert {:error, %{status: 400, code: "invalid_model"}} =
              execute_gateway(
@@ -2439,7 +2443,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic remaining source routing"
+        "input" => native_text_input("synthetic remaining source routing")
       })
 
     assert %{"id" => "resp_remaining_catalog_source"} = json_response(response, 200)
@@ -2702,7 +2706,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "use default mode"
+        "input" => native_text_input("use default mode")
       })
 
     assert %{"id" => default_response_id} = json_response(default_conn, 200)
@@ -2717,7 +2721,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "use latency preview mode",
+        "input" => native_text_input("use latency preview mode"),
         "service_tier" => "latency_preview"
       })
 
@@ -2808,7 +2812,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic namespace request",
+        "input" => native_text_input("synthetic namespace request"),
         "tools" => [namespace_tool, backend_ordinary_function_tool()]
       })
 
@@ -2856,7 +2860,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic reasoning envelope",
+        "input" => native_text_input("synthetic reasoning envelope"),
         "include" => [
           "reasoning.encrypted_content",
           "reasoning.encrypted_content"
@@ -3347,7 +3351,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "/backend-api/codex/responses",
         %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic lineage forwarding request"
+          "input" => native_text_input("synthetic lineage forwarding request")
         },
         lineage_request_headers(metadata)
       )
@@ -3383,7 +3387,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic client metadata request",
+        "input" => native_text_input("synthetic client metadata request"),
         "client_metadata" => metadata.client_metadata
       })
 
@@ -3422,7 +3426,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
           unquote(local_path),
           %{
             "model" => setup.model.exposed_model_id,
-            "input" => "synthetic code mode turn metadata projection request",
+            "input" => native_text_input("synthetic code mode turn metadata projection request"),
             "client_metadata" => metadata.client_metadata
           },
           headers
@@ -3487,7 +3491,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic turn-state forwarding request"
+        "input" => native_text_input("synthetic turn-state forwarding request")
       })
 
     assert %{"id" => "resp_backend_turn_state"} = json_response(conn, 200)
@@ -3531,7 +3535,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic turn-state failure relay request"
+        "input" => native_text_input("synthetic turn-state failure relay request")
       })
 
     assert %{"error" => %{"code" => "rate_limit_exceeded"}} = json_response(conn, 429)
@@ -3579,7 +3583,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic oversized upstream response request"
+        "input" => native_text_input("synthetic oversized upstream response request")
       })
 
     assert %{
@@ -3647,7 +3651,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/v1/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic public turn-state boundary request"
+        "input" => native_text_input("synthetic public turn-state boundary request")
       })
 
     assert %{"id" => "resp_public_turn_state_boundary"} = json_response(conn, 200)
@@ -3684,7 +3688,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/v1/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic public terminal-missing stream request",
+        "input" => native_text_input("synthetic public terminal-missing stream request"),
         "stream" => true
       })
 
@@ -3761,7 +3765,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "/backend-api/codex/responses",
         %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic Responses Lite marker request"
+          "input" => native_text_input("synthetic Responses Lite marker request")
         },
         [{"x-openai-internal-unapproved", "client-internal-spoof"}]
       )
@@ -3797,7 +3801,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "/backend-api/codex/responses",
         %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic Responses Lite spoof request"
+          "input" => native_text_input("synthetic Responses Lite spoof request")
         },
         [
           {"x-openai-internal-codex-responses-lite", "true"},
@@ -3838,7 +3842,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "/backend-api/codex/v1/responses",
         %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic alias lineage forwarding request"
+          "input" => native_text_input("synthetic alias lineage forwarding request")
         },
         lineage_request_headers(metadata)
       )
@@ -3930,7 +3934,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
             "/backend-api/codex/responses",
             %{
               "model" => setup.model.exposed_model_id,
-              "input" => "synthetic lineage upstream error request"
+              "input" => native_text_input("synthetic lineage upstream error request")
             },
             lineage_request_headers(metadata)
           )
@@ -4289,16 +4293,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     payloads = [
       %{
         "model" => setup.model.exposed_model_id,
-        "input" => "#{prompt_marker}-omitted"
+        "input" => native_text_input("#{prompt_marker}-omitted")
       },
       %{
         "model" => setup.model.exposed_model_id,
-        "input" => "#{prompt_marker}-default",
+        "input" => native_text_input("#{prompt_marker}-default"),
         "service_tier" => "default"
       },
       %{
         "model" => setup.model.exposed_model_id,
-        "input" => "#{prompt_marker}-auto",
+        "input" => native_text_input("#{prompt_marker}-auto"),
         "service_tier" => "auto"
       }
     ]
@@ -4377,7 +4381,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     priority_payload = %{
       "model" => setup.model.exposed_model_id,
-      "input" => "concrete tier prompt should not log",
+      "input" => native_text_input("concrete tier prompt should not log"),
       "service_tier" => "priority"
     }
 
@@ -4408,7 +4412,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "enforced tier prompt should not log",
+        "input" => native_text_input("enforced tier prompt should not log"),
         "service_tier" => "default"
       })
 
@@ -4464,7 +4468,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic fast tier request",
+        "input" => native_text_input("synthetic fast tier request"),
         "service_tier" => "fast"
       })
 
@@ -4483,7 +4487,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic denied fast tier request",
+        "input" => native_text_input("synthetic denied fast tier request"),
         "service_tier" => "fast"
       })
 
@@ -4568,7 +4572,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "use responses"
+        "input" => native_text_input("use responses")
       })
 
     assert %{"error" => %{"code" => "no_eligible_backend"}} = json_response(conn, 503)
@@ -4604,7 +4608,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => model.exposed_model_id,
-        "input" => "synthetic malformed canonical pin",
+        "input" => native_text_input("synthetic malformed canonical pin"),
         "previous_response_id" => previous_response_id
       })
 
@@ -4655,7 +4659,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(%{setup | model: model})
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "use sparse real metadata",
+        "input" => native_text_input("use sparse real metadata"),
         "reasoning" => %{},
         "service_tier" => "default",
         "stream" => true,
@@ -4711,7 +4715,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "hello",
+        "input" => native_text_input("hello"),
         "max_output_tokens" => 128,
         "prompt_cache_retention" => "24h",
         "safety_identifier" => "safe_fixture",
@@ -4755,7 +4759,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> put_req_header("x-session-id", "lower-priority-session-id-continuity-fixture")
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "session id continuity fixture"
+        "input" => native_text_input("session id continuity fixture")
       })
 
     second_conn =
@@ -4764,7 +4768,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> put_req_header("session-id", session_header)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "session id continuity reuse fixture"
+        "input" => native_text_input("session id continuity reuse fixture")
       })
 
     assert %{"id" => "resp_session_id_continuity"} = json_response(first_conn, 200)
@@ -4816,7 +4820,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> put_req_header("x-session-affinity", "lower-priority-affinity-fixture")
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "x-session-id continuity fixture"
+        "input" => native_text_input("x-session-id continuity fixture")
       })
 
     second_conn =
@@ -4825,7 +4829,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> put_req_header("x-session-id", session_header)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "x-session-id continuity reuse fixture"
+        "input" => native_text_input("x-session-id continuity reuse fixture")
       })
 
     assert %{"id" => "resp_x_session_id_continuity"} = json_response(first_conn, 200)
@@ -4877,7 +4881,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> put_req_header("x-session-affinity", session_header)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "session affinity continuity fixture"
+        "input" => native_text_input("session affinity continuity fixture")
       })
 
     second_conn =
@@ -4886,7 +4890,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> put_req_header("x-session-affinity", session_header)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "session affinity continuity reuse fixture"
+        "input" => native_text_input("session affinity continuity reuse fixture")
       })
 
     assert %{"id" => "resp_session_affinity_continuity"} = json_response(first_conn, 200)
@@ -4944,7 +4948,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> put_req_header("x-codex-conversation-id", "conversation-lower-priority-fixture")
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "header precedence continuity fixture"
+        "input" => native_text_input("header precedence continuity fixture")
       })
 
     assert %{"id" => "resp_header_precedence"} = json_response(conn, 200)
@@ -5036,7 +5040,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         |> auth(setup)
         |> post("/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "hello"
+          "input" => native_text_input("hello")
         })
       end)
 
@@ -5083,7 +5087,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "hello"
+        "input" => native_text_input("hello")
       })
 
     assert %{"id" => "resp_normalized_base_url"} = json_response(conn, 200)
@@ -5124,7 +5128,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
           |> auth(setup)
           |> post("/backend-api/codex/responses", %{
             "model" => setup.model.exposed_model_id,
-            "input" => "sensitive transport body"
+            "input" => native_text_input("sensitive transport body")
           })
 
         public_payload = json_response(conn, 502)
@@ -5414,7 +5418,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                  "/backend-api/codex/responses",
                  %{
                    "model" => setup.model.exposed_model_id,
-                   "input" => "pre-header timeout fixture"
+                   "input" => native_text_input("pre-header timeout fixture")
                  },
                  %{
                    request_id: "pre-header-receive-timeout",
@@ -5487,7 +5491,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                "/backend-api/codex/responses",
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "silent after headers stall fixture",
+                 "input" => native_text_input("silent after headers stall fixture"),
                  "stream" => true
                },
                %{
@@ -5573,7 +5577,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                "/backend-api/codex/responses",
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "partial frame stall fixture",
+                 "input" => native_text_input("partial frame stall fixture"),
                  "stream" => true
                },
                %{
@@ -5628,7 +5632,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                "/backend-api/codex/responses/compact",
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "hello",
+                 "input" => native_text_input("hello"),
                  "max_output_tokens" => 128,
                  "temperature" => 0.2,
                  "top_p" => 0.9
@@ -5662,7 +5666,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     payload = %{
       "model" => setup.model.exposed_model_id,
-      "input" => "hello",
+      "input" => native_text_input("hello"),
       "stream" => false
     }
 
@@ -6286,7 +6290,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "/backend-api/codex/responses",
         %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic input",
+          "input" => native_text_input("synthetic input"),
           "tools" => [
             %{
               "type" => "function",
@@ -6952,7 +6956,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "hello",
+        "input" => native_text_input("hello"),
         "service_tier" => "auto"
       })
 
@@ -7033,7 +7037,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     first_conn =
       post_backend_response(setup, [], %{
-        "input" => "route state snapshot first request"
+        "input" => native_text_input("route state snapshot first request")
       })
 
     assert %{"id" => first_id} = json_response(first_conn, 200)
@@ -7076,7 +7080,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     second_conn =
       post_backend_response(setup, [], %{
-        "input" => "route state snapshot second request"
+        "input" => native_text_input("route state snapshot second request")
       })
 
     assert %{"id" => second_id} = json_response(second_conn, 200)
@@ -7157,7 +7161,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "bridge ring retry metadata sentinel"
+        "input" => native_text_input("bridge ring retry metadata sentinel")
       })
 
     assert %{"id" => "resp_bridge_ring_shortlist_success"} = json_response(conn, 200)
@@ -7252,7 +7256,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         |> auth(setup)
         |> post("/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic assignment model failover input"
+          "input" => native_text_input("synthetic assignment model failover input")
         })
 
       assert %{"id" => "resp_assignment_model_failover_success"} = json_response(conn, 200)
@@ -7370,7 +7374,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         |> auth(setup)
         |> post("/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic assignment status failover input"
+          "input" => native_text_input("synthetic assignment status failover input")
         })
 
       assert %{"id" => "resp_assignment_model_status_failover_success"} =
@@ -7426,7 +7430,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic final model miss input"
+        "input" => native_text_input("synthetic final model miss input")
       })
 
     assert %{"error" => %{"code" => "model_not_found"}} = json_response(conn, 404)
@@ -7466,7 +7470,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic final provenance model miss input"
+        "input" => native_text_input("synthetic final provenance model miss input")
       })
 
     assert %{"error" => %{"type" => "invalid_request_error", "param" => "model"}} =
@@ -7542,7 +7546,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic hard pinned model miss input",
+        "input" => native_text_input("synthetic hard pinned model miss input"),
         "previous_response_id" => previous_response_id,
         "prompt_cache_key" => raw_prompt_cache_key
       })
@@ -7613,7 +7617,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic hard pinned provenance model miss input",
+        "input" => native_text_input("synthetic hard pinned provenance model miss input"),
         "previous_response_id" => previous_response_id
       })
 
@@ -7748,7 +7752,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic generic 404 input"
+        "input" => native_text_input("synthetic generic 404 input")
       })
 
     assert %{"error" => %{"code" => "request_not_found"}} = json_response(conn, 404)
@@ -7814,7 +7818,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses/compact", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic compact model miss input"
+        "input" => native_text_input("synthetic compact model miss input")
       })
 
     assert %{"error" => %{"code" => "model_not_found"}} = json_response(conn, 404)
@@ -7888,7 +7892,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "prompt-cache locality metadata prompt must not persist",
+        "input" => native_text_input("prompt-cache locality metadata prompt must not persist"),
         "prompt_cache_key" => raw_prompt_cache_key
       })
 
@@ -8096,7 +8100,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "retry within shortlist"
+        "input" => native_text_input("retry within shortlist")
       })
 
     assert %{"id" => "resp_shortlist_success"} = json_response(conn, 200)
@@ -8203,7 +8207,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "least recent success route"
+        "input" => native_text_input("least recent success route")
       })
 
     assert %{"id" => "resp_oldest_success_assignment"} = json_response(first_conn, 200)
@@ -8222,7 +8226,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "least recent success moves after runtime success"
+        "input" => native_text_input("least recent success moves after runtime success")
       })
 
     assert %{"id" => "resp_newer_success_assignment"} = json_response(second_conn, 200)
@@ -8367,7 +8371,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "quota first route metadata sentinel"
+        "input" => native_text_input("quota first route metadata sentinel")
       })
 
     assert %{"id" => "resp_lower_usage_assignment"} = json_response(conn, 200)
@@ -8468,7 +8472,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                "/backend-api/codex/responses",
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "sse bridge ring retry fixture",
+                 "input" => native_text_input("sse bridge ring retry fixture"),
                  "stream" => true
                },
                %{
@@ -8592,7 +8596,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                "/backend-api/codex/responses",
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "stream failure after visible output",
+                 "input" => native_text_input("stream failure after visible output"),
                  "stream" => true
                },
                %{
@@ -8686,7 +8690,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                "/backend-api/codex/responses",
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "stream idle timeout after keepalive",
+                 "input" => native_text_input("stream idle timeout after keepalive"),
                  "stream" => true
                },
                %{
@@ -8903,7 +8907,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         |> auth(setup)
         |> post("/backend-api/codex/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic assignment model SSE failover input",
+          "input" => native_text_input("synthetic assignment model SSE failover input"),
           "stream" => true
         })
 
@@ -9015,7 +9019,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                auth,
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "keepalive before assignment model miss fixture",
+                 "input" => native_text_input("keepalive before assignment model miss fixture"),
                  "stream" => true
                },
                %{
@@ -9122,7 +9126,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic hard-pinned SSE model miss input",
+        "input" => native_text_input("synthetic hard-pinned SSE model miss input"),
         "previous_response_id" => previous_response_id,
         "stream" => true
       })
@@ -9282,7 +9286,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                "/backend-api/codex/responses",
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "stream client disconnect fixture",
+                 "input" => native_text_input("stream client disconnect fixture"),
                  "stream" => true
                },
                %{upstream_endpoint: "/backend-api/codex/responses"}
@@ -9335,7 +9339,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                "/backend-api/codex/responses",
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "large context fixture",
+                 "input" => native_text_input("large context fixture"),
                  "stream" => true
                },
                %{
@@ -9394,7 +9398,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                "/backend-api/codex/responses",
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "synthetic provider policy terminal fixture",
+                 "input" => native_text_input("synthetic provider policy terminal fixture"),
                  "stream" => true
                },
                %{
@@ -9456,7 +9460,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                "/backend-api/codex/responses",
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "continue",
+                 "input" => native_text_input("continue"),
                  "stream" => true,
                  "previous_response_id" => "resp_missing"
                },
@@ -9520,7 +9524,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                "/backend-api/codex/responses",
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "continue",
+                 "input" => native_text_input("continue"),
                  "stream" => true,
                  "previous_response_id" => "resp_status_code_missing"
                },
@@ -9584,7 +9588,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                "/backend-api/codex/responses",
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "rate limit wrapped error fixture",
+                 "input" => native_text_input("rate limit wrapped error fixture"),
                  "stream" => true
                },
                %{
@@ -9648,7 +9652,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                "/backend-api/codex/responses",
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "continue after partial output",
+                 "input" => native_text_input("continue after partial output"),
                  "stream" => true,
                  "previous_response_id" => "resp_partial_missing"
                },
@@ -9716,7 +9720,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                "/backend-api/codex/responses",
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "continue after invalid partial output",
+                 "input" => native_text_input("continue after invalid partial output"),
                  "stream" => true,
                  "previous_response_id" => "resp_invalid_partial"
                },
@@ -9782,7 +9786,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                "/backend-api/codex/responses",
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "continue",
+                 "input" => native_text_input("continue"),
                  "stream" => true,
                  "previous_response_id" => "resp_invalid"
                },
@@ -9843,7 +9847,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                "/backend-api/codex/responses",
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "continue",
+                 "input" => native_text_input("continue"),
                  "stream" => true,
                  "previous_response_id" => "resp_missing"
                },
@@ -9940,7 +9944,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                auth,
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "keepalive fixture",
+                 "input" => native_text_input("keepalive fixture"),
                  "stream" => true
                },
                %{
@@ -9996,7 +10000,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                "/backend-api/codex/responses",
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "keepalive disabled fixture",
+                 "input" => native_text_input("keepalive disabled fixture"),
                  "stream" => true
                },
                %{
@@ -10049,7 +10053,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                auth,
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "keepalive before first event retry fixture",
+                 "input" => native_text_input("keepalive before first event retry fixture"),
                  "stream" => true
                },
                %{
@@ -10111,7 +10115,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
                "/backend-api/codex/responses",
                %{
                  "model" => setup.model.exposed_model_id,
-                 "input" => "stream retry fallback dispatch error fixture",
+                 "input" => native_text_input("stream retry fallback dispatch error fixture"),
                  "stream" => true
                },
                %{
@@ -10224,7 +10228,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
           |> auth(setup)
           |> post("/backend-api/codex/responses", %{
             "model" => setup.model.exposed_model_id,
-            "input" => "post reservation circuit rejection"
+            "input" => native_text_input("post reservation circuit rejection")
           })
         end)
       end)
@@ -10301,7 +10305,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic all-open pool characterization"
+        "input" => native_text_input("synthetic all-open pool characterization")
       })
 
     assert response.status == 503
@@ -10408,7 +10412,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic degraded source visibility check"
+        "input" => native_text_input("synthetic degraded source visibility check")
       })
 
     assert %{"error" => %{"code" => "no_eligible_backend"}} =
@@ -10490,7 +10494,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
           |> auth(setup)
           |> post("/backend-api/codex/responses", %{
             "model" => setup.model.exposed_model_id,
-            "input" => "retry post reservation circuit rejection"
+            "input" => native_text_input("retry post reservation circuit rejection")
           })
         end)
       end)
@@ -10540,7 +10544,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses/compact", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "compact",
+        "input" => native_text_input("compact"),
         "prompt_cache_key" => raw_prompt_cache_key,
         "prompt_cache_options" => %{"mode" => "explicit", "ttl" => "30m"},
         "max_output_tokens" => 128,
@@ -10601,13 +10605,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses/compact", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "compact without candidate output"
+        "input" => native_text_input("compact without candidate output")
       })
 
     assert %{"object" => "response.compaction"} = json_response(conn, 200)
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses/compact"
-    assert captured.json["input"] == "compact without candidate output"
+    assert captured.json["input"] == native_text_input("compact without candidate output")
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses/compact"
@@ -10651,7 +10655,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses/compact", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic compact turn-state forwarding request"
+        "input" => native_text_input("synthetic compact turn-state forwarding request")
       })
 
     assert %{"object" => "response.compaction"} = json_response(conn, 200)
@@ -10708,7 +10712,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         |> auth(setup)
         |> post(alias_path, %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic backend catalog token request",
+          "input" => native_text_input("synthetic backend catalog token request"),
           "stream" => true
         })
 
@@ -10750,7 +10754,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         |> auth(setup)
         |> post(endpoint, %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic excluded catalog header request",
+          "input" => native_text_input("synthetic excluded catalog header request"),
           "stream" => false
         })
 
@@ -10791,7 +10795,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic streaming turn-state relay request",
+        "input" => native_text_input("synthetic streaming turn-state relay request"),
         "stream" => true
       })
 
@@ -10828,7 +10832,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> put_req_header("x-request-id", deterministic_rotation_seed(2, 0))
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic retry catalog token request",
+        "input" => native_text_input("synthetic retry catalog token request"),
         "stream" => true
       })
 
@@ -10858,7 +10862,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic backend interrupted stream request",
+        "input" => native_text_input("synthetic backend interrupted stream request"),
         "stream" => true
       })
 
@@ -10912,7 +10916,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic native encrypted-args relay",
+        "input" => native_text_input("synthetic native encrypted-args relay"),
         "stream" => true
       })
 
@@ -10973,7 +10977,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic streaming safety-buffering relay request",
+        "input" => native_text_input("synthetic streaming safety-buffering relay request"),
         "stream" => true
       })
 
@@ -11018,7 +11022,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> put_req_header("session-id", session_id_header)
       |> post("/backend-api/codex/responses/compact", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "compact session-id continuity fixture"
+        "input" => native_text_input("compact session-id continuity fixture")
       })
 
     second_conn =
@@ -11029,7 +11033,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> put_req_header("x-session-affinity", "compact-lower-priority-affinity")
       |> post("/backend-api/codex/responses/compact", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "compact x-session-id continuity fixture"
+        "input" => native_text_input("compact x-session-id continuity fixture")
       })
 
     third_conn =
@@ -11040,7 +11044,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> put_req_header("x-session-affinity", affinity_header)
       |> post("/backend-api/codex/responses/compact", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "compact affinity continuity fixture"
+        "input" => native_text_input("compact affinity continuity fixture")
       })
 
     assert %{"object" => "response.compaction"} = json_response(first_conn, 200)
@@ -11109,7 +11113,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/v1/responses/compact", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "compact through v1 alias"
+        "input" => native_text_input("compact through v1 alias")
       })
 
     assert %{"object" => "response.compaction"} = json_response(conn, 200)
@@ -11188,7 +11192,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses/compact", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "compact failure"
+        "input" => native_text_input("compact failure")
       })
 
     assert %{"error" => %{"code" => "rate_limit_exceeded"}} = json_response(conn, 429)
@@ -11236,7 +11240,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses/compact", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "compact"
+        "input" => native_text_input("compact")
       })
 
     assert %{"object" => "response.compaction"} = json_response(conn, 200)
@@ -11270,7 +11274,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "/backend-api/codex/responses/compact",
         %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic compact lineage forwarding request"
+          "input" => native_text_input("synthetic compact lineage forwarding request")
         },
         lineage_request_headers(metadata)
       )
@@ -11317,7 +11321,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "/backend-api/codex/responses/compact",
         %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic compact Responses Lite marker request"
+          "input" => native_text_input("synthetic compact Responses Lite marker request")
         },
         [{"x-openai-internal-unapproved", "client-internal-spoof"}]
       )
@@ -11353,7 +11357,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
         "/backend-api/codex/v1/responses/compact",
         %{
           "model" => setup.model.exposed_model_id,
-          "input" => "synthetic alias compact lineage forwarding request"
+          "input" => native_text_input("synthetic alias compact lineage forwarding request")
         },
         lineage_request_headers(metadata)
       )
@@ -11424,7 +11428,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "route weekly probe quota"
+        "input" => native_text_input("route weekly probe quota")
       })
 
     assert %{"id" => "resp_weekly_candidate"} = json_response(conn, 200)
@@ -11459,7 +11463,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "weekly probe fallback"
+        "input" => native_text_input("weekly probe fallback")
       })
 
     assert %{"id" => "resp_weekly_probe_only"} = json_response(conn, 200)
@@ -11494,7 +11498,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "monthly account primary only"
+        "input" => native_text_input("monthly account primary only")
       })
 
     assert %{"id" => "resp_monthly_primary_only"} = json_response(conn, 200)
@@ -11543,7 +11547,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "recover stale quota"
+        "input" => native_text_input("recover stale quota")
       })
 
     assert %{"id" => "resp_refreshed_stale_quota"} = json_response(conn, 200)
@@ -11585,7 +11589,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     prime_stale_routing_quota!(setup.identity)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
-    payload = %{"model" => setup.model.exposed_model_id, "input" => "classify stale quota"}
+    payload = %{
+      "model" => setup.model.exposed_model_id,
+      "input" => native_text_input("classify stale quota")
+    }
 
     request_options =
       RequestOptions.build(
@@ -11653,7 +11660,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "recover expired stale quota"
+        "input" => native_text_input("recover expired stale quota")
       })
 
     assert %{"id" => "resp_refreshed_expired_stale_quota"} = json_response(conn, 200)
@@ -11730,7 +11737,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "recover all known quota windows"
+        "input" => native_text_input("recover all known quota windows")
       })
 
     assert %{"id" => "resp_refreshed_all_known_quota_windows"} = json_response(conn, 200)
@@ -11801,7 +11808,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> put_req_header("session-id", session_header)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "soft pinned quota fallback",
+        "input" => native_text_input("soft pinned quota fallback"),
         "stream" => true
       })
 
@@ -11866,7 +11873,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> put_req_header("session-id", session_header)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "non-streaming soft pinned quota fallback"
+        "input" => native_text_input("non-streaming soft pinned quota fallback")
       })
 
     assert %{"id" => "resp_soft_pinned_non_streaming_quota_fallback"} =
@@ -11938,7 +11945,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> put_req_header("session-id", session_header)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic local session accepted miss"
+        "input" => native_text_input("synthetic local session accepted miss")
       })
 
     assert %{"id" => "resp_session_header_model_fallback"} = json_response(conn, 200)
@@ -12008,7 +12015,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> put_req_header("x-codex-turn-state", turn_state)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "synthetic accepted turn state model miss"
+        "input" => native_text_input("synthetic accepted turn state model miss")
       })
 
     assert %{"id" => "resp_turn_state_model_fallback"} = json_response(conn, 200)
@@ -12074,7 +12081,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "hard pinned quota rejection",
+        "input" => native_text_input("hard pinned quota rejection"),
         "previous_response_id" => previous_response_id
       })
 
@@ -12227,7 +12234,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "hard previous-response quota rejection",
+        "input" => native_text_input("hard previous-response quota rejection"),
         "previous_response_id" => previous_response_id
       })
 
@@ -12409,7 +12416,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "exclude unusable quota windows"
+        "input" => native_text_input("exclude unusable quota windows")
       })
 
     assert %{"id" => "resp_precise_survivor"} = json_response(conn, 200)
@@ -12470,7 +12477,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "all exhausted quota rejection"
+        "input" => native_text_input("all exhausted quota rejection")
       })
 
     response = json_response(conn, 503)
@@ -12559,7 +12566,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       |> auth(setup)
       |> post("/backend-api/codex/responses", %{
         "model" => setup.model.exposed_model_id,
-        "input" => "sensitive prompt body for quota exclusion"
+        "input" => native_text_input("sensitive prompt body for quota exclusion")
       })
 
     response = json_response(conn, 503)

@@ -387,7 +387,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
     Jason.encode!(%{
       "type" => "response.create",
       "model" => setup.model.exposed_model_id,
-      "input" => "guarded reset probe over websocket",
+      "input" => native_text_input("guarded reset probe over websocket"),
       "stream" => true,
       "generate" => true
     })

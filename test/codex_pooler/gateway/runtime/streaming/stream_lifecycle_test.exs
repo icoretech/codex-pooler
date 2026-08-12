@@ -1929,7 +1929,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
   defp payload(setup) do
     %{
       "model" => setup.model.exposed_model_id,
-      "input" => "stream lifecycle accounting regression",
+      "input" => native_text_input("stream lifecycle accounting regression"),
       "stream" => true
     }
   end
@@ -1945,6 +1945,16 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
          }
        }}
     ])
+  end
+
+  defp native_text_input(text) do
+    [
+      %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "input_text", "text" => text}]
+      }
+    ]
   end
 
   defp backend_response_success_sse(response_id) do

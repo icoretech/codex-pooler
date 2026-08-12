@@ -44,7 +44,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     payload = %{
       "model" => setup.model.exposed_model_id,
-      "input" => "prepare this route"
+      "input" => native_text_input("prepare this route")
     }
 
     request_options =
@@ -146,7 +146,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     payload = %{
       "model" => setup.model.exposed_model_id,
-      "input" => "preserve routing snapshots"
+      "input" => native_text_input("preserve routing snapshots")
     }
 
     request_options =
@@ -375,7 +375,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     auth = %{auth | api_key: api_key}
     {:ok, policy} = Access.normalize_api_key_policy(api_key)
 
-    payload = %{"model" => setup.model.exposed_model_id, "input" => "policy snapshot"}
+    payload = %{
+      "model" => setup.model.exposed_model_id,
+      "input" => native_text_input("policy snapshot")
+    }
 
     options =
       request_options(auth, payload,
@@ -413,7 +416,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
-    payload = %{"model" => setup.model.exposed_model_id, "input" => "typed visible models"}
+    payload = %{
+      "model" => setup.model.exposed_model_id,
+      "input" => native_text_input("typed visible models")
+    }
+
     options = request_options(auth, payload, [])
 
     context =
@@ -477,7 +484,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
       metadata: %{}
     }
 
-    payload = %{"model" => requested_model.exposed_model_id, "input" => "enforced model"}
+    payload = %{
+      "model" => requested_model.exposed_model_id,
+      "input" => native_text_input("enforced model")
+    }
 
     options =
       request_options(auth, payload,
@@ -583,7 +593,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     setup = %{setup | api_key: api_key, model: requested_model}
     {:ok, auth_context} = Access.authenticate_authorization_header(setup.authorization)
-    payload = %{"model" => requested_model.exposed_model_id, "input" => "shared assignment"}
+
+    payload = %{
+      "model" => requested_model.exposed_model_id,
+      "input" => native_text_input("shared assignment")
+    }
+
     options = request_options(auth_context, payload, [])
 
     context =
@@ -658,7 +673,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
     auth = %{auth | api_key: api_key}
-    payload = %{"model" => setup.model.exposed_model_id, "input" => "route snapshot scope"}
+
+    payload = %{
+      "model" => setup.model.exposed_model_id,
+      "input" => native_text_input("route snapshot scope")
+    }
+
     base_options = request_options(auth, payload, [])
 
     cases = [
@@ -738,7 +758,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
       })
 
     put_model_serving_override!(setup.pool.id, "gpt-5", "full")
-    payload = %{"model" => model.exposed_model_id, "input" => "case identity"}
+    payload = %{"model" => model.exposed_model_id, "input" => native_text_input("case identity")}
 
     options =
       request_options(auth, payload,
@@ -803,7 +823,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
     auth = %{auth | api_key: api_key}
-    payload = %{"model" => absent_model, "input" => "host fallback"}
+    payload = %{"model" => absent_model, "input" => native_text_input("host fallback")}
 
     options =
       request_options(auth, payload,
@@ -851,7 +871,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
     auth = %{auth | api_key: api_key}
-    payload = %{"model" => absent_model, "input" => "image host fallback"}
+    payload = %{"model" => absent_model, "input" => native_text_input("image host fallback")}
 
     options =
       request_options(auth, payload,
@@ -910,7 +930,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     |> Ecto.Changeset.change(health_status: "degraded")
     |> Repo.update!()
 
-    payload = %{"model" => setup.model.exposed_model_id, "input" => "no runtime candidate"}
+    payload = %{
+      "model" => setup.model.exposed_model_id,
+      "input" => native_text_input("no runtime candidate")
+    }
 
     assert {:error,
             %{
@@ -932,7 +955,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
     model = put_assignment_lite_flag!(setup.model, setup.assignment.id, false)
-    payload = %{"model" => model.exposed_model_id, "input" => "websocket turn"}
+    payload = %{"model" => model.exposed_model_id, "input" => native_text_input("websocket turn")}
 
     base_options =
       auth
@@ -975,7 +998,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
       |> Repo.update!()
 
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
-    payload = %{"model" => setup.model.exposed_model_id, "input" => "candidate invariance"}
+
+    payload = %{
+      "model" => setup.model.exposed_model_id,
+      "input" => native_text_input("candidate invariance")
+    }
+
     options = request_options(auth, payload, [])
 
     lite_model =
@@ -1011,7 +1039,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {model, divergent} = add_divergent_assignment!(setup)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
-    payload = %{"model" => model.exposed_model_id, "input" => "new partitioned turn"}
+
+    payload = %{
+      "model" => model.exposed_model_id,
+      "input" => native_text_input("new partitioned turn")
+    }
 
     assert {:ok, prepared} =
              PreDispatch.prepare(
@@ -1068,7 +1100,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
       |> Repo.update!()
 
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
-    payload = %{"model" => model.exposed_model_id, "input" => "saved reset cohort boundary"}
+
+    payload = %{
+      "model" => model.exposed_model_id,
+      "input" => native_text_input("saved reset cohort boundary")
+    }
 
     assert {:ok, prepared} =
              PreDispatch.prepare(
@@ -1107,7 +1143,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {model, divergent} = add_divergent_assignment!(setup)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
-    payload = %{"model" => model.exposed_model_id, "input" => "translated partitioned turn"}
+
+    payload = %{
+      "model" => model.exposed_model_id,
+      "input" => native_text_input("translated partitioned turn")
+    }
 
     options =
       auth
@@ -1172,7 +1212,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
       })
       |> Repo.update!()
 
-    payload = %{"model" => model.exposed_model_id, "input" => "malformed alternate"}
+    payload = %{
+      "model" => model.exposed_model_id,
+      "input" => native_text_input("malformed alternate")
+    }
 
     options =
       auth
@@ -1198,7 +1241,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {model, divergent} = add_divergent_assignment!(setup)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
-    payload = %{"model" => model.exposed_model_id, "input" => "selected-only control"}
+
+    payload = %{
+      "model" => model.exposed_model_id,
+      "input" => native_text_input("selected-only control")
+    }
 
     raw_backend_options =
       auth
@@ -1230,7 +1277,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {model, divergent} = add_divergent_assignment!(setup)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
-    payload = %{"model" => model.exposed_model_id, "input" => "file-affinity turn"}
+
+    payload = %{
+      "model" => model.exposed_model_id,
+      "input" => native_text_input("file-affinity turn")
+    }
 
     options =
       auth
@@ -1270,7 +1321,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     payload = %{
       "model" => model.exposed_model_id,
-      "input" => "continue divergent partition",
+      "input" => native_text_input("continue divergent partition"),
       "previous_response_id" => "response-partition-anchor"
     }
 
@@ -1319,7 +1370,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
       })
       |> Repo.update!()
 
-    payload = %{"model" => model.exposed_model_id, "input" => "missing partition"}
+    payload = %{
+      "model" => model.exposed_model_id,
+      "input" => native_text_input("missing partition")
+    }
 
     assert {:error, %{status: 503, code: "no_eligible_backend"}} =
              PreDispatch.prepare(
@@ -1364,7 +1418,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     payload = %{
       "model" => model.exposed_model_id,
-      "input" => "invalid pinned partition",
+      "input" => native_text_input("invalid pinned partition"),
       "previous_response_id" => "response-invalid-partition"
     }
 
@@ -1390,7 +1444,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     payload = %{
       "model" => starved.model.exposed_model_id,
-      "input" => "cosmetic drift turn"
+      "input" => native_text_input("cosmetic drift turn")
     }
 
     assert {:ok, prepared} =
@@ -1430,7 +1484,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     payload = %{
       "model" => starved.model.exposed_model_id,
-      "input" => "cosmetic drift dispatch"
+      "input" => native_text_input("cosmetic drift dispatch")
     }
 
     assert {:ok, response} =
@@ -1458,7 +1512,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     payload = %{
       "model" => starved.model.exposed_model_id,
-      "input" => "behavioral drift turn"
+      "input" => native_text_input("behavioral drift turn")
     }
 
     assert {:ok, prepared} =
@@ -1498,7 +1552,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     payload = %{
       "model" => starved.model.exposed_model_id,
-      "input" => "single snapshot etag turn"
+      "input" => native_text_input("single snapshot etag turn")
     }
 
     context =
@@ -1558,7 +1612,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     payload = %{
       "model" => starved.model.exposed_model_id,
-      "input" => "behavioral drift dispatch"
+      "input" => native_text_input("behavioral drift dispatch")
     }
 
     assert {:ok, response} =
@@ -1601,7 +1655,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     payload = %{
       "model" => starved.model.exposed_model_id,
-      "input" => "fully exhausted split pool"
+      "input" => native_text_input("fully exhausted split pool")
     }
 
     assert {:error, %{status: 503, code: "quota_exhausted"}} =
@@ -1649,7 +1703,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     payload = %{
       "model" => starved.model.exposed_model_id,
-      "input" => "translated surface on the split pool"
+      "input" => native_text_input("translated surface on the split pool")
     }
 
     options =
@@ -1678,7 +1732,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     payload = %{
       "model" => starved.model.exposed_model_id,
-      "input" => "translated surface partition evidence"
+      "input" => native_text_input("translated surface partition evidence")
     }
 
     options =
@@ -1726,7 +1780,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
       })
       |> Repo.update!()
 
-    payload = %{"model" => model.exposed_model_id, "input" => "malformed source metadata"}
+    payload = %{
+      "model" => model.exposed_model_id,
+      "input" => native_text_input("malformed source metadata")
+    }
 
     assert {:error, %{status: 503, code: "no_eligible_backend"}} =
              PreDispatch.prepare(
@@ -1748,7 +1805,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     payload = %{
       "model" => setup.model.exposed_model_id,
-      "input" => "prepare this route with default routing settings"
+      "input" => native_text_input("prepare this route with default routing settings")
     }
 
     request_options =
@@ -1787,7 +1844,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     payload = %{
       "model" => setup.model.exposed_model_id,
-      "input" => "prepare this route with persisted routing settings"
+      "input" => native_text_input("prepare this route with persisted routing settings")
     }
 
     request_options =
@@ -1813,7 +1870,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     payload = %{
       "model" => setup.model.exposed_model_id,
-      "input" => "prepare fresh route state"
+      "input" => native_text_input("prepare fresh route state")
     }
 
     first_options =
@@ -1928,7 +1985,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     payload =
       %{
         "model" => setup.model.exposed_model_id,
-        "input" => "prepare this route",
+        "input" => native_text_input("prepare this route"),
         "tools" => [
           %{
             "type" => "function",
@@ -1972,7 +2029,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     payload = %{
       "model" => setup.model.exposed_model_id,
-      "input" => "prepare this route",
+      "input" => native_text_input("prepare this route"),
       "tools" => [
         %{
           "type" => "function",
@@ -2028,7 +2085,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     payload = %{
       "model" => setup.model.exposed_model_id,
-      "input" => "deny this route"
+      "input" => native_text_input("deny this route")
     }
 
     request_options =
@@ -2231,6 +2288,16 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
       assert {mode, applied} == expected
     end
+  end
+
+  defp native_text_input(text) do
+    [
+      %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "input_text", "text" => text}]
+      }
+    ]
   end
 
   defp request_options(auth, payload, attrs) do
