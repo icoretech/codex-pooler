@@ -1,0 +1,17 @@
+{
+  "name": "codex-pooler-facade-verification",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "contract": "bash run-contract.sh",
+    "clients": "node clients.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.116.0",
+    "ollama": "0.6.3",
+    "openai": "7.4.0"
+  }
+}
