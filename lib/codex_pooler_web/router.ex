@@ -137,6 +137,7 @@ defmodule CodexPoolerWeb.Router do
     post "/responses", V1.ResponsesController, :create
     post "/responses/compact", V1.ResponsesController, :compact
     post "/chat/completions", V1.ChatCompletionsController, :create
+    post "/completions", V1.CompletionsController, :create
     get "/usage", V1.UsageController, :index
 
     get "/files", V1.FilesController, :index

@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   alias CodexPooler.Gateway.Payloads.DebugPayloadSummary
   alias CodexPooler.Gateway.Payloads.ReasoningEffort
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.Persona
   alias CodexPooler.Gateway.Payloads.ToolResultShape
   alias CodexPooler.Gateway.Payloads.ToolSchemaLowering
 
@@ -102,7 +103,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
     upstream_payload =
       payload
-      |> maybe_strip_unsupported_upstream_fields(endpoint)
+      |> maybe_strip_unsupported_upstream_fields(endpoint, request_options)
       |> remove_client_supplied_responses_lite_metadata()
       |> strip_backend_codex_fields(endpoint, request_options)
 
@@ -869,11 +870,23 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   defp remove_client_supplied_responses_lite_metadata(payload), do: payload
 
-  defp maybe_strip_unsupported_upstream_fields(payload, "/backend-api/codex/responses") do
+  defp maybe_strip_unsupported_upstream_fields(
+         payload,
+         "/backend-api/codex/responses",
+         %RequestOptions{persona: %Persona{protocol: :openai_completions}}
+       ) do
+    Map.drop(payload, @unsupported_upstream_fields -- ~w(max_output_tokens temperature top_p))
+  end
+
+  defp maybe_strip_unsupported_upstream_fields(
+         payload,
+         "/backend-api/codex/responses",
+         %RequestOptions{}
+       ) do
     Map.drop(payload, @unsupported_upstream_fields)
   end
 
-  defp maybe_strip_unsupported_upstream_fields(payload, _endpoint), do: payload
+  defp maybe_strip_unsupported_upstream_fields(payload, _endpoint, %RequestOptions{}), do: payload
 
   defp normalize_reasoning_aliases(payload) do
     canonical_effort = ReasoningEffort.extract_native(payload)

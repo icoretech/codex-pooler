@@ -22,6 +22,14 @@ defmodule CodexPoolerWeb.PublicGatewayDispatch do
   @type gateway_executor :: (auth(), String.t(), map(), RequestOptions.t() ->
                                gateway_call_result())
   @type success_normalizer :: (map(), coerced_request() -> map())
+  @type batch_coercer :: (-> {:ok,
+                              %{
+                                required(:requests) => [coerced_request()],
+                                optional(atom()) => term()
+                              }}
+                             | {:error, Contracts.gateway_error()})
+  @type batch_combiner ::
+          ([Contracts.gateway_result()], map() -> gateway_call_result())
   @type auth_opts :: [
           authenticator: authenticator()
         ]
@@ -127,6 +135,27 @@ defmodule CodexPoolerWeb.PublicGatewayDispatch do
     execute_coerced(conn, coercer, normalize_success, opts)
   end
 
+  @spec coerced_batch(conn(), batch_coercer(), batch_combiner(), dispatch_opts()) :: conn()
+  def coerced_batch(conn, coercer, combine, opts \\ [])
+      when is_function(coercer, 0) and is_function(combine, 2) do
+    authenticator = Keyword.get(opts, :authenticator, &GatewayHelpers.authenticate_v1/1)
+    opts = Keyword.put_new(opts, :gateway_executor, &Gateway.execute/4)
+
+    case authenticator.(conn) do
+      {:ok, auth} ->
+        with {:ok, %{requests: requests} = batch} <- coercer.(),
+             {:ok, results} <- execute_coerced_batch(conn, auth, requests, opts),
+             result <- combine.(results, batch) do
+          GatewayHelpers.send_or_error(conn, result)
+        else
+          {:error, reason} -> GatewayHelpers.send_error(conn, reason)
+        end
+
+      {:error, reason} ->
+        GatewayHelpers.send_error(conn, reason)
+    end
+  end
+
   defp execute_coerced(conn, coercer, normalize_success, opts) do
     authenticator = Keyword.get(opts, :authenticator, &GatewayHelpers.authenticate_v1/1)
 
@@ -174,5 +203,18 @@ defmodule CodexPoolerWeb.PublicGatewayDispatch do
     GatewayHelpers.admit(conn, route_class, %{endpoint: local_endpoint}, fn ->
       gateway_executor.(auth, accounting_endpoint, payload, request_options)
     end)
+  end
+
+  defp execute_coerced_batch(conn, auth, requests, opts) when is_list(requests) do
+    Enum.reduce_while(requests, {:ok, []}, fn coerced, {:ok, results} ->
+      case execute_coerced_service(conn, auth, coerced, opts) do
+        {:ok, result} -> {:cont, {:ok, [result | results]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, results} -> {:ok, Enum.reverse(results)}
+      {:error, reason} -> {:error, reason}
+    end
   end
 end

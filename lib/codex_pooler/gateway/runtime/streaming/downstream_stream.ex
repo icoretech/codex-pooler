@@ -1,7 +1,7 @@
 defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   @moduledoc false
 
-  alias CodexPooler.Gateway.OpenAICompatibility.ChatCompletions
+  alias CodexPooler.Gateway.OpenAICompatibility.{ChatCompletions, Completions}
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
@@ -22,6 +22,13 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
       if source == :websocket_bridge, do: Map.put(state, :bridge_committed?, true), else: state
 
     cond do
+      public_openai_completions_stream?(opts) ->
+        Map.put(
+          state,
+          :public_openai_completions,
+          Completions.stream_state(openai_completion_payload(opts))
+        )
+
       public_openai_chat_stream?(opts) ->
         Map.put(
           state,
@@ -56,6 +63,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
           {iodata(), state()}
   def normalize_data(data, endpoint, %RequestOptions{} = opts, state) do
     cond do
+      public_openai_completions_stream?(opts) ->
+        normalize_public_openai_completions_stream_data(data, state)
+
       public_openai_chat_stream?(opts) ->
         normalize_public_openai_chat_stream_data(data, state)
 
@@ -71,6 +81,15 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   end
 
   @spec keepalive_allowed?(state()) :: boolean()
+  def keepalive_allowed?(%{
+        public_openai_completions: %{
+          chat_state: %{buffer: buffer, discarding_oversized?: discarding_oversized?}
+        }
+      })
+      when is_binary(buffer) and is_boolean(discarding_oversized?) do
+    buffer == "" and not discarding_oversized?
+  end
+
   def keepalive_allowed?(%{
         public_openai_responses: %{buffer: buffer, passthrough?: passthrough?}
       })
@@ -125,6 +144,19 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
     end
   end
 
+  def synthetic_terminal_failure(%{public_openai_completions: stream_state} = state, _reason) do
+    if Completions.visible_seen?(stream_state) and not Completions.terminal_seen?(stream_state) do
+      message = StreamProtocol.synthetic_public_openai_responses_failure_message()
+
+      {data, stream_state} =
+        Completions.synthetic_terminal_failure_chunk(stream_state, message)
+
+      {data, %{state | public_openai_completions: stream_state}}
+    else
+      {nil, state}
+    end
+  end
+
   def synthetic_terminal_failure(%{public_openai_chat: stream_state} = state, _reason) do
     # Chat streams cannot use the websocket bridge. Keep this gate byte-identical
     # to terminal_missing_interruption_reason/2 so emission and settlement agree.
@@ -146,6 +178,17 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   @spec terminal_missing_interruption_reason(state(), term()) :: term()
   def terminal_missing_interruption_reason(_state, {:upstream_idle_timeout, _reason} = reason),
     do: reason
+
+  def terminal_missing_interruption_reason(
+        %{public_openai_completions: stream_state},
+        original_reason
+      ) do
+    if Completions.visible_seen?(stream_state) and not Completions.terminal_seen?(stream_state) do
+      {:upstream_stream_interrupted, original_reason}
+    else
+      original_reason
+    end
+  end
 
   def terminal_missing_interruption_reason(
         %{public_openai_responses: stream_state} = state,
@@ -200,6 +243,16 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   end
 
   defp normalize_public_openai_chat_stream_data(data, state), do: {data, state}
+
+  defp normalize_public_openai_completions_stream_data(
+         data,
+         %{public_openai_completions: stream_state} = state
+       ) do
+    {data, stream_state} = Completions.normalize_stream_data(data, stream_state)
+    {data, %{state | public_openai_completions: stream_state}}
+  end
+
+  defp normalize_public_openai_completions_stream_data(data, state), do: {data, state}
 
   defp normalize_public_openai_responses_stream_data(
          data,
@@ -292,10 +345,24 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
 
   defp public_openai_chat_stream?(_opts), do: false
 
+  defp public_openai_completions_stream?(%RequestOptions{
+         openai_compatibility: %{public_openai_completions_stream: true}
+       }),
+       do: true
+
+  defp public_openai_completions_stream?(_opts), do: false
+
   defp openai_chat_payload(%RequestOptions{
          openai_compatibility: %{openai_chat_payload: %{} = payload}
        }),
        do: payload
 
   defp openai_chat_payload(_opts), do: %{}
+
+  defp openai_completion_payload(%RequestOptions{
+         openai_compatibility: %{completion_payload: %{} = payload}
+       }),
+       do: payload
+
+  defp openai_completion_payload(_opts), do: %{}
 end
