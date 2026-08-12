@@ -1235,6 +1235,7 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
              item,
              ~w(id type status call_id name server_label approval_request_id reason)
            ),
+         :ok <- validate_response_message_role(type, item),
          :ok <- validate_item_namespace(type, item),
          :ok <- optional_boolean(item, "approve"),
          :ok <-
@@ -1259,6 +1260,14 @@ defmodule CodexPooler.Gateway.Facade.PublicProjection do
       _invalid -> :error
     end
   end
+
+  # A Responses output message is authored by the assistant. Input-side
+  # messages accept a wider role vocabulary, but they do not pass through this
+  # upstream response projector.
+  defp validate_response_message_role("message", %{"role" => "assistant"}), do: :ok
+  defp validate_response_message_role("message", %{"role" => _invalid}), do: :error
+  defp validate_response_message_role("message", _item), do: :ok
+  defp validate_response_message_role(_type, _item), do: :ok
 
   defp validate_item_namespace(type, item)
        when type in [

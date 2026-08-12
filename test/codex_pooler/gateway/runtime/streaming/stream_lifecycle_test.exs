@@ -297,6 +297,64 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     assert Repo.get!(CodexTurn, turn.id).status == "failed"
   end
 
+  test "clean HTTP EOF with native SSE residue fails success finalization exactly once" do
+    assert_http_native_eof_failure!(:done, "http-success-eof-residue")
+  end
+
+  test "clean HTTP EOF with native SSE residue fails upstream failure finalization exactly once" do
+    assert_http_native_eof_failure!(
+      {:bridge_error, :upstream_websocket_error},
+      "http-failure-eof-residue"
+    )
+  end
+
+  test "HTTP native SSE rejects a response output message role container exactly once" do
+    sentinel = "http-sse-private-role-sentinel"
+
+    data =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{
+          "id" => "resp_http_sse_role_guard",
+          "object" => "response",
+          "status" => "completed",
+          "output" => [
+            %{
+              "id" => "msg_http_sse_role_guard",
+              "type" => "message",
+              "role" => %{"provider" => sentinel},
+              "content" => [%{"type" => "output_text", "text" => "safe text"}]
+            }
+          ]
+        }
+      })
+
+    assert_http_native_failure!(
+      :done,
+      sentinel,
+      "event: response.completed\ndata: #{data}\n\n"
+    )
+  end
+
+  test "complete valid HTTP native terminal remains successful without a synthetic duplicate" do
+    fixture = http_native_stream_fixture("http-valid-terminal")
+    stream = WebsocketBridgeStream.start("http-valid-terminal", settle_timeout_ms: 0)
+
+    send(self(), {stream.ref, {:data, backend_response_success_sse("resp_http_valid_terminal")}})
+    send(self(), {stream.ref, :done})
+
+    conn = run_http_native_stream!(fixture.context, stream)
+    body = IO.iodata_to_binary(conn.resp_body || "")
+
+    assert length(Regex.scan(~r/^event: response.completed$/m, body)) == 1
+    assert length(Regex.scan(~r/^event: error$/m, body)) == 0
+    assert body =~ "resp_http_valid_terminal"
+
+    assert Repo.reload!(fixture.reserved.request).status == "succeeded"
+    assert Repo.reload!(fixture.attempt).status == "succeeded"
+    assert Repo.get!(CodexTurn, fixture.turn.id).status == "succeeded"
+  end
+
   test "shared stream finalization helpers resolve bounded transports and emit exact labels" do
     request_options = %{transport: %{transport: "http_sse"}}
     parent = self()
@@ -1368,7 +1426,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     assert_pre_first_stall_finalized!(setup, "silent stream after headers")
   end
 
-  test "pre-first-event partial frame stall finalizes idle timeout without retry or synthetic events" do
+  test "pre-first-event partial frame stall emits one safe terminal and fails invalid" do
     release_ref = make_ref()
 
     first_mode =
@@ -1384,7 +1442,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
 
     {:ok, stream_conn} = execute_backend_stream(setup, release_ref, "partial-frame-stall")
 
-    refute stream_conn.resp_body =~ "response.created"
+    assert length(Regex.scan(~r/^event: error$/m, stream_conn.resp_body)) == 1
+    assert stream_conn.resp_body =~ ~s("code":"server_error")
     refute stream_conn.resp_body =~ "response.failed"
     refute stream_conn.resp_body =~ "[DONE]"
     refute stream_conn.resp_body =~ "resp_raw_partial_stall"
@@ -1392,7 +1451,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
 
     assert FakeUpstream.count(stalled_upstream) == 1
     assert FakeUpstream.count(fallback_upstream) == 0
-    assert_pre_first_stall_finalized!(setup, "partial frame stall")
+
+    assert_pre_first_stall_finalized!(setup, "partial frame stall",
+      expected_code: "upstream_stream_invalid",
+      expected_message: "upstream stream returned terminal event upstream_stream_invalid"
+    )
   end
 
   test "terminal-missing upstream SSE close fails request without poisoning route health" do
@@ -2076,6 +2139,95 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     }
   end
 
+  defp assert_http_native_eof_failure!(terminal, sentinel) do
+    assert_http_native_failure!(
+      terminal,
+      sentinel,
+      "event: response.completed\ndata: {\"type\":\"response.completed\",\"private\":\"#{sentinel}\"}"
+    )
+  end
+
+  defp assert_http_native_failure!(terminal, sentinel, data) do
+    fixture = http_native_stream_fixture(sentinel)
+    stream = WebsocketBridgeStream.start(sentinel, settle_timeout_ms: 0)
+
+    send(self(), {stream.ref, {:data, data}})
+    send(self(), {stream.ref, terminal})
+
+    conn = run_http_native_stream!(fixture.context, stream)
+    body = IO.iodata_to_binary(conn.resp_body || "")
+
+    assert length(Regex.scan(~r/^event: error$/m, body)) == 1
+    assert body =~ ~s("code":"server_error")
+    refute body =~ sentinel
+
+    request = Repo.reload!(fixture.reserved.request)
+    attempt = Repo.reload!(fixture.attempt)
+    turn = Repo.get!(CodexTurn, fixture.turn.id)
+
+    assert request.status == "failed"
+    assert request.last_error_code == "upstream_stream_invalid"
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "upstream_stream_invalid"
+    assert turn.status == "failed"
+    assert turn.error_code == "upstream_stream_invalid"
+    assert turn.final_attempt_id == attempt.id
+  end
+
+  defp http_native_stream_fixture(label) do
+    {setup, _first_upstream, _second_upstream} =
+      stream_retry_setup(FakeUpstream.sse_stream([]), FakeUpstream.sse_stream([]))
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = payload(setup)
+    request_options = request_options(auth, payload, setup)
+
+    assert {:ok, session} = SessionContinuity.start_codex_session(auth, request_options)
+
+    assert {:ok, reserved} =
+             Accounting.reserve(auth, setup.model, payload, %{
+               endpoint: @endpoint_path,
+               transport: "http_sse",
+               correlation_id: "#{label}-#{System.unique_integer([:positive])}",
+               request_metadata: %{}
+             })
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+    assert {:ok, turn} =
+             SessionContinuity.start_codex_turn(session, reserved.request, request_options)
+
+    context =
+      retry_context(setup, auth, request_options, reserved.request,
+        candidates: [{setup.assignment, setup.identity}],
+        attempt: attempt
+      )
+
+    %{context: context, reserved: reserved, attempt: attempt, turn: turn}
+  end
+
+  defp run_http_native_stream!(context, stream) do
+    result =
+      StreamDispatch.streaming_result(
+        %{sse_response() | body: stream},
+        context,
+        %{
+          finalization_callbacks: finalization_callbacks(),
+          http_first_event_retry: fn response_context, _opts ->
+            StreamLifecycle.fail_first_event_handler(response_context)
+          end
+        }
+      )
+
+    conn =
+      Phoenix.ConnTest.build_conn()
+      |> Plug.Conn.put_resp_content_type("text/event-stream")
+      |> Plug.Conn.send_chunked(200)
+
+    assert {:ok, conn} = result.stream.(conn)
+    conn
+  end
+
   defp payload(setup) do
     %{
       "model" => setup.model.exposed_model_id,
@@ -2229,17 +2381,20 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     {:ok, stream_conn}
   end
 
-  defp assert_pre_first_stall_finalized!(setup, input) do
+  defp assert_pre_first_stall_finalized!(setup, input, opts \\ []) do
+    expected_code = Keyword.get(opts, :expected_code, "stream_idle_timeout")
+    expected_message = Keyword.get(opts, :expected_message, "upstream stream idle timeout")
+
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.status == "failed"
     assert request.transport == "http_sse"
-    assert request.last_error_code == "stream_idle_timeout"
+    assert request.last_error_code == expected_code
     assert request.retry_count == 0
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "failed"
-    assert attempt.network_error_code == "stream_idle_timeout"
-    assert attempt.error_message == "upstream stream idle timeout"
+    assert attempt.network_error_code == expected_code
+    assert attempt.error_message == expected_message
     assert attempt.response_metadata["error_kind"] == "stream_interrupted"
     refute Map.has_key?(attempt.response_metadata, "stream_failure_stage")
     refute Map.has_key?(attempt.response_metadata, "stream_terminal_type")

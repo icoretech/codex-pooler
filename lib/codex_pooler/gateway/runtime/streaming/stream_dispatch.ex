@@ -503,8 +503,15 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   defp http_stream_terminal_failure_writer(%ResponseContext{} = response_context) do
     fn state, reason ->
       case flush_buffered_first_event(response_context, state) do
-        {:ok, state} -> finalize_http_stream_failure(state, reason)
-        {:chunk_error, state, _chunk_reason} -> finalize_http_stream_failure(state, reason)
+        {:ok, state} ->
+          state
+          |> DownstreamStream.finalize_eof()
+          |> finalize_http_stream_failure(reason)
+
+        {:chunk_error, state, _chunk_reason} ->
+          state
+          |> DownstreamStream.finalize_eof()
+          |> finalize_http_stream_failure(reason)
       end
     end
   end
@@ -515,13 +522,13 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
         {:success, state, ""}
 
       {{:failed, _failure}, {:terminal_stream_failure, _existing_failure}} ->
-        {:failure, state, "", reason}
+        http_stream_failure_result(state, reason)
 
       {{:failed, %{} = failure}, _reason} ->
-        {:failure, state, "", {:terminal_stream_failure, failure}}
+        http_stream_failure_result(state, {:terminal_stream_failure, failure})
 
       {{:failed, _failure}, _reason} ->
-        {:failure, state, "", reason}
+        http_stream_failure_result(state, reason)
 
       {_missing_terminal, _reason} ->
         http_stream_missing_terminal_failure_result(state, reason)
@@ -542,8 +549,13 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   defp http_stream_terminal_success_hook(%ResponseContext{} = response_context) do
     fn state ->
       case flush_buffered_first_event(response_context, state) do
-        {:ok, state} -> finalize_http_stream_success(state)
-        {:chunk_error, state, reason} -> finalize_flushed_chunk_error(state, reason)
+        {:ok, state} ->
+          state
+          |> DownstreamStream.finalize_eof()
+          |> finalize_http_stream_success()
+
+        {:chunk_error, state, reason} ->
+          finalize_flushed_chunk_error(state, reason)
       end
     end
   end
@@ -551,16 +563,23 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   defp finalize_http_stream_success(state) do
     case DownstreamStream.terminal_outcome(state) do
       {:failed, %{} = failure} ->
-        {:failure, state, "", {:terminal_stream_failure, failure}}
+        http_stream_failure_result(state, {:terminal_stream_failure, failure})
 
       {:failed, _failure} ->
-        {:failure, state, "", :upstream_stream_interrupted}
+        http_stream_failure_result(state, :upstream_stream_interrupted)
 
       terminal when terminal in [:completed, :incomplete] ->
         {:ok, state, ""}
 
       _missing_terminal ->
         missing_public_openai_responses_terminal_result(state)
+    end
+  end
+
+  defp http_stream_failure_result(state, reason) do
+    case write_public_openai_responses_terminal_failure(state, reason) do
+      {:ok, state, data} -> {:failure, state, data, reason}
+      {:error, _write_reason} -> {:failure, state, "", reason}
     end
   end
 

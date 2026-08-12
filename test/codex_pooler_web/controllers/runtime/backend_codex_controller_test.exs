@@ -5403,7 +5403,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_pre_first_stream_idle_timeout!(setup)
   end
 
-  test "POST /backend-api/codex/responses keeps partial pre-first-event SSE stalls metadata-only" do
+  test "POST /backend-api/codex/responses fails a partial pre-first-event SSE stall safely" do
     release_ref = make_ref()
 
     upstream =
@@ -5473,7 +5473,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert {:ok, stream_conn} = stream.(stream_conn)
 
-    refute stream_conn.resp_body =~ "response.created"
+    assert length(Regex.scan(~r/^event: error$/m, stream_conn.resp_body)) == 1
+    assert stream_conn.resp_body =~ ~s("code":"server_error")
     refute stream_conn.resp_body =~ "response.failed"
     refute stream_conn.resp_body =~ "[DONE]"
     refute stream_conn.resp_body =~ "resp_raw_partial_stall"
@@ -5486,7 +5487,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert FakeUpstream.count(upstream) == 1
     assert FakeUpstream.count(fallback_upstream) == 0
-    assert_pre_first_stream_idle_timeout!(setup)
+    assert_stream_terminal_failure!(setup, "upstream_stream_invalid")
   end
 
   test "unsupported upstream field stripping is scoped to local backend responses route" do

@@ -161,6 +161,31 @@ defmodule CodexPoolerWeb.FacadeTransportLeakageTest do
     assert json_response(conn, 502)["error"]["code"] == "server_error"
     refute conn.resp_body =~ "private-chat-sentinel"
     refute conn.resp_body =~ "private-provider-model"
+
+    malformed_response_role =
+      Jason.encode!(%{
+        "id" => "resp-malformed-role",
+        "object" => "response",
+        "status" => "completed",
+        "output" => [
+          %{
+            "id" => "msg-malformed-role",
+            "type" => "message",
+            "role" => %{"provider" => "private-role-sentinel"},
+            "content" => [%{"type" => "output_text", "text" => "safe text"}]
+          }
+        ]
+      })
+
+    conn =
+      Phoenix.ConnTest.build_conn(:post, "/v1/responses")
+      |> PublicGatewayResult.send(
+        {:ok, %{status: 200, headers: [], raw_body: malformed_response_role}},
+        & &1
+      )
+
+    assert json_response(conn, 502)["error"]["code"] == "server_error"
+    refute conn.resp_body =~ "private-role-sentinel"
   end
 
   defp private_response(hidden, content) do

@@ -4521,6 +4521,67 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     refute_rate_limit_event_windows(setup.identity)
   end
 
+  test "direct websocket rejects a response output message role container before success" do
+    sentinel = "direct-websocket-private-role-sentinel"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_ws_role_guard",
+               "object" => "response",
+               "status" => "completed",
+               "output" => [
+                 %{
+                   "id" => "msg_ws_role_guard",
+                   "type" => "message",
+                   "role" => %{"provider" => sentinel},
+                   "content" => [%{"type" => "output_text", "text" => "safe text"}]
+                 }
+               ]
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert {:error, %{code: "upstream_request_failed", status: 502}} =
+             execute_websocket_response(
+               auth,
+               Jason.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => [%{"type" => "message", "role" => "user", "content" => "hello"}],
+                 "stream" => true,
+                 "generate" => true
+               }),
+               %{request_id: "ws-response-role-guard"},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    assert_receive {:websocket_frame, failure_frame}, @websocket_frame_timeout
+
+    assert %{"type" => "error", "error" => %{"code" => "server_error"}} =
+             Jason.decode!(failure_frame)
+
+    refute failure_frame =~ sentinel
+    refute failure_frame =~ "resp_ws_role_guard"
+    refute_receive {:websocket_frame, _later_frame}
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.last_error_code == "upstream_stream_error"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "upstream_stream_error"
+  end
+
   test "websocket header and body quota conflict keeps rate limit event precedence" do
     body_reset_at = DateTime.add(DateTime.utc_now(), 900, :second) |> DateTime.truncate(:second)
 

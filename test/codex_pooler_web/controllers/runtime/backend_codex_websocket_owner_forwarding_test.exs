@@ -829,6 +829,77 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
+  test "owner-forwarded websocket rejects a response output message role container" do
+    sentinel = "owner-websocket-private-role-sentinel"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_owner_role_guard",
+               "object" => "response",
+               "status" => "completed",
+               "output" => [
+                 %{
+                   "id" => "msg_owner_role_guard",
+                   "type" => "message",
+                   "role" => %{"provider" => sentinel},
+                   "content" => [%{"type" => "output_text", "text" => "safe text"}]
+                 }
+               ]
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = owner_socket(auth, "ws-owner-role-guard", "owner-role-guard")
+
+    try do
+      payload =
+        websocket_payload(setup, "owner response role guard", %{
+          "request_id" => "ws-owner-role-guard"
+        })
+
+      assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+      assert {:push, {:text, failure_frame}, state} = receive_owner_socket_push(state)
+
+      assert %{
+               "type" => "response.failed",
+               "error" => %{"code" => "server_error"},
+               "response" => %{
+                 "status" => "failed",
+                 "error" => %{"code" => "server_error"}
+               }
+             } = Jason.decode!(failure_frame)
+
+      refute failure_frame =~ sentinel
+      refute failure_frame =~ "resp_owner_role_guard"
+
+      assert {:ok, state} = receive_owner_socket_complete(state)
+      assert {:ok, _state} = receive_socket_done(state)
+      refute_receive {:websocket_owner_frame, _, _, {:data, _duplicate_terminal}}, 100
+
+      assert [request] = request_logs(setup.pool.id)
+      assert request.status == "failed"
+      assert request.last_error_code == "upstream_stream_error"
+
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.status == "failed"
+      assert attempt.network_error_code == "upstream_stream_error"
+
+      assert [turn] = Repo.all(from(t in CodexTurn, where: t.request_id == ^request.id))
+      assert turn.status == "failed"
+      assert turn.error_code == "upstream_stream_error"
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
   @tag :feature_websocket_terminal_auth_refresh
   test "owner-forwarded websocket terminal auth refresh retries through the same owner session" do
     upstream =

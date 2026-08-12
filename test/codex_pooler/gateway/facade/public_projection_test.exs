@@ -438,6 +438,36 @@ defmodule CodexPooler.Gateway.Facade.PublicProjectionTest do
     assert nullable["usage"] == nil
   end
 
+  test "rejects wrong-typed and unknown response output message roles" do
+    valid = %{
+      "id" => "resp_message_role_guard",
+      "object" => "response",
+      "status" => "completed",
+      "output" => [
+        %{
+          "id" => "msg_message_role_guard",
+          "type" => "message",
+          "role" => "assistant",
+          "content" => [%{"type" => "output_text", "text" => "safe content"}]
+        }
+      ]
+    }
+
+    assert {:ok, projected} = PublicProjection.gateway_body_result(valid)
+    assert get_in(projected, ["output", Access.at(0), "role"]) == "assistant"
+
+    for role <- [
+          %{"provider" => @hidden_provider},
+          [@hidden_account],
+          "provider.private_role"
+        ] do
+      assert :error =
+               valid
+               |> put_in(["output", Access.at(0), "role"], role)
+               |> PublicProjection.gateway_body_result()
+    end
+  end
+
   test "rejects wrong-typed protocol fields across every supported envelope family" do
     cases = [
       chat: fn ->

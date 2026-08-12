@@ -267,3 +267,46 @@ Each confirmed production change followed a focused red/green cycle:
 
 - The full suite remains `6409/6410`, not completely green, solely because the same unrelated dev-server lifecycle process-liveness teardown assertion failed on the original baseline and in both review waves. No façade/security regression failed in the final full run.
 - DNS pinning, TLS hostname retention, proxy byte flow, and rebinding rejection are deterministically covered with injected resolvers/adapters. A real live provider signed-URL transfer was not authorized, so live provider DNS/TLS behavior remains a post-review smoke-test concern for root.
+
+## Final deploy-blocker wave (frozen baseline `18217b1b`)
+
+### Status and scope
+
+DONE_WITH_CONCERNS. Two final confirmed blockers were repaired in a new, narrow wave on frozen commit `18217b1b3f133e95800251c90afd3249ef050e3b`: native HTTP clean-EOF residue was not finalized by either HTTP lifecycle hook, and a Responses output-message `role` value was retained without type or enum validation. No deployment, live-provider request, credential revocation, or other live-state change was performed.
+
+### HTTP native SSE EOF finalization
+
+- Both HTTP relay hooks now call `DownstreamStream.finalize_eof/1` after flushing the first-event buffer and before reading terminal outcome.
+- Nonempty under-limit native SSE residue therefore latches `upstream_stream_invalid` on both clean-success EOF and upstream-failure finalization paths.
+- A latched native parser failure writes exactly one local `event: error` frame with public wire code `server_error`, never relays the residue, and settles the request, attempt, and Codex turn failed.
+- The terminal writer is idempotent through the existing `codex_failure_emitted?` latch, so later/failure finalization cannot duplicate the local terminal.
+- A complete valid native terminal remains successful and emits neither a local error nor a duplicate terminal.
+- The existing partial pre-first-event timeout cases were split by actual parser state: a silent timeout with no residue retains `stream_idle_timeout`, while a partial native SSE record now follows the required fail-closed EOF contract and records `upstream_stream_invalid` after emitting one safe terminal.
+
+### Responses output message role validation
+
+- A present `role` on a Responses output item of type `message` now accepts only the response-side role `assistant`. Maps, lists, and unknown strings fail projection instead of surviving an upstream 2xx.
+- Input-side roles remain governed by the separate request validator and are not narrowed by the response projector.
+- Collected HTTP now converts a malformed output role to a local 502. Native HTTP SSE, direct websocket, and owner-forwarded websocket paths emit one safe terminal, suppress the sentinel and later frames, and settle their applicable accounting records failed.
+- The adjacent enum audit confirmed that event, item, content, and tool discriminators already use explicit finite allowlists and public `service_tier` already uses its documented allowlist. No additional status or `finish_reason` restriction was introduced because the current heterogeneous response/item schemas do not define one shared finite set; scalar type validation remains fail-closed.
+
+### Final-wave TDD evidence
+
+- On frozen production, the initial focused command over projector, collected HTTP, and lifecycle files returned `70/74 passed` (seed `0`). The role mutation and active collected-response cases demonstrated the unsafe upstream 200 and leaked role map. The other two failures were test-harness callback omissions corrected before production work.
+- With the corrected harness still against unfixed lifecycle production, the exact HTTP EOF success/failure pair returned `0/2 passed` (seed `0`): each body contained zero local error frames and the clean-success path could settle successfully.
+- The minimal production repairs were then applied. The focused cross-transport matrix passed `8/8` (seed `0`, 15.9s; 319 excluded): role mutation, collected HTTP 502, native HTTP SSE, direct websocket, owner-forwarded websocket, both HTTP EOF finalizers, and valid-terminal/no-duplicate behavior.
+- The first cumulative response/stream/controller ledger returned `873/874`; its sole failure was the now-stale backend partial-residue timeout expectation. After updating that contract to assert the safe terminal and parser-invalid settlement, the same fourteen-file ledger passed `874/874` (seed `0`, 73.4s).
+
+### Final-wave verification
+
+- `git diff --check` — PASS.
+- `docker exec -w /workspace codex-pooler-facade-dev mix format --check-formatted` — PASS.
+- `docker exec -w /workspace codex-pooler-facade-dev sh -lc 'MIX_ENV=test mix compile --warnings-as-errors'` — PASS; two production files compiled.
+- `docker exec -w /workspace codex-pooler-facade-dev mix quality.xref` — PASS.
+- Impacted response/stream ledger across projection, stream protocol/relay/downstream/lifecycle/terminal, collected facade output, public Responses HTTP/websocket variants, and backend HTTP/direct/owner websocket controllers: `874 passed` (seed `0`, 73.4s).
+- Full suite: `docker exec -w /workspace codex-pooler-facade-dev sh -lc 'MIX_ENV=test mix test --seed 0'` returned `6416/6417 passed` (seed `0`, 316.5s). The sole failure is the unchanged baseline `CodexPooler.MixTasks.DevServerLifecycleTest` line 48 owned-process liveness teardown assertion; no façade, projection, streaming, transport, continuity, file, auth, count, or documentation test failed.
+
+### Final-wave concern
+
+- The repository-wide suite is not completely green because the same unrelated dev-server lifecycle teardown assertion remains reproducible across the frozen baselines and all review waves. All 874 directly impacted tests and every other full-suite test pass.
+- No live-provider or deployed-client smoke test was authorized. Runtime production deployment and credential operations remain root-owned follow-up work.
