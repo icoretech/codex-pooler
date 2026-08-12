@@ -12,7 +12,12 @@ defmodule CodexPooler.Dev.Task14ProductObserver do
   @handler_id "codex-pooler-task14-product-observer"
   @event [:codex_pooler, :gateway, :task14, :product_stage]
   @flag :task14_product_observation_enabled
-  @max_requests 8
+  # One entry per gateway request, not per lane or per thread. A real Task 14
+  # round is multi-turn: the 2026-08-12 round produced 14 requests across its
+  # two Pooler lanes (root threads 7 and 3, child threads 2 each), so a window
+  # of 8 dropped the whole second lane. 64 keeps ~4x that headroom and still
+  # serves well under the consumer's 64 KiB capture-document limit.
+  @max_requests 64
   @max_delta_count 10_000
   @bounded_id ~r/^[A-Za-z0-9_.:-]{1,120}$/
   @response_fingerprint ~r/^[0-9a-f]{12}$/

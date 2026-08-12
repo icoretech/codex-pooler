@@ -73,6 +73,46 @@ defmodule CodexPooler.Dev.Task14ProductObserverTest do
     assert crossed["responseFingerprint"] == "a1b2c3d4e5f6"
   end
 
+  test "retains every request of a real multi-turn round and still bounds the window" do
+    :ok = Task14ProductObserver.arm()
+
+    # The shape of the 2026-08-12 round: two Pooler lanes, each a root thread
+    # and a child thread, every thread taking several turns.
+    round_requests = for index <- 1..14, do: "round-request-#{index}"
+
+    for request_id <- round_requests do
+      emit(:provider_to_pooler, "response.completed",
+        request_id: request_id,
+        response_fingerprint: "a1b2c3d4e5f6"
+      )
+    end
+
+    captures = Task14ProductObserver.captures()
+    assert map_size(captures) == 14
+    assert Enum.all?(round_requests, &Map.has_key?(captures, &1))
+
+    for index <- 15..80 do
+      emit(:provider_to_pooler, "response.completed",
+        request_id: "overflow-request-#{index}",
+        response_fingerprint: "a1b2c3d4e5f6"
+      )
+    end
+
+    bounded = Task14ProductObserver.captures()
+    assert map_size(bounded) == 64
+    # The window drops arrivals it cannot hold; it never evicts what it already
+    # correlated, so a consumer sees a truthful prefix instead of a shuffled one.
+    assert Enum.all?(round_requests, &Map.has_key?(bounded, &1))
+
+    emit(:pooler_to_codex, "response.completed",
+      request_id: "round-request-1",
+      response_fingerprint: "a1b2c3d4e5f6"
+    )
+
+    assert bounded |> Map.fetch!("round-request-1") |> Map.get("downstreamStatus") == nil
+    assert Task14ProductObserver.captures()["round-request-1"]["downstreamStatus"] == "delivered"
+  end
+
   test "is disabled by default and disarm clears the store" do
     refute Task14ProductObserver.armed?()
     emit(:provider_to_pooler, "response.output_text.delta")
@@ -87,7 +127,7 @@ defmodule CodexPooler.Dev.Task14ProductObserverTest do
 
   defp emit(direction, event_type, opts \\ []) do
     :telemetry.execute(@event, %{count: 1}, %{
-      request_id: "request-1",
+      request_id: Keyword.get(opts, :request_id, "request-1"),
       client_request_id: "client-1",
       attempt_id: Keyword.get(opts, :attempt_id, "attempt-1"),
       direction: direction,
