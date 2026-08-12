@@ -202,6 +202,32 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert_receive {:classified_writer_frame, ^terminal, %{terminal: "response.completed"}}
   end
 
+  test "native websocket preserves a structural child text delta byte-for-byte" do
+    child_delta =
+      ~s({"type":"response.output_text.delta","output_index":1,"content_index":0,"sequence_number":7,"delta":"task15-sanitized-child-delta"})
+
+    terminal =
+      ~s({"type":"response.completed","response":{"id":"resp_task15_child_delta","status":"completed"}})
+
+    upstream = start_upstream(FakeUpstream.websocket_text_frames([child_delta, terminal]))
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+    parent = self()
+
+    request = %{
+      websocket_request(FakeUpstream.url(upstream))
+      | writer: fn frame -> send(parent, {:native_child_delta_frame, frame}) end,
+        message_mapper: &StreamProtocol.canonicalize_native_codex_responses_json_message/1
+    }
+
+    assert {:ok, %{terminal: "response.completed", status: 200}} =
+             UpstreamWebsocketSession.request(session, request)
+
+    assert_receive {:native_child_delta_frame, ^child_delta}
+    assert_receive {:native_child_delta_frame, terminal_frame}
+    assert %{"type" => "response.completed"} = Jason.decode!(terminal_frame)
+  end
+
   test "same-key requests reuse one FakeUpstream connection and process replacement opens another" do
     upstream =
       start_upstream(
