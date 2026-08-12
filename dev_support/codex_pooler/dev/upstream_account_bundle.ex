@@ -5,7 +5,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
   import Ecto.Query
 
   alias CodexPooler.Accounts
-  alias CodexPooler.Accounts.{Scope, User}
+  alias CodexPooler.Accounts.{PlatformBootstrapState, Scope, User}
   alias CodexPooler.Pools.{Membership, Pool}
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
@@ -188,12 +188,15 @@ defmodule CodexPooler.Dev.UpstreamAccountBundle do
   defp default_owner_scope do
     owner =
       Repo.one(
-        from user in User,
+        from state in PlatformBootstrapState,
+          join: user in User,
+          on: user.id == state.owner_user_id,
           join: membership in Membership,
           on: membership.user_id == user.id,
+          where: state.singleton == true and state.status == "completed",
           where: membership.role == "instance_owner" and membership.status == "active",
           where: is_nil(user.deleted_at),
-          order_by: [asc: user.created_at],
+          select: user,
           limit: 1
       )
 

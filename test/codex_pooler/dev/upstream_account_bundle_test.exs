@@ -406,11 +406,21 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
     end
   end
 
-  test "owner resolution selects the active default owner and rejects a non-owner" do
+  test "owner resolution selects the active bootstrap owner and rejects a non-owner" do
     %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+
+    %{user: other_owner} =
+      operator_fixture(owner, %{"email" => unique_user_email(), "role" => "instance_owner"})
+
     %{user: operator} = operator_fixture(owner, %{"email" => unique_user_email()})
+
     assert {:ok, %Scope{user: selected}} = UpstreamAccountBundle.resolve_owner_scope(nil)
     assert selected.id == owner.id
+
+    assert {:ok, %Scope{user: explicit_other_owner}} =
+             UpstreamAccountBundle.resolve_owner_scope(other_owner.email)
+
+    assert explicit_other_owner.id == other_owner.id
 
     assert {:ok, %Scope{user: explicit}} =
              UpstreamAccountBundle.resolve_owner_scope(owner.email)

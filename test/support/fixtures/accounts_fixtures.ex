@@ -80,14 +80,19 @@ defmodule CodexPooler.AccountsFixtures do
   end
 
   defp existing_owner_user! do
+    owner_user_id =
+      PlatformBootstrapState
+      |> Repo.get!(true)
+      |> Map.fetch!(:owner_user_id)
+
     Repo.one!(
       from user in User,
         join: membership in Membership,
         on: membership.user_id == user.id,
         where:
-          membership.role == "instance_owner" and membership.status == "active" and
+          user.id == ^owner_user_id and membership.role == "instance_owner" and
+            membership.status == "active" and
             is_nil(user.deleted_at),
-        order_by: [asc: user.id],
         limit: 1
     )
   end
