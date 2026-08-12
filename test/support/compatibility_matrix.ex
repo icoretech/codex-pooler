@@ -605,6 +605,20 @@ defmodule CodexPooler.CompatibilityMatrix do
         "backend Codex websocket response.create preserves canonical encrypted agent v2 NEW_TASK and MESSAGE handoffs only when the item contains exactly one input_text protocol envelope followed by one nonempty encrypted_content part, author and recipient are /morpheus or /root paths with lowercase-letter, digit, or underscore child segments, and the envelope task name and sender exactly match recipient and author; other encrypted agent_message variants remain filtered, assistant encrypted replay remains preserved, and durable request or attempt metadata never stores the encrypted payload"
     },
     %{
+      slug: :multi_agent_product_certification,
+      status: :supported,
+      current: :pinned_full_mode_v1_v2_stage_classification,
+      categories: [:route, :streaming, :ownership],
+      routes: [
+        %{method: :get, path: "/backend-api/codex/responses", transport: "websocket"},
+        %{method: :get, path: "/backend-api/codex/v1/responses", transport: "websocket"}
+      ],
+      future_routes: [],
+      fixture: :multi_agent_product_certification,
+      contract:
+        "pinned Codex source certification uses distinct source-valid Full-mode lanes: gpt-5.5 resolves v1 through feature fallback, while gpt-5.6-terra resolves v2 through the explicit feature override and is also the direct-control model; preflight requires an authenticated Full catalog snapshot and absent HTTP and websocket Lite markers; live-text and DoneClaim verdicts remain staged, opaque v2 encrypted arguments are classified as instruction_observation_missing when no permitted resolved-instruction source exists, and the native Pooler websocket writer preserves a structural child output_text delta byte-for-byte without a production transport change"
+    },
+    %{
       slug: :function_tool_schema_lowering,
       status: :supported,
       current: :non_strict_function_tool_schema_lowering,
@@ -1056,11 +1070,12 @@ defmodule CodexPooler.CompatibilityMatrix do
             "model",
             "instructions",
             "input",
+            "tools",
+            "parallel_tool_calls",
             "reasoning",
             "service_tier",
             "prompt_cache_key",
-            "previous_response_id",
-            "conversation"
+            "text"
           ],
           output_events: ["response.output_item.done", "response.completed", "[DONE]"],
           accepted_result_shapes: [
@@ -1553,6 +1568,111 @@ defmodule CodexPooler.CompatibilityMatrix do
       other_encrypted_agent_messages: "removed",
       assistant_encrypted_replay: "preserved",
       durable_metadata: "encrypted_content_omitted"
+    },
+    multi_agent_product_certification: %{
+      source_pin: "c9c6c0daa994109cec50fddcb57d076fdf9e738c",
+      primary_serving_mode: "full",
+      preflight: %{
+        catalog_authenticated: true,
+        catalog_use_responses_lite: false,
+        configured_mode: "full",
+        effective_mode: "full",
+        http_lite_header_present: false,
+        websocket_lite_metadata_present: false
+      },
+      protocol_matrix: %{
+        v1: %{
+          model: "gpt-5.5",
+          selection: "feature_fallback",
+          multi_agent: true,
+          multi_agent_v2: false
+        },
+        v2: %{
+          model: "gpt-5.6-terra",
+          selection: "feature_override",
+          multi_agent_v2: true
+        },
+        direct_control: %{model: "gpt-5.6-terra", provider: "builtin_openai"},
+        same_model_causal_pair: ["v2", "direct_control"]
+      },
+      live_text_stages: [
+        "provider_to_pooler",
+        "pooler_to_codex_writer",
+        "codex_app_server",
+        "desktop_preview"
+      ],
+      live_text_disposition: %{
+        pooler_delivery: "present",
+        first_failing_stage: "codex_app_server_boundary",
+        task15_regression: "byte_exact_native_websocket_writer_pass_through",
+        production_transport_change: "none"
+      },
+      done_claim_stages: [
+        "resolved_child_instruction",
+        "raw_child_completion",
+        "parent_delivered_completion",
+        "lazycodex_validator"
+      ],
+      done_claim_disposition: %{
+        v2_exact_instruction: "instruction_observation_missing",
+        reason: "opaque_encrypted_arguments_without_permitted_external_resolution_source",
+        downstream_stages: "not_attributed_past_first_missing_observation"
+      },
+      implemented_runtime_outcomes: %{
+        compact_projection: %{
+          preserves: [
+            "model",
+            "input",
+            "instructions",
+            "tools",
+            "parallel_tool_calls",
+            "reasoning",
+            "service_tier",
+            "prompt_cache_key",
+            "text"
+          ],
+          excludes: [
+            "tool_choice",
+            "previous_response_id",
+            "conversation",
+            "stream",
+            "include",
+            "store",
+            "compaction_trigger"
+          ],
+          singleton_disposition: "provider_selected_compact_route_no_synthetic_success"
+        },
+        overload: %{
+          public_status: 503,
+          wire_code: "server_is_overloaded",
+          internal_reasons: ["bulkhead_rejected", "bulkhead_queue_timeout"]
+        },
+        flat_schema_encrypted_property: "preserved_while_true_schema_keyword_removed",
+        public_v1: %{
+          unknown_typed_input: "reject_before_dispatch",
+          nested_tool_search: "reject_before_dispatch",
+          encrypted_function_args: "validated_and_round_tripped"
+        },
+        native_encrypted_function_args: "pass_through",
+        routing_hint: "trusted_native_effective_model_and_service_tier_only",
+        schema_bound_function_output_compression: "byte_exact_json_preserved",
+        encrypted_continuity: "evidence_selected_without_node_local_state",
+        responses_lite_full: %{
+          native_input_and_tools: "same_validation_across_modes",
+          compact_lite: "body_rewrite_and_marker",
+          auto_source: "health_level_aggregate",
+          image_retry_snapshot: "immutable",
+          context_window_policy: "mode_independent",
+          explicit_override_retention: "retained_until_auto_deletes",
+          assigned_instance_admin: "models_only_pool_operate"
+        }
+      },
+      deployment_certification: "exact_tested_commit_sha_required",
+      reporting: "metadata_only",
+      metrics_added: false,
+      runtime_config_added: false,
+      dashboards_changed: false,
+      helm_changed: false
     },
     function_tool_schema_lowering: %{
       backend_namespace_passthrough: %{
