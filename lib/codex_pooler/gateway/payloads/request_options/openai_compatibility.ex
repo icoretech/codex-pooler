@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.OpenAICompatibility do
             public_openai_chat_stream: false,
             public_openai_completions_stream: false,
             public_ollama_stream: false,
+            public_anthropic_stream: false,
             collect_openai_response_stream: false,
             collect_openai_image_stream: false,
             custom_tool_namespaces: %{},
@@ -14,6 +15,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.OpenAICompatibility do
             completion_payload: nil,
             ollama_surface: nil,
             ollama_formatting: nil,
+            anthropic_formatting: nil,
             source_endpoint: nil,
             translated_endpoint: nil
 
@@ -22,6 +24,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.OpenAICompatibility do
           public_openai_chat_stream: boolean(),
           public_openai_completions_stream: boolean(),
           public_ollama_stream: boolean(),
+          public_anthropic_stream: boolean(),
           collect_openai_response_stream: boolean(),
           collect_openai_image_stream: boolean(),
           custom_tool_namespaces: %{optional(String.t()) => String.t()},
@@ -29,6 +32,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.OpenAICompatibility do
           completion_payload: map() | nil,
           ollama_surface: :chat | :generate | nil,
           ollama_formatting: map() | nil,
+          anthropic_formatting: map() | nil,
           source_endpoint: String.t() | nil,
           translated_endpoint: String.t() | nil
         }
@@ -42,6 +46,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.OpenAICompatibility do
       public_openai_chat_stream: Map.get(opts, :public_openai_chat_stream, false),
       public_openai_completions_stream: Map.get(opts, :public_openai_completions_stream, false),
       public_ollama_stream: Map.get(opts, :public_ollama_stream, false),
+      public_anthropic_stream: Map.get(opts, :public_anthropic_stream, false),
       collect_openai_response_stream: Map.get(opts, :collect_openai_response_stream, false),
       collect_openai_image_stream: Map.get(opts, :collect_openai_image_stream, false),
       custom_tool_namespaces: %{},
@@ -49,6 +54,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.OpenAICompatibility do
       completion_payload: Map.get(opts, :openai_completion_payload),
       ollama_surface: Map.get(opts, :ollama_surface),
       ollama_formatting: Map.get(opts, :ollama_formatting),
+      anthropic_formatting: Map.get(opts, :anthropic_formatting),
       source_endpoint: Normalization.safe_endpoint(Map.get(opts, :openai_source_endpoint)),
       translated_endpoint: Normalization.safe_endpoint(Map.get(opts, :openai_translated_endpoint))
     }

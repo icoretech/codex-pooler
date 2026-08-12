@@ -32,14 +32,22 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
   end
 
   def send(conn, {:ok, %{raw_body: body, status: status} = result}, success_normalizer) do
-    case PublicResponse.normalize_raw_body(status, body, success_normalizer) do
-      {:ok, normalized} ->
-        conn
-        |> put_status(status)
-        |> json(PublicProjection.gateway_body(normalized))
+    if status >= 400 and IngressPath.protocol(conn) == :anthropic do
+      GatewayHelpers.send_error(conn, %{
+        status: status,
+        code: "upstream_error",
+        message: "upstream request failed"
+      })
+    else
+      case PublicResponse.normalize_raw_body(status, body, success_normalizer) do
+        {:ok, normalized} ->
+          conn
+          |> put_status(status)
+          |> json(PublicProjection.gateway_body(normalized))
 
-      :passthrough ->
-        GatewayHelpers.send_gateway_result(conn, result)
+        :passthrough ->
+          GatewayHelpers.send_gateway_result(conn, result)
+      end
     end
   end
 

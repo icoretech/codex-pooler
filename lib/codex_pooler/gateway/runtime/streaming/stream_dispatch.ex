@@ -228,8 +228,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   # lives in StreamLifecycle.first_event_retry_handler (compact model misses
   # finalize without retry or health mutation).
   defp http_stream_writer(%ResponseContext{response: response} = response_context) do
-    if DownstreamStream.public_ollama_stream?(response_context.context.request_options) do
-      ollama_http_stream_writer(response_context)
+    if transformed_facade_stream?(response_context.context.request_options) do
+      transformed_facade_http_stream_writer(response_context)
     else
       standard_http_stream_writer(response_context, response)
     end
@@ -267,25 +267,27 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     end
   end
 
-  defp ollama_http_stream_writer(%ResponseContext{context: context} = response_context) do
+  defp transformed_facade_http_stream_writer(
+         %ResponseContext{context: context} = response_context
+       ) do
     assignment_advertised? =
       ModelMetadata.assignment_source?(context.model, context.assignment.id)
 
     fn state, data ->
-      visible_before? = DownstreamStream.public_ollama_visible_seen?(state)
+      visible_before? = transformed_facade_visible_seen?(state, context.request_options)
 
       {downstream_data, next_state} =
         observe_and_normalize_stream_data(response_context, state, data)
 
-      visible_after? = DownstreamStream.public_ollama_visible_seen?(next_state)
+      visible_after? = transformed_facade_visible_seen?(next_state, context.request_options)
 
       case DownstreamStream.terminal_outcome(next_state) do
         {:failed, failure}
         when not visible_after? and not visible_before? ->
-          if retryable_ollama_first_failure?(failure, assignment_advertised?) do
+          if retryable_transformed_first_failure?(failure, assignment_advertised?) do
             {:retry_first_event, failure}
           else
-            write_ollama_terminal_failure(
+            write_transformed_terminal_failure(
               response_context,
               next_state,
               downstream_data,
@@ -296,7 +298,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
           end
 
         {:failed, failure} ->
-          write_ollama_terminal_failure(
+          write_transformed_terminal_failure(
             response_context,
             next_state,
             downstream_data,
@@ -306,7 +308,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
           )
 
         _outcome ->
-          write_ollama_data(
+          write_transformed_data(
             response_context,
             next_state,
             downstream_data,
@@ -317,7 +319,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     end
   end
 
-  defp write_ollama_terminal_failure(
+  defp write_transformed_terminal_failure(
          response_context,
          state,
          data,
@@ -325,7 +327,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
          visible_before?,
          visible_after?
        ) do
-    case write_ollama_data(
+    case write_transformed_data(
            response_context,
            state,
            data,
@@ -337,7 +339,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     end
   end
 
-  defp write_ollama_data(
+  defp write_transformed_data(
          %ResponseContext{context: context},
          state,
          data,
@@ -361,10 +363,28 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     end
   end
 
-  defp retryable_ollama_first_failure?(failure, assignment_advertised?) do
+  defp retryable_transformed_first_failure?(failure, assignment_advertised?) do
     not ErrorCodes.previous_response_miss_code?(Map.get(failure, :upstream_code)) and
       (ErrorCodes.retryable_first_event_code?(Map.get(failure, :code)) or
          ModelUnavailability.terminal_failure?(failure, assignment_advertised?))
+  end
+
+  defp transformed_facade_stream?(request_options) do
+    DownstreamStream.public_ollama_stream?(request_options) or
+      DownstreamStream.public_anthropic_stream?(request_options)
+  end
+
+  defp transformed_facade_visible_seen?(state, request_options) do
+    cond do
+      DownstreamStream.public_ollama_stream?(request_options) ->
+        DownstreamStream.public_ollama_visible_seen?(state)
+
+      DownstreamStream.public_anthropic_stream?(request_options) ->
+        DownstreamStream.public_anthropic_visible_seen?(state)
+
+      true ->
+        false
+    end
   end
 
   # The relay retains every streamed part — including non-visible blocks that
@@ -522,7 +542,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   end
 
   defp http_sse_keepalive_writer(%ResponseContext{} = response_context) do
-    if not DownstreamStream.public_ollama_stream?(response_context.context.request_options) and
+    if not transformed_facade_stream?(response_context.context.request_options) and
          sse_response?(response_context.response) do
       &write_sse_keepalive/1
     else
@@ -543,7 +563,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   end
 
   defp sse_keepalive_interval_ms(%ResponseContext{} = response_context) do
-    if not DownstreamStream.public_ollama_stream?(response_context.context.request_options) and
+    if not transformed_facade_stream?(response_context.context.request_options) and
          sse_response?(response_context.response),
        do: OperationalSettings.current().sse_keepalive_interval_ms,
        else: 0
@@ -735,9 +755,16 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
   defp stream_headers(response, %SelectedCandidateContext{} = context) do
     content_type =
-      if DownstreamStream.public_ollama_stream?(context.request_options),
-        do: "application/x-ndjson",
-        else: header(response, "content-type") || "text/event-stream"
+      cond do
+        DownstreamStream.public_ollama_stream?(context.request_options) ->
+          "application/x-ndjson"
+
+        DownstreamStream.public_anthropic_stream?(context.request_options) ->
+          "text/event-stream"
+
+        true ->
+          header(response, "content-type") || "text/event-stream"
+      end
 
     [{"cache-control", "no-cache"}, {"content-type", content_type}]
     |> maybe_put_backend_turn_state_response_header(response, context.request_options)

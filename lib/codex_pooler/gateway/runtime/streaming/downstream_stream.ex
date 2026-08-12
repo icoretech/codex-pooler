@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   @moduledoc false
 
   alias CodexPooler.Gateway.OpenAICompatibility.{ChatCompletions, Completions}
+  alias CodexPooler.Gateway.Facade.Anthropic.Stream, as: AnthropicStream
   alias CodexPooler.Gateway.Facade.Ollama.Stream, as: OllamaStream
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.Persona
@@ -24,6 +25,13 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
       if source == :websocket_bridge, do: Map.put(state, :bridge_committed?, true), else: state
 
     cond do
+      public_anthropic_stream?(opts) ->
+        Map.put(
+          state,
+          :public_anthropic,
+          AnthropicStream.new(opts.openai_compatibility.anthropic_formatting)
+        )
+
       public_ollama_stream?(opts) ->
         Map.put(
           state,
@@ -72,6 +80,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
           {iodata(), state()}
   def normalize_data(data, endpoint, %RequestOptions{} = opts, state) do
     cond do
+      public_anthropic_stream?(opts) ->
+        normalize_public_anthropic_stream_data(data, state)
+
       public_ollama_stream?(opts) ->
         normalize_public_ollama_stream_data(data, state)
 
@@ -93,6 +104,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   end
 
   @spec keepalive_allowed?(state()) :: boolean()
+  def keepalive_allowed?(%{public_anthropic: %{buffer: buffer}}) when is_binary(buffer),
+    do: buffer == ""
+
   def keepalive_allowed?(%{public_ollama: %{buffer: buffer}}) when is_binary(buffer),
     do: buffer == ""
 
@@ -123,6 +137,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
 
   @spec terminal_outcome(state()) ::
           :completed | :incomplete | {:failed, StreamProtocol.terminal_failure() | nil} | nil
+  def terminal_outcome(%{public_anthropic: stream_state}),
+    do: AnthropicStream.terminal_outcome(stream_state)
+
   def terminal_outcome(%{public_ollama: stream_state}),
     do: OllamaStream.terminal_outcome(stream_state)
 
@@ -144,6 +161,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   def terminal_outcome(_state), do: nil
 
   @spec synthetic_terminal_failure(state(), term()) :: {binary() | nil, state()}
+  def synthetic_terminal_failure(%{public_anthropic: stream_state} = state, _reason) do
+    {data, stream_state} = AnthropicStream.synthetic_terminal_failure(stream_state)
+    {data, %{state | public_anthropic: stream_state}}
+  end
+
   def synthetic_terminal_failure(%{public_ollama: stream_state} = state, _reason) do
     {data, stream_state} = OllamaStream.synthetic_terminal_failure(stream_state)
     {data, %{state | public_ollama: stream_state}}
@@ -201,6 +223,14 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   @spec terminal_missing_interruption_reason(state(), term()) :: term()
   def terminal_missing_interruption_reason(_state, {:upstream_idle_timeout, _reason} = reason),
     do: reason
+
+  def terminal_missing_interruption_reason(%{public_anthropic: stream_state}, original_reason) do
+    if is_nil(AnthropicStream.terminal_outcome(stream_state)) do
+      {:upstream_stream_interrupted, original_reason}
+    else
+      original_reason
+    end
+  end
 
   def terminal_missing_interruption_reason(%{public_ollama: stream_state}, original_reason) do
     if is_nil(OllamaStream.terminal_outcome(stream_state)) do
@@ -264,6 +294,34 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
 
   defp bridge_committed?(%{bridge_committed?: true}), do: true
   defp bridge_committed?(_state), do: false
+
+  @spec public_anthropic_stream?(RequestOptions.t()) :: boolean()
+  def public_anthropic_stream?(%RequestOptions{
+        persona: %Persona{protocol: :anthropic_messages},
+        openai_compatibility: %{
+          public_anthropic_stream: true,
+          anthropic_formatting: %{stream?: true}
+        }
+      }),
+      do: true
+
+  def public_anthropic_stream?(_opts), do: false
+
+  @spec public_anthropic_visible_seen?(state()) :: boolean()
+  def public_anthropic_visible_seen?(%{public_anthropic: stream_state}),
+    do: AnthropicStream.visible_seen?(stream_state)
+
+  def public_anthropic_visible_seen?(_state), do: false
+
+  defp normalize_public_anthropic_stream_data(
+         data,
+         %{public_anthropic: stream_state} = state
+       ) do
+    {data, stream_state} = AnthropicStream.normalize_data(data, stream_state)
+    {data, %{state | public_anthropic: stream_state}}
+  end
+
+  defp normalize_public_anthropic_stream_data(_data, state), do: {"", state}
 
   @spec public_ollama_stream?(RequestOptions.t()) :: boolean()
   def public_ollama_stream?(%RequestOptions{

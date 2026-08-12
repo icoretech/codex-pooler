@@ -1,7 +1,7 @@
 defmodule CodexPoolerWeb.Anthropic.MessagesController do
   use CodexPoolerWeb, :controller
 
-  alias CodexPooler.Gateway.Facade.Anthropic.{Messages, TokenCount}
+  alias CodexPooler.Gateway.Facade.Anthropic.{Messages, Response, TokenCount}
   alias CodexPooler.Gateway.OpenAICompatibility.Error
   alias CodexPoolerWeb.GatewayControllerHelpers, as: GatewayHelpers
   alias CodexPoolerWeb.PublicGatewayDispatch
@@ -20,7 +20,9 @@ defmodule CodexPoolerWeb.Anthropic.MessagesController do
           Messages.coerce(params, request_opts(conn))
         end
       end,
-      fn decoded, _coerced -> decoded end,
+      fn decoded, %{anthropic_formatting: formatting} ->
+        Response.message(decoded, formatting)
+      end,
       local_endpoint: "/v1/messages"
     )
   end

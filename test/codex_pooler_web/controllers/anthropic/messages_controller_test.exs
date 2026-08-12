@@ -5,7 +5,15 @@ defmodule CodexPoolerWeb.Anthropic.MessagesControllerTest do
   import CodexPooler.PoolerFixtures, only: [active_api_key_fixture: 1]
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
-    only: [gateway_setup: 2, prime_routing_quota!: 1, start_upstream: 1]
+    only: [
+      deterministic_rotation_seed: 2,
+      gateway_setup: 2,
+      gateway_upstream: 4,
+      prime_routing_quota!: 1,
+      put_model_source_assignments!: 2,
+      start_upstream: 1,
+      use_deterministic_rotation!: 2
+    ]
 
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.FakeUpstream
@@ -79,6 +87,350 @@ defmodule CodexPoolerWeb.Anthropic.MessagesControllerTest do
     end
 
     assert FakeUpstream.count(upstream) == 3
+  end
+
+  test "returns a collected Anthropic message with only local IDs and gemma3 identity", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        completed_response([
+          %{
+            "type" => "reasoning",
+            "id" => "provider-reasoning-id",
+            "encrypted_content" => "provider-encrypted-reasoning",
+            "summary" => [%{"type" => "summary_text", "text" => "Safe summary"}]
+          },
+          %{
+            "type" => "message",
+            "id" => "provider-message-id",
+            "content" => [
+              %{"type" => "output_text", "text" => "Forecast<END>provider-private-tail"}
+            ]
+          },
+          %{
+            "type" => "function_call",
+            "id" => "provider-tool-id",
+            "call_id" => "provider-call-id",
+            "name" => "lookup_weather",
+            "arguments" => ~s({"city":"London"})
+          }
+        ])
+      )
+
+    setup = facade_gateway_setup(upstream)
+
+    response =
+      conn
+      |> put_req_header("authorization", setup.authorization)
+      |> put_req_header("anthropic-version", @version)
+      |> post("/v1/messages", %{
+        "model" => "claude-client-selector",
+        "max_tokens" => 96,
+        "stream" => false,
+        "stop_sequences" => ["<END>"],
+        "thinking" => %{"type" => "enabled", "budget_tokens" => 1_024},
+        "messages" => [%{"role" => "user", "content" => "Weather?"}],
+        "tools" => [
+          %{
+            "name" => "lookup_weather",
+            "input_schema" => %{"type" => "object", "properties" => %{}}
+          }
+        ]
+      })
+
+    assert %{
+             "id" => message_id,
+             "type" => "message",
+             "role" => "assistant",
+             "model" => "gemma3",
+             "content" => [
+               %{"type" => "thinking", "thinking" => "Safe summary", "signature" => signature},
+               %{"type" => "text", "text" => "Forecast"},
+               %{
+                 "type" => "tool_use",
+                 "id" => tool_id,
+                 "name" => "lookup_weather",
+                 "input" => %{"city" => "London"}
+               }
+             ],
+             "stop_reason" => "stop_sequence",
+             "stop_sequence" => "<END>",
+             "usage" => %{
+               "input_tokens" => 2,
+               "cache_creation_input_tokens" => 0,
+               "cache_read_input_tokens" => 0,
+               "output_tokens" => 1
+             }
+           } = json_response(response, 200)
+
+    assert String.starts_with?(message_id, "msg_")
+    assert String.starts_with?(signature, "sig_")
+    assert String.starts_with?(tool_id, "toolu_")
+
+    for hidden <- [
+          "gpt-5.6-sol",
+          "claude-client-selector",
+          "provider-hidden-response-id",
+          "provider-hidden-model",
+          "provider-reasoning-id",
+          "provider-encrypted-reasoning",
+          "provider-message-id",
+          "provider-tool-id",
+          "provider-call-id",
+          "provider-private-tail",
+          setup.identity.chatgpt_account_id,
+          setup.assignment.id
+        ] do
+      refute response.resp_body =~ hidden
+    end
+  end
+
+  test "streams exact Anthropic SSE with sanitized headers", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"response.output_text.delta",
+             %{"type" => "response.output_text.delta", "delta" => "hello"}},
+            {"response.completed",
+             %{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => "provider-stream-id",
+                 "model" => "provider-stream-model",
+                 "status" => "completed",
+                 "usage" => %{"input_tokens" => 3, "output_tokens" => 1}
+               }
+             }}
+          ],
+          headers: [
+            {"x-request-id", "provider-request-id"},
+            {"x-openai-model", "provider-stream-model"},
+            {"x-provider-account", "provider-account"},
+            {"connection", "provider-private"},
+            {"cache-control", "provider-private"}
+          ]
+        )
+      )
+
+    setup = facade_gateway_setup(upstream)
+    local_request_id = Ecto.UUID.generate()
+
+    response =
+      conn
+      |> put_req_header("x-request-id", local_request_id)
+      |> put_req_header("authorization", setup.authorization)
+      |> put_req_header("anthropic-version", @version)
+      |> post("/v1/messages", %{
+        "model" => "anything",
+        "max_tokens" => 32,
+        "stream" => true,
+        "messages" => [%{"role" => "user", "content" => "hello"}]
+      })
+
+    events = sse_events(response.resp_body)
+
+    assert Enum.map(events, & &1.event) == [
+             "message_start",
+             "content_block_start",
+             "content_block_delta",
+             "content_block_stop",
+             "message_delta",
+             "message_stop"
+           ]
+
+    assert get_in(hd(events).data, ["message", "model"]) == "gemma3"
+    assert get_resp_header(response, "content-type") == ["text/event-stream"]
+    assert get_resp_header(response, "cache-control") == ["no-cache"]
+    assert get_resp_header(response, "x-request-id") == [local_request_id]
+    assert get_resp_header(response, "x-openai-model") == []
+    assert get_resp_header(response, "x-provider-account") == []
+    assert get_resp_header(response, "connection") == []
+
+    for hidden <- ["provider-stream-id", "provider-stream-model", "provider-account"] do
+      refute response.resp_body =~ hidden
+    end
+  end
+
+  test "maps a pre-stream upstream rejection to Anthropic JSON and status", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response_with_headers(
+          %{
+            "error" => %{
+              "type" => "provider_private_type",
+              "code" => "provider_private_code",
+              "message" => "provider private rejection"
+            }
+          },
+          [
+            {"x-request-id", "provider-request-id"},
+            {"x-provider-account", "provider-account"}
+          ],
+          503
+        )
+      )
+
+    setup = facade_gateway_setup(upstream)
+
+    response =
+      conn
+      |> put_req_header("authorization", setup.authorization)
+      |> put_req_header("anthropic-version", @version)
+      |> post("/v1/messages", %{
+        "max_tokens" => 32,
+        "stream" => true,
+        "messages" => [%{"role" => "user", "content" => "fail safely"}]
+      })
+
+    assert %{
+             "type" => "error",
+             "error" => %{
+               "type" => "api_error",
+               "message" => "gemma3 is temporarily unavailable"
+             }
+           } = json_response(response, 503)
+
+    refute response.resp_body =~ "provider"
+    assert get_resp_header(response, "x-provider-account") == []
+  end
+
+  test "a late terminal failure emits one Anthropic error event without retry or replay", %{
+    conn: conn
+  } do
+    first_mode =
+      FakeUpstream.sse_stream(
+        [
+          {"response.output_text.delta",
+           %{"type" => "response.output_text.delta", "delta" => "published once"}},
+          {"response.failed",
+           %{
+             "type" => "response.failed",
+             "response" => %{
+               "id" => "provider-failed-id",
+               "status" => "failed",
+               "error" => %{"code" => "server_error", "message" => "provider-private"}
+             }
+           }}
+        ],
+        done: false
+      )
+
+    fallback_mode =
+      FakeUpstream.sse_stream([
+        {"response.output_text.delta",
+         %{"type" => "response.output_text.delta", "delta" => "must not run"}},
+        {"response.completed",
+         %{"type" => "response.completed", "response" => %{"status" => "completed"}}}
+      ])
+
+    {setup, first_upstream, fallback_upstream} =
+      facade_stream_retry_setup(first_mode, fallback_mode)
+
+    response =
+      conn
+      |> put_req_header("x-request-id", deterministic_rotation_seed(2, 0))
+      |> put_req_header("authorization", setup.authorization)
+      |> put_req_header("anthropic-version", @version)
+      |> post("/v1/messages", %{
+        "max_tokens" => 32,
+        "stream" => true,
+        "messages" => [%{"role" => "user", "content" => "do not replay"}]
+      })
+
+    events = sse_events(response.resp_body)
+
+    assert ["published once"] ==
+             events
+             |> Enum.filter(&(get_in(&1.data, ["delta", "type"]) == "text_delta"))
+             |> Enum.map(&get_in(&1.data, ["delta", "text"]))
+
+    assert List.last(events) == %{
+             event: "error",
+             data: %{
+               "type" => "error",
+               "error" => %{"type" => "api_error", "message" => "request failed"}
+             }
+           }
+
+    assert Enum.count(events, &(&1.event == "error")) == 1
+    refute response.resp_body =~ "provider-private"
+    refute response.resp_body =~ "must not run"
+    assert FakeUpstream.count(first_upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 0
+  end
+
+  test "a retryable terminal before Anthropic-visible bytes retries without publishing the first attempt",
+       %{conn: conn} do
+    first_mode =
+      FakeUpstream.sse_stream(
+        [
+          {"response.created",
+           %{
+             "type" => "response.created",
+             "response" => %{"id" => "provider-first-id", "status" => "in_progress"}
+           }},
+          {"response.failed",
+           %{
+             "type" => "response.failed",
+             "response" => %{
+               "id" => "provider-failed-id",
+               "status" => "failed",
+               "error" => %{"code" => "server_error", "message" => "provider-private"}
+             }
+           }}
+        ],
+        done: false
+      )
+
+    fallback_mode =
+      FakeUpstream.sse_stream([
+        {"response.output_text.delta",
+         %{"type" => "response.output_text.delta", "delta" => "fallback answer"}},
+        {"response.completed",
+         %{
+           "type" => "response.completed",
+           "response" => %{
+             "id" => "provider-fallback-id",
+             "status" => "completed",
+             "usage" => %{"input_tokens" => 4, "output_tokens" => 2}
+           }
+         }}
+      ])
+
+    {setup, first_upstream, fallback_upstream} =
+      facade_stream_retry_setup(first_mode, fallback_mode)
+
+    response =
+      conn
+      |> put_req_header("x-request-id", deterministic_rotation_seed(2, 0))
+      |> put_req_header("authorization", setup.authorization)
+      |> put_req_header("anthropic-version", @version)
+      |> post("/v1/messages", %{
+        "max_tokens" => 32,
+        "stream" => true,
+        "messages" => [%{"role" => "user", "content" => "retry safely"}]
+      })
+
+    events = sse_events(response.resp_body)
+
+    assert ["fallback answer"] ==
+             events
+             |> Enum.filter(&(get_in(&1.data, ["delta", "type"]) == "text_delta"))
+             |> Enum.map(&get_in(&1.data, ["delta", "text"]))
+
+    assert List.last(events).event == "message_stop"
+    refute Enum.any?(events, &(&1.event == "error"))
+    refute response.resp_body =~ "provider-private"
+    refute response.resp_body =~ "provider-first-id"
+    assert FakeUpstream.count(first_upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 1
+
+    assert Enum.map(
+             Repo.all(from(a in Attempt, order_by: [asc: a.attempt_number])),
+             & &1.status
+           ) == ["retryable_failed", "succeeded"]
   end
 
   test "rejects mismatched dual credentials before validation or dispatch", %{conn: conn} do
@@ -230,7 +582,16 @@ defmodule CodexPoolerWeb.Anthropic.MessagesControllerTest do
     Enum.reduce(headers, conn, fn {name, value}, conn -> put_req_header(conn, name, value) end)
   end
 
-  defp completed_response do
+  defp completed_response(output \\ nil) do
+    output =
+      output ||
+        [
+          %{
+            "type" => "message",
+            "content" => [%{"type" => "output_text", "text" => "hello"}]
+          }
+        ]
+
     FakeUpstream.sse_stream([
       {"response.completed",
        %{
@@ -239,12 +600,7 @@ defmodule CodexPoolerWeb.Anthropic.MessagesControllerTest do
            "id" => "provider-hidden-response-id",
            "status" => "completed",
            "model" => "provider-hidden-model",
-           "output" => [
-             %{
-               "type" => "message",
-               "content" => [%{"type" => "output_text", "text" => "hello"}]
-             }
-           ],
+           "output" => output,
            "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
          }
        }}
@@ -270,5 +626,47 @@ defmodule CodexPoolerWeb.Anthropic.MessagesControllerTest do
 
     prime_routing_quota!(setup.identity)
     setup
+  end
+
+  defp facade_stream_retry_setup(first_mode, fallback_mode) do
+    first_upstream = start_upstream(first_mode)
+    fallback_upstream = start_upstream(fallback_mode)
+    setup = facade_gateway_setup(first_upstream)
+
+    fallback =
+      gateway_upstream(
+        setup.pool,
+        fallback_upstream,
+        "upstream-token-anthropic-stream-fallback",
+        compact?: false
+      )
+
+    prime_routing_quota!(fallback.identity)
+    use_deterministic_rotation!(setup.pool, 2)
+
+    model = put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+
+    {%{setup | model: model}, first_upstream, fallback_upstream}
+  end
+
+  defp sse_events(output) do
+    output
+    |> String.split("\n\n", trim: true)
+    |> Enum.map(fn block ->
+      lines = String.split(block, "\n")
+
+      event =
+        lines
+        |> Enum.find(&String.starts_with?(&1, "event: "))
+        |> String.replace_prefix("event: ", "")
+
+      data =
+        lines
+        |> Enum.find(&String.starts_with?(&1, "data: "))
+        |> String.replace_prefix("data: ", "")
+        |> Jason.decode!()
+
+      %{event: event, data: data}
+    end)
   end
 end

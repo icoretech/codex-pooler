@@ -824,17 +824,27 @@ defmodule CodexPooler.Gateway.Facade.Anthropic.Messages do
 
   defp maybe_put_cache_options(payload, false, false), do: payload
 
-  defp stream_options(%RequestOptions{} = opts, %{stream?: stream?}) do
+  defp stream_options(%RequestOptions{} = opts, %{stream?: stream?} = formatting) do
     RequestOptions.put_openai_compatibility(opts,
-      collect_openai_response_stream: not stream?
+      public_anthropic_stream: stream?,
+      collect_openai_response_stream: not stream?,
+      anthropic_formatting: formatting
     )
   end
 
-  defp stream_options(opts, %{stream?: stream?}) when is_list(opts),
-    do: Keyword.put(opts, :collect_openai_response_stream, not stream?)
+  defp stream_options(opts, %{stream?: stream?} = formatting) when is_list(opts) do
+    opts
+    |> Keyword.put(:public_anthropic_stream, stream?)
+    |> Keyword.put(:collect_openai_response_stream, not stream?)
+    |> Keyword.put(:anthropic_formatting, formatting)
+  end
 
-  defp stream_options(opts, %{stream?: stream?}) when is_map(opts),
-    do: Map.put(opts, :collect_openai_response_stream, not stream?)
+  defp stream_options(opts, %{stream?: stream?} = formatting) when is_map(opts) do
+    opts
+    |> Map.put(:public_anthropic_stream, stream?)
+    |> Map.put(:collect_openai_response_stream, not stream?)
+    |> Map.put(:anthropic_formatting, formatting)
+  end
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
