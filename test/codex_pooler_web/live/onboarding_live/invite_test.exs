@@ -80,10 +80,9 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
             expires_at: expires_at
           },
           device_authorization: nil,
-          device_polling?: false,
           device_poll_status: "",
           completed_onboarding: nil,
-          invite_state: :active,
+          invite_state: :ready,
           error_message: nil,
           now: now
         )
@@ -243,7 +242,66 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
 
     assert has_element?(view, "#device-poll-status", "authorization window expired")
     refute has_element?(view, "#device-poll-spinner")
-    refute current_device_poll_ref(view)
+    refute has_element?(view, "#device-authorization")
+    assert has_element?(view, "#device-onboarding-button", "Try device approval again")
+  end
+
+  test "non-pending device poll errors stop polling and expose a retry" do
+    configure_codex_auth_client!(%{
+      poll_result:
+        {:error,
+         %{
+           code: :codex_device_upstream_unavailable,
+           message: "temporary upstream failure"
+         }}
+    })
+
+    {token, _pool} = invite_fixture()
+    {:ok, view, _html} = live(build_conn(), ~p"/onboarding/invites/#{token}")
+
+    view |> element("#device-onboarding-button") |> render_click()
+
+    poll_ref = current_device_poll_ref(view)
+    send_current_device_poll(view)
+
+    assert has_element?(view, "#device-poll-status", "Onboarding could not continue")
+    refute has_element?(view, "#device-poll-spinner")
+    refute has_element?(view, "#device-authorization")
+    assert has_element?(view, "#device-onboarding-button", "Try device approval again")
+
+    send(view.pid, {:invite_workflow_tick, poll_ref})
+    _ = :sys.get_state(view.pid)
+
+    assert poll_count() == 1
+  end
+
+  test "invite state controls device authorization rendering" do
+    now = ~U[2026-08-12 12:00:00Z]
+
+    html =
+      render_component(&Components.invite_page/1,
+        flash: %{},
+        current_scope: nil,
+        contract: %{
+          pool_name: "Example Pool",
+          inviter_label: "operator@example.com",
+          invited_email: "invitee@example.com",
+          status: "active",
+          expires_at: DateTime.add(now, 3_600, :second)
+        },
+        device_authorization: %{
+          url: "https://auth.openai.com/codex/device",
+          user_code: "ABCD-EFGH"
+        },
+        device_poll_status: "Approval is pending.",
+        completed_onboarding: nil,
+        invite_state: :ready,
+        error_message: nil,
+        now: now
+      )
+
+    refute html =~ ~s(id="device-authorization")
+    refute html =~ ~s(id="device-poll-spinner")
   end
 
   test "automatic device polling handles slow down before completion" do
@@ -295,19 +353,19 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
     view |> element("#device-onboarding-button") |> render_click()
 
     first_ref = current_device_poll_ref(view)
-    send(view.pid, {:poll_device_authorization, make_ref()})
+    send(view.pid, {:invite_workflow_tick, make_ref()})
     _ = :sys.get_state(view.pid)
 
     assert has_element?(view, "#device-poll-status", "Open the verification page")
     assert poll_count() == 0
 
-    send(view.pid, {:poll_device_authorization, first_ref})
+    send(view.pid, {:invite_workflow_tick, first_ref})
     _ = :sys.get_state(view.pid)
 
     assert has_element?(view, "#device-poll-status", "Checking again in 5 seconds")
     assert poll_count() == 1
 
-    send(view.pid, {:poll_device_authorization, first_ref})
+    send(view.pid, {:invite_workflow_tick, first_ref})
     _ = :sys.get_state(view.pid)
 
     refute has_element?(view, "#invite-accepted")
@@ -670,7 +728,7 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
   defp worker_name(worker), do: worker |> Atom.to_string() |> String.replace_prefix("Elixir.", "")
 
   defp send_current_device_poll(view) do
-    send(view.pid, {:poll_device_authorization, current_device_poll_ref(view)})
+    send(view.pid, {:invite_workflow_tick, current_device_poll_ref(view)})
     _ = :sys.get_state(view.pid)
     :ok
   end
@@ -679,7 +737,7 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
     view.pid
     |> :sys.get_state()
     |> Map.fetch!(:socket)
-    |> then(& &1.assigns.device_poll_ref)
+    |> then(& &1.assigns.invite_timer_ref)
   end
 
   defp poll_count do

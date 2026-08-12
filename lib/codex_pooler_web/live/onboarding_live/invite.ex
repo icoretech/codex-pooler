@@ -13,7 +13,6 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
       current_scope={@current_scope}
       contract={@contract}
       device_authorization={@device_authorization}
-      device_polling?={@device_polling?}
       device_poll_status={@device_poll_status}
       completed_onboarding={@completed_onboarding}
       invite_state={@invite_state}
@@ -31,10 +30,9 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
        current_origin: nil,
        invite_token: token,
        device_authorization: nil,
-       device_poll_timer: nil,
-       device_poll_ref: nil,
+       invite_timer: nil,
+       invite_timer_ref: nil,
        device_poll_status: "Waiting for approval.",
-       device_polling?: false,
        completed_onboarding: nil,
        invite_state: :loading,
        error_message: nil
@@ -56,21 +54,21 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
   def handle_event("start_device", _params, socket) do
     case InviteOnboarding.start_device(socket.assigns.invite_token) do
       {:ok, %{account: account, verification: verification}} ->
+        authorization = %{
+          account_id: account.identity.id,
+          url: verification["verification_url"],
+          user_code: verification["user_code"],
+          expires_at: verification["expires_at"],
+          poll_interval_seconds: verification["poll_interval_seconds"]
+        }
+
         {:noreply,
          socket
          |> put_flash(:info, "Device authorization started")
-         |> assign(
-           :device_poll_status,
+         |> transition_device_pending(
+           authorization,
            "Open the verification page, enter the code, and keep this page open."
          )
-         |> assign(:device_polling?, true)
-         |> assign(:device_authorization, %{
-           account_id: account.identity.id,
-           url: verification["verification_url"],
-           user_code: verification["user_code"],
-           expires_at: verification["expires_at"],
-           poll_interval_seconds: verification["poll_interval_seconds"]
-         })
          |> schedule_device_poll()}
 
       {:error, reason} ->
@@ -79,79 +77,109 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
   end
 
   @impl true
-  def handle_info({:poll_device_authorization, ref}, %{assigns: %{device_poll_ref: ref}} = socket) do
+  def handle_info({:invite_workflow_tick, ref}, %{assigns: %{invite_timer_ref: ref}} = socket) do
     {:noreply,
      socket
-     |> assign(device_poll_timer: nil, device_poll_ref: nil)
-     |> poll_device_authorization()}
+     |> clear_invite_timer()
+     |> handle_invite_workflow_tick()}
   end
 
-  def handle_info({:poll_device_authorization, _ref}, socket) do
+  def handle_info({:invite_workflow_tick, _ref}, socket) do
     {:noreply, socket}
   end
+
+  defp handle_invite_workflow_tick(%{assigns: %{invite_state: :device_pending}} = socket),
+    do: poll_device_authorization(socket)
+
+  defp handle_invite_workflow_tick(socket), do: socket
 
   defp poll_device_authorization(socket) do
     with %{account_id: account_id} <- socket.assigns.device_authorization,
          {:ok, completed} <- InviteOnboarding.poll_device(socket.assigns.invite_token, account_id) do
       socket
       |> put_flash(:info, "Codex account connected")
-      |> assign(:device_poll_status, "Codex account connected.")
-      |> assign(:device_polling?, false)
-      |> assign(:invite_state, :accepted)
-      |> assign(:contract, nil)
-      |> assign(:device_authorization, nil)
-      |> clear_device_poll()
-      |> assign(:completed_onboarding, completed_response(completed, codex_base_url(socket)))
+      |> transition_accepted(completed_response(completed, codex_base_url(socket)))
     else
       nil ->
-        put_flash(socket, :error, "Start device authorization first")
+        transition_device_error(socket, "Start device authorization again.")
 
       {:error, %{code: code} = reason}
       when code in [:codex_device_authorization_pending, :codex_device_authorization_slow_down] ->
         socket
         |> assign(:device_poll_status, pending_message(reason))
-        |> assign(:device_polling?, true)
         |> schedule_device_poll(reason)
 
       {:error, %{code: :codex_device_code_expired} = reason} ->
         socket
         |> put_flash(:error, error_message(reason))
-        |> assign(:device_poll_status, error_message(reason))
-        |> assign(:device_polling?, false)
-        |> clear_device_poll()
+        |> transition_device_error(error_message(reason))
 
       {:error, reason} ->
-        put_flash(socket, :error, error_message(reason))
+        socket
+        |> put_flash(:error, error_message(reason))
+        |> transition_device_error(error_message(reason))
     end
   end
 
   defp schedule_device_poll(socket, reason \\ %{}) do
-    case socket.assigns.device_authorization do
-      %{poll_interval_seconds: interval_seconds} ->
+    case {socket.assigns.invite_state, socket.assigns.device_authorization} do
+      {:device_pending, %{poll_interval_seconds: interval_seconds}} ->
         retry_seconds = Map.get(reason, :retry_after_seconds) || interval_seconds
         ref = make_ref()
-        socket = clear_device_poll(socket)
+        socket = clear_invite_timer(socket)
 
         timer =
           Process.send_after(
             self(),
-            {:poll_device_authorization, ref},
+            {:invite_workflow_tick, ref},
             max(retry_seconds, 0) * 1_000
           )
 
-        assign(socket, device_poll_timer: timer, device_poll_ref: ref)
+        assign(socket, invite_timer: timer, invite_timer_ref: ref)
 
-      _authorization ->
-        socket
+      _state ->
+        transition_device_error(socket, "Start device authorization again.")
     end
   end
 
-  defp clear_device_poll(socket) do
-    if socket.assigns.device_poll_timer do
-      Process.cancel_timer(socket.assigns.device_poll_timer)
+  defp clear_invite_timer(socket) do
+    if socket.assigns.invite_timer do
+      Process.cancel_timer(socket.assigns.invite_timer)
     end
 
-    assign(socket, device_poll_timer: nil, device_poll_ref: nil)
+    assign(socket, invite_timer: nil, invite_timer_ref: nil)
+  end
+
+  defp transition_device_pending(socket, authorization, status) do
+    socket
+    |> clear_invite_timer()
+    |> assign(
+      invite_state: :device_pending,
+      device_authorization: authorization,
+      device_poll_status: status
+    )
+  end
+
+  defp transition_device_error(socket, status) do
+    socket
+    |> clear_invite_timer()
+    |> assign(
+      invite_state: :device_error,
+      device_authorization: nil,
+      device_poll_status: status
+    )
+  end
+
+  defp transition_accepted(socket, completed_onboarding) do
+    socket
+    |> clear_invite_timer()
+    |> assign(
+      invite_state: :accepted,
+      contract: nil,
+      device_authorization: nil,
+      device_poll_status: "Codex account connected.",
+      completed_onboarding: completed_onboarding
+    )
   end
 
   defp assign_invite(socket, token) do
@@ -183,7 +211,7 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite do
   end
 
   defp error_message(%{code: :codex_device_code_expired}),
-    do: "The authorization window expired. Start onboarding again from a fresh invite."
+    do: "The authorization window expired. Start device approval again."
 
   defp error_message(%{code: :invite_email_mismatch}),
     do: "The authorized Codex account email does not match this invite."

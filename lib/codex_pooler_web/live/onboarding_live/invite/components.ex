@@ -11,7 +11,6 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
   attr :current_scope, :any, required: true
   attr :contract, :any, required: true
   attr :device_authorization, :any, required: true
-  attr :device_polling?, :boolean, required: true
   attr :device_poll_status, :string, required: true
   attr :completed_onboarding, :any, required: true
   attr :invite_state, :atom, required: true
@@ -43,7 +42,11 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
           </div>
 
           <div class="p-6 sm:p-8">
-            <div :if={@contract} id="invite-metadata" class="grid gap-6">
+            <div
+              :if={@invite_state in [:ready, :device_pending, :device_error]}
+              id="invite-metadata"
+              class="grid gap-6"
+            >
               <div id="invite-contract" class="contents">
                 <div class="space-y-2">
                   <h2 class="text-xl font-semibold text-base-content">Invite details</h2>
@@ -96,7 +99,11 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
                   </div>
                 </dl>
 
-                <div id="onboarding-actions" class="grid gap-3">
+                <div
+                  :if={@invite_state in [:ready, :device_error]}
+                  id="onboarding-actions"
+                  class="grid gap-3"
+                >
                   <button
                     id="device-onboarding-button"
                     type="button"
@@ -105,7 +112,11 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
                     phx-disable-with="Starting device approval..."
                   >
                     <.icon name="hero-device-phone-mobile" class="size-4" />
-                    <span>Start device approval</span>
+                    <span>
+                      {if @invite_state == :device_error,
+                        do: "Try device approval again",
+                        else: "Start device approval"}
+                    </span>
                   </button>
                   <p class="text-sm leading-6 text-base-content/65">
                     Keep this page open after entering the code. It will continue automatically when approval is complete.
@@ -113,7 +124,7 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
                 </div>
 
                 <div
-                  :if={@device_authorization}
+                  :if={@invite_state == :device_pending}
                   id="device-authorization"
                   class="rounded-box border border-base-300 bg-base-100 p-4"
                 >
@@ -164,7 +175,6 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
                       aria-live="polite"
                     >
                       <span
-                        :if={@device_polling?}
                         id="device-poll-spinner"
                         class="loading loading-spinner loading-sm shrink-0 text-primary"
                         aria-hidden="true"
@@ -173,11 +183,22 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
                     </div>
                   </div>
                 </div>
+
+                <div
+                  :if={@invite_state == :device_error}
+                  id="device-poll-status"
+                  class="flex min-h-12 items-center gap-3 rounded-box border border-error/30 bg-error/10 px-3 py-2 text-sm text-base-content/75"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <.icon name="hero-exclamation-triangle" class="size-4 shrink-0 text-error" />
+                  <span>{@device_poll_status}</span>
+                </div>
               </div>
             </div>
 
             <div
-              :if={@completed_onboarding}
+              :if={@invite_state == :accepted}
               id="invite-accepted"
               class="grid gap-5 rounded-box border border-success/30 bg-success/10 p-5 text-base-content shadow-sm"
             >
@@ -240,7 +261,11 @@ defmodule CodexPoolerWeb.OnboardingLive.Invite.Components do
               </div>
             </div>
 
-            <div :if={@error_message} id="invite-error" class="alert alert-error items-start">
+            <div
+              :if={@invite_state == :invalid}
+              id="invite-error"
+              class="alert alert-error items-start"
+            >
               <.icon name="hero-exclamation-triangle" class="mt-0.5 size-5" />
               <div>
                 <p class="font-semibold">Invite unavailable</p>
