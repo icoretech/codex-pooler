@@ -502,7 +502,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
 
       assert [%{"event" => "response.failed", "data" => data}] = public_sse_events(chunk)
       assert data["error"]["code"] == "context_length_exceeded"
-      assert data["error"]["message"] == "upstream request failed"
+      assert data["error"]["message"] == "gemma3 request failed"
 
       assert data["response"] == %{
                "id" => "resp_context_overflow",
@@ -510,11 +510,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
                "status" => "failed",
                "error" => %{
                  "code" => "upstream_error",
-                 "message" => "upstream request failed",
-                 "type" => "server_error"
+                 "message" => "gemma3 request failed",
+                 "type" => "invalid_request_error"
                },
                "incomplete_details" => nil,
-               "model" => "unknown",
+               "model" => "gemma3",
                "object" => "response",
                "output" => [],
                "output_text" => "",
@@ -681,7 +681,15 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
                |> StreamProtocol.canonicalize_native_codex_responses_json_message()
                |> Jason.decode!()
 
-      assert missing_code ==
+      assert %{
+               "type" => "error",
+               "status" => 400,
+               "error" => %{
+                 "code" => "invalid_request",
+                 "message" => "Request is invalid",
+                 "type" => "invalid_request_error"
+               }
+             } =
                missing_code
                |> Jason.encode!()
                |> StreamProtocol.canonicalize_native_codex_responses_json_message()

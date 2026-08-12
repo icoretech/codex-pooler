@@ -1,12 +1,14 @@
 defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Facade
+  alias CodexPooler.Gateway.Facade.PublicProjection
   alias CodexPooler.Gateway.OpenAICompatibility.PublicResponse
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
 
   @spec normalize_response(map(), map()) :: map()
-  def normalize_response(decoded, chat_payload) when is_map(decoded) do
+  def normalize_response(decoded, _chat_payload) when is_map(decoded) do
     message = %{"role" => "assistant", "content" => output_text(decoded)}
     message = put_if_present(message, "tool_calls", output_tool_calls(decoded))
 
@@ -14,7 +16,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
       "id" => response_id(decoded),
       "object" => "chat.completion",
       "created" => created(decoded),
-      "model" => model(decoded, chat_payload),
+      "model" => Facade.public_model(),
       "choices" => [
         %{
           "index" => 0,
@@ -25,6 +27,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
     }
     |> put_if_present("usage", usage(decoded))
     |> put_if_present("service_tier", service_tier(response_map(decoded)))
+    |> PublicProjection.chat_completion()
   end
 
   @type stream_state :: %{
@@ -341,7 +344,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
       buffer: "",
       id: "chatcmpl_" <> Ecto.UUID.generate(),
       created: System.system_time(:second),
-      model: Map.get(chat_payload, "model"),
+      model: Facade.public_model(),
       service_tier: nil,
       role_sent?: false,
       visible_seen?: false,
@@ -383,7 +386,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
       state
       | id: decoded_string(response, "id") || state.id,
         created: created(response, state.created),
-        model: model(response, state),
+        model: Facade.public_model(),
         service_tier: service_tier(decoded) || service_tier(response) || state.service_tier
     }
   end
@@ -402,14 +405,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
   defp created(%{"created" => created}) when is_integer(created), do: created
   defp created(%{"created_at" => created}) when is_integer(created), do: created
   defp created(_decoded), do: System.system_time(:second)
-
-  defp model(decoded, %{"model" => model}) when is_binary(model),
-    do: decoded_string(decoded, "model") || model
-
-  defp model(decoded, %{model: model}) when is_binary(model),
-    do: decoded_string(decoded, "model") || model
-
-  defp model(decoded, _fallback), do: decoded_string(decoded, "model") || "unknown"
 
   defp output_text(decoded) do
     decoded

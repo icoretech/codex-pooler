@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
   import Plug.Conn, only: [put_status: 2]
 
   alias CodexPooler.Gateway.Contracts
+  alias CodexPooler.Gateway.Facade.PublicProjection
   alias CodexPooler.Gateway.OpenAICompatibility.PublicResponse
   alias CodexPoolerWeb.GatewayControllerHelpers, as: GatewayHelpers
 
@@ -25,7 +26,7 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
       {:ok, normalized} ->
         conn
         |> put_status(status)
-        |> json(normalized)
+        |> json(PublicProjection.gateway_body(normalized))
 
       :passthrough ->
         GatewayHelpers.send_gateway_result(conn, result)
@@ -35,15 +36,8 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
   def send(conn, {:ok, %{body: _body} = result}, _success_normalizer),
     do: GatewayHelpers.send_gateway_result(conn, result)
 
-  def send(conn, {:error, %{status: status} = reason}, _success_normalizer) do
-    if PublicResponse.redacted_gateway_error?(reason) do
-      conn
-      |> put_status(status)
-      |> json(%{"error" => PublicResponse.normalize_error(reason, status: status)})
-    else
-      GatewayHelpers.send_error(conn, reason)
-    end
-  end
+  def send(conn, {:error, %{status: _status} = reason}, _success_normalizer),
+    do: GatewayHelpers.send_error(conn, reason)
 
   def send(conn, {:error, reason}, _success_normalizer),
     do: GatewayHelpers.send_error(conn, reason)

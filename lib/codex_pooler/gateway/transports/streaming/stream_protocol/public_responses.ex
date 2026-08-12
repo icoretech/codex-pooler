@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Facade.PublicProjection
   alias CodexPooler.Gateway.OpenAICompatibility.{PublicResponse, Responses}
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
@@ -99,7 +100,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
   @spec normalize_json_message(binary(), map()) :: {binary(), map()}
   def normalize_json_message(_data, %{"type" => "response.failed"} = decoded) do
-    normalized = normalize_terminal_errors("response.failed", decoded)
+    normalized =
+      decoded
+      |> then(&normalize_terminal_errors("response.failed", &1))
+      |> PublicProjection.responses_event()
+
     {Jason.encode!(normalized), normalized}
   end
 
@@ -444,12 +449,17 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   end
 
   defp public_sse_block(event_type, decoded) when is_binary(event_type) and is_map(decoded) do
+    decoded =
+      decoded
+      |> Map.put_new("type", event_type)
+      |> PublicProjection.responses_event()
+
     [
       "event: ",
       event_type,
       "\n",
       "data: ",
-      Jason.encode!(Map.put_new(decoded, "type", event_type)),
+      Jason.encode!(decoded),
       "\n\n"
     ]
   end
@@ -557,8 +567,18 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     type = clean_string(Map.get(decoded, "type"))
 
     case normalize_terminal_errors_with_change(type, decoded) do
-      {:unchanged, normalized} -> {canonical_data, normalized}
-      {:changed, normalized} -> {Jason.encode!(normalized), normalized}
+      {:unchanged, normalized} ->
+        projected = PublicProjection.responses_event(normalized)
+
+        if projected === normalized do
+          {canonical_data, projected}
+        else
+          {Jason.encode!(projected), projected}
+        end
+
+      {:changed, normalized} ->
+        projected = PublicProjection.responses_event(normalized)
+        {Jason.encode!(projected), projected}
     end
   end
 

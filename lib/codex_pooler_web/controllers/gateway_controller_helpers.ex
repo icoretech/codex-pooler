@@ -10,6 +10,9 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   alias CodexPooler.Gateway.Admission, as: GatewayAdmission
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.ErrorSanitizer
+  alias CodexPooler.Gateway.Facade.Error, as: FacadeError
+  alias CodexPooler.Gateway.Facade.HeaderPolicy
+  alias CodexPooler.Gateway.Facade.PublicProjection
   alias CodexPooler.Gateway.Metadata
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -257,32 +260,24 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
 
   # sobelow_skip ["XSS.SendResp"]
   def send_gateway_result(conn, %{raw_body: body} = result) do
-    conn
-    |> put_gateway_headers(result_headers(result))
-    |> send_resp(result.status, body)
+    conn = put_gateway_headers(conn, result_headers(result))
+
+    case facade_json_body(conn, body) do
+      {:ok, projected} -> conn |> put_status(result.status) |> json(projected)
+      :passthrough -> send_resp(conn, result.status, body)
+    end
   end
 
   def send_gateway_result(conn, %{body: body} = result) do
     conn
     |> put_gateway_headers(result_headers(result))
     |> put_status(result.status)
-    |> json(body)
+    |> json(project_gateway_body(conn, body))
   end
 
   @spec send_error(conn(), Contracts.gateway_error() | map()) :: conn()
   def send_error(conn, %{status: status, code: code, message: message} = error) do
-    body = %{
-      "error" =>
-        Map.merge(
-          %{
-            "message" => message,
-            "type" => "invalid_request_error",
-            "code" => to_string(code),
-            "param" => Map.get(error, :param)
-          },
-          Contracts.recovery_error_fields(error)
-        )
-    }
+    body = error_body(conn, status, code, message, error)
 
     conn
     |> put_gateway_headers(Contracts.recovery_response_headers(error))
@@ -456,6 +451,67 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
   defp blank_to_nil(_value), do: nil
 
   defp put_gateway_headers(conn, headers) do
+    headers =
+      if facade_runtime?(conn) do
+        HeaderPolicy.result_headers(IngressPath.protocol(conn), headers)
+      else
+        headers
+      end
+
     Enum.reduce(headers, conn, fn {key, value}, conn -> put_resp_header(conn, key, value) end)
   end
+
+  defp facade_json_body(conn, body) when is_binary(body) do
+    if facade_runtime?(conn) do
+      case Jason.decode(body) do
+        {:ok, %{} = decoded} -> {:ok, PublicProjection.gateway_body(decoded)}
+        _invalid -> :passthrough
+      end
+    else
+      :passthrough
+    end
+  end
+
+  defp facade_json_body(_conn, _body), do: :passthrough
+
+  defp project_gateway_body(conn, %{} = body) do
+    if facade_runtime?(conn), do: PublicProjection.gateway_body(body), else: body
+  end
+
+  defp project_gateway_body(_conn, body), do: body
+
+  defp error_body(conn, status, code, message, error) do
+    if facade_runtime?(conn) do
+      IngressPath.protocol(conn)
+      |> FacadeError.body(status, error)
+      |> merge_recovery_error_fields(error)
+    else
+      %{
+        "error" =>
+          Map.merge(
+            %{
+              "message" => message,
+              "type" => "invalid_request_error",
+              "code" => to_string(code),
+              "param" => Map.get(error, :param)
+            },
+            Contracts.recovery_error_fields(error)
+          )
+      }
+    end
+  end
+
+  defp merge_recovery_error_fields(%{"error" => %{} = public_error} = body, error) do
+    case Contracts.recovery_error_fields(error) do
+      recovery when map_size(recovery) > 0 ->
+        Map.put(body, "error", Map.merge(public_error, recovery))
+
+      _recovery ->
+        body
+    end
+  end
+
+  defp merge_recovery_error_fields(body, _error), do: body
+
+  defp facade_runtime?(conn), do: IngressPath.fetch(conn).scope == :runtime
 end

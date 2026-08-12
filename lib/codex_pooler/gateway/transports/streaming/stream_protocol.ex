@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   """
 
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonicalization
+  alias CodexPooler.Gateway.Facade.PublicProjection
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesWebsocket
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser
@@ -73,13 +74,18 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   defdelegate normalize_sse_event_label(label), to: SSEParser
 
   @spec normalize_codex_responses_sse_data(binary()) :: binary()
-  defdelegate normalize_codex_responses_sse_data(data),
-    to: ErrorCanonicalization,
-    as: :normalize_data
+  def normalize_codex_responses_sse_data(data) when is_binary(data) do
+    data
+    |> ErrorCanonicalization.normalize_data()
+    |> project_sse_data()
+  end
 
   @spec normalize_codex_responses_sse_block(binary(), binary()) :: iodata()
-  def normalize_codex_responses_sse_block(block, separator \\ "\n\n"),
-    do: ErrorCanonicalization.normalize_block(block, separator)
+  def normalize_codex_responses_sse_block(block, separator \\ "\n\n") do
+    block
+    |> ErrorCanonicalization.normalize_block(separator)
+    |> PublicProjection.sse_block()
+  end
 
   @spec normalize_terminal_event(String.t() | nil, map()) :: {String.t() | nil, map()}
   defdelegate normalize_terminal_event(event_type, decoded), to: ErrorCanonicalization
@@ -121,11 +127,20 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
     to: ErrorCanonicalization
 
   @spec canonicalize_native_codex_responses_json_message(binary()) :: binary()
-  defdelegate canonicalize_native_codex_responses_json_message(data), to: ErrorCanonicalization
+  def canonicalize_native_codex_responses_json_message(data) when is_binary(data) do
+    data
+    |> ErrorCanonicalization.canonicalize_native_codex_responses_json_message()
+    |> PublicProjection.json_message()
+  end
 
   @spec canonicalize_native_codex_responses_json_message(binary(), map()) :: {binary(), map()}
-  defdelegate canonicalize_native_codex_responses_json_message(data, decoded),
-    to: ErrorCanonicalization
+  def canonicalize_native_codex_responses_json_message(data, decoded)
+      when is_binary(data) and is_map(decoded) do
+    {canonical, canonical_decoded} =
+      ErrorCanonicalization.canonicalize_native_codex_responses_json_message(data, decoded)
+
+    PublicProjection.json_message(canonical, canonical_decoded)
+  end
 
   @spec websocket_error_frame_headers(binary() | map()) :: websocket_frame_headers()
   defdelegate websocket_error_frame_headers(data), to: WebsocketErrorHeaders
@@ -199,4 +214,15 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
 
   @spec valid_json?(term()) :: boolean()
   defdelegate valid_json?(body), to: SSEParser
+
+  defp project_sse_data(data) do
+    case SSEParser.complete_sse_blocks(data, bounded?: false) do
+      {[], _buffer} ->
+        data |> PublicProjection.sse_block() |> IO.iodata_to_binary()
+
+      {blocks, buffer} ->
+        [Enum.map(blocks, &PublicProjection.sse_block([&1, "\n\n"])), buffer]
+        |> IO.iodata_to_binary()
+    end
+  end
 end

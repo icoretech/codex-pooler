@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesWebsocket do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Facade.PublicProjection
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
 
@@ -22,7 +23,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
 
         case PublicResponsesSequence.normalize(event_type, decoded, state, :websocket) do
           {:emit, type, normalized, state} ->
-            normalized = PublicResponses.normalize_terminal_errors(type, normalized)
+            normalized =
+              normalized
+              |> then(&PublicResponses.normalize_terminal_errors(type, &1))
+              |> PublicProjection.responses_event()
+
             {:push, Jason.encode!(normalized), state}
 
           {:drop, state} ->

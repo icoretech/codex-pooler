@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   """
 
   alias CodexPooler.Gateway.Contracts
+  alias CodexPooler.Gateway.Facade.PublicProjection
   alias CodexPooler.Gateway.OpenAICompatibility.Responses
   alias CodexPooler.Gateway.Payloads.PayloadNormalizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -43,17 +44,17 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   end
 
   def deliver_result(%{websocket_messages: messages}, push_frame) do
-    Enum.each(messages, fn message -> push_frame.(Jason.encode!(message)) end)
+    Enum.each(messages, fn message -> push_frame.(public_websocket_message(message)) end)
     :ok
   end
 
   def deliver_result(%{raw_body: body}, push_frame) do
-    push_frame.(body)
+    push_frame.(PublicProjection.json_message(body))
     :ok
   end
 
   def deliver_result(%{body: body}, push_frame) do
-    push_frame.(Jason.encode!(body))
+    push_frame.(body |> PublicProjection.gateway_body() |> Jason.encode!())
     :ok
   end
 
@@ -121,10 +122,17 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
          %RequestOptions{openai_compatibility: %{custom_tool_namespaces: namespaces}}
        )
        when is_function(push_frame, 1) and map_size(namespaces) > 0 do
-    fn data -> push_frame.(restore_custom_tool_call_namespaces(data, namespaces)) end
+    fn data ->
+      data
+      |> restore_custom_tool_call_namespaces(namespaces)
+      |> PublicProjection.json_message()
+      |> push_frame.()
+    end
   end
 
-  defp namespace_restoring_writer(push_frame, %RequestOptions{}), do: push_frame
+  defp namespace_restoring_writer(push_frame, %RequestOptions{}) do
+    fn data -> data |> PublicProjection.json_message() |> push_frame.() end
+  end
 
   defp restore_custom_tool_call_namespaces(data, namespaces) do
     case Jason.decode(data) do
@@ -218,7 +226,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
         {canonical, _decoded} =
           StreamProtocol.canonicalize_codex_responses_json_message(data, decoded)
 
-        [canonical]
+        [PublicProjection.json_message(canonical)]
 
       {:ok, _decoded} ->
         [data]
@@ -234,7 +242,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
         {canonical, _decoded} =
           StreamProtocol.canonicalize_codex_responses_json_message(data, decoded)
 
-        [canonical]
+        [PublicProjection.json_message(canonical)]
 
       {:ok, _decoded} ->
         [data]
@@ -310,4 +318,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   end
 
   defp continuity_ordered_payload(_payload), do: false
+
+  defp public_websocket_message(%{} = message) do
+    message |> PublicProjection.gateway_body() |> Jason.encode!()
+  end
+
+  defp public_websocket_message(message) when is_binary(message),
+    do: PublicProjection.json_message(message)
+
+  defp public_websocket_message(message), do: Jason.encode!(message)
 end

@@ -27,6 +27,24 @@ defmodule CodexPooler.Gateway.Facade.Error do
     unsupported_media_type
   )
 
+  @safe_protocol_codes ~w(
+    previous_response_not_found
+    stream_incomplete
+    upstream_request_timeout
+    server_error
+    upstream_error
+    context_length_exceeded
+    overloaded_error
+    server_is_overloaded
+    websocket_connection_limit_reached
+    rate_limit_exceeded
+    upstream_websocket_terminal_failure
+    upstream_request_failed
+    websocket_request_failed
+  )
+
+  @previous_response_not_found_message "Previous response was not found. Retrying the full request."
+
   @spec body(protocol(), pos_integer(), map()) :: map()
   def body(:ollama, status, error) do
     %{"error" => public_message(status, error)}
@@ -74,6 +92,12 @@ defmodule CodexPooler.Gateway.Facade.Error do
       code == "unsupported_endpoint" ->
         "Endpoint is not supported"
 
+      code == "previous_response_not_found" ->
+        @previous_response_not_found_message
+
+      code in @safe_protocol_codes ->
+        generic_message(status)
+
       code in @local_message_codes ->
         local_message(error, generic_message(status))
 
@@ -92,16 +116,23 @@ defmodule CodexPooler.Gateway.Facade.Error do
       code == "facade_model_unavailable" -> code
       code == "unsupported_endpoint" -> code
       code in @local_message_codes -> code
+      code in @safe_protocol_codes -> code
       true -> generic_code(status)
     end
   end
 
   defp normalized_code(%{code: code}) when is_atom(code), do: Atom.to_string(code)
   defp normalized_code(%{code: code}) when is_binary(code), do: code
+  defp normalized_code(%{"code" => code}) when is_atom(code), do: Atom.to_string(code)
+  defp normalized_code(%{"code" => code}) when is_binary(code), do: code
   defp normalized_code(_error), do: "request_failed"
 
   defp local_message(%{message: message}, _fallback) when is_binary(message) and message != "",
     do: message
+
+  defp local_message(%{"message" => message}, _fallback)
+       when is_binary(message) and message != "",
+       do: message
 
   defp local_message(_error, fallback), do: fallback
 

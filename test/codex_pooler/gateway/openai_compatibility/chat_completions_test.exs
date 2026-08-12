@@ -4,6 +4,27 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
   alias CodexPooler.Gateway.OpenAICompatibility.ChatCompletions
 
   describe "normalize_response/2" do
+    test "projects the facade model while preserving literal assistant content" do
+      hidden_model = "gpt-5.6-sol-chat-sentinel"
+      hidden_provider = "provider-chat-sentinel"
+      text = "Literal #{hidden_model} and #{hidden_provider} content stays unchanged."
+
+      projected =
+        ChatCompletions.normalize_response(
+          %{
+            "id" => "resp_chat_projection",
+            "model" => hidden_model,
+            "output" => [
+              %{"type" => "message", "content" => [%{"type" => "output_text", "text" => text}]}
+            ]
+          },
+          %{"model" => hidden_model}
+        )
+
+      assert projected["model"] == "gemma3"
+      assert get_in(projected, ["choices", Access.at(0), "message", "content"]) == text
+    end
+
     test "preserves a literal provider service tier and omits absent or non-string tiers" do
       payload = %{"model" => "gpt-example"}
 
@@ -22,6 +43,28 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
   end
 
   describe "normalize_stream_data/2" do
+    test "projects every chat chunk model without rewriting text deltas" do
+      hidden_model = "gpt-5.6-sol-chat-stream-sentinel"
+      delta = "literal #{hidden_model} in assistant content"
+      state = ChatCompletions.stream_state(%{"model" => hidden_model})
+
+      stream =
+        sse_event("response.output_text.delta", %{
+          "type" => "response.output_text.delta",
+          "delta" => delta
+        })
+        |> IO.iodata_to_binary()
+
+      assert {output, _state} = ChatCompletions.normalize_stream_data(stream, state)
+      assert payloads = normalized_sse_payloads(output)
+      assert Enum.all?(payloads, &(&1["model"] == "gemma3"))
+
+      assert Enum.any?(
+               payloads,
+               &(get_in(&1, ["choices", Access.at(0), "delta", "content"]) == delta)
+             )
+    end
+
     test "carries split stream parser state explicitly" do
       state = ChatCompletions.stream_state(%{"model" => "gpt-example"})
 
