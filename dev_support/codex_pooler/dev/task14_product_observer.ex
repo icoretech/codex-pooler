@@ -4,7 +4,7 @@ defmodule CodexPooler.Dev.Task14ProductObserver do
 
   The observer is disabled until explicitly armed. It retains only clear,
   bounded technical correlators, fixed route/mode/status values, event counts,
-  and a short hash of the upstream response identifier. Payloads, frame bytes,
+  and short hashes of upstream response identifiers. Payloads, frame bytes,
   prompts, tokens, and credentials are never part of the telemetry contract.
   """
 
@@ -18,6 +18,7 @@ defmodule CodexPooler.Dev.Task14ProductObserver do
   # of 8 dropped the whole second lane. 64 keeps ~4x that headroom and still
   # serves well under the consumer's 64 KiB capture-document limit.
   @max_requests 64
+  @max_response_fingerprints 16
   @max_delta_count 10_000
   @bounded_id ~r/^[A-Za-z0-9_.:-]{1,120}$/
   @response_fingerprint ~r/^[0-9a-f]{12}$/
@@ -111,7 +112,8 @@ defmodule CodexPooler.Dev.Task14ProductObserver do
           "route" => observation.route,
           "mode" => observation.mode,
           "providerDeltaCount" => 0,
-          "downstreamDeltaCount" => 0
+          "downstreamDeltaCount" => 0,
+          "responses" => []
         })
 
       Map.put(state, request_id, merge(existing, observation))
@@ -124,8 +126,11 @@ defmodule CodexPooler.Dev.Task14ProductObserver do
     |> poison_mismatched_binding("attemptId", observation.attempt_id)
     |> poison_mismatched_binding("route", observation.route)
     |> poison_mismatched_binding("mode", observation.mode)
-    |> merge_response_fingerprint(observation.response_fingerprint)
-    |> merge_event(observation.direction, observation.event_type)
+    |> merge_event(
+      observation.direction,
+      observation.event_type,
+      observation.response_fingerprint
+    )
   end
 
   defp poison_mismatched_binding(entry, key, observed) do
@@ -136,17 +141,7 @@ defmodule CodexPooler.Dev.Task14ProductObserver do
     end
   end
 
-  defp merge_response_fingerprint(entry, nil), do: entry
-
-  defp merge_response_fingerprint(entry, observed) do
-    case Map.fetch(entry, "responseFingerprint") do
-      :error -> Map.put(entry, "responseFingerprint", observed)
-      {:ok, ^observed} -> entry
-      {:ok, _different_or_poisoned} -> Map.put(entry, "responseFingerprint", nil)
-    end
-  end
-
-  defp merge_event(entry, direction, "response.output_text.delta") do
+  defp merge_event(entry, direction, "response.output_text.delta", _response_fingerprint) do
     key = delta_count_key(direction)
 
     Map.update(entry, key, 1, fn
@@ -155,11 +150,47 @@ defmodule CodexPooler.Dev.Task14ProductObserver do
     end)
   end
 
-  defp merge_event(entry, :provider_to_pooler, "response.completed"),
-    do: Map.put(entry, "providerStatus", "completed")
+  defp merge_event(entry, direction, "response.completed", response_fingerprint),
+    do: merge_response_terminal(entry, direction, response_fingerprint)
 
-  defp merge_event(entry, :pooler_to_codex, "response.completed"),
-    do: Map.put(entry, "downstreamStatus", "delivered")
+  defp merge_response_terminal(entry, _direction, nil), do: entry
+
+  defp merge_response_terminal(entry, direction, response_fingerprint) do
+    case Map.fetch(entry, "responses") do
+      {:ok, responses} when is_list(responses) ->
+        case Enum.find_index(responses, &(&1["responseFingerprint"] == response_fingerprint)) do
+          nil when length(responses) < @max_response_fingerprints ->
+            response = response_terminal(response_fingerprint, direction)
+
+            Map.put(
+              entry,
+              "responses",
+              Enum.sort_by([response | responses], & &1["responseFingerprint"])
+            )
+
+          nil ->
+            Map.put(entry, "responses", nil)
+
+          index ->
+            Map.update!(entry, "responses", fn current ->
+              List.update_at(
+                current,
+                index,
+                &Map.merge(&1, response_terminal(response_fingerprint, direction))
+              )
+            end)
+        end
+
+      _poisoned_or_invalid ->
+        Map.put(entry, "responses", nil)
+    end
+  end
+
+  defp response_terminal(response_fingerprint, :provider_to_pooler),
+    do: %{"responseFingerprint" => response_fingerprint, "providerStatus" => "completed"}
+
+  defp response_terminal(response_fingerprint, :pooler_to_codex),
+    do: %{"responseFingerprint" => response_fingerprint, "downstreamStatus" => "delivered"}
 
   defp delta_count_key(:provider_to_pooler), do: "providerDeltaCount"
   defp delta_count_key(:pooler_to_codex), do: "downstreamDeltaCount"

@@ -26,13 +26,17 @@ defmodule CodexPooler.Dev.Task14ProductObserverTest do
                "clientRequestId" => "client-1",
                "requestId" => "request-1",
                "attemptId" => "attempt-1",
-               "responseFingerprint" => "a1b2c3d4e5f6",
                "route" => "backend_websocket",
                "mode" => "full",
                "providerDeltaCount" => 1,
                "downstreamDeltaCount" => 1,
-               "providerStatus" => "completed",
-               "downstreamStatus" => "delivered"
+               "responses" => [
+                 %{
+                   "downstreamStatus" => "delivered",
+                   "providerStatus" => "completed",
+                   "responseFingerprint" => "a1b2c3d4e5f6"
+                 }
+               ]
              }
            } = Task14ProductObserver.captures()
 
@@ -42,21 +46,25 @@ defmodule CodexPooler.Dev.Task14ProductObserverTest do
     refute served.resp_body =~ "secret-token"
   end
 
-  test "poisons mismatched response fingerprints and unmatched terminal directions" do
+  test "keeps terminal directions scoped to their response fingerprints" do
     :ok = Task14ProductObserver.arm()
     emit(:provider_to_pooler, "response.completed", response_fingerprint: "a1b2c3d4e5f6")
     emit(:pooler_to_codex, "response.completed", response_fingerprint: "f6e5d4c3b2a1")
 
     assert %{"request-1" => entry} = Task14ProductObserver.captures()
-    assert entry["responseFingerprint"] == nil
-    assert entry["providerStatus"] == "completed"
-    assert entry["downstreamStatus"] == "delivered"
+
+    assert entry["responses"] == [
+             %{"providerStatus" => "completed", "responseFingerprint" => "a1b2c3d4e5f6"},
+             %{"downstreamStatus" => "delivered", "responseFingerprint" => "f6e5d4c3b2a1"}
+           ]
 
     :ok = Task14ProductObserver.arm()
     emit(:provider_to_pooler, "response.completed", response_fingerprint: "a1b2c3d4e5f6")
     assert %{"request-1" => unmatched} = Task14ProductObserver.captures()
-    assert unmatched["providerStatus"] == "completed"
-    refute Map.has_key?(unmatched, "downstreamStatus")
+
+    assert unmatched["responses"] == [
+             %{"providerStatus" => "completed", "responseFingerprint" => "a1b2c3d4e5f6"}
+           ]
   end
 
   test "poisons a terminal fingerprint joined across different attempts" do
@@ -70,7 +78,38 @@ defmodule CodexPooler.Dev.Task14ProductObserverTest do
 
     assert %{"request-1" => crossed} = Task14ProductObserver.captures()
     assert crossed["attemptId"] == nil
-    assert crossed["responseFingerprint"] == "a1b2c3d4e5f6"
+
+    assert crossed["responses"] == [
+             %{
+               "downstreamStatus" => "delivered",
+               "providerStatus" => "completed",
+               "responseFingerprint" => "a1b2c3d4e5f6"
+             }
+           ]
+  end
+
+  test "retains every terminal response of one gateway request" do
+    :ok = Task14ProductObserver.arm()
+
+    for response_fingerprint <- ["a1b2c3d4e5f6", "f6e5d4c3b2a1"] do
+      emit(:provider_to_pooler, "response.completed", response_fingerprint: response_fingerprint)
+      emit(:pooler_to_codex, "response.completed", response_fingerprint: response_fingerprint)
+    end
+
+    assert %{"request-1" => entry} = Task14ProductObserver.captures()
+
+    assert entry["responses"] == [
+             %{
+               "downstreamStatus" => "delivered",
+               "providerStatus" => "completed",
+               "responseFingerprint" => "a1b2c3d4e5f6"
+             },
+             %{
+               "downstreamStatus" => "delivered",
+               "providerStatus" => "completed",
+               "responseFingerprint" => "f6e5d4c3b2a1"
+             }
+           ]
   end
 
   test "retains every request of a real multi-turn round and still bounds the window" do
@@ -109,8 +148,17 @@ defmodule CodexPooler.Dev.Task14ProductObserverTest do
       response_fingerprint: "a1b2c3d4e5f6"
     )
 
-    assert bounded |> Map.fetch!("round-request-1") |> Map.get("downstreamStatus") == nil
-    assert Task14ProductObserver.captures()["round-request-1"]["downstreamStatus"] == "delivered"
+    assert bounded |> Map.fetch!("round-request-1") |> Map.get("responses") == [
+             %{"providerStatus" => "completed", "responseFingerprint" => "a1b2c3d4e5f6"}
+           ]
+
+    assert Task14ProductObserver.captures()["round-request-1"]["responses"] == [
+             %{
+               "downstreamStatus" => "delivered",
+               "providerStatus" => "completed",
+               "responseFingerprint" => "a1b2c3d4e5f6"
+             }
+           ]
   end
 
   test "is disabled by default and disarm clears the store" do
