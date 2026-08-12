@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
 
   alias CodexPoolerWeb.Admin.AvatarComponents
   alias CodexPoolerWeb.Admin.BadgeComponents, as: AdminBadges
+  alias CodexPoolerWeb.Admin.Components, as: AdminComponents
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting, as: ResetFormatting
   alias CodexPoolerWeb.Admin.UpstreamCockpitComponents.Formatting
   alias CodexPoolerWeb.Admin.UpstreamCockpitReadModel
@@ -96,17 +97,28 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Summary do
                 <.icon name="hero-clipboard-document" class="copy-icon size-3.5" />
               </button>
             </span>
-            <a
+            <div
               :if={@flow.device.verification_uri}
-              id="upstream-cockpit-relink-verification-link"
-              href={@flow.device.verification_uri}
-              target="_blank"
-              rel="noopener noreferrer"
-              class="inline-flex items-center gap-1 text-xs font-semibold text-info hover:underline"
+              class="flex min-w-0 items-center gap-1"
             >
-              <span>Open verification page</span>
-              <.icon name="hero-arrow-top-right-on-square" class="size-3" />
-            </a>
+              <a
+                id="upstream-cockpit-relink-verification-link"
+                href={@flow.device.verification_uri}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="inline-flex min-w-0 items-center gap-1 text-xs font-semibold text-info hover:underline"
+              >
+                <span>Open verification page</span>
+                <.icon name="hero-arrow-top-right-on-square" class="size-3 shrink-0" />
+              </a>
+              <AdminComponents.clipboard_button
+                id="upstream-cockpit-relink-copy-verification-url"
+                copy_text={@flow.device.verification_uri}
+                aria_label="Copy device verification URL"
+                class="btn btn-ghost btn-xs btn-square text-base-content/45 hover:text-base-content"
+                icon_class="size-3.5"
+              />
+            </div>
           </div>
         </.relink_step>
         <.relink_step

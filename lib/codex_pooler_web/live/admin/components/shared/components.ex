@@ -902,6 +902,32 @@ defmodule CodexPoolerWeb.Admin.Components do
   end
 
   attr :id, :string, required: true
+  attr :copy_text, :string, required: true
+  attr :aria_label, :string, required: true
+  attr :class, :any, default: "btn btn-square size-10 shrink-0"
+  attr :icon_class, :any, default: "size-4"
+
+  def clipboard_button(assigns) do
+    ~H"""
+    <button
+      id={@id}
+      type="button"
+      class={@class}
+      phx-hook="ClipboardCopy"
+      phx-update="ignore"
+      data-copy-text={@copy_text}
+      data-copy-label="Copy"
+      data-copied-label="Copied"
+      aria-label={@aria_label}
+      title={@aria_label}
+    >
+      <.icon name="hero-clipboard-document" class={["copy-icon", @icon_class]} />
+      <span data-copy-label class="sr-only" aria-live="polite" aria-atomic="true">Copy</span>
+    </button>
+    """
+  end
+
+  attr :id, :string, required: true
   attr :icon, :string, default: nil
   attr :label, :string, required: true
   attr :type, :string, default: "button"

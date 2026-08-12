@@ -80,6 +80,38 @@ defmodule CodexPooler.Upstreams.OAuthDeviceLinkingTest do
            }
   end
 
+  test "nested provider pending response keeps the device flow polling" do
+    scope = fixture_owner_scope()
+    pool = pool_fixture()
+
+    start_provider!(
+      device_routes(%{
+        "/api/accounts/deviceauth/token" =>
+          {403,
+           %{
+             "error" => %{
+               "message" => "Device authorization is pending. Please try again.",
+               "type" => "invalid_request_error",
+               "code" => "deviceauth_authorization_pending"
+             }
+           }}
+      })
+    )
+
+    assert {:ok, %{flow: flow}} = Upstreams.start_device_oauth(scope, pool)
+    assert flow.interval_seconds == 5
+
+    assert {:ok, %{status: :pending, flow: pending}} =
+             Upstreams.poll_device_oauth(scope, flow.id)
+
+    assert pending.status == "pending"
+    assert pending.interval_seconds == 5
+    assert DateTime.diff(pending.poll_after_at, pending.last_polled_at, :second) in 4..5
+    assert Repo.aggregate(UpstreamIdentity, :count) == 0
+    assert Repo.aggregate(PoolUpstreamAssignment, :count) == 0
+    assert Repo.aggregate(EncryptedSecret, :count) == 0
+  end
+
   test "slow_down device poll increases interval and schedules the next poll later" do
     scope = fixture_owner_scope()
     pool = pool_fixture()

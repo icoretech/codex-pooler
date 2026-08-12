@@ -324,6 +324,65 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
 
       assert [_request] = FakeOpenAIAuthProvider.requests(slow_down_provider)
     end
+
+    test "nested device-code pending responses retain the configured poll interval" do
+      raw_provider_value = "raw-nested-device-error-must-not-leak"
+
+      provider =
+        start_provider!(%{
+          "/api/accounts/deviceauth/token" =>
+            {403,
+             %{
+               "error" => %{
+                 "message" => raw_provider_value,
+                 "type" => "invalid_request_error",
+                 "code" => "deviceauth_authorization_pending"
+               }
+             }}
+        })
+
+      assert {:error,
+              %{
+                code: :codex_device_authorization_pending,
+                message: "Codex device authorization is still pending",
+                retry_after_seconds: 7,
+                status: 200
+              } = error} =
+               CodexAuth.poll_device_authorization(%{
+                 "device_auth_id" => "device-auth-nested-pending",
+                 "user_code" => "NESTED",
+                 "poll_interval_seconds" => 7
+               })
+
+      refute inspect(error) =~ raw_provider_value
+      assert [_request] = FakeOpenAIAuthProvider.requests(provider)
+    end
+
+    test "404 device-code responses retain the configured poll interval" do
+      raw_provider_value = "raw-not-found-device-error-must-not-leak"
+
+      provider =
+        start_provider!(%{
+          "/api/accounts/deviceauth/token" =>
+            {404, %{"error" => %{"message" => raw_provider_value}}}
+        })
+
+      assert {:error,
+              %{
+                code: :codex_device_authorization_pending,
+                message: "Codex device authorization is still pending",
+                retry_after_seconds: 9,
+                status: 200
+              } = error} =
+               CodexAuth.poll_device_authorization(%{
+                 "device_auth_id" => "device-auth-not-found-pending",
+                 "user_code" => "NOT-FOUND",
+                 "poll_interval_seconds" => 9
+               })
+
+      refute inspect(error) =~ raw_provider_value
+      assert [_request] = FakeOpenAIAuthProvider.requests(provider)
+    end
   end
 
   describe "refresh-token OAuth protocol" do

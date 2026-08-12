@@ -1183,6 +1183,14 @@ control.
   navigation attr. Primary buttons keep the inset top highlight and a
   `focus-visible` orange outline (CSS in `app.css`); disabled goes flat
   `base-300` with `cursor-not-allowed`.
+- **`clipboard_button/1`:** the shared square copy action for values shown
+  beside a primary link or compact data field. It composes the neutral daisyUI
+  button recipe, `ClipboardCopy` hook, clipboard/check icon swap, and an
+  `aria-live` screen-reader label that changes from Copy to Copied. Call sites
+  provide the stable id, safe copy value, and explicit accessible name; compact
+  surfaces may override only the button and icon sizing classes. The component
+  ignores LiveView patches so polling cannot erase transient copied feedback.
+  Copy controls never replace the visible value or destination link.
 - **Flash / toast** (`flash_group/1` in layouts.ex, `flash/1` in
   [`core_components.ex`](lib/codex_pooler_web/components/core_components.ex)):
   `toast toast-top toast-end z-50` stack, `aria-live="polite"`; each flash is

@@ -55,16 +55,23 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
             :if={oauth_relink_browser_flow?(@oauth_relink_flow, @oauth_relink_authorization_url)}
             class="grid gap-4 rounded-lg border border-base-300 bg-base-200/40 p-4"
           >
-            <a
-              id="oauth-relink-authorization-url"
-              href={@oauth_relink_authorization_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              class="btn btn-primary w-full justify-start gap-2 text-left"
-            >
-              <.icon name="hero-arrow-top-right-on-square" class="size-4 shrink-0" />
-              <span class="truncate">Open OpenAI authorization</span>
-            </a>
+            <div class="flex min-w-0 items-stretch gap-2">
+              <a
+                id="oauth-relink-authorization-url"
+                href={@oauth_relink_authorization_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="btn btn-primary min-w-0 flex-1 justify-start gap-2 text-left"
+              >
+                <.icon name="hero-arrow-top-right-on-square" class="size-4 shrink-0" />
+                <span class="truncate">Open OpenAI authorization</span>
+              </a>
+              <AdminComponents.clipboard_button
+                id="oauth-relink-authorization-url-copy"
+                copy_text={@oauth_relink_authorization_url}
+                aria_label="Copy OpenAI authorization URL"
+              />
+            </div>
 
             <.form
               id="oauth-relink-callback-form"
@@ -109,19 +116,37 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
               <p class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
                 Device code
               </p>
-              <p class="font-mono text-2xl font-bold tracking-widest text-base-content">
-                {@oauth_relink_flow.device_user_code}
-              </p>
+              <div class="flex min-w-0 items-center gap-2">
+                <p class="min-w-0 flex-1 break-all font-mono text-2xl font-bold tracking-widest text-base-content">
+                  {@oauth_relink_flow.device_user_code}
+                </p>
+                <AdminComponents.clipboard_button
+                  id="oauth-relink-device-code-copy"
+                  copy_text={@oauth_relink_flow.device_user_code}
+                  aria_label="Copy device code"
+                />
+              </div>
             </div>
-            <a
+            <div
               :if={@oauth_relink_flow.verification_uri}
-              href={@oauth_relink_flow.verification_uri}
-              target="_blank"
-              rel="noopener noreferrer"
-              class="link link-primary break-all text-sm"
+              class="flex min-w-0 items-stretch gap-2"
             >
-              {@oauth_relink_flow.verification_uri}
-            </a>
+              <a
+                id="oauth-relink-device-verification-url"
+                href={@oauth_relink_flow.verification_uri}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={@oauth_relink_flow.verification_uri}
+                class="link link-primary min-w-0 flex-1 self-center truncate text-sm"
+              >
+                {@oauth_relink_flow.verification_uri}
+              </a>
+              <AdminComponents.clipboard_button
+                id="oauth-relink-device-verification-url-copy"
+                copy_text={@oauth_relink_flow.verification_uri}
+                aria_label="Copy device verification URL"
+              />
+            </div>
           </section>
         </div>
 
