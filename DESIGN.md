@@ -1148,6 +1148,26 @@ trigger, and the policy mode cards above — follows the radio-less selection
 card contract ([Selection card](#selection-card-radio-less-choice-card)). Only multi-select checkbox cards keep a visible
 control.
 
+### OAuth browser handoff dialog
+
+- **Source:** `browser_authorization_step/1` in
+  [`oauth_dialog_components.ex`](lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex),
+  composed by the upstream link and cockpit relink dialogs.
+- **Anatomy:** one compact modal panel with a neutral pending `role="status"`
+  row and two ordered, flat steps separated by a hairline. Step 1 owns the
+  only orange action in the panel (`Open authorization page`) plus the labeled
+  neutral `Copy link` action. Step 2 explains where to find the callback URL,
+  then presents the required URL input and a right-aligned secondary completion
+  action. Do not wrap the steps in another card or render pending as a success
+  alert.
+- **Responsive behavior:** the step marker remains in a fixed 2rem column.
+  Open and copy actions share one row from `sm`; below `sm` they stack at full
+  width. The callback field always owns the available step width.
+- **Contract:** preserve the existing `oauth-link-*` and `oauth-relink-*`
+  ids. The visible copy label must expose the cross-browser handoff without
+  removing the destination link. The callback input is `required`, described
+  by adjacent help text, and keeps browser-native URL validation.
+
 ### Filters, empty state, notices, buttons, flash, theme toggle
 
 - **`filter_form/1`** (shared components.ex): a `.form` with
@@ -1183,14 +1203,16 @@ control.
   navigation attr. Primary buttons keep the inset top highlight and a
   `focus-visible` orange outline (CSS in `app.css`); disabled goes flat
   `base-300` with `cursor-not-allowed`.
-- **`clipboard_button/1`:** the shared square copy action for values shown
-  beside a primary link or compact data field. It composes the neutral daisyUI
+- **`clipboard_button/1`:** the shared copy action for values shown beside a
+  destination link or compact data field. It composes the neutral daisyUI
   button recipe, `ClipboardCopy` hook, clipboard/check icon swap, and an
-  `aria-live` screen-reader label that changes from Copy to Copied. Call sites
-  provide the stable id, safe copy value, and explicit accessible name; compact
-  surfaces may override only the button and icon sizing classes. The component
-  ignores LiveView patches so polling cannot erase transient copied feedback.
-  Copy controls never replace the visible value or destination link.
+  `aria-live` label that changes to Copied. The default `Copy` label is
+  screen-reader-only for square compact controls; handoff workflows may supply
+  a visible label such as `Copy link`. Call sites provide the stable id, safe
+  copy value, and explicit accessible name, and may override button/icon sizing
+  classes without replacing the hook contract. The component ignores LiveView
+  patches so polling cannot erase transient copied feedback. Copy controls
+  never replace the visible value or destination link.
 - **Flash / toast** (`flash_group/1` in layouts.ex, `flash/1` in
   [`core_components.ex`](lib/codex_pooler_web/components/core_components.ex)):
   `toast toast-top toast-end z-50` stack, `aria-live="polite"`; each flash is

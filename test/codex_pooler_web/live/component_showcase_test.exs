@@ -8,6 +8,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
   @dev_routes Application.compile_env(:codex_pooler, :dev_routes, false)
   @showcase_route "/dev/component-showcase/:theme"
   @states ~w(loading empty stale error)
+  @oauth_browser_authorization_url "https://auth.example.com/oauth/authorize?client_id=dev-component-showcase&response_type=code&state=synthetic-review-state"
 
   @tag :saved_reset_redemption_cause
   test "isolated showcase renders real primitives and required states in both themes" do
@@ -131,6 +132,39 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
         assert has_element?(view, selector)
       end
     end
+  end
+
+  test "browser OAuth review state renders the real pending link dialog with synthetic data" do
+    {:ok, view, html} = mount_showcase("light", "oauth-browser-dialog")
+
+    assert has_element?(view, "#showcase-oauth-browser-dialog-fixture")
+    assert has_element?(view, "#oauth-link-dialog[open]", "Link OpenAI account")
+
+    assert has_element?(
+             view,
+             "#oauth-link-status[data-role='oauth-pending-status'][role='status']",
+             "Browser authorization pending"
+           )
+
+    assert has_element?(view, "#oauth-link-authorization-step", "Authorize with OpenAI")
+    assert has_element?(view, "#oauth-link-callback-step", "Paste the callback URL")
+    assert has_element?(view, "#oauth-link-callback-form")
+    assert has_element?(view, "#oauth-link-callback-url[required][aria-describedby]")
+    assert has_element?(view, "#oauth-link-submit-callback.btn-secondary", "Complete link")
+    assert has_element?(view, "#oauth-link-cancel.btn-ghost", "Cancel")
+
+    assert has_element?(
+             view,
+             ~s(#oauth-link-authorization-url[href="#{@oauth_browser_authorization_url}"])
+           )
+
+    assert has_element?(
+             view,
+             ~s(#oauth-link-authorization-url-copy[phx-hook="ClipboardCopy"][phx-update="ignore"][data-copy-text="#{@oauth_browser_authorization_url}"]),
+             "Copy link"
+           )
+
+    assert unique_ids?(html)
   end
 
   test "the real flash group inherits the selected showcase theme boundary" do

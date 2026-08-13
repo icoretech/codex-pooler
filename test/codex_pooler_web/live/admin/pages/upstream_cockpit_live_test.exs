@@ -902,14 +902,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     |> render_click()
 
     assert has_element?(view, "#oauth-relink-authorization-url")
+    assert has_element?(view, "#oauth-relink-authorization-step", "Authorize with OpenAI")
     assert has_element?(view, "#oauth-relink-callback-url")
+    assert has_element?(view, "#oauth-relink-callback-step", "Paste the callback URL")
     assert has_element?(view, "#oauth-relink-submit-callback")
 
     authorization_url = oauth_relink_authorization_url_from_view(view)
 
     assert has_element?(
              view,
-             ~s(#oauth-relink-authorization-url-copy[phx-hook="ClipboardCopy"][phx-update="ignore"][data-copy-text="#{authorization_url}"][aria-label="Copy OpenAI authorization URL"])
+             ~s(#oauth-relink-authorization-url-copy[phx-hook="ClipboardCopy"][phx-update="ignore"][data-copy-text="#{authorization_url}"][aria-label="Copy OpenAI authorization URL"]),
+             "Copy link"
            )
 
     callback_url = callback_url(authorization_state(authorization_url), "cockpit-browser-code")

@@ -3,6 +3,8 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
 
   use CodexPoolerWeb, :live_view
 
+  alias CodexPoolerWeb.Admin.UpstreamPageComponents
+
   alias CodexPoolerWeb.Dev.{
     ComponentShowcase,
     ComponentShowcaseCatalog,
@@ -10,7 +12,9 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
     ComponentShowcaseStats
   }
 
-  @review_states ~w(catalog flash policy-dialog request-drawer)
+  @review_states ~w(catalog flash oauth-browser-dialog policy-dialog request-drawer)
+
+  @oauth_browser_authorization_url "https://auth.example.com/oauth/authorize?client_id=dev-component-showcase&response_type=code&state=synthetic-review-state"
 
   def component_contract, do: ComponentShowcaseCatalog.entries()
   def render_contracts, do: Map.new([ComponentShowcaseStats.contract()], &{&1.id, &1})
@@ -26,7 +30,14 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
         paused: false,
         review_state: review_state,
         variants: ComponentShowcaseData.primitive_variants(),
-        observatory: ComponentShowcaseData.observatory_presentation()
+        observatory: ComponentShowcaseData.observatory_presentation(),
+        oauth_link_form:
+          to_form(%{"pool_id" => "dev-component-showcase", "callback_url" => ""},
+            as: :oauth_link
+          ),
+        oauth_link_flow: %{flow_kind: "browser", status: "pending"},
+        oauth_link_authorization_url: @oauth_browser_authorization_url,
+        oauth_link_result: %{message: "Browser authorization pending"}
       )
       |> select_review_state(review_state)
 
@@ -54,6 +65,9 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
     {:noreply, select_review_state(socket, "catalog")}
   end
 
+  def handle_event("cancel_oauth_link", _params, socket), do: {:noreply, socket}
+  def handle_event("submit_oauth_callback", _params, socket), do: {:noreply, socket}
+
   def handle_event("close_request_log", _params, socket),
     do: {:noreply, select_review_state(socket, "catalog")}
 
@@ -62,7 +76,23 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
     ~H"""
     <div id="showcase-theme-boundary" data-theme={@theme} class="min-h-svh">
       <Layouts.app flash={@flash} chrome={:observatory}>
+        <div
+          :if={@review_state == "oauth-browser-dialog"}
+          id="showcase-oauth-browser-dialog-fixture"
+          class="min-h-svh bg-base-200 text-base-content"
+        >
+          <UpstreamPageComponents.oauth_link_dialog
+            oauth_linking
+            oauth_link_form={@oauth_link_form}
+            oauth_link_flow={@oauth_link_flow}
+            oauth_link_authorization_url={@oauth_link_authorization_url}
+            oauth_link_result={@oauth_link_result}
+            pool_options={[{"Design review Pool", "dev-component-showcase"}]}
+          />
+        </div>
+
         <ComponentShowcase.component_showcase
+          :if={@review_state != "oauth-browser-dialog"}
           theme={@theme}
           paused={@paused}
           review_state={@review_state}

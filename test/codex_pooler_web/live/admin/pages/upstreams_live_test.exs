@@ -1003,14 +1003,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     |> render_click()
 
     assert has_element?(view, "#oauth-link-authorization-url")
+    assert has_element?(view, "#oauth-link-authorization-step", "Authorize with OpenAI")
     assert has_element?(view, "#oauth-link-callback-url")
+    assert has_element?(view, "#oauth-link-callback-step", "Paste the callback URL")
     assert has_element?(view, "#oauth-link-submit-callback")
 
     authorization_url = authorization_url_from_view(view)
 
     assert has_element?(
              view,
-             ~s(#oauth-link-authorization-url-copy[phx-hook="ClipboardCopy"][phx-update="ignore"][data-copy-text="#{authorization_url}"][aria-label="Copy OpenAI authorization URL"])
+             ~s(#oauth-link-authorization-url-copy[phx-hook="ClipboardCopy"][phx-update="ignore"][data-copy-text="#{authorization_url}"][aria-label="Copy OpenAI authorization URL"]),
+             "Copy link"
            )
 
     callback_url =

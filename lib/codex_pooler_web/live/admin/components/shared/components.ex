@@ -904,6 +904,7 @@ defmodule CodexPoolerWeb.Admin.Components do
   attr :id, :string, required: true
   attr :copy_text, :string, required: true
   attr :aria_label, :string, required: true
+  attr :label, :string, default: "Copy"
   attr :class, :any, default: "btn btn-square size-10 shrink-0"
   attr :icon_class, :any, default: "size-4"
 
@@ -916,13 +917,20 @@ defmodule CodexPoolerWeb.Admin.Components do
       phx-hook="ClipboardCopy"
       phx-update="ignore"
       data-copy-text={@copy_text}
-      data-copy-label="Copy"
+      data-copy-label={@label}
       data-copied-label="Copied"
       aria-label={@aria_label}
       title={@aria_label}
     >
       <.icon name="hero-clipboard-document" class={["copy-icon", @icon_class]} />
-      <span data-copy-label class="sr-only" aria-live="polite" aria-atomic="true">Copy</span>
+      <span
+        data-copy-label
+        class={@label == "Copy" && "sr-only"}
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {@label}
+      </span>
     </button>
     """
   end

@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   alias CodexPoolerWeb.Admin.PoolFilterComponents
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting, as: ResetFormatting
   alias CodexPoolerWeb.Admin.UpstreamFilterForm
+  alias CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.SavedResetComponents
@@ -309,14 +310,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   attr :oauth_link_error, :map, default: nil
   attr :pool_options, :list, required: true
 
-  defp oauth_link_dialog(assigns) do
+  def oauth_link_dialog(assigns) do
     assigns =
       assigns
       |> assign(:oauth_docs_url, @oauth_docs_url)
       |> assign(:oauth_dialog_title, oauth_dialog_title(assigns.oauth_link_mode))
       |> assign(
         :oauth_dialog_description,
-        oauth_dialog_description(assigns.oauth_link_mode, assigns.oauth_link_target_account)
+        oauth_dialog_description(
+          assigns.oauth_link_mode,
+          assigns.oauth_link_target_account,
+          assigns.oauth_link_flow
+        )
       )
       |> assign(
         :oauth_callback_submit_label,
@@ -325,19 +330,34 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
 
     ~H"""
     <dialog :if={@oauth_linking} id="oauth-link-dialog" class="modal" open>
-      <div class="modal-box max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
-        <div class="border-b border-base-300 px-6 py-5">
-          <p class="text-sm font-semibold uppercase tracking-wide text-primary">
+      <div class="modal-box max-w-xl border border-base-300 bg-base-100 p-0 shadow-2xl">
+        <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
+          <p class="text-xs font-semibold uppercase tracking-wide text-primary">
             OpenAI OAuth
           </p>
-          <h2 class="mt-1 text-2xl font-bold text-base-content">{@oauth_dialog_title}</h2>
-          <p class="mt-2 text-sm leading-6 text-base-content/70">
+          <h2 class="mt-1 text-xl font-bold text-base-content sm:text-2xl">{@oauth_dialog_title}</h2>
+          <p class="mt-1.5 max-w-xl text-sm leading-5 text-base-content/65">
             {@oauth_dialog_description}
           </p>
         </div>
 
-        <div class="grid gap-5 p-6">
-          <div :if={@oauth_link_result} id="oauth-link-status" class="alert alert-success">
+        <div class="grid gap-5 p-5 sm:p-6">
+          <div
+            :if={@oauth_link_result && oauth_pending_flow?(@oauth_link_flow)}
+            id="oauth-link-status"
+            data-role="oauth-pending-status"
+            role="status"
+            class="flex items-center gap-2 text-sm font-medium text-base-content/65"
+          >
+            <.icon name="hero-clock" class="size-4 shrink-0 text-base-content/45" />
+            <span>{@oauth_link_result.message}</span>
+          </div>
+
+          <div
+            :if={@oauth_link_result && !oauth_pending_flow?(@oauth_link_flow)}
+            id="oauth-link-status"
+            class="alert alert-success"
+          >
             <.icon name="hero-check-circle" class="size-5" />
             <span>{@oauth_link_result.message}</span>
           </div>
@@ -408,60 +428,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
             </div>
           </.form>
 
-          <section
-            :if={oauth_browser_flow?(@oauth_link_flow, @oauth_link_authorization_url)}
-            class="grid gap-4 rounded-lg border border-base-300 bg-base-200/40 p-4"
-          >
-            <div class="flex min-w-0 items-stretch gap-2">
-              <a
-                id="oauth-link-authorization-url"
-                href={@oauth_link_authorization_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                class="btn btn-primary min-w-0 flex-1 justify-start gap-2 text-left"
-              >
-                <.icon name="hero-arrow-top-right-on-square" class="size-4 shrink-0" />
-                <span class="truncate">Open OpenAI authorization</span>
-              </a>
-              <AdminComponents.clipboard_button
-                id="oauth-link-authorization-url-copy"
-                copy_text={@oauth_link_authorization_url}
-                aria_label="Copy OpenAI authorization URL"
-              />
-            </div>
-
-            <.form
-              id="oauth-link-callback-form"
-              for={@oauth_link_form}
-              phx-submit="submit_oauth_callback"
-              autocomplete="off"
-              class="grid gap-3"
-            >
-              <div class="grid gap-2">
-                <label
-                  for="oauth-link-callback-url"
-                  class="text-xs font-semibold uppercase tracking-wide text-base-content/60"
-                >
-                  Callback URL
-                </label>
-                <input
-                  id="oauth-link-callback-url"
-                  name={@oauth_link_form[:callback_url].name}
-                  value=""
-                  type="url"
-                  autocomplete="off"
-                  class="input input-bordered w-full"
-                />
-              </div>
-
-              <AdminComponents.action_button
-                id="oauth-link-submit-callback"
-                icon="hero-check"
-                label={@oauth_callback_submit_label}
-                type="submit"
-                variant={:primary}
-              />
-            </.form>
+          <section :if={oauth_browser_flow?(@oauth_link_flow, @oauth_link_authorization_url)}>
+            <UpstreamOAuthDialogComponents.browser_authorization_step
+              id_prefix="oauth-link"
+              authorization_url={@oauth_link_authorization_url}
+              form={@oauth_link_form}
+              submit_event="submit_oauth_callback"
+              submit_label={@oauth_callback_submit_label}
+            />
           </section>
 
           <section
@@ -514,6 +488,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
               icon="hero-x-mark"
               label={oauth_dialog_dismiss_label(@oauth_link_flow)}
               phx-click="cancel_oauth_link"
+              variant={:ghost}
             />
           </:actions>
         </AdminComponents.dialog_footer>
@@ -981,17 +956,28 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   defp oauth_device_flow?(%{flow_kind: "device", status: "pending"}), do: true
   defp oauth_device_flow?(_flow), do: false
 
+  defp oauth_pending_flow?(%{status: "pending"}), do: true
+  defp oauth_pending_flow?(_flow), do: false
+
   defp oauth_dialog_dismiss_label(%{status: "completed"}), do: "Close"
   defp oauth_dialog_dismiss_label(_flow), do: "Cancel"
 
   defp oauth_dialog_title(:relink), do: "Relink OpenAI account"
   defp oauth_dialog_title(_mode), do: "Link OpenAI account"
 
-  defp oauth_dialog_description(:relink, account) do
+  defp oauth_dialog_description(_mode, _account, %{flow_kind: "browser", status: "pending"}) do
+    "Authorize with OpenAI, then paste the returned callback URL to finish."
+  end
+
+  defp oauth_dialog_description(_mode, _account, %{flow_kind: "device", status: "pending"}) do
+    "Finish the device authorization in your browser. This dialog updates when the account is ready."
+  end
+
+  defp oauth_dialog_description(:relink, account, _flow) do
     "Finish the OpenAI authorization flow to relink #{oauth_target_label(account)}."
   end
 
-  defp oauth_dialog_description(_mode, _account),
+  defp oauth_dialog_description(_mode, _account, _flow),
     do: "Choose a Pool and finish the OpenAI authorization flow."
 
   defp oauth_callback_submit_label(:relink), do: "Complete relink"
