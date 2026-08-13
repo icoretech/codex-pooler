@@ -42,7 +42,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.InstanceSettings
-  alias CodexPooler.InstanceSettings.Cache, as: InstanceSettingsCache
   alias CodexPooler.Pools
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
@@ -222,8 +221,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     setup = gateway_setup(upstream)
     port = start_public_endpoint!()
-    original = InstanceSettings.current()
-    on_exit(fn -> InstanceSettingsCache.put(original) end)
     {conn, websocket, ref} = public_websocket_connect!(port, setup, "ws-firewall-allowed")
 
     try do
@@ -252,8 +249,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   test "a denying locally applied firewall version closes an idle websocket with 1008" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     port = start_public_endpoint!()
-    original = InstanceSettings.current()
-    on_exit(fn -> InstanceSettingsCache.put(original) end)
     {conn, websocket, ref} = public_websocket_connect!(port, setup, "ws-firewall-denied")
 
     try do
@@ -294,8 +289,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     setup = gateway_setup(upstream)
     port = start_public_endpoint!()
-    original = InstanceSettings.current()
-    on_exit(fn -> InstanceSettingsCache.put(original) end)
     {conn, websocket, ref} = public_websocket_connect!(port, setup, "ws-firewall-busy")
 
     try do

@@ -158,6 +158,12 @@ defmodule CodexPooler.InstanceSettings do
   @spec reset_cache_for_test() :: :ok
   def reset_cache_for_test, do: Cache.reset_for_test()
 
+  @spec snapshot_cache_for_test() :: term()
+  def snapshot_cache_for_test, do: Cache.snapshot_for_test()
+
+  @spec restore_cache_for_test(term()) :: :ok
+  def restore_cache_for_test(snapshot), do: Cache.restore_for_test(snapshot)
+
   defp ensure_scoped_settings(%Scope{}), do: ensure_singleton!()
 
   defp do_update(%Settings{} = settings, attrs) when is_map(attrs) do

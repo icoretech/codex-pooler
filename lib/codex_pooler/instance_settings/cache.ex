@@ -47,8 +47,14 @@ defmodule CodexPooler.InstanceSettings.Cache do
   @spec subscribe_applied() :: :ok | {:error, term()}
   def subscribe_applied, do: PubSub.subscribe(@pubsub, @applied_topic)
 
+  @spec snapshot_for_test() :: term()
+  def snapshot_for_test, do: :persistent_term.get(@cache_key, @cache_miss)
+
+  @spec restore_for_test(term()) :: :ok
+  def restore_for_test(snapshot), do: GenServer.call(__MODULE__, {:restore, snapshot})
+
   @spec reset_for_test() :: :ok
-  def reset_for_test, do: GenServer.call(__MODULE__, :reset)
+  def reset_for_test, do: restore_for_test(@cache_miss)
 
   @impl true
   def init(opts) do
@@ -84,15 +90,22 @@ defmodule CodexPooler.InstanceSettings.Cache do
     {:reply, :ok, state}
   end
 
-  def handle_call(:reset, _from, state) do
+  # Restores the published entry verbatim so a caller can hand back exactly what
+  # it captured, including a cold-fallback snapshot that `put/1` would otherwise
+  # relabel as database-backed.
+  def handle_call({:restore, snapshot}, _from, state) do
     state = cancel_timers(state)
-    :persistent_term.erase(@cache_key)
 
-    reset_state =
+    case snapshot do
+      {@cache_version, %Settings{}} -> :persistent_term.put(@cache_key, snapshot)
+      _missing_or_stale -> :persistent_term.erase(@cache_key)
+    end
+
+    restored_state =
       new_state([], state.retry_generation, state.reconciliation_generation)
       |> schedule_reconciliation()
 
-    {:reply, :ok, reset_state}
+    {:reply, :ok, restored_state}
   end
 
   @impl true

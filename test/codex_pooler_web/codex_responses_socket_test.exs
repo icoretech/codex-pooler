@@ -39,8 +39,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   end
 
   test "locally applied allowed settings are a no-op and stale versions are ignored" do
+    snapshot = Cache.snapshot_for_test()
+    on_exit(fn -> Cache.restore_for_test(snapshot) end)
     original = cached_settings()
-    on_exit(fn -> Cache.put(original) end)
 
     allowed = firewall_settings(original, original.lock_version + 1, ["127.0.0.1"])
     :ok = Cache.put(allowed)
@@ -70,10 +71,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
   @tag :capture_log
   test "a locally applied cold-cache snapshot revokes an existing websocket" do
-    original = cached_settings()
-    on_exit(fn -> :persistent_term.put(@cache_key, {@cache_version, original}) end)
+    snapshot = Cache.snapshot_for_test()
+    on_exit(fn -> Cache.restore_for_test(snapshot) end)
     cold = Settings.fallback_default()
-    :persistent_term.put({Cache, :current}, {1, cold})
+    :persistent_term.put(@cache_key, {@cache_version, cold})
 
     assert %Settings{source: :fallback_defaults, db_available?: false} = cold
 
@@ -88,8 +89,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   end
 
   test "idle revocation closes once and later reallow cannot reopen the latch" do
+    snapshot = Cache.snapshot_for_test()
+    on_exit(fn -> Cache.restore_for_test(snapshot) end)
     original = cached_settings()
-    on_exit(fn -> Cache.put(original) end)
     denied = firewall_settings(original, original.lock_version + 1, ["203.0.113.10"])
     :ok = Cache.put(denied)
     state = firewall_socket_state(original.lock_version)
@@ -131,8 +133,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
   @tag :capture_log
   test "busy revocation drains the admitted task, flushes its final frame, and drops queued work" do
+    snapshot = Cache.snapshot_for_test()
+    on_exit(fn -> Cache.restore_for_test(snapshot) end)
     original = cached_settings()
-    on_exit(fn -> Cache.put(original) end)
     denied = firewall_settings(original, original.lock_version + 1, ["203.0.113.10"])
     :ok = Cache.put(denied)
 
@@ -165,8 +168,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
   @tag :capture_log
   test "revoked task DOWN cannot start queued work or close twice" do
+    snapshot = Cache.snapshot_for_test()
+    on_exit(fn -> Cache.restore_for_test(snapshot) end)
     original = cached_settings()
-    on_exit(fn -> Cache.put(original) end)
     denied = firewall_settings(original, original.lock_version + 1, ["203.0.113.10"])
     :ok = Cache.put(denied)
 

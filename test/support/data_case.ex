@@ -17,6 +17,7 @@ defmodule CodexPooler.DataCase do
   use ExUnit.CaseTemplate
 
   alias CodexPooler.Access.APIKeys.TouchDebounce
+  alias CodexPooler.InstanceSettings
   alias CodexPooler.Repo
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -40,12 +41,24 @@ defmodule CodexPooler.DataCase do
 
   @doc """
   Sets up the sandbox based on the test tags.
+
+  The instance settings cache lives in `:persistent_term`, so it survives the
+  sandbox rollback that returns the settings row to its baseline `lock_version`.
+  Handing the published entry back keeps every test's cache consistent with the
+  database it can actually see; otherwise a leaked version makes later tests
+  ignore their own settings broadcasts as stale.
   """
   def setup_sandbox(tags) do
     pid = Sandbox.start_owner!(Repo, shared: not tags[:async])
+    settings_cache = InstanceSettings.snapshot_cache_for_test()
 
     on_exit(fn ->
       TouchDebounce.reset()
+
+      unless InstanceSettings.snapshot_cache_for_test() == settings_cache do
+        InstanceSettings.restore_cache_for_test(settings_cache)
+      end
+
       Sandbox.stop_owner(pid)
     end)
   end
