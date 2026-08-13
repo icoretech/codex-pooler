@@ -733,7 +733,11 @@ pools panel renders per-assignment route chevrons:
   usage shows `? tok/5m`, never a false zero. This stat replaced the old
   binary "Eligible" label: readiness already lives gate-by-gate in the
   route meter below, so the label now says what the assignment is actually
-  doing.
+  doing. For operators with `pool.manage`, the entire assignment block is a
+  permission-aware patch link that opens that Pool's editor in place on the
+  Upstreams step. The block reuses `saved-reset-open-gloss` so hover or keyboard
+  focus sweeps the full clickable area once; reduced-motion users get no sweep.
+  Other operators keep the same block as non-interactive content.
 - The route path is always four gates in this order: **Assignment → Health →
   Quota → Circuit**. The compact account-card segment shortens only the first
   visible label to **Assign**; cockpit segments, the meter's accessible name,
@@ -1116,6 +1120,8 @@ verified live as the orange "Pro" / green "Free" pills.
 
 - **Source:** `policy_editor_dialog/1` in
   [`policy_editor_components.ex`](lib/codex_pooler_web/live/admin/components/shared/policy_editor_components.ex);
+  Pool composition and step panels in
+  [`wizard_components.ex`](lib/codex_pooler_web/live/admin/components/pages/pools/wizard_components.ex);
   API-key composition and step panels in
   [`wizard_components.ex`](lib/codex_pooler_web/live/admin/components/pages/api_keys/wizard_components.ex);
   tab CSS (`policy-editor-tab`, `is-current`, step-marker hover) in `app.css`.
@@ -1133,6 +1139,16 @@ verified live as the orange "Pro" / green "Free" pills.
   content below the fold on tablets.
 - **Step panels:** `role="tabpanel"` sections toggled by `block`/`hidden`
   (state lives server-side in `current_step`).
+- **Pool editor URL state:** `/admin/pools` accepts `edit_pool_id` plus `step`
+  for the owning inventory page. `/admin/upstreams` accepts the same params and
+  renders the shared Pool wizard in place, preserving the current upstream
+  filters while tabs and cancel patch only the host page URL. Both hosts resolve
+  the id through the current scope and require `pool.manage`; missing, hidden,
+  or unauthorized ids never open the editor.
+- **In-place invite:** the Upstreams header Invite action patches
+  `create_invite=1` onto `/admin/upstreams` and renders the shared Pool invite
+  dialog without moving to the Invites page. Validation, creation, the one-time
+  receipt, cancel, browser back, and filter preservation remain URL-driven.
 - **Policy mode cards** (`policy_mode_card/1`, `reasoning_policy_mode/1`):
   single-choice selection cards following the [Selection card](#selection-card-radio-less-choice-card) radio-less contract
   (sr-only radio, ✓ corner glyph while checked, `border-primary/60 +
@@ -1319,6 +1335,7 @@ control.
   upstream calls is expected and only escalates past the domain threshold),
   then one row per Pool assignment: pool link, [Upstream account card](#upstream-account-card) four-gate route-chevron
   meter (via `RoutePath`), and the lane's share of 7-day successes. The stable
+  Pool link keeps the existing generic Pools navigation. The stable
   `upstream-assignment-<assignment>-route` id and
   `data-role="upstream-assignment-route"` / `data-role="upstream-assignment-route-segment"`
   selectors expose the same `role="meter"`, dynamic four-gate maximum, current

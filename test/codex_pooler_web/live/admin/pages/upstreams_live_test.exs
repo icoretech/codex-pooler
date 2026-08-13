@@ -6,8 +6,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
   import Ecto.Query
   import Phoenix.LiveViewTest
+  import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
 
+  alias CodexPooler.Accounts
+  alias CodexPooler.Access.Invite
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Events
   alias CodexPooler.Events.Event
@@ -603,7 +606,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-page-create-invite-action[href='/admin/invites?create=1'][aria-label='Invite account'].btn.btn-secondary",
+             "#upstream-page-create-invite-action[href='/admin/upstreams?create_invite=1'][aria-label='Invite account'].btn.btn-secondary",
              "Invite"
            )
 
@@ -642,6 +645,49 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
            )
 
     refute has_element?(view, "#upstream-add-capacity-card")
+  end
+
+  test "opens and completes the Pool invite dialog in place", %{conn: conn, scope: scope} do
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "inline-invite", name: "Inline Invite"})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams?status=active")
+
+    view |> element("#upstream-page-create-invite-action") |> render_click()
+
+    assert_patch(view, ~p"/admin/upstreams?create_invite=1&status=active")
+    assert has_element?(view, "#admin-upstreams-live")
+    assert has_element?(view, "#pool-invite-dialog[open]")
+    assert has_element?(view, "#invite_pool_id option[value='#{pool.id}']", "Inline Invite")
+
+    view
+    |> form("#pool-invite-form",
+      invite: %{
+        "pool_id" => pool.id,
+        "invited_email" => "inline-invite@example.com",
+        "send_email" => "false"
+      }
+    )
+    |> render_change()
+
+    html =
+      view
+      |> form("#pool-invite-form",
+        invite: %{
+          "pool_id" => pool.id,
+          "invited_email" => "inline-invite@example.com",
+          "send_email" => "false"
+        }
+      )
+      |> render_submit()
+
+    assert has_element?(view, "#pool-onboarding-invite-ready")
+    assert html =~ "/onboarding/invites/"
+    assert Repo.get_by!(Invite, pool_id: pool.id).invited_email == "inline-invite@example.com"
+
+    view |> element("#pool-invite-dialog-close") |> render_click()
+
+    assert_patch(view, ~p"/admin/upstreams?status=active")
+    refute has_element?(view, "#pool-invite-dialog")
   end
 
   test "switches account cards between usage, 5m token usage, and Pools without exposing provider metadata",
@@ -7079,6 +7125,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              "Shared Source"
            )
 
+    source_selector =
+      "#upstream-account-#{identity.id}-pool-assignment-#{source_assignment.id}"
+
+    assert has_element?(
+             view,
+             "a#{source_selector}[data-role='upstream-account-pool-assignment'][href='/admin/upstreams?edit_pool_id=#{source_pool.id}&step=upstreams'].saved-reset-open-gloss",
+             "Shared Source"
+           )
+
     refute has_element?(
              view,
              "#upstream-account-#{identity.id}-assignment-#{source_assignment.id}",
@@ -7090,6 +7145,61 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              "#upstream-account-#{identity.id}-assignment-#{target_assignment.id}",
              "Shared Target"
            )
+
+    assert has_element?(
+             view,
+             "a#upstream-account-#{identity.id}-pool-assignment-#{target_assignment.id}[data-role='upstream-account-pool-assignment'][href='/admin/upstreams?edit_pool_id=#{target_pool.id}&step=upstreams'].saved-reset-open-gloss",
+             "Shared Target"
+           )
+
+    view |> element("a#{source_selector}") |> render_click()
+
+    assert_patch(
+      view,
+      ~p"/admin/upstreams?edit_pool_id=#{source_pool.id}&step=upstreams"
+    )
+
+    assert has_element?(view, "#admin-upstreams-live")
+    assert has_element?(view, "#pool-edit-dialog[open]")
+    assert has_element?(view, "#pool-edit-dialog-tab-upstreams[aria-selected='true']")
+    assert has_element?(view, "#pool_edit_id[value='#{source_pool.id}']")
+
+    _ = render_async(view)
+    view |> element("#pool-edit-dialog-tab-models") |> render_click()
+
+    assert_patch(view, ~p"/admin/upstreams?edit_pool_id=#{source_pool.id}&step=models")
+    assert has_element?(view, "#pool-edit-dialog-tab-models[aria-selected='true']")
+    _ = render_async(view)
+    refute has_element?(view, "#pool-model-serving-panel[data-state='loading']")
+
+    view |> element("#pool-edit-dialog-tab-upstreams") |> render_click()
+
+    assert_patch(
+      view,
+      ~p"/admin/upstreams?edit_pool_id=#{source_pool.id}&step=upstreams"
+    )
+
+    view
+    |> element("#pool-edit-form")
+    |> render_submit(%{
+      "pool_edit" => %{
+        "id" => source_pool.id,
+        "name" => source_pool.name,
+        "status" => "active",
+        "routing_strategy" => "bridge_ring",
+        "upstream_identity_ids" => [],
+        "api_key_ids" => []
+      }
+    })
+
+    assert Repo.reload!(source_assignment).status == "deleted"
+    refute has_element?(view, source_selector)
+    assert has_element?(view, "#upstream-account-#{identity.id}", "Shared Target")
+
+    view |> element("#pool-edit-cancel") |> render_click()
+
+    assert_patch(view, ~p"/admin/upstreams")
+    refute has_element?(view, "#pool-edit-dialog")
 
     refute has_element?(
              view,
@@ -7103,6 +7213,51 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute html =~ first_refresh
     refute html =~ second_refresh
     refute html =~ "raw_auth_json"
+  end
+
+  test "does not expose Pool editor permalinks without pool management", %{
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "restricted-pool-link", name: "Restricted Pool Link"})
+
+    %{identity: identity, assignment: assignment} =
+      upstream_assignment_fixture(pool, %{account_label: "Restricted Pool Link Account"})
+
+    %{user: admin, temporary_password: temporary_password} =
+      operator_fixture(scope, %{
+        "email" => "restricted-pool-link@example.com",
+        "password_change_required" => "false"
+      })
+
+    operator_pool_assignment_fixture(admin, pool, created_by_user_id: scope.user.id)
+
+    assert {:ok, %{token: token}} =
+             Accounts.login_user(%{"email" => admin.email, "password" => temporary_password})
+
+    admin_conn = log_in_user(build_conn(), admin, token)
+    {:ok, view, _html} = live(admin_conn, ~p"/admin/upstreams")
+
+    assert has_element?(view, "#upstream-account-#{identity.id}", "Restricted Pool Link Account")
+
+    assert has_element?(
+             view,
+             "div#upstream-account-#{identity.id}-pool-assignment-#{assignment.id}[data-role='upstream-account-pool-assignment']",
+             "Restricted Pool Link"
+           )
+
+    refute has_element?(
+             view,
+             "a#upstream-account-#{identity.id}-pool-assignment-#{assignment.id}"
+           )
+
+    {:ok, permalink_view, _html} =
+      live(
+        admin_conn,
+        ~p"/admin/upstreams?edit_pool_id=#{pool.id}&step=upstreams"
+      )
+
+    refute has_element?(permalink_view, "#pool-edit-dialog")
   end
 
   test "invalid Codex auth.json keeps submitted content out of the rendered form", %{

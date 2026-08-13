@@ -19,6 +19,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   @saved_reset_docs_url "https://docs.codex-pooler.com/operators/upstreams/#saved-resets"
 
   attr :pools, :list, required: true
+  attr :can_manage_pools?, :boolean, required: true
   attr :pool_options, :list, required: true
   attr :dialog_pool_options, :list, required: true
   attr :filter_form, :any, required: true
@@ -66,7 +67,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
             size={:md}
             variant={:primary}
           />
-          <.upstream_page_actions :if={@pools != []} />
+          <.upstream_page_actions :if={@pools != []} filter_values={@filter_values} />
         </:actions>
       </AdminComponents.page_header>
 
@@ -134,6 +135,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
           accounts={@upstream_accounts}
           account_panel_views={@account_panel_views}
           datetime_preferences={@datetime_preferences}
+          can_manage_pools?={@can_manage_pools?}
+          filter_values={@filter_values}
         />
       </section>
     </section>
@@ -262,7 +265,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   defp status_filter_icon_class(:primary), do: "shrink-0 text-primary"
   defp status_filter_icon_class(_tone), do: "shrink-0 text-base-content/60"
 
+  attr :filter_values, :map, required: true
+
   defp upstream_page_actions(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :invite_path,
+        upstreams_dialog_path(assigns.filter_values, %{"create_invite" => "1"})
+      )
+
     ~H"""
     <div
       id="upstream-page-actions"
@@ -280,7 +292,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
       </button>
       <.link
         id="upstream-page-create-invite-action"
-        navigate={~p"/admin/invites?create=1"}
+        patch={@invite_path}
         aria-label="Invite account"
         class="btn btn-secondary min-w-0 justify-center gap-2 px-4"
       >
@@ -897,6 +909,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   attr :accounts, :list, required: true
   attr :account_panel_views, :map, required: true
   attr :datetime_preferences, :map, required: true
+  attr :can_manage_pools?, :boolean, required: true
+  attr :filter_values, :map, required: true
 
   defp upstream_account_grid(assigns) do
     ~H"""
@@ -911,6 +925,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
         account_index={account_index}
         panel_view={account_panel_view(@account_panel_views, account)}
         datetime_preferences={@datetime_preferences}
+        can_manage_pools?={@can_manage_pools?}
+        pool_editor_query_params={UpstreamFilterForm.query_params(@filter_values)}
       />
     </div>
     """
@@ -922,6 +938,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   end
 
   defp account_panel_view(_panel_views, _account), do: :usage
+
+  defp upstreams_dialog_path(filter_values, extra_params) do
+    params =
+      filter_values
+      |> UpstreamFilterForm.query_params()
+      |> Map.merge(extra_params)
+
+    ~p"/admin/upstreams?#{params}"
+  end
 
   defp oauth_start_form_visible?(nil), do: true
   defp oauth_start_form_visible?(%{status: "pending"}), do: false

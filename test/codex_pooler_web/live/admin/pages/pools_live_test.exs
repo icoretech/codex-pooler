@@ -31,6 +31,92 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
   setup :register_and_log_in_user
 
+  test "pool editor permalink opens the requested Pool on the Upstreams step and clears on cancel",
+       %{
+         conn: conn,
+         scope: scope
+       } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "permalink-upstreams", name: "Permalink Upstreams"})
+
+    %{identity: identity} = upstream_assignment_fixture(pool)
+
+    {:ok, view, _html} =
+      live(conn, ~p"/admin/pools?edit_pool_id=#{pool.id}&step=upstreams")
+
+    assert has_element?(view, "#pool-edit-dialog[open]")
+    assert has_element?(view, "#pool-edit-dialog-tab-upstreams[aria-selected='true']")
+    assert has_element?(view, "#pool-edit-dialog-section-upstreams[role='tabpanel']")
+    assert has_element?(view, "#pool_edit_id[value='#{pool.id}']")
+
+    assert has_element?(
+             view,
+             "#pool-edit-upstream-assignment-options input[value='#{identity.id}'][checked]"
+           )
+
+    view |> element("#pool-edit-cancel") |> render_click()
+
+    assert_patch(view, ~p"/admin/pools")
+    refute has_element?(view, "#pool-edit-dialog")
+  end
+
+  test "Pool edit actions and wizard steps keep the editor state in the URL", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "permalink-actions", name: "Permalink Actions"})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view)
+
+    view |> element("#edit-pool-#{pool.id}") |> render_click()
+
+    assert_patch(view, ~p"/admin/pools?edit_pool_id=#{pool.id}&step=details")
+    assert has_element?(view, "#pool-edit-dialog-tab-details[aria-selected='true']")
+
+    view |> element("#pool-edit-dialog-tab-upstreams") |> render_click()
+
+    assert_patch(view, ~p"/admin/pools?edit_pool_id=#{pool.id}&step=upstreams")
+    assert has_element?(view, "#pool-edit-dialog-tab-upstreams[aria-selected='true']")
+  end
+
+  test "Pool editor permalinks are rejected outside the management scope", %{
+    scope: scope
+  } do
+    {:ok, assigned_pool} =
+      Pools.create_pool(scope, %{slug: "permalink-assigned", name: "Permalink Assigned"})
+
+    {:ok, hidden_pool} =
+      Pools.create_pool(scope, %{slug: "permalink-hidden", name: "Permalink Hidden"})
+
+    %{user: admin, temporary_password: temporary_password} =
+      operator_fixture(scope, %{
+        "email" => "permalink-assigned-admin@example.com",
+        "password_change_required" => "false"
+      })
+
+    operator_pool_assignment_fixture(admin, assigned_pool, created_by_user_id: scope.user.id)
+
+    assert {:ok, %{token: token}} =
+             Accounts.login_user(%{"email" => admin.email, "password" => temporary_password})
+
+    admin_conn = log_in_user(build_conn(), admin, token)
+
+    {:ok, assigned_view, _html} =
+      live(
+        admin_conn,
+        ~p"/admin/pools?edit_pool_id=#{assigned_pool.id}&step=upstreams"
+      )
+
+    refute has_element?(assigned_view, "#pool-edit-dialog")
+
+    {:ok, hidden_view, _html} =
+      live(admin_conn, ~p"/admin/pools?edit_pool_id=#{hidden_pool.id}&step=upstreams")
+
+    refute has_element?(hidden_view, "#pool-edit-dialog")
+  end
+
   test "renders empty pools guidance without a duplicate reset action", %{conn: conn} do
     Repo.delete_all(Pool)
 

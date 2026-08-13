@@ -18,6 +18,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   @pool_event_topics ["model_sync", "pools", "upstreams", "usage"]
   @pool_traffic_refresh_delay_ms 1_000
   @pool_traffic_fallback_refresh_ms 60_000
+  @edit_pool_id_param "edit_pool_id"
+  @pool_editor_step_param "step"
 
   @impl true
   def mount(_params, _session, socket) do
@@ -62,6 +64,11 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
      |> load_structural()
      |> start_pool_traffic_load()
      |> maybe_start_connected_refresh()}
+  end
+
+  @impl true
+  def handle_params(params, _uri, socket) do
+    {:noreply, apply_pool_editor_permalink(socket, params)}
   end
 
   @impl true
@@ -124,27 +131,12 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   end
 
   def handle_event("edit_pool", %{"id" => pool_id}, socket) do
-    case find_pool(socket, pool_id) do
-      nil ->
-        {:noreply, put_flash(socket, :error, "Pool was not found")}
+    case editable_pool(socket, pool_id) do
+      {:ok, pool} ->
+        {:noreply, push_patch(socket, to: pool_editor_path(pool.id, "details"))}
 
-      pool ->
-        case ensure_can_manage_pool(socket, pool) do
-          :ok ->
-            {:noreply,
-             socket
-             |> close_create_dialog()
-             |> assign(:editing_pool, pool)
-             |> assign(:pool_editor_mode, :edit)
-             |> assign(:edit_form, PoolForm.edit_form(pool))
-             |> assign(:pool_wizard_step, "details")
-             |> clear_deleting()
-             |> begin_model_serving_load(pool)
-             |> defer_pool_traffic_refresh()}
-
-          {:error, reason} ->
-            {:noreply, put_flash(socket, :error, error_message(reason))}
-        end
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, error_message(reason))}
     end
   end
 
@@ -181,11 +173,24 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
         true -> :edit
       end
 
-    {:noreply, assign(socket, :pool_wizard_step, PoolWizardComponents.normalize_step(step, mode))}
+    step = PoolWizardComponents.normalize_step(step, mode)
+
+    if mode == :edit && socket.assigns.editing_pool do
+      {:noreply, push_patch(socket, to: pool_editor_path(socket.assigns.editing_pool.id, step))}
+    else
+      {:noreply, assign(socket, :pool_wizard_step, step)}
+    end
   end
 
   def handle_event("cancel_edit", _params, socket) do
-    {:noreply, socket |> clear_editing() |> flush_deferred_pool_traffic_refresh()}
+    permalink_editor? = socket.assigns.pool_editor_mode == :edit
+    socket = socket |> clear_editing() |> flush_deferred_pool_traffic_refresh()
+
+    if permalink_editor? do
+      {:noreply, push_patch(socket, to: ~p"/admin/pools")}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_event("save_pool", %{"pool_edit" => pool_params}, socket) do
@@ -760,6 +765,82 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
 
   defp current_traffic_window(socket),
     do: Map.get(socket.assigns.pool_filters, "traffic_window", "24h")
+
+  defp apply_pool_editor_permalink(socket, %{@edit_pool_id_param => pool_id} = params)
+       when is_binary(pool_id) do
+    step =
+      params
+      |> Map.get(@pool_editor_step_param, "details")
+      |> PoolWizardComponents.normalize_step(:edit)
+
+    case editable_pool(socket, pool_id) do
+      {:ok, pool} ->
+        open_pool_editor(socket, pool, step)
+
+      {:error, _reason} ->
+        clear_invalid_pool_editor_permalink(socket)
+    end
+  end
+
+  defp apply_pool_editor_permalink(socket, _params) do
+    if socket.assigns.pool_editor_mode == :edit do
+      socket
+      |> clear_editing()
+      |> flush_deferred_pool_traffic_refresh()
+    else
+      socket
+    end
+  end
+
+  defp open_pool_editor(socket, pool, step) do
+    if match?(%{id: pool_id} when pool_id == pool.id, socket.assigns.editing_pool) &&
+         socket.assigns.pool_editor_mode == :edit do
+      assign(socket, :pool_wizard_step, step)
+    else
+      socket
+      |> close_create_dialog()
+      |> assign(:editing_pool, pool)
+      |> assign(:pool_editor_mode, :edit)
+      |> assign(:edit_form, PoolForm.edit_form(pool))
+      |> assign(:pool_wizard_step, step)
+      |> clear_deleting()
+      |> maybe_begin_model_serving_load(pool)
+      |> defer_pool_traffic_refresh()
+    end
+  end
+
+  defp maybe_begin_model_serving_load(socket, pool) do
+    if connected?(socket), do: begin_model_serving_load(socket, pool), else: socket
+  end
+
+  defp clear_invalid_pool_editor_permalink(socket) do
+    socket =
+      if socket.assigns.pool_editor_mode == :edit do
+        socket
+        |> clear_editing()
+        |> flush_deferred_pool_traffic_refresh()
+      else
+        socket
+      end
+
+    if connected?(socket), do: push_patch(socket, to: ~p"/admin/pools"), else: socket
+  end
+
+  defp editable_pool(socket, pool_id) do
+    case find_pool(socket, pool_id) do
+      nil ->
+        {:error, %{message: "Pool was not found"}}
+
+      pool ->
+        case ensure_can_manage_pool(socket, pool) do
+          :ok -> {:ok, pool}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  defp pool_editor_path(pool_id, step),
+    do: ~p"/admin/pools?edit_pool_id=#{pool_id}&step=#{step}"
 
   defp maybe_subscribe_pool_events(socket, pool_rows) do
     pool_rows

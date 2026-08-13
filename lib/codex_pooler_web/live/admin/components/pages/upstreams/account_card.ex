@@ -31,6 +31,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
   attr :account, :map, required: true
   attr :account_index, :integer, required: true
   attr :panel_view, :atom, default: :usage, values: [:usage, :tokens, :pools]
+  attr :can_manage_pools?, :boolean, default: false
+  attr :pool_editor_query_params, :map, default: %{}
 
   attr :datetime_preferences, :map, default: nil
 
@@ -329,50 +331,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
               data-role="upstream-account-pool-assignments"
               class="grid max-h-[24rem] gap-3 overflow-y-auto pr-1"
             >
-              <div
+              <.pool_assignment_block
                 :for={assignment <- @account.assignments}
-                id={"upstream-account-#{@account.identity.id}-pool-assignment-#{assignment.id}"}
-                data-role="upstream-account-pool-assignment"
-                class="grid gap-1.5"
-              >
-                <div class="flex min-w-0 items-center justify-between gap-3 text-xs">
-                  <span
-                    data-role="upstream-account-pool-assignment-pool"
-                    class="min-w-0 truncate font-medium text-base-content"
-                    title={assignment.pool_label}
-                  >
-                    {assignment.pool_label}
-                  </span>
-                  <span
-                    data-role="upstream-account-pool-assignment-traffic"
-                    class="shrink-0 text-[11px] font-medium leading-4 tabular-nums text-base-content/60"
-                    title={assignment_traffic_title(assignment)}
-                  >
-                    {assignment_traffic_label(assignment)}
-                  </span>
-                </div>
-                <div
-                  id={"upstream-account-#{@account.identity.id}-pool-assignment-#{assignment.id}-route"}
-                  data-role="upstream-account-pool-route"
-                  role="meter"
-                  aria-valuemin="0"
-                  aria-valuemax={RoutePath.segment_count()}
-                  aria-valuenow={RoutePath.ready_count(assignment)}
-                  aria-label={RoutePath.aria_label(assignment)}
-                  aria-valuetext={RoutePath.aria_label(assignment)}
-                  class="route-chevron-flow"
-                >
-                  <span
-                    :for={segment <- RoutePath.segments(assignment)}
-                    id={"upstream-account-#{@account.identity.id}-pool-assignment-#{assignment.id}-route-#{segment.key}"}
-                    data-role="upstream-account-pool-route-segment"
-                    title={segment.detail_label}
-                    class={RoutePath.segment_class(segment)}
-                  >
-                    {segment.short_label}
-                  </span>
-                </div>
-              </div>
+                account_id={@account.identity.id}
+                assignment={assignment}
+                can_manage_pools?={@can_manage_pools?}
+                query_params={@pool_editor_query_params}
+              />
             </div>
           </section>
         </div>
@@ -459,6 +424,101 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
       <SelectorContracts.selector_contracts account={@account} routing_readiness={@routing_readiness} />
     </article>
     """
+  end
+
+  attr :account_id, :string, required: true
+  attr :assignment, :map, required: true
+  attr :can_manage_pools?, :boolean, required: true
+  attr :query_params, :map, required: true
+
+  defp pool_assignment_block(assigns) do
+    assigns =
+      assigns
+      |> assign(
+        :id,
+        "upstream-account-#{assigns.account_id}-pool-assignment-#{assigns.assignment.id}"
+      )
+      |> assign(
+        :editor_path,
+        pool_editor_path(assigns.assignment.pool_id, assigns.query_params)
+      )
+
+    ~H"""
+    <.link
+      :if={@can_manage_pools?}
+      id={@id}
+      patch={@editor_path}
+      data-role="upstream-account-pool-assignment"
+      aria-label={"Edit #{@assignment.pool_label} upstream assignments"}
+      class="saved-reset-open-gloss relative grid min-w-0 gap-1.5 overflow-hidden rounded border border-transparent px-2 py-1.5 transition-colors hover:border-primary/25 hover:bg-primary/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+    >
+      <.pool_assignment_content
+        account_id={@account_id}
+        assignment={@assignment}
+      />
+    </.link>
+    <div
+      :if={!@can_manage_pools?}
+      id={@id}
+      data-role="upstream-account-pool-assignment"
+      class="grid min-w-0 gap-1.5 px-2 py-1.5"
+    >
+      <.pool_assignment_content
+        account_id={@account_id}
+        assignment={@assignment}
+      />
+    </div>
+    """
+  end
+
+  attr :account_id, :string, required: true
+  attr :assignment, :map, required: true
+
+  defp pool_assignment_content(assigns) do
+    ~H"""
+    <div class="flex min-w-0 items-center justify-between gap-3 text-xs">
+      <span
+        data-role="upstream-account-pool-assignment-pool"
+        class="min-w-0 truncate font-medium text-base-content"
+        title={@assignment.pool_label}
+      >
+        {@assignment.pool_label}
+      </span>
+      <span
+        data-role="upstream-account-pool-assignment-traffic"
+        class="shrink-0 text-[11px] font-medium leading-4 tabular-nums text-base-content/60"
+        title={assignment_traffic_title(@assignment)}
+      >
+        {assignment_traffic_label(@assignment)}
+      </span>
+    </div>
+    <div
+      id={"upstream-account-#{@account_id}-pool-assignment-#{@assignment.id}-route"}
+      data-role="upstream-account-pool-route"
+      role="meter"
+      aria-valuemin="0"
+      aria-valuemax={RoutePath.segment_count()}
+      aria-valuenow={RoutePath.ready_count(@assignment)}
+      aria-label={RoutePath.aria_label(@assignment)}
+      aria-valuetext={RoutePath.aria_label(@assignment)}
+      class="route-chevron-flow"
+    >
+      <span
+        :for={segment <- RoutePath.segments(@assignment)}
+        id={"upstream-account-#{@account_id}-pool-assignment-#{@assignment.id}-route-#{segment.key}"}
+        data-role="upstream-account-pool-route-segment"
+        title={segment.detail_label}
+        class={RoutePath.segment_class(segment)}
+      >
+        {segment.short_label}
+      </span>
+    </div>
+    """
+  end
+
+  defp pool_editor_path(pool_id, query_params) do
+    params = Map.merge(query_params, %{"edit_pool_id" => pool_id, "step" => "upstreams"})
+    ~p"/admin/upstreams?#{params}"
   end
 
   defp saved_resets(%{saved_resets: saved_resets}), do: saved_resets

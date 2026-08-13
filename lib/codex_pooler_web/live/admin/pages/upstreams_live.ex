@@ -2,12 +2,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   use CodexPoolerWeb, :admin_live_view
 
   alias CodexPooler.Events
+  alias CodexPooler.Mailer
   alias CodexPooler.Pools
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.Admin.InviteCreationDialog
   alias CodexPoolerWeb.Admin.LiveUpdatesHooks
   alias CodexPoolerWeb.Admin.PoolEventSubscriptions
   alias CodexPoolerWeb.Admin.PoolFilterComponents
+  alias CodexPoolerWeb.Admin.PoolWizardComponents
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
   alias CodexPoolerWeb.Admin.UpstreamAuthJsonImport
   alias CodexPoolerWeb.Admin.UpstreamFilterForm
@@ -16,7 +19,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   alias CodexPoolerWeb.Admin.UpstreamsLive.{
     AccountLifecycleWorkflow,
     AuthJsonWorkflow,
+    InviteWorkflow,
     OAuthWorkflow,
+    PoolEditorWorkflow,
     SavedResetWorkflow
   }
 
@@ -30,6 +35,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
       socket
       |> assign(
         page_title: "Upstreams",
+        can_manage_pools?: false,
         pools: [],
         pool_options: [],
         dialog_pool_options: [],
@@ -64,8 +70,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         upstreams_reload_generation: 0,
         upstreams_reload_running?: false,
         upstreams_reload_rerun?: false,
-        upstreams_reload_dirty?: false
+        upstreams_reload_dirty?: false,
+        upstreams_loaded?: false,
+        mailer_configured?: Mailer.configured?()
       )
+      |> assign(PoolEditorWorkflow.initial_assigns())
+      |> assign(InviteWorkflow.initial_assigns())
       |> allow_upload(:auth_json,
         accept: ~w(.json),
         max_entries: 1,
@@ -83,7 +93,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     {:noreply,
      socket
      |> close_account_workflow_dialogs()
-     |> load_upstreams(params)}
+     |> maybe_load_upstreams(params)
+     |> apply_pool_editor_params(params)
+     |> apply_invite_params(params)}
   end
 
   @impl true
@@ -138,6 +150,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
     {:noreply, maybe_run_upstreams_reload_rerun(socket)}
   end
 
+  def handle_async({:pool_editor_model_serving, _load_token, _pool_id} = key, result, socket) do
+    {:noreply, PoolEditorWorkflow.handle_model_async(key, result, socket)}
+  end
+
   @impl true
   def handle_event("filter", %{"filters" => filter_params}, socket) do
     {:noreply,
@@ -165,6 +181,59 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
 
     {:noreply,
      push_patch(socket, to: ~p"/admin/upstreams?#{UpstreamFilterForm.query_params(params)}")}
+  end
+
+  def handle_event("pool_wizard_step", %{"step" => step}, socket) do
+    case socket.assigns.editing_pool do
+      %{id: pool_id} ->
+        {:noreply,
+         push_patch(socket,
+           to: pool_editor_path(socket, pool_id, PoolWizardComponents.normalize_step(step, :edit))
+         )}
+
+      nil ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("cancel_edit", _params, socket) do
+    {:noreply, push_patch(socket, to: upstreams_path(socket))}
+  end
+
+  def handle_event("save_pool", %{"pool_edit" => pool_params}, socket) do
+    {:noreply,
+     PoolEditorWorkflow.save(socket, pool_params, fn socket, pool ->
+       socket
+       |> assign(:editing_pool, pool)
+       |> reload_upstreams()
+     end)}
+  end
+
+  def handle_event(
+        "validate_pool_model_serving",
+        %{"pool_model_serving" => attrs},
+        socket
+      ) do
+    {:noreply, PoolEditorWorkflow.validate_model_serving(socket, attrs)}
+  end
+
+  def handle_event("save_pool_model_serving", %{"pool_model_serving" => attrs}, socket) do
+    {:noreply, PoolEditorWorkflow.save_model_serving(socket, attrs)}
+  end
+
+  def handle_event("cancel_create_invite", _params, socket) do
+    {:noreply, push_patch(socket, to: upstreams_path(socket))}
+  end
+
+  def handle_event("validate_invite", %{"invite" => invite_params}, socket) do
+    {:noreply, InviteWorkflow.validate(socket, invite_params)}
+  end
+
+  def handle_event("create_invite", %{"invite" => invite_params}, socket) do
+    {:noreply,
+     InviteWorkflow.create(socket, invite_params, fn token ->
+       url(~p"/onboarding/invites/#{token}")
+     end)}
   end
 
   @impl true
@@ -427,6 +496,40 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
       active_nav={:upstreams}
       alert_notification_center={@alert_notification_center}
     >
+      <div
+        :for={warning <- @pool_editor_warnings}
+        id={"upstream-pool-editor-warning-#{warning.id}"}
+        class="alert alert-warning mb-4 items-start"
+      >
+        <.icon name="hero-exclamation-triangle" class="size-5" />
+        <div class="grid gap-1">
+          <p class="font-semibold">{warning.title}</p>
+          <p class="text-sm">{warning.message}</p>
+        </div>
+      </div>
+
+      <PoolWizardComponents.pool_wizard
+        :if={@editing_pool}
+        mode={:edit}
+        form={@pool_edit_form}
+        current_step={@pool_editor_step}
+        upstream_options={@pool_editor_upstream_options}
+        api_key_options={@pool_editor_api_key_options}
+        model_serving_form={@pool_model_serving_form}
+        model_serving_status={@pool_model_serving_status}
+        model_serving_dirty?={@pool_model_serving_dirty?}
+        model_serving_sync_pending?={@pool_model_serving_sync_pending?}
+      />
+
+      <InviteCreationDialog.pool_invite_dialog
+        creating_invite={@creating_invite}
+        invite_form={@invite_form}
+        invite_form_valid?={@invite_form_valid?}
+        last_invite={@last_invite}
+        mailer_configured?={@mailer_configured?}
+        pool_options={@dialog_pool_options}
+      />
+
       <UpstreamPageComponents.upstreams_page
         pools={@pools}
         pool_options={@pool_options}
@@ -457,6 +560,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         upstream_accounts={@upstream_accounts}
         uploads={@uploads}
         datetime_preferences={@datetime_preferences}
+        can_manage_pools?={@can_manage_pools?}
       />
     </AdminComponents.admin_shell>
     """
@@ -490,6 +594,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
       )
 
     %{
+      can_manage_pools?: Pools.can_manage_pools?(scope),
       pools: pools,
       filtered_pools: filtered_pools,
       filter_values: filter_values,
@@ -499,6 +604,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
 
   defp apply_upstreams_page_state(socket, page_state) do
     %{
+      can_manage_pools?: can_manage_pools?,
       pools: pools,
       filtered_pools: filtered_pools,
       filter_values: filter_values,
@@ -511,6 +617,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
       |> maybe_subscribe_pool_events(filtered_pools)
 
     assign(socket,
+      can_manage_pools?: can_manage_pools?,
       pools: pools,
       pool_options: pool_options(pools),
       dialog_pool_options: dialog_pool_options(pools),
@@ -521,6 +628,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
       upstream_accounts: upstream_accounts,
       upstreams_reload_dirty?: false,
       upstreams_reload_rerun?: false,
+      upstreams_loaded?: true,
       account_panel_views:
         prune_account_panel_views(socket.assigns.account_panel_views, upstream_accounts)
     )
@@ -599,12 +707,84 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   defp upstream_dialog_open?(socket) do
     socket.assigns.importing_auth_json or
       socket.assigns.oauth_linking or
+      socket.assigns.creating_invite or
+      not is_nil(socket.assigns.editing_pool) or
       not is_nil(socket.assigns.renaming_account) or
       not is_nil(socket.assigns.deleting_account) or
       not is_nil(socket.assigns.editing_saved_reset_policy)
   end
 
   defp reload_upstreams(socket), do: load_upstreams(socket, socket.assigns.filter_values)
+
+  defp maybe_load_upstreams(socket, params) do
+    filter_values = UpstreamFilterForm.filter_values(params, socket.assigns.pools)
+
+    if socket.assigns.upstreams_loaded? and filter_values == socket.assigns.filter_values do
+      socket
+    else
+      load_upstreams(socket, params)
+    end
+  end
+
+  defp apply_pool_editor_params(socket, %{"edit_pool_id" => pool_id} = params) do
+    step = Map.get(params, "step", "details")
+
+    case PoolEditorWorkflow.find_editable_pool(socket.assigns.current_scope, pool_id) do
+      {:ok, pool} ->
+        socket
+        |> InviteWorkflow.close()
+        |> PoolEditorWorkflow.open(pool, step)
+        |> defer_upstreams_reload()
+
+      {:error, _reason} ->
+        socket = PoolEditorWorkflow.close(socket)
+        if connected?(socket), do: push_patch(socket, to: upstreams_path(socket)), else: socket
+    end
+  end
+
+  defp apply_pool_editor_params(socket, _params) do
+    if socket.assigns.editing_pool do
+      socket
+      |> PoolEditorWorkflow.close()
+      |> flush_deferred_upstreams_reload()
+    else
+      socket
+    end
+  end
+
+  defp apply_invite_params(socket, %{"create_invite" => "1"}) do
+    if socket.assigns.pools == [] do
+      socket
+    else
+      socket
+      |> PoolEditorWorkflow.close()
+      |> InviteWorkflow.open()
+      |> defer_upstreams_reload()
+    end
+  end
+
+  defp apply_invite_params(socket, _params) do
+    if socket.assigns.creating_invite do
+      socket
+      |> InviteWorkflow.close()
+      |> flush_deferred_upstreams_reload()
+    else
+      socket
+    end
+  end
+
+  defp pool_editor_path(socket, pool_id, step) do
+    upstreams_path(socket, %{"edit_pool_id" => pool_id, "step" => step})
+  end
+
+  defp upstreams_path(socket, extra_params \\ %{}) do
+    params =
+      socket.assigns.filter_values
+      |> UpstreamFilterForm.query_params()
+      |> Map.merge(extra_params)
+
+    ~p"/admin/upstreams?#{params}"
+  end
 
   defp schedule_upstreams_reload(socket) do
     cond do
