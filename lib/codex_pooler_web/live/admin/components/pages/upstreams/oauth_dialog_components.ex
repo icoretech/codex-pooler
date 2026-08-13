@@ -203,6 +203,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
   attr :user_code, :string, required: true
   attr :verification_uri, :string, default: nil
   attr :status, :string, default: nil
+  attr :interval_seconds, :integer, default: nil
 
   @doc """
   The device route, in the same shape as the browser one.
@@ -219,7 +220,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
         <span class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
           Device code
         </span>
-        <div class="flex min-w-0 items-center gap-2">
+        <p class="text-xs leading-4 text-base-content/55">
+          Open the verification page below and enter this code to approve the account.
+        </p>
+        <div class="flex min-w-0 items-center gap-2 rounded-box border border-base-300 bg-base-200/40 px-3 py-2">
           <p class="min-w-0 flex-1 break-all font-mono text-lg font-semibold tracking-wider text-base-content">
             {@user_code}
           </p>
@@ -240,7 +244,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
           class="flex items-center gap-1.5 text-xs font-medium leading-4 text-base-content/55"
         >
           <.icon name="hero-arrow-path" class="admin-loading-icon size-3.5 shrink-0 text-base-content/40" />
-          <span>{@status}</span>
+          <span>{@status}{device_recheck_suffix(@interval_seconds)}</span>
         </p>
       </div>
 
@@ -286,6 +290,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
     </section>
     """
   end
+
+  # How often the poll re-checks is the one thing about this wait the operator
+  # cannot work out from the screen, and the flow already carries it.
+  defp device_recheck_suffix(seconds) when is_integer(seconds) and seconds > 0,
+    do: ", rechecking every #{seconds}s"
+
+  defp device_recheck_suffix(_seconds), do: ""
 
   @doc """
   Id of the callback form, so a dialog footer can submit it from outside.

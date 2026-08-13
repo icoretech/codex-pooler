@@ -422,6 +422,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
             id_prefix="oauth-link"
             user_code={@oauth_link_flow.device_user_code}
             verification_uri={@oauth_link_flow.verification_uri}
+            interval_seconds={Map.get(@oauth_link_flow, :interval_seconds)}
             status={oauth_pending_status(@oauth_link_result, @oauth_link_flow)}
           />
         </div>

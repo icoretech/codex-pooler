@@ -66,6 +66,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
             id_prefix="oauth-relink"
             user_code={@oauth_relink_flow.device_user_code}
             verification_uri={@oauth_relink_flow.verification_uri}
+            interval_seconds={Map.get(@oauth_relink_flow, :interval_seconds)}
             status={oauth_relink_pending_status(@oauth_relink_result, @oauth_relink_flow)}
           />
         </div>
