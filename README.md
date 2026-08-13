@@ -1929,8 +1929,10 @@ route-class admission, circuit thresholds, metrics auth, operator email, model
 metadata, upstream timeouts, the OpenAI pricing catalog URL, and SMTP delivery
 live in DB-managed Instance Settings under `/admin/system`. Live settings apply
 to new runtime work through the settings cache. Cached settings reload after save
-through PubSub invalidation; existing leases, in-flight requests, and already-open
-streams keep the values they started with.
+through PubSub invalidation; existing leases, in-flight requests, and open streams
+keep the values they started with. The exception is an already-open Responses
+websocket: after a locally applied runtime-firewall settings snapshot, it
+re-evaluates the client IP captured during its handshake.
 
 Secret Instance Settings stay write-only in the UI. The metrics bearer token is
 stored only as a keyed HMAC digest, fingerprint, and key version. The SMTP

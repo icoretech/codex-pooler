@@ -1789,7 +1789,9 @@ user-agent 历史。
 模型元数据、上游超时、OpenAI 价格 catalog URL 和 SMTP 投递等运营控制项位于
 `/admin/system` 下由数据库管理的 Instance Settings 中。实时设置会通过设置缓存
 应用到新的运行时工作。保存后，已缓存设置通过 PubSub invalidation 重新加载；已有
-leases、进行中的请求和已经打开的 streams 会继续使用它们启动时的值。
+leases、进行中的请求和打开的 streams 会继续使用它们启动时的值。唯一的例外是已
+打开的 Responses websocket：本地应用运行时防火墙设置快照后，它会重新评估握手时
+捕获的客户端 IP。
 
 Secret Instance Settings 在 UI 中保持 write-only。metrics bearer token 只以 keyed
 HMAC digest、fingerprint 和 key version 存储。SMTP password 使用 key version
