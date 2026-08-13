@@ -146,16 +146,30 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
              "Browser authorization pending"
            )
 
-    assert has_element?(view, "#oauth-link-authorization-step", "Authorize with OpenAI")
-    assert has_element?(view, "#oauth-link-callback-step", "Paste the callback URL")
+    assert has_element?(view, "#oauth-link-authorization-step", "Authorization page")
+    assert has_element?(view, "#oauth-link-callback-step", "Callback URL")
     assert has_element?(view, "#oauth-link-callback-form")
     assert has_element?(view, "#oauth-link-callback-url[required][aria-describedby]")
-    assert has_element?(view, "#oauth-link-submit-callback.btn-secondary", "Complete link")
+    # The completing action lives in the dialog footer, beside Cancel, and is the
+    # dialog's only filled orange: the URL row's Open and Copy are peers below it.
+    assert has_element?(
+             view,
+             "#oauth-link-dialog-footer #oauth-link-submit-callback.btn-primary",
+             "Complete link"
+           )
     assert has_element?(view, "#oauth-link-cancel.btn-ghost", "Cancel")
+
+    # The URL is a readonly field rather than a bare link, so it can be read and
+    # selected as well as opened; the Open action carries the same href.
+    assert has_element?(
+             view,
+             ~s(#oauth-link-authorization-url[readonly][value="#{@oauth_browser_authorization_url}"])
+           )
 
     assert has_element?(
              view,
-             ~s(#oauth-link-authorization-url[href="#{@oauth_browser_authorization_url}"])
+             ~s(#oauth-link-authorization-open[href="#{@oauth_browser_authorization_url}"][target="_blank"]),
+             "Open"
            )
 
     assert has_element?(

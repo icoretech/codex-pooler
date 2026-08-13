@@ -6,6 +6,99 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
 
   attr :id_prefix, :string, required: true
+  attr :browser_event, :string, required: true
+  attr :device_event, :string, required: true
+  attr :active, :atom, default: nil, values: [nil, :browser, :device]
+  attr :disabled, :boolean, default: false
+  attr :disabled_hint, :string, default: nil
+
+  @doc """
+  The two authorization routes, offered as peers.
+
+  Browser and device are not a route and its fallback: they are two ways the
+  same proof arrives, so neither is styled above the other. Each is an action
+  that *starts* a flow, which is why nothing is marked until one is running —
+  and once one is, the other stays available as a way to switch rather than
+  cancel and start again.
+  """
+  def method_doors(assigns) do
+    ~H"""
+    <div class="grid gap-2" data-role="oauth-method-doors">
+      <div class="grid gap-2 sm:grid-cols-2">
+        <.method_door
+          id={"#{@id_prefix}-browser-start"}
+          event={@browser_event}
+          icon="hero-arrow-top-right-on-square"
+          label="Browser"
+          hint={
+            if @active == :device,
+              do: "Switch to pasting a URL instead",
+              else: "Opens a tab. You paste the URL it sends you back to."
+          }
+          active={@active == :browser}
+          disabled={@disabled}
+        />
+        <.method_door
+          id={"#{@id_prefix}-device-start"}
+          event={@device_event}
+          icon="hero-device-phone-mobile"
+          label="Device code"
+          hint={
+            if @active == :browser,
+              do: "Switch to a code instead",
+              else: "Approve on any device. Nothing to paste."
+          }
+          active={@active == :device}
+          disabled={@disabled}
+        />
+      </div>
+      <p :if={@disabled && @disabled_hint} class="text-xs leading-4 text-base-content/55">
+        {@disabled_hint}
+      </p>
+    </div>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :event, :string, required: true
+  attr :icon, :string, required: true
+  attr :label, :string, required: true
+  attr :hint, :string, required: true
+  attr :active, :boolean, required: true
+  attr :disabled, :boolean, required: true
+
+  defp method_door(assigns) do
+    ~H"""
+    <button
+      id={@id}
+      type="button"
+      phx-click={@event}
+      disabled={@disabled}
+      aria-current={@active && "true"}
+      class={[
+        "group grid min-w-0 content-start gap-0.5 rounded-field border p-3 text-left transition-colors",
+        "outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
+        @active && "border-primary bg-primary/5",
+        !@active && "border-base-300 bg-base-100 hover:border-primary/50",
+        @disabled && "cursor-not-allowed opacity-45 hover:border-base-300"
+      ]}
+    >
+      <span class="flex min-w-0 items-center gap-1.5 text-sm font-semibold leading-tight text-base-content">
+        <.icon name={@icon} class="size-4 shrink-0" />
+        <span class="truncate">{@label}</span>
+        <span
+          :if={@active}
+          class="ml-auto shrink-0 text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-primary"
+        >
+          running
+        </span>
+      </span>
+      <span class="text-xs leading-4 text-base-content/55">{@hint}</span>
+    </button>
+    """
+  end
+
+  attr :id_prefix, :string, required: true
   attr :authorization_url, :string, required: true
   attr :form, :any, required: true
   attr :submit_event, :string, required: true
@@ -25,37 +118,37 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
       |> assign(:submit_id, "#{assigns.id_prefix}-submit-callback")
 
     ~H"""
-    <section id={@root_id} data-role="oauth-browser-flow" class="grid gap-5">
-      <div
-        id={@authorization_step_id}
-        data-role="oauth-authorization-step"
-        class="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)] gap-3"
-      >
-        <span class="grid size-8 place-items-center rounded-box bg-primary/15 text-sm font-bold tabular-nums text-primary">
-          1
-        </span>
-        <div class="min-w-0">
-          <h3 class="text-base font-semibold text-base-content">Authorize with OpenAI</h3>
-          <p class="mt-1 max-w-xl text-sm leading-5 text-base-content/65">
-            Open the authorization page in a new tab and keep this dialog open.
-          </p>
-          <div class="mt-3 grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+    <section id={@root_id} data-role="oauth-browser-flow" class="grid gap-4">
+      <div id={@authorization_step_id} data-role="oauth-authorization-step" class="grid min-w-0 gap-2">
+        <label for={@authorization_url_id} class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
+          Authorization page
+        </label>
+        <div class="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+          <input
+            id={@authorization_url_id}
+            type="url"
+            value={@authorization_url}
+            readonly
+            aria-label="OpenAI authorization URL"
+            class="input input-bordered w-full min-w-0 bg-base-200/60 font-mono text-sm"
+          />
+          <div class="flex min-w-0 gap-2">
             <a
-              id={@authorization_url_id}
+              id={"#{@id_prefix}-authorization-open"}
               href={@authorization_url}
               target="_blank"
               rel="noopener noreferrer"
-              class="btn btn-primary h-10 min-h-10 min-w-0 justify-start gap-2 px-4 text-left"
+              class="btn btn-secondary h-10 min-h-10 shrink-0 gap-2 px-4"
             >
               <.icon name="hero-arrow-top-right-on-square" class="size-4 shrink-0" />
-              <span class="truncate">Open authorization page</span>
+              <span>Open</span>
             </a>
             <AdminComponents.clipboard_button
               id={@authorization_copy_id}
               copy_text={@authorization_url}
               label="Copy link"
               aria_label="Copy OpenAI authorization URL"
-              class="btn btn-secondary h-10 min-h-10 w-full shrink-0 gap-2 px-3 sm:w-auto"
+              class="btn btn-secondary h-10 min-h-10 shrink-0 gap-2 px-3"
             />
           </div>
         </div>
@@ -66,18 +159,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
         for={@form}
         phx-submit={@submit_event}
         autocomplete="off"
-        class="grid min-w-0 grid-cols-[2rem_minmax(0,1fr)] gap-3 border-t border-base-300 pt-5"
+        class="grid min-w-0 gap-2 border-t border-base-300 pt-4"
       >
-        <span class="grid size-8 place-items-center rounded-box bg-base-200 text-sm font-bold tabular-nums text-base-content/60">
-          2
-        </span>
-        <div id={@callback_step_id} data-role="oauth-callback-step" class="min-w-0">
-          <label for={@callback_url_id} class="text-base font-semibold text-base-content">
-            Paste the callback URL
+        <div id={@callback_step_id} data-role="oauth-callback-step" class="grid min-w-0 gap-2">
+          <label
+            for={@callback_url_id}
+            class="text-xs font-semibold uppercase tracking-wide text-base-content/60"
+          >
+            Callback URL
           </label>
-          <p id={@callback_help_id} class="mt-1 max-w-xl text-sm leading-5 text-base-content/65">
-            After OpenAI redirects, copy the full URL from the browser address bar and paste it here.
-          </p>
           <input
             id={@callback_url_id}
             name={@form[:callback_url].name}
@@ -89,20 +179,23 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
             spellcheck="false"
             required
             aria-describedby={@callback_help_id}
-            class="input input-bordered mt-3 w-full font-mono text-sm"
+            class="input input-bordered w-full font-mono text-sm"
           />
-          <div class="mt-3 flex justify-end">
-            <AdminComponents.action_button
-              id={@submit_id}
-              icon="hero-check"
-              label={@submit_label}
-              type="submit"
-              size={:md}
-            />
-          </div>
+          <p id={@callback_help_id} class="text-xs leading-4 text-base-content/55">
+            After OpenAI redirects, copy the full URL from the browser address bar and paste it here.
+          </p>
         </div>
       </.form>
     </section>
     """
   end
+
+  @doc """
+  Id of the callback form, so a dialog footer can submit it from outside.
+  """
+  @spec callback_form_id(String.t()) :: String.t()
+  def callback_form_id(id_prefix), do: "#{id_prefix}-callback-form"
+
+  @spec callback_submit_id(String.t()) :: String.t()
+  def callback_submit_id(id_prefix), do: "#{id_prefix}-submit-callback"
 end

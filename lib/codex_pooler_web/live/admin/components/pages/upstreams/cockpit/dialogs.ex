@@ -53,21 +53,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
             <span>{@oauth_relink_error.message}</span>
           </div>
 
-          <div :if={oauth_relink_start_visible?(@oauth_relink_flow)} class="flex flex-wrap gap-2">
-            <AdminComponents.action_button
-              id="oauth-relink-browser-start"
-              icon="hero-arrow-top-right-on-square"
-              label="Browser"
-              phx-click="start_oauth_relink_browser"
-              variant={:primary}
-            />
-            <AdminComponents.action_button
-              id="oauth-relink-device-start"
-              icon="hero-device-phone-mobile"
-              label="Device code"
-              phx-click="start_oauth_relink_device"
-            />
-          </div>
+          <UpstreamOAuthDialogComponents.method_doors
+            :if={oauth_relink_start_visible?(@oauth_relink_flow)}
+            id_prefix="oauth-relink"
+            browser_event="start_oauth_relink_browser"
+            device_event="start_oauth_relink_device"
+          />
 
           <section :if={
             oauth_relink_browser_flow?(@oauth_relink_flow, @oauth_relink_authorization_url)
@@ -132,6 +123,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
               label={oauth_relink_dialog_dismiss_label(@oauth_relink_flow)}
               phx-click="cancel_oauth_relink"
               variant={:ghost}
+            />
+            <AdminComponents.action_button
+              :if={oauth_relink_browser_flow?(@oauth_relink_flow, @oauth_relink_authorization_url)}
+              id={UpstreamOAuthDialogComponents.callback_submit_id("oauth-relink")}
+              icon="hero-check"
+              label="Complete relink"
+              type="submit"
+              form={UpstreamOAuthDialogComponents.callback_form_id("oauth-relink")}
+              variant={:primary}
             />
           </:actions>
         </AdminComponents.dialog_footer>

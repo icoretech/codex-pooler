@@ -1003,9 +1003,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     |> render_click()
 
     assert has_element?(view, "#oauth-link-authorization-url")
-    assert has_element?(view, "#oauth-link-authorization-step", "Authorize with OpenAI")
+    assert has_element?(view, "#oauth-link-authorization-step", "Authorization page")
     assert has_element?(view, "#oauth-link-callback-url")
-    assert has_element?(view, "#oauth-link-callback-step", "Paste the callback URL")
+    assert has_element?(view, "#oauth-link-callback-step", "Callback URL")
     assert has_element?(view, "#oauth-link-submit-callback")
 
     authorization_url = authorization_url_from_view(view)
@@ -7945,7 +7945,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   end
 
   defp authorization_url_from_view(view) do
-    case Regex.run(~r/id="oauth-link-authorization-url"[^>]*href="([^"]+)"/, render(view)) do
+    case Regex.run(~r/id="oauth-link-authorization-open"[^>]*href="([^"]+)"/, render(view)) do
       [_match, authorization_url] -> String.replace(authorization_url, "&amp;", "&")
       _missing -> flunk("missing OAuth authorization URL")
     end

@@ -411,21 +411,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
               </select>
             </div>
 
-            <div class="flex flex-wrap gap-2">
-              <AdminComponents.action_button
-                id="oauth-link-browser-start"
-                icon="hero-arrow-top-right-on-square"
-                label="Browser"
-                phx-click="start_oauth_browser"
-                variant={:primary}
-              />
-              <AdminComponents.action_button
-                id="oauth-link-device-start"
-                icon="hero-device-phone-mobile"
-                label="Device code"
-                phx-click="start_oauth_device"
-              />
-            </div>
+            <UpstreamOAuthDialogComponents.method_doors
+              id_prefix="oauth-link"
+              browser_event="start_oauth_browser"
+              device_event="start_oauth_device"
+            />
           </.form>
 
           <section :if={oauth_browser_flow?(@oauth_link_flow, @oauth_link_authorization_url)}>
@@ -489,6 +479,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
               label={oauth_dialog_dismiss_label(@oauth_link_flow)}
               phx-click="cancel_oauth_link"
               variant={:ghost}
+            />
+            <AdminComponents.action_button
+              :if={oauth_browser_flow?(@oauth_link_flow, @oauth_link_authorization_url)}
+              id={UpstreamOAuthDialogComponents.callback_submit_id("oauth-link")}
+              icon="hero-check"
+              label={@oauth_callback_submit_label}
+              type="submit"
+              form={UpstreamOAuthDialogComponents.callback_form_id("oauth-link")}
+              variant={:primary}
             />
           </:actions>
         </AdminComponents.dialog_footer>
