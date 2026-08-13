@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Streaming.DownstreamStream
   alias CodexPooler.Gateway.Transports.BoundedResponseBody
+  alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.RejectionBody
   alias CodexPooler.Quotas.Evidence.CodexParsers.RateLimitReachedType
 
@@ -358,7 +359,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
 
     headers = [{"content-type", content_type}]
 
-    headers = maybe_put_backend_turn_state_response_header(headers, response, request_options)
+    headers =
+      headers
+      |> maybe_put_backend_turn_state_response_header(response, request_options)
+      |> maybe_put_native_response_control_headers(response, request_options)
 
     if streaming?, do: [{"cache-control", "no-cache"} | headers], else: headers
   end
@@ -505,6 +509,25 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   end
 
   defp maybe_put_backend_turn_state_response_header(headers, _response, _request_options),
+    do: headers
+
+  defp maybe_put_native_response_control_headers(
+         headers,
+         response,
+         %RequestOptions{
+           transport: %{
+             transport: transport,
+             upstream_endpoint: "/backend-api/codex/responses",
+             websocket_writer: nil
+           },
+           openai_compatibility: %{source_endpoint: nil, openai_chat_payload: nil}
+         }
+       )
+       when transport in ["http_json", "http_sse"] do
+    NativeCodexResponseControl.http_headers(Req.Response.to_map(response).headers) ++ headers
+  end
+
+  defp maybe_put_native_response_control_headers(headers, _response, _request_options),
     do: headers
 
   defp header(%Req.Response{headers: headers}, key) do

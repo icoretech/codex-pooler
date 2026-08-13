@@ -4,6 +4,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   use GenServer
 
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
+  alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
+  alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.UpstreamErrorParam
@@ -322,6 +324,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       timeouts: request.timeouts,
       message_mapper: request.message_mapper,
       frame_observer: request.frame_observer,
+      native_codex_response_control: Map.get(request, :native_codex_response_control),
       request_caller_pid: request_caller_pid,
       request_caller_monitor: request_caller_monitor,
       # Tolerant access: during a rolling deploy an owner-forwarded request may
@@ -397,7 +400,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     decoded = decode_text_frame(terminal)
 
     {:halt, {:terminal, state, receive_state, "error"}} =
-      handle_text_frame(state, receive_state, terminal, decoded, decoded)
+      handle_text_frame(state, receive_state, terminal, decoded, terminal, decoded)
 
     {{:ok, result}, state} =
       finish_receive_result({:terminal, state, receive_state, "error"})
@@ -905,12 +908,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       {:text, raw_text}, {:continue, state, receive_state} ->
         raw_decoded = decode_text_frame(raw_text)
 
-        {text, decoded} =
-          raw_text
-          |> map_message(raw_decoded, receive_state.message_mapper)
-          |> sanitize_downstream_text()
+        {mapped_text, mapped_decoded} =
+          map_message(raw_text, raw_decoded, receive_state.message_mapper)
 
-        handle_text_frame(state, receive_state, text, raw_decoded, decoded)
+        handle_text_frame(
+          state,
+          receive_state,
+          raw_text,
+          raw_decoded,
+          mapped_text,
+          mapped_decoded
+        )
 
       {:ping, payload}, {:continue, state, receive_state} ->
         case send_frame(state, {:pong, payload}) do
@@ -951,11 +959,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   defp handle_text_frame(
          state,
          %ReceiveState{} = receive_state,
-         text,
+         raw_text,
          raw_decoded,
-         decoded
+         mapped_text,
+         mapped_decoded
        ) do
-    terminal_discriminator = TerminalDiscriminator.classify(decoded)
+    terminal_discriminator = TerminalDiscriminator.classify(raw_decoded)
 
     receive_state =
       raw_decoded
@@ -963,7 +972,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       |> maybe_put_response_id(raw_decoded)
       |> put_websocket_frame_headers(raw_decoded)
       |> increment_text_frame_count()
-      |> append_receive_body(text)
+      |> append_receive_body(mapped_text)
       |> put_terminal_discriminator(terminal_discriminator)
 
     case retryable_first_text_frame(raw_decoded, receive_state) do
@@ -972,7 +981,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         {:halt, {:failure, state, receive_state, reason}}
 
       :error ->
-        observe_frame(receive_state, text, decoded)
+        observe_frame(receive_state, raw_text, raw_decoded)
+        receive_state = maybe_write_native_metadata(state, receive_state)
+
+        {text, _decoded} =
+          sanitize_downstream_text(
+            {mapped_text, mapped_decoded},
+            receive_state.native_codex_response_control
+          )
+
         write_frame(receive_state.writer, text, terminal_discriminator)
 
         receive_state = maybe_mark_downstream_output_started(receive_state, raw_decoded)
@@ -1230,6 +1247,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp observe_frame(%ReceiveState{}, _text, _decoded), do: :ok
 
+  defp maybe_write_native_metadata(
+         state,
+         %ReceiveState{
+           native_codex_response_control: %TurnSnapshot{models_etag: models_etag},
+           native_metadata_emitted?: false
+         } = receive_state
+       ) do
+    metadata = NativeCodexResponseControl.pooler_metadata_event(models_etag, state.headers)
+    write_frame(receive_state.writer, Jason.encode!(metadata), %TerminalDiscriminator{})
+    %{receive_state | native_metadata_emitted?: true}
+  end
+
+  defp maybe_write_native_metadata(_state, %ReceiveState{} = receive_state), do: receive_state
+
   defp write_frame(writer, text, terminal_discriminator) when is_function(writer, 2),
     do: writer.(text, terminal_discriminator)
 
@@ -1260,7 +1291,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp map_message(text, decoded, _mapper), do: {text, decoded}
 
-  defp sanitize_downstream_text({text, %{} = decoded}) when is_binary(text) do
+  defp sanitize_downstream_text({text, %{} = decoded}, %TurnSnapshot{}) when is_binary(text) do
+    case NativeCodexResponseControl.sanitize_websocket_event(decoded) do
+      :unchanged -> {text, decoded}
+      {:changed, sanitized} -> {Jason.encode!(sanitized), sanitized}
+      {:error, :invalid_event} -> {text, decoded}
+    end
+  end
+
+  defp sanitize_downstream_text({text, %{} = decoded}, _native_snapshot) when is_binary(text) do
     case Map.get(decoded, "type") do
       type
       when type in ["response.completed", "response.failed", "response.incomplete", "error"] ->
@@ -1272,7 +1311,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     end
   end
 
-  defp sanitize_downstream_text({text, decoded}), do: {text, decoded}
+  defp sanitize_downstream_text({text, decoded}, _native_snapshot), do: {text, decoded}
 
   defp decode_text_frame(text) do
     case Jason.decode(text) do

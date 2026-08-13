@@ -69,6 +69,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
   @supported_compression_model "gpt-4o"
   @reasoning_denial_message "reasoning effort is not available for this API key"
+  @native_response_control_headers [
+    "openai-model",
+    "x-reasoning-included",
+    "x-codex-safety-buffering-enabled",
+    "x-codex-safety-buffering-faster-model"
+  ]
   @canonical_full_failure_body %{
     "error" => %{
       "code" => "server_error",
@@ -10670,6 +10676,340 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   @tag :client_metadata
+  test "native Responses JSON and SSE aliases relay only closed response controls", %{
+    conn: conn
+  } do
+    response_headers = [
+      {"OpenAI-Model", "provider-model"},
+      {"X-Reasoning-Included", "included"},
+      {"X-Codex-Safety-Buffering-Enabled", "enabled"},
+      {"X-Codex-Safety-Buffering-Faster-Model", "provider-fast-model"},
+      {"etag", "hostile-upstream-standard-etag"},
+      {"x-models-etag", "hostile-upstream-models-etag"},
+      {"x-request-id", "hostile-upstream-request-id"},
+      {"x-unknown-control", "hostile-upstream-unknown-control"}
+    ]
+
+    for path <- ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"],
+        stream? <- [false, true] do
+      response_turn_state = "native-response-control-turn-state"
+
+      body = %{
+        "id" => "resp_native_response_controls",
+        "object" => "response",
+        "status" => "completed",
+        "metadata" => %{"trusted_access_for_cyber" => true},
+        "headers" => %{"body-control-sentinel" => "preserved"},
+        "safety_buffering" => %{
+          "model" => "body-safety-model",
+          "reasons" => ["body-safety-reason"]
+        },
+        "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+      }
+
+      event = %{
+        "type" => "response.completed",
+        "response" => body
+      }
+
+      upstream_mode =
+        if stream? do
+          FakeUpstream.sse_stream(
+            [{"response.completed", event}],
+            headers: [{"x-codex-turn-state", response_turn_state} | response_headers]
+          )
+        else
+          FakeUpstream.json_response_with_headers(
+            body,
+            [{"x-codex-turn-state", response_turn_state} | response_headers]
+          )
+        end
+
+      upstream = start_upstream(upstream_mode)
+      setup = gateway_setup(upstream)
+
+      expected_models_etag =
+        if stream? do
+          models_response =
+            conn
+            |> recycle()
+            |> auth(setup)
+            |> get("/backend-api/codex/models")
+
+          assert [models_etag] = get_resp_header(models_response, "etag")
+          models_etag
+        end
+
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post(path, %{
+          "model" => setup.model.exposed_model_id,
+          "input" => native_text_input("synthetic native response-control request"),
+          "stream" => stream?
+        })
+
+      assert_native_response_controls!(response)
+      assert get_resp_header(response, "etag") == []
+      refute "hostile-upstream-request-id" in get_resp_header(response, "x-request-id")
+      assert get_resp_header(response, "x-unknown-control") == []
+
+      if stream? do
+        assert get_resp_header(response, "x-models-etag") == [expected_models_etag]
+        assert get_resp_header(response, "cache-control") == ["no-cache"]
+        assert ["text/event-stream" <> _suffix] = get_resp_header(response, "content-type")
+
+        assert {"response.completed", ^event} =
+                 response.resp_body
+                 |> String.split("\n\n", trim: true)
+                 |> Enum.map(&SSEParser.stream_block_event/1)
+                 |> Enum.find(fn {event_type, _decoded} -> event_type == "response.completed" end)
+      else
+        assert get_resp_header(response, "x-models-etag") == []
+        assert ["application/json" <> _suffix] = get_resp_header(response, "content-type")
+        assert json_response(response, 200) == body
+      end
+
+      assert get_resp_header(response, "x-codex-turn-state") == [response_turn_state]
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.path == "/backend-api/codex/responses"
+    end
+  end
+
+  @tag :client_metadata
+  test "native Responses controls fail closed for malformed upstream values", %{conn: conn} do
+    oversized_value = String.duplicate("m", 1_025)
+
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response_with_headers(
+          %{"id" => "resp_malformed_native_response_controls"},
+          [
+            {"openai-model", ""},
+            {"x-reasoning-included", "present"},
+            {"x-codex-safety-buffering-faster-model", oversized_value}
+          ]
+        )
+      )
+
+    setup = gateway_setup(upstream)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => native_text_input("synthetic malformed response-control request")
+      })
+
+    assert %{"id" => "resp_malformed_native_response_controls"} = json_response(response, 200)
+    assert get_resp_header(response, "openai-model") == []
+    assert get_resp_header(response, "x-reasoning-included") == ["true"]
+    assert get_resp_header(response, "x-codex-safety-buffering-enabled") == []
+    assert get_resp_header(response, "x-codex-safety-buffering-faster-model") == []
+  end
+
+  @tag :client_metadata
+  test "response controls stay absent from compact public chat usage unauthenticated and unrelated routes",
+       %{conn: conn} do
+    response_headers = [
+      {"openai-model", "excluded-provider-model"},
+      {"x-reasoning-included", "excluded-reasoning"},
+      {"x-codex-safety-buffering-enabled", "excluded-safety"},
+      {"x-codex-safety-buffering-faster-model", "excluded-fast-model"},
+      {"x-models-etag", "excluded-provider-etag"}
+    ]
+
+    for path <- [
+          "/backend-api/codex/responses/compact",
+          "/backend-api/codex/v1/responses/compact"
+        ] do
+      compact_upstream =
+        start_upstream(
+          FakeUpstream.json_response_with_headers(
+            %{"object" => "response.compaction"},
+            response_headers
+          )
+        )
+
+      compact_setup = gateway_setup(compact_upstream, compact?: true)
+
+      compact_response =
+        conn
+        |> recycle()
+        |> auth(compact_setup)
+        |> post(path, %{
+          "model" => compact_setup.model.exposed_model_id,
+          "input" => native_text_input("synthetic excluded compact request")
+        })
+
+      assert %{"object" => "response.compaction"} = json_response(compact_response, 200)
+      refute_native_response_controls!(compact_response)
+      assert get_resp_header(compact_response, "x-models-etag") == []
+    end
+
+    public_upstream =
+      start_upstream(
+        FakeUpstream.json_response_with_headers(
+          %{
+            "id" => "resp_excluded_public_controls",
+            "object" => "response",
+            "status" => "completed",
+            "output" => []
+          },
+          response_headers
+        )
+      )
+
+    public_setup = gateway_setup(public_upstream)
+
+    public_response =
+      conn
+      |> recycle()
+      |> auth(public_setup)
+      |> post("/v1/responses", %{
+        "model" => public_setup.model.exposed_model_id,
+        "input" => "synthetic excluded public request"
+      })
+
+    assert %{"id" => "resp_excluded_public_controls"} = json_response(public_response, 200)
+    refute_native_response_controls!(public_response)
+    assert get_resp_header(public_response, "x-models-etag") == []
+
+    public_stream_upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"response.completed",
+             %{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => "resp_excluded_public_stream_controls",
+                 "status" => "completed",
+                 "output" => [],
+                 "usage" => %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}
+               }
+             }}
+          ],
+          headers: response_headers
+        )
+      )
+
+    public_stream_setup = gateway_setup(public_stream_upstream)
+
+    public_stream_response =
+      conn
+      |> recycle()
+      |> auth(public_stream_setup)
+      |> post("/v1/responses", %{
+        "model" => public_stream_setup.model.exposed_model_id,
+        "input" => "synthetic excluded public stream request",
+        "stream" => true
+      })
+
+    assert public_stream_response.status == 200
+    assert public_stream_response.resp_body =~ "resp_excluded_public_stream_controls"
+    refute_native_response_controls!(public_stream_response)
+    assert get_resp_header(public_stream_response, "x-models-etag") == []
+
+    chat_upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"response.completed",
+             %{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => "resp_excluded_chat_controls",
+                 "status" => "completed",
+                 "output" => [],
+                 "usage" => %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}
+               }
+             }}
+          ],
+          headers: response_headers
+        )
+      )
+
+    chat_setup = gateway_setup(chat_upstream)
+
+    chat_response =
+      conn
+      |> recycle()
+      |> auth(chat_setup)
+      |> post("/backend-api/codex/v1/chat/completions", %{
+        "model" => chat_setup.model.exposed_model_id,
+        "messages" => [%{"role" => "user", "content" => "synthetic excluded chat request"}]
+      })
+
+    assert %{"id" => "resp_excluded_chat_controls"} = json_response(chat_response, 200)
+    refute_native_response_controls!(chat_response)
+    assert get_resp_header(chat_response, "x-models-etag") == []
+
+    public_chat_response =
+      conn
+      |> recycle()
+      |> auth(chat_setup)
+      |> post("/v1/chat/completions", %{
+        "model" => chat_setup.model.exposed_model_id,
+        "messages" => [%{"role" => "user", "content" => "synthetic excluded public chat"}]
+      })
+
+    assert %{"id" => "resp_excluded_chat_controls"} = json_response(public_chat_response, 200)
+    refute_native_response_controls!(public_chat_response)
+    assert get_resp_header(public_chat_response, "x-models-etag") == []
+
+    usage_response =
+      conn
+      |> recycle()
+      |> auth(chat_setup)
+      |> get("/api/codex/usage")
+
+    assert %{"plan_type" => _plan_type} = json_response(usage_response, 200)
+    refute_native_response_controls!(usage_response)
+    assert get_resp_header(usage_response, "x-models-etag") == []
+
+    models_response =
+      conn
+      |> recycle()
+      |> auth(chat_setup)
+      |> get("/backend-api/codex/models")
+
+    assert %{"models" => [_model]} = json_response(models_response, 200)
+    refute_native_response_controls!(models_response)
+    assert get_resp_header(models_response, "x-models-etag") == []
+
+    unauthenticated_upstream =
+      start_upstream(
+        FakeUpstream.json_response_with_headers(
+          %{"id" => "resp_must_not_dispatch_response_controls"},
+          response_headers
+        )
+      )
+
+    unauthenticated_setup = gateway_setup(unauthenticated_upstream)
+
+    for path <- ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"] do
+      unauthenticated_response =
+        conn
+        |> recycle()
+        |> post(path, %{
+          "model" => unauthenticated_setup.model.exposed_model_id,
+          "input" => native_text_input("synthetic unauthenticated response-control request")
+        })
+
+      assert %{"error" => %{"code" => "api_key_missing"}} =
+               json_response(unauthenticated_response, 401)
+
+      refute_native_response_controls!(unauthenticated_response)
+      assert get_resp_header(unauthenticated_response, "x-models-etag") == []
+    end
+
+    assert FakeUpstream.count(unauthenticated_upstream) == 0
+  end
+
+  @tag :client_metadata
   test "backend Responses SSE aliases ignore upstream ETag headers and emit the exact predispatch models ETag",
        %{conn: conn} do
     for {alias_path, response_id} <- [
@@ -12840,6 +13180,22 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   defp execute_gateway(auth, endpoint, payload, opts) do
     request_options = RequestOptions.build(opts, endpoint, payload)
     RuntimeGateway.execute(auth, endpoint, payload, request_options)
+  end
+
+  defp assert_native_response_controls!(response) do
+    assert get_resp_header(response, "openai-model") == ["provider-model"]
+    assert get_resp_header(response, "x-reasoning-included") == ["true"]
+    assert get_resp_header(response, "x-codex-safety-buffering-enabled") == ["true"]
+
+    assert get_resp_header(response, "x-codex-safety-buffering-faster-model") == [
+             "provider-fast-model"
+           ]
+  end
+
+  defp refute_native_response_controls!(response) do
+    Enum.each(@native_response_control_headers, fn header ->
+      assert get_resp_header(response, header) == []
+    end)
   end
 
   defp assert_native_image_accounting!(setup, endpoint, image_model, forbidden_values) do

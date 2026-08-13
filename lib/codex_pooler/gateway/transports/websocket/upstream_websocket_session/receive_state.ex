@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ReceiveState do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
 
   defstruct [
@@ -8,6 +9,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
     :timeouts,
     :message_mapper,
     :frame_observer,
+    :native_codex_response_control,
     :response_id,
     :terminal_upstream_error_code,
     :terminal_upstream_error_param,
@@ -20,6 +22,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
     :request_caller_pid,
     :request_caller_monitor,
     assignment_advertised?: false,
+    native_metadata_emitted?: false,
     downstream_output_started?: false,
     terminal_seen?: false,
     last_upstream_event_type: "none",
@@ -42,6 +45,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
             CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.message_mapper(),
           frame_observer:
             CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.frame_observer(),
+          native_codex_response_control: TurnSnapshot.t() | nil,
           response_id: String.t() | nil,
           terminal_upstream_error_code: String.t() | nil,
           terminal_upstream_error_param: String.t() | nil,
@@ -54,6 +58,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
           request_caller_pid: pid() | nil,
           request_caller_monitor: reference() | nil,
           assignment_advertised?: boolean(),
+          native_metadata_emitted?: boolean(),
           downstream_output_started?: boolean(),
           terminal_seen?: boolean(),
           last_upstream_event_type: String.t(),

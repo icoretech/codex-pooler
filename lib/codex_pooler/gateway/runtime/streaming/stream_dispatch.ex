@@ -17,6 +17,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   alias CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle
   alias CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver
   alias CodexPooler.Gateway.Runtime.Streaming.Types, as: StreamTypes
+  alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamRelay
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream
@@ -592,8 +593,27 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
 
     [{"cache-control", "no-cache"}, {"content-type", content_type}]
     |> maybe_put_backend_turn_state_response_header(response, context.request_options)
+    |> maybe_put_native_response_control_headers(response, context.request_options)
     |> maybe_put_backend_models_etag(context)
   end
+
+  defp maybe_put_native_response_control_headers(
+         headers,
+         response,
+         %RequestOptions{
+           transport: %{
+             transport: "http_sse",
+             upstream_endpoint: "/backend-api/codex/responses",
+             websocket_writer: nil
+           },
+           openai_compatibility: %{source_endpoint: nil, openai_chat_payload: nil}
+         }
+       ) do
+    NativeCodexResponseControl.http_headers(Req.Response.to_map(response).headers) ++ headers
+  end
+
+  defp maybe_put_native_response_control_headers(headers, _response, _request_options),
+    do: headers
 
   defp maybe_put_backend_models_etag(
          headers,

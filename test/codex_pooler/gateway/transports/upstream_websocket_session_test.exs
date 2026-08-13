@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   alias CodexPooler.AgentV2ContractFixture
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
@@ -101,17 +102,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     upstream = start_upstream(FakeUpstream.websocket_text_frames([Jason.encode!(frame)]))
     {:ok, session} = UpstreamWebsocketSession.start_link([])
     on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+    parent = self()
+
+    request = %{
+      websocket_request(FakeUpstream.url(upstream))
+      | writer: fn text -> send(parent, {:characterization_writer_frame, text}) end
+    }
 
     assert {:ok, result} =
-             UpstreamWebsocketSession.request(
-               session,
-               websocket_request(FakeUpstream.url(upstream))
-             )
+             UpstreamWebsocketSession.request(session, request)
 
     expected_frame = Map.delete(frame, "headers")
 
     assert Map.take(result, [:body, :status, :terminal, :websocket_frame_headers]) == %{
-             body: "data: #{Jason.encode!(expected_frame)}\n\n",
+             body: "data: #{Jason.encode!(frame)}\n\n",
              status: 200,
              terminal: "response.failed",
              websocket_frame_headers: %{
@@ -127,10 +131,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
              name == "sec-websocket-accept" and byte_size(value) > 0
            end)
 
-    refute inspect(result) =~ "private-header-characterization"
+    assert_receive {:characterization_writer_frame, downstream_frame}
+    assert Jason.decode!(downstream_frame) == expected_frame
+    refute downstream_frame =~ "private-header-characterization"
   end
 
-  test "decoded observer sees mapped frames while malformed frames preserve fallback state" do
+  test "decoded observer sees raw frames while retained body keeps mapped provider bytes" do
     rate_limit = ~s({"type":"codex.rate_limits","rate_limits":{}})
     malformed = ~s({"type":"response.output_text.delta")
 
@@ -168,9 +174,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert malformed_bytes == byte_size(malformed)
 
     assert_receive {:observed_frame, terminal_bytes,
-                    %{"type" => "response.failed", "response" => %{"status" => "failed"}}}
+                    %{
+                      "type" => "response.failed",
+                      "response" => %{"status" => "failed"},
+                      "headers" => %{"openai-request-id" => "observer-request"}
+                    }}
 
-    assert terminal_bytes < byte_size(terminal) + 1_000
+    assert terminal_bytes == byte_size(terminal)
     assert result.terminal == "response.failed"
     assert result.websocket_frame_headers == %{"openai-request-id" => "observer-request"}
     assert result.body =~ "data: #{rate_limit}\n\ndata: #{malformed}\n\n"
@@ -200,6 +210,209 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
              UpstreamWebsocketSession.request(session, request)
 
     assert_receive {:classified_writer_frame, ^terminal, %{terminal: "response.completed"}}
+  end
+
+  test "native snapshot emits metadata before a sanitized terminal failure while observers retain raw data" do
+    terminal =
+      Jason.encode!(%{
+        "type" => "response.failed",
+        "headers" => %{
+          "openai-model" => "frame-model",
+          "x-models-etag" => "provider-etag",
+          "authorization" => "hostile-auth"
+        },
+        "response" => %{
+          "status" => "failed",
+          "error" => %{"code" => "server_error"},
+          "headers" => %{
+            "x-reasoning-included" => true,
+            "cookie" => "hostile-cookie"
+          }
+        }
+      })
+
+    upstream = start_upstream(FakeUpstream.websocket_text_frames([terminal]))
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+    parent = self()
+
+    request = %{
+      websocket_request(FakeUpstream.url(upstream))
+      | native_codex_response_control: %TurnSnapshot{models_etag: "pooler-etag"},
+        writer: fn frame -> send(parent, {:native_metadata_frame, frame}) end,
+        frame_observer: fn frame, decoded ->
+          send(parent, {:native_metadata_observer, frame, decoded})
+        end
+    }
+
+    assert {:ok, %{terminal: "response.failed"} = result} =
+             UpstreamWebsocketSession.request(session, request)
+
+    assert_receive {:native_metadata_frame, metadata}
+    assert metadata_event(metadata) == %{"x-models-etag" => "pooler-etag"}
+    assert_receive {:native_metadata_frame, sanitized_terminal}
+
+    assert Jason.decode!(sanitized_terminal) == %{
+             "type" => "response.failed",
+             "headers" => %{"openai-model" => "frame-model"},
+             "response" => %{
+               "status" => "failed",
+               "error" => %{"code" => "server_error"},
+               "headers" => %{"x-reasoning-included" => "true"}
+             }
+           }
+
+    assert_receive {:native_metadata_observer, ^terminal, observed}
+    assert observed["headers"]["authorization"] == "hostile-auth"
+    assert observed["response"]["headers"]["cookie"] == "hostile-cookie"
+    assert result.body == "data: #{terminal}\n\n"
+    assert result.body =~ "hostile-auth"
+    assert result.body =~ "hostile-cookie"
+    assert result.body =~ "provider-etag"
+    refute sanitized_terminal =~ "hostile-auth"
+    refute sanitized_terminal =~ "hostile-cookie"
+    refute sanitized_terminal =~ "provider-etag"
+    refute_received {:native_metadata_frame, _extra}
+  end
+
+  test "native snapshot takes model only from successful handshake headers" do
+    peer =
+      start_raw_websocket_peer(
+        upgrade_headers: [
+          {"OpenAI-Model", "handshake-model"},
+          {"x-models-etag", "provider-etag"},
+          {"set-cookie", "hostile-cookie"},
+          {"openai-request-id", "hostile-request-id"}
+        ]
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = %{
+      raw_websocket_request(peer.url, self())
+      | native_codex_response_control: %TurnSnapshot{models_etag: "pooler-etag"}
+    }
+
+    assert {:ok, _result} = UpstreamWebsocketSession.request(session, request)
+    assert_receive {:upstream_websocket_frame, metadata}
+
+    assert metadata_event(metadata) == %{
+             "openai-model" => "handshake-model",
+             "x-models-etag" => "pooler-etag"
+           }
+
+    assert_receive {:upstream_websocket_frame, accepted}
+    assert %{"id" => _id} = Jason.decode!(accepted)
+    refute metadata =~ "provider-etag"
+    refute metadata =~ "hostile-cookie"
+    refute metadata =~ "hostile-request-id"
+
+    assert {:ok, reused_result} = UpstreamWebsocketSession.request(session, request)
+    assert reused_result.upstream_websocket_connection.reused
+    assert_receive {:upstream_websocket_frame, reused_metadata}
+    assert metadata_event(reused_metadata) == metadata_event(metadata)
+    assert_receive {:upstream_websocket_frame, reused_accepted}
+    assert %{"id" => _id} = Jason.decode!(reused_accepted)
+    refute_received {:upstream_websocket_frame, _extra}
+  end
+
+  test "native snapshot removes malformed top-level and nested header containers" do
+    terminal =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "headers" => ["invalid-container"],
+        "response" => %{"status" => "completed", "headers" => "invalid-container"}
+      })
+
+    upstream = start_upstream(FakeUpstream.websocket_text_frames([terminal]))
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+    parent = self()
+
+    request = %{
+      websocket_request(FakeUpstream.url(upstream))
+      | native_codex_response_control: %TurnSnapshot{models_etag: "pooler-etag"},
+        writer: fn frame -> send(parent, {:malformed_metadata_frame, frame}) end,
+        frame_observer: fn frame, decoded ->
+          send(parent, {:malformed_metadata_observer, frame, decoded})
+        end
+    }
+
+    assert {:ok, _result} = UpstreamWebsocketSession.request(session, request)
+    assert_receive {:malformed_metadata_frame, metadata}
+    assert metadata_event(metadata) == %{"x-models-etag" => "pooler-etag"}
+    assert_receive {:malformed_metadata_frame, sanitized}
+
+    assert Jason.decode!(sanitized) == %{
+             "type" => "response.completed",
+             "response" => %{"status" => "completed"}
+           }
+
+    assert_receive {:malformed_metadata_observer, ^terminal, observed}
+    assert observed["headers"] == ["invalid-container"]
+    assert observed["response"]["headers"] == "invalid-container"
+    refute_received {:malformed_metadata_frame, _extra}
+  end
+
+  test "native snapshot emits none for retryable first output and once for later accepted output" do
+    retryable =
+      Jason.encode!(%{
+        "type" => "error",
+        "status" => 400,
+        "headers" => %{"authorization" => "retry-hostile-auth"},
+        "response" => %{"headers" => %{"cookie" => "retry-hostile-cookie"}},
+        "error" => %{
+          "type" => "invalid_request_error",
+          "code" => "invalid_api_key"
+        }
+      })
+
+    accepted =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"status" => "completed"}
+      })
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.websocket_text_frames([retryable]),
+           FakeUpstream.websocket_text_frames([accepted])
+         ]}
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+    parent = self()
+
+    request = %{
+      websocket_request(FakeUpstream.url(upstream))
+      | native_codex_response_control: %TurnSnapshot{models_etag: "retry-etag"},
+        writer: fn frame -> send(parent, {:retry_metadata_frame, frame}) end,
+        frame_observer: fn frame, decoded ->
+          send(parent, {:retry_metadata_observer, frame, decoded})
+        end
+    }
+
+    assert {:error, %{reason: {:auth_refresh_first_event, _failure}} = retry_result} =
+             UpstreamWebsocketSession.request(session, request)
+
+    assert retry_result.body == "data: #{retryable}\n\n"
+    assert retry_result.body =~ "retry-hostile-auth"
+    assert retry_result.body =~ "retry-hostile-cookie"
+    refute_received {:retry_metadata_frame, _frame}
+    refute_received {:retry_metadata_observer, _frame, _decoded}
+
+    assert {:ok, %{terminal: "response.completed"}} =
+             UpstreamWebsocketSession.request(session, request)
+
+    assert_receive {:retry_metadata_frame, metadata}
+    assert metadata_event(metadata) == %{"x-models-etag" => "retry-etag"}
+    assert_receive {:retry_metadata_frame, ^accepted}
+    assert_receive {:retry_metadata_observer, ^accepted, %{"type" => "response.completed"}}
+    refute_received {:retry_metadata_frame, _extra}
   end
 
   test "native websocket preserves a structural child text delta byte-for-byte" do
@@ -2009,13 +2222,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         )
       )
 
+    parent = self()
+
     request = %Request{
       url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
       headers: [{"authorization", "Bearer synthetic-upstream-token"}],
       payload: "{}",
       timeouts: @timeouts,
-      writer: fn _text -> :ok end,
-      message_mapper: nil
+      writer: fn frame -> send(parent, {:failed_upgrade_frame, frame}) end,
+      message_mapper: nil,
+      native_codex_response_control: %TurnSnapshot{models_etag: "upgrade-etag"}
     }
 
     result = UpstreamWebsocketSession.request_once(request)
@@ -2038,6 +2254,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
            ] = reason_headers
 
     refute inspect({reason_headers, result}) =~ "upgrade body sentinel"
+    refute_received {:failed_upgrade_frame, _frame}
   end
 
   @tag :continuation_generation_boundary
@@ -2399,6 +2616,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     }
   end
 
+  defp metadata_event(frame) do
+    assert %{"type" => "codex.response.metadata", "headers" => headers} = Jason.decode!(frame)
+    headers
+  end
+
   defp lifecycle_state(session) do
     session
     |> :sys.get_state()
@@ -2572,6 +2794,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
              connection_mode: Keyword.get(opts, :connection_mode, :websocket),
              pong_mode: Keyword.get(opts, :pong_mode, :ignore_ping),
              response_mode: Keyword.get(opts, :response_mode, :terminal),
+             upgrade_headers: Keyword.get(opts, :upgrade_headers, []),
              stopped?: false
            }
          end}
@@ -2678,7 +2901,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
       :websocket ->
         upgrade_mode = Agent.get(state, & &1.upgrade_mode)
 
-        case raw_websocket_peer_upgrade(socket, upgrade_mode, connection_id, owner) do
+        case raw_websocket_peer_upgrade(state, socket, upgrade_mode, connection_id, owner) do
           :ok -> raw_websocket_peer_frame_loop(state, socket, connection_id, owner, 0, nil, 0)
           {:error, reason} -> send(owner, {:raw_upstream_websocket_error, connection_id, reason})
         end
@@ -2699,10 +2922,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     send(owner, {:raw_upstream_websocket_connection_closed, connection_id})
   end
 
-  defp raw_websocket_peer_upgrade(socket, mode, connection_id, owner) do
+  defp raw_websocket_peer_upgrade(state, socket, mode, connection_id, owner) do
     with {:ok, headers} <- raw_websocket_peer_read_headers(socket),
          {:ok, key} <- raw_websocket_peer_header(headers, "sec-websocket-key") do
-      send_raw_websocket_upgrade(socket, key, mode, connection_id, owner)
+      send_raw_websocket_upgrade(state, socket, key, mode, connection_id, owner)
     end
   end
 
@@ -2727,11 +2950,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     end
   end
 
-  defp send_raw_websocket_upgrade(socket, _key, :malformed_response, _connection_id, _owner) do
+  defp send_raw_websocket_upgrade(
+         _state,
+         socket,
+         _key,
+         :malformed_response,
+         _connection_id,
+         _owner
+       ) do
     :gen_tcp.send(socket, "not-an-http-upgrade\r\n\r\n")
   end
 
-  defp send_raw_websocket_upgrade(socket, _key, :hold, connection_id, owner) do
+  defp send_raw_websocket_upgrade(_state, socket, _key, :hold, connection_id, owner) do
     case :gen_tcp.recv(socket, 0, 5_000) do
       {:error, :closed} ->
         {:error, :closed}
@@ -2745,7 +2975,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     end
   end
 
-  defp send_raw_websocket_upgrade(socket, key, mode, _connection_id, _owner)
+  defp send_raw_websocket_upgrade(state, socket, key, mode, _connection_id, _owner)
        when mode in [:valid, :invalid_accept] do
     accept =
       if mode == :valid do
@@ -2756,13 +2986,24 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         "invalid-websocket-accept"
       end
 
+    upgrade_headers =
+      if mode == :valid do
+        state
+        |> Agent.get(& &1.upgrade_headers)
+        |> Enum.map(fn {name, value} -> [name, ": ", value, "\r\n"] end)
+      else
+        []
+      end
+
     :gen_tcp.send(socket, [
       "HTTP/1.1 101 Switching Protocols\r\n",
       "upgrade: websocket\r\n",
       "connection: Upgrade\r\n",
       "sec-websocket-accept: ",
       accept,
-      "\r\n\r\n"
+      "\r\n",
+      upgrade_headers,
+      "\r\n"
     ])
   end
 
