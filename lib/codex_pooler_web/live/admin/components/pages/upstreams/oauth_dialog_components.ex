@@ -29,11 +29,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
           id={"#{@id_prefix}-browser-start"}
           event={@browser_event}
           icon="hero-arrow-top-right-on-square"
-          label="Browser"
+          label="via OAuth (browser)"
           hint={
             if @active == :device,
-              do: "Switch to pasting a URL instead",
-              else: "Opens a tab. You paste the URL it sends you back to."
+              do: "Switch to pasting a URL.",
+              else: "Approve in a tab, paste the URL back."
           }
           active={@active == :browser}
           disabled={@disabled}
@@ -42,11 +42,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
           id={"#{@id_prefix}-device-start"}
           event={@device_event}
           icon="hero-device-phone-mobile"
-          label="Device code"
+          label="via Device Code"
           hint={
             if @active == :browser,
-              do: "Switch to a code instead",
-              else: "Approve on any device. Nothing to paste."
+              do: "Switch to a device code.",
+              else: "Approve elsewhere, nothing to paste."
           }
           active={@active == :device}
           disabled={@disabled}
