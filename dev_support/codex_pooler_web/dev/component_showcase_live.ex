@@ -360,40 +360,66 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
   attr :cases, :list, required: true
   attr :current, :string, required: true
 
-  # One scrollable row rather than a wrapping block: at 375 the wrapped version
-  # was three rows tall and covered the header of the dialog underneath, which
-  # is the thing being reviewed. Styles are inline because Tailwind's `@source`
-  # list does not include `dev_support/`, so classes written only here compile
-  # to nothing.
+  # A disclosure holding a grid, not a row of chips. The row was fine at five
+  # cases and unusable at nineteen: on a phone it became a horizontal scroller
+  # where every case past the third was off-screen, and the reviewer had to
+  # swipe a strip to reach the thing they wanted to look at. Closed, this is one
+  # button naming the current case; open, it is a grid of all of them, and it
+  # collapses again on choosing one because the choice is a page load.
+  #
+  # Styles are inline because Tailwind's `@source` list does not include
+  # `dev_support/`, so a class written only here compiles to nothing and the
+  # element silently renders unstyled.
   defp case_switcher(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :current_label,
+        Enum.find_value(assigns.cases, "", fn {value, label} ->
+          value == assigns.current && label
+        end)
+      )
+
     ~H"""
-    <nav
+    <details
       id={@id}
-      aria-label={@label}
-      class="fixed inset-x-0 top-0 flex items-center gap-1.5 border-b border-base-300 bg-base-100 px-3 py-2"
-      {%{
-        "style" => "z-index:1000;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch"
-      }}
+      class="fixed left-2 top-2 rounded-box border border-base-300 bg-base-100 shadow-lg"
+      {%{"style" => "z-index:1000;max-width:calc(100vw - 1rem)"}}
     >
-      <span class="mr-1 text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/45">
-        {@label}
-      </span>
-      <a
-        :for={{value, label} <- @cases}
-        id={"#{@id_prefix}-#{value}"}
-        href={"/dev/component-showcase/#{@theme}?state=#{@state}&#{@param}=#{value}"}
-        aria-current={value == @current && "page"}
-        {%{"style" => "white-space:nowrap"}}
-        class={[
-          "rounded-field border px-2 py-1 text-xs font-semibold transition-colors",
-          value == @current && "border-primary bg-primary/10 text-base-content",
-          value != @current &&
-            "border-base-300 text-base-content/60 hover:border-primary/50 hover:text-base-content"
-        ]}
+      <summary
+        id={"#{@id}-summary"}
+        class="flex cursor-pointer items-center gap-2 px-3 py-2 text-xs font-semibold text-base-content"
+        aria-label={@label}
       >
-        {label}
-      </a>
-    </nav>
+        <span class="text-[0.62rem] uppercase tracking-[0.08em] text-base-content/45">
+          {@label}
+        </span>
+        <span class="text-primary">{@current_label}</span>
+      </summary>
+
+      <div
+        class="grid gap-1.5 border-t border-base-300 p-2"
+        {%{
+          "style" =>
+            "grid-template-columns:repeat(auto-fill,minmax(11rem,1fr));width:min(44rem,calc(100vw - 1rem));max-height:70vh;overflow-y:auto"
+        }}
+      >
+        <a
+          :for={{value, label} <- @cases}
+          id={"#{@id_prefix}-#{value}"}
+          href={"/dev/component-showcase/#{@theme}?state=#{@state}&#{@param}=#{value}"}
+          aria-current={value == @current && "page"}
+          class={[
+            "rounded-field border px-2 py-2 text-xs font-semibold transition-colors",
+            value == @current && "border-primary bg-primary/10 text-base-content",
+            value != @current &&
+              "border-base-300 text-base-content/60 hover:border-primary/50 hover:text-base-content"
+          ]}
+        >
+          {label}
+        </a>
+      </div>
+    </details>
     """
   end
 

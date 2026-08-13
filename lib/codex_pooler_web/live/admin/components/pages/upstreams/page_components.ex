@@ -473,7 +473,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   attr :account, :map, default: nil
   attr :form, :any, default: nil
 
-  defp rename_account_dialog(assigns) do
+  def rename_account_dialog(assigns) do
     assigns = assign(assigns, :upstream_actions_docs_url, @upstream_actions_docs_url)
 
     ~H"""
@@ -543,7 +543,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   attr :account, :map, default: nil
   attr :form, :any, required: true
 
-  defp delete_account_dialog(assigns) do
+  def delete_account_dialog(assigns) do
     assigns = assign(assigns, :upstream_actions_docs_url, @upstream_actions_docs_url)
 
     ~H"""
@@ -617,7 +617,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   attr :confirming_saved_reset_redemption, :map, default: nil
   attr :datetime_preferences, :map, required: true
 
-  defp saved_reset_policy_dialog(assigns) do
+  def saved_reset_policy_dialog(assigns) do
     assigns =
       assigns
       |> assign(:saved_reset_docs_url, @saved_reset_docs_url)

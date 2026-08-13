@@ -9,24 +9,28 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseDialogs do
   exist for exactly one render after a create, so photographing them in the app
   means creating real credentials.
 
-  Not covered here, and deliberately: `rename_account_dialog/1`,
-  `delete_account_dialog/1` and `saved_reset_policy_dialog/1` on the upstreams
-  index are `defp`, and the two alert delete dialogs are written inline in
-  `AlertsLive.render/1`. The cockpit twins of the first two are public and are
-  included, so the shared chrome is still covered; making the rest addressable
-  is a production change and is not worth making for a dev surface without
-  asking first.
+  One dialog is still missing: `saved_reset_policy_dialog/1` on the upstreams
+  index. It renders a projection the read model builds - saved-reset banks,
+  redemption availability and its reason - and a hand-written fixture for that
+  shape would drift from the real one without anything failing, which is the
+  opposite of what this gallery is for.
   """
 
   use CodexPoolerWeb, :html
 
   alias CodexPooler.Accounts.User
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
+  alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.SavedResetProjection
+  alias CodexPoolerWeb.DateTimeDisplay
 
   alias CodexPoolerWeb.Admin.{
+    AlertsPageComponents,
     ApiKeyPageComponents,
     InviteCreationDialog,
     InvitesPageComponents,
     OperatorComponents,
+    PoolListComponents,
+    SettingsPageComponents,
     UpstreamCockpitComponents,
     UpstreamPageComponents
   }
@@ -40,9 +44,12 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseDialogs do
   # hands back, then the destructive twin.
   @dialogs [
     {"pool-invite", "Pool · invite"},
+    {"pool-delete", "Pool · delete"},
     {"invite-revoke", "Invite · revoke"},
     {"api-key-secret", "API key · secret"},
     {"api-key-delete", "API key · delete"},
+    {"mcp-token", "MCP · token"},
+    {"mcp-delete", "MCP · delete"},
     {"operator-create", "Operator · create"},
     {"operator-create-receipt", "Operator · password receipt"},
     {"operator-edit", "Operator · edit"},
@@ -50,7 +57,12 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseDialogs do
     {"auth-json", "Upstream · import auth.json"},
     {"cockpit-rename", "Upstream · rename"},
     {"cockpit-delete", "Upstream · delete"},
-    {"cockpit-relink", "Upstream · OAuth relink"}
+    {"cockpit-relink", "Upstream · OAuth relink"},
+    {"upstream-rename", "Upstream · rename (index)"},
+    {"upstream-delete", "Upstream · delete (index)"},
+    {"saved-reset", "Upstream · saved resets"},
+    {"alert-rule-delete", "Alert rule · delete"},
+    {"alert-channel-delete", "Alert channel · delete"}
   ]
 
   @spec dialogs() :: [{String.t(), String.t()}]
@@ -156,6 +168,63 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseDialogs do
       form={fixture_form(%{"id" => "dev-showcase-identity", "confirmation_label" => ""})}
     />
 
+    <PoolListComponents.pool_delete_dialog
+      :if={@dialog == "pool-delete"}
+      deleting_pool={pool()}
+      delete_form={fixture_form(%{"id" => "dev-showcase-pool", "confirmation_slug" => ""})}
+      delete_form_version={1}
+    />
+
+    <SettingsPageComponents.MCP.mcp_created_token_dialog
+      :if={@dialog == "mcp-token"}
+      created_secret={%{key: %{key_prefix: "mcp_4c81"}, raw_token: synthetic_mcp_token()}}
+    />
+
+    <SettingsPageComponents.MCP.mcp_delete_dialog
+      :if={@dialog == "mcp-delete"}
+      key={%{key_prefix: "mcp_4c81", label: "Read-only metadata"}}
+      form={fixture_form(%{"id" => "dev-showcase-mcp"})}
+    />
+
+    <UpstreamPageComponents.rename_account_dialog
+      :if={@dialog == "upstream-rename"}
+      account={%{label: "design-review-account"}}
+      form={fixture_form(%{"account_label" => "design-review-account"})}
+    />
+
+    <UpstreamPageComponents.delete_account_dialog
+      :if={@dialog == "upstream-delete"}
+      account={%{label: "design-review-account"}}
+      form={fixture_form(%{"id" => "dev-showcase-identity", "confirmation_label" => ""})}
+    />
+
+    <UpstreamPageComponents.saved_reset_policy_dialog
+      :if={@dialog == "saved-reset"}
+      account={saved_reset_account()}
+      form={
+        fixture_form(%{
+          "auto_redeem_enabled" => "true",
+          "auto_redeem_min_blocked_minutes" => "60",
+          "auto_redeem_keep_credits" => "0",
+          "auto_redeem_trigger_mode" => "blocked",
+          "auto_redeem_quota_threshold_percent" => "95"
+        })
+      }
+      datetime_preferences={CodexPoolerWeb.DateTimeDisplay.preferences_for_user(nil)}
+    />
+
+    <AlertsPageComponents.Dialogs.rule_delete_dialog
+      :if={@dialog == "alert-rule-delete"}
+      rule={%{display_name: "Weekly quota exhausted"}}
+      form={fixture_form(%{"id" => "dev-showcase-rule"})}
+    />
+
+    <AlertsPageComponents.Dialogs.channel_delete_dialog
+      :if={@dialog == "alert-channel-delete"}
+      channel={%{display_name: "Ops mailbox"}}
+      form={fixture_form(%{"id" => "dev-showcase-channel"})}
+    />
+
     <UpstreamCockpitComponents.Dialogs.oauth_relink_dialog
       :if={@dialog == "cockpit-relink"}
       account_label="design-review-account"
@@ -178,7 +247,41 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseDialogs do
   defp operator_pool_options,
     do: Enum.map(@pool_option_list, fn {name, id} -> %{id: id, name: name} end)
 
+  # Built by running a synthetic identity through the real projection rather
+  # than by hand-writing the map. The saved-reset bank is the richest shape any
+  # of these dialogs reads, and a literal would drift from it silently - which
+  # is the failure this gallery exists to prevent, not to reproduce.
+  defp saved_reset_account do
+    identity = %UpstreamIdentity{
+      id: "dev-showcase-identity",
+      account_label: "design-review-account",
+      saved_reset_first_seen_ledger: %{"version" => 1, "entries" => []}
+    }
+
+    account = %{
+      identity: identity,
+      label: "design-review-account",
+      saved_resets:
+        SavedResetProjection.snapshot(identity, DateTimeDisplay.preferences_for_user(nil))
+    }
+
+    Map.put(
+      account,
+      :saved_reset_redemption_action,
+      SavedResetProjection.redemption_action(account)
+    )
+  end
+
   defp synthetic_api_key, do: "cp_live_9f2a" <> String.duplicate("x7Qk3mZ1", 5)
+  defp synthetic_mcp_token, do: "mcp_4c81" <> String.duplicate("b2Rt8vLp", 4)
+
+  defp pool,
+    do: %{
+      id: "dev-showcase-pool",
+      name: "Design review Pool",
+      slug: "design-review",
+      status: "archived"
+    }
 
   defp invite,
     do: %{id: "dev-showcase-invite", invited_email: "dana@example.com", status: "pending"}

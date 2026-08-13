@@ -236,7 +236,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
 
   attr :created_secret, :map, required: true
 
-  defp mcp_created_token_dialog(assigns) do
+  def mcp_created_token_dialog(assigns) do
     ~H"""
     <dialog
       id="settings-mcp-created-token-dialog"
@@ -288,7 +288,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
   attr :key, :any, required: true
   attr :form, :any, required: true
 
-  defp mcp_delete_dialog(assigns) do
+  def mcp_delete_dialog(assigns) do
     ~H"""
     <dialog
       id="settings-mcp-delete-dialog"

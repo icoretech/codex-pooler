@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
   alias CodexPoolerWeb.Admin.AlertRuleForm
   alias CodexPoolerWeb.Admin.AlertsPageComponents
   alias CodexPoolerWeb.Admin.AlertsPageComponents.{Channels, Incidents, Rules}
+  alias CodexPoolerWeb.Admin.AlertsPageComponents.Dialogs, as: AlertsDialogs
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
 
   @default_tab "rules"
@@ -160,121 +161,12 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
             incident_page_size={@incident_page_size}
           />
         </section>
-        <dialog
-          :if={@deleting_rule}
-          id="alert-rule-delete-dialog"
-          class="modal modal-bottom overflow-x-hidden sm:modal-middle"
-          open
-        >
-          <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
-            <div class="border-b border-base-300 px-6 py-5">
-              <p class="text-sm font-semibold uppercase tracking-wide text-error">Delete rule</p>
-              <h2 class="mt-1 text-2xl font-bold text-base-content">Delete alert rule</h2>
-              <p class="mt-2 text-sm leading-6 text-base-content/70">
-                This removes the rule definition. Existing incident records stay available to later alert workflows.
-              </p>
-            </div>
+        <AlertsDialogs.rule_delete_dialog rule={@deleting_rule} form={@rule_delete_form} />
 
-            <.form
-              id="alert-rule-delete-form"
-              for={@rule_delete_form}
-              phx-submit="confirm_delete_rule"
-              autocomplete="off"
-              class="grid gap-5 p-6"
-            >
-              <.input field={@rule_delete_form[:id]} type="hidden" />
-              <div class="alert alert-warning items-start">
-                <.icon name="hero-exclamation-triangle" class="size-5" />
-                <div class="grid gap-1">
-                  <p class="font-semibold">This deletes {@deleting_rule.display_name}.</p>
-                  <p class="text-sm">
-                    Create it again later if this condition should be evaluated again.
-                  </p>
-                </div>
-              </div>
-            </.form>
-
-            <AdminComponents.dialog_footer id="alert-rule-delete-dialog-footer">
-              <:actions>
-                <AdminComponents.action_button
-                  id="alert-rule-delete-cancel"
-                  label="Cancel"
-                  variant={:ghost}
-                  phx-click="cancel_delete_rule"
-                />
-                <AdminComponents.action_button
-                  id="alert-rule-delete-submit"
-                  icon="hero-trash"
-                  label="Delete rule"
-                  type="submit"
-                  form="alert-rule-delete-form"
-                  variant={:danger}
-                />
-              </:actions>
-            </AdminComponents.dialog_footer>
-          </div>
-          <form method="dialog" class="modal-backdrop">
-            <button type="button" phx-click="cancel_delete_rule">close</button>
-          </form>
-        </dialog>
-
-        <dialog
-          :if={@deleting_channel}
-          id="alert-channel-delete-dialog"
-          class="modal modal-bottom overflow-x-hidden sm:modal-middle"
-          open
-        >
-          <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
-            <div class="border-b border-base-300 px-6 py-5">
-              <p class="text-sm font-semibold uppercase tracking-wide text-error">Delete channel</p>
-              <h2 class="mt-1 text-2xl font-bold text-base-content">Delete alert channel</h2>
-              <p class="mt-2 text-sm leading-6 text-base-content/70">
-                This removes the delivery target. Existing delivery attempts stay available to later alert workflows.
-              </p>
-            </div>
-
-            <.form
-              id="alert-channel-delete-form"
-              for={@channel_delete_form}
-              phx-submit="confirm_delete_channel"
-              autocomplete="off"
-              class="grid gap-5 p-6"
-            >
-              <.input field={@channel_delete_form[:id]} type="hidden" />
-              <div class="alert alert-warning items-start">
-                <.icon name="hero-exclamation-triangle" class="size-5" />
-                <div class="grid gap-1">
-                  <p class="font-semibold">This deletes {@deleting_channel.display_name}.</p>
-                  <p class="text-sm">
-                    Rules using this channel will no longer deliver to it.
-                  </p>
-                </div>
-              </div>
-            </.form>
-
-            <AdminComponents.dialog_footer id="alert-channel-delete-dialog-footer">
-              <:actions>
-                <AdminComponents.action_button
-                  id="alert-channel-delete-cancel"
-                  label="Cancel"
-                  variant={:ghost}
-                  phx-click="cancel_delete_channel"
-                />
-                <AdminComponents.action_button
-                  id="alert-channel-delete-submit"
-                  icon="hero-trash"
-                  label="Delete channel"
-                  type="submit"
-                  form="alert-channel-delete-form"
-                  variant={:danger}
-                />
-              </:actions>
-            </AdminComponents.dialog_footer>
-          </div>
-          <form method="dialog" class="modal-backdrop">
-            <button type="button" phx-click="cancel_delete_channel">close</button>
-          </form>
-        </dialog>
+        <AlertsDialogs.channel_delete_dialog
+          channel={@deleting_channel}
+          form={@channel_delete_form}
+        />
       </section>
     </AdminComponents.admin_shell>
     """

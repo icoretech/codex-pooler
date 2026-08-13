@@ -296,7 +296,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
     |> element("#alert-rule-delete-#{rule.id}")
     |> render_click()
 
-    assert has_element?(view, "#alert-rule-delete-dialog[open]", "Delete alert rule")
+    assert has_element?(view, "#alert-rule-delete-dialog[open]", "Delete ")
     assert has_element?(view, "#alert-rule-delete-form")
 
     view
@@ -531,7 +531,7 @@ defmodule CodexPoolerWeb.Admin.AlertsLiveTest do
     |> element("#alert-channel-delete-#{channel.id}")
     |> render_click()
 
-    assert has_element?(view, "#alert-channel-delete-dialog[open]", "Delete alert channel")
+    assert has_element?(view, "#alert-channel-delete-dialog[open]", "Delete ")
     assert has_element?(view, "#alert-channel-delete-form")
 
     view

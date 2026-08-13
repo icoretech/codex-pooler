@@ -341,7 +341,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLiveTest do
         }
       })
 
-    assert has_element?(view, "#pool-onboarding-invite-ready", "Pool onboarding invite ready")
+    assert has_element?(view, "#pool-onboarding-invite-ready", "Not stored in admin history")
     assert has_element?(view, "#pool-invite-created")
     assert has_element?(view, "#pool-invite-target", "Example Pool")
     refute has_element?(view, "#pool-invite-target", "example-pool")

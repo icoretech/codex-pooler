@@ -27,11 +27,13 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">
-            Pool onboarding
+            Pool invite
           </p>
-          <h2 class="mt-1 text-2xl font-bold text-base-content">Create Pool invite</h2>
+          <h2 class="mt-1 text-2xl font-bold text-base-content">
+            {invite_dialog_title(@last_invite)}
+          </h2>
           <p class="mt-2 max-w-prose text-sm leading-6 text-base-content/70">
-            Create a one-time invite link for a Codex account and assign it to a Pool.
+            {invite_dialog_description(@last_invite)}
           </p>
         </div>
 
@@ -44,9 +46,9 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
             <div class="flex items-start gap-3 rounded-box border border-success/25 bg-success/10 p-4">
               <.icon name="hero-check-circle" class="mt-0.5 size-5 shrink-0 text-success" />
               <div class="grid min-w-0 gap-1">
-                <p class="font-semibold">Pool onboarding invite ready</p>
+                <p class="font-semibold">Not stored in admin history</p>
                 <p class="text-sm leading-6 text-base-content/70">
-                  Share this URL now. It is shown only for this create result and is not stored in admin history.
+                  This is the only place the URL appears. Nothing here can show it again.
                 </p>
                 <p :if={@last_invite.emailed?} id="pool-invite-email-status" class="text-sm">
                   Email sent to {@last_invite.invited_email}.
@@ -196,4 +198,15 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
     </dialog>
     """
   end
+
+  # The header follows the flow: once `last_invite` exists the invite does too,
+  # and "create a one-time invite link" describes a step already taken.
+  defp invite_dialog_title(nil), do: "Create Pool invite"
+  defp invite_dialog_title(_invite), do: "Share this link before closing"
+
+  defp invite_dialog_description(nil),
+    do: "Create a one-time invite link for a Codex account and assign it to a Pool."
+
+  defp invite_dialog_description(invite),
+    do: "It is shown once, and joins #{invite.pool_name}."
 end

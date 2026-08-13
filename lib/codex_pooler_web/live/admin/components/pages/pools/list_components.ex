@@ -70,7 +70,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
   attr :delete_form, Phoenix.HTML.Form, required: true
   attr :delete_form_version, :integer, required: true
 
-  defp pool_delete_dialog(assigns) do
+  def pool_delete_dialog(assigns) do
     ~H"""
     <dialog
       :if={@deleting_pool}
