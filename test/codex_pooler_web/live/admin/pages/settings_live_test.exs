@@ -286,11 +286,11 @@ defmodule CodexPoolerWeb.Admin.SettingsLiveTest do
       |> element("#settings-mcp-key-#{key.id}-delete")
       |> render_click()
 
-    expected_delete_copy =
-      "Deleting this MCP key is permanent. Existing clients using it will fail immediately. Usage is not tracked per key"
-
-    assert dialog_html =~ expected_delete_copy
-    assert has_element?(view, "#settings-mcp-delete-form", expected_delete_copy)
+    # The consequence is stated once, in the dialog header. It used to appear
+    # verbatim twice - description and warning alert - and the alert is gone.
+    assert dialog_html =~ "start failing immediately"
+    assert has_element?(view, "#settings-mcp-delete-dialog", key.label)
+    assert has_element?(view, "#settings-mcp-delete-dialog", key.key_prefix)
 
     view
     |> element("#settings-mcp-delete-form")

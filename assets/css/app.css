@@ -1963,12 +1963,14 @@ body {
    reject. The field id carries a form version, so the selector goes through the
    form: it holds exactly one text input. */
 #api-key-delete-dialog:has(#api-key-delete-form input[type="text"]:invalid)
-  #api-key-delete-submit {
-  pointer-events: none;
-  opacity: 0.45;
-}
-
-#pool-delete-dialog:has(#pool-delete-form input[type="text"]:invalid) #pool-delete-submit {
+  #api-key-delete-submit,
+#pool-delete-dialog:has(#pool-delete-form input[type="text"]:invalid) #pool-delete-submit,
+#delete-upstream-account-dialog:has(#delete-upstream-account-form input[type="text"]:invalid)
+  #delete-upstream-account-submit,
+#cockpit-delete-upstream-account-dialog:has(
+    #cockpit-delete-upstream-account-form input[type="text"]:invalid
+  )
+  #cockpit-delete-upstream-account-submit {
   pointer-events: none;
   opacity: 0.45;
 }

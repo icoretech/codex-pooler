@@ -104,7 +104,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
             type="text"
             label={"Type #{@api_key.key_prefix} to confirm"}
             placeholder={@api_key.key_prefix}
-            pattern={@api_key.key_prefix}
+            pattern={Regex.escape(@api_key.key_prefix)}
             required
           />
         </.form>

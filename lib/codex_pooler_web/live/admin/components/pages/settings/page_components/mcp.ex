@@ -297,10 +297,12 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
     >
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
-          <p class="text-sm font-semibold uppercase tracking-wide text-error">Permanent delete</p>
-          <h2 class="mt-1 text-2xl font-bold text-base-content">Delete MCP key</h2>
+          <p class="text-sm font-semibold uppercase tracking-wide text-error">MCP key</p>
+          <h2 class="mt-1 text-2xl font-bold text-base-content">Delete {@key.label}?</h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
-            Deleting this MCP key is permanent. Existing clients using it will fail immediately. Usage is not tracked per key
+            Clients authenticating with prefix
+            <span class="font-semibold text-base-content">{@key.key_prefix}</span>
+            start failing immediately. This cannot be undone.
           </p>
         </div>
         <.form
@@ -311,18 +313,6 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
           class="grid gap-5 p-5 sm:p-6"
         >
           <.input field={@form[:id]} type="hidden" />
-          <div class="alert alert-warning items-start">
-            <.icon name="hero-exclamation-triangle" class="size-5" />
-            <div class="grid gap-1">
-              <p class="font-semibold">
-                Deleting this MCP key is permanent. Existing clients using it will fail immediately. Usage is not tracked per key
-              </p>
-              <p class="text-sm">This removes {@key.label} permanently.</p>
-              <p class="text-sm">
-                Clients using prefix {@key.key_prefix} stop authenticating immediately.
-              </p>
-            </div>
-          </div>
         </.form>
 
         <AdminComponents.dialog_footer id="settings-mcp-delete-dialog-footer">
@@ -336,7 +326,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
             <AdminComponents.action_button
               id="settings-mcp-delete-submit"
               icon="hero-trash"
-              label="Delete MCP key"
+              label="Delete"
               type="submit"
               form="settings-mcp-delete-form"
               variant={:danger}

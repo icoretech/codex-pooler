@@ -102,7 +102,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
             id={"pool_delete_confirmation_slug_#{@delete_form_version}"}
             type="text"
             label={"Type #{@deleting_pool.slug} to confirm"}
-            pattern={@deleting_pool.slug}
+            pattern={Regex.escape(@deleting_pool.slug)}
             placeholder={@deleting_pool.slug}
             required
           />

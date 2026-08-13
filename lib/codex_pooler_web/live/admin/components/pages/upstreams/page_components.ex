@@ -555,12 +555,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
     >
       <div class="modal-box sm:max-w-xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
-          <p class="text-sm font-semibold uppercase tracking-wide text-error">
-            Delete upstream account
-          </p>
-          <h2 class="mt-1 text-2xl font-bold text-base-content">Confirm upstream account deletion</h2>
+          <p class="text-sm font-semibold uppercase tracking-wide text-error">Upstream account</p>
+          <h2 class="mt-1 text-2xl font-bold text-base-content">Delete {@account.label}?</h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
-            Type the account label exactly to remove this upstream account from operator routing surfaces.
+            It stops serving traffic immediately and leaves every routing surface with it.
+            This cannot be undone.
           </p>
         </div>
         <.form
@@ -571,13 +570,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
           class="grid gap-5 p-5 sm:p-6"
         >
           <.input field={@form[:id]} type="hidden" />
-          <p class="rounded-box border border-base-300 bg-base-200/60 p-3 text-sm text-base-content/70">
-            Confirmation label: <span class="font-semibold text-base-content">{@account.label}</span>
-          </p>
           <.input
             field={@form[:confirmation_label]}
             type="text"
-            label="Account label confirmation"
+            label={"Type #{@account.label} to confirm"}
+            pattern={Regex.escape(@account.label)}
             placeholder={@account.label}
             required
           />
