@@ -78,6 +78,7 @@
     "openai-python-responses-custom-tool.json",
     "openai-node-audio-transcription.json",
     "openai-python-chat-basic.json",
+    "openai-node-chat-custom-tool.json",
     "openai-python-audio-transcription.json",
     "opencode-responses-replay-continuation.json",
     "omp-responses-gpt56-clean-first-turn.json",

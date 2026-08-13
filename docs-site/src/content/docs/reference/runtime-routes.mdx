@@ -324,7 +324,7 @@ Supported work is translated into Codex-compatible requests and then routed thro
       <td><code>/backend-api/codex/responses</code></td>
       <td>Yes</td>
       <td>Translated</td>
-      <td>Chat Completions payloads are coerced to Codex Responses work and normalized back to Chat Completions shape. Input audio uses the public <code>&#123;data, format&#125;</code> shape and accepts <code>WAV</code>, <code>MP3</code>, <code>M4A</code>, <code>WebM</code>, and <code>OGG</code>. The decoded audio ceiling is 50 MiB (52,428,800 bytes), while the configured request envelope may reject a request earlier. Malformed, unsupported, or oversized audio returns a sanitized <code>invalid_request</code> before upstream dispatch. Early streaming terminal errors emit one public error chunk before any assistant role chunk. After visible output, a stream that ends without an upstream terminal emits one nested <code>data: &#123;"error":&#123;...&#125;&#125;</code> chunk with no following <code>[DONE]</code>; the translated <code>POST /backend-api/codex/v1/chat/completions</code> alias has the same OpenAI-compatible HTTP SSE behavior.</td>
+      <td>Chat Completions payloads are coerced to Codex Responses work and normalized back to Chat Completions shape. Official nested custom-tool definitions and named custom choices are translated to the supported flat Responses subset; completed and streamed custom calls return the Chat <code>custom</code> shape, and streamed free-form input is never parsed as function JSON. Input audio uses the public <code>&#123;data, format&#125;</code> shape and accepts <code>WAV</code>, <code>MP3</code>, <code>M4A</code>, <code>WebM</code>, and <code>OGG</code>. The decoded audio ceiling is 50 MiB (52,428,800 bytes), while the configured request envelope may reject a request earlier. Malformed, unsupported, or oversized audio returns a sanitized <code>invalid_request</code> before upstream dispatch. Early streaming terminal errors emit one public error chunk before any assistant role chunk. After visible output, a stream that ends without an upstream terminal emits one nested <code>data: &#123;"error":&#123;...&#125;&#125;</code> chunk with no following <code>[DONE]</code>; the translated <code>POST /backend-api/codex/v1/chat/completions</code> alias has the same OpenAI-compatible HTTP SSE behavior.</td>
     </tr>
     <tr>
       <td><code>GET /v1/usage</code></td>
@@ -487,11 +487,22 @@ model, including a Chat Completions named-function choice. See
 [Responses Lite and Full](/reference/responses-lite-vs-full/) for what the two
 serving modes change on the outgoing request. String choices such
 as `auto` are accepted in both modes. This is separate from accepted
-`custom_tool_call` replay input. Chat Completions does not accept executable
-custom definitions or custom choices, and actual execution availability still
-depends on the selected model and upstream account. Smoke verification retains
-metadata only. This narrow contract does not imply backend, Chat, or broad
-OpenAI tool parity.
+`custom_tool_call` replay input.
+
+Translated Chat Completions accepts the official nested custom definition
+shape, with `type: "custom"` and a nested `custom` object containing a nonblank
+`name` plus optional `description` and `format`. Its named custom choice uses the
+same outer wrapper and a nested custom name. Codex Pooler flattens those values
+into the supported Responses request shape, then projects completed and streamed
+`custom_tool_call` output back into the Chat `custom` object. Custom input stays
+free-form text across split SSE deltas and is never parsed as function JSON.
+Direct-Responses-only fields such as `defer_loading` and `allowed_callers` are
+not accepted inside the Chat wrapper. Malformed wrappers and unrelated tool
+families still fail before dispatch.
+
+Actual execution availability still depends on the selected model and upstream
+account. Smoke verification retains metadata only. This narrow contract does
+not imply backend or broad OpenAI tool parity.
 
 When an accepted namespace custom declaration has one exact executable name,
 public Responses HTTP, SSE, and direct or owner-forwarded websocket output

@@ -51,32 +51,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
          :ok <- validate_token_limits(payload),
          :ok <- validate_verbosity(payload),
          :ok <- validate_translatable_prompt_cache_breakpoints(payload),
-         :ok <- reject_custom_tool_definitions(payload),
-         :ok <- reject_custom_tool_choice(payload),
+         :ok <- reject_namespaced_custom_tool_definitions(payload),
+         :ok <- validate_custom_tool_choice_shape(payload),
          {:ok, response_payload} <- response_payload(payload) do
       {:ok, %{chat_payload: payload, response_payload: response_payload}}
     end
   end
-
-  defp reject_custom_tool_definitions(%{"tools" => tools}) when is_list(tools) do
-    if Enum.any?(tools, &custom_tool_definition?/1),
-      do: {:error, Error.invalid_request("tool shape is not translatable", "tools")},
-      else: :ok
-  end
-
-  defp reject_custom_tool_definitions(_payload), do: :ok
-
-  defp custom_tool_definition?(%{"type" => "custom"}), do: true
-
-  defp custom_tool_definition?(%{"tools" => tools}) when is_list(tools),
-    do: Enum.any?(tools, &custom_tool_definition?/1)
-
-  defp custom_tool_definition?(_tool), do: false
-
-  defp reject_custom_tool_choice(%{"tool_choice" => %{"type" => "custom"}}),
-    do: {:error, Error.invalid_request("tool_choice shape is not translatable", "tool_choice")}
-
-  defp reject_custom_tool_choice(_payload), do: :ok
 
   defp reject_legacy_functions(payload) do
     cond do
@@ -91,6 +71,27 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
         :ok
     end
   end
+
+  defp reject_namespaced_custom_tool_definitions(%{"tools" => tools}) when is_list(tools) do
+    if Enum.any?(tools, &namespaced_custom_tool_definition?/1),
+      do: {:error, Error.invalid_request("tool shape is not translatable", "tools")},
+      else: :ok
+  end
+
+  defp reject_namespaced_custom_tool_definitions(_payload), do: :ok
+
+  defp namespaced_custom_tool_definition?(%{"type" => "namespace", "tools" => tools})
+       when is_list(tools),
+       do: Enum.any?(tools, &custom_tool_definition?/1)
+
+  defp namespaced_custom_tool_definition?(_tool), do: false
+
+  defp custom_tool_definition?(%{"type" => "custom"}), do: true
+
+  defp custom_tool_definition?(%{"tools" => tools}) when is_list(tools),
+    do: Enum.any?(tools, &custom_tool_definition?/1)
+
+  defp custom_tool_definition?(_tool), do: false
 
   defp messages(%{"messages" => messages}) when is_list(messages) and messages != [] do
     if Enum.all?(messages, &valid_message?/1) do
@@ -718,6 +719,16 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
          "tools"
        )}
 
+  defp translate_tool(%{"type" => "custom", "custom" => %{} = custom} = tool) do
+    with :ok <- validate_exact_custom_keys(tool, ["type", "custom"]),
+         :ok <- validate_exact_custom_keys(custom, ["name", "description", "format"]) do
+      {:ok, Map.put(custom, "type", "custom")}
+    end
+  end
+
+  defp translate_tool(%{"type" => "custom"}),
+    do: {:error, Error.invalid_request("custom tool requires nested custom properties", "tools")}
+
   defp translate_tool(%{"type" => type} = tool)
        when type in ["web_search_preview", "image_generation"],
        do: {:ok, tool}
@@ -725,11 +736,47 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Chat do
   defp translate_tool(_tool),
     do: {:error, Error.invalid_request("tool shape is not translatable", "tools")}
 
+  defp validate_custom_tool_choice_shape(%{
+         "tool_choice" => %{"type" => "custom", "custom" => %{} = custom} = choice
+       }) do
+    with :ok <- validate_exact_custom_choice_keys(choice, ["type", "custom"]) do
+      validate_exact_custom_choice_keys(custom, ["name"])
+    end
+  end
+
+  defp validate_custom_tool_choice_shape(%{"tool_choice" => %{"type" => "custom"}}),
+    do: {:error, Error.invalid_request("tool_choice shape is not translatable", "tool_choice")}
+
+  defp validate_custom_tool_choice_shape(_payload), do: :ok
+
+  defp validate_exact_custom_keys(value, allowed_keys) do
+    case value |> Map.keys() |> Enum.reject(&(&1 in allowed_keys)) do
+      [] -> :ok
+      [_key | _rest] -> {:error, Error.invalid_request("tool shape is not translatable", "tools")}
+    end
+  end
+
+  defp validate_exact_custom_choice_keys(value, allowed_keys) do
+    case value |> Map.keys() |> Enum.reject(&(&1 in allowed_keys)) do
+      [] ->
+        :ok
+
+      [_key | _rest] ->
+        {:error, Error.invalid_request("tool_choice shape is not translatable", "tool_choice")}
+    end
+  end
+
   defp maybe_put_tool_choice(acc, %{
          "tool_choice" => %{"type" => "function", "function" => %{"name" => name}}
        })
        when is_binary(name),
        do: Map.put(acc, "tool_choice", %{"type" => "function", "name" => name})
+
+  defp maybe_put_tool_choice(acc, %{
+         "tool_choice" => %{"type" => "custom", "custom" => %{"name" => name}}
+       })
+       when is_binary(name),
+       do: Map.put(acc, "tool_choice", %{"type" => "custom", "name" => name})
 
   defp maybe_put_tool_choice(acc, %{"tool_choice" => tool_choice}),
     do: Map.put(acc, "tool_choice", tool_choice)

@@ -4057,58 +4057,96 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       end)
     end
 
-    test "Chat rejects custom definitions and choices with local untranslatable errors" do
-      messages_payload = %{
+    test "Chat translates official custom definitions and named choices" do
+      custom_tool = %{
+        "type" => "custom",
+        "custom" => %{
+          "name" => "custom_fixture",
+          "description" => "Processes free-form fixture input",
+          "format" => %{"type" => "text"}
+        }
+      }
+
+      custom_choice = %{
+        "type" => "custom",
+        "custom" => %{"name" => "custom_fixture"}
+      }
+
+      function_parameters = %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "properties" => %{"query" => %{"type" => "string"}},
+        "required" => ["query"]
+      }
+
+      payload = %{
+        "model" => "gpt-fixture-text",
+        "messages" => [%{"role" => "user", "content" => "synthetic input"}],
+        "tools" => [function_tool("lookup_fixture", function_parameters, true), custom_tool],
+        "tool_choice" => custom_choice
+      }
+
+      assert {:ok, result} = Chat.coerce(payload)
+
+      assert result.payload["tools"] == [
+               flat_function_tool("lookup_fixture", function_parameters, true),
+               %{
+                 "type" => "custom",
+                 "name" => "custom_fixture",
+                 "description" => "Processes free-form fixture input",
+                 "format" => %{"type" => "text"}
+               }
+             ]
+
+      assert result.payload["tool_choice"] == %{
+               "type" => "custom",
+               "name" => "custom_fixture"
+             }
+    end
+
+    test "Chat rejects malformed custom definitions and named choices" do
+      base_payload = %{
         "model" => "gpt-fixture-text",
         "messages" => [%{"role" => "user", "content" => "synthetic input"}]
       }
 
-      fallback_payload = %{
-        "model" => "gpt-fixture-text",
-        "input" => "synthetic fallback input"
+      valid_custom_tool = %{
+        "type" => "custom",
+        "custom" => %{"name" => "custom_fixture"}
       }
 
-      custom_tool = %{"type" => "custom", "name" => "custom_fixture"}
-      custom_choice = %{"type" => "custom", "name" => "custom_fixture"}
-
       invalid_cases = [
-        {Map.put(messages_payload, "tools", [custom_tool]),
-         %{
-           status: 400,
-           code: "invalid_request",
-           message: "tool shape is not translatable",
-           param: "tools"
-         }},
-        {Map.put(fallback_payload, "tools", [custom_tool]),
-         %{
-           status: 400,
-           code: "invalid_request",
-           message: "tool shape is not translatable",
-           param: "tools"
-         }},
-        {messages_payload
-         |> Map.put("tools", [function_tool("lookup_fixture", %{}, nil)])
-         |> Map.put("tool_choice", custom_choice),
-         %{
-           status: 400,
-           code: "invalid_request",
-           message: "tool_choice shape is not translatable",
-           param: "tool_choice"
-         }},
-        {fallback_payload
-         |> Map.put("tools", [flat_function_tool("lookup_fixture", %{}, nil)])
-         |> Map.put("tool_choice", custom_choice),
-         %{
-           status: 400,
-           code: "invalid_request",
-           message: "tool_choice shape is not translatable",
-           param: "tool_choice"
-         }}
+        {Map.put(base_payload, "tools", [%{"type" => "custom", "name" => "custom_fixture"}]),
+         "tools"},
+        {Map.put(base_payload, "tools", [%{"type" => "custom", "custom" => %{}}]), "tools"},
+        {Map.put(base_payload, "tools", [
+           %{
+             "type" => "custom",
+             "custom" => %{"name" => "custom_fixture", "unsupported" => true}
+           }
+         ]), "tools"},
+        {base_payload
+         |> Map.put("tools", [valid_custom_tool])
+         |> Map.put("tool_choice", %{"type" => "custom", "name" => "custom_fixture"}),
+         "tool_choice"},
+        {base_payload
+         |> Map.put("tools", [valid_custom_tool])
+         |> Map.put("tool_choice", %{
+           "type" => "custom",
+           "custom" => %{"name" => "custom_fixture"},
+           "unsupported" => true
+         }), "tool_choice"},
+        {base_payload
+         |> Map.put("tools", [valid_custom_tool])
+         |> Map.put("tool_choice", %{
+           "type" => "custom",
+           "custom" => %{"name" => "missing_fixture"}
+         }), "tool_choice"}
       ]
 
-      Enum.each(invalid_cases, fn {payload, expected_reason} ->
-        assert {:error, ^expected_reason} = Chat.validate(payload)
-        assert {:error, ^expected_reason} = Chat.coerce(payload)
+      Enum.each(invalid_cases, fn {payload, expected_param} ->
+        assert {:error, %{status: 400, code: "invalid_request", param: ^expected_param}} =
+                 Chat.coerce(payload)
       end)
     end
 

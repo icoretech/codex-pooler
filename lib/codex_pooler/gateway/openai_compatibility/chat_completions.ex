@@ -185,6 +185,11 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
     tool_call_arguments_chunk(decoded, state)
   end
 
+  defp normalize_stream_event("response.custom_tool_call_input.delta", decoded, state) do
+    state = sync_response_state(state, decoded)
+    custom_tool_call_input_chunk(decoded, state)
+  end
+
   defp normalize_stream_event(type, decoded, state) when is_binary(type) do
     cond do
       codex_event?(type) ->
@@ -260,6 +265,26 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
     {chat_sse_chunk(delta, nil, state), mark_visible(state)}
   end
 
+  defp tool_call_item_chunk(%{"type" => "custom_tool_call"} = item, context, state) do
+    index = tool_call_index(item, context)
+
+    delta = %{
+      "tool_calls" => [
+        %{
+          "index" => index,
+          "id" => tool_call_id(item, context, index),
+          "type" => "custom",
+          "custom" => %{
+            "name" => decoded_string(item, "name") || "tool",
+            "input" => decoded_string(item, "input") || ""
+          }
+        }
+      ]
+    }
+
+    {chat_sse_chunk(delta, nil, state), mark_visible(state)}
+  end
+
   defp tool_call_item_chunk(_item, _context, state), do: {[], state}
 
   defp tool_call_arguments_chunk(decoded, state) do
@@ -270,6 +295,21 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
         %{
           "index" => index,
           "function" => %{"arguments" => decoded_string(decoded, "delta") || ""}
+        }
+      ]
+    }
+
+    {chat_sse_chunk(delta, nil, state), mark_visible(state)}
+  end
+
+  defp custom_tool_call_input_chunk(decoded, state) do
+    index = Map.get(decoded, "output_index") || 0
+
+    delta = %{
+      "tool_calls" => [
+        %{
+          "index" => index,
+          "custom" => %{"input" => decoded_string(decoded, "delta") || ""}
         }
       ]
     }
@@ -431,18 +471,37 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
   defp output_tool_calls(decoded) do
     decoded
     |> output_items()
-    |> Enum.filter(&(Map.get(&1, "type") == "function_call"))
+    |> Enum.filter(&(Map.get(&1, "type") in ["function_call", "custom_tool_call"]))
     |> Enum.with_index()
-    |> Enum.map(fn {item, index} ->
-      %{
-        "id" => tool_call_id(item),
-        "type" => "function",
-        "function" => %{
-          "name" => decoded_string(item, "name") || "tool",
-          "arguments" => decoded_string(item, "arguments") || ""
-        },
-        "index" => index
-      }
+    |> Enum.flat_map(fn
+      {%{"type" => "function_call"} = item, index} ->
+        [
+          %{
+            "id" => tool_call_id(item),
+            "type" => "function",
+            "function" => %{
+              "name" => decoded_string(item, "name") || "tool",
+              "arguments" => decoded_string(item, "arguments") || ""
+            },
+            "index" => index
+          }
+        ]
+
+      {%{"type" => "custom_tool_call"} = item, index} ->
+        [
+          %{
+            "id" => tool_call_id(item),
+            "type" => "custom",
+            "custom" => %{
+              "name" => decoded_string(item, "name") || "tool",
+              "input" => decoded_string(item, "input") || ""
+            },
+            "index" => index
+          }
+        ]
+
+      {_item, _index} ->
+        []
     end)
     |> case do
       [] -> nil
@@ -562,8 +621,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
       _value -> nil
     end
   end
-
-  defp decoded_string(_decoded, _key), do: nil
 
   defp service_tier(decoded), do: decoded_string(decoded, "service_tier")
 

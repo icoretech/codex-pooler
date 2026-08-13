@@ -838,14 +838,15 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       feature = CompatibilityMatrix.by_slug!(:responses_executable_custom_tools)
       fixture = CompatibilityMatrix.fixture!(:responses_executable_custom_tools)
 
-      assert feature.current == :direct_responses_custom_tool_admission
+      assert feature.current == :responses_and_chat_custom_tool_admission
 
       assert feature.routes == [
                %{method: :post, path: "/v1/responses"},
-               %{method: :get, path: "/v1/responses", transport: "websocket"}
+               %{method: :get, path: "/v1/responses", transport: "websocket"},
+               %{method: :post, path: "/v1/chat/completions"}
              ]
 
-      assert fixture.scope == "direct_public_responses"
+      assert fixture.scope == "direct_public_responses_and_translated_chat"
       assert fixture.formats == ["omitted", "text", "grammar_lark", "grammar_regex"]
       assert fixture.allowed_callers_null == true
 
@@ -877,7 +878,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
              ]
 
       assert fixture.custom_replay_contract == "separate_input_item_shape"
-      assert fixture.chat_supported == false
+      assert fixture.chat_supported == true
+      assert fixture.chat.streamed_input == "free_form_fragments_not_json_parsed"
       assert fixture.provider_availability == "selected_model_and_account_dependent"
       assert fixture.broad_openai_tool_parity == false
     end
@@ -917,6 +919,15 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
              } = sdk_shape_row!("openai-python.responses.executable_custom_tool.v1")
 
       assert %{
+               source: "OpenAI Node `openai`",
+               version: "commit `6fa9152eb97b7a36e3c555fbdeaaa241423ae91e`",
+               endpoint: "`POST /v1/chat/completions`",
+               decision: "translate",
+               observed_shape:
+                 "Request tools use exact outer `type=custom` and nested `custom` with required nonblank `name` plus optional `description` and `format`; named choice nests the custom name; output calls use `type=custom` with nested `custom.name` and free-form `custom.input`"
+             } = sdk_shape_row!("openai-node.chat.custom_tool.v1")
+
+      assert %{
                source: "Vercel OpenAI provider `@ai-sdk/openai`",
                version: "`3.0.65+`",
                decision: "accept",
@@ -934,7 +945,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                observed_shape:
                  "Top-level `tools` entry has exact `type=namespace`, nonblank `name` and `description`, and a nonempty `tools` list whose children are exact flat `function` or exact executable `custom` definitions; typed custom choice has exact `type` and `name`",
                notes:
-                 "Direct public Responses HTTP and websocket preserve valid namespace custom definitions and exact typed custom choices in Full mode. HTTP, SSE, direct websocket, and owner-forwarded websocket output restore a missing or null custom_tool_call namespace only when one exact namespaced custom declaration matches, while explicit, flat, unknown, and non-unique namespaces remain unchanged. Lite keeps the existing pre-dispatch `unsupported_parameter` rejection for map-shaped `tool_choice`; Chat custom definitions/choices, hosted/MCP/tool_search/nested namespace children, blank namespace names, malformed custom fields, and global executable-name collisions remain excluded. This Codex provenance is separate from the OpenAI Python direct-custom and Vercel namespace-function rows."
+                 "Direct public Responses HTTP and websocket preserve valid namespace custom definitions and exact typed custom choices in Full mode. HTTP, SSE, direct websocket, and owner-forwarded websocket output restore a missing or null custom_tool_call namespace only when one exact namespaced custom declaration matches, while explicit, flat, unknown, and non-unique namespaces remain unchanged. Lite keeps the existing pre-dispatch `unsupported_parameter` rejection for map-shaped `tool_choice`; hosted/MCP/tool_search/nested namespace children, blank namespace names, malformed custom fields, and global executable-name collisions remain excluded. Chat uses a separate official nested wrapper and does not add namespace support. This Codex provenance is separate from the OpenAI Python direct-custom, OpenAI Node Chat-custom, and Vercel namespace-function rows."
              }
     end
 

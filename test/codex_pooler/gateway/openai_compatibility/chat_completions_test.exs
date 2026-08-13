@@ -19,6 +19,36 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
         refute Map.has_key?(ChatCompletions.normalize_response(response, payload), "service_tier")
       end
     end
+
+    test "projects completed custom tool calls without parsing free-form input" do
+      input = "print(\"hello\")\nreturn 42"
+
+      normalized =
+        ChatCompletions.normalize_response(
+          %{
+            "id" => "resp_custom_fixture",
+            "status" => "completed",
+            "output" => [
+              %{
+                "type" => "custom_tool_call",
+                "call_id" => "call_custom_fixture",
+                "name" => "code_exec",
+                "input" => input
+              }
+            ]
+          },
+          %{"model" => "gpt-example"}
+        )
+
+      assert get_in(normalized, ["choices", Access.at(0), "message", "tool_calls"]) == [
+               %{
+                 "id" => "call_custom_fixture",
+                 "type" => "custom",
+                 "custom" => %{"name" => "code_exec", "input" => input},
+                 "index" => 0
+               }
+             ]
+    end
   end
 
   describe "normalize_stream_data/2" do
@@ -163,6 +193,55 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
 
       assert Enum.map(tool_calls, &get_in(&1, ["function", "arguments"])) == [arguments]
       assert Enum.map(tool_calls, & &1["id"]) == ["call_terminal_only"]
+    end
+
+    test "streams custom tool headers and free-form input fragments" do
+      state = ChatCompletions.stream_state(%{"model" => "gpt-example"})
+
+      stream =
+        [
+          sse_event("response.output_item.added", %{
+            "type" => "response.output_item.added",
+            "output_index" => 0,
+            "item" => %{
+              "type" => "custom_tool_call",
+              "call_id" => "call_custom_fixture",
+              "name" => "code_exec",
+              "input" => ""
+            }
+          }),
+          sse_event("response.custom_tool_call_input.delta", %{
+            "type" => "response.custom_tool_call_input.delta",
+            "output_index" => 0,
+            "call_id" => "call_custom_fixture",
+            "delta" => "print(\"hel"
+          }),
+          sse_event("response.custom_tool_call_input.delta", %{
+            "type" => "response.custom_tool_call_input.delta",
+            "output_index" => 0,
+            "call_id" => "call_custom_fixture",
+            "delta" => "lo\")\nreturn 42"
+          })
+        ]
+        |> IO.iodata_to_binary()
+
+      assert {normalized, _state} = ChatCompletions.normalize_stream_data(stream, state)
+
+      assert normalized
+             |> normalized_sse_payloads()
+             |> Enum.flat_map(
+               &(get_in(&1, ["choices", Access.at(0), "delta", "tool_calls"]) || [])
+             ) ==
+               [
+                 %{
+                   "index" => 0,
+                   "id" => "call_custom_fixture",
+                   "type" => "custom",
+                   "custom" => %{"name" => "code_exec", "input" => ""}
+                 },
+                 %{"index" => 0, "custom" => %{"input" => "print(\"hel"}},
+                 %{"index" => 0, "custom" => %{"input" => "lo\")\nreturn 42"}}
+               ]
     end
 
     test "adds a literal tier only to chunks emitted after it is observed" do

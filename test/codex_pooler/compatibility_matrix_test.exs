@@ -204,13 +204,13 @@ defmodule CodexPooler.CompatibilityMatrixTest do
   end
 
   describe "Responses tool compatibility contract" do
-    test "separates executable custom tools from replay and Chat" do
+    test "separates executable custom tools from replay and translates Chat" do
       feature = CompatibilityMatrix.by_slug!(:responses_executable_custom_tools)
       fixture = CompatibilityMatrix.fixture!(:responses_executable_custom_tools)
 
-      assert feature.current == :direct_responses_custom_tool_admission
+      assert feature.current == :responses_and_chat_custom_tool_admission
       assert feature.contract =~ "custom replay is a separate input-item contract"
-      assert feature.contract =~ "Chat custom definitions and choices remain unsupported"
+      assert feature.contract =~ "without parsing free-form input as JSON"
       assert feature.contract =~ "selected model and upstream account"
       assert fixture.required_keys == ["type", "name"]
       assert fixture.allowed_callers == ["direct", "programmatic"]
@@ -230,7 +230,17 @@ defmodule CodexPooler.CompatibilityMatrixTest do
              }
 
       assert fixture.custom_replay_contract == "separate_input_item_shape"
-      assert fixture.chat_supported == false
+      assert fixture.chat_supported == true
+
+      assert fixture.chat == %{
+               request_definition: "nested_type_and_custom",
+               optional_definition_fields: ["description", "format"],
+               typed_choice: "nested_type_and_custom_name",
+               upstream_translation: "flat_responses_custom",
+               completed_output: "nested_chat_custom_call",
+               streamed_input: "free_form_fragments_not_json_parsed"
+             }
+
       assert fixture.broad_openai_tool_parity == false
     end
 

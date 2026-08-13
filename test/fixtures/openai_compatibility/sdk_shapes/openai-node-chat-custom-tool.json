@@ -1,0 +1,58 @@
+{
+  "schema_version": "2026-05-24.sdk-shape-corpus.v1",
+  "scenario_id": "openai-node.chat.custom_tool.v1",
+  "sdk_name": "OpenAI Node",
+  "sdk_package": "openai",
+  "sdk_version": "source commit 6fa9152eb97b7a36e3c555fbdeaaa241423ae91e",
+  "version_provenance": "Checked-in OpenAI Node reference source at commit 6fa9152eb97b7a36e3c555fbdeaaa241423ae91e dated 2026-08-12; only generated Chat request/output types and parser/stream behavior were used as shape sources.",
+  "endpoint": "/v1/chat/completions",
+  "http_method": "POST",
+  "scenario": "Chat Completions request and response using one custom tool, a named custom choice, and split free-form streamed input.",
+  "top_level_keys": ["model", "messages", "tools", "tool_choice", "stream"],
+  "input_item_types": ["chat_message:user"],
+  "content_part_types": ["text"],
+  "tool_shape_keys": [
+    "type",
+    "custom",
+    "custom.name",
+    "custom.description",
+    "custom.format",
+    "custom.input"
+  ],
+  "expected_decision": {
+    "status": "translate",
+    "allowed_values": ["accept", "translate", "reject", "passthrough"]
+  },
+  "owner_placeholder": "CodexPooler.Gateway.OpenAICompatibility.Chat",
+  "synthetic_data_policy": {
+    "model_placeholder": "sample-model",
+    "message_placeholder": "sample-user-message",
+    "tool_name_placeholder": "sample-custom-tool",
+    "tool_call_placeholder": "sample-tool-call",
+    "custom_input_stored": false
+  },
+  "structural_summary": {
+    "payload_kind": "chat_nested_custom_tool",
+    "required_definition_keys": ["type", "custom", "custom.name"],
+    "optional_definition_keys": ["custom.description", "custom.format"],
+    "typed_choice_keys": ["type", "custom", "custom.name"],
+    "output_shape": ["type", "custom.name", "custom.input"],
+    "stream_input": "free_form_fragments_not_json_parsed",
+    "raw_payload_stored": false,
+    "placeholder_values_only": true,
+    "notes": [
+      "The Chat wrapper is translated to the supported flat Responses custom-tool subset.",
+      "Custom input is free-form text and is not parsed against a function arguments schema.",
+      "Provider availability remains dependent on the selected model and upstream account."
+    ]
+  },
+  "redaction_status": {
+    "metadata_only": true,
+    "contains_real_prompt": false,
+    "contains_credentials": false,
+    "contains_headers": false,
+    "contains_media_or_file_bytes": false,
+    "contains_request_body": false,
+    "contains_custom_input": false
+  }
+}

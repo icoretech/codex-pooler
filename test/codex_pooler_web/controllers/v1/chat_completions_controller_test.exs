@@ -2065,35 +2065,132 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert_no_chat_dispatch!(upstream)
   end
 
-  test "POST /v1/chat/completions rejects custom definitions and choices before dispatch",
+  test "POST /v1/chat/completions translates custom definitions, choices, and completed calls",
        %{conn: conn} do
-    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    input = "print(\"hello\")\nreturn 42"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_chat_custom",
+          "status" => "completed",
+          "output" => [
+            %{
+              "type" => "custom_tool_call",
+              "call_id" => "call_chat_custom",
+              "name" => "code_exec",
+              "input" => input
+            }
+          ]
+        })
+      )
+
     setup = gateway_setup(upstream)
 
-    cases = [
-      {Map.put(chat_payload(setup), "tools", [%{"type" => "custom", "name" => "fixture"}]),
-       %{
-         "code" => "invalid_request",
-         "message" => "tool shape is not translatable",
-         "param" => "tools"
-       }},
-      {chat_payload(setup)
-       |> Map.put("tools", [function_tool()])
-       |> Map.put("tool_choice", %{"type" => "custom", "name" => "fixture"}),
-       %{
-         "code" => "invalid_request",
-         "message" => "tool_choice shape is not translatable",
-         "param" => "tool_choice"
-       }}
-    ]
+    custom = %{
+      "name" => "code_exec",
+      "description" => "Executes fixture input",
+      "format" => %{"type" => "text"}
+    }
 
-    Enum.each(cases, fn {payload, expected_error} ->
-      response = conn |> recycle() |> auth(setup) |> post("/v1/chat/completions", payload)
-      assert %{"error" => error} = json_response(response, 400)
-      assert Map.take(error, Map.keys(expected_error)) == expected_error
-    end)
+    payload =
+      chat_payload(setup)
+      |> Map.put("tools", [%{"type" => "custom", "custom" => custom}])
+      |> Map.put("tool_choice", %{
+        "type" => "custom",
+        "custom" => %{"name" => "code_exec"}
+      })
 
-    assert_no_chat_dispatch!(upstream)
+    response = conn |> auth(setup) |> post("/v1/chat/completions", payload)
+
+    assert %{
+             "choices" => [
+               %{
+                 "message" => %{
+                   "tool_calls" => [
+                     %{
+                       "id" => "call_chat_custom",
+                       "type" => "custom",
+                       "custom" => %{"name" => "code_exec", "input" => ^input}
+                     }
+                   ]
+                 }
+               }
+             ]
+           } = json_response(response, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.json["tools"] == [Map.put(custom, "type", "custom")]
+    assert captured.json["tool_choice"] == %{"type" => "custom", "name" => "code_exec"}
+  end
+
+  @tag :streaming_chat
+  test "POST /v1/chat/completions streams custom call input without JSON parsing", %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.output_item.added",
+           %{
+             "type" => "response.output_item.added",
+             "output_index" => 0,
+             "item" => %{
+               "type" => "custom_tool_call",
+               "call_id" => "call_chat_custom_stream",
+               "name" => "code_exec",
+               "input" => ""
+             }
+           }},
+          {"response.custom_tool_call_input.delta",
+           %{
+             "type" => "response.custom_tool_call_input.delta",
+             "output_index" => 0,
+             "delta" => "not-json:{"
+           }},
+          {"response.custom_tool_call_input.delta",
+           %{
+             "type" => "response.custom_tool_call_input.delta",
+             "output_index" => 0,
+             "delta" => "free-form"
+           }},
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{"id" => "resp_chat_custom_stream", "status" => "completed"}
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post(
+        "/v1/chat/completions",
+        chat_payload(setup)
+        |> Map.put("stream", true)
+        |> Map.put("tools", [
+          %{"type" => "custom", "custom" => %{"name" => "code_exec"}}
+        ])
+      )
+
+    tool_calls =
+      response.resp_body
+      |> chat_chunks()
+      |> Enum.flat_map(&(get_in(&1, ["choices", Access.at(0), "delta", "tool_calls"]) || []))
+
+    assert tool_calls == [
+             %{
+               "index" => 0,
+               "id" => "call_chat_custom_stream",
+               "type" => "custom",
+               "custom" => %{"name" => "code_exec", "input" => ""}
+             },
+             %{"index" => 0, "custom" => %{"input" => "not-json:{"}},
+             %{"index" => 0, "custom" => %{"input" => "free-form"}}
+           ]
+
+    assert response.resp_body =~ "data: [DONE]\n\n"
   end
 
   test "POST /v1/chat/completions does not repair strict structured output schemas",
@@ -2187,12 +2284,33 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
       Map.put(chat_payload(setup), "tools", [
         %{"type" => "unknown", "function" => %{"name" => "lookup_fixture", "parameters" => %{}}}
       ]),
+      Map.put(chat_payload(setup), "tools", [
+        %{"type" => "custom", "name" => "custom_fixture"}
+      ]),
+      Map.put(chat_payload(setup), "tools", [
+        %{"type" => "custom", "custom" => %{}}
+      ]),
+      Map.put(chat_payload(setup), "tools", [
+        %{
+          "type" => "custom",
+          "custom" => %{"name" => "custom_fixture", "unsupported" => true}
+        }
+      ]),
       chat_payload(setup)
       |> Map.put("tools", [function_tool()])
       |> Map.put("tool_choice", %{"type" => "function", "name" => "missing_fixture"}),
       chat_payload(setup)
       |> Map.put("tools", [function_tool()])
-      |> Map.put("tool_choice", %{"type" => "function", "function" => %{}})
+      |> Map.put("tool_choice", %{"type" => "function", "function" => %{}}),
+      chat_payload(setup)
+      |> Map.put("tools", [%{"type" => "custom", "custom" => %{"name" => "custom_fixture"}}])
+      |> Map.put("tool_choice", %{"type" => "custom", "name" => "custom_fixture"}),
+      chat_payload(setup)
+      |> Map.put("tools", [%{"type" => "custom", "custom" => %{"name" => "custom_fixture"}}])
+      |> Map.put("tool_choice", %{
+        "type" => "custom",
+        "custom" => %{"name" => "missing_fixture"}
+      })
     ]
 
     Enum.each(invalid_payloads, fn payload ->
