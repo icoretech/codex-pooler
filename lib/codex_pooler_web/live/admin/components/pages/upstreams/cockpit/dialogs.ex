@@ -29,17 +29,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
 
         <div class="grid gap-5 p-5 sm:p-6">
           <div
-            :if={@oauth_relink_result && oauth_relink_pending?(@oauth_relink_flow)}
-            id="oauth-relink-status"
-            data-role="oauth-pending-status"
-            role="status"
-            class="flex items-center gap-2 text-sm font-medium text-base-content/65"
-          >
-            <.icon name="hero-clock" class="size-4 shrink-0 text-base-content/45" />
-            <span>{@oauth_relink_result.message}</span>
-          </div>
-
-          <div
             :if={@oauth_relink_result && !oauth_relink_pending?(@oauth_relink_flow)}
             id="oauth-relink-status"
             class="alert alert-success"
@@ -69,6 +58,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
               form={@oauth_relink_form}
               submit_event="submit_oauth_relink_callback"
               submit_label="Complete relink"
+              status={oauth_relink_pending_status(@oauth_relink_result, @oauth_relink_flow)}
             />
           </section>
 
@@ -82,7 +72,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
                 Device code
               </p>
               <div class="flex min-w-0 items-center gap-2">
-                <p class="min-w-0 flex-1 break-all font-mono text-2xl font-bold tracking-widest text-base-content">
+                <p class="min-w-0 flex-1 break-all font-mono text-lg font-semibold tracking-wider text-base-content">
                   {@oauth_relink_flow.device_user_code}
                 </p>
                 <AdminComponents.clipboard_button
@@ -102,7 +92,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
                 target="_blank"
                 rel="noopener noreferrer"
                 title={@oauth_relink_flow.verification_uri}
-                class="link link-primary min-w-0 flex-1 self-center truncate text-sm"
+                class="link link-primary min-w-0 flex-1 self-center truncate font-mono text-xs"
               >
                 {@oauth_relink_flow.verification_uri}
               </a>
@@ -112,6 +102,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
                 aria_label="Copy device verification URL"
               />
             </div>
+            <p
+              :if={oauth_relink_pending_status(@oauth_relink_result, @oauth_relink_flow)}
+              id="oauth-relink-status"
+              data-role="oauth-pending-status"
+              role="status"
+              class="flex items-center gap-1.5 text-xs font-medium leading-4 text-base-content/55"
+            >
+              <.icon name="hero-clock" class="size-3.5 shrink-0 text-base-content/40" />
+              <span>{oauth_relink_pending_status(@oauth_relink_result, @oauth_relink_flow)}</span>
+            </p>
           </section>
         </div>
 
@@ -279,6 +279,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
 
   defp oauth_relink_device_flow?(%{flow_kind: "device", status: "pending"}), do: true
   defp oauth_relink_device_flow?(_flow), do: false
+
+  # The pending message belongs to the running flow, so it renders inside that
+  # flow's section instead of floating above the dialog body.
+  defp oauth_relink_pending_status(%{message: message}, %{status: "pending"})
+       when is_binary(message) and message != "",
+       do: message
+
+  defp oauth_relink_pending_status(_result, _flow), do: nil
 
   defp oauth_relink_pending?(%{status: "pending"}), do: true
   defp oauth_relink_pending?(_flow), do: false

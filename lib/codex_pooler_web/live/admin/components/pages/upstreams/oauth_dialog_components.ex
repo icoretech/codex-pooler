@@ -103,6 +103,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
   attr :form, :any, required: true
   attr :submit_event, :string, required: true
   attr :submit_label, :string, required: true
+  attr :status, :string, default: nil
 
   def browser_authorization_step(assigns) do
     assigns =
@@ -123,24 +124,24 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
         <label for={@authorization_url_id} class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
           Authorization page
         </label>
-        <div class="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+        <div class="grid min-w-0 items-stretch gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
           <input
             id={@authorization_url_id}
             type="url"
             value={@authorization_url}
             readonly
             aria-label="OpenAI authorization URL"
-            class="input input-bordered w-full min-w-0 bg-base-200/60 font-mono text-sm"
+            class="input input-bordered h-8 min-h-8 w-full min-w-0 bg-base-200/60 px-2 font-mono text-xs"
           />
-          <div class="flex min-w-0 gap-2">
+          <div class="flex min-w-0 items-stretch gap-2">
             <a
               id={"#{@id_prefix}-authorization-open"}
               href={@authorization_url}
               target="_blank"
               rel="noopener noreferrer"
-              class="btn btn-secondary h-10 min-h-10 shrink-0 gap-2 px-4"
+              class="btn btn-secondary btn-sm h-8 min-h-8 shrink-0 gap-1.5"
             >
-              <.icon name="hero-arrow-top-right-on-square" class="size-4 shrink-0" />
+              <.icon name="hero-arrow-top-right-on-square" class="size-3.5 shrink-0" />
               <span>Open</span>
             </a>
             <AdminComponents.clipboard_button
@@ -148,7 +149,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
               copy_text={@authorization_url}
               label="Copy link"
               aria_label="Copy OpenAI authorization URL"
-              class="btn btn-secondary h-10 min-h-10 shrink-0 gap-2 px-3"
+              class="btn btn-secondary btn-sm h-8 min-h-8 shrink-0 gap-1.5"
+              icon_class="size-3.5"
             />
           </div>
         </div>
@@ -179,10 +181,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
             spellcheck="false"
             required
             aria-describedby={@callback_help_id}
-            class="input input-bordered w-full font-mono text-sm"
+            class="input input-bordered h-8 min-h-8 w-full px-2 font-mono text-xs"
           />
           <p id={@callback_help_id} class="text-xs leading-4 text-base-content/55">
             After OpenAI redirects, copy the full URL from the browser address bar and paste it here.
+          </p>
+          <p
+            :if={@status}
+            id={"#{@id_prefix}-status"}
+            data-role="oauth-pending-status"
+            role="status"
+            class="flex items-center gap-1.5 text-xs font-medium leading-4 text-base-content/55"
+          >
+            <.icon name="hero-clock" class="size-3.5 shrink-0 text-base-content/40" />
+            <span>{@status}</span>
           </p>
         </div>
       </.form>
