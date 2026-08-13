@@ -209,7 +209,8 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
           <nav
             id="showcase-oauth-case-switcher"
             aria-label="OAuth dialog state"
-            class="fixed inset-x-0 top-0 z-1000 flex flex-wrap items-center gap-1.5 border-b border-base-300 bg-base-100 px-3 py-2"
+            class="fixed inset-x-0 top-0 flex flex-wrap items-center gap-1.5 border-b border-base-300 bg-base-100 px-3 py-2"
+            {%{"style" => "z-index:1000"}}
           >
             <span class="mr-1 text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/45">
               State
