@@ -1910,13 +1910,31 @@ body {
    produces. `method_door` is deliberately not a `.btn`, so the selection cards
    keep their own height. */
 @media (pointer: coarse), (width <= 48rem) {
-  [data-role="admin-dialog-footer"] .btn,
-  .modal-box .btn,
+  /* `btn-xs` is excluded on purpose. In this app that size means tertiary,
+     inline or icon-only - a 24px-wide info trigger, a "set all" shortcut beside
+     a summary - and forcing 2.75rem on those produces 44x24 pills and promotes
+     a tertiary action into the loudest thing on the screen. A small icon target
+     is widened with hit-area padding, not by stretching the button. */
+  [data-role="admin-dialog-footer"] .btn:not(.btn-xs),
+  .modal-box .btn:not(.btn-xs),
   .modal-box .input,
   .modal-box .select,
   .modal-box .textarea {
     height: 2.75rem;
     min-height: 2.75rem;
+  }
+
+  /* The floor above keys to daisyUI's component classes, so it reaches nothing
+     hand-rolled - and the model-serving mode picker is a hand-built segmented
+     control whose targets are plain `<label>`s wrapping an `sr-only` radio,
+     landing at 30px. It gets an explicit hook rather than a `label` selector:
+     `label.cursor-pointer` inside a dialog also matches compact inline
+     checkboxes in dense forms (alert channels, system settings, upstream
+     filters), and 2.75rem turns those from a line of text into a block. */
+  .modal-box .admin-segmented > label {
+    min-height: 2.75rem;
+    display: grid;
+    place-items: center;
   }
 
   /* Keyed to `data-admin-dialog-docs`, not to the `data-role`: that one is a

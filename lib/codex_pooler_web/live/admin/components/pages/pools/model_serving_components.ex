@@ -175,7 +175,7 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
             <legend class="sr-only">{row.labels.fieldset} — {row.display_name}</legend>
             <input type="hidden" name={row.identifier_name} value={row.exposed_model_id} />
 
-            <div class="min-w-0">
+            <div class="col-start-1 row-start-1 min-w-0 sm:col-auto sm:row-auto">
               <div class="flex min-w-0 flex-wrap items-center gap-2">
                 <p class={[
                   "text-[13px] font-semibold leading-tight",
@@ -205,7 +205,8 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
             </div>
 
             <div class={[
-              "grid grid-cols-3 overflow-hidden rounded-field border border-base-300 bg-base-100",
+              "admin-segmented col-start-2 row-start-1 row-span-2 grid grid-cols-3 self-center overflow-hidden rounded-field border border-base-300 bg-base-100",
+              "sm:col-auto sm:row-auto sm:row-span-1",
               !row.available? && "opacity-60"
             ]}>
               <label
@@ -225,7 +226,7 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
               </label>
             </div>
 
-            <div class="flex min-w-0 justify-end">
+            <div class="col-start-1 row-start-2 flex min-w-0 justify-start sm:col-auto sm:row-auto sm:justify-end">
               <span
                 id={"#{row.dom_id}-effective"}
                 data-role="pool-model-serving-effective"
@@ -265,9 +266,15 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
   defp row_described_by(%{dom_id: dom_id}),
     do: "#{dom_id}-effective #{dom_id}-availability-warning"
 
+  # Three bands stacked (identity, control, effective) cost 157px a row, and ten
+  # of them made this step five screens of scrolling on a phone. Below `sm` the
+  # row is two columns instead: identity and effective share the left one, the
+  # mode control takes the right and spans both of its rows. The children are
+  # placed explicitly because the effective badge is a sibling in source order -
+  # it has to land under the name rather than after the control.
   defp row_class(row) do
     [
-      "grid min-w-0 grid-cols-1 items-center gap-x-4 gap-y-2 border-b border-base-300/70 px-3 py-2.5 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_11.5rem_8.75rem]",
+      "grid min-w-0 grid-cols-[minmax(0,1fr)_9.5rem] items-center gap-x-3 gap-y-1 border-b border-base-300/70 px-3 py-2.5 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_11.5rem_8.75rem] sm:gap-x-4 sm:gap-y-2",
       (row.available? && "bg-base-200 even:bg-base-200/55") || "bg-base-content/3"
     ]
   end
