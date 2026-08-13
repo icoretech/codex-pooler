@@ -191,6 +191,94 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
     """
   end
 
+  attr :id_prefix, :string, required: true
+  attr :user_code, :string, required: true
+  attr :verification_uri, :string, default: nil
+  attr :status, :string, default: nil
+
+  @doc """
+  The device route, in the same shape as the browser one.
+
+  Both routes hand back the same proof, so they read the same way: labelled
+  rows, a readonly field carrying the value, and a labelled Open and Copy pair
+  beside it. The status line stays here and only here — on this route a poll is
+  actually running, and the operator has no other signal for it.
+  """
+  def device_authorization_step(assigns) do
+    ~H"""
+    <section id={"#{@id_prefix}-device-code"} data-role="oauth-device-flow" class="grid gap-4">
+      <div class="grid min-w-0 gap-2">
+        <span class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
+          Device code
+        </span>
+        <div class="flex min-w-0 items-center gap-2">
+          <p class="min-w-0 flex-1 break-all font-mono text-lg font-semibold tracking-wider text-base-content">
+            {@user_code}
+          </p>
+          <AdminComponents.clipboard_button
+            id={"#{@id_prefix}-device-code-copy"}
+            copy_text={@user_code}
+            label="Copy code"
+            aria_label="Copy device code"
+            class="btn btn-secondary btn-sm h-8 min-h-8 shrink-0 gap-1.5"
+            icon_class="size-3.5"
+          />
+        </div>
+      </div>
+
+      <div :if={@verification_uri} class="grid min-w-0 gap-2 border-t border-base-300 pt-4">
+        <label
+          for={"#{@id_prefix}-device-verification-url"}
+          class="text-xs font-semibold uppercase tracking-wide text-base-content/60"
+        >
+          Verification page
+        </label>
+        <div class="grid min-w-0 items-stretch gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+          <input
+            id={"#{@id_prefix}-device-verification-url"}
+            type="url"
+            value={@verification_uri}
+            readonly
+            aria-label="Device verification URL"
+            class="input input-bordered h-8 min-h-8 w-full min-w-0 bg-base-200/60 px-2 font-mono text-xs"
+          />
+          <div class="flex min-w-0 items-stretch gap-2">
+            <a
+              id={"#{@id_prefix}-device-verification-open"}
+              href={@verification_uri}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="btn btn-secondary btn-sm h-8 min-h-8 shrink-0 gap-1.5"
+            >
+              <.icon name="hero-arrow-top-right-on-square" class="size-3.5 shrink-0" />
+              <span>Open</span>
+            </a>
+            <AdminComponents.clipboard_button
+              id={"#{@id_prefix}-device-verification-url-copy"}
+              copy_text={@verification_uri}
+              label="Copy link"
+              aria_label="Copy device verification URL"
+              class="btn btn-secondary btn-sm h-8 min-h-8 shrink-0 gap-1.5"
+              icon_class="size-3.5"
+            />
+          </div>
+        </div>
+      </div>
+
+      <p
+        :if={@status}
+        id={"#{@id_prefix}-status"}
+        data-role="oauth-pending-status"
+        role="status"
+        class="flex items-center gap-1.5 text-xs font-medium leading-4 text-base-content/55"
+      >
+        <.icon name="hero-clock" class="size-3.5 shrink-0 text-base-content/40" />
+        <span>{@status}</span>
+      </p>
+    </section>
+    """
+  end
+
   @doc """
   Id of the callback form, so a dialog footer can submit it from outside.
   """

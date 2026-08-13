@@ -1016,10 +1016,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     verification_url = FakeOpenAIAuthProvider.url(provider) <> "/codex/device"
 
+    # The verification URL is a readonly field now, so it is carried as a value
+    # rather than as text; Open beside it holds the same address.
     assert has_element?(
              view,
-             "#oauth-relink-device-code",
-             verification_url
+             ~s(#oauth-relink-device-verification-url[readonly][value="#{verification_url}"])
+           )
+
+    assert has_element?(
+             view,
+             ~s(#oauth-relink-device-verification-open[href="#{verification_url}"])
            )
 
     assert has_element?(

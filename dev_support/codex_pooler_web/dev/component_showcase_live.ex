@@ -16,12 +16,28 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
 
   @oauth_browser_authorization_url "https://auth.example.com/oauth/authorize?client_id=dev-component-showcase&response_type=code&state=synthetic-review-state"
 
+  # Every branch the OAuth dialog can render, so a review sees the states that
+  # only appear when something goes wrong or when a route other than the browser
+  # one is taken. `browser` stays the default: it is what the plain review URL
+  # has always shown.
+  @oauth_cases [
+    {"start", "Start"},
+    {"browser", "Browser pending"},
+    {"browser-error", "Callback rejected"},
+    {"device", "Device pending"},
+    {"completed", "Linked"},
+    {"relink", "Relink"}
+  ]
+
+  @oauth_case_values Enum.map(@oauth_cases, &elem(&1, 0))
+
   def component_contract, do: ComponentShowcaseCatalog.entries()
   def render_contracts, do: Map.new([ComponentShowcaseStats.contract()], &{&1.id, &1})
 
   @impl true
   def mount(params, session, socket) do
     review_state = selected_review_state(params, session)
+    oauth_case = selected_oauth_case(params)
 
     socket =
       socket
@@ -29,19 +45,92 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
         theme: selected_theme(params, session),
         paused: false,
         review_state: review_state,
+        oauth_case: oauth_case,
+        oauth_cases: @oauth_cases,
         variants: ComponentShowcaseData.primitive_variants(),
         observatory: ComponentShowcaseData.observatory_presentation(),
         oauth_link_form:
           to_form(%{"pool_id" => "dev-component-showcase", "callback_url" => ""},
             as: :oauth_link
-          ),
-        oauth_link_flow: %{flow_kind: "browser", status: "pending"},
-        oauth_link_authorization_url: @oauth_browser_authorization_url,
-        oauth_link_result: %{message: "Browser authorization pending"}
+          )
       )
+      |> assign(oauth_fixture(oauth_case))
       |> select_review_state(review_state)
 
     {:ok, socket}
+  end
+
+  defp selected_oauth_case(%{"case" => oauth_case}) when oauth_case in @oauth_case_values,
+    do: oauth_case
+
+  defp selected_oauth_case(_params), do: "browser"
+
+  # Synthetic throughout: no real authorization URL, account, or device code.
+  defp oauth_fixture("start") do
+    %{
+      oauth_link_mode: :link,
+      oauth_link_target_account: nil,
+      oauth_link_flow: nil,
+      oauth_link_authorization_url: nil,
+      oauth_link_result: nil,
+      oauth_link_error: nil
+    }
+  end
+
+  defp oauth_fixture("browser-error") do
+    "browser"
+    |> oauth_fixture()
+    |> Map.put(:oauth_link_error, %{
+      message: "That callback URL is from an earlier attempt. Open the page again and paste the new one."
+    })
+  end
+
+  defp oauth_fixture("device") do
+    %{
+      oauth_link_mode: :link,
+      oauth_link_target_account: nil,
+      oauth_link_flow: %{
+        flow_kind: "device",
+        status: "pending",
+        device_user_code: "FJDK-XRQP",
+        verification_uri: "https://auth.example.com/device",
+        interval_seconds: 5
+      },
+      oauth_link_authorization_url: nil,
+      oauth_link_result: %{message: "Device authorization pending"},
+      oauth_link_error: nil
+    }
+  end
+
+  defp oauth_fixture("completed") do
+    %{
+      oauth_link_mode: :link,
+      oauth_link_target_account: nil,
+      oauth_link_flow: %{flow_kind: "browser", status: "completed"},
+      oauth_link_authorization_url: nil,
+      oauth_link_result: %{message: "Account linked to Design review Pool"},
+      oauth_link_error: nil
+    }
+  end
+
+  defp oauth_fixture("relink") do
+    "browser"
+    |> oauth_fixture()
+    |> Map.merge(%{
+      oauth_link_mode: :relink,
+      oauth_link_target_account: %{label: "design-review-account"}
+    })
+  end
+
+  defp oauth_fixture(_browser) do
+    %{
+      oauth_link_mode: :link,
+      oauth_link_target_account: nil,
+      oauth_link_flow: %{flow_kind: "browser", status: "pending"},
+      oauth_link_authorization_url: @oauth_browser_authorization_url,
+      oauth_link_result: %{message: "Browser authorization pending"},
+      oauth_link_error: nil
+    }
   end
 
   @impl true
@@ -81,12 +170,39 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
           id="showcase-oauth-browser-dialog-fixture"
           class="min-h-svh bg-base-200 text-base-content"
         >
+          <nav
+            id="showcase-oauth-case-switcher"
+            aria-label="OAuth dialog state"
+            class="fixed inset-x-0 top-0 z-1000 flex flex-wrap items-center gap-1.5 border-b border-base-300 bg-base-100 px-3 py-2"
+          >
+            <span class="mr-1 text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/45">
+              State
+            </span>
+            <a
+              :for={{value, label} <- @oauth_cases}
+              id={"showcase-oauth-case-#{value}"}
+              href={"/dev/component-showcase/#{@theme}?state=oauth-browser-dialog&case=#{value}"}
+              aria-current={value == @oauth_case && "page"}
+              class={[
+                "rounded-field border px-2 py-1 text-xs font-semibold transition-colors",
+                value == @oauth_case && "border-primary bg-primary/10 text-base-content",
+                value != @oauth_case &&
+                  "border-base-300 text-base-content/60 hover:border-primary/50 hover:text-base-content"
+              ]}
+            >
+              {label}
+            </a>
+          </nav>
+
           <UpstreamPageComponents.oauth_link_dialog
             oauth_linking
+            oauth_link_mode={@oauth_link_mode}
+            oauth_link_target_account={@oauth_link_target_account}
             oauth_link_form={@oauth_link_form}
             oauth_link_flow={@oauth_link_flow}
             oauth_link_authorization_url={@oauth_link_authorization_url}
             oauth_link_result={@oauth_link_result}
+            oauth_link_error={@oauth_link_error}
             pool_options={[{"Design review Pool", "dev-component-showcase"}]}
           />
         </div>

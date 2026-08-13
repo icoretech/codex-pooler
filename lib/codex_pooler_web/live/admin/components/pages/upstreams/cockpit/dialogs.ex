@@ -61,57 +61,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
             />
           </section>
 
-          <section
+          <UpstreamOAuthDialogComponents.device_authorization_step
             :if={oauth_relink_device_flow?(@oauth_relink_flow)}
-            id="oauth-relink-device-code"
-            class="grid gap-3 rounded-lg border border-base-300 bg-base-200/40 p-4"
-          >
-            <div class="grid gap-1">
-              <p class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
-                Device code
-              </p>
-              <div class="flex min-w-0 items-center gap-2">
-                <p class="min-w-0 flex-1 break-all font-mono text-lg font-semibold tracking-wider text-base-content">
-                  {@oauth_relink_flow.device_user_code}
-                </p>
-                <AdminComponents.clipboard_button
-                  id="oauth-relink-device-code-copy"
-                  copy_text={@oauth_relink_flow.device_user_code}
-                  aria_label="Copy device code"
-                />
-              </div>
-            </div>
-            <div
-              :if={@oauth_relink_flow.verification_uri}
-              class="flex min-w-0 items-stretch gap-2"
-            >
-              <a
-                id="oauth-relink-device-verification-url"
-                href={@oauth_relink_flow.verification_uri}
-                target="_blank"
-                rel="noopener noreferrer"
-                title={@oauth_relink_flow.verification_uri}
-                class="link link-primary min-w-0 flex-1 self-center truncate font-mono text-xs"
-              >
-                {@oauth_relink_flow.verification_uri}
-              </a>
-              <AdminComponents.clipboard_button
-                id="oauth-relink-device-verification-url-copy"
-                copy_text={@oauth_relink_flow.verification_uri}
-                aria_label="Copy device verification URL"
-              />
-            </div>
-            <p
-              :if={oauth_relink_pending_status(@oauth_relink_result, @oauth_relink_flow)}
-              id="oauth-relink-status"
-              data-role="oauth-pending-status"
-              role="status"
-              class="flex items-center gap-1.5 text-xs font-medium leading-4 text-base-content/55"
-            >
-              <.icon name="hero-clock" class="size-3.5 shrink-0 text-base-content/40" />
-              <span>{oauth_relink_pending_status(@oauth_relink_result, @oauth_relink_flow)}</span>
-            </p>
-          </section>
+            id_prefix="oauth-relink"
+            user_code={@oauth_relink_flow.device_user_code}
+            verification_uri={@oauth_relink_flow.verification_uri}
+            status={oauth_relink_pending_status(@oauth_relink_result, @oauth_relink_flow)}
+          />
         </div>
 
         <AdminComponents.dialog_footer id="oauth-relink-dialog-footer" docs_url={@oauth_docs_url}>
