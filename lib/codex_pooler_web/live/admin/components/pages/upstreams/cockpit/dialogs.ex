@@ -188,8 +188,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
       class="modal modal-bottom overflow-x-hidden sm:modal-middle"
       open
     >
-      <div class="modal-box sm:max-w-xl border border-error/30 bg-base-100 p-0 shadow-2xl">
-        <div class="border-b border-error/20 px-6 py-5">
+      <div class="modal-box sm:max-w-xl border border-base-300 bg-base-100 p-0 shadow-2xl">
+        <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-error">
             Delete upstream account
           </p>
