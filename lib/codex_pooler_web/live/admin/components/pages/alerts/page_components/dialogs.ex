@@ -23,7 +23,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Dialogs do
       open
     >
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
-        <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
+        <div class="px-5 py-4 sm:px-6 sm:py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-error">Alert rule</p>
           <h2 class="mt-1 text-2xl font-bold text-base-content">Delete {@rule.display_name}?</h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
@@ -79,7 +79,7 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Dialogs do
       open
     >
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
-        <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
+        <div class="px-5 py-4 sm:px-6 sm:py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-error">Alert channel</p>
           <h2 class="mt-1 text-2xl font-bold text-base-content">Delete {@channel.display_name}?</h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
