@@ -220,20 +220,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
     ~H"""
     <section id={"#{@id_prefix}-device-code"} data-role="oauth-device-flow" class="grid gap-4">
       <div class="grid min-w-0 gap-2">
-        <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-baseline gap-2">
-          <span class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
-            Device code
-          </span>
-          <span
+        <span class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
+          Device code
+        </span>
+        <p class="text-xs leading-4 text-base-content/55">
+          Open the verification page below and enter this code to approve the account.<span
             :if={@expires_at}
             id={"#{@id_prefix}-device-expires-at"}
-            class="shrink-0 text-xs font-medium text-base-content/55"
-          >
-            Expires {DateTimeDisplay.format_datetime(@expires_at, @datetime_preferences)}
-          </span>
-        </div>
-        <p class="text-xs leading-4 text-base-content/55">
-          Open the verification page below and enter this code to approve the account.
+            phx-hook="RelativeCountdown"
+            data-countdown-at={DateTime.to_iso8601(@expires_at)}
+            title={DateTimeDisplay.format_datetime(@expires_at, @datetime_preferences)}
+          > It expires in <span data-role="relative-countdown-value">{countdown_label(@expires_at)}</span>.</span>
         </p>
         <div class="grid min-w-0 gap-2 rounded-box border border-base-300 bg-base-200/40 px-3 py-2">
           <div class="flex min-w-0 items-center gap-2">
@@ -303,6 +300,37 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
 
     </section>
     """
+  end
+
+  # Mirrors `formatRelativeCountdown` in `relative_countdown.mjs` so the server's
+  # first paint and the hook's first repaint agree, and the label never jumps.
+  # The hook keeps it honest from there; the absolute time stays on `title` for
+  # when it matters exactly, or when the hook never runs.
+  @minute 60
+  @hour 60 * @minute
+  @day 24 * @hour
+
+  defp countdown_label(%DateTime{} = expires_at) do
+    seconds = DateTime.diff(expires_at, DateTime.utc_now())
+
+    cond do
+      seconds <= 0 -> "due"
+      seconds >= @day -> duration_parts([{div(seconds, @day), "d"}, {rem(div(seconds, @hour), 24), "h"}])
+      seconds >= @hour -> hour_label(ceil(seconds / @minute))
+      seconds >= @minute -> "#{ceil(seconds / @minute)}m"
+      true -> "<1m"
+    end
+  end
+
+  defp countdown_label(_expires_at), do: "due"
+
+  defp hour_label(total_minutes),
+    do: duration_parts([{div(total_minutes, 60), "h"}, {rem(total_minutes, 60), "m"}])
+
+  defp duration_parts(parts) do
+    parts
+    |> Enum.filter(fn {value, _unit} -> value > 0 end)
+    |> Enum.map_join(" ", fn {value, unit} -> "#{value}#{unit}" end)
   end
 
   # How often the poll re-checks is the one thing about this wait the operator
