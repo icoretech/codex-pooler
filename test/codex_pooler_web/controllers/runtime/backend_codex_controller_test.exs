@@ -9437,6 +9437,74 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
            } == {0, 0}
   end
 
+  test "HTTP cyber_policy 400 is terminal and does not retry another assignment", %{conn: conn} do
+    rejecting_upstream =
+      start_upstream(
+        FakeUpstream.json_response(
+          %{
+            "error" => %{
+              "code" => "cyber_policy",
+              "message" => "synthetic provider policy rejection"
+            }
+          },
+          400
+        )
+      )
+
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_cyber_policy_fallback_must_not_run",
+          "object" => "response"
+        })
+      )
+
+    setup = gateway_setup(rejecting_upstream)
+
+    fallback =
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-cyber-policy-fallback",
+        compact?: false
+      )
+
+    prime_routing_quota!(fallback.identity)
+    use_routing_strategy!(setup.pool, "bridge_ring", 2)
+
+    setup = %{
+      setup
+      | model: put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+    }
+
+    request_id = seed_with_assignment_order([setup.assignment.id, fallback.assignment.id])
+
+    response =
+      conn
+      |> put_req_header("x-request-id", request_id)
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => native_text_input("synthetic provider policy rejection request")
+      })
+
+    assert response.status == 400
+    assert response.resp_body =~ ~s("code":"cyber_policy")
+    assert FakeUpstream.count(rejecting_upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 0
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.response_status_code == 400
+    assert request.retry_count == 0
+    assert request.last_error_code == "upstream_status"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.upstream_status_code == 400
+    assert attempt.network_error_code == "upstream_status"
+    assert attempt.retryable == false
+    assert Repo.aggregate(BridgeDemotion, :count) == 0
+    assert Repo.aggregate(RoutingCircuitState, :count) == 0
+  end
+
   test "SSE previous response miss is masked while preserving upstream metadata" do
     upstream =
       start_upstream(

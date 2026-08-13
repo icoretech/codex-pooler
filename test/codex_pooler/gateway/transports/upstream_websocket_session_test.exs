@@ -37,6 +37,31 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert body == "data: #{frame}\n\n"
   end
 
+  test "public mapper classifies a canonicalized typeless detail as a terminal failure" do
+    detail = ~s({"detail":"synthetic terminal detail"})
+    upstream = start_upstream(FakeUpstream.websocket_text_frames([detail]))
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+    parent = self()
+
+    request = %{
+      websocket_request(FakeUpstream.url(upstream))
+      | message_mapper: &StreamProtocol.normalize_public_openai_responses_json_message/1,
+        writer: fn frame -> send(parent, {:mapped_terminal_frame, frame}) end
+    }
+
+    assert {:ok, %{body: body, terminal: "response.failed", status: 200}} =
+             UpstreamWebsocketSession.request(session, request)
+
+    assert_receive {:mapped_terminal_frame, frame}
+
+    assert %{"type" => "response.failed", "error" => %{"code" => "upstream_terminal_failure"}} =
+             Jason.decode!(frame)
+
+    assert body =~ "upstream_terminal_failure"
+    refute body =~ "synthetic terminal detail"
+  end
+
   @tag :task_1_red
   test "RED-R01 response.done followed by clean close completes before close classification" do
     frame =

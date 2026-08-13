@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
   alias CodexPooler.Gateway, as: RuntimeGateway
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, BridgeSessionAlias, CodexSession}
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
@@ -561,7 +562,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
                  fn frame -> send(self(), {:websocket_frame, frame}) end
                )
 
-      assert_receive {:websocket_frame, frame}, @websocket_frame_timeout
+      frame = receive_provider_websocket_frame!()
       assert %{"id" => "resp_ws_compression_disabled"} = Jason.decode!(frame)
 
       assert [captured] = FakeUpstream.requests(upstream)
@@ -619,7 +620,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
                  fn frame -> send(self(), {:websocket_frame, frame}) end
                )
 
-      assert_receive {:websocket_frame, frame}, @websocket_frame_timeout
+      frame = receive_provider_websocket_frame!()
       assert %{"id" => "resp_ws_backend_skipped"} = Jason.decode!(frame)
 
       assert [captured] = FakeUpstream.requests(upstream)
@@ -678,7 +679,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
                  fn frame -> send(self(), {:websocket_frame, frame}) end
                )
 
-      assert_receive {:websocket_frame, frame}, @websocket_frame_timeout
+      frame = receive_provider_websocket_frame!()
       assert %{"id" => "resp_ws_embedded_json_compressed"} = Jason.decode!(frame)
 
       assert [captured] = FakeUpstream.requests(upstream)
@@ -1018,6 +1019,16 @@ defmodule CodexPooler.Gateway.WebsocketTest do
     assert item
            |> Map.fetch!("output")
            |> payload_fingerprint() == payload_fingerprint(original_output)
+  end
+
+  defp receive_provider_websocket_frame! do
+    assert_receive {:websocket_frame, frame}, @websocket_frame_timeout
+
+    if StreamProtocol.internal_control_event?(frame) do
+      receive_provider_websocket_frame!()
+    else
+      frame
+    end
   end
 
   defp assert_lossy_shell_skipped_metadata!(metadata, route_class, transport) do

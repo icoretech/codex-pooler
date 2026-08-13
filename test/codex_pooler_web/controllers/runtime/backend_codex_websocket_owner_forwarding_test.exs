@@ -55,6 +55,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   }
 
   alias CodexPooler.Gateway.Transports.Admission
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
@@ -383,6 +384,50 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert_native_owner_turn_log!(logs, "ws-owner-output-before-data", "before_visible_output")
   end
 
+  test "owner-forwarded metadata-only data remains pre-visible while unknown controls commit output" do
+    task_pid = socket_test_task()
+    on_exit(fn -> stop_socket_test_task(task_pid) end)
+
+    state = owner_output_state(task_pid, "ws-owner-metadata-pre-visible")
+    downstream = state.websocket_owner_downstream
+
+    metadata_frame =
+      Jason.encode!(%{
+        "type" => "codex.response.metadata",
+        "headers" => %{"x-models-etag" => ~s(W/"owner-turn-etag")}
+      })
+
+    assert {:push, {:text, ^metadata_frame}, state} =
+             CodexResponsesSocket.handle_info(
+               owner_frame(downstream, {:data, metadata_frame}),
+               state
+             )
+
+    assert state.native_turn_output_task_pids == MapSet.new()
+
+    {result, logs} =
+      with_info_log(fn ->
+        CodexResponsesSocket.handle_info(
+          owner_frame(downstream, owner_error_payload(:owner_drained)),
+          state
+        )
+      end)
+
+    assert {:push, {:text, _error_frame}, failed_state} = result
+    assert failed_state.native_turn_output_task_pids == MapSet.new()
+    assert_native_owner_turn_log!(logs, "ws-owner-metadata-pre-visible", "before_visible_output")
+
+    unknown_frame = Jason.encode!(%{"type" => "codex.future_control"})
+
+    assert {:push, {:text, ^unknown_frame}, visible_state} =
+             CodexResponsesSocket.handle_info(
+               owner_frame(downstream, {:data, unknown_frame}),
+               state
+             )
+
+    assert visible_state.native_turn_output_task_pids == MapSet.new([task_pid])
+  end
+
   test "owner-forwarded native output state resets before a second turn" do
     first_task_pid = socket_test_task()
     second_task_pid = socket_test_task()
@@ -456,6 +501,34 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert {:push, {:text, _error_frame}, failed_state} = result
     refute failed_state.public_turn_output_committed?
     assert_native_owner_turn_log!(logs, "ws-owner-public-rate-only", "before_visible_output")
+  end
+
+  test "owner-forwarded public metadata-only data does not commit output" do
+    task_pid = socket_test_task()
+    on_exit(fn -> stop_socket_test_task(task_pid) end)
+
+    state = public_owner_output_state(task_pid, "ws-owner-public-metadata-only")
+    downstream = state.websocket_owner_downstream
+
+    metadata_frame =
+      Jason.encode!(%{
+        "type" => "codex.response.metadata",
+        "headers" => %{"x-models-etag" => ~s(W/"owner-public-etag")}
+      })
+
+    assert {:push, {:text, normalized_frame}, state} =
+             CodexResponsesSocket.handle_info(
+               public_owner_frame(downstream, task_pid, {:data, metadata_frame}),
+               state
+             )
+
+    assert Jason.decode!(normalized_frame) == %{
+             "headers" => %{"x-models-etag" => ~s(W/"owner-public-etag")},
+             "sequence_number" => 0,
+             "type" => "codex.response.metadata"
+           }
+
+    refute state.public_turn_output_committed?
   end
 
   test "late stale owner epoch data cannot commit the active native turn" do
@@ -1188,6 +1261,88 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
+  test "local and remote owners emit identical native metadata bytes for one turn snapshot" do
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.json_response(%{
+             "id" => "resp_local_metadata_parity",
+             "object" => "response"
+           }),
+           FakeUpstream.json_response(%{
+             "id" => "resp_remote_metadata_parity",
+             "object" => "response"
+           })
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, local_state} = owner_socket(auth, "ws-local-metadata-parity", "local-metadata-parity")
+
+    {:ok, remote_state} =
+      owner_socket(auth, "ws-remote-metadata-parity", "remote-metadata-parity")
+
+    remote_node = :"codex_pooler@remote-metadata-parity.example"
+
+    node_opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => :success}
+      )
+
+    remote_state = remote_owner_state(remote_state, remote_node, node_opts)
+
+    models_conn = build_conn() |> auth(setup) |> get("/backend-api/codex/models")
+    assert [models_etag] = get_resp_header(models_conn, "etag")
+
+    try do
+      assert :ok =
+               Gateway.run_websocket_response(
+                 auth,
+                 websocket_payload(setup, "local metadata parity"),
+                 owner_response_options(local_state, []),
+                 fn _data -> :ok end
+               )
+
+      assert {:push, {:text, local_metadata}, local_state} =
+               receive_owner_socket_raw_push(local_state)
+
+      assert %{
+               "type" => "codex.response.metadata",
+               "headers" => %{"x-models-etag" => ^models_etag}
+             } = Jason.decode!(local_metadata)
+
+      assert {:push, {:text, local_response}, local_state} =
+               receive_owner_socket_raw_push(local_state)
+
+      assert owner_response_id(local_response) == "resp_local_metadata_parity"
+      assert {:ok, _local_state} = receive_owner_socket_complete(local_state)
+
+      assert :ok =
+               Gateway.run_websocket_response(
+                 auth,
+                 websocket_payload(setup, "remote metadata parity"),
+                 owner_response_options(remote_state, node_opts),
+                 fn _data -> :ok end
+               )
+
+      assert {:push, {:text, remote_metadata}, remote_state} =
+               receive_owner_socket_raw_push(remote_state)
+
+      assert remote_metadata == local_metadata
+
+      assert {:push, {:text, remote_response}, remote_state} =
+               receive_owner_socket_raw_push(remote_state)
+
+      assert owner_response_id(remote_response) == "resp_remote_metadata_parity"
+      assert {:ok, _remote_state} = receive_owner_socket_complete(remote_state)
+    after
+      CodexResponsesSocket.terminate(:closed, local_state)
+      CodexResponsesSocket.terminate(:closed, remote_state)
+    end
+  end
+
   @tag :continuation_generation_boundary
   test "direct owner guards a replacement generation and settles once before full retry" do
     assert_owner_continuation_generation_boundary(:direct)
@@ -1588,11 +1743,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       original_downstream = remote_state.websocket_owner_downstream
 
       assert_receive {:websocket_owner_frame, correlation_id, recovered_epoch,
-                      {:data, recovered_frame}},
+                      {:data, recovered_metadata_frame}},
                      1_000
 
       assert correlation_id == original_downstream.correlation_id
       assert recovered_epoch > original_downstream.epoch
+
+      assert %{
+               "type" => "codex.response.metadata",
+               "headers" => %{"x-models-etag" => _models_etag}
+             } = Jason.decode!(recovered_metadata_frame)
+
+      assert_receive {:websocket_owner_frame, ^correlation_id, ^recovered_epoch,
+                      {:data, recovered_frame}},
+                     1_000
 
       assert owner_response_id(recovered_frame) == "resp_owner_mode_loss_recovered"
 
@@ -7390,8 +7554,27 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     receive do
       {:websocket_owner_frame, _correlation_id, _epoch, _payload} = message ->
         case CodexResponsesSocket.handle_info(message, state) do
-          {:push, _frame, _state} = result -> result
-          {:ok, state} -> receive_owner_socket_push(state)
+          {:push, {:text, frame}, state} = result ->
+            if StreamProtocol.internal_control_event?(frame) do
+              receive_owner_socket_push(state)
+            else
+              result
+            end
+
+          {:ok, state} ->
+            receive_owner_socket_push(state)
+        end
+    after
+      1_000 -> flunk("expected owner websocket response frame")
+    end
+  end
+
+  defp receive_owner_socket_raw_push(state) do
+    receive do
+      {:websocket_owner_frame, _correlation_id, _epoch, _payload} = message ->
+        case CodexResponsesSocket.handle_info(message, state) do
+          {:push, {:text, _frame}, _state} = result -> result
+          {:ok, state} -> receive_owner_socket_raw_push(state)
         end
     after
       1_000 -> flunk("expected owner websocket response frame")

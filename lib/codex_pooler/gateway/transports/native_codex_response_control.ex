@@ -65,7 +65,7 @@ defmodule CodexPooler.Gateway.Transports.NativeCodexResponseControl do
 
   defp sanitize_header_field(event) do
     case Map.fetch(event, "headers") do
-      {:ok, headers} when is_map(headers) -> Map.put(event, "headers", projected_map(headers))
+      {:ok, headers} when is_map(headers) -> put_projected_headers(event, "headers", headers)
       {:ok, _invalid_headers} -> Map.delete(event, "headers")
       :error -> event
     end
@@ -74,7 +74,7 @@ defmodule CodexPooler.Gateway.Transports.NativeCodexResponseControl do
   defp sanitize_response_headers(%{"response" => response} = event) when is_map(response) do
     case Map.fetch(response, "headers") do
       {:ok, headers} when is_map(headers) ->
-        Map.put(event, "response", Map.put(response, "headers", projected_map(headers)))
+        Map.put(event, "response", put_projected_headers(response, "headers", headers))
 
       {:ok, _invalid_headers} ->
         Map.put(event, "response", Map.delete(response, "headers"))
@@ -85,6 +85,13 @@ defmodule CodexPooler.Gateway.Transports.NativeCodexResponseControl do
   end
 
   defp sanitize_response_headers(event), do: event
+
+  defp put_projected_headers(event, key, headers) do
+    case projected_map(headers) do
+      projected when map_size(projected) == 0 -> Map.delete(event, key)
+      projected -> Map.put(event, key, projected)
+    end
+  end
 
   @spec projected_map(term()) :: %{optional(String.t()) => String.t()}
   defp projected_map(headers) do

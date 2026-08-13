@@ -85,8 +85,29 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert feature.current == :predispatch_catalog_snapshot
       assert fixture.header == "x-models-etag"
       assert fixture.equals == "authenticated_backend_models_etag"
-      assert fixture.http_sse == "response_header"
-      assert fixture.websocket == "upgrade_header"
+      assert fixture.http_json == :excluded
+      assert fixture.http_sse == %{surface: :response_header, authority: :request_snapshot}
+
+      assert fixture.websocket == %{
+               upgrade: %{
+                 surface: :response_header,
+                 authority: :backward_compatible_connection_open
+               },
+               turn: %{
+                 surface: :codex_response_metadata_event,
+                 authority: :current_turn_snapshot,
+                 event_type: "codex.response.metadata"
+               }
+             }
+
+      assert fixture.snapshot_lifetime == %{
+               http: :request,
+               websocket: :response_create_turn,
+               retry: :preserve,
+               owner_forwarding: :preserve,
+               next_websocket_turn: :reresolve
+             }
+
       assert fixture.upstream_etag_relay == false
 
       assert fixture.included_routes == [

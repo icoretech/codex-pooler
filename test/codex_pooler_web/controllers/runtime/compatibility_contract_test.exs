@@ -549,7 +549,49 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert models_etag.contract =~ "classifies it independently per model"
 
       assert responses_etag.contract =~ "exact authenticated backend models ETag"
+      assert responses_etag.contract =~ "backward-compatible connection-opening value"
+      assert responses_etag.contract =~ "authoritative codex.response.metadata"
+      assert responses_etag.contract =~ "current predispatch snapshot"
       assert responses_etag.contract =~ "never relayed from upstream"
+
+      assert CompatibilityMatrix.fixture!(:backend_responses_etag) == %{
+               header: "x-models-etag",
+               equals: "authenticated_backend_models_etag",
+               http_json: :excluded,
+               http_sse: %{surface: :response_header, authority: :request_snapshot},
+               websocket: %{
+                 upgrade: %{
+                   surface: :response_header,
+                   authority: :backward_compatible_connection_open
+                 },
+                 turn: %{
+                   surface: :codex_response_metadata_event,
+                   authority: :current_turn_snapshot,
+                   event_type: "codex.response.metadata"
+                 }
+               },
+               snapshot_lifetime: %{
+                 http: :request,
+                 websocket: :response_create_turn,
+                 retry: :preserve,
+                 owner_forwarding: :preserve,
+                 next_websocket_turn: :reresolve
+               },
+               upstream_etag_relay: false,
+               included_routes: [
+                 "/backend-api/codex/responses",
+                 "/backend-api/codex/v1/responses"
+               ],
+               excluded_surfaces: [
+                 "backend_json",
+                 "backend_compact",
+                 "public_v1",
+                 "usage",
+                 "unauthenticated",
+                 "unrelated_routes"
+               ]
+             }
+
       assert envelope.contract =~ "exactly one reasoning.encrypted_content include"
       assert envelope.contract =~ "compact routes remain excluded"
       assert error_param.contract =~ "failed-attempt detail only"

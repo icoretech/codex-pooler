@@ -248,6 +248,24 @@ defmodule CodexPooler.Gateway.Transports.NativeCodexResponseControlTest do
              }
     end
 
+    test "omits header fields when no provider header control is safe to relay" do
+      event = %{
+        "type" => "response.failed",
+        "headers" => %{"authorization" => "hostile-top-secret"},
+        "response" => %{
+          "id" => "resp_example",
+          "headers" => %{"cookie" => "hostile-nested-secret"}
+        }
+      }
+
+      assert {:changed, sanitized} = NativeCodexResponseControl.sanitize_websocket_event(event)
+
+      assert sanitized == %{
+               "type" => "response.failed",
+               "response" => %{"id" => "resp_example"}
+             }
+    end
+
     test "fails closed for a non-map event" do
       for malformed <- [nil, [], "event", 1] do
         assert NativeCodexResponseControl.sanitize_websocket_event(malformed) ==

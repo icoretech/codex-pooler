@@ -102,9 +102,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
           failure
         )
 
-      {:error, %{body: "", reason: reason} = response}
+      {:error, %{reason: reason} = response}
       when reason in [:upstream_websocket_closed_before_terminal, :closed, :econnreset] ->
-        handle_pre_visible_transport_websocket_failure(
+        handle_transport_websocket_failure(
           prepared_context,
           dispatch_request,
           callbacks,
@@ -257,6 +257,32 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
          started
        ) do
     Finalization.finalize_failed_websocket_response(context, Map.put(response, :started, started))
+  end
+
+  defp pre_visible_transport_websocket_failure?(%{body: body}) when is_binary(body),
+    do: StreamProtocol.internal_control_event?(body) or body == ""
+
+  defp handle_transport_websocket_failure(
+         %PreparedContext{context: context} = prepared_context,
+         dispatch_request,
+         callbacks,
+         response,
+         started
+       ) do
+    if pre_visible_transport_websocket_failure?(response) do
+      handle_pre_visible_transport_websocket_failure(
+        prepared_context,
+        dispatch_request,
+        callbacks,
+        response,
+        started
+      )
+    else
+      Finalization.finalize_failed_websocket_response(
+        context,
+        Map.put(response, :started, started)
+      )
+    end
   end
 
   defp handle_retryable_first_websocket_event(
@@ -496,26 +522,24 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
   defp websocket_terminal_outcome(_terminal, body), do: StreamProtocol.terminal_outcome(body)
 
   defp finalize_exhausted_auth_refresh(context, dispatch_request, response, failure, started) do
-    case Map.get(response, :body, "") do
-      "" ->
-        Finalization.finalize_failed_websocket_response(
-          context,
-          response
-          |> Map.put(:reason, :upstream_unauthorized)
-          |> Map.put(:started, started)
-        )
+    if pre_visible_transport_websocket_failure?(response) do
+      Finalization.finalize_failed_websocket_response(
+        context,
+        response
+        |> Map.put(:reason, :upstream_unauthorized)
+        |> Map.put(:started, started)
+      )
+    else
+      deliver_retry_exhausted_websocket_failure(dispatch_request, response)
 
-      _body ->
-        deliver_retry_exhausted_websocket_failure(dispatch_request, response)
-
-        Finalization.finalize_terminal_websocket_response(
-          context,
-          response
-          |> Map.put(:started, started)
-          |> Map.put(:status, websocket_response_status(response))
-          |> Map.put(:terminal, failure.event_type || "response.failed")
-          |> Map.put(:upstream_error_code, failure.upstream_code || failure.code)
-        )
+      Finalization.finalize_terminal_websocket_response(
+        context,
+        response
+        |> Map.put(:started, started)
+        |> Map.put(:status, websocket_response_status(response))
+        |> Map.put(:terminal, failure.event_type || "response.failed")
+        |> Map.put(:upstream_error_code, failure.upstream_code || failure.code)
+      )
     end
   end
 
@@ -652,8 +676,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
           {:ok, map()} | {:error, map()}
   defp dispatch_websocket_request_with_owner_recovery(prepared_context, dispatch_request) do
     case UpstreamDispatch.websocket_request(dispatch_request) do
-      {:error, %{body: "", reason: :owner_unavailable}} = error ->
-        retry_owner_websocket_request(prepared_context, dispatch_request, error)
+      {:error, %{reason: :owner_unavailable} = error} ->
+        if pre_visible_transport_websocket_failure?(error) do
+          retry_owner_websocket_request(prepared_context, dispatch_request, error)
+        else
+          error
+        end
 
       result ->
         result

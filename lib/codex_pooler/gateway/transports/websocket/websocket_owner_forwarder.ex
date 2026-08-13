@@ -422,7 +422,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
         true -> :ok
       end
 
-      unless StreamProtocol.internal_rate_limit_event?(decoded),
+      unless StreamProtocol.internal_control_event?(decoded),
         do: :atomics.put(visibility, 1, 1)
     end
 

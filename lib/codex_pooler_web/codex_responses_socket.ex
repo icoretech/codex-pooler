@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   @behaviour WebSock
 
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Websocket
@@ -84,7 +85,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
       tracked_response_task?(state, task_pid) and
           not Adapter.public_responses_stream?(state) ->
-        state = mark_native_turn_output_pushed(state, task_pid)
+        state = maybe_mark_native_turn_output_pushed(state, task_pid, data)
         {:push, {:text, Adapter.downstream_response_chunk(data)}, state}
 
       true ->
@@ -462,7 +463,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp handle_non_public_owner_payload({:data, data}, state) do
-    state = mark_active_native_owner_turn_output(state)
+    state = maybe_mark_active_native_owner_turn_output(state, data)
     {:push, {:text, Adapter.downstream_response_chunk(data)}, state}
   end
 
@@ -889,17 +890,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp maybe_mark_public_turn_output_committed(state, data) do
-    if codex_rate_limits_frame?(data) do
+    if StreamProtocol.internal_control_event?(data) do
       state
     else
       Map.put(state, :public_turn_output_committed?, true)
-    end
-  end
-
-  defp codex_rate_limits_frame?(data) when is_binary(data) do
-    case Jason.decode(data) do
-      {:ok, %{"type" => "codex.rate_limits"}} -> true
-      _other -> false
     end
   end
 
@@ -1025,7 +1019,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp run_response(parent, task_pid, auth, payload, opts) do
     Websocket.run_websocket_response(auth, payload, opts, fn data ->
-      Process.put(:response_task_visible_output?, true)
+      unless StreamProtocol.internal_control_event?(data) do
+        Process.put(:response_task_visible_output?, true)
+      end
 
       send(parent, {:codex_response_chunk, task_pid, data})
     end)
@@ -1119,6 +1115,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     end
   end
 
+  defp maybe_mark_active_native_owner_turn_output(state, data) do
+    if StreamProtocol.internal_control_event?(data) do
+      state
+    else
+      mark_active_native_owner_turn_output(state)
+    end
+  end
+
   defp reset_owner_turn_output(state) do
     state
     |> Map.put(:native_turn_output_task_pids, MapSet.new())
@@ -1132,6 +1136,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       MapSet.new([pid]),
       &MapSet.put(&1, pid)
     )
+  end
+
+  defp maybe_mark_native_turn_output_pushed(state, pid, data) when is_pid(pid) do
+    if StreamProtocol.internal_control_event?(data) do
+      state
+    else
+      mark_native_turn_output_pushed(state, pid)
+    end
   end
 
   defp remove_native_turn_output(state, pid) when is_pid(pid) do

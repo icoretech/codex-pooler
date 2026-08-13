@@ -285,7 +285,7 @@ One HTTP request, or one websocket `response.create` turn, keeps the serving mod
 
 Saving a new mode does not mutate a request or turn that is already in flight. A change is picked up by the next HTTP request, or by the next `response.create` turn on an already-open websocket connection.
 
-Because the effective mode is part of the backend catalog body, changing it changes the `GET /backend-api/codex/models` ETag. An open websocket connection keeps the models ETag it handshook with; a new connection observes the updated one.
+Because the effective mode is part of the backend catalog body, changing it changes the `GET /backend-api/codex/models` ETag. A backend websocket keeps its upgrade ETag for backward compatibility, but every accepted `response.create` turn also receives a `codex.response.metadata` event whose `x-models-etag` value is authoritative for that turn. An already-open connection can therefore observe the new ETag on its next turn; an in-flight retry keeps the turn snapshot it started with.
 
 ## Operational Evidence
 

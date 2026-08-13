@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway, as: RuntimeGateway
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -31,7 +32,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
 
     assert :ok = execute_reset_probe(fixture)
 
-    assert_receive {:websocket_frame, terminal_frame}, @websocket_frame_timeout
+    terminal_frame = receive_provider_websocket_frame!()
 
     assert %{
              "type" => "response.failed",
@@ -147,7 +148,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
 
     assert :ok = execute_reset_probe(fixture)
 
-    assert_receive {:websocket_frame, terminal_frame}, @websocket_frame_timeout
+    terminal_frame = receive_provider_websocket_frame!()
     assert %{"type" => "response.failed"} = Jason.decode!(terminal_frame)
 
     assert_reset_probe_outcome!(
@@ -394,7 +395,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
   end
 
   defp assert_receive_completed_frame(response_id) do
-    assert_receive {:websocket_frame, completed_frame}, @websocket_frame_timeout
+    completed_frame = receive_provider_websocket_frame!()
 
     assert %{
              "type" => "response.completed",
@@ -403,7 +404,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
   end
 
   defp assert_receive_failed_frame(error_code) do
-    assert_receive {:websocket_frame, failed_frame}, @websocket_frame_timeout
+    failed_frame = receive_provider_websocket_frame!()
 
     assert %{
              "type" => failure_type,
@@ -412,6 +413,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexResetProbeWebsocketTest do
 
     assert failure_type in ["error", "response.failed"]
     refute_received {:websocket_frame, _unexpected}
+  end
+
+  defp receive_provider_websocket_frame! do
+    assert_receive {:websocket_frame, frame}, @websocket_frame_timeout
+
+    if StreamProtocol.internal_control_event?(frame) do
+      receive_provider_websocket_frame!()
+    else
+      frame
+    end
   end
 
   defp assert_reset_probe_outcome!(

@@ -127,7 +127,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :backend_responses_etag,
       contract:
-        "backend Responses HTTP SSE response headers and websocket upgrade headers expose x-models-etag equal byte-for-byte to the exact authenticated backend models ETag from the predispatch catalog snapshot; the value is never relayed from upstream and is excluded from backend JSON, compact, public /v1, usage, unauthenticated, and unrelated routes"
+        "backend Responses HTTP SSE response headers expose x-models-etag equal byte-for-byte to the exact authenticated backend models ETag from the request snapshot; websocket upgrade headers retain the same backward-compatible connection-opening value, while each accepted backend websocket turn emits an authoritative codex.response.metadata x-models-etag from that turn's current predispatch snapshot; the value is never relayed from upstream and is excluded from backend JSON, compact, public /v1, usage, unauthenticated, and unrelated routes"
     },
     %{
       slug: :pool_model_serving_modes,
@@ -734,8 +734,23 @@ defmodule CodexPooler.CompatibilityMatrix do
     backend_responses_etag: %{
       header: "x-models-etag",
       equals: "authenticated_backend_models_etag",
-      http_sse: "response_header",
-      websocket: "upgrade_header",
+      http_json: :excluded,
+      http_sse: %{surface: :response_header, authority: :request_snapshot},
+      websocket: %{
+        upgrade: %{surface: :response_header, authority: :backward_compatible_connection_open},
+        turn: %{
+          surface: :codex_response_metadata_event,
+          authority: :current_turn_snapshot,
+          event_type: "codex.response.metadata"
+        }
+      },
+      snapshot_lifetime: %{
+        http: :request,
+        websocket: :response_create_turn,
+        retry: :preserve,
+        owner_forwarding: :preserve,
+        next_websocket_turn: :reresolve
+      },
       upstream_etag_relay: false,
       included_routes: [
         "/backend-api/codex/responses",

@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   import Ecto.Query
   import ExUnit.CaptureLog
   import CodexPooler.PoolerFixtures, only: [request_fixture: 2]
+
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
   alias CodexPooler.Access
@@ -33,6 +34,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   }
 
   alias CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
 
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request,
@@ -524,6 +526,130 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                {"x-models-etag", updated_etag}
     after
       Mint.HTTP.close(fresh_conn)
+    end
+  end
+
+  test "native websocket preserves trusted cyber metadata only in the provider event" do
+    trusted_access_sentinel = "trusted-cyber-provider-event-only"
+
+    hostile = %{
+      authorization: "hostile-authorization-sentinel",
+      cookie: "hostile-cookie-sentinel",
+      provider_etag: "hostile-provider-etag-sentinel",
+      quota: "hostile-quota-sentinel",
+      rate_limit: "hostile-rate-limit-sentinel",
+      reasoning: "hostile-reasoning-control-sentinel",
+      request_id: "hostile-request-id-sentinel",
+      safety: "hostile-safety-control-sentinel",
+      unknown: "hostile-unknown-header-sentinel"
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"response.completed",
+             %{
+               "type" => "response.completed",
+               "headers" => %{
+                 "authorization" => hostile.authorization,
+                 "cookie" => hostile.cookie,
+                 "etag" => hostile.provider_etag,
+                 "x-codex-primary-used-percent" => hostile.quota,
+                 "x-codex-rate-limit-reached-type" => hostile.rate_limit,
+                 "x-codex-safety-buffering-enabled" => hostile.safety,
+                 "x-reasoning-included" => hostile.reasoning,
+                 "x-request-id" => hostile.request_id,
+                 "x-unknown-header" => hostile.unknown
+               },
+               "response" => %{
+                 "id" => "resp_ws_trusted_cyber_metadata",
+                 "status" => "completed",
+                 "metadata" => %{
+                   "trusted_access_for_cyber" => trusted_access_sentinel
+                 },
+                 "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+               }
+             }}
+          ],
+          headers: [
+            {"set-cookie", hostile.cookie},
+            {"authorization", hostile.authorization},
+            {"x-request-id", hostile.request_id},
+            {"etag", hostile.provider_etag},
+            {"x-codex-primary-used-percent", hostile.quota},
+            {"x-codex-rate-limit-reached-type", hostile.rate_limit},
+            {"x-unknown-header", hostile.unknown},
+            {"x-reasoning-included", hostile.reasoning},
+            {"x-codex-safety-buffering-enabled", hostile.safety}
+          ]
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {result, logs} =
+      with_log(fn ->
+        execute_websocket_response(
+          auth,
+          Jason.encode!(%{
+            "type" => "response.create",
+            "model" => setup.model.exposed_model_id,
+            "input" => native_text_input("synthetic trusted cyber metadata request"),
+            "stream" => true,
+            "generate" => true
+          }),
+          %{request_id: "ws-trusted-cyber-metadata", capture_metadata_control?: true},
+          fn frame -> send(self(), {:websocket_frame, frame}) end
+        )
+      end)
+
+    assert result == :ok
+
+    assert_received {:websocket_frame, metadata_frame}
+
+    assert %{
+             "type" => "codex.response.metadata",
+             "headers" => %{"x-models-etag" => models_etag}
+           } = Jason.decode!(metadata_frame)
+
+    assert String.starts_with?(models_etag, ~s(W/"cp-models-v1-))
+    assert_received {:websocket_frame, provider_frame}
+
+    assert %{
+             "type" => "response.completed",
+             "headers" => %{
+               "x-codex-safety-buffering-enabled" => "true",
+               "x-reasoning-included" => "true"
+             },
+             "response" => %{
+               "metadata" => %{"trusted_access_for_cyber" => ^trusted_access_sentinel}
+             }
+           } = Jason.decode!(provider_frame)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert request.status == "succeeded"
+    assert attempt.status == "succeeded"
+    assert Repo.all(from(d in BridgeDemotion)) == []
+    assert Repo.all(from(c in RoutingCircuitState)) == []
+
+    audit_events = Repo.all(from(e in AuditEvent))
+    request_logs = RequestLogs.list(setup.pool.id, limit: 10)
+    sessions = Repo.all(from(s in CodexSession))
+    turns = Repo.all(from(t in CodexTurn))
+
+    durable_text =
+      inspect({request, attempt, sessions, turns, audit_events, request_logs.items}) <> logs
+
+    refute metadata_frame =~ trusted_access_sentinel
+    refute durable_text =~ trusted_access_sentinel
+
+    for hostile_value <- Map.values(hostile) do
+      refute metadata_frame =~ hostile_value
+      refute provider_frame =~ hostile_value
+      refute durable_text =~ hostile_value
     end
   end
 
@@ -9407,12 +9533,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                  "stream" => true,
                  "generate" => true
                }),
-               %{request_id: request_id},
+               %{request_id: request_id, capture_metadata_control?: true},
                fn frame -> send(self(), {:websocket_frame, frame}) end
              )
 
-    frames = receive_websocket_frames_by_type(["codex.rate_limits"], @websocket_frame_timeout)
+    frames =
+      receive_websocket_frames_by_type(
+        ["codex.response.metadata", "codex.rate_limits"],
+        @websocket_frame_timeout
+      )
+
+    assert %{"type" => "codex.response.metadata"} = frames["codex.response.metadata"]
     assert %{"type" => "codex.rate_limits"} = frames["codex.rate_limits"]
+
+    assert_received {:websocket_frame, retry_metadata_frame}
+    assert %{"type" => "codex.response.metadata"} = Jason.decode!(retry_metadata_frame)
 
     assert_received {:websocket_frame, frame}
     assert %{"id" => "resp_ws_connection_limit_after_rate_limits"} = Jason.decode!(frame)
@@ -9449,6 +9584,87 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert window.source == "codex_rate_limit_event"
     assert Decimal.equal?(window.used_percent, Decimal.new("29.0"))
     assert DateTime.compare(window.reset_at, reset_at) == :eq
+  end
+
+  @tag :feature_websocket_connection_limit_retry
+  test "unknown Codex control commits output and prevents websocket retry" do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"codex.future_control", %{"type" => "codex.future_control"}},
+            {"error",
+             %{
+               "type" => "error",
+               "status" => 400,
+               "code" => "websocket_connection_limit_reached",
+               "message" => "do not replay visible provider control"
+             }}
+          ],
+          done: false
+        )
+      )
+
+    fallback_upstream =
+      start_upstream(FakeUpstream.json_response(%{"id" => "resp_ws_unknown_control_fallback"}))
+
+    setup = gateway_setup(upstream)
+
+    fallback =
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-unknown-control-fallback",
+        compact?: false
+      )
+
+    prime_routing_quota!(fallback.identity)
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+      )
+
+    request_id =
+      seed_preferring_assignment(
+        [setup.assignment.id, fallback.assignment.id],
+        setup.assignment.id
+      )
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert :ok =
+             execute_websocket_response(
+               auth,
+               Jason.encode!(%{
+                 "type" => "response.create",
+                 "model" => setup.model.exposed_model_id,
+                 "input" => native_text_input("preserve unknown Codex control visibility"),
+                 "stream" => true,
+                 "generate" => true
+               }),
+               %{request_id: request_id, capture_metadata_control?: true},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    assert_received {:websocket_frame, metadata_frame}
+    assert %{"type" => "codex.response.metadata"} = Jason.decode!(metadata_frame)
+
+    assert_received {:websocket_frame, provider_frame}
+    assert %{"type" => "codex.future_control"} = Jason.decode!(provider_frame)
+
+    assert_received {:websocket_frame, failed_frame}
+    assert %{"type" => "response.failed"} = Jason.decode!(failed_frame)
+
+    assert FakeUpstream.count(upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 0
+
+    assert [attempt] = Repo.all(from(a in Attempt))
+    assert attempt.status == "failed"
+    assert attempt.retryable == false
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.retry_count == 0
   end
 
   @tag :task_8_websocket_failure
@@ -11480,6 +11696,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                 {:data, ^ref, data}, {websocket, frames, closed?} ->
                   {:ok, websocket, decoded} = Mint.WebSocket.decode(websocket, data)
 
+                  decoded = Enum.reject(decoded, &metadata_control_frame?/1)
+
                   {websocket, frames ++ decoded,
                    closed? or Enum.any?(decoded, &match?({:close, _, _}, &1))}
 
@@ -12184,8 +12402,26 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
   defp execute_websocket_response(auth, raw_payload, opts, push_frame) do
     request_options = RequestOptions.for_websocket(opts)
-    RuntimeGateway.execute_websocket_response(auth, raw_payload, request_options, push_frame)
+
+    capture_metadata_control? = Map.get(opts, :capture_metadata_control?, false)
+
+    RuntimeGateway.execute_websocket_response(auth, raw_payload, request_options, fn frame ->
+      if capture_metadata_control? || not metadata_control_frame?(frame) do
+        push_frame.(frame)
+      end
+    end)
   end
+
+  defp metadata_control_frame?(%{"type" => "codex.response.metadata"}), do: true
+
+  defp metadata_control_frame?({:text, frame}) when is_binary(frame),
+    do: metadata_control_frame?(frame)
+
+  defp metadata_control_frame?(frame) when is_binary(frame) do
+    match?({:ok, %{"type" => "codex.response.metadata"}}, Jason.decode(frame))
+  end
+
+  defp metadata_control_frame?(_frame), do: false
 
   defp completed_websocket_finalization_context!(setup, auth, session, body) do
     payload = %{"model" => setup.model.exposed_model_id, "stream" => true}
@@ -12332,7 +12568,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   defp receive_socket_push(state, timeout_ms) do
     receive do
       {:codex_response_chunk, task_pid, frame} ->
-        CodexResponsesSocket.handle_info({:codex_response_chunk, task_pid, frame}, state)
+        result = CodexResponsesSocket.handle_info({:codex_response_chunk, task_pid, frame}, state)
+
+        if StreamProtocol.internal_control_event?(frame) do
+          receive_socket_push(state, timeout_ms)
+        else
+          result
+        end
     after
       timeout_ms -> flunk("expected websocket response chunk")
     end

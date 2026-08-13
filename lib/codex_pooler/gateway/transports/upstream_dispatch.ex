@@ -869,44 +869,44 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp record_upstream_websocket_body(
          {:error,
           %{
-            body: body,
+            body: _body,
             reason: {:websocket_upgrade_failed, _status, headers}
           }} = result,
          identity,
          request
        ) do
     RateLimitObserver.record_websocket_upgrade_headers(identity, headers)
-    mark_visible_output(request, body)
+    mark_visible_output(request, result)
     result
   end
 
   defp record_upstream_websocket_body(
-         {:ok, %{body: body, websocket_frame_headers: frame_headers}} = result,
+         {:ok, %{body: _body, websocket_frame_headers: frame_headers}} = result,
          identity,
          request
        ) do
     RateLimitObserver.record_websocket_frame_headers(identity, frame_headers)
-    mark_visible_output(request, body)
+    mark_visible_output(request, result)
     result
   end
 
-  defp record_upstream_websocket_body({:ok, %{body: body}} = result, _identity, request) do
-    mark_visible_output(request, body)
+  defp record_upstream_websocket_body({:ok, %{body: _body}} = result, _identity, request) do
+    mark_visible_output(request, result)
     result
   end
 
   defp record_upstream_websocket_body(
-         {:error, %{body: body, websocket_frame_headers: frame_headers}} = result,
+         {:error, %{body: _body, websocket_frame_headers: frame_headers}} = result,
          identity,
          request
        ) do
     RateLimitObserver.record_websocket_frame_headers(identity, frame_headers)
-    mark_visible_output(request, body)
+    mark_visible_output(request, result)
     result
   end
 
-  defp record_upstream_websocket_body({:error, %{body: body}} = result, _identity, request) do
-    mark_visible_output(request, body)
+  defp record_upstream_websocket_body({:error, %{body: _body}} = result, _identity, request) do
+    mark_visible_output(request, result)
     result
   end
 
@@ -1132,11 +1132,24 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     TransportEnvelope.headers(identity, token, headers, include_codex_identity?: true)
   end
 
-  defp mark_visible_output(request, data) when is_binary(data) and data != "" do
-    PersistenceSessionContinuity.mark_codex_turn_visible(request)
+  defp mark_visible_output(request, {status, %{body: body} = result})
+       when status in [:ok, :error] and is_binary(body) and body != "" do
+    if downstream_output_visible?(status, result, body) do
+      PersistenceSessionContinuity.mark_codex_turn_visible(request)
+    end
   end
 
-  defp mark_visible_output(_request, _data), do: :ok
+  defp mark_visible_output(_request, _result), do: :ok
+
+  defp downstream_output_visible?(
+         :error,
+         %{transport_failure: %{pre_visible_output: true}},
+         _body
+       ),
+       do: false
+
+  defp downstream_output_visible?(_status, _result, body),
+    do: not StreamProtocol.internal_control_event?(body)
 
   defp maybe_put_responses_lite_header(headers, %RequestOptions{} = request_options) do
     headers =

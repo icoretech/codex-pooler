@@ -231,6 +231,36 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     end
   end
 
+  test "native socket keeps only provider-visible frames in its turn visibility latch" do
+    task_pid = self()
+
+    state = %{
+      opts: RequestOptions.for_websocket(%{}),
+      tasks: MapSet.new([task_pid]),
+      task_monitors: %{},
+      native_turn_output_task_pids: MapSet.new()
+    }
+
+    for control_type <- ["codex.rate_limits", "codex.response.metadata"] do
+      control = Jason.encode!(%{"type" => control_type})
+
+      assert {:push, {:text, ^control}, control_state} =
+               CodexResponsesSocket.handle_info({:codex_response_chunk, task_pid, control}, state)
+
+      assert control_state.native_turn_output_task_pids == MapSet.new()
+    end
+
+    unknown_control = Jason.encode!(%{"type" => "codex.future_control"})
+
+    assert {:push, {:text, ^unknown_control}, visible_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_chunk, task_pid, unknown_control},
+               state
+             )
+
+    assert visible_state.native_turn_output_task_pids == MapSet.new([task_pid])
+  end
+
   @tag :task_1_red
   test "RED-R02 public GET wraps exact legacy success as response.completed" do
     task_pid = self()

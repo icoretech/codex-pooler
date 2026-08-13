@@ -29,6 +29,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     RoutingCircuitState
   }
 
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
@@ -1142,29 +1143,44 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
 
   def public_websocket_receive_text!(conn, websocket, ref) do
     case dequeue_public_websocket_text(ref) do
-      {:ok, text} ->
-        {conn, websocket, text}
+      {:ok, text} when is_binary(text) ->
+        continue_public_websocket_receive(conn, websocket, ref, text)
 
       :empty ->
-        receive do
-          message ->
-            case Mint.WebSocket.stream(conn, message) do
-              {:ok, conn, responses} ->
-                case decode_public_websocket_text(websocket, ref, responses) do
-                  {:ok, websocket, text} -> {conn, websocket, text}
-                  {:cont, websocket} -> public_websocket_receive_text!(conn, websocket, ref)
-                end
+        receive_public_websocket_text!(conn, websocket, ref)
+    end
+  end
 
-              {:error, conn, reason, _responses} ->
-                Mint.HTTP.close(conn)
-                flunk("websocket receive failed: #{inspect(reason)}")
+  defp continue_public_websocket_receive(conn, websocket, ref, text) do
+    if internal_control_frame?(text) do
+      public_websocket_receive_text!(conn, websocket, ref)
+    else
+      {conn, websocket, text}
+    end
+  end
 
-              :unknown ->
+  defp receive_public_websocket_text!(conn, websocket, ref) do
+    receive do
+      message ->
+        case Mint.WebSocket.stream(conn, message) do
+          {:ok, conn, responses} ->
+            case decode_public_websocket_text(websocket, ref, responses) do
+              {:ok, websocket, text} ->
+                continue_public_websocket_receive(conn, websocket, ref, text)
+
+              {:cont, websocket} ->
                 public_websocket_receive_text!(conn, websocket, ref)
             end
-        after
-          @detection_timeout_ms -> flunk("timed out waiting for websocket frame")
+
+          {:error, conn, reason, _responses} ->
+            Mint.HTTP.close(conn)
+            flunk("websocket receive failed: #{inspect(reason)}")
+
+          :unknown ->
+            public_websocket_receive_text!(conn, websocket, ref)
         end
+    after
+      @detection_timeout_ms -> flunk("timed out waiting for websocket frame")
     end
   end
 
@@ -1365,10 +1381,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   def receive_socket_push(state) do
     receive do
       {:codex_response_chunk, task_pid, frame} ->
-        CodexResponsesSocket.handle_info({:codex_response_chunk, task_pid, frame}, state)
+        result = CodexResponsesSocket.handle_info({:codex_response_chunk, task_pid, frame}, state)
+
+        if internal_control_frame?(frame) do
+          receive_socket_push(state)
+        else
+          result
+        end
     after
       @detection_timeout_ms -> flunk("expected websocket response chunk")
     end
+  end
+
+  defp internal_control_frame?(frame) when is_binary(frame) do
+    StreamProtocol.internal_control_event?(frame)
   end
 
   def receive_socket_done(state, timeout_ms \\ @detection_timeout_ms) do

@@ -964,7 +964,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
          mapped_text,
          mapped_decoded
        ) do
-    terminal_discriminator = TerminalDiscriminator.classify(raw_decoded)
+    terminal_discriminator = TerminalDiscriminator.classify(mapped_decoded)
 
     receive_state =
       raw_decoded
@@ -1118,7 +1118,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   defp maybe_mark_downstream_output_started(%ReceiveState{} = receive_state, decoded) do
-    if StreamProtocol.internal_rate_limit_event?(decoded) do
+    if StreamProtocol.internal_control_event?(decoded) do
       receive_state
     else
       %{receive_state | downstream_output_started?: true}
