@@ -230,7 +230,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
             phx-hook="RelativeCountdown"
             data-countdown-at={DateTime.to_iso8601(@expires_at)}
             title={DateTimeDisplay.format_datetime(@expires_at, @datetime_preferences)}
-          > It expires in <span data-role="relative-countdown-value">{countdown_label(@expires_at)}</span>.</span>
+          > It expires in <span
+              data-role="relative-countdown-value"
+              class="font-semibold text-base-content/75"
+            >{countdown_label(@expires_at)}</span>.</span>
         </p>
         <div class="grid min-w-0 gap-2 rounded-box border border-base-300 bg-base-200/40 px-3 py-2">
           <div class="flex min-w-0 items-center gap-2">
