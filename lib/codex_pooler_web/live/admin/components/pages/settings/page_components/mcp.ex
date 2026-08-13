@@ -244,48 +244,26 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
       open
     >
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
-        <div class="border-b border-base-300 px-6 py-5">
+        <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">MCP token</p>
-          <h2 class="mt-1 text-2xl font-bold text-base-content">Copy this MCP token now</h2>
-          <p class="mt-2 text-sm leading-6 text-base-content/70">
-            This raw token is shown once. Future views only show prefix {@created_secret.key.key_prefix}.
+          <h2 class="mt-1 text-2xl font-bold text-base-content">Copy this token before closing</h2>
+          <p
+            id="settings-mcp-created-token-alert"
+            class="mt-2 text-sm leading-6 text-base-content/70"
+          >
+            It is shown once. Afterwards only the prefix
+            <span class="font-semibold text-base-content">{@created_secret.key.key_prefix}</span>
+            identifies it.
           </p>
         </div>
-        <div class="grid gap-5 p-6">
-          <div id="settings-mcp-created-token-alert" class="alert alert-success items-start">
-            <.icon name="hero-key" class="size-5" />
-            <div class="grid gap-1">
-              <p class="font-semibold">Copy this MCP token before closing the dialog.</p>
-              <p class="text-sm">It will not be shown again.</p>
-            </div>
-          </div>
-          <div class="grid gap-2 rounded-box border border-base-300 bg-base-200 p-4">
-            <p class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
-              one-time MCP token
-            </p>
-            <div class="join w-full">
-              <code
-                id="settings-mcp-created-token-value"
-                class="join-item min-h-10 flex-1 break-all border border-base-300 bg-base-100 px-3 py-2.5 font-mono text-sm text-base-content"
-              >
-                {@created_secret.raw_token}
-              </code>
-              <button
-                id="settings-mcp-created-token-copy"
-                type="button"
-                class="btn btn-neutral join-item min-h-10"
-                phx-hook="ClipboardCopy"
-                phx-update="ignore"
-                data-copy-text={@created_secret.raw_token}
-                data-copy-label="Copy"
-                data-copied-label="Copied"
-                aria-label="Copy MCP token"
-              >
-                <.icon name="hero-clipboard-document" class="copy-icon size-4" />
-                <span data-copy-label>Copy</span>
-              </button>
-            </div>
-          </div>
+        <div class="grid gap-5 p-5 sm:p-6">
+          <AdminComponents.one_time_secret
+            value={@created_secret.raw_token}
+            value_id="settings-mcp-created-token-value"
+            copy_id="settings-mcp-created-token-copy"
+            copy_label="Copy token"
+            copy_aria_label="Copy MCP token"
+          />
         </div>
 
         <AdminComponents.dialog_footer id="settings-mcp-created-token-dialog-footer">
@@ -293,7 +271,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
             <AdminComponents.action_button
               id="settings-mcp-created-token-close"
               icon="hero-check"
-              label="Close"
+              label="Done"
               phx-click="close_mcp_created_token"
               variant={:primary}
             />
@@ -318,7 +296,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
       open
     >
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
-        <div class="border-b border-base-300 px-6 py-5">
+        <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-error">Permanent delete</p>
           <h2 class="mt-1 text-2xl font-bold text-base-content">Delete MCP key</h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
@@ -330,7 +308,7 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
           for={@form}
           phx-submit="confirm_delete_mcp_key"
           autocomplete="off"
-          class="grid gap-5 p-6"
+          class="grid gap-5 p-5 sm:p-6"
         >
           <.input field={@form[:id]} type="hidden" />
           <div class="alert alert-warning items-start">

@@ -24,7 +24,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog do
       open
     >
       <div class="modal-box sm:max-w-5xl border border-base-300 bg-base-100 p-0 shadow-2xl">
-        <div class="border-b border-base-300 px-6 py-5">
+        <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">
             Upstream credentials
           </p>
@@ -40,7 +40,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AuthJsonDialog do
           phx-change="validate_auth_json_import"
           phx-submit="import_auth_json"
           autocomplete="off"
-          class="grid gap-5 p-6"
+          class="grid gap-5 p-5 sm:p-6"
         >
           <.input
             field={@auth_json_form[:pool_id]}

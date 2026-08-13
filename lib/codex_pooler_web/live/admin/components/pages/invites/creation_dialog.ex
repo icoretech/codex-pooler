@@ -25,7 +25,7 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
       open
     >
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
-        <div class="border-b border-base-300 px-6 py-5">
+        <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">
             Pool onboarding
           </p>
@@ -132,7 +132,7 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
           phx-change="validate_invite"
           phx-submit="create_invite"
           autocomplete="off"
-          class="grid gap-5 p-6"
+          class="grid gap-5 p-5 sm:p-6"
         >
           <div class="grid gap-4 md:grid-cols-2">
             <.input

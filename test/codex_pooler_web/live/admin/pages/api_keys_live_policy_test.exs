@@ -35,7 +35,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLivePolicyTest do
       })
 
     assert has_element?(view, "#api-key-created-secret-dialog[open]")
-    assert has_element?(view, "#api-key-created-secret", "Copy this API key before closing")
+    assert has_element?(view, "#api-key-created-secret", "It is shown once")
     assert has_element?(view, "#api-key-created-secret-value")
     assert has_element?(view, "#api-key-copy-created-secret")
     raw_key = extract_raw_key!(html)

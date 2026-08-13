@@ -134,7 +134,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLiveUsageActionsTest do
     rotated_raw_key = extract_raw_key!(rotate_html)
     rotated_api_key = Repo.get!(APIKey, api_key.id)
     assert rotated_raw_key != original_raw_key
-    assert has_element?(view, "#api-key-created-secret", "Copy this API key before closing")
+    assert has_element?(view, "#api-key-created-secret", "It is shown once")
     refute render(view) =~ original_raw_key
 
     view |> element("#revoke-api-key-#{api_key.id}") |> render_click()

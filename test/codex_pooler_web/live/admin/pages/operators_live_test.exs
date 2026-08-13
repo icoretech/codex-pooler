@@ -103,7 +103,7 @@ defmodule CodexPoolerWeb.Admin.OperatorsLiveTest do
     assert has_element?(
              view,
              "#operator-create-temporary-password-receipt",
-             "Copy this temporary password now"
+             "must use it on next sign in"
            )
 
     assert has_element?(view, "#operator-create-dialog[open]")

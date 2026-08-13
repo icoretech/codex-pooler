@@ -1937,6 +1937,14 @@ body {
     place-items: center;
   }
 
+  /* The one-time secret is a `<code>`, so it is invisible to every selector
+     above. It sits beside its copy button from `sm`, and a tablet is inside
+     this query - leaving it out is what made the field 32px next to a 44px
+     button on an iPad. */
+  .modal-box .admin-secret-value {
+    min-height: 2.75rem;
+  }
+
   /* Keyed to `data-admin-dialog-docs`, not to the `data-role`: that one is a
      caller-overridable test hook and the policy-editor shell does override it,
      so a rule written against it silently skips every dialog built on that
@@ -1945,6 +1953,19 @@ body {
   [data-role="admin-dialog-footer"] [data-admin-dialog-docs] {
     min-height: 2.75rem;
   }
+}
+
+/* A destructive confirm stays unavailable until what was typed actually matches
+   the prefix. The check is the field's own `pattern`, so it is the browser
+   comparing the strings rather than a hand-written validator, and the same
+   `required` + `pattern` pair keeps blocking the submit if the rule below is
+   ever bypassed - this only stops the button from inviting a click it would
+   reject. The field id carries a form version, so the selector goes through the
+   form: it holds exactly one text input. */
+#api-key-delete-dialog:has(#api-key-delete-form input[type="text"]:invalid)
+  #api-key-delete-submit {
+  pointer-events: none;
+  opacity: 0.45;
 }
 
 /* Admin rail. Below xl the sidebar is a 64px icon rail, and that is a content

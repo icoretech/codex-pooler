@@ -128,7 +128,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
       open
     >
       <div class="modal-box sm:max-w-xl border border-base-300 bg-base-100 p-0 shadow-2xl">
-        <div class="border-b border-base-300 px-6 py-5">
+        <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">Upstream account</p>
           <h2 class="mt-1 text-2xl font-bold text-base-content">Rename upstream account</h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
@@ -141,7 +141,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
           phx-change="validate_rename_account"
           phx-submit="rename_account"
           autocomplete="off"
-          class="grid gap-5 p-6"
+          class="grid gap-5 p-5 sm:p-6"
         >
           <.input field={@form[:account_label]} type="text" label="Label" required />
         </.form>
@@ -203,7 +203,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
           for={@form}
           phx-submit="confirm_delete_account"
           autocomplete="off"
-          class="grid gap-5 p-6"
+          class="grid gap-5 p-5 sm:p-6"
         >
           <.input field={@form[:id]} type="hidden" />
           <p class="rounded-box border border-base-300 bg-base-200/60 p-3 text-sm text-base-content/70">

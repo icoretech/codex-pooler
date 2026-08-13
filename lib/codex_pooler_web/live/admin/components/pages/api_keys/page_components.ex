@@ -22,52 +22,26 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
       open
     >
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
-        <div class="border-b border-base-300 px-6 py-5">
+        <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">
-            API key secret
+            API key
           </p>
-          <h2 class="mt-1 text-2xl font-bold text-base-content">Copy this API key now</h2>
-          <p class="mt-2 text-sm leading-6 text-base-content/70">
-            This raw key is shown once. Future views only show fingerprint {@created_secret.key_prefix}.
+          <h2 class="mt-1 text-2xl font-bold text-base-content">Copy this key before closing</h2>
+          <p id="api-key-created-secret" class="mt-2 text-sm leading-6 text-base-content/70">
+            It is shown once. Afterwards only the fingerprint
+            <span class="font-semibold text-base-content">{@created_secret.key_prefix}</span>
+            identifies it.
           </p>
         </div>
 
-        <div class="grid gap-5 p-6">
-          <div id="api-key-created-secret" class="alert alert-success items-start">
-            <.icon name="hero-key" class="size-5" />
-            <div class="grid gap-1">
-              <p class="font-semibold">Copy this API key before closing the dialog.</p>
-              <p class="text-sm">It will not be shown again.</p>
-            </div>
-          </div>
-
-          <div class="grid gap-2 rounded-box border border-base-300 bg-base-200 p-4">
-            <p class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
-              one-time api key
-            </p>
-            <div class="join w-full">
-              <code
-                id="api-key-created-secret-value"
-                class="join-item min-h-10 flex-1 break-all border border-base-300 bg-base-100 px-3 py-2.5 font-mono text-sm text-base-content"
-              >
-                {@created_secret.raw_key}
-              </code>
-              <button
-                id="api-key-copy-created-secret"
-                type="button"
-                class="btn btn-neutral join-item min-h-10"
-                phx-hook="ClipboardCopy"
-                phx-update="ignore"
-                data-copy-text={@created_secret.raw_key}
-                data-copy-label="Copy"
-                data-copied-label="Copied"
-                aria-label="Copy API key"
-              >
-                <.icon name="hero-clipboard-document" class="copy-icon size-4" />
-                <span data-copy-label>Copy</span>
-              </button>
-            </div>
-          </div>
+        <div class="grid gap-5 p-5 sm:p-6">
+          <AdminComponents.one_time_secret
+            value={@created_secret.raw_key}
+            value_id="api-key-created-secret-value"
+            copy_id="api-key-copy-created-secret"
+            copy_label="Copy key"
+            copy_aria_label="Copy API key"
+          />
         </div>
 
         <AdminComponents.dialog_footer
@@ -75,14 +49,13 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
           docs_url={@api_key_docs_url}
         >
           <:actions>
-            <button
+            <AdminComponents.action_button
               id="api-key-secret-dialog-close"
-              type="button"
-              class="btn btn-primary btn-sm"
+              icon="hero-check"
+              label="Done"
               phx-click="close_secret"
-            >
-              Close
-            </button>
+              variant={:primary}
+            />
           </:actions>
         </AdminComponents.dialog_footer>
       </div>
@@ -107,11 +80,13 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
       open
     >
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
-        <div class="border-b border-base-300 px-6 py-5">
-          <p class="text-sm font-semibold uppercase tracking-wide text-error">Hard delete</p>
-          <h2 class="mt-1 text-2xl font-bold text-base-content">Delete API key</h2>
+        <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
+          <p class="text-sm font-semibold uppercase tracking-wide text-error">API key</p>
+          <h2 class="mt-1 text-2xl font-bold text-base-content">
+            Delete {@api_key.display_name}?
+          </h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
-            This permanently removes the API key and its related request history from this instance.
+            It stops working immediately, and its request history goes with it. This cannot be undone.
           </p>
         </div>
 
@@ -120,26 +95,16 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
           for={@form}
           phx-submit="confirm_delete_api_key"
           autocomplete="off"
-          class="grid gap-5 p-6"
+          class="grid gap-5 p-5 sm:p-6"
         >
           <.input field={@form[:id]} type="hidden" />
-          <div class="alert alert-warning items-start">
-            <.icon name="hero-exclamation-triangle" class="size-5" />
-            <div class="grid gap-1">
-              <p class="font-semibold">
-                This removes {@api_key.display_name} permanently.
-              </p>
-              <p class="text-sm">
-                Type <span class="break-all font-semibold">{@api_key.key_prefix}</span> to confirm.
-              </p>
-            </div>
-          </div>
           <.input
             field={@form[:confirmation_prefix]}
             id={"api_key_delete_confirmation_prefix_#{@form_version}"}
             type="text"
-            label="Confirm prefix"
+            label={"Type #{@api_key.key_prefix} to confirm"}
             placeholder={@api_key.key_prefix}
+            pattern={@api_key.key_prefix}
             required
           />
         </.form>
@@ -158,7 +123,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
             <AdminComponents.action_button
               id="api-key-delete-submit"
               icon="hero-trash"
-              label="Delete API key"
+              label="Delete"
               type="submit"
               form="api-key-delete-form"
               variant={:danger}

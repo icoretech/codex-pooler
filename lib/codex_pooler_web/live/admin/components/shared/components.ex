@@ -340,7 +340,7 @@ defmodule CodexPoolerWeb.Admin.Components do
   # actions with it. The policy-editor shell pins its own footer the same way.
   attr :class, :any,
     default:
-      "modal-action sticky bottom-0 mt-0 w-full shrink-0 border-t border-base-300 bg-base-200/80 px-4 py-2.5 sm:px-5"
+      "modal-action sticky bottom-0 mt-0 w-full shrink-0 border-t border-base-300 bg-base-200/80 px-5 py-2.5 sm:px-6"
 
   attr :docs_link_role, :string, default: "admin-dialog-docs-link"
   attr :docs_link_id, :string, default: nil
@@ -905,6 +905,62 @@ defmodule CodexPoolerWeb.Admin.Components do
     """
   end
 
+  attr :value, :string, required: true
+  attr :value_id, :string, required: true
+  attr :copy_id, :string, required: true
+  attr :copy_label, :string, required: true
+  attr :copy_aria_label, :string, required: true
+
+  @doc """
+  The one-time secret block: a raw credential shown once, with its copy action.
+
+  Three dialogs reveal a secret exactly once - the API key, the MCP token, the
+  operator's temporary password - and each had its own copy of this markup,
+  identical class for class. Sharing it is the point: these are the screens
+  where a credential is lost if the layout misleads, so they must not drift.
+
+  It is the value and its copy action, and nothing else. The wrapper card and
+  the "one-time api key" caption it used to carry made a third box around a
+  string that already sat in a bordered field inside a bordered alert, and the
+  caption restated a title one line above it. Whatever names the secret belongs
+  in the dialog header, said once.
+
+  The layout is the OAuth handoff row: value and action share one line from `sm`
+  and stack below it. A credential is long and unbreakable, so on a phone it
+  takes the full width and the action drops under it - squeezed beside the
+  button it wrapped three deep - while on a desktop it fits inline and an action
+  parked on its own row reads as detached from what it copies.
+
+  The type is `text-xs`: 14px mono reads much larger than the 14px Roboto
+  Condensed beside it, the same call made on the OAuth handoff field. The copy
+  label has to say what it copies - `clipboard_button/1` treats the bare word
+  "Copy" as the icon-only case and hides the label from sight.
+
+  `admin-secret-value` is the hook the touch-target floor keys to: the value is
+  a `<code>`, so none of the daisyUI component selectors reach it, and without
+  it the field stays 32px beside a 44px button on a tablet.
+  """
+  def one_time_secret(assigns) do
+    ~H"""
+    <div class="grid min-w-0 items-start gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+      <code
+        id={@value_id}
+        class="admin-secret-value grid min-h-8 min-w-0 items-center break-all rounded-field border border-base-300 bg-base-200/60 px-2.5 py-1 font-mono text-xs leading-5 text-base-content"
+      >
+        {@value}
+      </code>
+      <.clipboard_button
+        id={@copy_id}
+        copy_text={@value}
+        label={@copy_label}
+        aria_label={@copy_aria_label}
+        class="btn btn-secondary btn-sm h-8 min-h-8 w-full shrink-0 gap-1.5 sm:w-auto"
+        icon_class="size-3.5"
+      />
+    </div>
+    """
+  end
+
   attr :id, :string, required: true
   attr :copy_text, :string, required: true
   attr :aria_label, :string, required: true
@@ -1052,7 +1108,12 @@ defmodule CodexPoolerWeb.Admin.Components do
   defp action_button_class(:primary, :md), do: "btn btn-primary w-full gap-2 px-5 sm:w-auto"
   defp action_button_class(:primary, :sm), do: "btn btn-primary btn-sm gap-2"
 
-  defp action_button_class(:danger, _size), do: "btn btn-error btn-outline btn-sm gap-2"
+  # Filled, not outlined. A destructive confirm is the one action its dialog
+  # exists for, and an outline reads as the quieter of the two buttons next to a
+  # ghost Cancel - the wrong way round. This is the only `:danger` recipe, so
+  # all 17 destructive confirms move together rather than splitting into two
+  # vocabularies.
+  defp action_button_class(:danger, _size), do: "btn btn-error btn-sm gap-2"
 
   defp action_button_class(:ghost, _size),
     do: "btn btn-ghost btn-sm gap-2 text-base-content/60 hover:text-base-content"

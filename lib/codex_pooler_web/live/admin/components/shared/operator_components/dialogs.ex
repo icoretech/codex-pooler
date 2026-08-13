@@ -29,13 +29,15 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
       open
     >
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
-        <div class="border-b border-base-300 px-6 py-5">
+        <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">
             Operator access
           </p>
-          <h2 class="mt-1 text-2xl font-bold text-base-content">Create operator</h2>
+          <h2 class="mt-1 text-2xl font-bold text-base-content">
+            {create_dialog_title(@temporary_password_receipt)}
+          </h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
-            Add a local admin account and decide how the first password is delivered.
+            {create_dialog_description(@temporary_password_receipt)}
           </p>
         </div>
 
@@ -47,7 +49,6 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
           copy_button_id="operator-create-copy-temporary-password"
           close_button_id="operator-create-dialog-close"
           close_event="cancel_create_operator"
-          heading_text="Copy this temporary password now."
           email_error_copy="Operator email could not be sent. Copy the temporary password now."
         />
 
@@ -57,7 +58,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
           for={@create_form}
           phx-submit="create_operator"
           autocomplete="off"
-          class="grid gap-5 p-6"
+          class="grid gap-5 p-5 sm:p-6"
         >
           <div class="grid gap-4 md:grid-cols-2">
             <.operator_email_input
@@ -126,7 +127,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
       open
     >
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
-        <div class="border-b border-base-300 px-6 py-5">
+        <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">
             Operator profile
           </p>
@@ -141,7 +142,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
           for={@edit_form}
           phx-submit="save_operator"
           autocomplete="off"
-          class="grid gap-5 p-6"
+          class="grid gap-5 p-5 sm:p-6"
         >
           <.input field={@edit_form[:id]} type="hidden" />
           <div class="grid gap-4 md:grid-cols-2">
@@ -205,7 +206,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
       open
     >
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
-        <div class="border-b border-base-300 px-6 py-5">
+        <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">
             Operator credential
           </p>
@@ -231,7 +232,6 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
           copy_button_id="operator-copy-temporary-password"
           close_button_id="operator-password-dialog-close"
           close_event="cancel_reset"
-          heading_text="Temporary password ready"
         />
 
         <.form
@@ -240,7 +240,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
           for={@reset_form}
           phx-submit="save_temporary_password"
           autocomplete="off"
-          class="grid gap-5 p-6"
+          class="grid gap-5 p-5 sm:p-6"
         >
           <.input field={@reset_form[:id]} type="hidden" />
           <.input field={@reset_form[:operation]} type="hidden" />
@@ -426,67 +426,51 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
     """
   end
 
+  # The header follows the flow rather than freezing on the form's opening line:
+  # once the receipt exists the operator does too, and "add a local admin
+  # account" is describing a step already taken.
+  defp create_dialog_title(nil), do: "Create operator"
+  defp create_dialog_title(_receipt), do: "Copy this password before closing"
+
+  defp create_dialog_description(nil),
+    do: "Add a local admin account and decide how the first password is delivered."
+
+  defp create_dialog_description(_receipt),
+    do: "It is shown once, and cannot be recovered afterwards."
+
   attr :receipt, :map, required: true
   attr :wrapper_id, :string, required: true
   attr :code_id, :string, required: true
   attr :copy_button_id, :string, required: true
   attr :close_button_id, :string, required: true
   attr :close_event, :string, required: true
-  attr :heading_text, :string, required: true
   attr :email_error_copy, :string, default: nil
 
   defp temporary_password_receipt_card(assigns) do
     assigns = assign(assigns, :operator_password_docs_url, @operator_password_docs_url)
 
     ~H"""
-    <div class="grid gap-5 p-6">
-      <div
-        id={@wrapper_id}
-        class={[
-          "alert items-start",
-          @receipt.email_error? && "alert-warning",
-          !@receipt.email_error? && "alert-success"
-        ]}
-      >
-        <.icon name="hero-key" class="size-5" />
+    <div id={@wrapper_id} class="grid gap-4 p-5 sm:p-6">
+      <div :if={@receipt.email_error?} class="alert alert-warning items-start">
+        <.icon name="hero-exclamation-triangle" class="size-5" />
         <div class="grid gap-1">
-          <p class="font-semibold">{@heading_text}</p>
-          <p :if={@receipt.email_error? && @email_error_copy} class="text-sm">
-            {@email_error_copy}
-          </p>
-          <p class="text-sm">
-            {@receipt.operator_email} must use this password on next sign in.
-          </p>
+          <p class="font-semibold">{@email_error_copy}</p>
+          <p class="text-sm">Hand it over yourself: they have no other way to receive it.</p>
         </div>
       </div>
 
-      <div class="grid gap-2 rounded-box border border-base-300 bg-base-200 p-4">
-        <p class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
-          one-time password
-        </p>
-        <div class="join w-full">
-          <code
-            id={@code_id}
-            class="join-item min-h-10 flex-1 break-all border border-base-300 bg-base-100 px-3 py-2.5 font-mono text-sm text-base-content"
-          >
-            {@receipt.temporary_password}
-          </code>
-          <button
-            id={@copy_button_id}
-            type="button"
-            class="btn btn-neutral join-item min-h-10"
-            phx-hook="ClipboardCopy"
-            phx-update="ignore"
-            data-copy-text={@receipt.temporary_password}
-            data-copy-label="Copy"
-            data-copied-label="Copied"
-            aria-label="Copy one-time password"
-          >
-            <.icon name="hero-clipboard-document" class="copy-icon size-4" />
-            <span data-copy-label>Copy</span>
-          </button>
-        </div>
-      </div>
+      <p class="text-sm leading-6 text-base-content/70">
+        <span class="font-semibold text-base-content">{@receipt.operator_email}</span>
+        must use it on next sign in.
+      </p>
+
+      <AdminComponents.one_time_secret
+        value={@receipt.temporary_password}
+        value_id={@code_id}
+        copy_id={@copy_button_id}
+        copy_label="Copy password"
+        copy_aria_label="Copy one-time password"
+      />
     </div>
 
     <AdminComponents.dialog_footer id={"#{@wrapper_id}-footer"} docs_url={@operator_password_docs_url}>
@@ -494,7 +478,7 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
         <AdminComponents.action_button
           id={@close_button_id}
           icon="hero-check"
-          label="Close"
+          label="Done"
           phx-click={@close_event}
           variant={:primary}
         />
