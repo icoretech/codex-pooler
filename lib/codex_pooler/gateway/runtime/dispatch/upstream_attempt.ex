@@ -4,11 +4,13 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
   alias CodexPooler.Gateway.Payloads.ContinuityPayload
   alias CodexPooler.Gateway.Routing.ModelMetadata
   alias CodexPooler.Gateway.Runtime.Dispatch.PreparedContext
+  alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt
   alias CodexPooler.Gateway.Runtime.Dispatch.WebsocketBridge
   alias CodexPooler.Gateway.Runtime.Finalization
   alias CodexPooler.Gateway.Runtime.Streaming.StreamDispatch
   alias CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle
+  alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
   alias CodexPooler.Gateway.Transports.UpstreamDispatch.Request, as: DispatchRequest
   alias CodexPooler.RouteClass
@@ -113,9 +115,22 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
       writer: Keyword.get(opts, :writer),
       assignment_advertised?:
         ModelMetadata.assignment_source?(context.model, context.assignment.id),
+      native_codex_response_control: native_codex_response_control(context),
       request_options: context.request_options
     }
   end
+
+  defp native_codex_response_control(%{
+         route_state: route_state,
+         request_options: %{transport: %{transport: "websocket"}}
+       }) do
+    case RouteState.codex_models_etag(route_state) do
+      models_etag when is_binary(models_etag) -> %TurnSnapshot{models_etag: models_etag}
+      nil -> nil
+    end
+  end
+
+  defp native_codex_response_control(_context), do: nil
 
   defp release_websocket_payload(%PreparedContext{context: context} = prepared_context) do
     %{prepared_context | context: %{context | payload: continuity_payload(context.payload)}}

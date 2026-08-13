@@ -151,6 +151,64 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
     end)
   end
 
+  test "exact internal controls remain pre-visible across SSE and direct JSON" do
+    for type <- ["codex.rate_limits", "codex.response.metadata"] do
+      sse = sse_event(type, %{"type" => type})
+
+      assert {{:write, ^sse}, sse_state} =
+               StreamAttempt.classify_first_event(sse, StreamAttempt.first_event_state())
+
+      assert state_projection(sse_state) == %{classified?: false, buffer: ""}
+
+      direct = Jason.encode!(%{"type" => type})
+
+      assert {:buffered, direct_state} =
+               StreamAttempt.classify_first_event(direct, StreamAttempt.first_event_state())
+
+      assert state_projection(direct_state) == %{classified?: false, buffer: direct}
+
+      assert_fold_equivalent(
+        type,
+        0,
+        [sse],
+        false,
+        &Reference.classify_first_event/3,
+        &StreamAttempt.classify_first_event/3
+      )
+    end
+  end
+
+  test "unknown Codex controls commit visible output in SSE and direct JSON" do
+    type = "codex.future_control"
+
+    for data <- [sse_event(type, %{"type" => type}), Jason.encode!(%{"type" => type})] do
+      assert {{:write, ^data}, state} =
+               StreamAttempt.classify_first_event(data, StreamAttempt.first_event_state())
+
+      assert state_projection(state) == %{classified?: true, buffer: ""}
+
+      assert_fold_equivalent(
+        type,
+        0,
+        [data],
+        false,
+        &Reference.classify_first_event/3,
+        &StreamAttempt.classify_first_event/3
+      )
+    end
+  end
+
+  test "malformed and incomplete data remains buffered rather than becoming internal" do
+    for data <- ["{", ~s({"type":), "event: codex.response.metadata\ndata: {"] do
+      refute StreamProtocol.internal_control_event?(data)
+
+      assert {:buffered, state} =
+               StreamAttempt.classify_first_event(data, StreamAttempt.first_event_state())
+
+      assert state_projection(state) == %{classified?: false, buffer: data}
+    end
+  end
+
   test "leading empty SSE block bytes remain in buffered state and the eventual visible write" do
     visible = sse_event("response.created", %{"type" => "response.created"})
     chunks = ["\n\n", visible]

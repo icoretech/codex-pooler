@@ -173,6 +173,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   @spec internal_rate_limit_event?(term()) :: boolean()
   defdelegate internal_rate_limit_event?(event), to: TerminalOutcome
 
+  @spec internal_control_event?(term()) :: boolean()
+  defdelegate internal_control_event?(event), to: TerminalOutcome
+
   @spec downstream_visible_event?(term()) :: boolean()
   defdelegate downstream_visible_event?(event), to: TerminalOutcome
 

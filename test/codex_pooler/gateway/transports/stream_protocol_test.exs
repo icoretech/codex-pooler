@@ -92,6 +92,71 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
     end
   end
 
+  describe "internal control event visibility" do
+    test "recognizes only the closed control set across map shapes" do
+      for type <- ["codex.rate_limits", "codex.response.metadata"],
+          event <- [
+            %{event_type: type},
+            %{"event_type" => type},
+            %{data_type: type},
+            %{"data_type" => type},
+            %{"type" => type}
+          ] do
+        assert StreamProtocol.internal_control_event?(event)
+        refute StreamProtocol.downstream_visible_event?(event)
+      end
+
+      assert StreamProtocol.internal_rate_limit_event?(%{"type" => "codex.rate_limits"})
+      refute StreamProtocol.internal_rate_limit_event?(%{"type" => "codex.response.metadata"})
+    end
+
+    test "recognizes the closed control set in direct JSON and SSE data" do
+      for type <- ["codex.rate_limits", "codex.response.metadata"] do
+        direct = Jason.encode!(%{"type" => type})
+        sse = sse_event(type, %{"type" => type})
+
+        assert StreamProtocol.internal_control_event?(direct)
+        assert StreamProtocol.internal_control_event?(sse)
+        refute StreamProtocol.downstream_visible_event?(direct)
+        refute StreamProtocol.downstream_visible_event?(sse)
+        refute StreamProtocol.stream_data_visible?(sse)
+      end
+    end
+
+    test "keeps unknown Codex, response, and terminal events visible" do
+      future_control = "codex.future_control"
+      direct = Jason.encode!(%{"type" => future_control})
+      sse = sse_event(future_control, %{"type" => future_control})
+
+      refute StreamProtocol.internal_control_event?(%{"type" => future_control})
+      refute StreamProtocol.internal_control_event?(direct)
+      refute StreamProtocol.internal_control_event?(sse)
+      assert StreamProtocol.downstream_visible_event?(%{"type" => future_control})
+      assert StreamProtocol.downstream_visible_event?(direct)
+      assert StreamProtocol.downstream_visible_event?(sse)
+      assert StreamProtocol.stream_data_visible?(sse)
+
+      for type <- ["response.created", "response.failed"] do
+        assert StreamProtocol.downstream_visible_event?(%{"type" => type})
+        assert StreamProtocol.downstream_visible_event?(Jason.encode!(%{"type" => type}))
+        assert StreamProtocol.stream_data_visible?(sse_event(type, %{"type" => type}))
+      end
+    end
+
+    test "does not silently classify malformed or incomplete encoded data as internal" do
+      for data <- [
+            "{",
+            ~s({"type":),
+            "event: codex.response.metadata\ndata: {",
+            "event: codex.rate_limits\ndata: {",
+            sse_event("codex.response.metadata", %{"type" => "codex.response.metadata"}) <>
+              sse_event("codex.future_control", %{"type" => "codex.future_control"})
+          ] do
+        refute StreamProtocol.internal_control_event?(data)
+      end
+    end
+  end
+
   @tag :task_1_pin
   test "PIN-P04 backend POST SSE preserves decoded done and legacy JSON bytes across LF and CRLF" do
     fixtures = [

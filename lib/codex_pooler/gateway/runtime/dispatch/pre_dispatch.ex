@@ -202,10 +202,6 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
     )
   end
 
-  # Every route snapshots the requested-model candidates consumed by filtering,
-  # refresh, saved-reset, bridge ordering, and dispatch. Native backend HTTP
-  # Responses additionally emits the models ETag, so those lanes extend the
-  # same read to every policy-visible model used to build that ETag.
   defp quota_snapshot_candidates(
          visible_model_context,
          candidate_snapshots,
@@ -468,14 +464,20 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   defp codex_models_etag_eligible?(endpoint, %RequestOptions{} = request_options) do
     source_endpoint = request_options.openai_compatibility.source_endpoint || endpoint
 
-    source_endpoint in [
-      "/backend-api/codex/responses",
-      "/backend-api/codex/v1/responses"
-    ] and request_options.transport.transport in ["http_json", "http_sse"] and
-      request_options.transport.route_class in [
-        RouteClass.proxy_http(),
-        RouteClass.proxy_stream()
+    native_responses? =
+      source_endpoint in [
+        "/backend-api/codex/responses",
+        "/backend-api/codex/v1/responses"
       ]
+
+    supported_transport? =
+      {request_options.transport.transport, request_options.transport.route_class} in [
+        {"http_json", RouteClass.proxy_http()},
+        {"http_sse", RouteClass.proxy_stream()},
+        {"websocket", RouteClass.proxy_websocket()}
+      ]
+
+    native_responses? and supported_transport?
   end
 
   defp visible_models(models) when is_list(models) do

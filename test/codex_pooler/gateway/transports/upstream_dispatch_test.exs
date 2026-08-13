@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeSessionAlias, CodexSession}
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
+  alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.RejectionBody
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
   alias CodexPooler.Gateway.Transports.UpstreamDispatch.RejectionDrain
@@ -127,6 +128,57 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
                       arity: 4,
                       timeout: 25
                     }}
+  end
+
+  test "owner dispatch carries the same immutable response-control snapshot on retry", %{
+    auth: auth
+  } do
+    remote_node = :"codex_pooler@response-control-owner.example"
+
+    %{session: session, lease_token: lease_token} =
+      owner_session_fixture(auth, Atom.to_string(remote_node))
+
+    downstream = %{pid: self(), epoch: 1, correlation_id: "corr-response-control-owner"}
+    snapshot = %TurnSnapshot{models_etag: ~s(W/"turn-etag")}
+
+    forwarder_opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => :timeout},
+        capture_request_to: self()
+      )
+
+    request_options =
+      websocket_owner_request_options(session, lease_token, downstream, forwarder_opts)
+
+    request = %UpstreamDispatch.Request{
+      url: "https://upstream.example.test/backend-api/codex/responses",
+      token: "redacted",
+      upstream_payload: "{}",
+      identity: upstream_identity(),
+      accounting_request: nil,
+      writer: fn _message -> :ok end,
+      native_codex_response_control: snapshot,
+      request_options: request_options
+    }
+
+    assert {:error, %{reason: :owner_forward_timeout, started: false}} =
+             UpstreamDispatch.websocket_request(request)
+
+    assert_receive {:websocket_owner_harness_request,
+                    %UpstreamWebsocketSession.Request{
+                      native_codex_response_control: ^snapshot
+                    }}
+
+    assert {:error, %{reason: :owner_forward_timeout, started: false}} =
+             UpstreamDispatch.websocket_request(request)
+
+    assert_receive {:websocket_owner_harness_request,
+                    %UpstreamWebsocketSession.Request{
+                      native_codex_response_control: ^snapshot
+                    }}
+
+    assert request.native_codex_response_control == snapshot
+    assert request.request_options.extra == %{}
   end
 
   test "http request does not reuse Cloudflare cookies for non-ChatGPT upstream origins" do

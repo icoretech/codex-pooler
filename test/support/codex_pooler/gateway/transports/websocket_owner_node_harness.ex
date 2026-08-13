@@ -361,6 +361,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
   def call_owner(node, module, function, args, timeout) do
     mode = call_mode(node)
     send_call_observation(node, module, function, args, timeout, mode)
+    send_request_observation(function, args)
     dispatch_call_mode(mode, node, module, function, args)
   end
 
@@ -497,6 +498,15 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
     })
   end
 
+  defp send_request_observation(:remote_submit_request, [_session_id, _downstream, request, _opts]) do
+    case __MODULE__ |> Process.get(%{}) |> Map.get(:capture_request_to) do
+      pid when is_pid(pid) -> send(pid, {:websocket_owner_harness_request, request})
+      _not_configured -> :ok
+    end
+  end
+
+  defp send_request_observation(_function, _args), do: :ok
+
   defp await_call_barrier(notify, release_ref, function) do
     send(
       notify,
@@ -515,7 +525,8 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
       nodes: nodes,
       calls: Keyword.get(opts, :calls, %{}),
       roles: Keyword.get(opts, :roles, %{}),
-      notify: Keyword.get(opts, :notify, self())
+      notify: Keyword.get(opts, :notify, self()),
+      capture_request_to: Keyword.get(opts, :capture_request_to)
     }
   end
 

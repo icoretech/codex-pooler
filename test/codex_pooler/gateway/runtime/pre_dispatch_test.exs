@@ -682,8 +682,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     base_options = request_options(auth, payload, [])
 
     cases = [
-      {"websocket", RequestOptions.for_websocket(base_options, payload), [setup.identity.id],
-       false},
+      {"websocket", RequestOptions.for_websocket(base_options, payload),
+       [setup.identity.id, policy_visible.identity.id], true},
       {"/v1/responses",
        RequestOptions.mark_openai_compatibility_origin(
          base_options,
@@ -736,6 +736,105 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
         assert RouteState.codex_models_etag(prepared.route_state) == nil, lane
       end
     end
+  end
+
+  test "only native backend websocket routes capture a response-control turn snapshot" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    payload = %{
+      "model" => setup.model.exposed_model_id,
+      "input" => native_text_input("native response control")
+    }
+
+    base_options = request_options(auth, payload, [])
+
+    native_websocket = RequestOptions.for_websocket(base_options, payload)
+
+    backend_alias_websocket =
+      native_websocket
+      |> RequestOptions.put_openai_compatibility(
+        source_endpoint: "/backend-api/codex/v1/responses"
+      )
+
+    public_websocket =
+      native_websocket
+      |> RequestOptions.mark_openai_compatibility_origin(
+        "/v1/responses",
+        @endpoint_path
+      )
+      |> RequestOptions.put_openai_compatibility(public_openai_responses_stream: true)
+
+    ineligible = [
+      {"public websocket", @endpoint_path, public_websocket},
+      {"compact", "/backend-api/codex/responses/compact",
+       RequestOptions.build(base_options, "/backend-api/codex/responses/compact", payload)},
+      {"translated chat", @endpoint_path,
+       RequestOptions.mark_openai_compatibility_origin(
+         base_options,
+         "/v1/chat/completions",
+         @endpoint_path
+       )},
+      {"usage", "/api/codex/usage",
+       RequestOptions.build(base_options, "/api/codex/usage", payload)},
+      {"unrelated", "/backend-api/codex/images/generations",
+       RequestOptions.build(base_options, "/backend-api/codex/images/generations", payload)}
+    ]
+
+    etags =
+      for {lane, options} <- [
+            {"canonical websocket", native_websocket},
+            {"backend alias websocket", backend_alias_websocket}
+          ] do
+        assert {:ok, prepared} =
+                 PreDispatch.prepare(auth, @endpoint_path, payload, options, setup.model),
+               lane
+
+        models_etag = RouteState.codex_models_etag(prepared.route_state)
+        assert is_binary(models_etag) and models_etag != "", lane
+        {lane, models_etag}
+      end
+
+    assert [{"canonical websocket", etag}, {"backend alias websocket", etag}] = etags
+
+    for {lane, endpoint, options} <- ineligible do
+      assert {:ok, prepared} =
+               PreDispatch.prepare(auth, endpoint, payload, options, setup.model),
+             lane
+
+      assert RouteState.codex_models_etag(prepared.route_state) == nil, lane
+    end
+  end
+
+  test "a prepared websocket turn keeps its snapshot while the next turn resolves a new ETag" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    payload = %{
+      "model" => setup.model.exposed_model_id,
+      "input" => native_text_input("fresh response control turn")
+    }
+
+    options =
+      auth
+      |> request_options(payload, [])
+      |> RequestOptions.for_websocket(payload)
+
+    assert {:ok, first_turn} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, options, setup.model)
+
+    first_etag = RouteState.codex_models_etag(first_turn.route_state)
+    assert is_binary(first_etag) and first_etag != ""
+
+    changed_model = put_assignment_lite_flag!(setup.model, setup.assignment.id, true)
+
+    assert {:ok, next_turn} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, options, changed_model)
+
+    next_etag = RouteState.codex_models_etag(next_turn.route_state)
+
+    assert first_etag != next_etag
+    assert RouteState.codex_models_etag(first_turn.route_state) == first_etag
   end
 
   test "prepare finds a canonical override for a case-preserving catalog model id" do
@@ -980,8 +1079,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
              source: "override"
            }
 
-    assert RouteState.codex_models_etag(first_turn.route_state) == nil
-    assert RouteState.codex_models_etag(second_turn.route_state) == nil
+    first_etag = RouteState.codex_models_etag(first_turn.route_state)
+    second_etag = RouteState.codex_models_etag(second_turn.route_state)
+
+    assert is_binary(first_etag)
+    assert is_binary(second_etag)
+    assert first_etag != second_etag
   end
 
   test "opposite assignment Lite source flags partition new-turn candidate membership" do

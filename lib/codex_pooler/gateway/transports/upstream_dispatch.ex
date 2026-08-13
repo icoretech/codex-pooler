@@ -59,6 +59,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     alias CodexPooler.Accounting.Request, as: AccountingRequest
     alias CodexPooler.Gateway.Payloads.RequestOptions
     alias CodexPooler.Gateway.Payloads.RequestOptions.Transport
+    alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
     alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
     defstruct [
@@ -72,6 +73,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       :accounting_attempt,
       :writer,
       :assignment_advertised?,
+      :native_codex_response_control,
       :request_options
     ]
 
@@ -86,6 +88,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
             accounting_attempt: AccountingAttempt.t() | nil,
             writer: Transport.websocket_writer(),
             assignment_advertised?: boolean(),
+            native_codex_response_control: TurnSnapshot.t() | nil,
             request_options: RequestOptions.t()
           }
   end
@@ -387,6 +390,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
         accounting_attempt: attempt,
         writer: writer,
         assignment_advertised?: assignment_advertised?,
+        native_codex_response_control: native_codex_response_control,
         request_options: %RequestOptions{} = request_options
       }) do
     headers =
@@ -412,6 +416,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       message_mapper: message_mapper,
       frame_observer: websocket_frame_observer(identity, observation),
       reset_probe: request_options.routing.reset_probe,
+      native_codex_response_control: native_codex_response_control,
       assignment_advertised?: assignment_advertised?,
       connection_bound_continuation?: connection_bound_continuation?(request_options),
       forward_error_body?: false

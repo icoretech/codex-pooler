@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
 
   @terminal_event_types ["response.failed", "response.incomplete", "error"]
   @success_event_types ["response.completed", "response.done"]
+  @internal_control_event_types ["codex.rate_limits", "codex.response.metadata"]
   @downstream_visible_event_types @terminal_event_types ++
                                     ["response.created", "response.in_progress"]
 
@@ -185,9 +186,33 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
 
   def internal_rate_limit_event?(_data), do: false
 
+  @spec internal_control_event?(term()) :: boolean()
+  def internal_control_event?(%{} = event) do
+    {event_type, data_type} = event_stream_types(event)
+    event_type in @internal_control_event_types or data_type in @internal_control_event_types
+  end
+
+  def internal_control_event?(data) when is_binary(data) do
+    case SSEParser.complete_sse_blocks(data, bounded?: false) do
+      {[_block | _rest] = blocks, ""} ->
+        Enum.all?(blocks, &internal_control_sse_block?/1)
+
+      {[_block | _rest], _remaining} ->
+        false
+
+      {[], _remaining} ->
+        case Jason.decode(data) do
+          {:ok, %{} = decoded} -> internal_control_event?(decoded)
+          _other -> false
+        end
+    end
+  end
+
+  def internal_control_event?(_data), do: false
+
   @spec downstream_visible_event?(term()) :: boolean()
   def downstream_visible_event?(%{} = event) do
-    not internal_rate_limit_event?(event) and visible_downstream_event?(event)
+    not internal_control_event?(event) and visible_downstream_event?(event)
   end
 
   def downstream_visible_event?(data) when is_binary(data) do
@@ -315,6 +340,18 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
     visible_event_type?(event_type) or visible_event_type?(data_type)
   end
 
+  defp internal_control_sse_block?(block) do
+    with data when is_binary(data) <- SSEParser.sse_field(block, "data"),
+         {:ok, %{} = decoded} <- Jason.decode(data) do
+      internal_control_event?(%{
+        event_type: SSEParser.sse_field(block, "event"),
+        data_type: Map.get(decoded, "type")
+      })
+    else
+      _other -> false
+    end
+  end
+
   defp event_stream_types(event) do
     event_type = Map.get(event, :event_type) || Map.get(event, "event_type")
 
@@ -327,7 +364,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.TerminalOutcom
   defp visible_event_type?(type) when type in @downstream_visible_event_types, do: true
 
   defp visible_event_type?(type) when is_binary(type) do
-    String.contains?(type, ".delta") or String.contains?(type, "output") or
+    String.starts_with?(type, "codex.") or String.contains?(type, ".delta") or
+      String.contains?(type, "output") or
       String.contains?(type, "message") or String.contains?(type, "tool")
   end
 

@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
   @moduledoc false
 
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
+  alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
 
   defstruct [
     :url,
@@ -12,6 +13,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
     :message_mapper,
     :frame_observer,
     :reset_probe,
+    :native_codex_response_control,
     assignment_advertised?: false,
     connection_bound_continuation?: false,
     forward_error_body?: true
@@ -39,6 +41,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
             CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.message_mapper(),
           frame_observer: frame_observer(),
           reset_probe: ResetProbe.t() | nil,
+          native_codex_response_control: TurnSnapshot.t() | nil,
           assignment_advertised?: boolean(),
           connection_bound_continuation?: boolean(),
           forward_error_body?: boolean()
