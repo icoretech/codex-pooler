@@ -38,35 +38,104 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     end
   end
 
-  test "locally applied allowed settings are a no-op and stale versions are ignored" do
+  test "future applied metadata evaluates only the current published snapshot" do
     snapshot = Cache.snapshot_for_test()
     on_exit(fn -> Cache.restore_for_test(snapshot) end)
     original = cached_settings()
 
     allowed = firewall_settings(original, original.lock_version + 1, ["127.0.0.1"])
-    :ok = Cache.put(allowed)
+    :ok = publish_cache_snapshot(allowed)
     state = firewall_socket_state(original.lock_version)
 
-    assert {:ok, ^state} =
+    assert {:ok, future_event_state} =
              CodexResponsesSocket.handle_info(
                applied_message(allowed.lock_version + 1),
                state
              )
 
+    refute future_event_state.firewall_revoked?
+    assert future_event_state.firewall_applied_version == allowed.lock_version
+
     assert {:ok, allowed_state} =
-             CodexResponsesSocket.handle_info(applied_message(allowed.lock_version), state)
+             CodexResponsesSocket.handle_info(
+               applied_message(allowed.lock_version),
+               future_event_state
+             )
 
     refute allowed_state.firewall_revoked?
     assert allowed_state.firewall_applied_version == allowed.lock_version
+  end
 
-    denied = firewall_settings(allowed, allowed.lock_version + 1, ["203.0.113.10"])
-    :ok = Cache.put(denied)
+  @tag :task_2_red
+  test "stale and duplicate applied metadata re-evaluate only the current allowed snapshot" do
+    snapshot = Cache.snapshot_for_test()
+    on_exit(fn -> Cache.restore_for_test(snapshot) end)
+    original = cached_settings()
+    allowed = firewall_settings(original, 8, ["127.0.0.1"])
+    :ok = publish_cache_snapshot(allowed)
 
-    assert {:ok, ^allowed_state} =
-             CodexResponsesSocket.handle_info(
-               applied_message(allowed.lock_version),
-               allowed_state
-             )
+    for applied_version <- [2, 7] do
+      state = firewall_socket_state(7)
+
+      assert {:ok, evaluated_state} =
+               CodexResponsesSocket.handle_info(applied_message(applied_version), state)
+
+      refute evaluated_state.firewall_revoked?
+      refute evaluated_state.firewall_close_sent?
+      assert evaluated_state.firewall_applied_version == allowed.lock_version
+    end
+  end
+
+  @tag :task_2_red
+  test "lower applied version revokes a higher-watermark socket from the current snapshot" do
+    snapshot = Cache.snapshot_for_test()
+    on_exit(fn -> Cache.restore_for_test(snapshot) end)
+    original = cached_settings()
+    denied = firewall_settings(original, 2, ["203.0.113.10"])
+    :ok = publish_cache_snapshot(denied)
+
+    state =
+      firewall_socket_state(7, %{
+        queued_response_payloads: :queue.from_list(["queued payload"])
+      })
+
+    telemetry_id = attach_firewall_telemetry()
+    on_exit(fn -> :telemetry.detach(telemetry_id) end)
+
+    {result, logs} =
+      ExUnit.CaptureLog.with_log([level: :warning], fn ->
+        CodexResponsesSocket.handle_info(applied_message(2), state)
+      end)
+
+    assert {:stop, :normal, @revocation_close, revoked_state} = result
+    assert revoked_state.firewall_applied_version == 7
+    assert revoked_state.firewall_revoked?
+    assert revoked_state.firewall_close_sent?
+    assert MapSet.size(revoked_state.tasks) == 0
+    assert :queue.is_empty(revoked_state.queued_response_payloads)
+
+    assert_receive {:firewall_denied, measurements, metadata}
+    assert measurements == %{count: 1}
+    assert metadata == %{scope: "runtime", reason: "websocket_revoked"}
+
+    assert length(Regex.scan(~r/ingress firewall denied/, logs)) == 1
+    refute logs =~ "127.0.0.1"
+    refute logs =~ "203.0.113.10"
+    refute logs =~ "not_allowed"
+
+    assert {:ok, ^revoked_state} =
+             CodexResponsesSocket.handle_in({"must not dispatch", [opcode: :text]}, revoked_state)
+
+    assert {:ok, ^revoked_state} =
+             CodexResponsesSocket.handle_info(applied_message(2), revoked_state)
+
+    allowed = firewall_settings(denied, 3, ["127.0.0.1"])
+    :ok = publish_cache_snapshot(allowed)
+
+    assert {:ok, ^revoked_state} =
+             CodexResponsesSocket.handle_info(applied_message(3), revoked_state)
+
+    refute_receive {:firewall_denied, _, _}
   end
 
   @tag :capture_log
@@ -93,7 +162,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     on_exit(fn -> Cache.restore_for_test(snapshot) end)
     original = cached_settings()
     denied = firewall_settings(original, original.lock_version + 1, ["203.0.113.10"])
-    :ok = Cache.put(denied)
+    :ok = publish_cache_snapshot(denied)
     state = firewall_socket_state(original.lock_version)
 
     telemetry_id = attach_firewall_telemetry()
@@ -117,7 +186,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     refute logs =~ "not_allowed"
 
     allowed = firewall_settings(denied, denied.lock_version + 1, ["127.0.0.1"])
-    :ok = Cache.put(allowed)
+    :ok = publish_cache_snapshot(allowed)
 
     assert {:ok, ^revoked_state} =
              CodexResponsesSocket.handle_info(
@@ -137,7 +206,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     on_exit(fn -> Cache.restore_for_test(snapshot) end)
     original = cached_settings()
     denied = firewall_settings(original, original.lock_version + 1, ["203.0.113.10"])
-    :ok = Cache.put(denied)
+    :ok = publish_cache_snapshot(denied)
 
     state =
       firewall_socket_state(original.lock_version, %{
@@ -172,7 +241,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     on_exit(fn -> Cache.restore_for_test(snapshot) end)
     original = cached_settings()
     denied = firewall_settings(original, original.lock_version + 1, ["203.0.113.10"])
-    :ok = Cache.put(denied)
+    :ok = publish_cache_snapshot(denied)
 
     task_pid = spawn(fn -> receive do: (:stop -> :ok) end)
     on_exit(fn -> if Process.alive?(task_pid), do: send(task_pid, :stop) end)
@@ -1310,6 +1379,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       {@cache_version, %Settings{} = settings} -> settings
       _missing_or_stale -> Settings.default()
     end
+  end
+
+  defp publish_cache_snapshot(%Settings{} = settings) do
+    Cache.restore_for_test({@cache_version, settings})
   end
 
   defp firewall_settings(settings, lock_version, allowlist) do

@@ -294,27 +294,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp handle_firewall_applied(_applied_version, %{firewall_revoked?: true} = state),
     do: {:ok, state}
 
-  defp handle_firewall_applied(applied_version, state) do
-    if applied_version <= Map.get(state, :firewall_applied_version, 0) do
-      {:ok, state}
-    else
-      settings = InstanceSettings.current()
-
-      cond do
-        settings.source == :fallback_defaults ->
-          settings
-          |> evaluate_firewall(state)
-          |> close_if_revoked_idle()
-
-        settings.lock_version >= applied_version ->
-          settings
-          |> evaluate_firewall(state)
-          |> close_if_revoked_idle()
-
-        true ->
-          {:ok, state}
-      end
-    end
+  defp handle_firewall_applied(_applied_version, state) do
+    InstanceSettings.current()
+    |> evaluate_firewall(state)
+    |> close_if_revoked_idle()
   end
 
   defp evaluate_firewall(settings, state) do
@@ -323,7 +306,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     case Firewall.evaluate_client_ip(client_ip, operational_settings) do
       %{outcome: :allow} ->
-        {:ok, Map.put(state, :firewall_applied_version, settings.lock_version)}
+        {:ok, put_firewall_watermark(state, settings.lock_version)}
 
       %{outcome: :deny} ->
         {:ok, revoke_firewall(state, settings.lock_version)}
@@ -340,9 +323,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     :ok = Firewall.observe_denial(Firewall.denied(:websocket_revoked), :runtime)
 
     state
-    |> Map.put(:firewall_applied_version, applied_version)
+    |> put_firewall_watermark(applied_version)
     |> Map.put(:firewall_revoked?, true)
     |> Map.put(:queued_response_payloads, :queue.new())
+  end
+
+  defp put_firewall_watermark(state, current_version) do
+    previous_version = Map.get(state, :firewall_applied_version, 0)
+    Map.put(state, :firewall_applied_version, max(previous_version, current_version))
   end
 
   defp close_if_revoked_idle({:ok, state}) do

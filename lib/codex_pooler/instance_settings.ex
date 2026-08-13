@@ -171,25 +171,24 @@ defmodule CodexPooler.InstanceSettings do
     attrs = attrs |> strip_context_attrs() |> put_updated_by(scope)
     before = Settings.mark_loaded(settings, :database)
 
-    settings
-    |> Settings.changeset(attrs)
-    |> Repo.update(
-      stale_error_field: :lock_version,
-      stale_error_message: "was updated by another operator"
-    )
-    |> tap(fn
+    result =
+      settings
+      |> Settings.changeset(attrs)
+      |> Repo.update(
+        stale_error_field: :lock_version,
+        stale_error_message: "was updated by another operator"
+      )
+
+    case result do
       {:ok, updated} ->
         updated = Settings.mark_loaded(updated, :database)
-        Cache.put(updated)
+        _cache_result = Cache.put(updated)
         _ = Cache.broadcast_update(updated)
         record_update_audit(scope, before, updated)
+        {:ok, updated}
 
-      _result ->
-        :ok
-    end)
-    |> case do
-      {:ok, updated} -> {:ok, Settings.mark_loaded(updated, :database)}
-      {:error, changeset} -> {:error, changeset}
+      {:error, changeset} ->
+        {:error, changeset}
     end
   end
 

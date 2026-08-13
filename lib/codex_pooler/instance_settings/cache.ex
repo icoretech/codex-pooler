@@ -33,8 +33,16 @@ defmodule CodexPooler.InstanceSettings.Cache do
     end
   end
 
-  @spec put(Settings.t()) :: :ok
-  def put(%Settings{} = settings), do: GenServer.call(__MODULE__, {:put, settings})
+  @spec put(Settings.t()) :: {:ok, Settings.t()} | {:error, term()}
+  def put(%Settings{} = settings) do
+    GenServer.call(__MODULE__, {:put, settings})
+  catch
+    :exit, _reason -> {:error, :cache_unavailable}
+  end
+
+  @spec put_for_test(Settings.t()) :: :ok
+  def put_for_test(%Settings{} = settings),
+    do: GenServer.call(__MODULE__, {:put_for_test, settings})
 
   @spec broadcast_update(Settings.t()) :: :ok | {:error, term()}
   def broadcast_update(%Settings{} = settings) do
@@ -85,7 +93,19 @@ defmodule CodexPooler.InstanceSettings.Cache do
     {:reply, settings, state}
   end
 
-  def handle_call({:put, %Settings{} = settings}, _from, state) do
+  def handle_call({:put, %Settings{}}, _from, state) do
+    case load_settings() do
+      {:ok, settings} ->
+        {settings, state} = publish_success(state, settings)
+        {:reply, {:ok, settings}, state}
+
+      {:error, reason} ->
+        {_settings, state} = publish_failure(state, reason)
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:put_for_test, %Settings{} = settings}, _from, state) do
     {_settings, state} = publish_success(state, settings)
     {:reply, :ok, state}
   end
@@ -109,13 +129,6 @@ defmodule CodexPooler.InstanceSettings.Cache do
   end
 
   @impl true
-  def handle_info(
-        {@message_tag, {:updated, lock_version}},
-        %{cached: %Settings{lock_version: lock_version}, health: :ready} = state
-      ) do
-    {:noreply, state}
-  end
-
   def handle_info({@message_tag, {:updated, lock_version}}, state)
       when is_integer(lock_version) do
     state =

@@ -235,8 +235,8 @@ defmodule CodexPooler.InstanceSettingsTest do
     :ok = Cache.subscribe()
     updated = %{settings | lock_version: settings.lock_version + 1}
 
-    assert :ok = Cache.put(updated)
-    assert InstanceSettings.current().lock_version == updated.lock_version
+    assert {:ok, published} = Cache.put(updated)
+    assert InstanceSettings.current().lock_version == published.lock_version
 
     assert :ok = Cache.broadcast_update(updated)
     assert_receive {Cache, {:updated, lock_version}}
@@ -581,7 +581,56 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert InstanceSettings.current().files.upload_ttl_seconds == 120
   end
 
-  test "cache ignores its own already-applied update broadcast without noisy reload" do
+  @tag :failure_modes
+  test "update/2 returns committed success and broadcasts when the local cache reload fails" do
+    settings = InstanceSettings.current()
+    :ok = Cache.subscribe()
+    Application.put_env(:codex_pooler, InstanceSettings, repo: FailingRepo)
+
+    log =
+      capture_log(fn ->
+        assert {:ok, updated} =
+                 InstanceSettings.update_system_settings(settings, %{
+                   "gateway" => %{"gateway_debug" => true}
+                 })
+
+        assert updated.gateway.gateway_debug
+        assert InstanceSettings.get!().gateway.gateway_debug
+        assert_receive {Cache, {:updated, lock_version}}
+        assert lock_version == updated.lock_version
+      end)
+
+    assert log =~ "instance settings db load failed warm_cache=true"
+    assert :sys.get_state(Cache).health == :degraded
+  end
+
+  @tag :failure_modes
+  test "update/2 returns committed success and broadcasts when the cache process is unavailable" do
+    settings = InstanceSettings.current()
+    :ok = Cache.subscribe()
+    assert :ok = Supervisor.terminate_child(CodexPooler.Supervisor, Cache)
+
+    try do
+      assert {:error, :cache_unavailable} = Cache.put(settings)
+
+      assert {:ok, updated} =
+               InstanceSettings.update_system_settings(settings, %{
+                 "gateway" => %{"gateway_debug" => true}
+               })
+
+      assert updated.gateway.gateway_debug
+      assert InstanceSettings.get!().gateway.gateway_debug
+      assert_receive {Cache, {:updated, lock_version}}
+      assert lock_version == updated.lock_version
+      refute_received {Cache, {:updated, ^lock_version}}
+    after
+      assert {:ok, restarted} = Supervisor.restart_child(CodexPooler.Supervisor, Cache)
+      assert is_pid(restarted)
+      _ = :sys.get_state(restarted)
+    end
+  end
+
+  test "cache reloads its own already-applied update broadcast without failure" do
     settings = InstanceSettings.current()
 
     log =
@@ -623,7 +672,7 @@ defmodule CodexPooler.InstanceSettingsTest do
         smtp: %{settings.smtp | password: "transient-smtp-password", password_action: "set"}
     }
 
-    assert :ok = Cache.put(candidate)
+    assert :ok = Cache.put_for_test(candidate)
 
     published = InstanceSettings.current()
     assert published.metrics.bearer_token == nil
@@ -652,11 +701,86 @@ defmodule CodexPooler.InstanceSettingsTest do
       end)
 
     assert_receive {:applied_observer_ready, ^observer}
-    assert :ok = Cache.put(updated)
+    assert :ok = Cache.put_for_test(updated)
 
     assert_receive {:applied_observer_result, lock_version, current_lock_version}
     assert lock_version == updated.lock_version
     assert current_lock_version == updated.lock_version
+  end
+
+  test "cache put reloads the authoritative database row before publishing delayed updates" do
+    version_1 = InstanceSettings.current()
+    :ok = Cache.subscribe_applied()
+
+    assert {:ok, version_2} =
+             InstanceSettings.update_system_settings(version_1, %{
+               "ingress" => %{"firewall_allowlist" => ["198.51.100.0/24"]}
+             })
+
+    assert_receive {Cache, {:applied, 2}}
+
+    assert {:ok, version_3} =
+             InstanceSettings.update_system_settings(version_2, %{
+               "ingress" => %{"firewall_allowlist" => ["203.0.113.0/24"]}
+             })
+
+    assert_receive {Cache, {:applied, 3}}
+    assert Repo.get!(Settings, true).lock_version == 3
+
+    assert {:ok, published_version_3} = Cache.put(version_3)
+    assert published_version_3.lock_version == 3
+    assert_receive {Cache, {:applied, 3}}
+    assert_published_snapshot(3, ["203.0.113.0/24"])
+
+    assert {:ok, republished_version_3} = Cache.put(version_2)
+    assert republished_version_3.lock_version == 3
+    assert_receive {Cache, {:applied, applied_version}}
+    assert applied_version == 3
+    assert_published_snapshot(3, ["203.0.113.0/24"])
+  end
+
+  test "cache accepts recreated singleton versions before publishing a later denial" do
+    :ok = Cache.subscribe_applied()
+    version_1 = InstanceSettings.current()
+
+    version_7 =
+      Enum.reduce(2..7, version_1, fn expected_version, settings ->
+        allowlist = ["198.51.100.#{expected_version}/32"]
+
+        assert {:ok, updated} =
+                 InstanceSettings.update_system_settings(settings, %{
+                   "ingress" => %{"firewall_allowlist" => allowlist}
+                 })
+
+        assert updated.lock_version == expected_version
+        assert_receive {Cache, {:applied, ^expected_version}}
+        assert_published_snapshot(expected_version, allowlist)
+        updated
+      end)
+
+    assert InstanceSettings.current().lock_version == version_7.lock_version
+    _ = :sys.get_state(Cache)
+    assert {1, nil} = Repo.delete_all(Settings)
+    assert Repo.aggregate(Settings, :count) == 0
+
+    recreated_version_1 = InstanceSettings.ensure_singleton!()
+    assert recreated_version_1.lock_version == 1
+    assert Repo.aggregate(Settings, :count) == 1
+
+    assert {:ok, published_recreated_version_1} = Cache.put(recreated_version_1)
+    assert published_recreated_version_1.lock_version == 1
+    assert_receive {Cache, {:applied, 1}}
+    assert_published_snapshot(1, [])
+
+    assert {:ok, denied_version_2} =
+             InstanceSettings.update_system_settings(recreated_version_1, %{
+               "ingress" => %{"firewall_allowlist" => ["203.0.113.10/32"]}
+             })
+
+    assert denied_version_2.lock_version == 2
+    assert_receive {Cache, {:applied, 2}}
+    assert_published_snapshot(2, ["203.0.113.10/32"])
+    assert Repo.aggregate(Settings, :count) == 1
   end
 
   test "cache misses and incompatible publication versions reload through the writer" do
@@ -1286,6 +1410,17 @@ defmodule CodexPooler.InstanceSettingsTest do
 
     assert_received {^ref, result}
     {result, log}
+  end
+
+  defp assert_published_snapshot(lock_version, firewall_allowlist) do
+    published = InstanceSettings.current()
+
+    assert published.lock_version == lock_version
+    assert published.ingress.firewall_allowlist == firewall_allowlist
+    assert published.metrics.bearer_token == nil
+    assert published.metrics.bearer_token_action == nil
+    assert published.smtp.password == nil
+    assert published.smtp.password_action == nil
   end
 
   defp configure_scripted_cache(settings, failure \\ :none) do

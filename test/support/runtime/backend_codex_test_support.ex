@@ -1012,12 +1012,23 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
         turn_state,
         path \\ "/backend-api/codex/responses"
       ) do
+    public_websocket_connect_with_request_headers!(port, setup, turn_state, path, [])
+  end
+
+  def public_websocket_connect_with_request_headers!(
+        port,
+        setup,
+        turn_state,
+        path,
+        request_headers
+      ) do
     {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, protocols: [:http1])
 
-    headers = [
-      {"authorization", setup.authorization},
-      {"x-codex-turn-state", turn_state}
-    ]
+    headers =
+      [
+        {"authorization", setup.authorization},
+        {"x-codex-turn-state", turn_state}
+      ] ++ request_headers
 
     {:ok, conn, ref} = Mint.WebSocket.upgrade(:ws, conn, path, headers)
 
