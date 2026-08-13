@@ -3,7 +3,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
 
   import Phoenix.LiveViewTest
 
-  alias CodexPoolerWeb.Dev.ComponentShowcaseLive
+  alias CodexPoolerWeb.Dev.{ComponentShowcaseDialogs, ComponentShowcaseLive}
 
   @dev_routes Application.compile_env(:codex_pooler, :dev_routes, false)
   @showcase_route "/dev/component-showcase/:theme"
@@ -204,6 +204,27 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
            )
   end
 
+  test "every dialog in the gallery renders through its real component" do
+    # The gallery exists because dialog chrome is shared: the shell, the footer,
+    # the touch-target floor. This pins that each case still reaches a real
+    # `<dialog>` with the footer marker, so a fixture that drifts out of shape
+    # with its component fails here rather than silently rendering nothing.
+    for {id, _label} <- ComponentShowcaseDialogs.dialogs() do
+      {:ok, view, html} = mount_showcase("light", "dialogs", nil, id)
+
+      assert has_element?(view, "#showcase-dialog-gallery")
+      assert has_element?(view, ~s(#showcase-dialog-#{id}[aria-current="page"]))
+
+      assert has_element?(view, "dialog[open].modal-bottom"),
+             "#{id} did not render an open bottom-sheet dialog"
+
+      assert has_element?(view, ~s(dialog[open] [data-role="admin-dialog-footer"])),
+             "#{id} rendered without the shared dialog footer"
+
+      assert unique_ids?(html), "#{id} rendered duplicate DOM ids"
+    end
+  end
+
   test "dialog footers carry the marker the touch-target floor is keyed to" do
     # `app.css` raises every footer control to 44px at touch widths through
     # `[data-role="admin-dialog-footer"]`. Dropping the attribute would leave
@@ -254,10 +275,11 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
     assert html_response(get(conn, "/dev/component-showcase/dark"), 404) =~ "Not Found"
   end
 
-  defp mount_showcase(theme, review_state \\ "catalog", oauth_case \\ nil) do
+  defp mount_showcase(theme, review_state \\ "catalog", oauth_case \\ nil, dialog_case \\ nil) do
     session =
       %{"theme" => theme, "review_state" => review_state}
       |> then(&if oauth_case, do: Map.put(&1, "oauth_case", oauth_case), else: &1)
+      |> then(&if dialog_case, do: Map.put(&1, "dialog_case", dialog_case), else: &1)
 
     live_isolated(build_conn(), ComponentShowcaseLive, session: session)
   end

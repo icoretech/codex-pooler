@@ -9,10 +9,11 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
     ComponentShowcase,
     ComponentShowcaseCatalog,
     ComponentShowcaseData,
+    ComponentShowcaseDialogs,
     ComponentShowcaseStats
   }
 
-  @review_states ~w(catalog flash oauth-browser-dialog policy-dialog request-drawer)
+  @review_states ~w(catalog dialogs flash oauth-browser-dialog policy-dialog request-drawer)
 
   @oauth_browser_authorization_url "https://auth.example.com/oauth/authorize?client_id=dev-component-showcase&response_type=code&state=synthetic-review-state"
 
@@ -62,11 +63,32 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
             as: :oauth_link
           )
       )
+      |> assign(
+        dialog_case: selected_dialog_case(params, session),
+        dialog_cases: ComponentShowcaseDialogs.dialogs()
+      )
       |> assign(oauth_fixture(oauth_case))
       |> select_review_state(review_state)
+      # The auth.json dialog renders a real `live_file_input`, which needs a real
+      # `UploadConfig` - there is no faking it from a fixture map.
+      |> allow_upload(:auth_json, accept: ~w(.json), max_entries: 1, max_file_size: 512_000)
 
     {:ok, socket}
   end
+
+  defp selected_dialog_case(%{"dialog" => dialog}, _session) do
+    if dialog in ComponentShowcaseDialogs.ids(),
+      do: dialog,
+      else: ComponentShowcaseDialogs.default_id()
+  end
+
+  defp selected_dialog_case(_params, %{"dialog_case" => dialog}) do
+    if dialog in ComponentShowcaseDialogs.ids(),
+      do: dialog,
+      else: ComponentShowcaseDialogs.default_id()
+  end
+
+  defp selected_dialog_case(_params, _session), do: ComponentShowcaseDialogs.default_id()
 
   # Params for the browser, session for `live_isolated` - the same two-door
   # lookup `selected_review_state/2` already uses, so the finished states are
@@ -103,7 +125,8 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
     "browser"
     |> oauth_fixture()
     |> Map.put(:oauth_link_error, %{
-      message: "That callback URL is from an earlier attempt. Open the page again and paste the new one."
+      message:
+        "That callback URL is from an earlier attempt. Open the page again and paste the new one."
     })
   end
 
@@ -268,34 +291,16 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
           id="showcase-oauth-browser-dialog-fixture"
           class="min-h-svh bg-base-200 text-base-content"
         >
-          <nav
+          <.case_switcher
             id="showcase-oauth-case-switcher"
-            aria-label="OAuth dialog state"
-            class="fixed inset-x-0 top-0 flex items-center gap-1.5 border-b border-base-300 bg-base-100 px-3 py-2"
-            {%{
-              "style" =>
-                "z-index:1000;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch"
-            }}
-          >
-            <span class="mr-1 text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/45">
-              State
-            </span>
-            <a
-              :for={{value, label} <- @oauth_cases}
-              id={"showcase-oauth-case-#{value}"}
-              href={"/dev/component-showcase/#{@theme}?state=oauth-browser-dialog&case=#{value}"}
-              aria-current={value == @oauth_case && "page"}
-              {%{"style" => "white-space:nowrap"}}
-              class={[
-                "rounded-field border px-2 py-1 text-xs font-semibold transition-colors",
-                value == @oauth_case && "border-primary bg-primary/10 text-base-content",
-                value != @oauth_case &&
-                  "border-base-300 text-base-content/60 hover:border-primary/50 hover:text-base-content"
-              ]}
-            >
-              {label}
-            </a>
-          </nav>
+            label="OAuth dialog state"
+            id_prefix="showcase-oauth-case"
+            param="case"
+            state="oauth-browser-dialog"
+            theme={@theme}
+            cases={@oauth_cases}
+            current={@oauth_case}
+          />
 
           <UpstreamPageComponents.oauth_link_dialog
             oauth_linking
@@ -311,8 +316,30 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
           />
         </div>
 
+        <div
+          :if={@review_state == "dialogs"}
+          id="showcase-dialog-gallery"
+          class="min-h-svh bg-base-200 text-base-content"
+        >
+          <.case_switcher
+            id="showcase-dialog-switcher"
+            label="Admin dialog"
+            id_prefix="showcase-dialog"
+            param="dialog"
+            state="dialogs"
+            theme={@theme}
+            cases={@dialog_cases}
+            current={@dialog_case}
+          />
+
+          <ComponentShowcaseDialogs.dialog_fixture
+            dialog={@dialog_case}
+            upload={@uploads.auth_json}
+          />
+        </div>
+
         <ComponentShowcase.component_showcase
-          :if={@review_state != "oauth-browser-dialog"}
+          :if={@review_state not in ["oauth-browser-dialog", "dialogs"]}
           theme={@theme}
           paused={@paused}
           review_state={@review_state}
@@ -321,6 +348,52 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
         />
       </Layouts.app>
     </div>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :label, :string, required: true
+  attr :id_prefix, :string, required: true
+  attr :param, :string, required: true
+  attr :state, :string, required: true
+  attr :theme, :string, required: true
+  attr :cases, :list, required: true
+  attr :current, :string, required: true
+
+  # One scrollable row rather than a wrapping block: at 375 the wrapped version
+  # was three rows tall and covered the header of the dialog underneath, which
+  # is the thing being reviewed. Styles are inline because Tailwind's `@source`
+  # list does not include `dev_support/`, so classes written only here compile
+  # to nothing.
+  defp case_switcher(assigns) do
+    ~H"""
+    <nav
+      id={@id}
+      aria-label={@label}
+      class="fixed inset-x-0 top-0 flex items-center gap-1.5 border-b border-base-300 bg-base-100 px-3 py-2"
+      {%{
+        "style" => "z-index:1000;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch"
+      }}
+    >
+      <span class="mr-1 text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/45">
+        {@label}
+      </span>
+      <a
+        :for={{value, label} <- @cases}
+        id={"#{@id_prefix}-#{value}"}
+        href={"/dev/component-showcase/#{@theme}?state=#{@state}&#{@param}=#{value}"}
+        aria-current={value == @current && "page"}
+        {%{"style" => "white-space:nowrap"}}
+        class={[
+          "rounded-field border px-2 py-1 text-xs font-semibold transition-colors",
+          value == @current && "border-primary bg-primary/10 text-base-content",
+          value != @current &&
+            "border-base-300 text-base-content/60 hover:border-primary/50 hover:text-base-content"
+        ]}
+      >
+        {label}
+      </a>
+    </nav>
     """
   end
 
