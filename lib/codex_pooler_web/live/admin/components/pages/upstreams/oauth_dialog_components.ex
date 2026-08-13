@@ -67,6 +67,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
   attr :active, :boolean, required: true
   attr :disabled, :boolean, required: true
 
+  # The selection-card anatomy from DESIGN.md: `rounded-box` shell, 13px title
+  # over an 11px description, `border-primary/60 bg-primary/5` when carried, and
+  # the corner check as the non-colour channel. The one deliberate departure is
+  # the control: these start a flow rather than select a value, so the card is a
+  # button and there is no radio behind it. The check therefore reads "this is
+  # the route running" rather than "this is the option chosen".
   defp method_door(assigns) do
     ~H"""
     <button
@@ -76,24 +82,26 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
       disabled={@disabled}
       aria-current={@active && "true"}
       class={[
-        "group grid min-w-0 content-start gap-0.5 rounded-field border p-3 text-left transition-colors",
+        "relative min-w-0 rounded-box border p-2.5 text-left transition-colors",
         "outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
-        @active && "border-primary bg-primary/5",
+        @active && "border-primary/60 bg-primary/5",
         !@active && "border-base-300 bg-base-100 hover:border-primary/50",
         @disabled && "cursor-not-allowed opacity-45 hover:border-base-300"
       ]}
     >
-      <span class="flex min-w-0 items-center gap-1.5 text-sm font-semibold leading-tight text-base-content">
-        <.icon name={@icon} class="size-4 shrink-0" />
-        <span class="truncate">{@label}</span>
-        <span
-          :if={@active}
-          class="ml-auto shrink-0 text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-primary"
-        >
-          running
+      <span
+        :if={@active}
+        class="pointer-events-none absolute right-2.5 top-3 inline-flex items-center gap-1"
+      >
+        <.icon name="hero-check" class="size-3 text-primary" />
+      </span>
+      <span class="flex min-w-0 items-start gap-2.5">
+        <.icon name={@icon} class="mt-0.5 size-3.5 shrink-0 text-base-content/55" />
+        <span class="grid min-w-0 gap-0.5">
+          <span class="text-[13px] font-semibold leading-tight text-base-content">{@label}</span>
+          <span class="text-[11px] leading-4 text-base-content/55">{@hint}</span>
         </span>
       </span>
-      <span class="text-xs leading-4 text-base-content/55">{@hint}</span>
     </button>
     """
   end

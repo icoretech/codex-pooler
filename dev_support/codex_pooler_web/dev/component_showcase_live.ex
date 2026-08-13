@@ -27,7 +27,9 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
     {"device", "Device pending"},
     {"device-expired", "Code expired"},
     {"completed", "Linked"},
-    {"relink", "Relink"}
+    {"device-linked", "Device linked"},
+    {"relink", "Relink"},
+    {"relink-mismatch", "Identity mismatch"}
   ]
 
   @oauth_case_values Enum.map(@oauth_cases, &elem(&1, 0))
@@ -132,6 +134,25 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
       oauth_link_result: %{message: "Account linked to Design review Pool"},
       oauth_link_error: nil
     }
+  end
+
+  # The device route reaching its own end: `completed` above is the browser one,
+  # and the two differ in what the operator did to get there.
+  defp oauth_fixture("device-linked") do
+    "completed"
+    |> oauth_fixture()
+    |> Map.put(:oauth_link_flow, %{flow_kind: "device", status: "completed"})
+  end
+
+  defp oauth_fixture("relink-mismatch") do
+    "relink"
+    |> oauth_fixture()
+    |> Map.merge(%{
+      oauth_link_result: nil,
+      oauth_link_error: %{
+        message: "The authorized Codex account does not match the account being relinked."
+      }
+    })
   end
 
   defp oauth_fixture("relink") do
