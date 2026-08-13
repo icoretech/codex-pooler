@@ -232,6 +232,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
             icon_class="size-3.5"
           />
         </div>
+        <p
+          :if={@status}
+          id={"#{@id_prefix}-status"}
+          data-role="oauth-pending-status"
+          role="status"
+          class="flex items-center gap-1.5 text-xs font-medium leading-4 text-base-content/55"
+        >
+          <.icon name="hero-arrow-path" class="admin-loading-icon size-3.5 shrink-0 text-base-content/40" />
+          <span>{@status}</span>
+        </p>
       </div>
 
       <div :if={@verification_uri} class="grid min-w-0 gap-2 border-t border-base-300 pt-4">
@@ -273,16 +283,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
         </div>
       </div>
 
-      <p
-        :if={@status}
-        id={"#{@id_prefix}-status"}
-        data-role="oauth-pending-status"
-        role="status"
-        class="flex items-center gap-1.5 text-xs font-medium leading-4 text-base-content/55"
-      >
-        <.icon name="hero-clock" class="size-3.5 shrink-0 text-base-content/40" />
-        <span>{@status}</span>
-      </p>
     </section>
     """
   end
