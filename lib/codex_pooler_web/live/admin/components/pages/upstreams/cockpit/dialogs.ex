@@ -29,7 +29,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
             OpenAI OAuth
           </p>
           <h2 class="mt-1 text-xl font-bold text-base-content sm:text-2xl">
-            Relink {@account_label}
+            {oauth_relink_title(@account_label, @oauth_relink_flow)}
           </h2>
           <p class="mt-1.5 max-w-xl text-sm leading-5 text-base-content/65">
             {oauth_relink_description(@oauth_relink_flow)}
@@ -257,6 +257,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
 
   defp oauth_relink_pending?(%{status: "pending"}), do: true
   defp oauth_relink_pending?(_flow), do: false
+
+  # Mirrors the link dialog: once the flow completes the header states the
+  # outcome instead of repeating the instructions. This dialog needs no cockpit
+  # link of its own - `OAuthRelinkWorkflow.complete/3` refreshes the page already
+  # underneath it.
+  defp oauth_relink_title(account_label, %{status: "completed"}),
+    do: "#{account_label} reauthorized"
+
+  defp oauth_relink_title(account_label, _flow), do: "Relink #{account_label}"
+
+  defp oauth_relink_description(%{status: "completed"}) do
+    "This page already shows the refreshed authorization."
+  end
 
   defp oauth_relink_description(%{flow_kind: "browser", status: "pending"}) do
     "Authorize with OpenAI, then paste the returned callback URL to finish."

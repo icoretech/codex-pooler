@@ -322,7 +322,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
           assigns.oauth_link_mode,
           assigns.oauth_link_target_account,
           assigns.oauth_link_form,
-          assigns.pool_options
+          assigns.pool_options,
+          assigns.oauth_link_flow
         )
       )
       |> assign(
@@ -337,6 +338,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
         :oauth_callback_submit_label,
         oauth_callback_submit_label(assigns.oauth_link_mode)
       )
+      |> assign(:oauth_cockpit_path, oauth_cockpit_path(assigns.oauth_link_flow))
 
     ~H"""
     <dialog :if={@oauth_linking} id="oauth-link-dialog" class="modal" open>
@@ -444,6 +446,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
               label={@oauth_callback_submit_label}
               type="submit"
               form={UpstreamOAuthDialogComponents.callback_form_id("oauth-link")}
+              variant={:primary}
+            />
+            <AdminComponents.action_button
+              :if={@oauth_cockpit_path}
+              id="oauth-link-open-cockpit"
+              icon="hero-cloud-arrow-up"
+              label="Open cockpit"
+              navigate={@oauth_cockpit_path}
               variant={:primary}
             />
           </:actions>
@@ -923,10 +933,25 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   # account is going. The Pool survives every step - `OAuthWorkflow` rebuilds the
   # form from `oauth_link_pool_id` each time - so the title keeps answering
   # "which Pool was this again?" long after the select is gone.
-  defp oauth_dialog_title(:relink, account, _form, _pool_options),
+  #
+  # Once the flow is done the header stops asking for anything. An imperative
+  # title standing over a success banner reads as a step still owed, so the
+  # completed screen gets the declarative twin of the same sentence: same
+  # subject, same Pool, stated as fact.
+  defp oauth_dialog_title(:relink, account, _form, _pool_options, %{status: "completed"}),
+    do: "#{oauth_target_label(account)} reauthorized"
+
+  defp oauth_dialog_title(:relink, account, _form, _pool_options, _flow),
     do: "Relink #{oauth_target_label(account)}"
 
-  defp oauth_dialog_title(_mode, _account, form, pool_options) do
+  defp oauth_dialog_title(_mode, _account, form, pool_options, %{status: "completed"}) do
+    case oauth_selected_pool_label(form, pool_options) do
+      nil -> "Account added"
+      pool -> "Added to #{pool}"
+    end
+  end
+
+  defp oauth_dialog_title(_mode, _account, form, pool_options, _flow) do
     case oauth_selected_pool_label(form, pool_options) do
       nil -> "Link an account"
       pool -> "Link an account to #{pool}"
@@ -939,6 +964,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
     Enum.find_value(pool_options, fn {label, value} ->
       to_string(value) == selected && selected != "" && label
     end)
+  end
+
+  # The completed clause comes first: a finished relink would otherwise fall into
+  # the relink clause below and keep telling the operator to approve again.
+  defp oauth_dialog_description(_mode, _account, %{status: "completed"}) do
+    "Routing, quota, and health for this account live on its cockpit."
   end
 
   defp oauth_dialog_description(_mode, _account, %{flow_kind: "browser", status: "pending"}) do
@@ -968,6 +999,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
 
   defp oauth_relink_mode?(:relink), do: true
   defp oauth_relink_mode?(_mode), do: false
+
+  # `mark_oauth_flow_completed/4` stamps the linked identity onto the flow row, so
+  # the completed flow the LiveView already holds is enough to reach the cockpit -
+  # no extra assign, query, or reload lookup. `Map.get/2` because the dev showcase
+  # renders this dialog from plain fixture maps rather than `OAuthFlow` structs.
+  defp oauth_cockpit_path(%{status: "completed"} = flow) do
+    case Map.get(flow, :result_upstream_identity_id) do
+      identity_id when is_binary(identity_id) and identity_id != "" ->
+        ~p"/admin/upstreams/#{identity_id}"
+
+      _absent ->
+        nil
+    end
+  end
+
+  defp oauth_cockpit_path(_flow), do: nil
 
   defp form_checkbox_checked?(field) do
     Form.normalize_value("checkbox", field.value)

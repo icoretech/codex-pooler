@@ -29,10 +29,15 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
     {"completed", "Linked"},
     {"device-linked", "Device linked"},
     {"relink", "Relink"},
+    {"relink-linked", "Relinked"},
     {"relink-mismatch", "Identity mismatch"}
   ]
 
   @oauth_case_values Enum.map(@oauth_cases, &elem(&1, 0))
+
+  # Synthetic, but shaped like the real column so the cockpit link in the footer
+  # renders the route it would render in production.
+  @oauth_completed_identity_id "00000000-0000-4000-8000-00000000c0de"
 
   def component_contract, do: ComponentShowcaseCatalog.entries()
   def render_contracts, do: Map.new([ComponentShowcaseStats.contract()], &{&1.id, &1})
@@ -126,13 +131,20 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
     })
   end
 
+  # The message and the identity stamp are the real ones: `complete_message/1`
+  # produces this exact string, and `mark_oauth_flow_completed/4` puts the linked
+  # identity on the flow, which is what the footer's cockpit link reads.
   defp oauth_fixture("completed") do
     %{
       oauth_link_mode: :link,
       oauth_link_target_account: nil,
-      oauth_link_flow: %{flow_kind: "browser", status: "completed"},
+      oauth_link_flow: %{
+        flow_kind: "browser",
+        status: "completed",
+        result_upstream_identity_id: @oauth_completed_identity_id
+      },
       oauth_link_authorization_url: nil,
-      oauth_link_result: %{message: "Account linked to Design review Pool"},
+      oauth_link_result: %{message: "OpenAI account linked"},
       oauth_link_error: nil
     }
   end
@@ -142,7 +154,27 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
   defp oauth_fixture("device-linked") do
     "completed"
     |> oauth_fixture()
-    |> Map.put(:oauth_link_flow, %{flow_kind: "device", status: "completed"})
+    |> Map.put(:oauth_link_flow, %{
+      flow_kind: "device",
+      status: "completed",
+      result_upstream_identity_id: @oauth_completed_identity_id
+    })
+  end
+
+  # The third finished screen: a relink ends on its own header and its own
+  # message, so reviewing only the two link ones would leave that copy unseen.
+  defp oauth_fixture("relink-linked") do
+    "relink"
+    |> oauth_fixture()
+    |> Map.merge(%{
+      oauth_link_flow: %{
+        flow_kind: "browser",
+        status: "completed",
+        result_upstream_identity_id: @oauth_completed_identity_id
+      },
+      oauth_link_authorization_url: nil,
+      oauth_link_result: %{message: "OpenAI account relinked"}
+    })
   end
 
   defp oauth_fixture("relink-mismatch") do

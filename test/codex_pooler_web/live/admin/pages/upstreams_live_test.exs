@@ -1007,6 +1007,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(view, "#oauth-link-callback-url")
     assert has_element?(view, "#oauth-link-callback-step", "Callback URL")
     assert has_element?(view, "#oauth-link-submit-callback")
+    # Nothing to open yet: a pending flow has no linked identity to point at.
+    refute has_element?(view, "#oauth-link-open-cockpit")
 
     authorization_url = authorization_url_from_view(view)
 
@@ -1026,9 +1028,21 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(view, "#oauth-link-status", "OpenAI account linked")
     assert has_element?(view, "#oauth-link-cancel", "Close")
 
+    # A finished flow stops asking for the two things it already got.
+    assert has_element?(view, "#oauth-link-dialog h2", "Added to OAuth Browser UI")
+    refute render(view) =~ "Choose a Pool, then approve the account."
+
     identity = Repo.one!(UpstreamIdentity)
     assert identity.chatgpt_account_id == "acct_admin_browser"
     assert has_element?(view, "#upstream-account-#{identity.id}")
+
+    # The cockpit link reads the identity stamped on the completed flow row, so
+    # this also proves that stamp names the account that was actually linked.
+    assert has_element?(
+             view,
+             ~s(#oauth-link-dialog-footer #oauth-link-open-cockpit[href="/admin/upstreams/#{identity.id}"]),
+             "Open cockpit"
+           )
 
     assert [token_request] = FakeOpenAIAuthProvider.requests(provider)
 

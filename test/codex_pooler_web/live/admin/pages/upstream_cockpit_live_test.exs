@@ -923,6 +923,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert has_element?(view, "#oauth-relink-status", "OpenAI account relinked")
     assert has_element?(view, "#oauth-relink-cancel", "Close")
+
+    # The header follows the flow instead of freezing on its opening line, and a
+    # dialog that already sits on the cockpit offers no link to the cockpit.
+    assert has_element?(view, "#oauth-relink-dialog h2", "reauthorized")
+    refute render(view) =~ "Reconnect this upstream identity"
+    refute has_element?(view, "#oauth-relink-dialog [id$='-open-cockpit']")
+
     assert Repo.aggregate(UpstreamIdentity, :count) == 1
 
     reloaded = Repo.get!(UpstreamIdentity, identity.id)
