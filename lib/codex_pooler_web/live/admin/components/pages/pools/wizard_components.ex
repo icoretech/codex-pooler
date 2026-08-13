@@ -129,9 +129,12 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
   attr :model_serving_sync_pending?, :boolean, default: false
 
   def pool_wizard(assigns) do
+    config = pool_wizard_config(assigns.mode)
+
     assigns =
       assigns
-      |> assign(pool_wizard_config(assigns.mode))
+      |> assign(config)
+      |> assign(:eyebrow, pool_wizard_eyebrow(config.title, assigns.form))
       |> assign(:docs_url, @pool_docs_url)
       |> assign(:steps, pool_wizard_steps(assigns.mode))
       |> assign(:step_heading, pool_step_heading(assigns.current_step))
@@ -141,7 +144,7 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
     <div id={"#{@id}-responsive-shell"} class="contents">
       <PolicyEditorComponents.policy_editor_dialog
         id={@id}
-        eyebrow={@title}
+        eyebrow={@eyebrow}
         title={@step_heading.title}
         description={@step_heading.description}
         steps={@steps}
@@ -545,6 +548,25 @@ defmodule CodexPoolerWeb.Admin.PoolWizardComponents do
   end
 
   defp pool_wizard_config(mode), do: Map.fetch!(@pool_wizard_modes, mode)
+
+  # The step headings change as you move through the wizard, so the eyebrow is
+  # the only line that can say which Pool you are editing the whole time. A Pool
+  # being created has no name yet, so it keeps the bare action.
+  defp pool_wizard_eyebrow(title, form) do
+    case pool_wizard_pool_name(form) do
+      nil -> title
+      name -> "#{title} · #{name}"
+    end
+  end
+
+  defp pool_wizard_pool_name(%Phoenix.HTML.Form{} = form) do
+    case String.trim(to_string(form[:name].value)) do
+      "" -> nil
+      name -> name
+    end
+  end
+
+  defp pool_wizard_pool_name(_form), do: nil
 
   defp pool_step_heading(step), do: Map.fetch!(@pool_step_headings, normalize_step(step))
 
