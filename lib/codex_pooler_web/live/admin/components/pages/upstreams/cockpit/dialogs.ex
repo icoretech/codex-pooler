@@ -58,7 +58,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
               form={@oauth_relink_form}
               submit_event="submit_oauth_relink_callback"
               submit_label="Complete relink"
-              status={oauth_relink_pending_status(@oauth_relink_result, @oauth_relink_flow)}
             />
           </section>
 

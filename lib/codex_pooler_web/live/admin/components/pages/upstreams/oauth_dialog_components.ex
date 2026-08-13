@@ -103,7 +103,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
   attr :form, :any, required: true
   attr :submit_event, :string, required: true
   attr :submit_label, :string, required: true
-  attr :status, :string, default: nil
 
   def browser_authorization_step(assigns) do
     assigns =
@@ -185,16 +184,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
           />
           <p id={@callback_help_id} class="text-xs leading-4 text-base-content/55">
             After OpenAI redirects, copy the full URL from the browser address bar and paste it here.
-          </p>
-          <p
-            :if={@status}
-            id={"#{@id_prefix}-status"}
-            data-role="oauth-pending-status"
-            role="status"
-            class="flex items-center gap-1.5 text-xs font-medium leading-4 text-base-content/55"
-          >
-            <.icon name="hero-clock" class="size-3.5 shrink-0 text-base-content/40" />
-            <span>{@status}</span>
           </p>
         </div>
       </.form>

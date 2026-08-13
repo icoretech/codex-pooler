@@ -140,11 +140,13 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
     assert has_element?(view, "#showcase-oauth-browser-dialog-fixture")
     assert has_element?(view, "#oauth-link-dialog[open]", "Link OpenAI account")
 
-    assert has_element?(
-             view,
-             "#oauth-link-status[data-role='oauth-pending-status'][role='status']",
-             "Browser authorization pending"
-           )
+    # A pending browser flow must never read as a finished one. It also carries
+    # no status line of its own: nothing is running on this route — the pooler is
+    # waiting for the operator — and the empty field and its help text already
+    # say so. The device route keeps its status line, because a poll really is
+    # running there and the operator has no other signal for it.
+    refute has_element?(view, "#oauth-link-dialog .alert-success")
+    refute has_element?(view, "#oauth-link-dialog [data-role='oauth-pending-status']")
 
     assert has_element?(view, "#oauth-link-authorization-step", "Authorization page")
     assert has_element?(view, "#oauth-link-callback-step", "Callback URL")

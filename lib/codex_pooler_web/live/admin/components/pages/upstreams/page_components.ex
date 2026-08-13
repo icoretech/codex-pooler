@@ -414,7 +414,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
               form={@oauth_link_form}
               submit_event="submit_oauth_callback"
               submit_label={@oauth_callback_submit_label}
-              status={oauth_pending_status(@oauth_link_result, @oauth_link_flow)}
             />
           </section>
 
