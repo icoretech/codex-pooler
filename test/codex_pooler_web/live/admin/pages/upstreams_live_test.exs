@@ -1093,8 +1093,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     |> element("#oauth-relink-upstream-account-#{identity.id}")
     |> render_click()
 
-    assert has_element?(view, "#oauth-link-dialog", "Relink OpenAI account")
-    assert has_element?(view, "#oauth-link-relink-target", "Card Relink Codex")
+    # The title names the account being relinked and keeps naming it once the
+    # flow starts, which is where the separate Account row used to disappear.
+    assert has_element?(view, "#oauth-link-dialog", "Relink Card Relink Codex")
+    refute has_element?(view, "#oauth-link-relink-target")
     refute has_element?(view, "#oauth_link_pool_id")
 
     view

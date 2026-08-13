@@ -314,7 +314,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
     assigns =
       assigns
       |> assign(:oauth_docs_url, @oauth_docs_url)
-      |> assign(:oauth_dialog_title, oauth_dialog_title(assigns.oauth_link_mode))
+      |> assign(
+        :oauth_dialog_title,
+        oauth_dialog_title(
+          assigns.oauth_link_mode,
+          assigns.oauth_link_target_account,
+          assigns.oauth_link_form,
+          assigns.pool_options
+        )
+      )
       |> assign(
         :oauth_dialog_description,
         oauth_dialog_description(
@@ -364,17 +372,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
             autocomplete="off"
             class="grid gap-4"
           >
-            <div
-              :if={oauth_relink_mode?(@oauth_link_mode)}
-              id="oauth-link-relink-target"
-              class="rounded-lg border border-base-300 bg-base-200/40 p-4 text-sm text-base-content"
-            >
-              <p class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
-                Account
-              </p>
-              <p class="mt-1 font-medium">{oauth_target_label(@oauth_link_target_account)}</p>
-            </div>
-
             <div :if={!oauth_relink_mode?(@oauth_link_mode)} class="grid gap-2">
               <label
                 for="oauth_link_pool_id"
@@ -917,23 +914,42 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   defp oauth_dialog_dismiss_label(%{status: "completed"}), do: "Close"
   defp oauth_dialog_dismiss_label(_flow), do: "Cancel"
 
-  defp oauth_dialog_title(:relink), do: "Relink OpenAI account"
-  defp oauth_dialog_title(_mode), do: "Link OpenAI account"
+  # The eyebrow already names the provider, so the title spends its words on the
+  # thing the operator cannot otherwise see once the flow starts: where this
+  # account is going. The Pool survives every step - `OAuthWorkflow` rebuilds the
+  # form from `oauth_link_pool_id` each time - so the title keeps answering
+  # "which Pool was this again?" long after the select is gone.
+  defp oauth_dialog_title(:relink, account, _form, _pool_options),
+    do: "Relink #{oauth_target_label(account)}"
+
+  defp oauth_dialog_title(_mode, _account, form, pool_options) do
+    case oauth_selected_pool_label(form, pool_options) do
+      nil -> "Link an account"
+      pool -> "Link an account to #{pool}"
+    end
+  end
+
+  defp oauth_selected_pool_label(form, pool_options) do
+    selected = to_string(form[:pool_id].value || "")
+
+    Enum.find_value(pool_options, fn {label, value} ->
+      to_string(value) == selected && selected != "" && label
+    end)
+  end
 
   defp oauth_dialog_description(_mode, _account, %{flow_kind: "browser", status: "pending"}) do
-    "Authorize with OpenAI, then paste the returned callback URL to finish."
+    "Approve in the tab that opened, then paste the callback URL back here."
   end
 
   defp oauth_dialog_description(_mode, _account, %{flow_kind: "device", status: "pending"}) do
-    "Finish the device authorization in your browser. This dialog updates when the account is ready."
+    "Enter the code below to approve. This dialog updates when the account is ready."
   end
 
-  defp oauth_dialog_description(:relink, account, _flow) do
-    "Finish the OpenAI authorization flow to relink #{oauth_target_label(account)}."
-  end
+  defp oauth_dialog_description(:relink, _account, _flow),
+    do: "Approve again to refresh this account's authorization."
 
   defp oauth_dialog_description(_mode, _account, _flow),
-    do: "Choose a Pool and finish the OpenAI authorization flow."
+    do: "Choose a Pool, then approve the account."
 
   defp oauth_callback_submit_label(:relink), do: "Complete relink"
   defp oauth_callback_submit_label(_mode), do: "Complete link"

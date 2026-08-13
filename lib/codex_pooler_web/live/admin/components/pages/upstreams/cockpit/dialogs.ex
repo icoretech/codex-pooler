@@ -9,6 +9,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
   @oauth_docs_url "https://docs.codex-pooler.com/operators/upstreams/#openai-oauth-upstream-linking"
   @upstream_actions_docs_url "https://docs.codex-pooler.com/operators/upstreams/#card-action-menu"
 
+  attr :account_label, :string, required: true
+  attr :oauth_relinking, :boolean, required: true
+  attr :oauth_relink_form, :any, required: true
+  attr :oauth_relink_flow, :map, default: nil
+  attr :oauth_relink_authorization_url, :string, default: nil
+  attr :oauth_relink_result, :map, default: nil
+  attr :oauth_relink_error, :map, default: nil
+
   def oauth_relink_dialog(assigns) do
     assigns = assign(assigns, :oauth_docs_url, @oauth_docs_url)
 
@@ -20,7 +28,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
             OpenAI OAuth
           </p>
           <h2 class="mt-1 text-xl font-bold text-base-content sm:text-2xl">
-            Relink OpenAI account
+            Relink {@account_label}
           </h2>
           <p class="mt-1.5 max-w-xl text-sm leading-5 text-base-content/65">
             {oauth_relink_description(@oauth_relink_flow)}

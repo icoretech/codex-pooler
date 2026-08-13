@@ -138,7 +138,8 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
     {:ok, view, html} = mount_showcase("light", "oauth-browser-dialog")
 
     assert has_element?(view, "#showcase-oauth-browser-dialog-fixture")
-    assert has_element?(view, "#oauth-link-dialog[open]", "Link OpenAI account")
+    # The title carries the destination Pool, so it survives the whole flow.
+    assert has_element?(view, "#oauth-link-dialog[open]", "Link an account to Design review Pool")
 
     # A pending browser flow must never read as a finished one. It also carries
     # no status line of its own: nothing is running on this route — the pooler is

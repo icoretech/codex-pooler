@@ -65,6 +65,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
           />
 
           <Dialogs.oauth_relink_dialog
+            account_label={@cockpit.header.title}
             oauth_relinking={@oauth_relinking}
             oauth_relink_form={@oauth_relink_form}
             oauth_relink_flow={@oauth_relink_flow}
