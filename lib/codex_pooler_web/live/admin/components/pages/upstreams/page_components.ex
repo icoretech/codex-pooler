@@ -88,6 +88,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
         oauth_link_result={@oauth_link_result}
         oauth_link_error={@oauth_link_error}
         pool_options={@dialog_pool_options}
+        datetime_preferences={@datetime_preferences}
       />
 
       <.rename_account_dialog account={@renaming_account} form={@rename_account_form} />
@@ -309,6 +310,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
   attr :oauth_link_result, :map, default: nil
   attr :oauth_link_error, :map, default: nil
   attr :pool_options, :list, required: true
+  attr :datetime_preferences, :map, default: %{}
 
   def oauth_link_dialog(assigns) do
     assigns =
@@ -420,6 +422,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
             user_code={@oauth_link_flow.device_user_code}
             verification_uri={@oauth_link_flow.verification_uri}
             interval_seconds={Map.get(@oauth_link_flow, :interval_seconds)}
+            expires_at={Map.get(@oauth_link_flow, :expires_at)}
+            datetime_preferences={@datetime_preferences}
             status={oauth_pending_status(@oauth_link_result, @oauth_link_flow)}
           />
         </div>

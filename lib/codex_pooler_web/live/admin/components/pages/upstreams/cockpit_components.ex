@@ -72,6 +72,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents do
             oauth_relink_authorization_url={@oauth_relink_authorization_url}
             oauth_relink_result={@oauth_relink_result}
             oauth_relink_error={@oauth_relink_error}
+            datetime_preferences={@datetime_preferences}
           />
 
           <Dialogs.rename_account_dialog account={@renaming_account} form={@rename_account_form} />

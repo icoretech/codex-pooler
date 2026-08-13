@@ -103,7 +103,8 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
         status: "pending",
         device_user_code: "FJDK-XRQP",
         verification_uri: "https://auth.example.com/device",
-        interval_seconds: 5
+        interval_seconds: 5,
+        expires_at: ~U[2026-08-13 17:45:00.000000Z]
       },
       oauth_link_authorization_url: nil,
       oauth_link_result: %{message: "Device authorization pending"},
@@ -262,6 +263,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
             oauth_link_result={@oauth_link_result}
             oauth_link_error={@oauth_link_error}
             pool_options={[{"Design review Pool", "dev-component-showcase"}]}
+            datetime_preferences={CodexPoolerWeb.DateTimeDisplay.preferences_for_user(nil)}
           />
         </div>
 

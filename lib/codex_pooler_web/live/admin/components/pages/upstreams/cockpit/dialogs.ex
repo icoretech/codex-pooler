@@ -16,6 +16,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
   attr :oauth_relink_authorization_url, :string, default: nil
   attr :oauth_relink_result, :map, default: nil
   attr :oauth_relink_error, :map, default: nil
+  attr :datetime_preferences, :map, default: %{}
 
   def oauth_relink_dialog(assigns) do
     assigns = assign(assigns, :oauth_docs_url, @oauth_docs_url)
@@ -75,6 +76,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
             user_code={@oauth_relink_flow.device_user_code}
             verification_uri={@oauth_relink_flow.verification_uri}
             interval_seconds={Map.get(@oauth_relink_flow, :interval_seconds)}
+            expires_at={Map.get(@oauth_relink_flow, :expires_at)}
+            datetime_preferences={@datetime_preferences}
             status={oauth_relink_pending_status(@oauth_relink_result, @oauth_relink_flow)}
           />
         </div>

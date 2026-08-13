@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
   use CodexPoolerWeb, :html
 
   alias CodexPoolerWeb.Admin.Components, as: AdminComponents
+  alias CodexPoolerWeb.DateTimeDisplay
 
   attr :id_prefix, :string, required: true
   attr :browser_event, :string, required: true
@@ -204,6 +205,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
   attr :verification_uri, :string, default: nil
   attr :status, :string, default: nil
   attr :interval_seconds, :integer, default: nil
+  attr :expires_at, :any, default: nil
+  attr :datetime_preferences, :map, default: %{}
 
   @doc """
   The device route, in the same shape as the browser one.
@@ -217,9 +220,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
     ~H"""
     <section id={"#{@id_prefix}-device-code"} data-role="oauth-device-flow" class="grid gap-4">
       <div class="grid min-w-0 gap-2">
-        <span class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
-          Device code
-        </span>
+        <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-baseline gap-2">
+          <span class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
+            Device code
+          </span>
+          <span
+            :if={@expires_at}
+            id={"#{@id_prefix}-device-expires-at"}
+            class="shrink-0 text-xs font-medium text-base-content/55"
+          >
+            Expires {DateTimeDisplay.format_datetime(@expires_at, @datetime_preferences)}
+          </span>
+        </div>
         <p class="text-xs leading-4 text-base-content/55">
           Open the verification page below and enter this code to approve the account.
         </p>
