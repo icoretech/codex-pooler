@@ -1968,6 +1968,11 @@ body {
   opacity: 0.45;
 }
 
+#pool-delete-dialog:has(#pool-delete-form input[type="text"]:invalid) #pool-delete-submit {
+  pointer-events: none;
+  opacity: 0.45;
+}
+
 /* Admin rail. Below xl the sidebar is a 64px icon rail, and that is a content
    decision rather than a nav one (the Content-Column Rule): it returns ~192px
    to every admin page in the 768-1280 band. What it costs is legibility — an

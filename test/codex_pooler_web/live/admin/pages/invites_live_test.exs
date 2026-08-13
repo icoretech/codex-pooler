@@ -561,7 +561,7 @@ defmodule CodexPoolerWeb.Admin.InvitesLiveTest do
     |> element("#invite-revoke-open-#{invite.id}")
     |> render_click()
 
-    assert has_element?(view, "#invite-revoke-dialog[open]", "Revoke Pool invite")
+    assert has_element?(view, "#invite-revoke-dialog[open]", "Revoke the invite for")
     assert has_element?(view, "#invite-revoke-dialog", "revoke@example.com")
     assert_admin_dialog_docs_link(view, "invite-revoke-dialog-footer")
 

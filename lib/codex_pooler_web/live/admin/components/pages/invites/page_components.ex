@@ -252,24 +252,16 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
       class="modal modal-bottom overflow-x-hidden sm:modal-middle"
       open
     >
-      <div class="modal-box sm:max-w-xl rounded-box border border-base-300 bg-base-100 p-0 shadow-2xl">
-        <div class="grid gap-2 px-5 py-4">
-          <p class="text-xs font-semibold uppercase tracking-wide text-primary">Pool onboarding</p>
-          <h2 class="text-xl font-semibold text-base-content">Revoke Pool invite</h2>
-          <p class="text-sm text-base-content/70">
-            Revoke the active invite for <span class="font-semibold text-base-content">
-              {@invite.invited_email}
-            </span>.
+      <div class="modal-box sm:max-w-xl border border-base-300 bg-base-100 p-0 shadow-2xl">
+        <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
+          <p class="text-sm font-semibold uppercase tracking-wide text-error">Pool invite</p>
+          <h2 class="mt-1 text-2xl font-bold text-base-content">
+            Revoke the invite for {@invite.invited_email}?
+          </h2>
+          <p class="mt-2 text-sm leading-6 text-base-content/70">
+            The invite URL stops working immediately. Upstream accounts already onboarded through it
+            keep working.
           </p>
-        </div>
-
-        <div class="border-t border-base-300 px-5 py-4">
-          <div class="alert border-error/20 bg-error/10 text-error">
-            <.icon name="hero-no-symbol" class="size-5" />
-            <span>
-              The existing invite URL will stop working immediately. Existing upstream accounts are not affected.
-            </span>
-          </div>
         </div>
 
         <AdminComponents.dialog_footer
@@ -277,24 +269,20 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
           docs_url={@invite_docs_url}
         >
           <:actions>
-            <button
+            <AdminComponents.action_button
               id="invite-revoke-cancel"
-              type="button"
-              class="btn btn-ghost btn-sm gap-2 text-base-content/60 hover:text-base-content"
+              label="Cancel"
+              variant={:ghost}
               phx-click="cancel_revoke_invite"
-            >
-              <span>Cancel</span>
-            </button>
-            <button
+            />
+            <AdminComponents.action_button
               id="invite-revoke-confirm"
-              type="button"
-              class="btn btn-error btn-sm gap-2"
+              icon="hero-no-symbol"
+              label="Revoke"
+              variant={:danger}
               phx-click="confirm_revoke_invite"
               phx-value-id={@invite.id}
-            >
-              <.icon name="hero-no-symbol" class="size-4" />
-              <span>Revoke invite</span>
-            </button>
+            />
           </:actions>
         </AdminComponents.dialog_footer>
       </div>

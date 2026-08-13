@@ -80,10 +80,12 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
     >
       <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
-          <p class="text-sm font-semibold uppercase tracking-wide text-error">Hard delete</p>
-          <h2 class="mt-1 text-2xl font-bold text-base-content">Delete archived Pool</h2>
+          <p class="text-sm font-semibold uppercase tracking-wide text-error">Pool</p>
+          <h2 class="mt-1 text-2xl font-bold text-base-content">
+            Delete {@deleting_pool.name}?
+          </h2>
           <p class="mt-2 text-sm leading-6 text-base-content/70">
-            Hard deletion is available only for archived Pools and requires the exact slug confirmation.
+            Only an archived Pool can be deleted, and this one leaves for good. This cannot be undone.
           </p>
         </div>
 
@@ -95,20 +97,12 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           class="grid gap-5 p-5 sm:p-6"
         >
           <.input field={@delete_form[:id]} type="hidden" />
-          <div class="alert alert-warning items-start">
-            <.icon name="hero-exclamation-triangle" class="size-5" />
-            <div class="grid gap-1">
-              <p class="font-semibold">This removes {@deleting_pool.name} permanently.</p>
-              <p class="text-sm">
-                Type <span class="break-all font-semibold">{@deleting_pool.slug}</span> to confirm.
-              </p>
-            </div>
-          </div>
           <.input
             field={@delete_form[:confirmation_slug]}
             id={"pool_delete_confirmation_slug_#{@delete_form_version}"}
             type="text"
-            label="Confirm slug"
+            label={"Type #{@deleting_pool.slug} to confirm"}
+            pattern={@deleting_pool.slug}
             placeholder={@deleting_pool.slug}
             required
           />
@@ -128,7 +122,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
             <AdminComponents.action_button
               id="pool-delete-submit"
               icon="hero-trash"
-              label="Delete Pool"
+              label="Delete"
               type="submit"
               form="pool-delete-form"
               variant={:danger}
