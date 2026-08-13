@@ -335,9 +335,12 @@ defmodule CodexPoolerWeb.Admin.Components do
 
   attr :id, :string, required: true
 
+  # `sticky bottom-0` because `.modal-box` is itself the scroll container: on a
+  # bottom sheet the body runs past the fold and an unpinned footer takes the
+  # actions with it. The policy-editor shell pins its own footer the same way.
   attr :class, :any,
     default:
-      "modal-action mt-0 w-full shrink-0 border-t border-base-300 bg-base-200/80 px-4 py-2.5 sm:px-5"
+      "modal-action sticky bottom-0 mt-0 w-full shrink-0 border-t border-base-300 bg-base-200/80 px-4 py-2.5 sm:px-5"
 
   attr :docs_link_role, :string, default: "admin-dialog-docs-link"
   attr :docs_link_id, :string, default: nil
@@ -352,11 +355,12 @@ defmodule CodexPoolerWeb.Admin.Components do
       |> assign(:resolved_docs_link_id, assigns.docs_link_id || "#{assigns.id}-docs-link")
 
     ~H"""
-    <footer id={@id} class={@class}>
-      <div class="flex w-full flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <footer id={@id} data-role="admin-dialog-footer" class={@class}>
+      <div class="flex w-full flex-row flex-wrap items-center justify-between gap-3">
         <a
           id={@resolved_docs_link_id}
           data-role={@docs_link_role}
+          data-admin-dialog-docs
           href={@docs_url}
           target="_blank"
           rel="noopener noreferrer"
@@ -372,7 +376,7 @@ defmodule CodexPoolerWeb.Admin.Components do
           </span>
           <span class="leading-none">Docs</span>
         </a>
-        <div class="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+        <div class="flex flex-row flex-wrap justify-end gap-2">
           {render_slot(@actions)}
         </div>
       </div>

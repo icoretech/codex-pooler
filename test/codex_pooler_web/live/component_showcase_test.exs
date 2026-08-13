@@ -185,6 +185,41 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
     assert unique_ids?(html)
   end
 
+  test "a finished OAuth link states the outcome and offers the cockpit" do
+    {:ok, view, _html} = mount_showcase("light", "oauth-browser-dialog", "completed")
+
+    # Declarative once the flow is done: an imperative title over a success
+    # banner reads as a step still owed.
+    assert has_element?(view, "#oauth-link-dialog h2", "Added to Design review Pool")
+    assert has_element?(view, "#oauth-link-status.alert-success", "OpenAI account linked")
+    refute render(view) =~ "Choose a Pool, then approve the account."
+
+    # Nothing left to submit, and one place left to go.
+    refute has_element?(view, "#oauth-link-submit-callback")
+
+    assert has_element?(
+             view,
+             "#oauth-link-dialog-footer #oauth-link-open-cockpit.btn-primary",
+             "Open cockpit"
+           )
+  end
+
+  test "dialog footers carry the marker the touch-target floor is keyed to" do
+    # `app.css` raises every footer control to 44px at touch widths through
+    # `[data-role="admin-dialog-footer"]`. Dropping the attribute would leave
+    # 28px targets on every dialog with nothing failing to say so.
+    {:ok, view, _html} = mount_showcase("light", "oauth-browser-dialog")
+
+    assert has_element?(
+             view,
+             ~s(footer#oauth-link-dialog-footer[data-role="admin-dialog-footer"])
+           )
+
+    {:ok, policy_view, _html} = mount_showcase("dark", "policy-dialog")
+
+    assert has_element?(policy_view, ~s(footer[data-role="admin-dialog-footer"]))
+  end
+
   test "the real flash group inherits the selected showcase theme boundary" do
     for theme <- ~w(light dark) do
       {:ok, view, _html} = mount_showcase(theme)
@@ -219,10 +254,12 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
     assert html_response(get(conn, "/dev/component-showcase/dark"), 404) =~ "Not Found"
   end
 
-  defp mount_showcase(theme, review_state \\ "catalog") do
-    live_isolated(build_conn(), ComponentShowcaseLive,
-      session: %{"theme" => theme, "review_state" => review_state}
-    )
+  defp mount_showcase(theme, review_state \\ "catalog", oauth_case \\ nil) do
+    session =
+      %{"theme" => theme, "review_state" => review_state}
+      |> then(&if oauth_case, do: Map.put(&1, "oauth_case", oauth_case), else: &1)
+
+    live_isolated(build_conn(), ComponentShowcaseLive, session: session)
   end
 
   defp unique_ids?(html) do

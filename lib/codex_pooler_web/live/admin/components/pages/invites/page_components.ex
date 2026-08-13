@@ -246,8 +246,13 @@ defmodule CodexPoolerWeb.Admin.InvitesPageComponents do
     assigns = assign(assigns, :invite_docs_url, @invite_docs_url)
 
     ~H"""
-    <dialog :if={@invite} id="invite-revoke-dialog" class="modal" open>
-      <div class="modal-box max-w-xl rounded-box border border-base-300 bg-base-100 p-0 shadow-2xl">
+    <dialog
+      :if={@invite}
+      id="invite-revoke-dialog"
+      class="modal modal-bottom overflow-x-hidden sm:modal-middle"
+      open
+    >
+      <div class="modal-box sm:max-w-xl rounded-box border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="grid gap-2 px-5 py-4">
           <p class="text-xs font-semibold uppercase tracking-wide text-primary">Pool onboarding</p>
           <h2 class="text-xl font-semibold text-base-content">Revoke Pool invite</h2>

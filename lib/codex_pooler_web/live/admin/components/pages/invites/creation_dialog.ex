@@ -18,8 +18,13 @@ defmodule CodexPoolerWeb.Admin.InviteCreationDialog do
     assigns = assign(assigns, :invite_docs_url, @invite_docs_url)
 
     ~H"""
-    <dialog :if={@creating_invite} id="pool-invite-dialog" class="modal" open>
-      <div class="modal-box max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
+    <dialog
+      :if={@creating_invite}
+      id="pool-invite-dialog"
+      class="modal modal-bottom overflow-x-hidden sm:modal-middle"
+      open
+    >
+      <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-6 py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">
             Pool onboarding

@@ -1148,25 +1148,69 @@ trigger, and the policy mode cards above — follows the radio-less selection
 card contract ([Selection card](#selection-card-radio-less-choice-card)). Only multi-select checkbox cards keep a visible
 control.
 
-### OAuth browser handoff dialog
+### Dialog shell (every admin modal)
 
-- **Source:** `browser_authorization_step/1` in
+- **Presentation:** `<dialog class="modal modal-bottom overflow-x-hidden sm:modal-middle">`.
+  Below `sm` the dialog is a **bottom sheet** — edge to edge, anchored to the
+  bottom, top corners rounded and bottom corners square, capped at
+  `calc(100vh - 5em)` and scrolling inside itself. From `sm` up it is a
+  centered modal. This is not decoration: on a phone the dialog's actions
+  belong within thumb reach, and a floating panel puts them mid-screen.
+- **Width:** the size utility is `sm:`-prefixed (`modal-box sm:max-w-xl`), never
+  bare. daisyUI's `.modal-bottom .modal-box` sets `max-width: none`, but a bare
+  `max-w-xl` is a Tailwind *utility* and utilities win over daisyUI's components
+  layer regardless of specificity — so an unprefixed width silently keeps the
+  sheet at 576px and cancels the whole pattern.
+- **Scrolling:** `.modal-box` already ships `overflow-y: auto`, so the box is
+  the scroll container and no inner wrapper needs to become one. The footer is
+  `sticky bottom-0` (the `dialog_footer` default) so a long body scrolls under
+  actions that stay put.
+- **Two shells exist and must agree.** `policy_editor_dialog/1` in
+  [`policy_editor_components.ex`](lib/codex_pooler_web/live/admin/components/shared/policy_editor_components.ex)
+  is the wizard shell (its own header with numbered steps, an explicit
+  `flex-col` body with `flex-1 overflow-y-auto`, `sm:max-w-4xl`); everything
+  else is a hand-written `<dialog>` + `modal-box` + `dialog_footer`. The
+  presentation rules above are the same for both. A new dialog copies an
+  existing one — so copy one that already follows this.
+
+### OAuth handoff dialog (two doors)
+
+- **Source:** `method_doors/1`, `browser_authorization_step/1` and
+  `device_authorization_step/1` in
   [`oauth_dialog_components.ex`](lib/codex_pooler_web/live/admin/components/pages/upstreams/oauth_dialog_components.ex),
   composed by the upstream link and cockpit relink dialogs.
-- **Anatomy:** one compact modal panel with a neutral pending `role="status"`
-  row and two ordered, flat steps separated by a hairline. Step 1 owns the
-  only orange action in the panel (`Open authorization page`) plus the labeled
-  neutral `Copy link` action. Step 2 explains where to find the callback URL,
-  then presents the required URL input and a right-aligned secondary completion
-  action. Do not wrap the steps in another card or render pending as a success
-  alert.
-- **Responsive behavior:** the step marker remains in a fixed 2rem column.
-  Open and copy actions share one row from `sm`; below `sm` they stack at full
-  width. The callback field always owns the available step width.
+- **Anatomy:** one modal panel that shows exactly one thing at a time. Before a
+  flow starts, the Pool select sits over two peer selection cards — `via OAuth
+  (browser)` and `via Device Code` — following the selection-card anatomy
+  below. Neither route is the default and their hints are written to hold the
+  same line count, so the two cards stay the same height.
+  Once a route starts, its section replaces the doors: a labelled row with a
+  readonly field carrying the value and a labelled `Open` + `Copy` pair beside
+  it. Both routes use that same shape, because both hand back the same kind of
+  proof. The device route additionally carries the code, its expiry as a live
+  countdown inside the help sentence, and the only status line in the dialog —
+  a poll really is running there. The browser route has no status line: nothing
+  is running, the pooler is waiting for the operator.
+- **The completing action lives in the dialog footer**, beside the dismiss,
+  submitting the body form through `form=`. It is the dialog's only filled
+  orange; `Open` is secondary. A finished flow replaces it with `Open cockpit`,
+  built from `result_upstream_identity_id` on the completed flow.
+- **The header follows the flow.** Titles are imperative while a step is owed
+  (`Link an account to <Pool>`, `Relink <account>`) and declarative once it is
+  not (`Added to <Pool>`, `<account> reauthorized`). The description never
+  repeats an instruction the flow has already satisfied. The Pool name rides
+  the title so it survives the whole flow, since the select is gone after the
+  first step.
+- **Responsive behavior:** open and copy actions share one row with the field
+  from `sm` and stack below it under `sm`. Presentation follows the shared
+  dialog shell below — bottom sheet on phone, centered from `sm`. Touch-width
+  control heights follow the accessibility baseline; the selection cards keep
+  their own height.
 - **Contract:** preserve the existing `oauth-link-*` and `oauth-relink-*`
-  ids. The visible copy label must expose the cross-browser handoff without
-  removing the destination link. The callback input is `required`, described
-  by adjacent help text, and keeps browser-native URL validation.
+  ids. Never render a pending flow as a success alert. The callback input is
+  `required`, described by adjacent help text, and keeps browser-native URL
+  validation. Every state is reviewable at
+  `/dev/component-showcase/<theme>?state=oauth-browser-dialog&case=<case>`.
 
 ### Filters, empty state, notices, buttons, flash, theme toggle
 
@@ -1203,6 +1247,13 @@ control.
   navigation attr. Primary buttons keep the inset top highlight and a
   `focus-visible` orange outline (CSS in `app.css`); disabled goes flat
   `base-300` with `cursor-not-allowed`.
+  **A dismissal takes no icon.** `Cancel` / `Close` in a dialog footer is
+  `variant={:ghost}` with a label and nothing else — the word already says it,
+  and an `✕` beside it is the same message twice. Confirming actions do take an
+  icon, because it names *which* action (`hero-check`, `hero-trash`,
+  `hero-pencil-square`). The exception is a terminal acknowledgement that is the
+  dialog's only action — a one-time secret's `Close` — which is `:primary` with
+  `hero-check`, because there it confirms rather than dismisses.
 - **`clipboard_button/1`:** the shared copy action for values shown beside a
   destination link or compact data field. It composes the neutral daisyUI
   button recipe, `ClipboardCopy` hook, clipboard/check icon swap, and an
@@ -1813,6 +1864,30 @@ and [`Toolbar.toolbar`](lib/codex_pooler_web/live/observatory/components/toolbar
 - Reduced motion disables shine, transitions, and disclosure animations.
 - Icons are decorative (`aria-hidden` spans) unless paired with `sr-only`
   text.
+- **Control height belongs to the pointer, not to the control.** Admin sizing
+  is tuned for a mouse — `btn-sm` footers land at 28px, dialog fields at 32-35px,
+  the footer `Docs` link at 14px — and those heights are correct on a desktop,
+  where a field and the buttons beside it are levelled to agree. Where the
+  pointer is coarse, or the viewport is 768px or narrower, every control inside
+  a dialog clears the 44px minimum instead. The rule lives once in
+  [`app.css`](assets/css/app.css) under
+  `@media (pointer: coarse), (width <= 48rem)`, scoped to `.modal-box` and
+  `[data-role="admin-dialog-footer"]` so it covers **every** dialog. Do not
+  re-solve it per dialog: a rule scoped to one dialog's ids leaves a 44px field
+  sitting next to another dialog's 35px field, which is worse than the problem
+  it fixed. 768px is inside the range because a tablet is held, not clicked.
+- **The dialog footer is one row at every width.** `Docs` on the left, actions
+  on the right, `flex-wrap` for the rare long label. It does not collapse to a
+  column on phones: stacking a 44px `Docs` row above two 44px button rows turns
+  a 65px footer into 143px, and on a dialog whose only action is `Cancel` that
+  reads as a hole. The row height comes from the buttons, so the `Docs` link
+  takes its 44px tap target at no layout cost.
+- **CSS keyed to a component's markup must not key to `data-role`.**
+  `dialog_footer` exposes `docs_link_role` and `docs_icon_role` as overridable
+  test hooks, and the policy-editor shell does override them, so a rule written
+  against `[data-role="admin-dialog-docs-link"]` silently skips every dialog
+  built on that shell. Styling hooks are separate attributes the component
+  always emits — `data-admin-dialog-docs`, `data-role="admin-dialog-footer"`.
 
 ### Do:
 

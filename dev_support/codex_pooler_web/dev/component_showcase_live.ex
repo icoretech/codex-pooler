@@ -45,7 +45,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
   @impl true
   def mount(params, session, socket) do
     review_state = selected_review_state(params, session)
-    oauth_case = selected_oauth_case(params)
+    oauth_case = selected_oauth_case(params, session)
 
     socket =
       socket
@@ -68,10 +68,18 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
     {:ok, socket}
   end
 
-  defp selected_oauth_case(%{"case" => oauth_case}) when oauth_case in @oauth_case_values,
-    do: oauth_case
+  # Params for the browser, session for `live_isolated` - the same two-door
+  # lookup `selected_review_state/2` already uses, so the finished states are
+  # reachable from a test and not only from the URL.
+  defp selected_oauth_case(%{"case" => oauth_case}, _session)
+       when oauth_case in @oauth_case_values,
+       do: oauth_case
 
-  defp selected_oauth_case(_params), do: "browser"
+  defp selected_oauth_case(_params, %{"oauth_case" => oauth_case})
+       when oauth_case in @oauth_case_values,
+       do: oauth_case
+
+  defp selected_oauth_case(_params, _session), do: "browser"
 
   defp select_oauth_case(socket, oauth_case) do
     socket
@@ -263,8 +271,11 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
           <nav
             id="showcase-oauth-case-switcher"
             aria-label="OAuth dialog state"
-            class="fixed inset-x-0 top-0 flex flex-wrap items-center gap-1.5 border-b border-base-300 bg-base-100 px-3 py-2"
-            {%{"style" => "z-index:1000"}}
+            class="fixed inset-x-0 top-0 flex items-center gap-1.5 border-b border-base-300 bg-base-100 px-3 py-2"
+            {%{
+              "style" =>
+                "z-index:1000;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch"
+            }}
           >
             <span class="mr-1 text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/45">
               State
@@ -274,6 +285,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
               id={"showcase-oauth-case-#{value}"}
               href={"/dev/component-showcase/#{@theme}?state=oauth-browser-dialog&case=#{value}"}
               aria-current={value == @oauth_case && "page"}
+              {%{"style" => "white-space:nowrap"}}
               class={[
                 "rounded-field border px-2 py-1 text-xs font-semibold transition-colors",
                 value == @oauth_case && "border-primary bg-primary/10 text-base-content",

@@ -22,8 +22,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
     assigns = assign(assigns, :oauth_docs_url, @oauth_docs_url)
 
     ~H"""
-    <dialog :if={@oauth_relinking} id="oauth-relink-dialog" class="modal" open>
-      <div class="modal-box max-w-xl border border-base-300 bg-base-100 p-0 shadow-2xl">
+    <dialog
+      :if={@oauth_relinking}
+      id="oauth-relink-dialog"
+      class="modal modal-bottom overflow-x-hidden sm:modal-middle"
+      open
+    >
+      <div class="modal-box sm:max-w-xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-5 py-4 sm:px-6 sm:py-5">
           <p class="text-xs font-semibold uppercase tracking-wide text-primary">
             OpenAI OAuth
@@ -86,7 +91,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
           <:actions>
             <AdminComponents.action_button
               id="oauth-relink-cancel"
-              icon="hero-x-mark"
               label={oauth_relink_dialog_dismiss_label(@oauth_relink_flow)}
               phx-click="cancel_oauth_relink"
               variant={:ghost}
@@ -117,8 +121,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
     assigns = assign(assigns, :upstream_actions_docs_url, @upstream_actions_docs_url)
 
     ~H"""
-    <dialog :if={@account && @form} id="cockpit-rename-upstream-account-dialog" class="modal" open>
-      <div class="modal-box max-w-xl border border-base-300 bg-base-100 p-0 shadow-2xl">
+    <dialog
+      :if={@account && @form}
+      id="cockpit-rename-upstream-account-dialog"
+      class="modal modal-bottom overflow-x-hidden sm:modal-middle"
+      open
+    >
+      <div class="modal-box sm:max-w-xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-6 py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">Upstream account</p>
           <h2 class="mt-1 text-2xl font-bold text-base-content">Rename upstream account</h2>
@@ -173,8 +182,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
     assigns = assign(assigns, :upstream_actions_docs_url, @upstream_actions_docs_url)
 
     ~H"""
-    <dialog :if={@account} id="cockpit-delete-upstream-account-dialog" class="modal" open>
-      <div class="modal-box max-w-xl border border-error/30 bg-base-100 p-0 shadow-2xl">
+    <dialog
+      :if={@account}
+      id="cockpit-delete-upstream-account-dialog"
+      class="modal modal-bottom overflow-x-hidden sm:modal-middle"
+      open
+    >
+      <div class="modal-box sm:max-w-xl border border-error/30 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-error/20 px-6 py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-error">
             Delete upstream account

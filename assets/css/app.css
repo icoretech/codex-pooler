@@ -1889,6 +1889,46 @@ body {
   opacity: 0.45;
 }
 
+/* Touch-target floor for dialogs.
+   ------------------------------------------------------------------
+   Admin dialog controls are sized for a mouse: `btn-sm` footers land at 28px,
+   the `Docs` link at 14px, and the OAuth dialogs' own fields and buttons at
+   32px after they were levelled to agree with each other. All of them are
+   under the 44px a fingertip needs, and the levelling is worth keeping — on a
+   desktop those heights are correct and the alignment between a field and the
+   buttons beside it is the point.
+
+   So the height is a property of the pointer, not of the control. Where the
+   pointer is coarse, or the viewport is narrow enough that it is a phone or a
+   tablet, every control in a dialog gets the 44px floor; everywhere else the
+   32/28px sizing stands untouched. 48rem is inclusive because 768 is the
+   tablet width this was measured at, and a tablet is held, not clicked.
+
+   The scope is the dialog, not one dialog. `.modal-box` covers every body and
+   `admin-dialog-footer` every footer, so a 44px field in one dialog cannot sit
+   next to a 35px field in another - which is exactly what a per-dialog rule
+   produces. `method_door` is deliberately not a `.btn`, so the selection cards
+   keep their own height. */
+@media (pointer: coarse), (width <= 48rem) {
+  [data-role="admin-dialog-footer"] .btn,
+  .modal-box .btn,
+  .modal-box .input,
+  .modal-box .select,
+  .modal-box .textarea {
+    height: 2.75rem;
+    min-height: 2.75rem;
+  }
+
+  /* Keyed to `data-admin-dialog-docs`, not to the `data-role`: that one is a
+     caller-overridable test hook and the policy-editor shell does override it,
+     so a rule written against it silently skips every dialog built on that
+     shell - which is most of them. The footer is a single row, so the buttons
+     already set its height and this costs no layout. */
+  [data-role="admin-dialog-footer"] [data-admin-dialog-docs] {
+    min-height: 2.75rem;
+  }
+}
+
 /* Admin rail. Below xl the sidebar is a 64px icon rail, and that is a content
    decision rather than a nav one (the Content-Column Rule): it returns ~192px
    to every admin page in the 768-1280 band. What it costs is legibility — an

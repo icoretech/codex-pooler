@@ -261,7 +261,6 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Channels do
           <div class="flex flex-wrap justify-end gap-2">
             <AdminComponents.action_button
               id="alert-channel-cancel"
-              icon="hero-x-mark"
               label="Cancel"
               phx-click="cancel_channel_form"
             />

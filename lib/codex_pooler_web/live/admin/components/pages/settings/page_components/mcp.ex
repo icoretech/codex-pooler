@@ -238,8 +238,12 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
 
   defp mcp_created_token_dialog(assigns) do
     ~H"""
-    <dialog id="settings-mcp-created-token-dialog" class="modal" open>
-      <div class="modal-box max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
+    <dialog
+      id="settings-mcp-created-token-dialog"
+      class="modal modal-bottom overflow-x-hidden sm:modal-middle"
+      open
+    >
+      <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-6 py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">MCP token</p>
           <h2 class="mt-1 text-2xl font-bold text-base-content">Copy this MCP token now</h2>
@@ -308,8 +312,12 @@ defmodule CodexPoolerWeb.Admin.SettingsPageComponents.MCP do
 
   defp mcp_delete_dialog(assigns) do
     ~H"""
-    <dialog id="settings-mcp-delete-dialog" class="modal" open>
-      <div class="modal-box max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
+    <dialog
+      id="settings-mcp-delete-dialog"
+      class="modal modal-bottom overflow-x-hidden sm:modal-middle"
+      open
+    >
+      <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-6 py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-error">Permanent delete</p>
           <h2 class="mt-1 text-2xl font-bold text-base-content">Delete MCP key</h2>

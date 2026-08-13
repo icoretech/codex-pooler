@@ -160,8 +160,13 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
             incident_page_size={@incident_page_size}
           />
         </section>
-        <dialog :if={@deleting_rule} id="alert-rule-delete-dialog" class="modal" open>
-          <div class="modal-box max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
+        <dialog
+          :if={@deleting_rule}
+          id="alert-rule-delete-dialog"
+          class="modal modal-bottom overflow-x-hidden sm:modal-middle"
+          open
+        >
+          <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
             <div class="border-b border-base-300 px-6 py-5">
               <p class="text-sm font-semibold uppercase tracking-wide text-error">Delete rule</p>
               <h2 class="mt-1 text-2xl font-bold text-base-content">Delete alert rule</h2>
@@ -213,8 +218,13 @@ defmodule CodexPoolerWeb.Admin.AlertsLive do
           </form>
         </dialog>
 
-        <dialog :if={@deleting_channel} id="alert-channel-delete-dialog" class="modal" open>
-          <div class="modal-box max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
+        <dialog
+          :if={@deleting_channel}
+          id="alert-channel-delete-dialog"
+          class="modal modal-bottom overflow-x-hidden sm:modal-middle"
+          open
+        >
+          <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
             <div class="border-b border-base-300 px-6 py-5">
               <p class="text-sm font-semibold uppercase tracking-wide text-error">Delete channel</p>
               <h2 class="mt-1 text-2xl font-bold text-base-content">Delete alert channel</h2>

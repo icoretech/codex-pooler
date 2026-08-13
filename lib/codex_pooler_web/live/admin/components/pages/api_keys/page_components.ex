@@ -16,8 +16,12 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
     assigns = assign(assigns, :api_key_docs_url, @api_key_docs_url)
 
     ~H"""
-    <dialog id="api-key-created-secret-dialog" class="modal" open>
-      <div class="modal-box max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
+    <dialog
+      id="api-key-created-secret-dialog"
+      class="modal modal-bottom overflow-x-hidden sm:modal-middle"
+      open
+    >
+      <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-6 py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">
             API key secret
@@ -97,8 +101,12 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
     assigns = assign(assigns, :api_key_docs_url, @api_key_docs_url)
 
     ~H"""
-    <dialog id="api-key-delete-dialog" class="modal" open>
-      <div class="modal-box max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
+    <dialog
+      id="api-key-delete-dialog"
+      class="modal modal-bottom overflow-x-hidden sm:modal-middle"
+      open
+    >
+      <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-6 py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-error">Hard delete</p>
           <h2 class="mt-1 text-2xl font-bold text-base-content">Delete API key</h2>

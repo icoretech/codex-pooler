@@ -332,7 +332,6 @@ defmodule CodexPoolerWeb.Admin.AlertsPageComponents.Rules do
           <div class="flex flex-wrap justify-end gap-2">
             <AdminComponents.action_button
               id="alert-rule-cancel"
-              icon="hero-x-mark"
               label="Cancel"
               phx-click="cancel_rule_form"
             />

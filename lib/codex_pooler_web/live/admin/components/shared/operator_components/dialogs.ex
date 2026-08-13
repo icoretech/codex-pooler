@@ -22,8 +22,13 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
     assigns = assign(assigns, :operator_docs_url, @operator_docs_url)
 
     ~H"""
-    <dialog :if={@creating_operator} id="operator-create-dialog" class="modal" open>
-      <div class="modal-box max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
+    <dialog
+      :if={@creating_operator}
+      id="operator-create-dialog"
+      class="modal modal-bottom overflow-x-hidden sm:modal-middle"
+      open
+    >
+      <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-6 py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">
             Operator access
@@ -114,8 +119,13 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
     assigns = assign(assigns, :operator_actions_docs_url, @operator_actions_docs_url)
 
     ~H"""
-    <dialog :if={@editing_operator} id="operator-edit-dialog" class="modal" open>
-      <div class="modal-box max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
+    <dialog
+      :if={@editing_operator}
+      id="operator-edit-dialog"
+      class="modal modal-bottom overflow-x-hidden sm:modal-middle"
+      open
+    >
+      <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-6 py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">
             Operator profile
@@ -191,10 +201,10 @@ defmodule CodexPoolerWeb.Admin.OperatorComponents.Dialogs do
     <dialog
       :if={@resetting_operator || @password_dialog_receipt}
       id="operator-password-dialog"
-      class="modal"
+      class="modal modal-bottom overflow-x-hidden sm:modal-middle"
       open
     >
-      <div class="modal-box max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
+      <div class="modal-box sm:max-w-2xl border border-base-300 bg-base-100 p-0 shadow-2xl">
         <div class="border-b border-base-300 px-6 py-5">
           <p class="text-sm font-semibold uppercase tracking-wide text-primary">
             Operator credential
