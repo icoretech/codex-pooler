@@ -208,11 +208,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitComponents.Dialogs do
           <.input
             field={@form[:confirmation_label]}
             type="text"
-            label={"Type #{@account.label} to confirm"}
             pattern={Regex.escape(@account.label)}
             placeholder={@account.label}
             required
-          />
+          >
+            <:label_content>
+              Type <span class="font-semibold text-base-content">{@account.label}</span> to confirm
+            </:label_content>
+          </.input>
         </.form>
 
         <AdminComponents.dialog_footer

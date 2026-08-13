@@ -103,6 +103,13 @@ defmodule CodexPoolerWeb.CoreComponents do
 
   attr :field, FormField
 
+  slot :label_content,
+    doc: """
+    Label markup, for the cases a string cannot carry: a confirmation field
+    whose label has to emphasise the value being typed. Takes precedence over
+    the `label` attribute when given.
+    """
+
   attr :errors, :list, default: []
   attr :checked, :boolean
   attr :prompt, :string, default: nil
@@ -170,7 +177,8 @@ defmodule CodexPoolerWeb.CoreComponents do
     ~H"""
     <div class="fieldset mb-2">
       <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+        <span :if={@label_content != []} class="label mb-1">{render_slot(@label_content)}</span>
+        <span :if={@label && @label_content == []} class="label mb-1">{@label}</span>
         <select
           id={@id}
           name={@name}
@@ -191,7 +199,8 @@ defmodule CodexPoolerWeb.CoreComponents do
     ~H"""
     <div class="fieldset mb-2">
       <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+        <span :if={@label_content != []} class="label mb-1">{render_slot(@label_content)}</span>
+        <span :if={@label && @label_content == []} class="label mb-1">{@label}</span>
         <textarea
           id={@id}
           name={@name}
@@ -211,7 +220,8 @@ defmodule CodexPoolerWeb.CoreComponents do
     ~H"""
     <div class="fieldset mb-2">
       <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+        <span :if={@label_content != []} class="label mb-1">{render_slot(@label_content)}</span>
+        <span :if={@label && @label_content == []} class="label mb-1">{@label}</span>
         <input
           type={@type}
           name={@name}

@@ -102,11 +102,15 @@ defmodule CodexPoolerWeb.Admin.ApiKeyPageComponents do
             field={@form[:confirmation_prefix]}
             id={"api_key_delete_confirmation_prefix_#{@form_version}"}
             type="text"
-            label={"Type #{@api_key.key_prefix} to confirm"}
             placeholder={@api_key.key_prefix}
             pattern={Regex.escape(@api_key.key_prefix)}
             required
-          />
+          >
+            <:label_content>
+              Type <span class="font-semibold text-base-content">{@api_key.key_prefix}</span>
+              to confirm
+            </:label_content>
+          </.input>
         </.form>
 
         <AdminComponents.dialog_footer

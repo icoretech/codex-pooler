@@ -101,11 +101,15 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
             field={@delete_form[:confirmation_slug]}
             id={"pool_delete_confirmation_slug_#{@delete_form_version}"}
             type="text"
-            label={"Type #{@deleting_pool.slug} to confirm"}
             pattern={Regex.escape(@deleting_pool.slug)}
             placeholder={@deleting_pool.slug}
             required
-          />
+          >
+            <:label_content>
+              Type <span class="font-semibold text-base-content">{@deleting_pool.slug}</span>
+              to confirm
+            </:label_content>
+          </.input>
         </.form>
 
         <AdminComponents.dialog_footer
