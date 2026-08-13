@@ -25,6 +25,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
     {"browser", "Browser pending"},
     {"browser-error", "Callback rejected"},
     {"device", "Device pending"},
+    {"device-expired", "Code expired"},
     {"completed", "Linked"},
     {"relink", "Relink"}
   ]
@@ -65,6 +66,12 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
 
   defp selected_oauth_case(_params), do: "browser"
 
+  defp select_oauth_case(socket, oauth_case) do
+    socket
+    |> assign(:oauth_case, oauth_case)
+    |> assign(oauth_fixture(oauth_case))
+  end
+
   # Synthetic throughout: no real authorization URL, account, or device code.
   defp oauth_fixture("start") do
     %{
@@ -100,6 +107,20 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
       oauth_link_result: %{message: "Device authorization pending"},
       oauth_link_error: nil
     }
+  end
+
+  # Shown the way the dialog renders it today, dead code and all: the expired
+  # code stays on screen beside the controls that would start a new one, which
+  # is the point of being able to look at this state.
+  defp oauth_fixture("device-expired") do
+    "device"
+    |> oauth_fixture()
+    |> Map.merge(%{
+      oauth_link_result: nil,
+      oauth_link_error: %{
+        message: "The authorization window expired. Start onboarding again from a fresh invite."
+      }
+    })
   end
 
   defp oauth_fixture("completed") do
@@ -154,8 +175,23 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
     {:noreply, select_review_state(socket, "catalog")}
   end
 
-  def handle_event("cancel_oauth_link", _params, socket), do: {:noreply, socket}
-  def handle_event("submit_oauth_callback", _params, socket), do: {:noreply, socket}
+  # The dialog's own controls walk the review between fixtures, so the states can
+  # be reached the way an operator reaches them rather than only by URL. Without
+  # these the door buttons had no matching clause at all and the click took the
+  # LiveView down, which is why the dialog could be looked at but not used.
+  def handle_event("start_oauth_browser", _params, socket),
+    do: {:noreply, select_oauth_case(socket, "browser")}
+
+  def handle_event("start_oauth_device", _params, socket),
+    do: {:noreply, select_oauth_case(socket, "device")}
+
+  def handle_event("cancel_oauth_link", _params, socket),
+    do: {:noreply, select_oauth_case(socket, "start")}
+
+  def handle_event("submit_oauth_callback", _params, socket),
+    do: {:noreply, select_oauth_case(socket, "completed")}
+
+  def handle_event("validate_oauth_link_pool", _params, socket), do: {:noreply, socket}
 
   def handle_event("close_request_log", _params, socket),
     do: {:noreply, select_review_state(socket, "catalog")}
