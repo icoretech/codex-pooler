@@ -223,29 +223,31 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
         <p class="text-xs leading-4 text-base-content/55">
           Open the verification page below and enter this code to approve the account.
         </p>
-        <div class="flex min-w-0 items-center gap-2 rounded-box border border-base-300 bg-base-200/40 px-3 py-2">
-          <p class="min-w-0 flex-1 break-all font-mono text-lg font-semibold tracking-wider text-base-content">
-            {@user_code}
+        <div class="grid min-w-0 gap-2 rounded-box border border-base-300 bg-base-200/40 px-3 py-2">
+          <div class="flex min-w-0 items-center gap-2">
+            <p class="min-w-0 flex-1 break-all font-mono text-lg font-semibold tracking-wider text-base-content">
+              {@user_code}
+            </p>
+            <AdminComponents.clipboard_button
+              id={"#{@id_prefix}-device-code-copy"}
+              copy_text={@user_code}
+              label="Copy code"
+              aria_label="Copy device code"
+              class="btn btn-secondary btn-sm h-8 min-h-8 shrink-0 gap-1.5"
+              icon_class="size-3.5"
+            />
+          </div>
+          <p
+            :if={@status}
+            id={"#{@id_prefix}-status"}
+            data-role="oauth-pending-status"
+            role="status"
+            class="flex items-center gap-1.5 border-t border-base-300/70 pt-2 text-xs font-medium leading-4 text-base-content/55"
+          >
+            <span class="loading loading-spinner loading-xs shrink-0 text-base-content/40"></span>
+            <span>{@status}{device_recheck_suffix(@interval_seconds)}</span>
           </p>
-          <AdminComponents.clipboard_button
-            id={"#{@id_prefix}-device-code-copy"}
-            copy_text={@user_code}
-            label="Copy code"
-            aria_label="Copy device code"
-            class="btn btn-secondary btn-sm h-8 min-h-8 shrink-0 gap-1.5"
-            icon_class="size-3.5"
-          />
         </div>
-        <p
-          :if={@status}
-          id={"#{@id_prefix}-status"}
-          data-role="oauth-pending-status"
-          role="status"
-          class="flex items-center gap-1.5 text-xs font-medium leading-4 text-base-content/55"
-        >
-          <.icon name="hero-arrow-path" class="admin-loading-icon size-3.5 shrink-0 text-base-content/40" />
-          <span>{@status}{device_recheck_suffix(@interval_seconds)}</span>
-        </p>
       </div>
 
       <div :if={@verification_uri} class="grid min-w-0 gap-2 border-t border-base-300 pt-4">
