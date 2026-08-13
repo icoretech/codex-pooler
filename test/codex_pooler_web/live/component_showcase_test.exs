@@ -160,6 +160,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
              "#oauth-link-dialog-footer #oauth-link-submit-callback.btn-primary",
              "Complete link"
            )
+
     assert has_element?(view, "#oauth-link-cancel.btn-ghost", "Cancel")
 
     # The URL is a readonly field rather than a bare link, so it can be read and

@@ -129,7 +129,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
     ~H"""
     <section id={@root_id} data-role="oauth-browser-flow" class="grid gap-4">
       <div id={@authorization_step_id} data-role="oauth-authorization-step" class="grid min-w-0 gap-2">
-        <label for={@authorization_url_id} class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
+        <label
+          for={@authorization_url_id}
+          class="text-xs font-semibold uppercase tracking-wide text-base-content/60"
+        >
           Authorization page
         </label>
         <div class="grid min-w-0 items-stretch gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
@@ -231,9 +234,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
             data-countdown-at={DateTime.to_iso8601(@expires_at)}
             title={DateTimeDisplay.format_datetime(@expires_at, @datetime_preferences)}
           > It expires in <span
-              data-role="relative-countdown-value"
-              class="font-semibold text-base-content/75"
-            >{countdown_label(@expires_at)}</span>.</span>
+            data-role="relative-countdown-value"
+            class="font-semibold text-base-content/75"
+          >{countdown_label(@expires_at)}</span>.</span>
         </p>
         <div class="grid min-w-0 gap-2 rounded-box border border-base-300 bg-base-200/40 px-3 py-2">
           <div class="flex min-w-0 items-center gap-2">
@@ -300,7 +303,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
           </div>
         </div>
       </div>
-
     </section>
     """
   end
@@ -317,11 +319,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamOAuthDialogComponents do
     seconds = DateTime.diff(expires_at, DateTime.utc_now())
 
     cond do
-      seconds <= 0 -> "due"
-      seconds >= @day -> duration_parts([{div(seconds, @day), "d"}, {rem(div(seconds, @hour), 24), "h"}])
-      seconds >= @hour -> hour_label(ceil(seconds / @minute))
-      seconds >= @minute -> "#{ceil(seconds / @minute)}m"
-      true -> "<1m"
+      seconds <= 0 ->
+        "due"
+
+      seconds >= @day ->
+        duration_parts([{div(seconds, @day), "d"}, {rem(div(seconds, @hour), 24), "h"}])
+
+      seconds >= @hour ->
+        hour_label(ceil(seconds / @minute))
+
+      seconds >= @minute ->
+        "#{ceil(seconds / @minute)}m"
+
+      true ->
+        "<1m"
     end
   end
 
