@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.6.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.0...codex-pooler-v0.6.1) (2026-08-13)
+
+
+### Features
+
+* **admin:** finish the OAuth link dialog on a screen of its own ([73ed2cc](https://github.com/icoretech/codex-pooler/commit/73ed2cc42cce376c85d90ce30dbcf4e53202d249))
+* **admin:** fold the device expiry into the sentence, as a live countdown ([4891c95](https://github.com/icoretech/codex-pooler/commit/4891c95ece788683d20665f8c0bf9ddfb3453d72))
+* **admin:** open Pool workflows in upstreams ([79f5fa5](https://github.com/icoretech/codex-pooler/commit/79f5fa5bd8665b5156af9bcbeb7d57cb6f51e217))
+* **admin:** open the collapsed sidebar rail on hover and focus ([c62e63e](https://github.com/icoretech/codex-pooler/commit/c62e63e5aa723b1432bdda59d3a6ab15fc572765))
+* **admin:** say when the device code expires ([c5687bf](https://github.com/icoretech/codex-pooler/commit/c5687bf1f8d940ccd3d987ccd97d4d74c65fbd89))
+* **dev:** put all 20 admin dialogs in the gallery, and fix what that exposed ([4032c6a](https://github.com/icoretech/codex-pooler/commit/4032c6aaaa7a9632fe106d12bab56badfa823e69))
+* **dev:** review the OAuth dialog in every state, and align the device route ([aafd3d2](https://github.com/icoretech/codex-pooler/commit/aafd3d2fd67eb753f452bcdf27e0911fc4ad28dc))
+* **openai:** support Chat custom tools ([6e27c31](https://github.com/icoretech/codex-pooler/commit/6e27c319087322c71e82059b99e80335a84fd6ce))
+
+
+### Bug Fixes
+
+* **admin:** clarify browser oauth handoff ([6b24021](https://github.com/icoretech/codex-pooler/commit/6b24021466d110b3827e3c3f6d2c6aaf771fb040))
+* **admin:** drop the browser flow's pending line ([7002cd8](https://github.com/icoretech/codex-pooler/commit/7002cd881b4a60ae2e4fa802e1fa82bc7f0ae7b1))
+* **admin:** emphasise the value a confirmation field asks you to type ([0ac5d40](https://github.com/icoretech/codex-pooler/commit/0ac5d401956ebdb57262c832b665c7692b62eb2f))
+* **admin:** finish the destructive-dialog vocabulary ([9fb2f5c](https://github.com/icoretech/codex-pooler/commit/9fb2f5c70bcae00ef55c150cdf7cbd3823130554))
+* **admin:** let a body-less confirm stop drawing an empty body ([cfd3fb6](https://github.com/icoretech/codex-pooler/commit/cfd3fb6dc3431874a8e97a151f557bfbe3d4f068))
+* **admin:** let the device status say a poll is running, and sit with the code ([5609f3b](https://github.com/icoretech/codex-pooler/commit/5609f3b50b0c1a3e252e01a4dfbdb8eda5e89fed))
+* **admin:** make every dialog usable with a thumb ([6ce544a](https://github.com/icoretech/codex-pooler/commit/6ce544a39194dcb1a756dc0f2c18267de088c10e))
+* **admin:** name the live upstream account in traffic distribution ([d347cfd](https://github.com/icoretech/codex-pooler/commit/d347cfd3352fa90fbbc9edefe3447bd028ce2fbe))
+* **admin:** name the Pool the wizard is editing ([f08a579](https://github.com/icoretech/codex-pooler/commit/f08a57956cf1f91c23d8526dd623182f9529a644))
+* **admin:** narrow the dialog touch floor, and fit the model list on a phone ([b153b05](https://github.com/icoretech/codex-pooler/commit/b153b053a1d1bd91f562602c8f5c3fd135b5441c))
+* **admin:** one confirm mechanism across all seven delete dialogs ([f5c6ac0](https://github.com/icoretech/codex-pooler/commit/f5c6ac0ed37f2cda0040ade5329f4d9ae54a35ec))
+* **admin:** say each thing once, and line the dialogs up ([3919ede](https://github.com/icoretech/codex-pooler/commit/3919ede139bce2e111bfdbca9b23deab20965a2e))
+* **admin:** settle the OAuth dialog's type, sizing and pending line ([1f75db3](https://github.com/icoretech/codex-pooler/commit/1f75db3289e10b9bf45aa14c0b3c81203eeb38c4))
+* **admin:** stop two delete dialogs wearing a red shell nobody else wears ([99b8fb7](https://github.com/icoretech/codex-pooler/commit/99b8fb7499e9166d374538bd2b9de354778bb0ef))
+* **admin:** use a real spinner for the device wait, and group it with the code ([ef8c0b1](https://github.com/icoretech/codex-pooler/commit/ef8c0b172ddcbd63e4dd3f5893b7aff4f315763c))
+* **auth:** preserve pending device authorization flows ([6748fde](https://github.com/icoretech/codex-pooler/commit/6748fde709d0e05f8bbc2389e7968ed7a5098f74))
+* **dev:** lift the showcase state switcher above the dialog ([b34b66c](https://github.com/icoretech/codex-pooler/commit/b34b66cef55061cc87bea49488c81558ef39fc16))
+* **dev:** make the showcase OAuth dialog usable, not just visible ([ef7c805](https://github.com/icoretech/codex-pooler/commit/ef7c80529603fca30f140938ef8c28bf4d9ff084))
+* **gateway:** define native Codex response control foundations ([c4d22f3](https://github.com/icoretech/codex-pooler/commit/c4d22f3c8f767c97ff432dd54127232fda54029a))
+* **gateway:** relay native Codex response controls ([0750ec4](https://github.com/icoretech/codex-pooler/commit/0750ec4cbb9b2b9ab5cc2bdb3e16636303c326cb))
+* **onboarding:** make invite device state authoritative ([899368e](https://github.com/icoretech/codex-pooler/commit/899368e1326b31ab26f653a293c7120a457e5794))
+* **onboarding:** refresh and rebalance hosted invites ([d188d29](https://github.com/icoretech/codex-pooler/commit/d188d297db29220d29c0bd7c732d43d687b89def))
+* **runtime:** preserve firewall revocation across settings recreation ([99a1e01](https://github.com/icoretech/codex-pooler/commit/99a1e01b2bff1bf0662f9d78e05bc2b553c887e0))
+* **websocket:** preserve native response metadata semantics ([651ec84](https://github.com/icoretech/codex-pooler/commit/651ec847ac267e226d1deb4bad78cb95ed3173d5))
+
 ## [0.6.0](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.5.18...codex-pooler-v0.6.0) (2026-08-12)
 
 
