@@ -1540,24 +1540,22 @@ defmodule CodexPooler.InstanceSettingsTest do
       restore_partition_guard(distribution.previous_partition_guard)
     end
 
-    if distribution.epmd_started?, do: System.cmd("epmd", ["-kill"])
     :ok
   end
 
   defp ensure_test_distribution_started! do
     case Node.alive?() do
       true ->
-        %{epmd_started?: false, node_started?: false, previous_partition_guard: :unchanged}
+        %{node_started?: false, previous_partition_guard: :unchanged}
 
       false ->
-        epmd_started? = ensure_epmd_started!()
+        ensure_epmd_started!()
         previous_partition_guard = Application.fetch_env(:kernel, :prevent_overlapping_partitions)
         Application.put_env(:kernel, :prevent_overlapping_partitions, false)
         node_name = String.to_atom("instance_settings_test_#{System.unique_integer([:positive])}")
         assert {:ok, _pid} = :net_kernel.start([node_name, :shortnames])
 
         %{
-          epmd_started?: epmd_started?,
           node_started?: true,
           previous_partition_guard: previous_partition_guard
         }

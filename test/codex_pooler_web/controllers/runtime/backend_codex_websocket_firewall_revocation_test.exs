@@ -452,13 +452,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
       end
     after
       restore_partition_guard(distribution.previous_partition_guard)
-
-      if distribution.epmd_started? do
-        case :erl_epmd.names() do
-          {:ok, _names} -> assert {_output, 0} = System.cmd("epmd", ["-kill"])
-          {:error, _reason} -> :ok
-        end
-      end
     end
 
     :ok
@@ -566,14 +559,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
   defp ensure_test_distribution_started! do
     case Node.alive?() do
       true ->
-        %{epmd_started?: false, node_started?: false, previous_partition_guard: :unchanged}
+        %{node_started?: false, previous_partition_guard: :unchanged}
 
       false ->
-        epmd_started? = ensure_epmd_started!()
+        ensure_epmd_started!()
         previous_partition_guard = Application.fetch_env(:kernel, :prevent_overlapping_partitions)
 
         distribution = %{
-          epmd_started?: epmd_started?,
           node_started?: true,
           previous_partition_guard: previous_partition_guard
         }

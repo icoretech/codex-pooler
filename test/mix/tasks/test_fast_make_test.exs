@@ -6,6 +6,27 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
   @receipt_detection_timeout_ms 15_000
   @receipt_poll_interval_ms 20
 
+  test "test-fast starts EPMD before partition processes" do
+    unless partitioned_child?() do
+      fixture = start_fixture!()
+      epmd_port = available_tcp_port()
+      epmd_port_string = Integer.to_string(epmd_port)
+
+      on_exit(fn ->
+        System.cmd("epmd", ["-kill"], env: [{"ERL_EPMD_PORT", epmd_port_string}])
+      end)
+
+      assert {output, 0} =
+               run_make(fixture, 2,
+                 TEST_FAST_RELEASE: "1",
+                 TEST_FAST_REQUIRE_EPMD: "1",
+                 ERL_EPMD_PORT: epmd_port_string
+               )
+
+      assert output =~ "test-fast: PASS (2/2 partitions)"
+    end
+  end
+
   test "two simultaneous N=4 invocations overlap with distinct namespaces and clean exact databases" do
     unless partitioned_child?() do
       fixture = start_fixture!()
@@ -98,6 +119,10 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
 
     printf 'namespace=%s partition=%s\n' "$namespace" "$partition" > "$receipt"
 
+    if [ "${TEST_FAST_REQUIRE_EPMD:-}" = "1" ] && ! epmd -names >/dev/null 2>&1; then
+      exit 19
+    fi
+
     if [ "${TEST_FAST_FAIL_PARTITION:-}" = "$partition" ]; then
       exit 17
     fi
@@ -118,6 +143,13 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
     end)
 
     %{directory: directory, helper_path: helper_path, release_path: release_path}
+  end
+
+  defp available_tcp_port do
+    {:ok, socket} = :gen_tcp.listen(0, [:binary, active: false])
+    {:ok, {_address, port}} = :inet.sockname(socket)
+    :ok = :gen_tcp.close(socket)
+    port
   end
 
   defp run_make(fixture, partitions, extra_env \\ []) do

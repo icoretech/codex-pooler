@@ -76,6 +76,19 @@ test-fast:
 		echo "test-fast: failed to generate invocation namespace"; \
 		exit 1; \
 	fi; \
+	if ! epmd -daemon >/dev/null 2>&1; then \
+		echo "test-fast: failed to start EPMD"; \
+		exit 1; \
+	fi; \
+	epmd_ready=0; \
+	for _ in $$(seq 1 200); do \
+		if epmd -names >/dev/null 2>&1; then epmd_ready=1; break; fi; \
+		sleep 0.01; \
+	done; \
+	if [ "$$epmd_ready" -ne 1 ]; then \
+		echo "test-fast: EPMD did not become ready"; \
+		exit 1; \
+	fi; \
 	log_dir=$$(mktemp -d "$${TMPDIR:-/tmp}/codex-pooler-test-fast.XXXXXX"); \
 	pids=(); \
 	logs=(); \

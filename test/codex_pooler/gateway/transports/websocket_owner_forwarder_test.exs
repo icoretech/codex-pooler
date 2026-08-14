@@ -26,8 +26,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   @timeouts %{connect_timeout_ms: 1_000, receive_timeout_ms: 1_000}
 
   setup_all do
-    started_epmd? = ensure_epmd_started!()
-    on_exit(fn -> if started_epmd?, do: stop_epmd!() end)
+    ensure_epmd_started!()
     :ok
   end
 
@@ -2263,11 +2262,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     else
       flunk("EPMD did not become ready: #{inspect(error)}")
     end
-  end
-
-  defp stop_epmd! do
-    assert {_output, 0} = System.cmd("epmd", ["-kill"], stderr_to_stdout: true)
-    :ok
   end
 
   defp previous_release_forwarder_beam(module) do
