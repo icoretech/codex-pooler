@@ -34,6 +34,11 @@ defmodule CodexPooler.MixProject do
       preferred_envs: [
         coverage: :test,
         precommit: :test,
+        quality: :test,
+        "quality.credo": :test,
+        "quality.dialyzer": :test,
+        "quality.security": :test,
+        "quality.xref": :test,
         six: :test,
         "six.detail": :test,
         "six.html": :test
@@ -122,9 +127,12 @@ defmodule CodexPooler.MixProject do
         "esbuild codex_pooler --minify",
         "phx.digest"
       ],
-      "quality.xref": ["xref graph --format plain --label compile-connected --fail-above 0"],
+      "quality.xref": [
+        "compile --warnings-as-errors",
+        "xref graph --format plain --label compile-connected --fail-above 0 --no-compile"
+      ],
       "quality.credo": ["credo --strict"],
-      "quality.dialyzer": ["dialyzer"],
+      "quality.dialyzer": ["compile --warnings-as-errors", "dialyzer --no-compile"],
       "quality.security": ["sobelow --exit --threshold medium --skip"],
       quality: ["quality.xref", "quality.credo", "quality.dialyzer", "quality.security"],
       coverage: ["test --cover"],
