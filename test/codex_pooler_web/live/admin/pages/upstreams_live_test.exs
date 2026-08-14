@@ -9,8 +9,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
 
-  alias CodexPooler.Accounts
   alias CodexPooler.Access.Invite
+  alias CodexPooler.Accounts
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Events
   alias CodexPooler.Events.Event
