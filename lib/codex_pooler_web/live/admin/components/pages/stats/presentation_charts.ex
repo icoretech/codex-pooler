@@ -10,8 +10,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
     "var(--color-secondary)",
     "var(--color-info)",
     "var(--color-success)",
-    "var(--color-warning)",
-    "var(--color-accent)"
+    "var(--color-warning)"
   ]
 
   attr :requests, :list, required: true
@@ -63,7 +62,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
             class="admin-apex-bar-chart admin-chart-mobile-wide w-full"
             phx-hook="ApexTimeSeriesChart"
             phx-update="ignore"
-            role="img"
+            role="group"
             aria-labelledby="stats-traffic-chart-title"
             aria-describedby="stats-traffic-chart-desc stats-traffic-chart-mode-description"
             data-chart-categories={@traffic_chart.categories}
@@ -135,7 +134,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
             class="admin-apex-bar-chart admin-chart-mobile-wide w-full"
             phx-hook="ApexTimeSeriesChart"
             phx-update="ignore"
-            role="img"
+            role="group"
             aria-labelledby="stats-token-cost-chart-title"
             aria-describedby="stats-token-cost-chart-desc stats-token-cost-chart-mode-description"
             data-chart-categories={@token_cost_chart.categories}
@@ -170,7 +169,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
           aria-label="Underlying interval values for Tokens vs cost"
         >
           <li :for={point <- @token_cost_chart.points}>
-            {point.label}: {point.total_tokens} tokens, {point.cached_input_tokens} cached input tokens, {Format.money_from_micros(
+            {point.label}: {point.total_tokens} tokens, {point.cached_input_tokens} cached input tokens, {point.standard_output_tokens} standard output tokens, {point.reasoning_tokens} reasoning tokens, {Format.money_from_micros(
               point.cost_micros
             )} cost
           </li>
@@ -213,7 +212,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
     token_total = Enum.reduce(points, 0, &(&1.tokens + &2))
     request_total = Enum.reduce(points, 0, &(&1.requests + &2))
 
-    "#{length(points)} time buckets with #{token_total} total tokens and #{request_total} total requests."
+    "#{length(points)} time buckets with #{token_total} total tokens and #{request_total} total requests. Requests counts every admitted request status. Other models, when present, combines positive-token usage outside the top five."
   end
 
   defp token_cost_chart_description(points) do
@@ -245,14 +244,14 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
           token_values = Enum.map(labels, &Map.get(tokens_by_label, &1, 0))
 
           {[%{name: "Tokens", type: "column", data: token_values}], token_values, "Tokens",
-           ["var(--color-primary)", "var(--color-info)"]}
+           ["var(--color-primary)", "var(--admin-chart-requests)"]}
 
         model_series ->
           token_values = model_series |> Enum.map(& &1.data) |> Enum.zip_with(&Enum.sum/1)
           model_names = Enum.map(model_series, & &1.name)
 
           {model_series, token_values, model_names,
-           Enum.take(@model_colors, length(model_series)) ++ ["var(--color-base-content)"]}
+           model_series_colors(model_series) ++ ["var(--admin-chart-requests)"]}
       end
 
     points =
@@ -324,13 +323,16 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
       Enum.map(labels, fn label ->
         token_row = Map.get(tokens_by_label, label, %{})
         cost_micros = Map.get(cost_by_label, label, 0)
+        output_tokens = chart_value(token_row, :output_tokens)
+        reasoning_tokens = min(chart_value(token_row, :reasoning_tokens), output_tokens)
 
         %{
           label: label,
           input_tokens: chart_value(token_row, :uncached_input_tokens),
           cached_input_tokens: chart_value(token_row, :cached_input_tokens),
-          output_tokens: chart_value(token_row, :output_tokens),
-          reasoning_tokens: chart_value(token_row, :reasoning_tokens),
+          output_tokens: output_tokens,
+          standard_output_tokens: output_tokens - reasoning_tokens,
+          reasoning_tokens: reasoning_tokens,
           total_tokens: chart_value(token_row, :total_tokens),
           cost_micros: cost_micros,
           cost_usd: micros_to_usd(cost_micros)
@@ -339,7 +341,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
 
     input_values = Enum.map(points, & &1.input_tokens)
     cached_input_values = Enum.map(points, & &1.cached_input_tokens)
-    output_values = Enum.map(points, & &1.output_tokens)
+    standard_output_values = Enum.map(points, & &1.standard_output_tokens)
     reasoning_values = Enum.map(points, & &1.reasoning_tokens)
     cost_values = Enum.map(points, & &1.cost_usd)
     token_total = points |> Enum.map(& &1.total_tokens) |> Enum.sum()
@@ -351,7 +353,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
         Jason.encode!([
           %{name: "Input", type: "column", data: input_values},
           %{name: "Cached input", type: "column", data: cached_input_values},
-          %{name: "Output", type: "column", data: output_values},
+          %{name: "Output (standard)", type: "column", data: standard_output_values},
           %{name: "Reasoning", type: "column", data: reasoning_values},
           %{name: "Cost", type: "line", data: cost_values}
         ]),
@@ -360,7 +362,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
       yaxis:
         Jason.encode!([
           %{
-            seriesName: ["Input", "Cached input", "Output", "Reasoning"],
+            seriesName: ["Input", "Cached input", "Output (standard)", "Reasoning"],
             title: "tokens",
             valueKind: "tokens"
           },
@@ -381,6 +383,7 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
   end
 
   defp chart_series_name(nil), do: ""
+  defp chart_series_name("Other"), do: "Other models"
 
   defp chart_series_name(value) do
     value
@@ -390,6 +393,18 @@ defmodule CodexPoolerWeb.Admin.StatsPresentation.Charts do
   end
 
   defp chart_value(row, key), do: max(Map.get(row, key) || 0, 0)
+
+  defp model_series_colors(model_series) do
+    model_series
+    |> Enum.with_index()
+    |> Enum.map(fn
+      {%{name: "Other models"}, _index} ->
+        "var(--admin-chart-other-models)"
+
+      {_series, index} ->
+        Enum.at(@model_colors, index, "var(--color-accent)")
+    end)
+  end
 
   defp micros_to_usd(micros) when is_integer(micros) do
     micros / 1_000_000

@@ -113,7 +113,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
     assert Enum.map(traffic_series, & &1["name"]) == [
              "model-a",
              "model-b",
-             "Other",
+             "Other models",
              "Requests"
            ]
 
@@ -137,7 +137,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
 
     assert component_chart_json_attribute(html, "data-chart-yaxis") == [
              %{
-               "seriesName" => ["model-a", "model-b", "Other"],
+               "seriesName" => ["model-a", "model-b", "Other models"],
                "title" => "tokens",
                "valueKind" => "tokens"
              },
@@ -246,6 +246,149 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
            ]
 
     refute html =~ "stats-model-usage-chart"
+  end
+
+  test "traffic charts explain semantic series and keep output stacks mutually exclusive" do
+    bucket = "2026-01-10T12:00:00Z"
+
+    html =
+      render_component(&StatsCharts.traffic_charts/1, %{
+        requests: [%{bucket: bucket, requests: 6}],
+        tokens: [
+          %{
+            bucket: bucket,
+            uncached_input_tokens: 7,
+            cached_input_tokens: 3,
+            output_tokens: 11,
+            reasoning_tokens: 4,
+            total_tokens: 21
+          }
+        ],
+        costs: [%{bucket: bucket, settled_cost_micros: 0}],
+        model_usage: [
+          %{bucket: bucket, model_code: "model-a", total_tokens: 13},
+          %{bucket: bucket, model_code: "Other", total_tokens: 8}
+        ]
+      })
+
+    assert component_chart_json_attribute(html, "data-chart-series") == [
+             %{"name" => "model-a", "type" => "column", "data" => [13]},
+             %{"name" => "Other models", "type" => "column", "data" => [8]},
+             %{"name" => "Requests", "type" => "line", "data" => [6]}
+           ]
+
+    assert component_chart_json_attribute(html, "data-chart-colors") == [
+             "var(--color-primary)",
+             "var(--admin-chart-other-models)",
+             "var(--admin-chart-requests)"
+           ]
+
+    assert component_chart_json_attribute(html, "data-chart-yaxis") == [
+             %{
+               "seriesName" => ["model-a", "Other models"],
+               "title" => "tokens",
+               "valueKind" => "tokens"
+             },
+             %{
+               "seriesName" => "Requests",
+               "title" => "requests",
+               "opposite" => true,
+               "valueKind" => "integer"
+             }
+           ]
+
+    assert component_chart_json_attribute(html, "data-chart-series")
+           |> Enum.map(& &1["name"]) == ["model-a", "Other models", "Requests"]
+
+    assert component_chart_attribute(html, "id", "stats-traffic-chart-semantics") == []
+    assert html =~ "Requests counts every admitted request status."
+
+    assert html =~
+             "Other models, when present, combines positive-token usage outside the top five."
+
+    assert component_chart_attribute(html, "role", "stats-traffic-chart-plot") == ["group"]
+    assert component_chart_attribute(html, "role", "stats-token-cost-chart-plot") == ["group"]
+
+    assert component_chart_json_attribute(html, "data-chart-series")
+           |> Enum.find(&(&1["name"] == "Requests"))
+           |> Map.fetch!("data") == [6]
+
+    token_series =
+      component_chart_json_attribute(html, "data-chart-series", "stats-token-cost-chart-plot")
+
+    assert Enum.map(token_series, & &1["name"]) == [
+             "Input",
+             "Cached input",
+             "Output (standard)",
+             "Reasoning",
+             "Cost"
+           ]
+
+    series_by_name = Map.new(token_series, &{&1["name"], &1["data"]})
+
+    assert series_by_name == %{
+             "Input" => [7],
+             "Cached input" => [3],
+             "Output (standard)" => [7],
+             "Reasoning" => [4],
+             "Cost" => [0.0]
+           }
+
+    assert Enum.zip_with(
+             series_by_name["Output (standard)"],
+             series_by_name["Reasoning"],
+             &+/2
+           ) == [11]
+
+    assert Enum.zip_with(
+             [
+               series_by_name["Input"],
+               series_by_name["Cached input"],
+               series_by_name["Output (standard)"],
+               series_by_name["Reasoning"]
+             ],
+             &Enum.sum/1
+           ) == [21]
+  end
+
+  test "token chart clamps invalid reasoning without adding to canonical output" do
+    buckets = ["2026-01-10T12:00:00Z", "2026-01-10T13:00:00Z"]
+
+    html =
+      render_component(&StatsCharts.traffic_charts/1, %{
+        requests: Enum.map(buckets, &%{bucket: &1, requests: 0}),
+        tokens: [
+          %{
+            bucket: Enum.at(buckets, 0),
+            uncached_input_tokens: 2,
+            cached_input_tokens: 0,
+            output_tokens: 5,
+            reasoning_tokens: -3,
+            total_tokens: 7
+          },
+          %{
+            bucket: Enum.at(buckets, 1),
+            uncached_input_tokens: 1,
+            cached_input_tokens: 1,
+            output_tokens: 4,
+            reasoning_tokens: 9,
+            total_tokens: 6
+          }
+        ],
+        costs: [],
+        model_usage: []
+      })
+
+    series =
+      component_chart_json_attribute(html, "data-chart-series", "stats-token-cost-chart-plot")
+
+    series_by_name = Map.new(series, &{&1["name"], &1["data"]})
+
+    assert series_by_name["Output (standard)"] == [5, 0]
+    assert series_by_name["Reasoning"] == [0, 4]
+
+    assert Enum.zip_with(series_by_name["Output (standard)"], series_by_name["Reasoning"], &+/2) ==
+             [5, 4]
   end
 
   describe "authenticated stats dashboard" do
@@ -877,7 +1020,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
                "gpt-ranked-3",
                "gpt-ranked-4",
                "gpt-ranked-5",
-               "Other",
+               "Other models",
                "Requests"
              ]
 
@@ -1831,14 +1974,25 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
   end
 
   defp component_chart_json_attribute(html, attribute) do
+    component_chart_json_attribute(html, attribute, "stats-traffic-chart-plot")
+  end
+
+  defp component_chart_json_attribute(html, attribute, chart_id) do
     html
     |> LazyHTML.from_fragment()
-    |> LazyHTML.query("#stats-traffic-chart-plot")
+    |> LazyHTML.query("##{chart_id}")
     |> LazyHTML.attribute(attribute)
     |> case do
       [value] -> Jason.decode!(value)
-      [] -> flunk("missing #{attribute} in Traffic chart HTML")
+      [] -> flunk("missing #{attribute} in #{chart_id} HTML")
     end
+  end
+
+  defp component_chart_attribute(html, attribute, chart_id) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query("##{chart_id}")
+    |> LazyHTML.attribute(attribute)
   end
 
   defp log_in_scoped_admin(conn, scope, assigned_pools) do

@@ -20,6 +20,8 @@ colors:
   reset-bank: "oklch(52% 0.22 295)"
   rank-gold: "oklch(78% 0.13 85)"
   rank-bronze: "oklch(62% 0.11 55)"
+  chart-other-models: "oklch(58% 0.15 315)"
+  chart-requests: "oklch(52% 0.13 210)"
 typography:
   page-title:
     fontFamily: "Roboto Condensed, ui-sans-serif, system-ui, sans-serif"
@@ -254,6 +256,13 @@ than decoration.
 - **Podium Gold** (`{colors.rank-gold}`) and **Podium Bronze**
   (`{colors.rank-bronze}`): leaderboard rank metals only. Theme-invariant, so
   first place reads the same in both themes.
+- **Other models** (`--admin-chart-other-models`): positive-token model usage
+  outside the ranked top five. It is a chart category, not an error or status.
+  Light uses `oklch(58% 0.15 315)`; dark uses `oklch(74% 0.12 315)`.
+- **Requests** (`--admin-chart-requests`): every admitted request status,
+  including failed, rejected, interrupted, cancelled, and in-progress traffic.
+  It is a volume series, not a success signal. Light uses
+  `oklch(52% 0.13 210)`; dark uses `oklch(72% 0.11 210)`.
 
 ### Neutral
 
@@ -1108,10 +1117,18 @@ verified live as the orange "Pro" / green "Free" pills.
   `data-chart-*` contract (categories/series/units/value-kinds/yaxis/colors/
   height/legend/stacked/zoom/mode-control...). Colors are CSS variables
   (`var(--color-primary)` etc.) so charts re-skin per theme.
+  Admin Stats binds `Other models` and `Requests` by semantic series name to
+  `--admin-chart-other-models` and `--admin-chart-requests`; fallback and
+  overflow ordering must never move those colors to another series. The token
+  stack is uncached input + cached input + `Output (standard)` + `Reasoning`,
+  where standard output is `max(output - reasoning, 0)` and displayed
+  reasoning is bounded to canonical output. Standard plus reasoning therefore
+  equals canonical output rather than double-counting it.
 - **Scroll ownership:** the plot sits in
   `data-role="chart-scroll-region"` (`overflow-x-auto overscroll-x-contain`);
   below `48rem` the plot keeps `min-width: 36rem` and scrolls inside the card.
-- **A11y:** the plot is `role="img"` labeled by an `sr-only` title and a
+- **A11y:** the plot is `role="group"` because Apex adds keyboard-operable
+  legend controls inside it. The group is labeled by an `sr-only` title and a
   description summarizing buckets/totals; an `sr-only` `<ul
   data-chart-source="interval">` mirrors every interval value; mode changes
   announce through an `aria-live="polite"` description.

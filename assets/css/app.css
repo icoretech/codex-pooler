@@ -54,6 +54,8 @@
   /* Banked-reset resource color: a stored charge, deliberately outside the
      status vocabulary (success/warning/error/info). */
   --color-reset-bank: oklch(78% 0.12 295);
+  --admin-chart-other-models: oklch(74% 0.12 315);
+  --admin-chart-requests: oklch(72% 0.11 210);
 }
 
 @plugin "daisyui/theme" {
@@ -91,6 +93,8 @@
   --noise: 0;
   /* Banked-reset resource color (see dark theme note). */
   --color-reset-bank: oklch(52% 0.22 295);
+  --admin-chart-other-models: oklch(58% 0.15 315);
+  --admin-chart-requests: oklch(52% 0.13 210);
 }
 
 /* Add variants based on LiveView classes */
