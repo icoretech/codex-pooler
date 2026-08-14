@@ -154,6 +154,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     assert has_element?(view, "#system-tab-mcp", "MCP")
     assert has_element?(view, "#system-tab-metrics", "Metrics")
     assert has_element?(view, "#system-tab-gateway", "Gateway")
+    assert has_element?(view, "#system-tab-firewall", "Firewall")
     refute has_element?(view, "#system-tab-development")
     assert has_element?(view, "#system-settings-panel")
     assert has_element?(view, "#system-settings-panel[data-selected-tab='smtp']")
@@ -181,16 +182,31 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     assert has_element?(gateway_view, "#system-tab-gateway[aria-selected='true']", "Gateway")
     assert has_element?(gateway_view, "#system-settings-panel[data-selected-tab='gateway']")
 
-    for group <- ~w(gateway ingress files transcription operator catalog) do
+    for group <- ~w(gateway operator catalog) do
       assert has_element?(gateway_view, "#instance-settings-#{group}-form")
       assert has_element?(gateway_view, "#instance-settings-#{group}-submit")
       assert has_element?(gateway_view, "#instance-settings-#{group}-errors")
       assert has_element?(gateway_view, "#instance-settings-#{group}-status")
     end
 
+    refute has_element?(gateway_view, "#instance-settings-files-form")
+    refute has_element?(gateway_view, "#instance-settings-transcription-form")
+
     refute has_element?(gateway_view, "#instance-settings-smtp-form")
     refute has_element?(gateway_view, "#instance-settings-mcp-form")
     refute has_element?(gateway_view, "#instance-settings-metrics-form")
+    refute has_element?(gateway_view, "#instance-settings-ingress-form")
+    refute has_element?(gateway_view, "#system-runtime-firewall-card")
+
+    {:ok, firewall_view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "firewall"}}")
+    assert has_element?(firewall_view, "#system-tab-firewall[aria-selected='true']", "Firewall")
+    assert has_element?(firewall_view, "#system-settings-panel[data-selected-tab='firewall']")
+    assert has_element?(firewall_view, "#system-runtime-firewall-card")
+    assert has_element?(firewall_view, "#instance-settings-ingress-form")
+    assert has_element?(firewall_view, "#instance-settings-ingress-submit")
+    assert has_element?(firewall_view, "#instance-settings-ingress-errors")
+    assert has_element?(firewall_view, "#instance-settings-ingress-status")
+    refute has_element?(firewall_view, "#instance-settings-gateway-form")
 
     {:ok, mcp_view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "mcp"}}")
     assert has_element?(mcp_view, "#system-tab-mcp[aria-selected='true']", "MCP")
@@ -225,10 +241,11 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     assert has_element?(
              view,
              "#instance-settings-bulkhead-preset-default[aria-pressed='true']",
-             "Default / small"
+             "Solo / Small"
            )
 
-    assert has_element?(view, "#instance-settings-bulkhead-preset-medium", "9-49 active")
+    assert has_element?(view, "#instance-settings-bulkhead-preset-default", "1-4 active")
+    assert has_element?(view, "#instance-settings-bulkhead-preset-medium", "5-49 active")
     assert has_element?(view, "#instance-settings-bulkhead-preset-large", "50+ active")
     refute has_element?(view, "#instance-settings-bulkhead-custom")
 
@@ -253,6 +270,213 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
            )
 
     assert has_element?(view, "#instance-settings-bulkhead-mobile-cue", "Swipe table for limits")
+
+    assert has_element?(
+             view,
+             "#instance-settings-bulkhead-preset-region + #instance-settings-bulkhead-mobile-cue + #instance-settings-bulkhead-scroll-region"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-bulkhead-notes",
+             "Route classes stay fixed"
+           )
+
+    refute has_element?(
+             view,
+             "#instance-settings-bulkhead-notes",
+             "Per-node starting points"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-bulkhead-group-supporting > th.border-t.border-base-300",
+             "Supporting lanes"
+           )
+  end
+
+  test "renders gateway limits with units and grouped default actions", %{conn: conn} do
+    assert {:ok, _settings} =
+             InstanceSettings.update_system_settings(InstanceSettings.ensure_singleton!(), %{
+               "gateway" => %{"upstream_connect_timeout_ms" => 12_345}
+             })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    assert has_element?(view, "#instance-settings-gateway-debug-region")
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-debug-region #instance-settings-gateway-debug"
+           )
+
+    refute has_element?(
+             view,
+             "#instance-settings-gateway-scalar-matrix #instance-settings-gateway-debug"
+           )
+
+    assert has_element?(view, "#instance-settings-gateway-scalar-matrix")
+    assert has_element?(view, "#instance-settings-gateway-scalar-group-streaming", "Streaming")
+
+    refute has_element?(
+             view,
+             "#instance-settings-gateway-scalar-group-streaming > th.border-t"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-scalar-group-upstream",
+             "Upstream timing"
+           )
+
+    assert has_element?(view, "#instance-settings-gateway-scalar-group-continuity", "Continuity")
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-scalar-group-circuit",
+             "Circuit recovery"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-scalar-group-files",
+             "File bridge"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-scalar-group-transcription",
+             "Audio transcription"
+           )
+
+    assert has_element?(
+             view,
+             "tbody[data-runtime-limit-group='circuit'] + tbody[data-runtime-limit-group='files'] + tbody[data-runtime-limit-group='transcription']"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-upstream-connect-timeout-ms[value='12345']"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-reset-upstream.btn-square[aria-label='Reset Upstream timing settings to their defaults'][title='Reset Upstream timing settings to their defaults']"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-scalar-group-continuity > th.border-t.border-base-300"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-scalar-group-circuit > th.border-t.border-base-300"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-unit-upstream-connect-timeout-ms",
+             "ms"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-file-max-size-bytes[name='instance_settings[files][max_size_bytes]']"
+           )
+
+    assert has_element?(view, "#instance-settings-gateway-unit-file-max-size-bytes", "bytes")
+
+    assert has_element?(
+             view,
+             "#instance-settings-transcription-max-upload-bytes[name='instance_settings[transcription][max_upload_bytes]']"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-unit-transcription-max-upload-bytes",
+             "bytes"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-scalar-mobile-cue",
+             "Swipe table for values"
+           )
+  end
+
+  test "validates a gateway scalar without treating LiveView bulkhead metadata as fields", %{
+    conn: conn
+  } do
+    settings = InstanceSettings.ensure_singleton!()
+    params = SystemSettingsForm.params_from_settings(settings)
+
+    gateway_params =
+      params["gateway"]
+      |> Map.put("sse_keepalive_interval_ms", "10001")
+      |> Map.update!("bulkheads", fn bulkheads ->
+        Map.new(bulkheads, fn {route_class, config} ->
+          live_view_config =
+            config
+            |> Map.new(fn {field, value} -> {field, to_string(value)} end)
+            |> Map.merge(%{
+              "_unused_max_concurrency" => "",
+              "_unused_queue_limit" => "",
+              "_unused_queue_timeout_ms" => ""
+            })
+
+          {route_class, live_view_config}
+        end)
+      end)
+
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    view
+    |> element("#instance-settings-gateway-form")
+    |> render_change(%{
+      "_target" => ["instance_settings", "gateway", "sse_keepalive_interval_ms"],
+      "instance_settings" => %{
+        "_group" => "gateway",
+        "lock_version" => Integer.to_string(settings.lock_version),
+        "gateway" => gateway_params
+      }
+    })
+
+    assert has_element?(view, "#instance-settings-sse-keepalive-interval-ms[value='10001']")
+    refute has_element?(view, "#instance-settings-gateway-errors li")
+  end
+
+  test "restores one gateway group without persisting until the card is saved", %{conn: conn} do
+    assert {:ok, _settings} =
+             InstanceSettings.update_system_settings(InstanceSettings.ensure_singleton!(), %{
+               "gateway" => %{
+                 "upstream_connect_timeout_ms" => 88_888,
+                 "upstream_pool_timeout_ms" => 99_999
+               }
+             })
+
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    render_click(element(view, "#instance-settings-gateway-reset-upstream"))
+
+    assert has_element?(view, "#instance-settings-upstream-connect-timeout-ms[value='15000']")
+    assert has_element?(view, "#instance-settings-upstream-pool-timeout-ms[value='15000']")
+    assert has_element?(view, "#instance-settings-upstream-receive-timeout-ms[value='300000']")
+    assert has_element?(view, "#instance-settings-gateway-status", "Unsaved changes")
+    assert InstanceSettings.get!().gateway.upstream_pool_timeout_ms == 99_999
+    assert InstanceSettings.get!().gateway.upstream_connect_timeout_ms == 88_888
+
+    view |> form("#instance-settings-gateway-form") |> render_submit()
+
+    assert InstanceSettings.get!().gateway.upstream_pool_timeout_ms == 15_000
+    assert InstanceSettings.get!().gateway.upstream_connect_timeout_ms == 15_000
+
+    {:ok, reloaded_view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    assert has_element?(
+             reloaded_view,
+             "#instance-settings-upstream-pool-timeout-ms[value='15000']"
+           )
   end
 
   test "applies a bulkhead preset, saves it, and reloads the persisted values", %{conn: conn} do
@@ -518,7 +742,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
                "ingress" => %{"firewall_allowlist" => ["198.51.100.0/24"]}
              })
 
-    {:ok, view, html} = live(conn, ~p"/admin/system")
+    {:ok, view, html} = live(conn, ~p"/admin/system?#{%{"tab" => "firewall"}}")
 
     assert has_element?(view, "#system-runtime-firewall-card")
 
@@ -530,7 +754,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
 
     assert has_element?(
              view,
-             "#system-current-session-ip[data-state='available']",
+             "#system-current-session-ip.text-xs[data-state='available']",
              "198.51.100.23"
            )
 
@@ -540,7 +764,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
   test "shows disabled firewall and a safe fallback without a recorded session IP", %{
     conn: conn
   } do
-    {:ok, view, _html} = live(conn, ~p"/admin/system")
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "firewall"}}")
 
     assert has_element?(
              view,
@@ -618,7 +842,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
       set: [ip_address: "2001:db8::7"]
     )
 
-    {:ok, view, _html} = live(conn, ~p"/admin/system")
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "firewall"}}")
 
     assert has_element?(
              view,
@@ -628,7 +852,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
   end
 
   test "updates the rendered firewall state after saving ingress settings", %{conn: conn} do
-    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "firewall"}}")
 
     assert has_element?(view, "#system-runtime-firewall-status[data-state='disabled']")
 
@@ -668,7 +892,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
       set: [ip_address: "198.51.100.44"]
     )
 
-    {:ok, view, _html} = live(conn, ~p"/admin/system")
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "firewall"}}")
 
     assert has_element?(view, "#system-current-session-ip", "198.51.100.44")
 
@@ -679,6 +903,10 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
 
     render_patch(view, ~p"/admin/system?#{%{"tab" => "gateway"}}")
 
+    refute has_element?(view, "#system-runtime-firewall-card")
+
+    render_patch(view, ~p"/admin/system?#{%{"tab" => "firewall"}}")
+
     assert has_element?(
              view,
              "#system-current-session-ip[data-state='unavailable']",
@@ -688,6 +916,10 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     refute render(view) =~ "198.51.100.44"
 
     render_patch(view, ~p"/admin/system?#{%{"tab" => "smtp"}}")
+
+    refute has_element?(view, "#system-runtime-firewall-card")
+
+    render_patch(view, ~p"/admin/system?#{%{"tab" => "firewall"}}")
 
     assert has_element?(
              view,
@@ -1226,16 +1458,25 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
   end
 
   test "renders operational hints and realistic IP placeholders", %{conn: conn} do
-    {:ok, view, html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+    {:ok, gateway_view, gateway_html} =
+      live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    {:ok, firewall_view, firewall_html} =
+      live(conn, ~p"/admin/system?#{%{"tab" => "firewall"}}")
 
     for selector <- [
           "#admin-system-live",
           "#system-tabs",
-          "#system-settings-panel",
+          "#system-settings-panel"
+        ] do
+      assert has_element?(gateway_view, selector)
+    end
+
+    for selector <- [
           "#instance-settings-ingress-form",
           "#instance-settings-ingress-submit"
         ] do
-      assert has_element?(view, selector)
+      assert has_element?(firewall_view, selector)
     end
 
     {:ok, smtp_view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "smtp"}}")
@@ -1250,21 +1491,21 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
           "172.16.0.0/12",
           "2001:db8:10::/48"
         ] do
-      assert html =~ placeholder
+      assert firewall_html =~ placeholder
     end
 
-    refute html =~ "198.51.100.10/32\\n203.0.113.0/24"
-    refute html =~ "Operator login URL"
-    assert html =~ "Public operator app URL"
-    assert html =~ "Operator emails append /login to this value."
-    assert has_element?(view, "#instance-settings-forwarded-client-ip-source")
-    assert has_element?(view, "#instance-settings-forwarded-proxy-depth")
+    refute firewall_html =~ "198.51.100.10/32\\n203.0.113.0/24"
+    refute gateway_html =~ "Operator login URL"
+    assert gateway_html =~ "Public operator app URL"
+    assert gateway_html =~ "Operator emails append /login to this value."
+    assert has_element?(firewall_view, "#instance-settings-forwarded-client-ip-source")
+    assert has_element?(firewall_view, "#instance-settings-forwarded-proxy-depth")
 
-    assert html =~
+    assert firewall_html =~
              "number of proxies between the internet and the pooler, including the one connected directly; 0 uses trusted-CIDR walking."
 
     for hint <- [
-          "Records sanitized request/attempt routing metadata for new gateway requests.",
+          "Adds sanitized request and routing details to gateway logs and attempt metadata for temporary troubleshooting. It increases log and stored-data volume; keep it disabled during normal production operation to minimize overhead.",
           "Interval for downstream SSE heartbeat events; 0 disables heartbeats.",
           "Maximum time allowed to establish a connection to an upstream account.",
           "Maximum time a gateway request may wait for an available pooled connection.",
@@ -1279,7 +1520,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
           "Each class has a separate per-node concurrency and queue budget.",
           "Model-specific context window sizes used when upstream metadata is missing or needs correction."
         ] do
-      assert html =~ hint
+      assert gateway_html =~ hint
     end
   end
 
@@ -1289,7 +1530,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
           {"x_real_ip", 0},
           {"x_forwarded_for", 2}
         ] do
-      {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+      {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "firewall"}}")
 
       saved_html =
         view
@@ -1309,7 +1550,8 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
       assert saved.ingress.forwarded_client_ip_source == String.to_existing_atom(source)
       assert saved.ingress.forwarded_proxy_depth == depth
 
-      {:ok, reloaded_view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+      {:ok, reloaded_view, _html} =
+        live(conn, ~p"/admin/system?#{%{"tab" => "firewall"}}")
 
       assert has_element?(
                reloaded_view,
@@ -1362,7 +1604,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
 
     assert json_response(denied, 403)["error"]["code"] == "access_denied"
 
-    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "firewall"}}")
 
     saved_html =
       view
@@ -1400,7 +1642,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
           {"x_real_ip", "1", "must be 0 unless forwarded client IP source is X-Forwarded-For"},
           {"x_forwarded_for", "17", "must be less than or equal to 16"}
         ] do
-      {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+      {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "firewall"}}")
 
       rejected_html =
         view
@@ -1503,13 +1745,24 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
              "must be greater than or equal to 60000"
            )
 
+    assert has_element?(
+             view,
+             "#instance-settings-websocket-owner-idle-timeout-ms[aria-invalid='true']"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-label-line-websocket-owner-idle-timeout-ms #instance-settings-websocket-owner-idle-timeout-ms-error",
+             "must be greater than or equal to 60000"
+           )
+
     persisted = InstanceSettings.get!()
     assert persisted.gateway.websocket_owner_idle_timeout_ms == 900_000
     assert persisted.gateway.websocket_idle_timeout_ms == 444_000
   end
 
   test "renders constrained compressed JSON encoding controls and help copy", %{conn: conn} do
-    {:ok, view, html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+    {:ok, view, html} = live(conn, ~p"/admin/system?#{%{"tab" => "firewall"}}")
 
     assert has_element?(view, "#instance-settings-decompression-algorithms")
 
@@ -1555,7 +1808,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
   end
 
   test "saves empty compressed JSON encoding selection through the ingress card", %{conn: conn} do
-    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "firewall"}}")
 
     html =
       view
@@ -1574,7 +1827,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
   end
 
   test "rejects unknown compressed JSON encodings even when posted outside the UI", %{conn: conn} do
-    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "firewall"}}")
 
     html =
       view
@@ -1623,45 +1876,55 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
            )
   end
 
-  test "saves one settings card with current scope attribution", %{conn: conn, user: user} do
+  test "saves gateway, file, and transcription limits as one card", %{conn: conn, user: user} do
     {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
 
     html =
       view
-      |> element("#instance-settings-files-form")
+      |> element("#instance-settings-gateway-form")
       |> render_submit(%{
         "instance_settings" => %{
-          "files" => %{"upload_ttl_seconds" => "321"}
+          "gateway" => %{"upstream_pool_timeout_ms" => "16000"},
+          "files" => %{"upload_ttl_seconds" => "321"},
+          "transcription" => %{"max_upload_bytes" => "30000000"}
         }
       })
 
-    assert html =~ "File bridge limits saved"
+    assert html =~ "Gateway controls saved"
     updated = InstanceSettings.get!()
+    assert updated.gateway.upstream_pool_timeout_ms == 16_000
     assert updated.files.upload_ttl_seconds == 321
+    assert updated.transcription.max_upload_bytes == 30_000_000
     assert updated.operator.login_base_url == "http://localhost"
     assert updated.updated_by_user_id == user.id
     assert has_element?(view, "#instance-settings-upload-ttl-seconds[value='321']")
-    assert has_element?(view, "#instance-settings-files-status", "Saved")
+    assert has_element?(view, "#instance-settings-gateway-status", "Saved")
 
     event = Repo.get_by!(AuditEvent, action: "instance_settings.update", actor_user_id: user.id)
-    assert get_in(event.details, ["changed_keys"]) == ["files.upload_ttl_seconds"]
+
+    assert get_in(event.details, ["changed_keys"]) == [
+             "files.upload_ttl_seconds",
+             "gateway.upstream_pool_timeout_ms",
+             "transcription.max_upload_bytes"
+           ]
   end
 
-  test "invalid card submit renders only that card changeset errors", %{conn: conn} do
+  test "invalid file limit renders in the composite gateway card", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
 
     html =
       view
-      |> element("#instance-settings-files-form")
+      |> element("#instance-settings-gateway-form")
       |> render_submit(%{
         "instance_settings" => %{
           "files" => %{"upload_ttl_seconds" => "-1"}
         }
       })
 
-    assert html =~ "File bridge limits could not be saved"
-    assert has_element?(view, "#instance-settings-files-errors")
-    assert has_element?(view, "#instance-settings-files-errors", "must be greater than 0")
+    assert html =~ "Gateway controls could not be saved"
+    assert has_element?(view, "#instance-settings-gateway-errors")
+    assert has_element?(view, "#instance-settings-gateway-errors", "must be greater than 0")
+    assert has_element?(view, "#instance-settings-upload-ttl-seconds[aria-invalid='true']")
     refute has_element?(view, "#instance-settings-operator-errors", "has invalid format")
 
     refute has_element?(
@@ -1735,6 +1998,8 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
       }
     })
 
+    select_system_tab(view, "firewall")
+
     html =
       view
       |> element("#instance-settings-ingress-form")
@@ -1798,7 +2063,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
 
     html =
       view
-      |> element("#instance-settings-files-form")
+      |> element("#instance-settings-gateway-form")
       |> render_submit(%{
         "instance_settings" => %{
           "lock_version" => stale.lock_version,
@@ -1810,7 +2075,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
 
     assert has_element?(
              view,
-             "#instance-settings-files-errors",
+             "#instance-settings-gateway-errors",
              "was updated by another operator"
            )
 
@@ -1875,7 +2140,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     select_system_tab(remounted_view, "gateway")
 
     remounted_view
-    |> element("#instance-settings-files-form")
+    |> element("#instance-settings-gateway-form")
     |> render_submit(%{
       "instance_settings" => %{
         "files" => %{"upload_ttl_seconds" => "654"}

@@ -1125,6 +1125,70 @@ verified live as the orange "Pro" / green "Free" pills.
 </div>
 ```
 
+### Firewall system tab
+
+- **Source:** `cards/1` in
+  [`firewall.ex`](lib/codex_pooler_web/live/admin/components/pages/system/page_components/firewall.ex),
+  selected through the shared system tab picker in
+  [`page_components.ex`](lib/codex_pooler_web/live/admin/components/pages/system/page_components.ex).
+- **Purpose:** gives runtime ingress policy its own focused workspace instead
+  of leaving firewall state above every system tab or mixing ingress controls
+  into Gateway. Gateway keeps routing, transport, file, operator, and catalog
+  settings; Firewall owns the current policy summary and the complete ingress
+  form.
+- **Anatomy:** the first surface is a compact visibility card with policy state
+  and the current authenticated session IP. The second surface is the existing
+  settings card for allowlist CIDRs, trusted proxies, forwarded-client policy,
+  and compressed-body limits. Both follow the normal system card density,
+  typography, border, status, validation, and save-action contracts.
+- **State isolation:** the visibility card reflects persisted ingress state;
+  edits and validation remain scoped to the `ingress` form and are not allowed
+  to validate or overwrite Gateway fields. The card updates after a successful
+  ingress save and is absent from every other tab.
+- **Responsive:** tab navigation wraps through the shared picker when needed;
+  the visibility facts stack below the description on narrow screens, while
+  the ingress controls retain their established one-, two-, and three-column
+  breakpoints.
+
+### Gateway runtime limits matrix
+
+- **Source:** `matrix/1` in
+  [`gateway_settings_matrix.ex`](lib/codex_pooler_web/live/admin/components/pages/system/page_components/gateway_settings_matrix.ex),
+  with canonical reference values from
+  [`defaults.ex`](lib/codex_pooler/instance_settings/defaults.ex).
+- **Purpose:** replaces the loose gateway scalar grid with one grouped matrix
+  whose compound value control combines the numeric input and its unit. File
+  bridge and audio transcription limits belong to this same runtime surface,
+  immediately after circuit recovery, instead of living in separate cards.
+  Each row-group header exposes one right-aligned reset action for loading the
+  canonical defaults of the settings below it. The
+  gateway debug toggle remains a separate control because it is a behavior
+  switch, not a numeric limit.
+- **Anatomy:** a normal `text-sm` heading and help text, a two-column matrix
+  (`Setting`, `Current value`), and six operational row groups: streaming,
+  upstream timing, continuity, circuit recovery, file bridge, and audio
+  transcription. Setting names and descriptions use body type. Each value uses
+  the existing daisy input-shell recipe with the native number input and a
+  bordered unit segment. Each group header owns the sole top hairline on its
+  spanning cell, so the separator remains visible without doubling across table
+  rendering modes. Reset is an icon-only square action, vertically centered in
+  the group header, with its group-specific name retained in the tooltip and
+  accessible label rather than repeated as visible text in every header.
+- **States:** the same `FormField` instances, ids, changeset errors, card-level
+  summary, unsaved status, and submit path used by the former scalar grid stay
+  authoritative. The Gateway card is one persistence boundary for `gateway`,
+  `files`, and `transcription`: one validation pass, stale check, save action,
+  and reload updates the complete visible matrix. Native minimum/maximum
+  attributes mirror the server-side numeric constraints without replacing them.
+- **Responsive and scroll ownership:** the matrix owns horizontal overflow in
+  `instance-settings-gateway-scalar-scroll-region`; the page never scrolls
+  horizontally. Phones show the explicit `Swipe table for values`
+  continuation cue.
+- **Accessibility:** row headers describe every value, each current-value input
+  has a stable id and accessible name, reset buttons name the affected group,
+  and validation appears beside the setting name as text plus color. Native
+  number steppers remain available.
+
 ### Route-class bulkhead editor
 
 - **Source:** `editor/1` in
@@ -1136,14 +1200,19 @@ verified live as the orange "Pro" / green "Free" pills.
   queue length, and timeout without changing route keys or JSON structure.
 - **Anatomy:** a normal `text-sm` field heading and help text, a three-choice
   preset selector, a horizontally scrollable four-column matrix, inline field
-  errors, and one fixed-key reminder. Route names use body type; monospace is
-  reserved for the numeric inputs, following the Mono-Is-Data rule.
-- **Presets:** Default / small, Medium, and Large set concurrency and queue
-  limits from the runtime defaults. They preserve every timeout and leave the
-  reserved control-plane lane unchanged. Manual edits to preset-controlled
-  concurrency or queue values produce a neutral `Custom values` badge; timeout
-  edits remain independent of the capacity preset. No hidden preset state is
-  persisted.
+  errors, and one compact constraint note immediately above the matrix for fixed
+  route keys and numeric limits. Route names and numeric inputs use the shared
+  admin form type so bulkhead values match every other editable number;
+  monospace remains reserved for read-only identifiers and diffable metadata.
+  Each row-group header puts the sole top hairline on the spanning header cell
+  so the boundary remains explicit after the preceding data row without a
+  second border on the group row.
+- **Presets:** Solo / Small (1-4 active users), Medium (5-49), and Large (50+)
+  set concurrency and queue limits from the runtime defaults. They preserve
+  every timeout and leave the reserved control-plane lane unchanged. Manual
+  edits to preset-controlled concurrency or queue values produce a neutral
+  `Custom values` badge; timeout edits remain independent of the capacity
+  preset. No hidden preset state is persisted.
 - **States:** selected presets use the primary selected-state wash; hover and
   focus use existing control transitions; invalid inputs use `input-error`,
   `aria-invalid`, an associated error line, and the card-level error summary.

@@ -3,7 +3,14 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents do
 
   use CodexPoolerWeb, :html
 
-  alias CodexPoolerWeb.Admin.SystemPageComponents.{Development, Gateway, MCP, Metrics, SMTP}
+  alias CodexPoolerWeb.Admin.SystemPageComponents.{
+    Development,
+    Firewall,
+    Gateway,
+    MCP,
+    Metrics,
+    SMTP
+  }
 
   attr :tabs, :list, required: true
   attr :selected_tab, :string, required: true
@@ -44,6 +51,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents do
   attr :development_helpers_available?, :boolean, required: true
   attr :impeccable_live_status, :any, default: :unavailable
   attr :datetime_preferences, :map, required: true
+  attr :current_session_ip, :string, default: nil
 
   def instance_settings_panel(assigns) do
     ~H"""
@@ -54,6 +62,14 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents do
         form_params={@form_params}
         settings={@settings}
         card_statuses={@card_statuses}
+      />
+      <Firewall.cards
+        selected_tab={@selected_tab}
+        forms={@forms}
+        form_params={@form_params}
+        settings={@settings}
+        card_statuses={@card_statuses}
+        current_session_ip={@current_session_ip}
       />
       <Development.card
         selected_tab={@selected_tab}

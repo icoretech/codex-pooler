@@ -4,8 +4,8 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.BulkheadEditor do
   use CodexPoolerWeb, :html
 
   @presets [
-    %{id: :default, label: "Default / small", range: "1-8 active"},
-    %{id: :medium, label: "Medium", range: "9-49 active"},
+    %{id: :default, label: "Solo / Small", range: "1-4 active"},
+    %{id: :medium, label: "Medium", range: "5-49 active"},
     %{id: :large, label: "Large", range: "50+ active"}
   ]
 
@@ -93,7 +93,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.BulkheadEditor do
         </span>
       </div>
 
-      <div class="grid gap-2">
+      <div id="instance-settings-bulkhead-preset-region" class="grid gap-2">
         <div
           id="instance-settings-bulkhead-presets"
           class="grid gap-1 rounded-field border border-base-300 bg-base-200/60 p-1 sm:grid-cols-3"
@@ -119,8 +119,11 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.BulkheadEditor do
             <span class="text-[11px] leading-4 text-base-content/55">{preset.range}</span>
           </button>
         </div>
-        <p class="text-xs leading-5 text-base-content/55">
-          Per-node starting points. Presets change concurrency and queue only; benchmark before rollout.
+        <p
+          id="instance-settings-bulkhead-notes"
+          class="text-xs leading-5 text-base-content/55"
+        >
+          Route classes stay fixed. Max concurrent and timeout must be at least 1; queue limit may be 0.
         </p>
       </div>
 
@@ -145,29 +148,34 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.BulkheadEditor do
               <th scope="col" class="min-w-24">Timeout (ms)</th>
             </tr>
           </thead>
-          <.bulkhead_group label="Gateway traffic" rows={@gateway_rows} />
-          <.bulkhead_group label="Supporting lanes" rows={@supporting_rows} />
+          <.bulkhead_group
+            id="instance-settings-bulkhead-group-gateway"
+            label="Gateway traffic"
+            rows={@gateway_rows}
+          />
+          <.bulkhead_group
+            id="instance-settings-bulkhead-group-supporting"
+            label="Supporting lanes"
+            rows={@supporting_rows}
+          />
         </table>
       </div>
-
-      <p class="text-xs leading-5 text-base-content/55">
-        Route classes stay fixed. Max concurrent and timeout must be at least 1; queue limit may be 0.
-      </p>
     </section>
     """
   end
 
+  attr :id, :string, required: true
   attr :label, :string, required: true
   attr :rows, :list, required: true
 
   defp bulkhead_group(assigns) do
     ~H"""
     <tbody>
-      <tr class="border-y border-base-300 bg-base-200/65">
+      <tr id={@id} class="bg-base-200/65">
         <th
           scope="rowgroup"
           colspan="4"
-          class="py-2 text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/50"
+          class="border-t border-base-300 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/50"
         >
           {@label}
         </th>
@@ -199,7 +207,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.BulkheadEditor do
             aria-invalid={to_string(!field.valid?)}
             aria-describedby={if field.valid?, do: nil, else: "#{field.id}-error"}
             class={[
-              "input input-sm w-full min-w-20 font-mono tabular-nums",
+              "input input-sm w-full min-w-20",
               !field.valid? && "input-error"
             ]}
           />
