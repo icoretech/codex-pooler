@@ -74,7 +74,7 @@ defmodule CodexPooler.InstanceSettingsSecurityTest do
 
     html =
       view
-      |> element("#instance-settings-files-form")
+      |> element("#instance-settings-gateway-form")
       |> render_submit(%{
         "instance_settings" => %{
           "files" => %{"upload_ttl_seconds" => "900"}
