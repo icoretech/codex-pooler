@@ -3145,87 +3145,53 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     setup = gateway_setup(upstream, supported_compression_model_opts())
     enable_request_compression!(setup.pool)
-    {server, port} = start_public_endpoint_with_server!()
-    temp_root = Path.join(System.tmp_dir!(), "task-9b-curl-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(temp_root)
-    File.chmod!(temp_root, 0o700)
-
-    on_exit(fn ->
-      if Process.alive?(server) do
-        try do
-          GenServer.stop(server)
-        catch
-          :exit, _reason -> :ok
-        end
-      end
-
-      File.rm_rf!(temp_root)
-    end)
+    {_server, port} = start_public_endpoint_with_server!()
 
     schema_bound_output = Jason.encode!(%{"rows" => Enum.to_list(1..160)}, pretty: true)
     unbound_output = Jason.encode!(%{"rows" => Enum.to_list(161..320)}, pretty: true)
 
-    request_body =
-      Jason.encode!(%{
-        "model" => setup.model.exposed_model_id,
-        "tools" => [
-          %{
-            "type" => "function",
-            "name" => "schema_bound_curl_fixture",
-            "output_schema" => %{"type" => "object"}
-          },
-          %{"type" => "function", "name" => "unbound_curl_fixture"}
-        ],
-        "input" => [
-          %{
-            "type" => "function_call",
-            "call_id" => "call_curl_schema_bound",
-            "name" => "schema_bound_curl_fixture",
-            "arguments" => "{}"
-          },
-          %{
-            "type" => "function_call",
-            "call_id" => "call_curl_unbound",
-            "name" => "unbound_curl_fixture",
-            "arguments" => "{}"
-          },
-          %{
-            "type" => "function_call_output",
-            "call_id" => "call_curl_schema_bound",
-            "output" => schema_bound_output
-          },
-          %{
-            "type" => "function_call_output",
-            "call_id" => "call_curl_unbound",
-            "output" => unbound_output
-          }
-        ]
-      })
-
-    request_path = Path.join(temp_root, "request.json")
-    curl_config_path = Path.join(temp_root, "curl.conf")
-    File.write!(request_path, request_body)
-
-    File.write!(
-      curl_config_path,
-      "url = \"http://127.0.0.1:#{port}/backend-api/codex/responses\"\n" <>
-        "request = \"POST\"\n" <>
-        "header = \"content-type: application/json\"\n" <>
-        "header = \"authorization: #{setup.authorization}\"\n" <>
-        "data-binary = \"@#{request_path}\"\n"
-    )
-
-    File.chmod!(request_path, 0o600)
-    File.chmod!(curl_config_path, 0o600)
-
-    {curl_output, 0} =
-      System.cmd(
-        "curl",
-        ["-i", "--silent", "--show-error", "--max-time", "10", "--config", curl_config_path],
-        stderr_to_stdout: true
+    {headers, _response_body} =
+      curl_json_request!(
+        port,
+        setup.authorization,
+        %{
+          "model" => setup.model.exposed_model_id,
+          "tools" => [
+            %{
+              "type" => "function",
+              "name" => "schema_bound_curl_fixture",
+              "output_schema" => %{"type" => "object"}
+            },
+            %{"type" => "function", "name" => "unbound_curl_fixture"}
+          ],
+          "input" => [
+            %{
+              "type" => "function_call",
+              "call_id" => "call_curl_schema_bound",
+              "name" => "schema_bound_curl_fixture",
+              "arguments" => "{}"
+            },
+            %{
+              "type" => "function_call",
+              "call_id" => "call_curl_unbound",
+              "name" => "unbound_curl_fixture",
+              "arguments" => "{}"
+            },
+            %{
+              "type" => "function_call_output",
+              "call_id" => "call_curl_schema_bound",
+              "output" => schema_bound_output
+            },
+            %{
+              "type" => "function_call_output",
+              "call_id" => "call_curl_unbound",
+              "output" => unbound_output
+            }
+          ]
+        }
       )
 
-    assert String.starts_with?(curl_output, "HTTP/1.1 200")
+    assert String.starts_with?(headers, "HTTP/1.1 200")
     assert [captured] = FakeUpstream.requests(upstream)
     assert FakeUpstream.http_request_count(upstream) == 1
 

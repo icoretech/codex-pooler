@@ -156,58 +156,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       )
 
     setup = gateway_setup(upstream, compact?: true)
-    {server, port} = start_public_endpoint_with_server!()
+    {_server, port} = start_public_endpoint_with_server!()
 
-    temp_root =
-      Path.join(System.tmp_dir!(), "compaction-v2-curl-#{System.unique_integer([:positive])}")
-
-    File.mkdir_p!(temp_root)
-    File.chmod!(temp_root, 0o700)
-
-    on_exit(fn ->
-      if Process.alive?(server) do
-        try do
-          GenServer.stop(server)
-        catch
-          :exit, _reason -> :ok
-        end
-      end
-
-      File.rm_rf!(temp_root)
-    end)
-
-    request_path = Path.join(temp_root, "request.json")
-    curl_config_path = Path.join(temp_root, "curl.conf")
-
-    File.write!(
-      request_path,
-      Jason.encode!(%{
-        "model" => setup.model.exposed_model_id,
-        "input" => visible_input(prompt_text) ++ [compaction_trigger()],
-        "stream" => true
-      })
-    )
-
-    File.write!(
-      curl_config_path,
-      "url = \"http://127.0.0.1:#{port}/backend-api/codex/responses\"\n" <>
-        "request = \"POST\"\n" <>
-        "header = \"content-type: application/json\"\n" <>
-        "header = \"authorization: #{setup.authorization}\"\n" <>
-        "data-binary = \"@#{request_path}\"\n"
-    )
-
-    File.chmod!(request_path, 0o600)
-    File.chmod!(curl_config_path, 0o600)
-
-    {curl_output, 0} =
-      System.cmd(
-        "curl",
-        ["-i", "--silent", "--show-error", "--max-time", "10", "--config", curl_config_path],
-        stderr_to_stdout: true
+    {headers, response_body} =
+      curl_json_request!(
+        port,
+        setup.authorization,
+        %{
+          "model" => setup.model.exposed_model_id,
+          "input" => visible_input(prompt_text) ++ [compaction_trigger()],
+          "stream" => true
+        }
       )
 
-    assert [headers, response_body] = String.split(curl_output, "\r\n\r\n", parts: 2)
     assert String.starts_with?(headers, "HTTP/1.1 200")
     assert String.downcase(headers) =~ "content-type: text/event-stream"
 
@@ -252,61 +213,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     upstream = start_upstream(FakeUpstream.json_response(%{"error" => provider_error}, 400))
     setup = gateway_setup(upstream, compact?: true)
     put_compact_model_serving_mode!(setup, "full")
-    {server, port} = start_public_endpoint_with_server!()
+    {_server, port} = start_public_endpoint_with_server!()
 
-    temp_root =
-      Path.join(
-        System.tmp_dir!(),
-        "compaction-v2-full-curl-#{System.unique_integer([:positive])}"
+    {headers, response_body} =
+      curl_json_request!(
+        port,
+        setup.authorization,
+        %{
+          "model" => setup.model.exposed_model_id,
+          "input" => [compaction_trigger()],
+          "stream" => true
+        }
       )
 
-    File.mkdir_p!(temp_root)
-    File.chmod!(temp_root, 0o700)
-
-    on_exit(fn ->
-      if Process.alive?(server) do
-        try do
-          GenServer.stop(server)
-        catch
-          :exit, _reason -> :ok
-        end
-      end
-
-      File.rm_rf!(temp_root)
-    end)
-
-    request_path = Path.join(temp_root, "request.json")
-    curl_config_path = Path.join(temp_root, "curl.conf")
-
-    File.write!(
-      request_path,
-      Jason.encode!(%{
-        "model" => setup.model.exposed_model_id,
-        "input" => [compaction_trigger()],
-        "stream" => true
-      })
-    )
-
-    File.write!(
-      curl_config_path,
-      "url = \"http://127.0.0.1:#{port}/backend-api/codex/responses\"\n" <>
-        "request = \"POST\"\n" <>
-        "header = \"content-type: application/json\"\n" <>
-        "header = \"authorization: #{setup.authorization}\"\n" <>
-        "data-binary = \"@#{request_path}\"\n"
-    )
-
-    File.chmod!(request_path, 0o600)
-    File.chmod!(curl_config_path, 0o600)
-
-    {curl_output, 0} =
-      System.cmd(
-        "curl",
-        ["-i", "--silent", "--show-error", "--max-time", "10", "--config", curl_config_path],
-        stderr_to_stdout: true
-      )
-
-    assert [headers, response_body] = String.split(curl_output, "\r\n\r\n", parts: 2)
     assert String.starts_with?(headers, "HTTP/1.1 400")
     assert %{"error" => ^provider_error} = Jason.decode!(response_body)
     refute response_body =~ "event:"

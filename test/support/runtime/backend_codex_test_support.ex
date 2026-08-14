@@ -978,6 +978,50 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
     port
   end
 
+  @spec curl_json_request!(pos_integer(), String.t(), map(), String.t()) ::
+          {String.t(), String.t()}
+  def curl_json_request!(
+        port,
+        authorization,
+        request_body,
+        path \\ "/backend-api/codex/responses"
+      ) do
+    temp_root =
+      Path.join(System.tmp_dir!(), "backend-codex-curl-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(temp_root)
+    File.chmod!(temp_root, 0o700)
+    on_exit(fn -> File.rm_rf!(temp_root) end)
+
+    request_path = Path.join(temp_root, "request.json")
+    curl_config_path = Path.join(temp_root, "curl.conf")
+
+    File.write!(request_path, Jason.encode!(request_body))
+
+    File.write!(
+      curl_config_path,
+      "url = \"http://127.0.0.1:#{port}#{path}\"\n" <>
+        "request = \"POST\"\n" <>
+        "header = \"content-type: application/json\"\n" <>
+        "header = \"authorization: #{authorization}\"\n" <>
+        "data-binary = \"@#{request_path}\"\n"
+    )
+
+    File.chmod!(request_path, 0o600)
+    File.chmod!(curl_config_path, 0o600)
+
+    {curl_output, exit_code} =
+      System.cmd(
+        "curl",
+        ["-i", "--silent", "--show-error", "--max-time", "10", "--config", curl_config_path],
+        stderr_to_stdout: true
+      )
+
+    assert exit_code == 0
+    assert [headers, response_body] = String.split(curl_output, "\r\n\r\n", parts: 2)
+    {headers, response_body}
+  end
+
   def start_public_endpoint_with_server! do
     {:ok, server} =
       Bandit.start_link(
