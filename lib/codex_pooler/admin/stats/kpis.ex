@@ -3,7 +3,6 @@ defmodule CodexPooler.Admin.Stats.Kpis do
 
   alias CodexPooler.Admin.Stats.Aggregates
 
-  @succeeded "succeeded"
   @failed_statuses ~w(failed rejected interrupted cancelled)
 
   @type cache_rate_kpi :: %{
@@ -21,21 +20,21 @@ defmodule CodexPooler.Admin.Stats.Kpis do
         }
 
   @spec request_kpi([map()]) :: map()
-  def request_kpi(requests) do
+  def request_kpi(request_buckets) do
     %{
-      value: length(requests),
-      succeeded: Enum.count(requests, &(&1.status == @succeeded)),
-      failed: Enum.count(requests, &(&1.status in @failed_statuses)),
-      in_progress: Enum.count(requests, &(&1.status == "in_progress"))
+      value: Aggregates.sum_integer(request_buckets, :requests),
+      succeeded: Aggregates.sum_integer(request_buckets, :succeeded),
+      failed: Aggregates.sum_integer(request_buckets, :failed),
+      in_progress: Aggregates.sum_integer(request_buckets, :in_progress)
     }
   end
 
   @spec success_rate_kpi([map()]) :: map()
   def success_rate_kpi([]), do: %{value: nil, unit: "percent"}
 
-  def success_rate_kpi(requests) do
-    succeeded = Enum.count(requests, &(&1.status == @succeeded))
-    %{value: Aggregates.percentage(succeeded, length(requests)), unit: "percent"}
+  def success_rate_kpi(request_buckets) do
+    requests = request_kpi(request_buckets)
+    %{value: Aggregates.percentage(requests.succeeded, requests.value), unit: "percent"}
   end
 
   @spec token_kpi([map()]) :: map()
@@ -104,7 +103,7 @@ defmodule CodexPooler.Admin.Stats.Kpis do
   def turn_kpi(turns) do
     %{
       value: length(turns),
-      succeeded: Enum.count(turns, &(&1.status == @succeeded)),
+      succeeded: Enum.count(turns, &(&1.status == "succeeded")),
       failed: Enum.count(turns, &(&1.status in @failed_statuses)),
       in_progress: Enum.count(turns, &(&1.status == "in_progress"))
     }

@@ -115,11 +115,20 @@ defmodule CodexPooler.Admin.Stats do
   @spec build_dashboard_for_pool_ids(Filters.normalized(), [Pools.Pool.t()], [Ecto.UUID.t()]) ::
           {:ok, dashboard()}
   defp build_dashboard_for_pool_ids(normalized, pools, pool_ids) do
-    requests =
-      GatewayReadModel.requests_for_pool_ids(
+    request_buckets =
+      GatewayReadModel.stats_request_status_buckets_for_pool_ids(
         pool_ids,
         normalized.started_at,
-        normalized.ended_at
+        normalized.ended_at,
+        request_bucket_granularity(normalized.window)
+      )
+
+    recent_failures =
+      GatewayReadModel.recent_failures_for_pool_ids(
+        pool_ids,
+        normalized.started_at,
+        normalized.ended_at,
+        5
       )
 
     attempts =
@@ -173,13 +182,14 @@ defmodule CodexPooler.Admin.Stats do
 
     quota_summary = Quota.ReadModel.summary(quota_accounts)
     tokens = Kpis.token_kpi(settlements)
+    request_kpi = Kpis.request_kpi(request_buckets)
 
     dashboard = %{
       filters: Filters.public(normalized, pools),
       selected_pool: Filters.pool_summary(normalized.selected_pool),
       kpis: %{
-        requests: Kpis.request_kpi(requests),
-        success_rate: Kpis.success_rate_kpi(requests),
+        requests: request_kpi,
+        success_rate: Kpis.success_rate_kpi(request_buckets),
         tokens: tokens,
         cache_rate: Kpis.cache_rate_kpi(tokens),
         tokens_per_second: Kpis.tokens_per_second_kpi(settlements, attempts),
@@ -191,12 +201,12 @@ defmodule CodexPooler.Admin.Stats do
       tables: %{
         top_api_keys: Tables.top_api_keys(settlements, pools),
         upstreams: Tables.upstream_table(settlements, quota_accounts),
-        recent_failures: Tables.recent_failures(requests),
+        recent_failures: recent_failures,
         daily_rollups: Tables.daily_rollup_table(daily_rollups),
         recent_activity: recent_activity
       },
       charts: %{
-        requests: Charts.request_series(requests, chart_context),
+        requests: Charts.request_series(request_buckets, chart_context),
         tokens: Charts.token_series(settlements, chart_context),
         settled_cost: Charts.cost_series(settlements, chart_context),
         model_usage: model_usage
@@ -207,7 +217,7 @@ defmodule CodexPooler.Admin.Stats do
       },
       sources:
         SourceSummary.build(
-          requests,
+          request_kpi.value,
           attempts,
           settlements,
           daily_rollups,
@@ -215,8 +225,13 @@ defmodule CodexPooler.Admin.Stats do
           activity_counts,
           model_usage_report.source,
           length(model_usage)
-        ),
-      empty_states: EmptyStates.build(requests, settlements, quota_accounts)
+        )
+        |> Map.merge(%{
+          model_usage_rollup_source: model_usage_report.rollup_source,
+          model_usage_edge_source: model_usage_report.edge_source,
+          model_usage_confidence: model_usage_report.confidence
+        }),
+      empty_states: EmptyStates.build(request_kpi.value, settlements, quota_accounts)
     }
 
     {:ok, dashboard}
@@ -226,9 +241,13 @@ defmodule CodexPooler.Admin.Stats do
   defp chart_context(normalized) do
     %{
       window: normalized.window,
+      started_at: normalized.started_at,
       ended_at: normalized.ended_at
     }
   end
+
+  defp request_bucket_granularity(:seven_days), do: :day
+  defp request_bucket_granularity(_window), do: :hour
 
   @spec empty_dashboard(Filters.normalized(), [Pools.Pool.t()]) :: dashboard()
   defp empty_dashboard(normalized, pools) do
@@ -266,7 +285,7 @@ defmodule CodexPooler.Admin.Stats do
         summary: quota_summary,
         accounts: []
       },
-      sources: SourceSummary.build([], [], [], [], [], %{audit_events: 0, jobs: 0}, nil, 0),
+      sources: SourceSummary.build(0, [], [], [], [], %{audit_events: 0, jobs: 0}, nil, 0),
       empty_states: [
         %{
           code: :no_reporting_pools,

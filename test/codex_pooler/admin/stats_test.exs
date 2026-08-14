@@ -8,7 +8,9 @@ defmodule CodexPooler.Admin.StatsTest do
 
   alias CodexPooler.Accounting.DailyRollup
   alias CodexPooler.Accounts.Scope
+  alias CodexPooler.Admin.GatewayReadModel
   alias CodexPooler.Admin.Stats
+  alias CodexPooler.Admin.Stats.Buckets
   alias CodexPooler.Admin.Stats.Kpis
   alias CodexPooler.Admin.Stats.Tables
   alias CodexPooler.Audit
@@ -321,7 +323,7 @@ defmodule CodexPooler.Admin.StatsTest do
     assert [%{error_code: "upstream_rate_limited", status: "failed"}] =
              dashboard.tables.recent_failures
 
-    assert Enum.count(dashboard.charts.requests) == 24
+    assert Enum.count(dashboard.charts.requests) == 25
 
     assert Enum.any?(
              dashboard.charts.tokens,
@@ -347,6 +349,318 @@ defmodule CodexPooler.Admin.StatsTest do
     assert Enum.any?(dashboard.tables.recent_activity, &(&1.type == :audit_event))
     assert Enum.any?(dashboard.tables.recent_activity, &(&1.type == :job))
     refute inspect(dashboard.tables.recent_activity) =~ "Bearer hidden"
+  end
+
+  test "stats request projection preserves exact bounds and all admitted status totals" do
+    first_pool = pool_fixture(%{slug: "stats-request-projection-a"})
+    second_pool = pool_fixture(%{slug: "stats-request-projection-b"})
+    %{api_key: first_key} = active_api_key_fixture(first_pool)
+    %{api_key: second_key} = active_api_key_fixture(second_pool)
+    started_at = ~U[2026-08-14 11:34:56.000000Z]
+    ended_at = ~U[2026-08-14 12:34:56.000000Z]
+
+    for {pool, api_key, status, timestamp} <- [
+          {first_pool, first_key, "succeeded", started_at},
+          {first_pool, first_key, "failed", ~U[2026-08-14 11:50:00.000000Z]},
+          {second_pool, second_key, "rejected", ~U[2026-08-14 12:10:00.000000Z]},
+          {second_pool, second_key, "cancelled", ~U[2026-08-14 12:20:00.000000Z]},
+          {second_pool, second_key, "accepted", ~U[2026-08-14 12:30:00.000000Z]},
+          {second_pool, second_key, "in_progress", ended_at},
+          {first_pool, first_key, "cancelled", ~U[2026-08-14 12:34:56.000001Z]}
+        ] do
+      request_fixture(%{pool: pool, api_key: api_key}, %{status: status})
+      |> set_request_time!(timestamp)
+    end
+
+    {rows, query_events} =
+      collect_repo_query_events(fn ->
+        GatewayReadModel.stats_request_status_buckets_for_pool_ids(
+          [first_pool.id, second_pool.id],
+          started_at,
+          ended_at,
+          :hour
+        )
+      end)
+
+    assert rows == [
+             %{
+               bucket: ~U[2026-08-14 11:00:00.000000Z],
+               requests: 2,
+               succeeded: 1,
+               failed: 1,
+               in_progress: 0
+             },
+             %{
+               bucket: ~U[2026-08-14 12:00:00.000000Z],
+               requests: 4,
+               succeeded: 0,
+               failed: 2,
+               in_progress: 1
+             }
+           ]
+
+    assert [projection_event] =
+             Enum.filter(query_events, &(&1.projection == :stats_request_status_buckets))
+
+    assert projection_event.command == "SELECT"
+    assert projection_event.row_count == 2
+    assert projection_event.source in [nil, "requests"]
+
+    assert GatewayReadModel.stats_request_status_buckets_for_pool_ids(
+             [first_pool.id, first_pool.id, second_pool.id],
+             started_at,
+             ended_at,
+             :hour
+           ) == rows
+
+    assert [%{requests: 1, in_progress: 1}] =
+             GatewayReadModel.stats_request_status_buckets_for_pool_ids(
+               [second_pool.id],
+               ended_at,
+               ended_at,
+               :hour
+             )
+
+    assert GatewayReadModel.stats_request_status_buckets_for_pool_ids(
+             [first_pool.id],
+             ended_at,
+             started_at,
+             :hour
+           ) == []
+
+    assert GatewayReadModel.stats_request_status_buckets_for_pool_ids(
+             [first_pool.id],
+             started_at,
+             ended_at,
+             :invalid
+           ) == []
+
+    assert GatewayReadModel.stats_request_status_buckets_for_pool_ids(
+             [Ecto.UUID.generate()],
+             started_at,
+             ended_at,
+             :hour
+           ) == []
+
+    assert GatewayReadModel.stats_request_status_buckets_for_pool_ids(
+             [],
+             started_at,
+             ended_at,
+             :hour
+           ) == []
+
+    assert GatewayReadModel.recent_failures_for_pool_ids(
+             [first_pool.id],
+             started_at,
+             ended_at,
+             0
+           ) == []
+  end
+
+  test "stats labels cover both exact inclusive bounds without changing PoolUsage labels" do
+    for {window, seconds, stats_count, pool_usage_count} <- [
+          {:one_hour, 60 * 60, 2, 1},
+          {:five_hours, 5 * 60 * 60, 6, 5},
+          {:twenty_four_hours, 24 * 60 * 60, 25, 24},
+          {:seven_days, 7 * 24 * 60 * 60, 8, 7}
+        ] do
+      ended_at = ~U[2026-08-14 08:55:00.000000Z]
+      started_at = DateTime.add(ended_at, -seconds, :second)
+      context = %{window: window, started_at: started_at, ended_at: ended_at}
+
+      assert length(Buckets.stats_labels(context)) == stats_count
+      assert length(Buckets.labels(context)) == pool_usage_count
+      assert hd(Buckets.stats_labels(context)) == Buckets.label(started_at, window)
+      assert List.last(Buckets.stats_labels(context)) == Buckets.label(ended_at, window)
+    end
+
+    aligned = %{
+      window: :one_hour,
+      started_at: ~U[2026-08-14 07:00:00.000000Z],
+      ended_at: ~U[2026-08-14 08:00:00.000000Z]
+    }
+
+    assert length(Buckets.stats_labels(aligned)) == 2
+  end
+
+  test "dashboard consumes bounded request buckets and database-limited recent failures" do
+    scope = owner_scope()
+    pool = pool_fixture(%{slug: "stats-request-dashboard"})
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    as_of = ~U[2026-08-14 08:55:00.000000Z]
+    started_at = DateTime.add(as_of, -5, :hour)
+
+    for {status, offset, error_code} <- [
+          {"succeeded", 0, nil},
+          {"failed", 1, "failure-1"},
+          {"rejected", 2, "failure-2"},
+          {"cancelled", 3, "failure-3"},
+          {"failed", 4, "failure-4"},
+          {"rejected", 5, "failure-5"},
+          {"failed", 6, "failure-6"},
+          {"accepted", 7, nil},
+          {"in_progress", 8, nil}
+        ] do
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        status: status,
+        last_error_code: error_code,
+        response_status_code: if(status == "succeeded", do: 200, else: 500)
+      })
+      |> set_request_time!(DateTime.add(started_at, offset * 30, :minute))
+    end
+
+    {recent_failures, recent_events} =
+      collect_repo_query_events(fn ->
+        GatewayReadModel.recent_failures_for_pool_ids([pool.id], started_at, as_of, 5)
+      end)
+
+    assert length(recent_failures) == 5
+
+    assert Enum.map(recent_failures, & &1.error_code) ==
+             ["failure-6", "failure-5", "failure-4", "failure-3", "failure-2"]
+
+    assert Enum.all?(recent_failures, fn row ->
+             Map.keys(row) |> Enum.sort() ==
+               [
+                 :admitted_at,
+                 :endpoint,
+                 :error_code,
+                 :id,
+                 :pool_id,
+                 :requested_model,
+                 :response_status_code,
+                 :status,
+                 :transport
+               ]
+           end)
+
+    assert [%{projection: :stats_recent_failures, row_count: 5}] =
+             Enum.filter(recent_events, &(&1.projection == :stats_recent_failures))
+
+    {dashboard_result, dashboard_events} =
+      collect_repo_query_events(fn ->
+        Stats.build_dashboard(scope, %{pool_id: pool.id, window: "5h", as_of: as_of})
+      end)
+
+    assert {:ok, dashboard} = dashboard_result
+    assert dashboard.kpis.requests == %{value: 9, succeeded: 1, failed: 6, in_progress: 1}
+    assert dashboard.kpis.success_rate == %{value: 11.1, unit: "percent"}
+    assert dashboard.sources.requests == 9
+    assert Enum.sum(Enum.map(dashboard.charts.requests, & &1.requests)) == 9
+    assert length(dashboard.charts.requests) == 6
+    assert length(dashboard.tables.recent_failures) == 5
+    assert Enum.any?(dashboard.empty_states, &(&1.code == :no_usage))
+    refute Enum.any?(dashboard.empty_states, &(&1.code == :no_requests))
+    assert dashboard.kpis.tokens.total_tokens == 0
+    assert Enum.any?(dashboard.charts.requests, &(&1.requests > 0 and &1.requests == &1.failed))
+
+    assert [%{row_count: request_rows}] =
+             Enum.filter(
+               dashboard_events,
+               &(&1.projection == :stats_request_status_buckets)
+             )
+
+    assert request_rows <= 6
+
+    assert [%{row_count: 5}] =
+             Enum.filter(dashboard_events, &(&1.projection == :stats_recent_failures))
+
+    refute Enum.any?(dashboard_events, fn event ->
+             event.source == "requests" and is_nil(event.projection) and event.row_count > 6
+           end)
+  end
+
+  test "dashboard request reads use only the bounded Stats projections" do
+    scope = owner_scope()
+    pool = pool_fixture(%{slug: "stats-projection-only"})
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    as_of = ~U[2026-08-14 08:55:00.000000Z]
+
+    request_fixture(%{pool: pool, api_key: api_key}, %{status: "succeeded"})
+    |> set_request_time!(DateTime.add(as_of, -10, :minute))
+
+    {dashboard_result, query_events} =
+      collect_repo_query_events(fn ->
+        Stats.build_dashboard(scope, %{pool_id: pool.id, window: "1h", as_of: as_of})
+      end)
+
+    assert {:ok, dashboard} = dashboard_result
+    assert dashboard.kpis.requests.value == 1
+
+    request_events = Enum.filter(query_events, &(&1.source == "requests"))
+
+    assert Enum.map(request_events, & &1.projection) == [
+             :stats_request_status_buckets,
+             :stats_recent_failures
+           ]
+
+    refute Enum.any?(request_events, &is_nil(&1.projection))
+  end
+
+  test "failed-only request buckets do not invent settled usage" do
+    scope = owner_scope()
+    pool = pool_fixture(%{slug: "stats-failed-only"})
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    as_of = ~U[2026-08-14 08:55:00.000000Z]
+
+    request_fixture(%{pool: pool, api_key: api_key}, %{
+      status: "failed",
+      last_error_code: "bounded_failure"
+    })
+    |> set_request_time!(DateTime.add(as_of, -10, :minute))
+
+    assert {:ok, dashboard} =
+             Stats.build_dashboard(scope, %{pool_id: pool.id, window: "1h", as_of: as_of})
+
+    assert dashboard.kpis.requests == %{value: 1, succeeded: 0, failed: 1, in_progress: 0}
+    assert Enum.sum(Enum.map(dashboard.charts.requests, & &1.requests)) == 1
+    assert dashboard.kpis.tokens.total_tokens == 0
+    assert Enum.sum(Enum.map(dashboard.charts.tokens, & &1.total_tokens)) == 0
+    assert Enum.any?(dashboard.empty_states, &(&1.code == :no_usage))
+    refute Enum.any?(dashboard.empty_states, &(&1.code == :no_requests))
+  end
+
+  test "stats request query count and returned cardinality stay invariant as volume grows" do
+    scope = owner_scope()
+    as_of = ~U[2026-08-14 08:55:00.000000Z]
+    started_at = DateTime.add(as_of, -5, :hour)
+
+    results =
+      for {suffix, request_count} <- [{"small", 8}, {"large", 80}] do
+        pool = pool_fixture(%{slug: "stats-cardinality-#{suffix}"})
+        %{api_key: api_key} = active_api_key_fixture(pool)
+
+        for index <- 0..(request_count - 1) do
+          timestamp = DateTime.add(started_at, rem(index, 6) * 50, :minute)
+
+          request_fixture(%{pool: pool, api_key: api_key}, %{status: "succeeded"})
+          |> set_request_time!(timestamp)
+        end
+
+        {dashboard_result, query_events} =
+          collect_repo_query_events(fn ->
+            Stats.build_dashboard(scope, %{pool_id: pool.id, window: "5h", as_of: as_of})
+          end)
+
+        assert {:ok, dashboard} = dashboard_result
+        assert dashboard.kpis.requests.value == request_count
+        assert Enum.sum(Enum.map(dashboard.charts.requests, & &1.requests)) == request_count
+
+        projection_events =
+          Enum.filter(query_events, fn event ->
+            event.projection in [:stats_request_status_buckets, :stats_recent_failures]
+          end)
+
+        assert Enum.map(projection_events, & &1.projection) == [
+                 :stats_request_status_buckets,
+                 :stats_recent_failures
+               ]
+
+        assert Enum.map(projection_events, & &1.row_count) == [6, 0]
+        {request_count, projection_events}
+      end
+
+    assert Enum.map(results, fn {_count, events} -> length(events) end) == [2, 2]
   end
 
   test "build_dashboard/2 sorts upstream usage by tokens descending" do
@@ -481,7 +795,7 @@ defmodule CodexPooler.Admin.StatsTest do
     as_of = ~U[2026-01-10 12:34:56.000000Z]
     current_bucket = truncate_to_hour(as_of)
     previous_bucket = DateTime.add(current_bucket, -1, :hour)
-    before_window_bucket = DateTime.add(current_bucket, -5, :hour)
+    before_window_bucket = DateTime.add(current_bucket, -6, :hour)
     after_window_bucket = DateTime.add(current_bucket, 1, :hour)
 
     m55 =
@@ -632,28 +946,28 @@ defmodule CodexPooler.Admin.StatsTest do
     model_usage = Map.fetch!(dashboard.charts, :model_usage)
 
     assert model_usage_series_order(model_usage) == [
+             "gpt-5.3",
              "gpt-5.5",
              "gpt-5.4",
-             "gpt-5.3",
              "gpt-5.0",
              "gpt-5.1",
              "Other"
            ]
 
-    assert model_usage_total(model_usage, "gpt-5.5") == 900
-    assert model_usage_total(model_usage, "Other") == 50
-    assert model_usage_bucket_labels(model_usage) == hourly_bucket_labels(as_of, 5)
-    assert length(model_usage) <= 6 * 5
+    assert model_usage_total(model_usage, "gpt-5.5") == 9
+    assert model_usage_total(model_usage, "Other") == 1
+    assert model_usage_bucket_labels(model_usage) == hourly_bucket_labels(as_of, 6)
+    assert length(model_usage) <= 6 * 6
 
     assert_model_usage_point!(model_usage, "gpt-5.5", hourly_bucket(current_bucket), %{
       request_count: 1,
-      input_tokens: 600,
-      cached_input_tokens: 100,
-      output_tokens: 200,
-      reasoning_tokens: 100,
-      total_tokens: 900,
-      estimated_cost_micros: 901_000,
-      settled_cost_micros: 899_000
+      input_tokens: 9,
+      cached_input_tokens: 0,
+      output_tokens: 0,
+      reasoning_tokens: 0,
+      total_tokens: 9,
+      estimated_cost_micros: 0,
+      settled_cost_micros: 0
     })
 
     rendered = inspect(model_usage)
@@ -665,7 +979,7 @@ defmodule CodexPooler.Admin.StatsTest do
     refute rendered =~ hourly_bucket(before_window_bucket)
     refute rendered =~ hourly_bucket(after_window_bucket)
 
-    assert dashboard.sources.model_usage_source == :hourly_model_usage_rollups
+    assert dashboard.sources.model_usage_source == :hourly_model_usage_rollups_with_exact_edges
     assert dashboard.sources.model_usage_rows == length(model_usage)
   end
 
@@ -734,7 +1048,7 @@ defmodule CodexPooler.Admin.StatsTest do
     today = DateTime.to_date(as_of)
     first_visible_date = Date.add(today, -6)
     in_range_date = Date.add(today, -2)
-    out_of_range_date = Date.add(today, -7)
+    out_of_range_date = Date.add(today, -8)
 
     model =
       model_fixture(pool, %{
@@ -796,8 +1110,8 @@ defmodule CodexPooler.Admin.StatsTest do
     model_usage = Map.fetch!(dashboard.charts, :model_usage)
 
     assert model_usage_series_order(model_usage) == ["gpt-5.5-daily"]
-    assert model_usage_bucket_labels(model_usage) == daily_bucket_labels(as_of)
-    assert length(model_usage) <= 7
+    assert model_usage_bucket_labels(model_usage) == daily_bucket_labels(as_of, 8)
+    assert length(model_usage) <= 8
 
     assert_model_usage_point!(model_usage, "gpt-5.5-daily", Date.to_iso8601(in_range_date), %{
       request_count: 3,
@@ -832,8 +1146,50 @@ defmodule CodexPooler.Admin.StatsTest do
     refute rendered =~ "gpt-4.1-daily"
     refute rendered =~ Date.to_iso8601(out_of_range_date)
 
-    assert dashboard.sources.model_usage_source == :daily_model_rollups
+    assert dashboard.sources.model_usage_source == :daily_model_rollups_with_exact_edges
     assert dashboard.sources.model_usage_rows == length(model_usage)
+  end
+
+  test "dashboard model series reconcile exact assigned-model edges and expose temporal confidence" do
+    scope = owner_scope()
+    pool = pool_fixture(%{slug: "stats-model-exact-edges"})
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
+    model = model_fixture(pool, %{exposed_model_id: "gpt-stats-exact"})
+    as_of = ~U[2026-08-14 12:45:00.000000Z]
+    started_at = DateTime.add(as_of, -5, :hour)
+
+    for {occurred_at, tokens} <- [
+          {started_at, 10},
+          {~U[2026-08-14 08:10:00.000000Z], 20},
+          {as_of, 30},
+          {DateTime.add(as_of, 1, :microsecond), 4_000}
+        ] do
+      insert_model_request_and_settlement!(
+        pool,
+        api_key,
+        assignment,
+        identity,
+        model,
+        occurred_at,
+        total_tokens: tokens
+      )
+    end
+
+    insert_hourly_model_usage_rollup!(pool, model, ~U[2026-08-14 08:00:00.000000Z],
+      total_tokens: 20
+    )
+
+    assert {:ok, dashboard} =
+             Stats.build_dashboard(scope, %{pool_id: pool.id, window: "5h", as_of: as_of})
+
+    model_usage = dashboard.charts.model_usage
+    assert model_usage_total(model_usage, "gpt-stats-exact") == 60
+    assert dashboard.kpis.tokens.total_tokens == 60
+    assert dashboard.sources.model_usage_source == :hourly_model_usage_rollups_with_exact_edges
+    assert dashboard.sources.model_usage_rollup_source == :hourly_model_usage_rollups
+    assert dashboard.sources.model_usage_edge_source == :raw_settlement_edges
+    assert dashboard.sources.model_usage_confidence == :temporal_containment_only
   end
 
   test "empty selected period returns typed empty states and unavailable KPI values" do
@@ -854,8 +1210,13 @@ defmodule CodexPooler.Admin.StatsTest do
     assert dashboard.kpis.turns == %{value: 0, succeeded: 0, failed: 0, in_progress: 0}
     assert dashboard.quota.summary.state == :unknown
     assert Enum.map(dashboard.empty_states, & &1.code) == [:no_requests, :no_usage]
-    assert [%{requests: 0, succeeded: 0, failed: 0}] = dashboard.charts.requests
-    assert [%{total_tokens: 0}] = dashboard.charts.tokens
+
+    assert [
+             %{requests: 0, succeeded: 0, failed: 0, in_progress: 0},
+             %{requests: 0, succeeded: 0, failed: 0, in_progress: 0}
+           ] = dashboard.charts.requests
+
+    assert [%{total_tokens: 0}, %{total_tokens: 0}] = dashboard.charts.tokens
     assert Map.fetch!(dashboard.charts, :model_usage) == []
   end
 
@@ -1202,8 +1563,8 @@ defmodule CodexPooler.Admin.StatsTest do
     assert dashboard.kpis.requests.value == 2
     assert dashboard.kpis.tokens.total_tokens == 50
     assert dashboard.kpis.settled_cost.micros == 50
-    assert Enum.sum(Enum.map(dashboard.charts.tokens, & &1.total_tokens)) == 30
-    assert Enum.sum(Enum.map(dashboard.charts.settled_cost, & &1.settled_cost_micros)) == 30
+    assert Enum.sum(Enum.map(dashboard.charts.tokens, & &1.total_tokens)) == 50
+    assert Enum.sum(Enum.map(dashboard.charts.settled_cost, & &1.settled_cost_micros)) == 50
   end
 
   test "selected hard-deleted pool ids are excluded from management-visible stats" do
@@ -1514,13 +1875,15 @@ defmodule CodexPooler.Admin.StatsTest do
   end
 
   defp insert_hourly_model_usage!(pool, api_key, assignment, identity, model, bucket, attrs) do
+    occurred_at = Keyword.get(attrs, :occurred_at, bucket)
+
     insert_model_request_and_settlement!(
       pool,
       api_key,
       assignment,
       identity,
       model,
-      bucket,
+      occurred_at,
       total_tokens: Keyword.get(attrs, :ledger_total_tokens, Keyword.fetch!(attrs, :total_tokens))
     )
 
@@ -1663,10 +2026,10 @@ defmodule CodexPooler.Admin.StatsTest do
     |> Enum.map(&hourly_bucket/1)
   end
 
-  defp daily_bucket_labels(as_of) do
+  defp daily_bucket_labels(as_of, count) do
     today = DateTime.to_date(as_of)
 
-    6..0//-1
+    (count - 1)..0//-1
     |> Enum.map(&Date.add(today, -&1))
     |> Enum.map(&Date.to_iso8601/1)
   end

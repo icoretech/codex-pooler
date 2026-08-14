@@ -838,13 +838,18 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
             display_name: "Ranked Model Display Name #{sensitive_marker}"
           })
 
-        insert_hourly_model_usage_rollup!(pool, model, truncate_to_hour(as_of), %{
-          total_tokens: total_tokens,
-          input_tokens: total_tokens,
-          cached_input_tokens: 0,
-          output_tokens: 0,
-          reasoning_tokens: 0
-        })
+        insert_hourly_model_usage_rollup!(
+          pool,
+          model,
+          as_of |> truncate_to_hour() |> DateTime.add(-1, :hour),
+          %{
+            total_tokens: total_tokens,
+            input_tokens: total_tokens,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_tokens: 0
+          }
+        )
       end
 
       {:ok, view, _html} =
@@ -1304,7 +1309,8 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
           [:codex_pooler, :repo, :query],
           fn _event, _measurements, metadata, _config ->
             if metadata[:repo] == Repo and self() != view.pid and
-                 normalize_repo_query_value(metadata[:source]) == "requests" do
+                 metadata[:options][:reporting_projection] ==
+                   :stats_request_status_buckets do
               send(test_pid, {handler_id, self()})
 
               receive do

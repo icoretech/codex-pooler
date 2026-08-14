@@ -10,6 +10,7 @@ defmodule CodexPooler.Admin.GatewayReadModel do
   alias CodexPooler.Repo
 
   @type bucket_granularity :: :hour | :day
+  @failed_request_statuses ~w(failed rejected interrupted cancelled)
 
   @spec requests_for_pool_ids([Ecto.UUID.t()], DateTime.t(), DateTime.t()) :: [map()]
   def requests_for_pool_ids([], _started_at, _ended_at), do: []
@@ -64,6 +65,108 @@ defmodule CodexPooler.Admin.GatewayReadModel do
   def hourly_request_counts_by_pool_ids(pool_ids, started_at, ended_at) do
     bucketed_request_counts_by_pool_ids(pool_ids, started_at, ended_at, :hour)
   end
+
+  @spec stats_request_status_buckets_for_pool_ids(
+          [Ecto.UUID.t()],
+          DateTime.t(),
+          DateTime.t(),
+          bucket_granularity()
+        ) :: [map()]
+  def stats_request_status_buckets_for_pool_ids([], _started_at, _ended_at, _granularity),
+    do: []
+
+  def stats_request_status_buckets_for_pool_ids(pool_ids, started_at, ended_at, :hour) do
+    if DateTime.compare(started_at, ended_at) == :gt do
+      []
+    else
+      from(request in Request,
+        where:
+          request.pool_id in ^pool_ids and request.admitted_at >= ^started_at and
+            request.admitted_at <= ^ended_at,
+        group_by: fragment("date_trunc('hour', ?)", request.admitted_at),
+        order_by: [asc: fragment("date_trunc('hour', ?)", request.admitted_at)],
+        select: %{
+          bucket:
+            type(fragment("date_trunc('hour', ?)", request.admitted_at), :utc_datetime_usec),
+          requests: count(request.id),
+          succeeded: filter(count(request.id), request.status == "succeeded"),
+          failed: filter(count(request.id), request.status in ^@failed_request_statuses),
+          in_progress: filter(count(request.id), request.status == "in_progress")
+        }
+      )
+      |> Repo.all(telemetry_options: [reporting_projection: :stats_request_status_buckets])
+    end
+  end
+
+  def stats_request_status_buckets_for_pool_ids(pool_ids, started_at, ended_at, :day) do
+    if DateTime.compare(started_at, ended_at) == :gt do
+      []
+    else
+      from(request in Request,
+        where:
+          request.pool_id in ^pool_ids and request.admitted_at >= ^started_at and
+            request.admitted_at <= ^ended_at,
+        group_by: fragment("date_trunc('day', ?)", request.admitted_at),
+        order_by: [asc: fragment("date_trunc('day', ?)", request.admitted_at)],
+        select: %{
+          bucket: type(fragment("date_trunc('day', ?)", request.admitted_at), :utc_datetime_usec),
+          requests: count(request.id),
+          succeeded: filter(count(request.id), request.status == "succeeded"),
+          failed: filter(count(request.id), request.status in ^@failed_request_statuses),
+          in_progress: filter(count(request.id), request.status == "in_progress")
+        }
+      )
+      |> Repo.all(telemetry_options: [reporting_projection: :stats_request_status_buckets])
+    end
+  end
+
+  def stats_request_status_buckets_for_pool_ids(
+        _pool_ids,
+        _started_at,
+        _ended_at,
+        _granularity
+      ),
+      do: []
+
+  @spec recent_failures_for_pool_ids(
+          [Ecto.UUID.t()],
+          DateTime.t(),
+          DateTime.t(),
+          pos_integer()
+        ) :: [map()]
+  def recent_failures_for_pool_ids([], _started_at, _ended_at, _limit), do: []
+
+  def recent_failures_for_pool_ids(pool_ids, started_at, ended_at, limit)
+      when is_integer(limit) and limit > 0 do
+    if DateTime.compare(started_at, ended_at) == :gt do
+      []
+    else
+      limit = min(limit, 5)
+
+      from(request in Request,
+        where:
+          request.pool_id in ^pool_ids and request.admitted_at >= ^started_at and
+            request.admitted_at <= ^ended_at and
+            request.status in ^@failed_request_statuses,
+        order_by: [desc: request.admitted_at, desc: request.id],
+        limit: ^limit,
+        select: %{
+          id: request.id,
+          pool_id: request.pool_id,
+          requested_model: request.requested_model,
+          endpoint: request.endpoint,
+          transport: request.transport,
+          status: request.status,
+          error_code: request.last_error_code,
+          response_status_code: request.response_status_code,
+          admitted_at: request.admitted_at
+        }
+      )
+      |> Repo.all(telemetry_options: [reporting_projection: :stats_recent_failures])
+    end
+  end
+
+  def recent_failures_for_pool_ids(_pool_ids, _started_at, _ended_at, _limit), do: []
 
   @spec bucketed_request_counts_by_pool_ids(
           [Ecto.UUID.t()],

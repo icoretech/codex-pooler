@@ -1,10 +1,19 @@
 defmodule CodexPooler.Admin.Stats.SourceSummary do
   @moduledoc false
 
-  @spec build([map()], [map()], [map()], [map()], [map()], map(), term(), non_neg_integer()) ::
+  @spec build(
+          non_neg_integer(),
+          [map()],
+          [map()],
+          [map()],
+          [map()],
+          map(),
+          term(),
+          non_neg_integer()
+        ) ::
           map()
   def build(
-        requests,
+        request_count,
         attempts,
         settlements,
         daily_rollups,
@@ -14,7 +23,7 @@ defmodule CodexPooler.Admin.Stats.SourceSummary do
         model_usage_rows
       ) do
     %{
-      requests: length(requests),
+      requests: request_count,
       attempts: length(attempts),
       settlements: length(settlements),
       daily_rollups: length(daily_rollups),

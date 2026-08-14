@@ -4,17 +4,16 @@ defmodule CodexPooler.Admin.Stats.Charts do
   alias CodexPooler.Admin.Stats.Aggregates
   alias CodexPooler.Admin.Stats.Buckets
 
-  @succeeded "succeeded"
-  @failed_statuses ~w(failed rejected interrupted cancelled)
-
   @type bucket_context :: %{
           required(:ended_at) => DateTime.t(),
+          required(:started_at) => DateTime.t(),
           required(:window) => atom(),
           optional(atom()) => term()
         }
   @type model_usage_row :: %{
           required(:bucket) => String.t() | nil,
           required(:model_code) => String.t(),
+          required(:series_rank) => pos_integer(),
           required(:request_count) => non_neg_integer(),
           required(:input_tokens) => non_neg_integer(),
           required(:cached_input_tokens) => non_neg_integer(),
@@ -26,25 +25,26 @@ defmodule CodexPooler.Admin.Stats.Charts do
         }
 
   @spec request_series(Enumerable.t(), bucket_context()) :: [map()]
-  def request_series(requests, normalized) do
-    buckets = Buckets.labels(normalized)
-    grouped = Enum.group_by(requests, &Buckets.label(&1.admitted_at, normalized.window))
+  def request_series(request_buckets, normalized) do
+    buckets = Buckets.stats_labels(normalized)
+    grouped = Enum.group_by(request_buckets, &Buckets.label(&1.bucket, normalized.window))
 
     Enum.map(buckets, fn label ->
       rows = Map.get(grouped, label, [])
 
       %{
         bucket: label,
-        requests: length(rows),
-        succeeded: Enum.count(rows, &(&1.status == @succeeded)),
-        failed: Enum.count(rows, &(&1.status in @failed_statuses))
+        requests: Aggregates.sum_integer(rows, :requests),
+        succeeded: Aggregates.sum_integer(rows, :succeeded),
+        failed: Aggregates.sum_integer(rows, :failed),
+        in_progress: Aggregates.sum_integer(rows, :in_progress)
       }
     end)
   end
 
   @spec token_series(Enumerable.t(), bucket_context()) :: [map()]
   def token_series(settlements, normalized) do
-    buckets = Buckets.labels(normalized)
+    buckets = Buckets.stats_labels(normalized)
     grouped = Enum.group_by(settlements, &Buckets.label(&1.occurred_at, normalized.window))
 
     Enum.map(buckets, fn label ->
@@ -67,7 +67,7 @@ defmodule CodexPooler.Admin.Stats.Charts do
 
   @spec cost_series(Enumerable.t(), bucket_context()) :: [map()]
   def cost_series(settlements, normalized) do
-    buckets = Buckets.labels(normalized)
+    buckets = Buckets.stats_labels(normalized)
     grouped = Enum.group_by(settlements, &Buckets.label(&1.occurred_at, normalized.window))
 
     Enum.map(buckets, fn label ->
@@ -82,7 +82,7 @@ defmodule CodexPooler.Admin.Stats.Charts do
 
   @spec model_usage_series(Enumerable.t(), bucket_context()) :: [model_usage_row()]
   def model_usage_series(rows, normalized) do
-    buckets = Buckets.labels(normalized)
+    buckets = Buckets.stats_labels(normalized)
     bucket_set = MapSet.new(buckets)
 
     bucketed_rows =
@@ -93,38 +93,23 @@ defmodule CodexPooler.Admin.Stats.Charts do
 
     ranked_models =
       bucketed_rows
-      |> model_usage_totals()
-      |> Enum.filter(&(&1.total_tokens > 0))
-      |> Enum.sort_by(fn row -> {-row.total_tokens, -row.request_count, row.model_code} end)
-
-    top_model_codes =
-      ranked_models
-      |> Enum.take(5)
-      |> Enum.map(& &1.model_code)
-
-    other_model_codes =
-      ranked_models
-      |> Enum.drop(5)
-      |> Enum.map(& &1.model_code)
-
-    top_rows =
-      Enum.flat_map(top_model_codes, fn model_code ->
-        model_usage_rows_for_model(bucketed_rows, buckets, model_code)
+      |> Map.values()
+      |> Enum.group_by(& &1.model_code)
+      |> Enum.map(fn {model_code, rows} ->
+        %{model_code: model_code, series_rank: rows |> Enum.map(& &1.series_rank) |> Enum.min()}
       end)
+      |> Enum.sort_by(&{&1.series_rank, &1.model_code})
 
-    case other_model_codes do
-      [] ->
-        top_rows
-
-      _other_model_codes ->
-        top_rows ++ model_usage_rows_for_other(bucketed_rows, buckets, other_model_codes)
-    end
+    Enum.flat_map(ranked_models, fn %{model_code: model_code} ->
+      model_usage_rows_for_model(bucketed_rows, buckets, model_code)
+    end)
   end
 
   defp normalize_model_usage_bucket(row, window) do
     %{
       bucket: Buckets.model_usage_bucket_label(row.bucket, window),
       model_code: row.model_code || "",
+      series_rank: model_usage_integer(row, :series_rank),
       request_count: model_usage_integer(row, :request_count),
       input_tokens: model_usage_integer(row, :input_tokens),
       cached_input_tokens: model_usage_integer(row, :cached_input_tokens),
@@ -146,35 +131,9 @@ defmodule CodexPooler.Admin.Stats.Charts do
     end)
   end
 
-  defp model_usage_totals(bucketed_rows) do
-    bucketed_rows
-    |> Map.values()
-    |> Enum.group_by(& &1.model_code)
-    |> Enum.map(fn {model_code, rows} ->
-      %{
-        model_code: model_code,
-        request_count: Aggregates.sum_integer(rows, :request_count),
-        total_tokens: Aggregates.sum_integer(rows, :total_tokens)
-      }
-    end)
-  end
-
   defp model_usage_rows_for_model(bucketed_rows, buckets, model_code) do
     Enum.map(buckets, fn bucket ->
       Map.get(bucketed_rows, {model_code, bucket}, empty_model_usage_row(model_code, bucket))
-    end)
-  end
-
-  defp model_usage_rows_for_other(bucketed_rows, buckets, other_model_codes) do
-    other_model_codes = MapSet.new(other_model_codes)
-
-    Enum.map(buckets, fn bucket ->
-      rows =
-        bucketed_rows
-        |> Map.values()
-        |> Enum.filter(&(&1.bucket == bucket and &1.model_code in other_model_codes))
-
-      aggregate_model_usage_row("Other", bucket, rows)
     end)
   end
 
@@ -182,6 +141,7 @@ defmodule CodexPooler.Admin.Stats.Charts do
     %{
       bucket: bucket,
       model_code: model_code,
+      series_rank: rows |> Enum.map(& &1.series_rank) |> Enum.min(fn -> 0 end),
       request_count: Aggregates.sum_integer(rows, :request_count),
       input_tokens: Aggregates.sum_integer(rows, :input_tokens),
       cached_input_tokens: Aggregates.sum_integer(rows, :cached_input_tokens),

@@ -1,10 +1,10 @@
 defmodule CodexPooler.Admin.Stats.EmptyStates do
   @moduledoc false
 
-  @spec build([map()], [map()], [map()]) :: [map()]
-  def build(requests, settlements, assignments) do
+  @spec build(non_neg_integer(), [map()], [map()]) :: [map()]
+  def build(request_count, settlements, assignments) do
     []
-    |> maybe_empty(requests == [], :no_requests, "No requests in this range")
+    |> maybe_empty(request_count == 0, :no_requests, "No requests in this range")
     |> maybe_empty(
       settlements == [],
       :no_usage,
