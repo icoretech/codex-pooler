@@ -271,10 +271,23 @@ body {
   container: upstream-account-card / inline-size;
 }
 
-.upstream-account-token-model-row {
+.upstream-account-token-model-grid {
   grid-template-columns:
-    minmax(0, 1fr) clamp(1.5rem, 15cqi, 4rem) max-content max-content;
+    minmax(0, 1fr) clamp(1.5rem, 9cqi, 2.25rem) max-content max-content;
   column-gap: clamp(0.25rem, 2cqi, 0.625rem);
+}
+
+.upstream-account-token-model-row {
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  column-gap: inherit;
+}
+
+@container upstream-account-card (width >= 18.5rem) {
+  .upstream-account-token-model-grid {
+    grid-template-columns:
+      minmax(7.45rem, 1fr) clamp(1.5rem, 9cqi, 2.25rem) max-content max-content;
+  }
 }
 
 @media (width >= 40rem) {
@@ -289,6 +302,11 @@ body {
 }
 
 @container upstream-account-card (width >= 20rem) {
+  .upstream-account-token-model-grid {
+    grid-template-columns:
+      minmax(7.45rem, 1fr) clamp(1.5rem, 15cqi, 4rem) max-content max-content;
+  }
+
   .upstream-account-quota-limits-multiple {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

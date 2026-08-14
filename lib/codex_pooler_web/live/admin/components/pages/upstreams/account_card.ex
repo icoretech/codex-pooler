@@ -227,7 +227,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
             <div
               id={"upstream-account-#{@account.identity.id}-token-models"}
               data-role="upstream-account-token-models"
-              class="grid max-h-[24rem] content-start gap-0.5 overflow-y-auto pr-1"
+              class="upstream-account-token-model-grid grid max-h-[24rem] content-start gap-0.5 overflow-y-auto pr-1"
             >
               <p
                 :if={@token_leaderboard == []}

@@ -1011,14 +1011,20 @@ Three recurring list shapes, all `text-xs`-scale and truncation-guarded:
 ```
 
 - **Ranked compact rows** — the account tokens panel
-  (`data-role="upstream-account-token-model"`, class
-  `upstream-account-token-model-row … odd:bg-base-200/40`) sizes its four
-  tracks from the account-card container: model label `minmax(0, 1fr)`, share
-  bar `clamp(1.5rem, 15cqi, 4rem)`, then token and cost values at
-  `max-content`, with a `clamp(0.25rem, 2cqi, 0.625rem)` gap. The inline share
-  bar remains `h-1 rounded-full bg-primary/70`. This prevents the viewport's
-  `sm` breakpoint from widening fixed numeric tracks inside a still-narrow
-  tablet card. The stats leaderboard
+  (`data-role="upstream-account-token-models"`, class
+  `upstream-account-token-model-grid`) owns one shared four-column grid for all
+  rows. Each `upstream-account-token-model-row` spans that parent grid and uses
+  `subgrid`, so the model, share bar, token, and cost columns stay vertically
+  aligned even when the numeric values have different lengths. The model track
+  is `minmax(0, 1fr)` and the token and cost tracks are `max-content`; existing
+  model titles and info popovers preserve the complete identifier when the
+  visible label needs an ellipsis. On cards below `20rem`, the share track is
+  compact (`clamp(1.5rem, 9cqi, 2.25rem)`) to protect model-label space. At
+  `18.5rem`, the model track reserves `7.45rem` so long catalog identifiers remain
+  readable in the narrow two-card tablet layout. At `20rem` and above the share
+  track expands to `clamp(1.5rem, 15cqi, 4rem)`. The shared gap
+  remains `clamp(0.25rem, 2cqi, 0.625rem)`, and the inline share bar remains
+  `h-1 rounded-full bg-primary/70`. The stats leaderboard
   runner rows (`divide-y divide-base-300/70`, rank medallion, name+pool stack,
   right-aligned mono values).
 - **Hairline tables** — long homogeneous records (request logs, jobs) use

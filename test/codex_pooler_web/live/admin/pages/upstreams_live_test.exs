@@ -838,6 +838,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     # five minutes: settled tokens only, older usage never leaks in.
     assert has_element?(
              view,
+             "##{card_id}-token-models.upstream-account-token-model-grid"
+           )
+
+    assert has_element?(
+             view,
              "##{tokens_panel_id} [data-role='upstream-account-token-model'].upstream-account-token-model-row"
            )
 
