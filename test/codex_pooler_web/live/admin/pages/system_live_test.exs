@@ -366,12 +366,12 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
 
     assert has_element?(
              view,
-             "#instance-settings-gateway-scalar-group-continuity > th.border-t.border-base-300"
+             "#instance-settings-gateway-scalar-group-continuity > th.border-t.border-t-base-300"
            )
 
     assert has_element?(
              view,
-             "#instance-settings-gateway-scalar-group-circuit > th.border-t.border-base-300"
+             "#instance-settings-gateway-scalar-group-circuit > th.border-t.border-t-base-300"
            )
 
     assert has_element?(

@@ -66,7 +66,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.GatewaySettingsMatrix do
         <th
           scope="rowgroup"
           colspan="2"
-          class={["border-base-300 py-2", not @first? && "border-t"]}
+          class={["py-2", not @first? && "border-t border-t-base-300"]}
         >
           <div class="flex items-center justify-between gap-4">
             <span class="min-w-0">
