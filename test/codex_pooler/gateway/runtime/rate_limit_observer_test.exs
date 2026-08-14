@@ -195,6 +195,27 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
       assert Decimal.equal?(window.used_percent, Decimal.new("43.0"))
       wait_for_rate_limit_event_tasks()
     end
+
+    test "persists standalone-CR rate-limit events and consumes a deferred LF" do
+      identity = active_upstream_assignment_fixture().identity
+      reset_at = DateTime.add(DateTime.utc_now(), 900, :second) |> DateTime.truncate(:second)
+
+      event =
+        "event: codex.rate_limits\r" <>
+          "data: #{Jason.encode!(codex_rate_limits_payload(44, reset_at))}\r\r"
+
+      assert {:ok, state} =
+               RateLimitObserver.record_events(identity, event, RateLimitObserver.event_state())
+
+      assert state.buffer == ""
+      assert window = wait_for_rate_limit_event_window(identity, "primary")
+      assert Decimal.equal?(window.used_percent, Decimal.new("44.0"))
+
+      assert {:ok, %{buffer: "", skip_leading_lf?: false}} =
+               RateLimitObserver.record_events(identity, "\n", state)
+
+      wait_for_rate_limit_event_tasks()
+    end
   end
 
   describe "saved reset convergence from runtime evidence" do

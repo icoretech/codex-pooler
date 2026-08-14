@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
 
   require Logger
 
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.SavedResets.Convergence
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -15,7 +16,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
 
   @type observer_result :: :ok
   @type observer_metadata :: keyword()
-  @type event_state :: %{required(:buffer) => binary()}
+  @type event_state :: StreamProtocol.sse_block_state()
 
   @spec record_headers(UpstreamIdentity.t(), Req.Response.t()) :: observer_result()
   def record_headers(%UpstreamIdentity{} = identity, response) do
@@ -61,7 +62,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
   def record_websocket_frame_headers(_identity, _headers), do: :ok
 
   @spec event_state() :: event_state()
-  def event_state, do: %{buffer: ""}
+  def event_state, do: StreamProtocol.new_sse_block_state()
 
   @spec record_complete_events(UpstreamIdentity.t() | term(), binary() | term()) ::
           observer_result()
@@ -82,12 +83,11 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
 
   @spec record_events(UpstreamIdentity.t() | term(), binary() | term(), event_state()) ::
           {:ok, event_state()}
-  def record_events(%UpstreamIdentity{} = identity, data, %{buffer: previous_buffer})
-      when is_binary(data) and is_binary(previous_buffer) do
-    {events, buffer} = rate_limit_event_payloads(data, previous_buffer)
+  def record_events(%UpstreamIdentity{} = identity, data, state) when is_binary(data) do
+    {events, state} = rate_limit_event_payloads(data, normalize_event_state(state))
 
     persist_events_async(identity, events)
-    {:ok, %{buffer: buffer}}
+    {:ok, state}
   end
 
   def record_events(_identity, _data, state), do: {:ok, normalize_event_state(state)}
@@ -188,7 +188,13 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
   defp persisted_account_evidence?(windows),
     do: Enum.any?(windows, &(&1.quota_key == "account"))
 
-  defp normalize_event_state(%{buffer: buffer}) when is_binary(buffer), do: %{buffer: buffer}
+  defp normalize_event_state(%{buffer: buffer, skip_leading_lf?: skip_leading_lf?})
+       when is_binary(buffer) and is_boolean(skip_leading_lf?),
+       do: %{buffer: buffer, skip_leading_lf?: skip_leading_lf?}
+
+  defp normalize_event_state(%{buffer: buffer}) when is_binary(buffer),
+    do: %{buffer: buffer, skip_leading_lf?: false}
+
   defp normalize_event_state(_state), do: event_state()
 
   defp rate_limit_error_payloads(body) do
@@ -202,9 +208,13 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
     end
   end
 
-  defp rate_limit_event_payloads(data, previous_buffer) do
-    scan = previous_buffer <> data
-    {complete_blocks, buffer} = complete_sse_blocks(scan)
+  defp rate_limit_event_payloads(data, state) do
+    scan = state.buffer <> data
+
+    {complete_blocks, state} =
+      StreamProtocol.complete_sse_blocks(state, data, bounded?: false)
+
+    state = bounded_event_state(state)
 
     # Compatibility stance: the provider emits the event type as the literal
     # `codex.rate_limits`, not as a JSON unicode escape. Scan retained+current
@@ -212,37 +222,16 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserver do
     if :binary.match(scan, @rate_limit_marker) != :nomatch do
       direct_events = data |> String.trim() |> rate_limit_events_from_json()
       events = direct_events ++ rate_limit_events_from_sse_blocks(complete_blocks)
-      {events, buffer}
+      {events, state}
     else
-      {[], buffer}
+      {[], state}
     end
   end
 
-  defp complete_sse_blocks(data) do
-    data =
-      if :binary.match(data, "\r") == :nomatch, do: data, else: String.replace(data, "\r\n", "\n")
+  defp bounded_event_state(%{buffer: buffer}) when byte_size(buffer) > @max_event_buffer_bytes,
+    do: event_state()
 
-    if String.contains?(data, "\n\n") do
-      parts = String.split(data, "\n\n")
-      ends_with_separator? = String.ends_with?(data, "\n\n")
-
-      {complete, buffer} =
-        if ends_with_separator? do
-          {parts, ""}
-        else
-          {Enum.drop(parts, -1), List.last(parts) || ""}
-        end
-
-      {Enum.reject(complete, &(&1 == "")), bounded_incomplete_sse_block(buffer)}
-    else
-      {[], bounded_incomplete_sse_block(data)}
-    end
-  end
-
-  defp bounded_incomplete_sse_block(buffer) when byte_size(buffer) > @max_event_buffer_bytes,
-    do: ""
-
-  defp bounded_incomplete_sse_block(buffer), do: buffer
+  defp bounded_event_state(state), do: state
 
   defp rate_limit_events_from_sse_blocks(blocks) do
     Enum.flat_map(blocks, fn block ->
