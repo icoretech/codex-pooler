@@ -13,6 +13,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
 
   @websocket_frame_timeout 1_000
   @large_websocket_frame_timeout 5_000
+  @websocket_transport_barrier_payload "codex-pooler-test-barrier"
   @model_serving_websocket_routes [
     {:backend_responses, "/backend-api/codex/responses"},
     {:backend_v1_responses, "/backend-api/codex/v1/responses"},
@@ -160,6 +161,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
         })
 
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, queued_payload)
+      {conn, websocket} = public_websocket_transport_barrier!(conn, websocket, ref)
       assert_public_websocket_queue_length!(server, 1)
 
       {{conn, websocket}, logs} =
@@ -184,6 +186,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
               })
 
             {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, new_payload)
+            {conn, websocket} = public_websocket_transport_barrier!(conn, websocket, ref)
             assert_public_websocket_queue_length!(server, 0)
             {conn, websocket}
           end
@@ -222,18 +225,25 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
     initial_node = Node.self()
     initial_connected_nodes = MapSet.new(Node.list(:connected))
     initial_partition_guard = Application.fetch_env(:kernel, :prevent_overlapping_partitions)
-    initial_epmd = :erl_epmd.names()
     test_pid = self()
 
     assert_raise RuntimeError, "forced post-start peer setup failure", fn ->
       start_instance_settings_broadcast_peer!(fn peer ->
         peer_monitor = Process.monitor(peer.pid)
-        send(test_pid, {:partial_peer_started, peer, peer_monitor})
+
+        started_distribution_node =
+          if peer.distribution.node_started?, do: Node.self()
+
+        send(
+          test_pid,
+          {:partial_peer_started, peer, peer_monitor, started_distribution_node}
+        )
+
         raise "forced post-start peer setup failure"
       end)
     end
 
-    assert_receive {:partial_peer_started, peer, peer_monitor}
+    assert_receive {:partial_peer_started, peer, peer_monitor, started_distribution_node}
 
     try do
       assert_receive {:DOWN, ^peer_monitor, :process, peer_pid, _reason},
@@ -247,7 +257,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
       assert Application.fetch_env(:kernel, :prevent_overlapping_partitions) ==
                initial_partition_guard
 
-      assert_epmd_restored!(initial_epmd)
+      assert_epmd_names_released!([peer.node, started_distribution_node])
     after
       stop_instance_settings_broadcast_peer!(peer)
     end
@@ -466,6 +476,63 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
     assert :queue.len(websock_state.queued_response_payloads) == expected_length
   end
 
+  defp public_websocket_transport_barrier!(conn, websocket, ref) do
+    {:ok, websocket, data} =
+      Mint.WebSocket.encode(websocket, {:ping, @websocket_transport_barrier_payload})
+
+    {:ok, conn} = Mint.WebSocket.stream_request_body(conn, ref, data)
+
+    await_public_websocket_transport_barrier!(
+      conn,
+      websocket,
+      ref,
+      System.monotonic_time(:millisecond) + @large_websocket_frame_timeout
+    )
+  end
+
+  defp await_public_websocket_transport_barrier!(conn, websocket, ref, deadline) do
+    timeout = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      message ->
+        case Mint.WebSocket.stream(conn, message) do
+          :unknown ->
+            await_public_websocket_transport_barrier!(conn, websocket, ref, deadline)
+
+          {:ok, conn, responses} ->
+            {websocket, pong?} = decode_transport_barrier_responses!(websocket, ref, responses)
+
+            if pong? do
+              {conn, websocket}
+            else
+              await_public_websocket_transport_barrier!(conn, websocket, ref, deadline)
+            end
+        end
+    after
+      timeout -> flunk("timed out waiting for websocket transport barrier")
+    end
+  end
+
+  defp decode_transport_barrier_responses!(websocket, ref, responses) do
+    Enum.reduce(responses, {websocket, false}, fn
+      {:data, ^ref, response_data}, {websocket, pong?} ->
+        assert {:ok, websocket, frames} = Mint.WebSocket.decode(websocket, response_data)
+
+        unexpected_frames =
+          Enum.reject(frames, fn
+            {:pong, @websocket_transport_barrier_payload} -> true
+            frame -> metadata_control_frame?(frame)
+          end)
+
+        assert unexpected_frames == []
+
+        {websocket, pong? or {:pong, @websocket_transport_barrier_payload} in frames}
+
+      _response, state ->
+        state
+    end)
+  end
+
   defp assert_sanitized_websocket_revocation_log!(logs, setup) do
     revocation_lines =
       logs
@@ -548,13 +615,48 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketFirewallRevocationTest do
 
   defp restore_partition_guard(:unchanged), do: :ok
 
-  defp assert_epmd_restored!({:ok, initial_names}) do
-    assert {:ok, restored_names} = :erl_epmd.names()
-    assert MapSet.new(restored_names) == MapSet.new(initial_names)
+  defp assert_epmd_names_released!(nodes) do
+    expected_names =
+      nodes
+      |> Enum.reject(&is_nil/1)
+      |> Enum.map(fn node ->
+        node
+        |> Atom.to_string()
+        |> String.split("@", parts: 2)
+        |> hd()
+      end)
+      |> MapSet.new()
+
+    await_epmd_names_released!(expected_names, System.monotonic_time(:millisecond) + 1_000)
   end
 
-  defp assert_epmd_restored!({:error, _reason}) do
-    assert {:error, _reason} = :erl_epmd.names()
+  defp await_epmd_names_released!(expected_names, deadline) do
+    registered_names =
+      case :erl_epmd.names() do
+        {:ok, names} ->
+          names
+          |> Enum.map(fn {name, _port} -> List.to_string(name) end)
+          |> MapSet.new()
+
+        {:error, _reason} ->
+          MapSet.new()
+      end
+
+    remaining_names = MapSet.intersection(expected_names, registered_names)
+
+    cond do
+      MapSet.size(remaining_names) == 0 ->
+        :ok
+
+      System.monotonic_time(:millisecond) < deadline ->
+        receive do
+        after
+          10 -> await_epmd_names_released!(expected_names, deadline)
+        end
+
+      true ->
+        flunk("EPMD still registers acquired nodes: #{inspect(remaining_names)}")
+    end
   end
 
   defp broadcast_peer_source do
