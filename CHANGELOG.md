@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.2...codex-pooler-v0.6.3) (2026-08-14)
+
+
+### Features
+
+* **admin:** add structured bulkhead editor ([86c735d](https://github.com/icoretech/codex-pooler/commit/86c735d7c99f989eacf5af23b6e94e85a2d9c7b5))
+* **gateway:** support Responses WebSocket stream IDs ([302f9f6](https://github.com/icoretech/codex-pooler/commit/302f9f69fa439744b372951b7be7d1598c528932))
+
+
+### Bug Fixes
+
+* **gateway:** preserve replay URL citations ([da88830](https://github.com/icoretech/codex-pooler/commit/da8883081266cbd3e4fa98ff113c32908a9384a5))
+* **test:** keep EPMD alive across test partitions ([197aafa](https://github.com/icoretech/codex-pooler/commit/197aafa9e2d5f132598a95408c12e6ab596a130a))
+
 ## [0.6.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.1...codex-pooler-v0.6.2) (2026-08-14)
 
 
