@@ -1309,11 +1309,25 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       responses_chat = CompatibilityMatrix.by_slug!(:responses_chat)
       fixture = CompatibilityMatrix.fixture!(:responses_chat)
 
-      assert responses_chat.contract =~ "terminal compaction_trigger backend payloads bridge"
+      assert responses_chat.contract =~
+               "terminal compaction_trigger backend payloads on either backend Responses alias retain the final trigger"
+
+      assert responses_chat.contract =~ "/backend-api/codex/responses"
       assert responses_chat.contract =~ "/backend-api/codex/responses/compact"
+      assert responses_chat.contract =~ "buffered JSON"
+      assert responses_chat.contract =~ "compact accounting"
+
+      assert responses_chat.contract =~
+               "strip transient stream/include/store/prompt_cache_options fields"
+
+      assert responses_chat.contract =~ "direct compact aliases preserve their canonical legacy"
+      assert responses_chat.contract =~ "public /v1/responses/compact remains unsupported"
       assert responses_chat.contract =~ "preserves only schema-backed string replay identity"
       assert responses_chat.contract =~ "drops other compact-result fields"
       assert responses_chat.contract =~ "malformed trigger placement is rejected before dispatch"
+
+      refute responses_chat.contract =~ "terminal_trigger_bridges_to_compact"
+      refute responses_chat.contract =~ "strips compaction_trigger"
 
       assert responses_chat.contract =~
                "public /v1 Responses accepts encrypted compaction output replay items"
@@ -1336,26 +1350,24 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
       assert fixture.compaction_recovery_boundary == %{
                backend_compaction_trigger: %{
-                 routes: ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"],
-                 behavior: "terminal_trigger_bridges_to_compact",
-                 compact_endpoint: "/backend-api/codex/responses/compact",
+                 client_routes: [
+                   "/backend-api/codex/responses",
+                   "/backend-api/codex/v1/responses"
+                 ],
+                 upstream_endpoint: "/backend-api/codex/responses",
+                 accounting_endpoint: "/backend-api/codex/responses/compact",
+                 admission_endpoint: :original_client_route,
                  route_class: "proxy_compact",
                  transport: "http_compact_json",
                  valid_trigger: "exactly_one_final_input_item",
                  malformed_trigger: %{status: 400, param: "input", upstream_dispatch: false},
-                 strips: ["compaction_trigger", "stream", "include", "store"],
-                 preserves: [
-                   "model",
-                   "instructions",
-                   "input",
-                   "tools",
-                   "parallel_tool_calls",
-                   "reasoning",
-                   "service_tier",
-                   "prompt_cache_key",
-                   "text"
-                 ],
-                 output_events: ["response.output_item.done", "response.completed", "[DONE]"],
+                 retained: ["final_compaction_trigger"],
+                 strips: ["stream", "include", "store", "prompt_cache_options"],
+                 response_adaptation: %{
+                   upstream: "buffered_responses_json",
+                   downstream: "backend_responses_sse",
+                   output_events: ["response.output_item.done", "response.completed", "[DONE]"]
+                 },
                  output_item: %{
                    "type" => "compaction",
                    "encrypted_content" => "encrypted_content",
@@ -1377,7 +1389,15 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                    terminal_events_share_identical_item: true
                  },
                  websocket_bridge: false,
-                 hidden_replay: false
+                 hidden_replay: false,
+                 direct_compact_preservation: %{
+                   client_routes: [
+                     "/backend-api/codex/responses/compact",
+                     "/backend-api/codex/v1/responses/compact"
+                   ],
+                   upstream_endpoint: "/backend-api/codex/responses/compact",
+                   behavior: "legacy_compact_route_unchanged"
+                 }
                },
                context_overflow: %{
                  recovery_owner: "client_or_upstream",

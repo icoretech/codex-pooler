@@ -948,9 +948,11 @@ serve. For deployed instances, change `baseUrl` to
 `remoteCompaction.v2Endpoint` to
 `https://codex-pooler.example.com/backend-api/codex/responses`.
 
-Keep `remoteCompaction` under the `codex-pooler` provider so `/compact remote`
-can use Codex Pooler's backend compact route while normal OMP model traffic stays
-on the narrow OpenAI-compatible `/v1` Responses route. Do not use
+Keep `remoteCompaction` under the `codex-pooler` provider. Its `endpoint` stays
+the direct backend compact endpoint for OMP's direct compact path, while
+`v2Endpoint` is the normal backend Responses endpoint for terminal-trigger
+streaming compaction. Normal OMP model traffic stays on the narrow
+OpenAI-compatible `/v1` Responses route. Do not use
 `compaction.remoteEndpoint` for this path: OMP reserves that setting for generic
 summary services that accept `{systemPrompt, prompt}` JSON, not provider-native
 Responses compact payloads. In this setup, `omp config get
@@ -960,8 +962,13 @@ from the provider-level `remoteCompaction` block in `models.yml`.
 `remoteCompaction.v2StreamingEnabled: true` lets OMP use the Codex-style
 streaming compaction path. OMP sends a normal backend Responses request with a
 terminal `compaction_trigger` to `remoteCompaction.v2Endpoint`; Codex Pooler
-bridges that request to the backend compact route and returns Responses SSE. The
-V2 flag is not a global `compaction` setting: keep it inside
+retains that final item and sends the request through the normal backend
+Responses upstream endpoint. The request remains compact-accounted and buffered
+through the compact transport, while downstream canonical Responses SSE remains
+the same.
+Direct backend compact aliases remain supported and use the canonical legacy
+`/backend-api/codex/responses/compact` upstream endpoint. The V2 flag is not a
+global `compaction` setting: keep it inside
 `remoteCompaction`.
 
 Current OMP source derives an effort thinking surface, including `xhigh`, for

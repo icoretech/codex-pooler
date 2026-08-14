@@ -229,7 +229,7 @@ Routing settings are split into selection policy, continuity, and compatibility.
 
 `Request compression` enables per-Pool request compression. It is off by default and applies only to upstream-bound Responses tool-output payloads on eligible request routes. It is request-side only: Codex Pooler does not store raw outputs, does not store upstream response bodies, and does not implement CCR/retrieval.
 
-Eligible families are backend Responses, backend `/v1/responses`, backend and public translated chat completions, public `/v1/responses`, backend compact routes, and websocket `response.create` dispatches. Multipart, file, audio, image, admin, MCP, usage, and other non-Responses requests are not eligible. Public `/v1/responses/compact` remains unsupported because it has no upstream compact dispatch.
+Eligible families are backend Responses, compact-accounted terminal-trigger backend Responses dispatches, backend `/v1/responses`, backend and public translated chat completions, public `/v1/responses`, direct backend compact routes, and websocket `response.create` dispatches. Terminal triggers use the normal backend Responses upstream endpoint while retaining their compact accounting and transport identity; direct compact routes use the canonical legacy compact upstream endpoint. Multipart, file, audio, image, admin, MCP, usage, and other non-Responses requests are not eligible. Public `/v1/responses/compact` remains unsupported because it has no upstream compact dispatch.
 
 Within eligible tool outputs, valid JSON objects or arrays can be minified even when they are surrounded by ordinary explanatory text. Every surrounding byte stays unchanged. Quoted JSON-looking text, malformed or over-limit spans, and protected exact-output tool results remain pass-through.
 
@@ -319,7 +319,9 @@ If a catalog refresh no longer returns a model, an existing Lite or Full overrid
 
 Codex, OpenCode, and other supported public OpenAI-compatible clients keep their existing Pool API key, base URL, configuration, and model id. Codex Pooler changes only the backend request selected for that Pool-model pair. `GET /v1/models` remains unchanged and does not expose serving-mode fields; public `POST /v1/responses/compact` remains unsupported.
 
-Backend compact routes use the same Lite body rewrite as ordinary backend Responses routes before compact-specific projection. In Lite, top-level `tools` and non-blank `instructions` move into `input`; compact-only controls are still removed. In Full, compact keeps its narrow projection without the Lite rewrite.
+Terminal-trigger requests on either backend Responses route retain the final `compaction_trigger`, dispatch through the normal backend Responses upstream endpoint, and preserve their compact accounting and transport identity. Direct backend compact aliases remain separate and dispatch through the canonical legacy `/backend-api/codex/responses/compact` upstream endpoint.
+
+Backend compact handling uses the same Lite body rewrite as ordinary backend Responses routes before compact-specific projection. In Lite, top-level `tools` and non-blank `instructions` move into `input`; compact-only controls are still removed. In Full, compact keeps its narrow projection without the Lite rewrite.
 
 One HTTP request or one websocket `response.create` turn keeps the mode it started with across retries, assignment failover, and cross-node owner forwarding. A later websocket turn can pick up a saved change. Mode selection does not remove otherwise eligible assignments from the candidate set.
 

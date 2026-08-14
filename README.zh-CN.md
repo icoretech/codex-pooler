@@ -829,6 +829,12 @@ providers:
     api: openai-responses
     apiKey: CODEX_POOLER_API_KEY
     authHeader: true
+    remoteCompaction:
+      enabled: true
+      api: openai-codex-responses
+      endpoint: http://localhost:4000/backend-api/codex/responses/compact
+      v2StreamingEnabled: true
+      v2Endpoint: http://localhost:4000/backend-api/codex/responses
     models:
       - id: gpt-5.6-terra
         name: GPT-5.6 Terra via Codex Pooler
@@ -865,7 +871,28 @@ providers:
 `apiKey: CODEX_POOLER_API_KEY` 会让 OMP 在运行时解析该环境变量。
 `authHeader: true` 会让 OMP 以 `Authorization: Bearer ...` 发送 Pool API 密钥。
 只定义你分配到的 Pool 能服务的模型 id。对于已部署实例，把 `baseUrl` 改为
-`https://codex-pooler.example.com/v1`。
+`https://codex-pooler.example.com/v1`，把 `remoteCompaction.endpoint` 改为
+`https://codex-pooler.example.com/backend-api/codex/responses/compact`，并把
+`remoteCompaction.v2Endpoint` 改为
+`https://codex-pooler.example.com/backend-api/codex/responses`。
+
+将 `remoteCompaction` 保留在 `codex-pooler` provider 下。它的 `endpoint` 继续是
+OMP 直接 compact 路径使用的后端 compact endpoint，而 `v2Endpoint` 是终端触发器
+流式 compaction 使用的普通后端 Responses endpoint。普通 OMP 模型流量仍走窄范围
+OpenAI 兼容的 `/v1` Responses 路径。不要把 `compaction.remoteEndpoint` 用于这里：
+OMP 会把该设置保留给接受 `{systemPrompt, prompt}` JSON 的通用摘要服务，而不是
+provider 原生的 Responses compact payload。在这个配置中，`omp config get
+compaction.remoteEndpoint` 应保持为 `(not set)`；远程能力来自 `models.yml` 内
+provider 级别的 `remoteCompaction` 块。
+
+`remoteCompaction.v2StreamingEnabled: true` 让 OMP 使用 Codex 风格的流式
+compaction 路径。OMP 会把带有终端 `compaction_trigger` 的普通后端 Responses 请求
+发送到 `remoteCompaction.v2Endpoint`；Codex Pooler 会保留该最后一项，并通过普通
+后端 Responses upstream endpoint 发送请求。该请求仍通过 compact transport 做
+compact accounting 和缓冲，而下游规范化 Responses SSE 保持不变。直接后端 compact alias
+仍受支持，并使用规范的旧版
+`/backend-api/codex/responses/compact` upstream endpoint。V2 标志不是全局
+`compaction` 设置：请将它保留在 `remoteCompaction` 内。
 
 当前 OMP 源码会为设置了 `reasoning: true` 的自定义 `openai-responses` 模型推导
 包含 `xhigh` 的 effort thinking 能力。只有在你要覆盖推导出的 effort 列表、wire
@@ -915,6 +942,8 @@ modelRoles:
 compaction:
   thresholdPercent: 95
   reserveTokens: 128000
+  remoteEnabled: true
+  remoteStreamingV2Enabled: true
   midTurnEnabled: true
   handoffSaveToDisk: true
 ```

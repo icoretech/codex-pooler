@@ -115,10 +115,10 @@ These endpoints keep Codex backend semantics and do not translate through the pu
     </tr>
     <tr>
       <td><code>POST /backend-api/codex/responses</code></td>
-      <td><code>/backend-api/codex/responses</code>, or <code>/backend-api/codex/responses/compact</code> for terminal compaction triggers</td>
+      <td><code>/backend-api/codex/responses</code>; terminal compaction triggers keep compact accounting and transport</td>
       <td>No; backend payload is proxied through gateway normalization</td>
       <td>Supported</td>
-      <td>Primary Codex Responses route for JSON and SSE work. A valid terminal <code>compaction_trigger</code> bridges through compact handling and returns backend Responses SSE with encrypted compaction output. The bridge selects the first valid <code>compaction</code> or <code>compaction_summary</code> item in output, then falls back to a valid top-level <code>compaction_summary</code>. Strict variant validation and a fixed safe allowlist rebuild a canonical <code>compaction</code> item from encrypted content, a string source item <code>id</code> when present, and structurally validated opaque replay data. The response-level <code>id</code> remains separate from the item <code>id</code>. Malformed or missing optional values are omitted, all other compact-result fields are dropped, and the same canonical item appears in both terminal events. This is terminal-item fidelity only and does not widen the metadata-only privacy boundary. The compact bridge strips compact-unsupported controls such as <code>store</code>, <code>stream</code>, and <code>include</code> before upstream dispatch.</td>
+      <td>Primary Codex Responses route for JSON and SSE work. A valid terminal <code>compaction_trigger</code> retains its final input item, dispatches through the normal backend Responses upstream endpoint, remains compact-accounted and buffered through compact transport, and returns backend Responses SSE with encrypted compaction output. The bridge selects the first valid <code>compaction</code> or <code>compaction_summary</code> item in output, then falls back to a valid top-level <code>compaction_summary</code>. Strict variant validation and a fixed safe allowlist rebuild a canonical <code>compaction</code> item from encrypted content, a string source item <code>id</code> when present, and structurally validated opaque replay data. The response-level <code>id</code> remains separate from the item <code>id</code>. Malformed or missing optional values are omitted, all other compact-result fields are dropped, and the same canonical item appears in both terminal events. This is terminal-item fidelity only and does not widen the metadata-only privacy boundary. The compact bridge strips compact-unsupported controls such as <code>store</code>, <code>stream</code>, <code>include</code>, and <code>prompt_cache_options</code> before upstream dispatch.</td>
     </tr>
     <tr>
       <td><code>GET /backend-api/codex/responses</code></td>
@@ -132,7 +132,7 @@ These endpoints keep Codex backend semantics and do not translate through the pu
       <td><code>/backend-api/codex/responses/compact</code></td>
       <td>No</td>
       <td>Supported</td>
-      <td>Backend compact compatibility route.</td>
+      <td>Backend compact compatibility route. Direct compact requests use the canonical legacy <code>/backend-api/codex/responses/compact</code> upstream endpoint; this remains distinct from terminal-trigger requests on the normal Responses route.</td>
     </tr>
     <tr>
       <td><code>POST /backend-api/codex/images/generations</code></td>
@@ -175,10 +175,10 @@ Some Codex clients use `/backend-api/codex/v1` as their base URL. Codex Pooler e
     </tr>
     <tr>
       <td><code>POST /backend-api/codex/v1/responses</code></td>
-      <td><code>/backend-api/codex/responses</code>, or <code>/backend-api/codex/responses/compact</code> for terminal compaction triggers</td>
+      <td><code>/backend-api/codex/responses</code>; terminal compaction triggers keep compact accounting and transport</td>
       <td>No</td>
       <td>Supported</td>
-      <td>Alias for backend Responses. Prompt-cache routing locality can apply here. Terminal compaction triggers follow the canonical compact bridge: it selects the first valid <code>compaction</code> or <code>compaction_summary</code> output item, then a valid top-level <code>compaction_summary</code> fallback. Strict variant validation and a fixed safe allowlist rebuild a canonical <code>compaction</code> item from encrypted content, a string source item <code>id</code> when present, and structurally validated opaque replay data; the response-level <code>id</code> remains separate. Missing or malformed optional values are omitted, other compact-result fields are dropped, and both terminal events contain the identical item. This is terminal-item fidelity only and does not widen the metadata-only privacy boundary.</td>
+      <td>Alias for backend Responses. Prompt-cache routing locality can apply here. A terminal <code>compaction_trigger</code> retains its final input item, uses the normal backend Responses upstream endpoint, and remains compact-accounted and buffered through compact transport. The bridge then selects the first valid <code>compaction</code> or <code>compaction_summary</code> output item, then a valid top-level <code>compaction_summary</code> fallback. Strict variant validation and a fixed safe allowlist rebuild a canonical <code>compaction</code> item from encrypted content, a string source item <code>id</code> when present, and structurally validated opaque replay data; the response-level <code>id</code> remains separate. Missing or malformed optional values are omitted, other compact-result fields are dropped, and both terminal events contain the identical item. This is terminal-item fidelity only and does not widen the metadata-only privacy boundary.</td>
     </tr>
     <tr>
       <td><code>GET /backend-api/codex/v1/responses</code></td>
@@ -192,7 +192,7 @@ Some Codex clients use `/backend-api/codex/v1` as their base URL. Codex Pooler e
       <td><code>/backend-api/codex/responses/compact</code></td>
       <td>No</td>
       <td>Supported</td>
-      <td>Alias for backend compact. Prompt-cache routing locality is excluded.</td>
+      <td>Alias for backend compact. Direct compact requests use the canonical legacy <code>/backend-api/codex/responses/compact</code> upstream endpoint. Prompt-cache routing locality is excluded.</td>
     </tr>
     <tr>
       <td><code>POST /backend-api/codex/v1/chat/completions</code></td>
@@ -399,7 +399,8 @@ items and their input order exactly. Start a new chain without
 The stable public item fields are `type: "compaction"`, nonblank string
 `encrypted_content`, and optional `id` as absent, string, or `null`. Unknown
 compaction fields and malformed values fail before upstream dispatch. Public
-`POST /v1/responses/compact` remains unsupported.
+`POST /v1/responses/compact` remains unsupported. This replay behavior does not
+enable a public direct compact route.
 
 ### Pool image permission
 
@@ -812,7 +813,7 @@ Eligible route families are exact:
   </tbody>
 </table>
 
-Unsupported surfaces are multipart, file, audio, image, admin, MCP, usage, and other non-Responses routes. `POST /v1/responses/compact` remains unsupported because the public compact route has no upstream dispatch.
+Unsupported surfaces are multipart, file, audio, image, admin, MCP, usage, and other non-Responses routes. `POST /v1/responses/compact` remains unsupported because the public compact route has no upstream dispatch. This does not change support for direct backend compact aliases or terminal-trigger backend Responses dispatches.
 
 Compression is fail-open. Scanner, tokenizer, compression, and limit errors preserve the original upstream request body and record safe `payload_compression` metadata. JSON request bodies over 1 MiB skip before scanning, and a dispatch processes at most 50 output candidates. Token counting is local and in-process with tokenizer data shipped by the application; it does not call OpenAI or load a local model.
 

@@ -120,8 +120,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Eligibility do
         false
 
       route_class == RouteClass.proxy_compact() ->
-        compact_endpoint?(source_endpoint(endpoints)) and
-          endpoints.upstream_endpoint == @backend_compact_endpoint
+        compact_route_eligible?(endpoints, request_options)
 
       route_class == RouteClass.proxy_websocket() ->
         responses_endpoint?(source_endpoint(endpoints)) and
@@ -159,6 +158,19 @@ defmodule CodexPooler.Gateway.RequestCompression.Eligibility do
 
   defp compact_endpoint?(endpoint) when endpoint in @compact_source_endpoints, do: true
   defp compact_endpoint?(_endpoint), do: false
+
+  defp compact_route_eligible?(endpoints, %RequestOptions{} = request_options) do
+    transport(request_options) == "http_compact_json" and
+      compact_endpoint?(endpoints.endpoint) and
+      compact_endpoint?(source_endpoint(endpoints)) and
+      compact_upstream_endpoint?(endpoints.upstream_endpoint)
+  end
+
+  defp compact_upstream_endpoint?(endpoint)
+       when endpoint in [@backend_compact_endpoint, @backend_responses_endpoint],
+       do: true
+
+  defp compact_upstream_endpoint?(_endpoint), do: false
 
   defp public_unsupported_compact?(endpoints) do
     endpoints

@@ -23,6 +23,7 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
     reasoning
     service_tier
     prompt_cache_key
+    prompt_cache_options
     text
   )
 
@@ -219,9 +220,7 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   defp visible_text?(_value), do: false
 
   defp compact_payload(payload) do
-    payload
-    |> project_payload()
-    |> Map.put("input", payload["input"] |> Enum.drop(-1))
+    project_payload(payload)
   end
 
   defp maybe_put_prompt_cache_key(compact_payload, %{"prompt_cache_key" => value}) do
