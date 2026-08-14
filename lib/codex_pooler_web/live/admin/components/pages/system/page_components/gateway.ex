@@ -3,7 +3,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
 
   use CodexPoolerWeb, :html
 
-  alias CodexPoolerWeb.Admin.SystemPageComponents.FormControls
+  alias CodexPoolerWeb.Admin.SystemPageComponents.{BulkheadEditor, FormControls}
   alias CodexPoolerWeb.Admin.SystemSettingsForm
 
   attr :selected_tab, :string, required: true
@@ -31,15 +31,14 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
           <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <FormControls.scalar_controls form={gateway_form} controls={gateway_scalar_controls()} />
           </div>
-          <div class="grid gap-4 lg:grid-cols-2">
-            <FormControls.json_textarea
-              id="instance-settings-bulkheads"
-              name="instance_settings[gateway][bulkheads]"
-              label="Route-class bulkheads"
-              value={
-                param_json_value(@form_params, "gateway", "bulkheads", @settings.gateway.bulkheads)
+          <div class="grid gap-4">
+            <BulkheadEditor.editor
+              bulkheads={bulkhead_values(@form_params, @settings.gateway.bulkheads)}
+              active_preset={
+                @form_params
+                |> bulkhead_values(@settings.gateway.bulkheads)
+                |> SystemSettingsForm.bulkhead_preset()
               }
-              hint="Per route-class concurrency, queue length, and queue timeout policy as JSON."
             />
             <FormControls.json_textarea
               id="instance-settings-model-context-window-overrides"
@@ -451,6 +450,13 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
       value when is_binary(value) -> value
       value when is_map(value) -> Jason.encode!(value, pretty: true)
       _missing -> Jason.encode!(fallback || %{}, pretty: true)
+    end
+  end
+
+  defp bulkhead_values(form_params, fallback) do
+    case get_in(form_params, ["gateway", "bulkheads"]) do
+      %{} = value -> value
+      _missing_or_invalid -> fallback
     end
   end
 end

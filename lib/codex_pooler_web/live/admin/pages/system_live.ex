@@ -125,6 +125,33 @@ defmodule CodexPoolerWeb.Admin.SystemLive do
     save_instance_settings(socket, params, autosave?: true)
   end
 
+  def handle_event("apply_bulkhead_preset", %{"preset" => preset}, socket) do
+    case SystemSettingsForm.apply_bulkhead_preset(socket.assigns.form_params, preset) do
+      {:ok, form_params} ->
+        changeset =
+          socket.assigns.settings
+          |> SystemSettingsForm.group_changeset(form_params, "gateway")
+          |> Map.put(:action, :validate)
+
+        {:noreply,
+         socket
+         |> assign(:form_params, form_params)
+         |> assign(:smtp_test_status, nil)
+         |> put_card_status(
+           "gateway",
+           SystemSettingsForm.dirty_card_status(
+             form_params,
+             socket.assigns.group_snapshots,
+             "gateway"
+           )
+         )
+         |> put_group_form("gateway", changeset)}
+
+      :error ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_event("test_smtp", _params, socket) do
     params =
       SystemSettingsForm.group_only_params(

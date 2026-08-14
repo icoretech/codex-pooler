@@ -4,6 +4,7 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsForm do
   import Phoenix.Component, only: [to_form: 2]
 
   alias CodexPooler.InstanceSettings.Settings
+  alias CodexPooler.RouteClass
 
   @json_fields [{"gateway", "bulkheads"}, {"gateway", "model_context_window_overrides"}]
   @array_fields [
@@ -17,6 +18,8 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsForm do
     {"X-Real-IP", "x_real_ip"}
   ]
   @settings_groups ~w(gateway ingress files transcription operator catalog development mcp metrics smtp)
+  @bulkhead_fields ~w(max_concurrency queue_limit queue_timeout_ms)
+  @bulkhead_presets [default: 1, medium: 2, large: 4]
 
   @spec settings_groups() :: [String.t()]
   def settings_groups, do: @settings_groups
@@ -145,9 +148,45 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsForm do
     |> strip_form_meta()
     |> normalize_array_fields()
     |> normalize_json_fields()
+    |> normalize_bulkhead_fields()
     |> normalize_write_only("metrics", "bearer_token", "bearer_token_action")
     |> normalize_write_only("smtp", "password", "password_action")
   end
+
+  @spec apply_bulkhead_preset(map(), String.t()) :: {:ok, map()} | :error
+  def apply_bulkhead_preset(form_params, preset) when is_map(form_params) and is_binary(preset) do
+    with {_preset_id, multiplier} <-
+           Enum.find(@bulkhead_presets, fn {preset_id, _multiplier} ->
+             Atom.to_string(preset_id) == preset
+           end),
+         %{} = gateway <- Map.get(form_params, "gateway"),
+         %{} = current <- Map.get(gateway, "bulkheads") do
+      defaults = RouteClass.default_bulkheads()
+
+      bulkheads =
+        Map.new(RouteClass.all(), fn route_class ->
+          current_config = Map.get(current, route_class, %{})
+          default_config = Map.fetch!(defaults, route_class)
+
+          config = preset_bulkhead_config(route_class, current_config, default_config, multiplier)
+
+          {route_class, config}
+        end)
+
+      {:ok, put_in(form_params, ["gateway", "bulkheads"], bulkheads)}
+    else
+      _invalid -> :error
+    end
+  end
+
+  @spec bulkhead_preset(map()) :: :default | :medium | :large | :custom
+  def bulkhead_preset(bulkheads) when is_map(bulkheads) do
+    Enum.find_value(@bulkhead_presets, :custom, fn {preset, multiplier} ->
+      if bulkhead_preset_matches?(bulkheads, multiplier), do: preset
+    end)
+  end
+
+  def bulkhead_preset(_bulkheads), do: :custom
 
   @spec params_from_settings(Settings.t()) :: map()
   def params_from_settings(%Settings{} = settings) do
@@ -206,6 +245,44 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsForm do
 
   defp normalize_json_fields(params),
     do: Enum.reduce(@json_fields, params, &normalize_json_field/2)
+
+  defp normalize_bulkhead_fields(params) do
+    update_nested(params, "gateway", "bulkheads", fn
+      bulkheads when is_map(bulkheads) ->
+        Map.new(bulkheads, fn {route_class, config} ->
+          {route_class, normalize_bulkhead_config(config)}
+        end)
+
+      invalid ->
+        invalid
+    end)
+  end
+
+  defp normalize_bulkhead_field(field, config) do
+    atom_field = bulkhead_field_atom(field)
+
+    cond do
+      Map.has_key?(config, field) -> Map.update!(config, field, &normalize_integer/1)
+      Map.has_key?(config, atom_field) -> Map.update!(config, atom_field, &normalize_integer/1)
+      true -> config
+    end
+  end
+
+  defp normalize_bulkhead_config(config) when is_map(config),
+    do: Enum.reduce(@bulkhead_fields, config, &normalize_bulkhead_field/2)
+
+  defp normalize_bulkhead_config(config), do: config
+
+  defp normalize_integer(value) when is_binary(value) do
+    trimmed = String.trim(value)
+
+    case Integer.parse(trimmed) do
+      {integer, ""} -> integer
+      _invalid -> value
+    end
+  end
+
+  defp normalize_integer(value), do: value
 
   defp normalize_array_field({group, field}, params) do
     update_nested(params, group, field, fn
@@ -278,6 +355,55 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsForm do
       end
     end
   end
+
+  defp bulkhead_preset_matches?(bulkheads, multiplier) do
+    defaults = RouteClass.default_bulkheads()
+
+    RouteClass.all()
+    |> Enum.reject(&(&1 == RouteClass.proxy_control()))
+    |> Enum.all?(fn route_class ->
+      current = Map.get(bulkheads, route_class, %{})
+      default = Map.fetch!(defaults, route_class)
+
+      bulkhead_value(current, "max_concurrency") ==
+        bulkhead_value(default, "max_concurrency") * multiplier and
+        bulkhead_value(current, "queue_limit") ==
+          bulkhead_value(default, "queue_limit") * multiplier
+    end)
+  end
+
+  defp bulkhead_config(current, default) do
+    Map.new(@bulkhead_fields, fn field ->
+      {field, bulkhead_value(current, field) || bulkhead_value(default, field)}
+    end)
+  end
+
+  defp preset_bulkhead_config(route_class, current, default, multiplier) do
+    if route_class == RouteClass.proxy_control() do
+      bulkhead_config(current, default)
+    else
+      %{
+        "max_concurrency" => bulkhead_value(default, "max_concurrency") * multiplier,
+        "queue_limit" => bulkhead_value(default, "queue_limit") * multiplier,
+        "queue_timeout_ms" =>
+          bulkhead_value(current, "queue_timeout_ms") ||
+            bulkhead_value(default, "queue_timeout_ms")
+      }
+    end
+  end
+
+  defp bulkhead_value(config, "max_concurrency"),
+    do: Map.get(config, "max_concurrency", Map.get(config, :max_concurrency))
+
+  defp bulkhead_value(config, "queue_limit"),
+    do: Map.get(config, "queue_limit", Map.get(config, :queue_limit))
+
+  defp bulkhead_value(config, "queue_timeout_ms"),
+    do: Map.get(config, "queue_timeout_ms", Map.get(config, :queue_timeout_ms))
+
+  defp bulkhead_field_atom("max_concurrency"), do: :max_concurrency
+  defp bulkhead_field_atom("queue_limit"), do: :queue_limit
+  defp bulkhead_field_atom("queue_timeout_ms"), do: :queue_timeout_ms
 
   defp stringify_keys(map), do: Map.new(map, fn {key, value} -> {to_string(key), value} end)
 

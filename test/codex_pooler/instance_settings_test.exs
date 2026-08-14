@@ -320,6 +320,22 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert errors_on(changeset).gateway != []
   end
 
+  test "changeset rejects unknown fields inside a route-class bulkhead" do
+    settings = InstanceSettings.ensure_singleton!()
+
+    bulkheads =
+      settings.gateway.bulkheads
+      |> put_in(["proxy_http", "unexpected_limit"], 99)
+
+    assert {:error, changeset} =
+             InstanceSettings.update_system_settings(settings, %{
+               "gateway" => %{"bulkheads" => bulkheads}
+             })
+
+    assert errors_on(changeset).gateway.bulkheads != []
+    assert InstanceSettings.get!().lock_version == settings.lock_version
+  end
+
   test "changeset rejects websocket idle timeout values outside the bounded range" do
     settings = InstanceSettings.ensure_singleton!()
 

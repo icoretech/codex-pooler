@@ -1125,6 +1125,37 @@ verified live as the orange "Pro" / green "Free" pills.
 </div>
 ```
 
+### Route-class bulkhead editor
+
+- **Source:** `editor/1` in
+  [`bulkhead_editor.ex`](lib/codex_pooler_web/live/admin/components/pages/system/page_components/bulkhead_editor.ex),
+  with preset and parameter normalization in
+  [`system_settings_form.ex`](lib/codex_pooler_web/live/admin/forms/system_settings_form.ex).
+- **Purpose:** replaces the gateway bulkhead JSON textarea with a fixed matrix
+  for the nine runtime route classes. Operators edit per-node concurrency,
+  queue length, and timeout without changing route keys or JSON structure.
+- **Anatomy:** a normal `text-sm` field heading and help text, a three-choice
+  preset selector, a horizontally scrollable four-column matrix, inline field
+  errors, and one fixed-key reminder. Route names use body type; monospace is
+  reserved for the numeric inputs, following the Mono-Is-Data rule.
+- **Presets:** Default / small, Medium, and Large set concurrency and queue
+  limits from the runtime defaults. They preserve every timeout and leave the
+  reserved control-plane lane unchanged. Manual edits to preset-controlled
+  concurrency or queue values produce a neutral `Custom values` badge; timeout
+  edits remain independent of the capacity preset. No hidden preset state is
+  persisted.
+- **States:** selected presets use the primary selected-state wash; hover and
+  focus use existing control transitions; invalid inputs use `input-error`,
+  `aria-invalid`, an associated error line, and the card-level error summary.
+- **Responsive and scroll ownership:** preset choices stack below `sm` and
+  become three columns above it. The matrix owns horizontal overflow inside
+  `bulkhead-scroll-region`; the page never scrolls horizontally. Phones show
+  the explicit `Swipe table for limits` continuation cue.
+- **Accessibility:** the preset group exposes `aria-pressed`; table headers and
+  row headers label every numeric control; each input has a screen-reader
+  label, minimum, required state, and error description. Server-side changeset
+  validation remains authoritative for persistence.
+
 ### Time-series chart surface
 
 - **Source:** `traffic_charts/1` in

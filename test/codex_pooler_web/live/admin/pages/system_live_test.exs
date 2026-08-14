@@ -20,7 +20,9 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
   alias CodexPooler.MCP.{OperatorMCPKey, OperatorMCPSettings}
   alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
+  alias CodexPooler.RouteClass
   alias CodexPoolerWeb.Admin.SystemPageComponents.Metrics, as: MetricsComponent
+  alias CodexPoolerWeb.Admin.SystemSettingsForm
 
   setup :register_and_log_in_user
 
@@ -208,6 +210,183 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
 
     assert has_element?(metrics_view, "#instance-settings-metrics-token-clear[type='checkbox']")
     refute has_element?(metrics_view, "#instance-settings-gateway-form")
+  end
+
+  test "renders a structured validated bulkhead editor with every route class", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    assert has_element?(
+             view,
+             "#instance-settings-bulkheads[data-active-preset='default']"
+           )
+
+    refute has_element?(view, "textarea#instance-settings-bulkheads")
+
+    assert has_element?(
+             view,
+             "#instance-settings-bulkhead-preset-default[aria-pressed='true']",
+             "Default / small"
+           )
+
+    assert has_element?(view, "#instance-settings-bulkhead-preset-medium", "9-49 active")
+    assert has_element?(view, "#instance-settings-bulkhead-preset-large", "50+ active")
+    refute has_element?(view, "#instance-settings-bulkhead-custom")
+
+    for route_class <- RouteClass.all() do
+      assert has_element?(
+               view,
+               "#instance-settings-bulkhead-row-#{String.replace(route_class, "_", "-")}[data-route-class='#{route_class}']"
+             )
+    end
+
+    assert has_element?(
+             view,
+             "#instance-settings-bulkhead-proxy-http-max-concurrency[name='instance_settings[gateway][bulkheads][proxy_http][max_concurrency]'][value='32']"
+           )
+
+    assert has_element?(view, "#instance-settings-bulkheads", "Does not share streaming")
+
+    assert has_element?(
+             view,
+             "#instance-settings-bulkheads",
+             "No current route selects this class"
+           )
+
+    assert has_element?(view, "#instance-settings-bulkhead-mobile-cue", "Swipe table for limits")
+  end
+
+  test "applies a bulkhead preset, saves it, and reloads the persisted values", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    render_click(element(view, "#instance-settings-bulkhead-preset-medium"))
+
+    assert has_element?(
+             view,
+             "#instance-settings-bulkheads[data-active-preset='medium']"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-bulkhead-proxy-http-max-concurrency[value='64']"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-bulkhead-proxy-http-queue-limit[value='256']"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-bulkhead-proxy-http-queue-timeout-ms[value='10000']"
+           )
+
+    assert has_element?(view, "#instance-settings-gateway-status", "Unsaved changes")
+
+    saved_html = view |> form("#instance-settings-gateway-form") |> render_submit()
+
+    assert saved_html =~ "Gateway controls saved"
+
+    saved = InstanceSettings.get!()
+    assert saved.gateway.bulkheads[RouteClass.proxy_http()]["max_concurrency"] == 64
+    assert saved.gateway.bulkheads[RouteClass.proxy_http()]["queue_limit"] == 256
+    assert saved.gateway.bulkheads[RouteClass.proxy_http()]["queue_timeout_ms"] == 10_000
+
+    {:ok, reloaded_view, _html} =
+      live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    assert has_element?(
+             reloaded_view,
+             "#instance-settings-bulkheads[data-active-preset='medium']"
+           )
+
+    assert has_element?(
+             reloaded_view,
+             "#instance-settings-bulkhead-proxy-http-max-concurrency[value='64']"
+           )
+  end
+
+  test "marks manually edited bulkhead values as custom without saving them", %{conn: conn} do
+    settings = InstanceSettings.ensure_singleton!()
+    params = SystemSettingsForm.params_from_settings(settings)
+
+    changed_gateway =
+      put_in(
+        params["gateway"],
+        ["bulkheads", RouteClass.proxy_http(), "queue_limit"],
+        "129"
+      )
+
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    view
+    |> element("#instance-settings-gateway-form")
+    |> render_change(%{
+      "instance_settings" => %{
+        "_group" => "gateway",
+        "lock_version" => Integer.to_string(settings.lock_version),
+        "gateway" => changed_gateway
+      }
+    })
+
+    assert has_element?(view, "#instance-settings-bulkheads[data-active-preset='custom']")
+    assert has_element?(view, "#instance-settings-bulkhead-custom", "Custom values")
+
+    assert has_element?(
+             view,
+             "#instance-settings-bulkhead-proxy-http-queue-limit[value='129']"
+           )
+
+    assert has_element?(view, "#instance-settings-gateway-status", "Unsaved changes")
+
+    assert InstanceSettings.get!().gateway.bulkheads[RouteClass.proxy_http()]["queue_limit"] ==
+             128
+  end
+
+  test "shows the invalid bulkhead field and does not persist it", %{conn: conn} do
+    settings = InstanceSettings.ensure_singleton!()
+    params = SystemSettingsForm.params_from_settings(settings)
+
+    invalid_gateway =
+      put_in(
+        params["gateway"],
+        ["bulkheads", RouteClass.proxy_http(), "max_concurrency"],
+        "0"
+      )
+
+    {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+
+    html =
+      view
+      |> element("#instance-settings-gateway-form")
+      |> render_submit(%{
+        "instance_settings" => %{
+          "lock_version" => Integer.to_string(settings.lock_version),
+          "gateway" => invalid_gateway
+        }
+      })
+
+    assert html =~ "Gateway controls could not be saved"
+
+    assert has_element?(
+             view,
+             "#instance-settings-bulkhead-proxy-http-max-concurrency[aria-invalid='true'][value='0']"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-bulkhead-proxy-http-max-concurrency-error",
+             "Must be 1 or more"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-errors",
+             "positive max_concurrency"
+           )
+
+    persisted = InstanceSettings.get!()
+    assert persisted.lock_version == settings.lock_version
+    assert persisted.gateway.bulkheads[RouteClass.proxy_http()]["max_concurrency"] == 32
   end
 
   test "metrics card exposes open and protected endpoint states and warns before clear reopens it",
@@ -1097,7 +1276,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
           "How long an opened circuit stays closed to normal traffic before probing.",
           "Concurrent probe attempts allowed while testing a half-open circuit.",
           "Successful probes required before closing a previously opened circuit.",
-          "Per route-class concurrency, queue length, and queue timeout policy as JSON.",
+          "Each class has a separate per-node concurrency and queue budget.",
           "Model-specific context window sizes used when upstream metadata is missing or needs correction."
         ] do
       assert html =~ hint

@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsFormTest do
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
   alias CodexPooler.Repo
+  alias CodexPooler.RouteClass
   alias CodexPoolerWeb.Admin.SystemPageComponents.Gateway
   alias CodexPoolerWeb.Admin.SystemSettingsForm
 
@@ -131,5 +132,111 @@ defmodule CodexPoolerWeb.Admin.SystemSettingsFormTest do
     assert InstanceSettings.get!().lock_version == settings.lock_version
     assert InstanceSettings.get!().ingress.forwarded_client_ip_source == :x_forwarded_for
     assert InstanceSettings.get!().ingress.forwarded_proxy_depth == 0
+  end
+
+  test "normalizes structured bulkhead inputs without accepting malformed numbers" do
+    params = %{
+      "gateway" => %{
+        "bulkheads" => %{
+          RouteClass.proxy_http() => %{
+            "max_concurrency" => " 64 ",
+            "queue_limit" => "256",
+            "queue_timeout_ms" => "not-a-number"
+          }
+        }
+      }
+    }
+
+    normalized = SystemSettingsForm.normalize_params(params)
+
+    assert get_in(normalized, [
+             "gateway",
+             "bulkheads",
+             RouteClass.proxy_http(),
+             "max_concurrency"
+           ]) == 64
+
+    assert get_in(normalized, [
+             "gateway",
+             "bulkheads",
+             RouteClass.proxy_http(),
+             "queue_limit"
+           ]) == 256
+
+    assert get_in(normalized, [
+             "gateway",
+             "bulkheads",
+             RouteClass.proxy_http(),
+             "queue_timeout_ms"
+           ]) == "not-a-number"
+  end
+
+  test "bulkhead presets change concurrency and queue only and preserve the reserved lane" do
+    settings = InstanceSettings.ensure_singleton!()
+    params = SystemSettingsForm.params_from_settings(settings)
+
+    customized =
+      params
+      |> put_in(
+        ["gateway", "bulkheads", RouteClass.proxy_http(), "queue_timeout_ms"],
+        12_345
+      )
+      |> put_in(
+        ["gateway", "bulkheads", RouteClass.proxy_control(), "max_concurrency"],
+        9
+      )
+      |> put_in(["gateway", "bulkheads", RouteClass.proxy_control(), "queue_limit"], 18)
+
+    assert {:ok, medium} = SystemSettingsForm.apply_bulkhead_preset(customized, "medium")
+
+    assert get_in(medium, [
+             "gateway",
+             "bulkheads",
+             RouteClass.proxy_http(),
+             "max_concurrency"
+           ]) == 64
+
+    assert get_in(medium, [
+             "gateway",
+             "bulkheads",
+             RouteClass.proxy_http(),
+             "queue_limit"
+           ]) == 256
+
+    assert get_in(medium, [
+             "gateway",
+             "bulkheads",
+             RouteClass.proxy_http(),
+             "queue_timeout_ms"
+           ]) == 12_345
+
+    assert get_in(medium, [
+             "gateway",
+             "bulkheads",
+             RouteClass.proxy_control(),
+             "max_concurrency"
+           ]) == 9
+
+    assert get_in(medium, [
+             "gateway",
+             "bulkheads",
+             RouteClass.proxy_control(),
+             "queue_limit"
+           ]) == 18
+
+    assert SystemSettingsForm.bulkhead_preset(get_in(medium, ["gateway", "bulkheads"])) ==
+             :medium
+
+    custom =
+      put_in(
+        medium,
+        ["gateway", "bulkheads", RouteClass.proxy_stream(), "queue_limit"],
+        123
+      )
+
+    assert SystemSettingsForm.bulkhead_preset(get_in(custom, ["gateway", "bulkheads"])) ==
+             :custom
+
+    assert :error = SystemSettingsForm.apply_bulkhead_preset(customized, "unsupported")
   end
 end

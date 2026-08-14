@@ -16,6 +16,7 @@ defmodule CodexPooler.InstanceSettings.Settings do
   @decompression_algorithms ~w(gzip deflate zstd)
   @default_openai_pricing_url StaticDefaults.catalog()["openai_pricing_url"]
   @default_development StaticDefaults.development()
+  @bulkhead_fields MapSet.new(~w(max_concurrency queue_limit queue_timeout_ms))
 
   @gateway_embed_fields [
     :gateway_debug,
@@ -627,11 +628,13 @@ defmodule CodexPooler.InstanceSettings.Settings do
   defp validate_bulkheads(:bulkheads, _value), do: [bulkheads: "must be a map"]
 
   defp valid_bulkhead?(config) when is_map(config) do
+    fields = config |> Map.keys() |> Enum.map(&to_string/1) |> MapSet.new()
     max_concurrency = map_get(config, "max_concurrency")
     queue_limit = map_get(config, "queue_limit")
     queue_timeout_ms = map_get(config, "queue_timeout_ms")
 
-    positive_integer?(max_concurrency) and non_negative_integer?(queue_limit) and
+    map_size(config) == MapSet.size(@bulkhead_fields) and fields == @bulkhead_fields and
+      positive_integer?(max_concurrency) and non_negative_integer?(queue_limit) and
       positive_integer?(queue_timeout_ms)
   end
 
