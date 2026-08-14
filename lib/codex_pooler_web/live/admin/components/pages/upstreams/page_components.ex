@@ -156,6 +156,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
       phx-change="filter"
       phx-submit="filter"
       autocomplete="off"
+      fields_class="upstream-filter-fields"
     >
       <.upstream_query_filter_input field={@form[:query]} />
       <PoolFilterComponents.pool_filter_dropdown
@@ -179,7 +180,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
     assigns = assign(assigns, :value, assigns.field.value || "")
 
     ~H"""
-    <div id="upstream-query-filter" class="grid gap-2">
+    <div id="upstream-query-filter" class="upstream-filter-query grid gap-2">
       <label for={@field.id} class="sr-only">Search</label>
       <div class="input input-bordered flex min-h-10 w-full items-center gap-2">
         <input
@@ -917,7 +918,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents do
     <div
       :if={@accounts != []}
       id="upstream-account-grid"
-      class="grid min-w-0 items-start gap-3 lg:grid-cols-2 2xl:grid-cols-3 [@media(width>=112rem)]:grid-cols-4"
+      class="grid min-w-0 items-start gap-3 min-[700px]:grid-cols-2 2xl:grid-cols-3 [@media(width>=112rem)]:grid-cols-4"
     >
       <AccountCard.account_card
         :for={{account, account_index} <- Enum.with_index(@accounts)}

@@ -838,6 +838,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     # five minutes: settled tokens only, older usage never leaks in.
     assert has_element?(
              view,
+             "##{tokens_panel_id} [data-role='upstream-account-token-model'].upstream-account-token-model-row"
+           )
+
+    assert has_element?(
+             view,
              "##{tokens_panel_id} ##{card_id}-token-model-gpt-example-busy" <>
                " [data-role='upstream-account-token-model-tokens']",
              "1.4k"
@@ -1905,7 +1910,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert active_usage_panel_class =~ "transition-opacity"
     refute active_usage_panel_class =~ "translate-y"
     refute active_usage_panel_class =~ "transition-[max-height"
-    assert active_saved_meter_class =~ "md:col-span-2"
+    assert active_saved_meter_class =~ "upstream-account-saved-reset-meter-wide"
     assert active_saved_meter_segment_1_class =~ "bg-(--color-reset-bank)/80"
     assert active_saved_meter_segment_2_class =~ "bg-(--color-reset-bank)/80"
     assert active_saved_meter_segment_3_class =~ "bg-base-300/70"
@@ -2999,10 +3004,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
+             "#upstream-account-grid.min-\\[700px\\]\\:grid-cols-2"
+           )
+
+    assert has_element?(
+             view,
+             "#upstream-filter-form [data-role='filter-fields'].upstream-filter-fields"
+           )
+
+    assert has_element?(view, "#upstream-query-filter.upstream-filter-query")
+
+    assert has_element?(
+             view,
              "#upstream-account-grid.\\[\\@media\\(width\\>\\=112rem\\)\\]\\:grid-cols-4"
            )
 
-    assert has_element?(view, "#upstream-account-#{identity.id}.min-w-0")
+    assert has_element?(view, "#upstream-account-#{identity.id}.min-w-0.upstream-account-card")
     assert has_element?(view, "[data-role='upstream-account-card']")
     assert has_element?(view, "#upstream-account-#{identity.id}-plan-label", "Team")
 
@@ -3083,7 +3100,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert has_element?(
              view,
-             "#upstream-account-#{identity.id} footer[data-role='upstream-account-card-footer'] #upstream-account-#{identity.id}-routing-readiness",
+             "#upstream-account-#{identity.id} footer[data-role='upstream-account-card-footer'].upstream-account-card-footer #upstream-account-#{identity.id}-routing-readiness",
              "Routing ready"
            )
 
@@ -3202,7 +3219,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute has_element?(view, "#refresh-upstream-account-#{identity.id}[disabled]")
 
     assert has_element?(view, "#upstream-account-#{identity.id}-limits")
-    assert has_element?(view, "#upstream-account-#{identity.id}-limits.md\\:grid-cols-2")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{identity.id}-limits.upstream-account-quota-limits.upstream-account-quota-limits-multiple"
+           )
+
     refute has_element?(view, "#upstream-account-#{identity.id}-limits", "windows")
 
     assert has_element?(
@@ -3276,8 +3298,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
            )
 
     assert has_element?(view, "#upstream-account-#{browser_identity.id}-limit-weekly", "75%")
-    assert has_element?(view, "#upstream-account-#{browser_identity.id}-limits.grid.gap-3")
-    refute has_element?(view, "#upstream-account-#{browser_identity.id}-limits.md\\:grid-cols-2")
+
+    assert has_element?(
+             view,
+             "#upstream-account-#{browser_identity.id}-limits.grid.gap-3.upstream-account-quota-limits"
+           )
+
+    refute has_element?(
+             view,
+             "#upstream-account-#{browser_identity.id}-limits.upstream-account-quota-limits-multiple"
+           )
 
     refute has_element?(view, "#upstream-account-#{browser_identity.id}-limit-primary_5h")
     refute has_element?(view, "#upstream-account-#{browser_identity.id}-limit-weekly-count")

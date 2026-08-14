@@ -255,6 +255,59 @@ body {
   font-family: "Roboto Condensed", ui-sans-serif, system-ui, sans-serif;
 }
 
+/* The upstream inventory changes column count with the page frame, while each
+   account card lays out its dense internals from the width actually available
+   to that card. This keeps tablet portrait cards compact without penalizing
+   the wider mobile-landscape and desktop cards in the same two-column grid. */
+.upstream-filter-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.upstream-filter-query {
+  grid-column: 1 / -1;
+}
+
+.upstream-account-card {
+  container: upstream-account-card / inline-size;
+}
+
+.upstream-account-token-model-row {
+  grid-template-columns:
+    minmax(0, 1fr) clamp(1.5rem, 15cqi, 4rem) max-content max-content;
+  column-gap: clamp(0.25rem, 2cqi, 0.625rem);
+}
+
+@media (width >= 40rem) {
+  .upstream-filter-fields {
+    grid-template-columns:
+      minmax(0, 1.55fr) minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .upstream-filter-query {
+    grid-column: auto;
+  }
+}
+
+@container upstream-account-card (width >= 20rem) {
+  .upstream-account-quota-limits-multiple {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .upstream-account-saved-reset-meter-wide {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (width < 40rem) {
+  .upstream-account-card-footer {
+    padding-inline: 0.75rem;
+  }
+
+  .upstream-account-card-footer dd {
+    font-size: 0.6875rem;
+  }
+}
+
 /* Status stripes: a colored left edge reinforcing status text that is always
    present elsewhere on the surface (footer routing label, status chips). The
    tone/status arrives as a data attribute from the read model; presentation

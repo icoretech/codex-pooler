@@ -699,9 +699,16 @@ ownership, accessibility, and a minimal real markup example.
   [`account_card/`](lib/codex_pooler_web/live/admin/components/pages/upstreams/account_card).
 - **Purpose:** one upstream identity's health, quota, token burn, and Pool
   routing at a glance, with recovery actions.
+- **Inventory grid:** one column below `700px`, two equal columns from `700px`,
+  three from `2xl`, and four from `112rem`; `items-start` preserves each
+  card's natural height instead of stretching a row to its tallest account.
 - **Root:** `<article data-role="upstream-account-card">`, classes
-  `min-w-0 rounded-box border border-base-300 bg-base-100 transition-colors`
+  `upstream-account-card min-w-0 rounded-box border border-base-300
+  bg-base-100 transition-colors`
   plus `admin-token-burn-active` when tokens burned in the last 5 minutes.
+  The root declares the named `upstream-account-card` inline-size container,
+  so quota and leaderboard internals respond to the width left by the page
+  grid rather than to the viewport.
   The routing tone is exposed as `data-routing-tone="success|warning|error"`;
   `app.css` paints the card's left border from it (the status stripe — a
   reinforcement of the footer routing label, never the sole channel).
@@ -730,6 +737,11 @@ opacity-0 pointer-events-none` plus `aria-hidden` and `inert`; the visible one
 (`motion-reduce:transition-none`). Usage panel holds the quota rows ([Quota progress row](#quota-progress-row-including-striped-credit-backed-state)) and
 saved-reset meter ([Saved-reset badge and meter](#saved-reset-badge-and-meter)); tokens panel holds a model leaderboard list ([Compact and definition lists](#compact-and-definition-lists));
 pools panel renders per-assignment route chevrons:
+
+- Multiple quota rows stack while the card is narrower than `20rem`; from
+  `20rem` they use two equal `minmax(0, 1fr)` tracks and the saved-reset meter
+  spans both. This lets tablet portrait and mobile landscape both show two
+  account cards per page row without crushing quota copy in the narrower card.
 
 - Each assignment row heads with the pool label on the left and a live
   traffic stat on the right
@@ -798,6 +810,10 @@ the open panel keeps its cell in the hover tint (`text-primary/70` label).
 Tokens/5m uses plain `{count} tokens` when usage accounting is complete,
 `{count}+ tokens` when reported usage is only a verified lower bound, and
 `Usage unavailable` when no token total can be claimed. Minimal cell:
+
+Below `sm`, the account-specific footer hook reduces only the band's inline
+padding to `0.75rem` and keeps values on the fine-print `0.6875rem` token so
+all three facts remain readable inside the single-column phone card.
 
 ```heex
 <:fact role="upstream-routing-cell">
@@ -995,9 +1011,14 @@ Three recurring list shapes, all `text-xs`-scale and truncation-guarded:
 ```
 
 - **Ranked compact rows** — the account tokens panel
-  (`data-role="upstream-account-token-model"`,
-  `grid-cols-[minmax(0,1fr)_4rem_3.5rem_3.5rem] … odd:bg-base-200/40` with an
-  inline share bar `h-1 rounded-full bg-primary/70`) and the stats leaderboard
+  (`data-role="upstream-account-token-model"`, class
+  `upstream-account-token-model-row … odd:bg-base-200/40`) sizes its four
+  tracks from the account-card container: model label `minmax(0, 1fr)`, share
+  bar `clamp(1.5rem, 15cqi, 4rem)`, then token and cost values at
+  `max-content`, with a `clamp(0.25rem, 2cqi, 0.625rem)` gap. The inline share
+  bar remains `h-1 rounded-full bg-primary/70`. This prevents the viewport's
+  `sm` breakpoint from widening fixed numeric tracks inside a still-narrow
+  tablet card. The stats leaderboard
   runner rows (`divide-y divide-base-300/70`, rank medallion, name+pool stack,
   right-aligned mono values).
 - **Hairline tables** — long homogeneous records (request logs, jobs) use
@@ -1251,8 +1272,11 @@ control.
   `phx-hook="AdminFilterDropdowns"`, arbitrary-variant class surgery that
   compacts nested daisyUI fields (`[&_.input]:input-sm`,
   `[&_.label]:uppercase …`), optional `<details>` "Advanced filters", and a
-  `data-role="filter-actions"` cluster. `cally_date_filter/1` provides the
-  anchored calendar popover.
+  `data-role="filter-actions"` cluster. Call sites may add a named layout hook
+  through `fields_class` without replacing the shared control recipe.
+  Upstreams uses it for a two-column phone layout with search spanning both,
+  then a `1.55fr / 1fr / 1fr` search/Pool/status row from `sm`.
+  `cally_date_filter/1` provides the anchored calendar popover.
 - **`empty_state/1`:** dashed-border `rounded-box` panel, icon at
   `text-base-content/40`, title + optional description + actions, all
   centered. The chart-free variant (`pool-activity-empty-state` in `app.css`)

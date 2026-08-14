@@ -70,7 +70,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
       data-role="upstream-account-card"
       data-routing-tone={@routing_readiness.tone}
       class={[
-        "min-w-0 rounded-box border border-base-300 bg-base-100 transition-colors",
+        "upstream-account-card min-w-0 rounded-box border border-base-300 bg-base-100 transition-colors",
         token_burn_active?(@account) && "admin-token-burn-active"
       ]}
       style={quota_shine_style(@account, @account_index)}
@@ -173,6 +173,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
             </div>
             <div
               id={"upstream-account-#{@account.identity.id}-limits"}
+              data-role="upstream-account-quota-limits"
               class={quota_limits_grid_class(@reported_quota_limits)}
             >
               <QuotaLimitRow.quota_limit_row
@@ -240,7 +241,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                 :for={row <- @token_leaderboard}
                 id={"upstream-account-#{@account.identity.id}-token-model-#{row.dom_id}"}
                 data-role="upstream-account-token-model"
-                class="grid min-w-0 grid-cols-[minmax(0,1fr)_2.25rem_2.75rem_3.25rem] items-center gap-1.5 rounded px-2 py-1.5 text-xs odd:bg-base-200/40 sm:grid-cols-[minmax(0,1fr)_4rem_3.5rem_3.5rem] sm:gap-3"
+                class="upstream-account-token-model-row grid min-w-0 items-center rounded px-2 py-1.5 text-xs odd:bg-base-200/40"
               >
                 <div
                   data-role="upstream-account-token-model-id"
@@ -352,6 +353,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
       <AdminComponents.card_fact_strip
         id={"upstream-account-#{@account.identity.id}-routing-readiness"}
         data-role="upstream-account-card-footer"
+        class="upstream-account-card-footer"
       >
         <:fact role="upstream-routing-cell">
           <AdminComponents.card_fact_label>Routing</AdminComponents.card_fact_label>
@@ -970,11 +972,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
 
   defp reported_quota_limit?(_limit), do: false
 
-  defp quota_limits_grid_class([_single_limit]), do: "grid gap-3"
-  defp quota_limits_grid_class(_limits), do: "grid gap-3 md:grid-cols-2"
+  defp quota_limits_grid_class([_single_limit]),
+    do: "upstream-account-quota-limits grid gap-3"
+
+  defp quota_limits_grid_class(_limits),
+    do: "upstream-account-quota-limits upstream-account-quota-limits-multiple grid gap-3"
 
   defp saved_reset_meter_grid_class([_single_limit]), do: nil
-  defp saved_reset_meter_grid_class(_limits), do: "md:col-span-2"
+  defp saved_reset_meter_grid_class(_limits), do: "upstream-account-saved-reset-meter-wide"
 
   defp account_plan_label_id(account, _index),
     do: "upstream-account-#{account.identity.id}-plan-label"

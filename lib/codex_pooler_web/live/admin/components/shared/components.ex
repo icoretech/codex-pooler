@@ -465,6 +465,7 @@ defmodule CodexPoolerWeb.Admin.Components do
   attr :mobile_single_column, :boolean, default: false
   attr :single_row, :boolean, default: false
   attr :control_size, :atom, default: :compact, values: [:compact, :default]
+  attr :fields_class, :any, default: nil, doc: "extra classes for the filter fields grid"
   attr :rest, :global, include: ~w(phx-change phx-submit phx-target method action autocomplete)
 
   slot :inner_block, required: true
@@ -482,7 +483,10 @@ defmodule CodexPoolerWeb.Admin.Components do
     >
       <div class={filter_form_layout_class(@compact)}>
         <div
-          class={filter_fields_class(@compact, @mobile_single_column, @single_row, @control_size)}
+          class={[
+            filter_fields_class(@compact, @mobile_single_column, @single_row, @control_size),
+            @fields_class
+          ]}
           data-role="filter-fields"
           data-layout={if(@single_row, do: "single-row")}
         >
