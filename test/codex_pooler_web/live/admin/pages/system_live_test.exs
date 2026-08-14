@@ -342,6 +342,13 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
            )
 
     assert has_element?(view, "#instance-settings-gateway-scalar-matrix")
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-hint-websocket-owner-idle-timeout-ms.w-full.max-w-none",
+             "Post-detach retention for websocket owners"
+           )
+
     assert has_element?(view, "#instance-settings-gateway-scalar-group-streaming", "Streaming")
 
     assert has_element?(

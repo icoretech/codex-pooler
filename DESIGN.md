@@ -1173,7 +1173,10 @@ verified live as the orange "Pro" / green "Free" pills.
   spanning cell, so the separator remains visible without doubling across table
   rendering modes. Reset is an icon-only square action, vertically centered in
   the group header, with its group-specific name retained in the tooltip and
-  accessible label rather than repeated as visible text in every header.
+  accessible label rather than repeated as visible text in every header. Setting
+  descriptions consume the full available setting column and wrap only when the
+  responsive table width requires it; they do not use a prose-measure cap inside
+  the matrix.
 - **States:** the same `FormField` instances, ids, changeset errors, card-level
   summary, unsaved status, and submit path used by the former scalar grid stay
   authoritative. The Gateway card is one persistence boundary for `gateway`,

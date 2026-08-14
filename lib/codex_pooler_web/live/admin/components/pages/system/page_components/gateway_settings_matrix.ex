@@ -125,7 +125,10 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.GatewaySettingsMatrix do
             {@error}
           </span>
         </span>
-        <span class="mt-0.5 block max-w-96 text-xs leading-4 text-base-content/55">
+        <span
+          id={"instance-settings-gateway-hint-#{@setting.dom_id}"}
+          class="mt-0.5 block w-full max-w-none text-xs leading-4 text-base-content/55"
+        >
           {@setting.hint}
         </span>
       </th>
