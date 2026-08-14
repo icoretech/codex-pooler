@@ -96,7 +96,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.BulkheadEditor do
       <div id="instance-settings-bulkhead-preset-region" class="grid gap-2">
         <div
           id="instance-settings-bulkhead-presets"
-          class="grid gap-1 rounded-field border border-base-300 bg-base-200/60 p-1 sm:grid-cols-3"
+          class="grid min-w-0 max-w-2xl gap-2 sm:grid-cols-3"
           role="group"
           aria-label="Concurrent user presets"
         >
@@ -108,15 +108,35 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.BulkheadEditor do
             phx-value-preset={preset.id}
             aria-pressed={to_string(@active_preset == preset.id)}
             class={[
-              "grid min-h-12 cursor-pointer gap-0.5 rounded-field border px-3 py-2 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
+              "relative grid min-h-16 min-w-0 cursor-pointer gap-0.5 rounded-box border bg-base-100 p-2.5 pr-14 text-left transition-colors hover:border-primary/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
               @active_preset == preset.id &&
-                "border-primary/50 bg-primary/5 text-base-content",
+                "border-primary/60 bg-primary/5 text-base-content",
               @active_preset != preset.id &&
-                "border-transparent text-base-content/65 hover:border-base-300 hover:bg-base-100 hover:text-base-content"
+                "border-base-300 text-base-content"
             ]}
           >
-            <span class="text-sm font-semibold leading-4">{preset.label}</span>
-            <span class="text-[11px] leading-4 text-base-content/55">{preset.range}</span>
+            <span
+              id={"instance-settings-bulkhead-preset-#{preset.id}-indicator"}
+              class="pointer-events-none absolute right-2.5 top-2 inline-flex items-center gap-1"
+            >
+              <.icon
+                :if={@active_preset == preset.id}
+                name="hero-check"
+                class="size-3 text-primary"
+              />
+              <span
+                :if={preset.id == :default}
+                class="text-[0.56rem] font-bold uppercase tracking-wide text-primary/70"
+              >
+                Default
+              </span>
+            </span>
+            <span class="text-[13px] font-semibold leading-tight text-base-content">
+              {preset.label}
+            </span>
+            <span class="text-[11px] leading-4 text-base-content/55">
+              {preset.range} users
+            </span>
           </button>
         </div>
         <p

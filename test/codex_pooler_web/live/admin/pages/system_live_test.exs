@@ -244,9 +244,30 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
              "Solo / Small"
            )
 
-    assert has_element?(view, "#instance-settings-bulkhead-preset-default", "1-4 active")
-    assert has_element?(view, "#instance-settings-bulkhead-preset-medium", "5-49 active")
-    assert has_element?(view, "#instance-settings-bulkhead-preset-large", "50+ active")
+    assert has_element?(
+             view,
+             "#instance-settings-bulkhead-presets.max-w-2xl.sm\\:grid-cols-3"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-bulkhead-preset-default.border-primary\\/60.bg-primary\\/5"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-bulkhead-preset-medium.border-base-300.bg-base-100"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-bulkhead-preset-default-indicator",
+             "Default"
+           )
+
+    assert has_element?(view, "#instance-settings-bulkhead-preset-default", "1-4 active users")
+    assert has_element?(view, "#instance-settings-bulkhead-preset-medium", "5-49 active users")
+    assert has_element?(view, "#instance-settings-bulkhead-preset-large", "50+ active users")
     refute has_element?(view, "#instance-settings-bulkhead-custom")
 
     for route_class <- RouteClass.all() do

@@ -1199,7 +1199,8 @@ verified live as the orange "Pro" / green "Free" pills.
   for the nine runtime route classes. Operators edit per-node concurrency,
   queue length, and timeout without changing route keys or JSON structure.
 - **Anatomy:** a normal `text-sm` field heading and help text, a three-choice
-  preset selector, a horizontally scrollable four-column matrix, inline field
+  preset selector using the shared [Selection card](#selection-card-radio-less-choice-card)
+  anatomy, a horizontally scrollable four-column matrix, inline field
   errors, and one compact constraint note immediately above the matrix for fixed
   route keys and numeric limits. Route names and numeric inputs use the shared
   admin form type so bulkhead values match every other editable number;
@@ -1213,13 +1214,17 @@ verified live as the orange "Pro" / green "Free" pills.
   edits to preset-controlled concurrency or queue values produce a neutral
   `Custom values` badge; timeout edits remain independent of the capacity
   preset. No hidden preset state is persisted.
-- **States:** selected presets use the primary selected-state wash; hover and
-  focus use existing control transitions; invalid inputs use `input-error`,
+- **States:** each preset is an independent `rounded-box` selection card with a
+  check glyph, primary selected-state wash, native `aria-pressed`, and the
+  permanent `DEFAULT` micro-tag on Solo / Small. Hover and focus use the shared
+  selection-card transitions; invalid inputs use `input-error`,
   `aria-invalid`, an associated error line, and the card-level error summary.
-- **Responsive and scroll ownership:** preset choices stack below `sm` and
-  become three columns above it. The matrix owns horizontal overflow inside
-  `bulkhead-scroll-region`; the page never scrolls horizontally. Phones show
-  the explicit `Swipe table for limits` continuation cue.
+- **Responsive and scroll ownership:** preset choices stack below `sm`, become
+  three columns above it, and stop at `max-w-2xl` so they retain selection-card
+  proportions instead of stretching across the desktop card. The matrix owns
+  horizontal overflow inside `bulkhead-scroll-region`; the page never scrolls
+  horizontally. Phones show the explicit `Swipe table for limits` continuation
+  cue.
 - **Accessibility:** the preset group exposes `aria-pressed`; table headers and
   row headers label every numeric control; each input has a screen-reader
   label, minimum, required state, and error description. Server-side changeset
