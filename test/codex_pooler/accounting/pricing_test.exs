@@ -1453,6 +1453,96 @@ defmodule CodexPooler.Accounting.PricingTest do
       assert Decimal.equal?(log.cost.usd, Decimal.new("0.000910"))
     end
 
+    test "settlement preserves absent and explicit-zero cached reads through request facts" do
+      setup = accounting_setup()
+
+      for {suffix, cached_input_tokens} <- [{"absent", :absent}, {"zero", 0}, {"positive", 4}] do
+        assert {:ok, reserved} =
+                 Accounting.reserve(
+                   setup.auth,
+                   setup.model,
+                   %{"model" => setup.model.exposed_model_id, "max_output_tokens" => 1},
+                   %{correlation_id: "corr-cached-read-#{suffix}"}
+                 )
+
+        assert is_nil(reserved.reservation.cached_input_tokens)
+        assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+        usage = %{
+          status: "usage_known",
+          input_tokens: 10,
+          output_tokens: 2,
+          total_tokens: 12
+        }
+
+        usage =
+          if cached_input_tokens == :absent,
+            do: usage,
+            else: Map.put(usage, :cached_input_tokens, cached_input_tokens)
+
+        assert {:ok, result} =
+                 Accounting.finalize_success(
+                   reserved.request,
+                   attempt,
+                   usage,
+                   %{response_status_code: 200}
+                 )
+
+        expected = if cached_input_tokens == :absent, do: nil, else: cached_input_tokens
+        fact = Repo.get!(RequestLogFact, reserved.request.id)
+
+        assert result.settlement.cached_input_tokens == expected
+        assert fact.latest_cached_input_tokens == expected
+
+        assert %{items: [log], total: 1} =
+                 Accounting.list_request_logs(setup.pool,
+                   filters: %{request_id: reserved.request.id}
+                 )
+
+        assert log.token_counts.cached_input_tokens == expected
+      end
+    end
+
+    test "distinct output rates charge reasoning as an output subset without changing totals" do
+      setup =
+        accounting_setup(%{
+          input_token_micros: Decimal.new(0),
+          cached_input_token_micros: Decimal.new(0),
+          output_token_micros: Decimal.new(20),
+          reasoning_token_micros: Decimal.new(70),
+          request_base_micros: Decimal.new(0)
+        })
+
+      assert {:ok, reserved} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id, "max_output_tokens" => 1},
+                 %{correlation_id: "corr-distinct-reasoning-rate"}
+               )
+
+      assert {:ok, attempt} = Accounting.create_attempt(reserved.request, setup.assignment)
+
+      assert {:ok, result} =
+               Accounting.finalize_success(
+                 reserved.request,
+                 attempt,
+                 %{
+                   status: "usage_known",
+                   input_tokens: 5,
+                   output_tokens: 10,
+                   reasoning_tokens: 3,
+                   total_tokens: 15
+                 },
+                 %{response_status_code: 200}
+               )
+
+      assert result.settlement.output_tokens == 10
+      assert result.settlement.reasoning_tokens == 3
+      assert result.settlement.total_tokens == 15
+      assert Decimal.equal?(result.settlement.settled_cost_micros, Decimal.new(350))
+    end
+
     test "cache-write usage preserves nil, zero, and positive counters in ledger and request facts" do
       setup = accounting_setup()
 

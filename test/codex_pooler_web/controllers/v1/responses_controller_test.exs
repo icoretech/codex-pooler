@@ -1510,7 +1510,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert settlement.input_tokens == 23
     assert settlement.cached_input_tokens == 11
     assert settlement.output_tokens == 29
-    assert settlement.reasoning_tokens == nil
+    assert settlement.reasoning_tokens == 17
     assert settlement.total_tokens == 52
     refute Map.has_key?(settlement.details, "input_tokens_details")
     refute Map.has_key?(settlement.details, "output_tokens_details")
@@ -1521,7 +1521,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert log.token_counts.input_tokens == 23
     assert log.token_counts.cached_input_tokens == 11
     assert log.token_counts.output_tokens == 29
-    assert log.token_counts.reasoning_tokens == nil
+    assert log.token_counts.reasoning_tokens == 17
     assert log.token_counts.total_tokens == 52
     refute Map.has_key?(log.token_counts, :input_tokens_details)
     refute Map.has_key?(log.token_counts, :output_tokens_details)
@@ -3229,7 +3229,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
     assert settlement.usage_status == "usage_known"
     assert settlement.input_tokens == 16
-    assert settlement.cached_input_tokens == nil
+    assert settlement.cached_input_tokens == 0
     assert settlement.output_tokens == 5
     assert settlement.reasoning_tokens == nil
     assert settlement.total_tokens == 21
@@ -7476,7 +7476,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert settlement.input_tokens == 53
     assert settlement.cached_input_tokens == 31
     assert settlement.output_tokens == 59
-    assert settlement.reasoning_tokens == nil
+    assert settlement.reasoning_tokens == 41
     assert settlement.total_tokens == 112
     refute Map.has_key?(settlement.details, "input_tokens_details")
     refute Map.has_key?(settlement.details, "output_tokens_details")
@@ -7487,7 +7487,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert log.token_counts.input_tokens == 53
     assert log.token_counts.cached_input_tokens == 31
     assert log.token_counts.output_tokens == 59
-    assert log.token_counts.reasoning_tokens == nil
+    assert log.token_counts.reasoning_tokens == 41
     assert log.token_counts.total_tokens == 112
     refute Map.has_key?(log.token_counts, :input_tokens_details)
     refute Map.has_key?(log.token_counts, :output_tokens_details)

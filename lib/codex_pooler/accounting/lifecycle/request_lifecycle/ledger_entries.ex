@@ -55,7 +55,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
   @type usage :: %{
           required(:status) => String.t(),
           required(:input_tokens) => non_neg_integer(),
-          required(:cached_input_tokens) => non_neg_integer(),
+          required(:cached_input_tokens) => non_neg_integer() | nil,
           required(:output_tokens) => non_neg_integer(),
           required(:reasoning_tokens) => non_neg_integer(),
           required(:total_tokens) => non_neg_integer(),
@@ -196,7 +196,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
       transport: request.transport,
       currency_code: (snapshot && snapshot.currency_code) || reservation.currency_code,
       input_tokens: positive_or_nil(state.usage.input_tokens),
-      cached_input_tokens: positive_or_nil(state.usage.cached_input_tokens),
+      cached_input_tokens: known_cached_input_tokens(state.usage),
       cache_write_tokens: known_cache_write_tokens(state.usage),
       output_tokens: positive_or_nil(state.usage.output_tokens),
       reasoning_tokens: positive_or_nil(state.usage.reasoning_tokens),
@@ -332,6 +332,11 @@ defmodule CodexPooler.Accounting.RequestLifecycle.LedgerEntries do
   defp positive_or_nil(value), do: if(value && value > 0, do: value, else: nil)
   defp nonnegative_or_nil(value) when is_integer(value) and value >= 0, do: value
   defp nonnegative_or_nil(_value), do: nil
+
+  defp known_cached_input_tokens(%{status: "usage_known", cached_input_tokens: value}),
+    do: nonnegative_or_nil(value)
+
+  defp known_cached_input_tokens(_usage), do: nil
 
   defp known_cache_write_tokens(%{status: "usage_known", cache_write_tokens: value}),
     do: nonnegative_or_nil(value)

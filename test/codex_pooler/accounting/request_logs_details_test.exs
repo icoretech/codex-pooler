@@ -183,6 +183,47 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
     assert is_nil(Map.get(logs_by_id[legacy_request.id].token_counts, :cache_write_tokens))
   end
 
+  test "request log details distinguish explicit zero cached reads from absent cached reads" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    entries =
+      for {suffix, cached_input_tokens} <- [{"absent", nil}, {"zero", 0}] do
+        request =
+          request_fixture(%{pool: pool, api_key: api_key}, %{
+            requested_model: "cached-read-#{suffix}",
+            status: "succeeded",
+            usage_status: "usage_known",
+            correlation_id: "cached-read-#{suffix}"
+          })
+
+        attempt = attempt_fixture(request, assignment)
+
+        entry =
+          ledger_entry_fixture(request, %{
+            attempt_id: attempt.id,
+            input_tokens: 5,
+            cached_input_tokens: cached_input_tokens,
+            output_tokens: 2,
+            total_tokens: 7,
+            details: %{"pricing_status" => "priced", "settled_cost_micros" => "12"}
+          })
+
+        {request, entry}
+      end
+
+    assert %{items: logs, total: 2} = Accounting.list_request_logs(pool)
+    logs_by_id = Map.new(logs, &{&1.id, &1})
+
+    for {request, entry} <- entries do
+      fact = Repo.get!(RequestLogFact, request.id)
+      expected = entry.cached_input_tokens
+
+      assert fact.latest_cached_input_tokens == expected
+      assert logs_by_id[request.id].token_counts.cached_input_tokens == expected
+    end
+  end
+
   test "request detail component cost follows the fact settlement entry exactly" do
     reset_bootstrap_state_fixture!()
     %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})

@@ -101,25 +101,25 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
          context_prefix: context_prefix,
          usage_fragment: usage_fragment
        }) do
-    with {:ok, input_tokens} <- retained_int(usage_fragment, ~r/"input_tokens"\s*:\s*(\d+)/),
-         {:ok, output_tokens} <- retained_int(usage_fragment, ~r/"output_tokens"\s*:\s*(\d+)/),
-         {:ok, total_tokens} <- retained_int(usage_fragment, ~r/"total_tokens"\s*:\s*(\d+)/),
-         {:ok, cache_write_tokens} <- retained_optional_cache_write_tokens(usage_fragment) do
-      %{
-        "input_tokens" => input_tokens,
-        "cached_input_tokens" => retained_cached_input_tokens(usage_fragment),
-        "output_tokens" => output_tokens,
-        "reasoning_tokens" =>
-          retained_int_or_zero(usage_fragment, ~r/"reasoning_tokens"\s*:\s*(\d+)/),
-        "total_tokens" => total_tokens
-      }
-      |> maybe_put_retained_cache_write_tokens(cache_write_tokens)
-      |> normalize_usage(%{
-        "service_tier" => retained_service_tier(context_prefix, usage_fragment)
-      })
+    case retained_usage_object(usage_fragment) do
+      {:ok, usage} ->
+        normalize_usage(usage, %{
+          "service_tier" => retained_service_tier(context_prefix, usage_fragment)
+        })
+
+      :error ->
+        nil
+    end
+  end
+
+  defp retained_usage_object(usage_fragment) do
+    with {object_offset, _length} <- :binary.match(usage_fragment, "{"),
+         {:ok, object_end} <- json_object_end(usage_fragment, object_offset),
+         object <- binary_part(usage_fragment, object_offset, object_end - object_offset),
+         {:ok, %{} = usage} <- Jason.decode(object) do
+      {:ok, usage}
     else
-      :invalid -> %{status: "usage_unknown", source: "invalid_usage_tokens"}
-      :error -> nil
+      _missing_or_invalid -> :error
     end
   end
 
@@ -202,46 +202,6 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
     @service_tier_pattern
     |> Regex.scan(body, capture: :all_but_first)
     |> Enum.map(fn [tier] -> tier end)
-  end
-
-  defp retained_cached_input_tokens(body) do
-    case retained_int(body, ~r/"cached_input_tokens"\s*:\s*(\d+)/) do
-      {:ok, tokens} -> tokens
-      :error -> retained_int_or_zero(body, ~r/"cached_tokens"\s*:\s*(\d+)/)
-    end
-  end
-
-  defp retained_optional_cache_write_tokens(body) do
-    case Regex.run(~r/"cache_write_tokens"\s*:\s*([^,}\s]+)/, body, capture: :all_but_first) do
-      nil -> {:ok, nil}
-      [scalar] -> normalize_retained_cache_write_scalar(scalar)
-    end
-  end
-
-  defp normalize_retained_cache_write_scalar(scalar) do
-    case int_value(scalar) do
-      {:ok, value} -> {:ok, value}
-      :error -> :invalid
-    end
-  end
-
-  defp maybe_put_retained_cache_write_tokens(usage, nil), do: usage
-
-  defp maybe_put_retained_cache_write_tokens(usage, value),
-    do: Map.put(usage, "cache_write_tokens", value)
-
-  defp retained_int_or_zero(body, pattern) do
-    case retained_int(body, pattern) do
-      {:ok, value} -> value
-      :error -> 0
-    end
-  end
-
-  defp retained_int(body, pattern) do
-    case Regex.run(pattern, body, capture: :all_but_first) do
-      [value] -> int_value(value)
-      _other -> :error
-    end
   end
 
   defp from_delimited_json_messages(body) do
@@ -329,11 +289,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
   defp normalize_usage(usage, envelope) do
     with {:ok, input_tokens} <-
            required_int_value(usage["input_tokens"] || usage["prompt_tokens"]),
-         {:ok, cached_input_tokens} <- optional_int_value(cached_input_tokens(usage)),
+         {:ok, cached_input_tokens} <- cached_input_tokens_value(usage),
          {:ok, cache_write_tokens} <- cache_write_tokens_value(usage),
          {:ok, output_tokens} <-
            required_int_value(usage["output_tokens"] || usage["completion_tokens"]),
-         {:ok, reasoning_tokens} <- optional_int_value(usage["reasoning_tokens"]),
+         {:ok, reasoning_tokens} <- reasoning_tokens_value(usage),
          {:ok, total_tokens} <-
            total_tokens_value(usage["total_tokens"], input_tokens, output_tokens),
          true <- total_tokens == input_tokens + output_tokens do
@@ -341,12 +301,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
         status: "usage_known",
         source: "upstream_usage",
         input_tokens: input_tokens,
-        cached_input_tokens: cached_input_tokens,
         output_tokens: output_tokens,
         reasoning_tokens: reasoning_tokens,
         total_tokens: total_tokens,
         service_tier: service_tier(envelope)
       }
+      |> maybe_put_cached_input_tokens(cached_input_tokens)
       |> maybe_put_cache_write_tokens(cache_write_tokens)
     else
       _invalid -> %{status: "usage_unknown", source: "invalid_usage_tokens"}
@@ -357,15 +317,43 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
   defp service_tier(%{"response" => %{"service_tier" => tier}}) when is_binary(tier), do: tier
   defp service_tier(_envelope), do: nil
 
-  defp cached_input_tokens(%{"cached_input_tokens" => tokens}), do: tokens
+  defp cached_input_tokens_value(usage) do
+    case fetch_cached_input_tokens(usage) do
+      :absent -> {:ok, nil}
+      {:present, value} -> int_value(value)
+    end
+  end
 
-  defp cached_input_tokens(%{"input_tokens_details" => %{"cached_tokens" => tokens}}),
-    do: tokens
+  defp fetch_cached_input_tokens(usage) do
+    with :error <- Map.fetch(usage, "cached_input_tokens"),
+         :error <- fetch_nested(usage, "input_tokens_details", "cached_tokens"),
+         :error <- fetch_nested(usage, "prompt_tokens_details", "cached_tokens") do
+      :absent
+    else
+      {:ok, value} -> {:present, value}
+    end
+  end
 
-  defp cached_input_tokens(%{"prompt_tokens_details" => %{"cached_tokens" => tokens}}),
-    do: tokens
+  defp reasoning_tokens_value(usage) do
+    case fetch_nested(usage, "output_tokens_details", "reasoning_tokens") do
+      {:ok, value} -> preferred_reasoning_tokens_value(value, usage)
+      :error -> optional_int_value(usage["reasoning_tokens"])
+    end
+  end
 
-  defp cached_input_tokens(_usage), do: nil
+  defp preferred_reasoning_tokens_value(value, usage) do
+    case int_value(value) do
+      {:ok, reasoning_tokens} -> {:ok, reasoning_tokens}
+      :error -> fallback_reasoning_tokens_value(usage)
+    end
+  end
+
+  defp fallback_reasoning_tokens_value(usage) do
+    case Map.fetch(usage, "reasoning_tokens") do
+      {:ok, value} -> int_value(value)
+      :error -> :error
+    end
+  end
 
   defp cache_write_tokens_value(usage) do
     case fetch_cache_write_tokens(usage) do
@@ -394,6 +382,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsage do
 
   defp maybe_put_cache_write_tokens(usage, nil), do: usage
   defp maybe_put_cache_write_tokens(usage, value), do: Map.put(usage, :cache_write_tokens, value)
+
+  defp maybe_put_cached_input_tokens(usage, nil), do: usage
+
+  defp maybe_put_cached_input_tokens(usage, value),
+    do: Map.put(usage, :cached_input_tokens, value)
 
   defp maybe_default_usage(true), do: %{status: "usage_unknown", source: "usage_missing"}
   defp maybe_default_usage(false), do: nil

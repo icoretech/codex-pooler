@@ -29,6 +29,49 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
              }
     end
 
+    test "prefers canonical nested reasoning and falls back to accepted flat reasoning" do
+      for {details, flat, expected} <- [
+            {%{"reasoning_tokens" => 17}, 5, 17},
+            {nil, 7, 7},
+            {%{"reasoning_tokens" => -1}, 11, 11},
+            {%{"reasoning_tokens" => "invalid"}, 13, 13},
+            {%{"reasoning_tokens" => nil}, 15, 15}
+          ] do
+        usage = %{
+          "input_tokens" => 10,
+          "output_tokens" => 20,
+          "reasoning_tokens" => flat,
+          "total_tokens" => 30
+        }
+
+        usage =
+          if is_nil(details),
+            do: usage,
+            else: Map.put(usage, "output_tokens_details", details)
+
+        assert %{reasoning_tokens: ^expected, total_tokens: 30} =
+                 ResponseUsage.from_decoded(%{"usage" => usage})
+      end
+    end
+
+    test "marks invalid canonical nested reasoning without a flat fallback as unknown" do
+      for invalid <- [-1, 1.5, "invalid", nil] do
+        decoded = %{
+          "usage" => %{
+            "input_tokens" => 10,
+            "output_tokens" => 20,
+            "output_tokens_details" => %{"reasoning_tokens" => invalid},
+            "total_tokens" => 30
+          }
+        }
+
+        assert ResponseUsage.from_decoded(decoded) == %{
+                 status: "usage_unknown",
+                 source: "invalid_usage_tokens"
+               }
+      end
+    end
+
     test "matches decoded input without an encode-decode round trip" do
       decoded = %{
         "service_tier" => "priority",
@@ -248,6 +291,49 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
                total_tokens: 214_919,
                service_tier: nil
              }
+    end
+
+    test "extracts canonical nested reasoning from a retained SSE suffix" do
+      body =
+        ~s(output_text":"truncated prefix) <>
+          ~s(","usage":{"input_tokens":21,"output_tokens":41,"reasoning_tokens":5,"output_tokens_details":{"reasoning_tokens":17},"total_tokens":62},"status":"completed"}}\n\n) <>
+          "data: [DONE]\n\n"
+
+      assert %{reasoning_tokens: 17, output_tokens: 41, total_tokens: 62} =
+               ResponseUsage.from_sse(body)
+    end
+
+    test "matches decoded JSON for present-invalid nested reasoning in retained SSE" do
+      for {nested, flat} <- [
+            {-1, :absent},
+            {1.5, :absent},
+            {"1", :absent},
+            {%{}, :absent},
+            {-1, 7},
+            {1.5, 7},
+            {"1", 7},
+            {%{}, 7},
+            {-1, "invalid"},
+            {1.5, -2},
+            {"1", %{}},
+            {%{}, nil},
+            {:absent, 9}
+          ] do
+        usage =
+          %{
+            "input_tokens" => 21,
+            "output_tokens" => 41,
+            "total_tokens" => 62
+          }
+          |> maybe_put_test_value("reasoning_tokens", flat)
+          |> maybe_put_test_nested_reasoning(nested)
+
+        expected = ResponseUsage.from_decoded(%{"usage" => usage})
+        retained = retained_usage(usage)
+
+        assert ResponseUsage.from_sse(retained) == expected
+        assert ResponseUsage.from_websocket_body(retained) == expected
+      end
     end
 
     test "rejects malformed cache-write counters in retained SSE usage" do
@@ -479,7 +565,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
                 "input_tokens" => 17,
                 "cached_input_tokens" => 6,
                 "output_tokens" => 19,
-                "reasoning_tokens" => 3,
+                "output_tokens_details" => %{"reasoning_tokens" => 3},
                 "total_tokens" => 36
               }
             }
@@ -649,4 +735,18 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.ResponseUsageTest do
   defp retained_usage_with_cache_write(cache_write_tokens) do
     ~s|"usage":{"input_tokens":10,"input_tokens_details":{"cached_tokens":4,"cache_write_tokens":#{cache_write_tokens}},"output_tokens":2,"total_tokens":12}}|
   end
+
+  defp retained_usage(usage) do
+    ~s(output_text":"truncated prefix,"usage":) <>
+      Jason.encode!(usage) <>
+      ~s(,"status":"completed"}}\n\ndata: [DONE]\n\n)
+  end
+
+  defp maybe_put_test_nested_reasoning(usage, :absent), do: usage
+
+  defp maybe_put_test_nested_reasoning(usage, value),
+    do: Map.put(usage, "output_tokens_details", %{"reasoning_tokens" => value})
+
+  defp maybe_put_test_value(map, _key, :absent), do: map
+  defp maybe_put_test_value(map, key, value), do: Map.put(map, key, value)
 end

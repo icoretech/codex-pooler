@@ -620,7 +620,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
         if(request_status == "succeeded", do: @usage_pending, else: @usage_unknown)
 
     input_tokens = get_int(usage, [:input_tokens, "input_tokens"])
-    cached_input_tokens = get_int(usage, [:cached_input_tokens, "cached_input_tokens"]) || 0
+    cached_input_tokens = optional_usage_counter(usage, :cached_input_tokens)
     cache_write_tokens = optional_usage_counter(usage, :cache_write_tokens)
     output_tokens = get_int(usage, [:output_tokens, "output_tokens"])
     reasoning_tokens = get_int(usage, [:reasoning_tokens, "reasoning_tokens"]) || 0
@@ -648,7 +648,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
     %{
       status: normalized_status,
       input_tokens: input_tokens || 0,
-      cached_input_tokens: cached_input_tokens,
+      cached_input_tokens: reported_counter_value(cached_input_tokens),
       cache_write_tokens: reported_counter_value(cache_write_tokens),
       output_tokens: output_tokens || 0,
       reasoning_tokens: reasoning_tokens,
@@ -690,12 +690,13 @@ defmodule CodexPooler.Accounting.RequestLifecycle do
          total_tokens
        ) do
     with true <- nonnegative_integer?(input_tokens),
-         true <- nonnegative_integer?(cached_input_tokens),
+         true <- valid_optional_counter?(cached_input_tokens),
          true <- valid_optional_counter?(cache_write_tokens),
          true <- nonnegative_integer?(output_tokens),
          true <- nonnegative_integer?(total_tokens),
+         {:ok, reads} <- optional_counter_for_sum(cached_input_tokens),
          {:ok, writes} <- optional_counter_for_sum(cache_write_tokens) do
-      cached_input_tokens + writes <= input_tokens
+      reads + writes <= input_tokens
     else
       _invalid -> false
     end

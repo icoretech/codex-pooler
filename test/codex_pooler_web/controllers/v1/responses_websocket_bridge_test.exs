@@ -938,12 +938,12 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert [settlement] = settlements_for(request)
     assert settlement.usage_status == "usage_known"
     assert settlement.input_tokens == 16
-    assert settlement.cached_input_tokens == nil
+    assert settlement.cached_input_tokens == 0
     assert settlement.output_tokens == 5
-    assert settlement.reasoning_tokens == nil
+    assert settlement.reasoning_tokens == 4
     assert settlement.total_tokens == 21
     assert settlement.pricing_snapshot_id == flex_pricing.id
-    assert Decimal.equal?(settlement.settled_cost_micros, Decimal.new(650))
+    assert Decimal.equal?(settlement.settled_cost_micros, Decimal.new(570))
     assert settlement.details["usage_source"] == "upstream_usage"
 
     assert_stream_finalization_event!(telemetry_events, %{
@@ -2340,7 +2340,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   defp oversized_completed_frame(response_id, sentinel, include_usage?) do
     usage =
       if include_usage? do
-        ~s(,"service_tier":"flex","usage":{"input_tokens":16,"input_tokens_details":{"cached_tokens":0},"output_tokens":5,"reasoning_tokens":0,"total_tokens":21})
+        ~s(,"service_tier":"flex","usage":{"input_tokens":16,"input_tokens_details":{"cached_tokens":0},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":4},"total_tokens":21})
       else
         ""
       end
