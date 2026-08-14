@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.6.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.3...codex-pooler-v0.6.4) (2026-08-14)
+
+
+### Features
+
+* **admin:** align bulkhead presets with selection cards ([3d05feb](https://github.com/icoretech/codex-pooler/commit/3d05feb00a54b372c10a4d6edd937c15f18aaaf4))
+* **admin:** consolidate gateway runtime controls ([4c511df](https://github.com/icoretech/codex-pooler/commit/4c511df33109d7a6ba6e36dca3468909c88f0c03))
+
+
+### Bug Fixes
+
+* **admin:** assign table separators to group headers ([1448daa](https://github.com/icoretech/codex-pooler/commit/1448daa9ec0683668cdf757d946f94282cce3fd6))
+* **admin:** keep runtime group separators single ([0d0f496](https://github.com/icoretech/codex-pooler/commit/0d0f4963978f4b1d8d432e1b50e6c6cdf530ab29))
+* **admin:** let runtime descriptions use column width ([ab78076](https://github.com/icoretech/codex-pooler/commit/ab780767ac8cf1c8edaf1dbbb775b8bead709c71))
+* **ci:** isolate quality analysis from development builds ([0119651](https://github.com/icoretech/codex-pooler/commit/01196510017db957cafcfd2a2c516696fbdbe2b1))
+* **test:** target consolidated gateway settings form ([facc726](https://github.com/icoretech/codex-pooler/commit/facc726543b84f945acf33e8aa9d1ae71da4349e))
+* **test:** warm settings cache before sandbox ownership ([157b812](https://github.com/icoretech/codex-pooler/commit/157b8121d683baf9437a67d1e82cfc11625a70ec))
+
 ## [0.6.3](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.2...codex-pooler-v0.6.3) (2026-08-14)
 
 
