@@ -258,12 +258,44 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
   defp validate_assistant_replay_content(_content),
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
-  defp validate_assistant_replay_content_part(%{"type" => "output_text", "text" => text} = part)
+  defp validate_assistant_replay_content_part(
+         %{"type" => "output_text", "text" => text, "annotations" => annotations} = part
+       )
        when is_binary(text) do
-    validate_exact_item_keys(part, ["type", "text"])
+    with :ok <- validate_exact_item_keys(part, ["type", "text", "annotations"]) do
+      validate_url_citation_annotations(annotations)
+    end
   end
 
+  defp validate_assistant_replay_content_part(%{"type" => "output_text", "text" => text} = part)
+       when is_binary(text),
+       do: validate_exact_item_keys(part, ["type", "text"])
+
   defp validate_assistant_replay_content_part(_part),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp validate_url_citation_annotations(annotations) when is_list(annotations),
+    do: validate_each(annotations, &validate_url_citation_annotation/1)
+
+  defp validate_url_citation_annotations(_annotations),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp validate_url_citation_annotation(
+         %{
+           "type" => "url_citation",
+           "start_index" => start_index,
+           "end_index" => end_index,
+           "url" => url,
+           "title" => title
+         } = annotation
+       )
+       when (is_integer(start_index) or is_float(start_index)) and
+              (is_integer(end_index) or is_float(end_index)) and is_binary(url) and
+              is_binary(title),
+       do:
+         validate_exact_item_keys(annotation, ["type", "start_index", "end_index", "url", "title"])
+
+  defp validate_url_citation_annotation(_annotation),
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
   defp validate_optional_assistant_phase(%{"phase" => phase})

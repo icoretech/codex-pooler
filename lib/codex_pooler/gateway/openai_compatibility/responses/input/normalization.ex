@@ -380,10 +380,16 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
     end
   end
 
-  defp normalize_assistant_replay_content_part(%{"type" => "output_text", "text" => text})
+  defp normalize_assistant_replay_content_part(%{"type" => "output_text", "text" => text} = part)
        when is_binary(text) do
-    {:ok, %{"type" => "output_text", "text" => text}}
+    {:ok, part}
   end
+
+  defp normalize_assistant_replay_content_part(%{
+         "type" => "text",
+         "annotations" => _annotations
+       }),
+       do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
   defp normalize_assistant_replay_content_part(%{"type" => "text", "text" => text})
        when is_binary(text) do

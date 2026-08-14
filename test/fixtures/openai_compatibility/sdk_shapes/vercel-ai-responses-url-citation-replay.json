@@ -1,0 +1,70 @@
+{
+  "schema_version": "2026-05-24.sdk-shape-corpus.v1",
+  "scenario_id": "vercel-ai.responses.url_citation_replay.v1",
+  "sdk_name": "Vercel AI SDK",
+  "sdk_package": "ai",
+  "sdk_version": "commit 1c1a9d18e713d40cf3c32ca3d2ad4c8adc2951c2",
+  "version_provenance": "Pinned references/vercel-ai commit 1c1a9d18e713d40cf3c32ca3d2ad4c8adc2951c2 preserves Open Responses manual history output_text URL citations; fixture records structural fields only.",
+  "endpoint": "/v1/responses",
+  "http_method": "POST or WEBSOCKET response.create",
+  "scenario": "Vercel AI SDK manual Open Responses assistant-history replay with output_text URL citations.",
+  "top_level_keys": [
+    "model",
+    "input"
+  ],
+  "input_item_types": [
+    "message:assistant",
+    "message:user"
+  ],
+  "content_part_types": [
+    "output_text",
+    "input_text"
+  ],
+  "tool_shape_keys": [],
+  "expected_decision": {
+    "status": "translate",
+    "allowed_values": [
+      "accept",
+      "translate",
+      "reject",
+      "passthrough"
+    ]
+  },
+  "owner_placeholder": "open_responses_url_citation_replay",
+  "synthetic_data_policy": {
+    "model_placeholder": "sample-model",
+    "assistant_text_placeholder": "sample-assistant-message",
+    "citation_url_placeholder": "https://example.com/citation",
+    "citation_title_placeholder": "Sample citation",
+    "user_message_placeholder": "sample-user-message"
+  },
+  "structural_summary": {
+    "payload_kind": "vercel_ai_open_responses_url_citation_replay",
+    "assistant_output_text_annotations_present": true,
+    "annotation_type": "url_citation",
+    "annotation_exact_keys": [
+      "type",
+      "start_index",
+      "end_index",
+      "url",
+      "title"
+    ],
+    "annotation_order_preserved": true,
+    "explicit_empty_annotations_preserved": true,
+    "omitted_annotations_preserved": true,
+    "malformed_or_unsupported_annotations": "reject_before_dispatch",
+    "raw_payload_stored": false,
+    "placeholder_values_only": true,
+    "notes": [
+      "Only the exact URL-citation schema is accepted for assistant output_text replay.",
+      "The fixture intentionally omits raw assistant text and citation values."
+    ]
+  },
+  "redaction_status": {
+    "metadata_only": true,
+    "contains_real_prompt": false,
+    "contains_credentials": false,
+    "contains_headers": false,
+    "contains_media_or_file_bytes": false
+  }
+}

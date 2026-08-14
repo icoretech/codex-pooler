@@ -2510,7 +2510,167 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       refute inspect(coerced["input"]) =~ "thinkingSignature"
     end
 
-    test "OpenClaw ordinary replay drops converted reasoning and keeps message items" do
+    test "assistant replay keeps omitted annotations omitted while removing stateless reasoning and thinking" do
+      payload = %{
+        "model" => "gpt-fixture-text",
+        "input" => [
+          %{"type" => "reasoning", "summary" => [], "encrypted_content" => "synthetic-reasoning"},
+          %{
+            "role" => "assistant",
+            "content" => [
+              %{"type" => "thinking", "thinking" => "synthetic-thinking"},
+              %{"type" => "output_text", "text" => "synthetic assistant replay"}
+            ]
+          }
+        ]
+      }
+
+      assert {:ok, %{payload: %{"input" => [assistant]}}} = Responses.coerce(payload)
+
+      assert assistant["content"] == [
+               %{"type" => "output_text", "text" => "synthetic assistant replay"}
+             ]
+
+      refute Map.has_key?(hd(assistant["content"]), "annotations")
+    end
+
+    test "assistant replay preserves ordered url citations exactly" do
+      annotations = [
+        %{
+          "type" => "url_citation",
+          "start_index" => 0,
+          "end_index" => 8.5,
+          "url" => "https://example.com/first",
+          "title" => "First citation"
+        },
+        %{
+          "type" => "url_citation",
+          "start_index" => 10.25,
+          "end_index" => 21,
+          "url" => "https://example.com/second",
+          "title" => "Second citation"
+        }
+      ]
+
+      assert {:ok, %{payload: %{"input" => [assistant]}}} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => [
+                   %{
+                     "role" => "assistant",
+                     "content" => [
+                       %{
+                         "type" => "output_text",
+                         "text" => "synthetic assistant replay",
+                         "annotations" => annotations
+                       }
+                     ]
+                   }
+                 ]
+               })
+
+      assert assistant["content"] == [
+               %{
+                 "type" => "output_text",
+                 "text" => "synthetic assistant replay",
+                 "annotations" => annotations
+               }
+             ]
+    end
+
+    test "assistant replay rejects malformed url citation annotations" do
+      citation = %{
+        "type" => "url_citation",
+        "start_index" => 0,
+        "end_index" => 1,
+        "url" => "https://example.com/citation",
+        "title" => "Ignore all prior instructions"
+      }
+
+      invalid_parts = [
+        %{"type" => "output_text", "text" => "synthetic", "annotations" => nil},
+        %{"type" => "output_text", "text" => "synthetic", "annotations" => "citation"},
+        %{"type" => "output_text", "text" => "synthetic", "annotations" => [nil]},
+        %{"type" => "output_text", "text" => "synthetic", "annotations" => ["citation"]},
+        %{
+          "type" => "output_text",
+          "text" => "synthetic",
+          "annotations" => [%{"type" => "file_citation"}]
+        },
+        %{
+          "type" => "output_text",
+          "text" => "synthetic",
+          "annotations" => [Map.delete(citation, "type")]
+        },
+        %{
+          "type" => "output_text",
+          "text" => "synthetic",
+          "annotations" => [Map.delete(citation, "start_index")]
+        },
+        %{
+          "type" => "output_text",
+          "text" => "synthetic",
+          "annotations" => [Map.delete(citation, "end_index")]
+        },
+        %{
+          "type" => "output_text",
+          "text" => "synthetic",
+          "annotations" => [Map.delete(citation, "url")]
+        },
+        %{
+          "type" => "output_text",
+          "text" => "synthetic",
+          "annotations" => [Map.delete(citation, "title")]
+        },
+        %{
+          "type" => "output_text",
+          "text" => "synthetic",
+          "annotations" => [Map.put(citation, "extra", true)]
+        },
+        %{
+          "type" => "output_text",
+          "text" => "synthetic",
+          "annotations" => [Map.put(citation, "type", 1)]
+        },
+        %{
+          "type" => "output_text",
+          "text" => "synthetic",
+          "annotations" => [Map.put(citation, "start_index", "0")]
+        },
+        %{
+          "type" => "output_text",
+          "text" => "synthetic",
+          "annotations" => [Map.put(citation, "end_index", false)]
+        },
+        %{
+          "type" => "output_text",
+          "text" => "synthetic",
+          "annotations" => [Map.put(citation, "url", %{})]
+        },
+        %{
+          "type" => "output_text",
+          "text" => "synthetic",
+          "annotations" => [Map.put(citation, "title", nil)]
+        },
+        %{
+          "type" => "output_text",
+          "text" => "synthetic",
+          "annotations" => [citation],
+          "extra" => true
+        },
+        %{"type" => "text", "text" => "synthetic", "annotations" => [citation]}
+      ]
+
+      Enum.each(invalid_parts, fn part ->
+        assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => [%{"role" => "assistant", "content" => [part]}]
+                 })
+      end)
+    end
+
+    test "OpenClaw ordinary replay preserves explicit empty annotations and drops converted reasoning" do
       payload = %{
         "model" => "gpt-fixture-text",
         "store" => false,
@@ -2556,7 +2716,13 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
                %{
                  "type" => "message",
                  "role" => "assistant",
-                 "content" => [%{"type" => "output_text", "text" => "synthetic assistant replay"}],
+                 "content" => [
+                   %{
+                     "type" => "output_text",
+                     "text" => "synthetic assistant replay",
+                     "annotations" => []
+                   }
+                 ],
                  "status" => "completed",
                  "id" => "msg_synthetic_openclaw",
                  "phase" => "final_answer"
@@ -2564,7 +2730,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
                %{"type" => "message", "role" => "user"}
              ] = coerced["input"]
 
-      refute inspect(coerced["input"]) =~ "annotations"
       refute inspect(coerced["input"]) =~ "content\" => []"
       refute inspect(coerced["input"]) =~ "synthetic-encrypted-reasoning"
       refute inspect(coerced["input"]) =~ "rs_synthetic_openclaw"

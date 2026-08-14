@@ -35,11 +35,12 @@
     "assistant_text_part_present": true,
     "thinking_forwarded_upstream": false,
     "reasoning_content_field_forwarded_upstream": false,
-    "assistant_output_annotations_forwarded_upstream": false,
+    "assistant_output_annotations_forwarded_upstream": "exact_url_citation_only",
     "raw_payload_stored": false,
     "placeholder_values_only": true,
     "notes": [
       "The observed failure was a pre-dispatch adapter rejection after OpenClaw converted assistant thinking metadata into a Responses reasoning item that retained content: [].",
+      "Assistant output_text annotations preserve only exact url_citation maps; assistant thinking and unsupported converted reasoning content remain removed before dispatch.",
       "The fixture intentionally omits raw prompt, thinking content, signatures, and transport bodies."
     ]
   },

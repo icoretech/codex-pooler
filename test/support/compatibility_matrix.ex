@@ -2146,6 +2146,12 @@ defmodule CodexPooler.CompatibilityMatrix do
         dropped_content_part_type: "thinking",
         normalized_content_part_type: "output_text",
         source_text_part_type: "text",
+        output_text_annotations: %{
+          accepted_type: "url_citation",
+          exact_keys: ["type", "start_index", "end_index", "url", "title"],
+          preserves: ["order", "exact_values", "explicit_empty_list", "omission"],
+          malformed: "reject_before_dispatch"
+        },
         requires_previous_response_id: false,
         metadata_only: true
       },

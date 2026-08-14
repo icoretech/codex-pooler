@@ -105,6 +105,12 @@ websocket surface. Omitted or `null` values are accepted; blank or non-string
 values are rejected before dispatch. The legacy `result` branch follows the same
 metadata contract.
 
+Assistant replay `output_text` may carry only exact `url_citation` annotations:
+the map keys are `type`, `start_index`, `end_index`, `url`, and `title`, with
+`type=url_citation`. Accepted values preserve order, exact values, explicit empty
+lists, and omission. Malformed or unsupported annotation maps reject before
+dispatch; do not call this generic annotation passthrough.
+
 Direct public Responses may repair only a missing nested object or array type in
 strict flat-function parameters with a typed object root and complete,
 unambiguous structural evidence. This applies to top-level flat functions and
