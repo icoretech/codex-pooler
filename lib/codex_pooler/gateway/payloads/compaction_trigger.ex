@@ -23,20 +23,24 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
     reasoning
     service_tier
     prompt_cache_key
+    prompt_cache_options
     text
   )
+
+  @trigger %{"type" => "compaction_trigger"}
 
   @stream_headers [{"content-type", "text/event-stream"}]
 
   @type payload :: %{optional(String.t()) => term()}
-  @type bridge_decision :: :passthrough | {:ok, payload()} | {:error, Contracts.gateway_error()}
+  @type bridge :: %{payload: payload(), stream?: boolean()}
+  @type bridge_decision :: :passthrough | {:ok, bridge()} | {:error, Contracts.gateway_error()}
 
   @spec prepare_bridge(String.t(), payload()) :: bridge_decision()
   def prepare_bridge(local_endpoint, payload)
       when is_binary(local_endpoint) and is_map(payload) do
     cond do
       local_endpoint in @compact_endpoints ->
-        validate_direct_compact_payload(payload)
+        prepare_direct_compact_bridge(payload)
 
       local_endpoint not in @backend_response_endpoints ->
         :passthrough
@@ -116,8 +120,9 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
 
   defp prepare_input_bridge(%{"input" => [%{"type" => "compaction_trigger"}]} = payload) do
     payload
-    |> compact_payload()
+    |> compact_bridge_payload(false)
     |> validate_compact_payload()
+    |> bridge_result(true)
   end
 
   defp prepare_input_bridge(%{"input" => input} = payload) do
@@ -137,17 +142,30 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
         {:error, invalid_trigger_error()}
 
       true ->
-        compact_payload(payload)
+        payload
+        |> compact_bridge_payload(false)
         |> validate_compact_payload()
+        |> bridge_result(true)
     end
   end
 
-  defp validate_direct_compact_payload(payload) do
-    case validate_projection(payload) do
-      :ok -> :passthrough
-      {:error, _reason} = error -> error
+  defp prepare_direct_compact_bridge(payload) do
+    with :ok <- validate_projection(payload) do
+      case payload["input"] do
+        [] ->
+          :passthrough
+
+        input when is_list(input) ->
+          {:ok, %{payload: compact_bridge_payload(payload, true), stream?: payload["stream"] == true}}
+
+        _ ->
+          {:error, Error.invalid_request("input must be a non-empty array", "input")}
+      end
     end
   end
+
+  defp bridge_result({:ok, payload}, stream?), do: {:ok, %{payload: payload, stream?: stream?}}
+  defp bridge_result({:error, _reason} = error, _stream?), do: error
 
   defp validate_compact_payload(payload) do
     case validate_projection(payload) do
@@ -218,10 +236,17 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   defp visible_text?(value) when is_binary(value), do: String.trim(value) != ""
   defp visible_text?(_value), do: false
 
-  defp compact_payload(payload) do
+  defp compact_bridge_payload(payload, append_trigger?) do
+    input =
+      if append_trigger? do
+        payload["input"] ++ [@trigger]
+      else
+        payload["input"]
+      end
+
     payload
     |> project_payload()
-    |> Map.put("input", payload["input"] |> Enum.drop(-1))
+    |> Map.put("input", input)
   end
 
   defp maybe_put_prompt_cache_key(compact_payload, %{"prompt_cache_key" => value}) do

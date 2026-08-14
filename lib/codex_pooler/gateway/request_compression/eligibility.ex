@@ -121,7 +121,7 @@ defmodule CodexPooler.Gateway.RequestCompression.Eligibility do
 
       route_class == RouteClass.proxy_compact() ->
         compact_endpoint?(source_endpoint(endpoints)) and
-          endpoints.upstream_endpoint == @backend_compact_endpoint
+          endpoints.upstream_endpoint in [@backend_compact_endpoint, @backend_responses_endpoint]
 
       route_class == RouteClass.proxy_websocket() ->
         responses_endpoint?(source_endpoint(endpoints)) and

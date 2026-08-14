@@ -210,9 +210,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
       request_options.openai_compatibility.source_endpoint ||
         upstream_endpoint
 
-    upstream_endpoint not in @compact_responses_endpoints and
+    not compaction_trigger_bridge?(request_options) and
+      upstream_endpoint not in @compact_responses_endpoints and
       source_endpoint in @ordinary_responses_endpoints
   end
+
+  defp compaction_trigger_bridge?(%RequestOptions{payload_context: %{compaction_trigger_bridge?: true}}),
+    do: true
+
+  defp compaction_trigger_bridge?(_request_options), do: false
 
   @spec response_body_limit_exceeded?(Req.Response.t()) :: boolean()
   def response_body_limit_exceeded?(%Req.Response{} = response),

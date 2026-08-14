@@ -163,28 +163,45 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
           request_opts: opts
         )
 
-      {:ok, compact_payload} ->
-        proxy_compaction_trigger_bridge(conn, local_endpoint, auth, compact_payload, opts)
+      {:ok, %{payload: compact_payload, stream?: stream?}} ->
+        proxy_compaction_trigger_bridge(
+          conn,
+          local_endpoint,
+          auth,
+          compact_payload,
+          opts,
+          stream?
+        )
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp proxy_compaction_trigger_bridge(conn, local_endpoint, auth, compact_payload, opts) do
+  defp proxy_compaction_trigger_bridge(
+         conn,
+         local_endpoint,
+         auth,
+         compact_payload,
+         opts,
+         stream?
+       ) do
     compact_endpoint = "/backend-api/codex/responses/compact"
+    upstream_endpoint = "/backend-api/codex/responses"
 
-    conn
-    |> PublicGatewayDispatch.dispatch_json_payload(
-      auth,
-      compact_endpoint,
-      compact_endpoint,
-      compact_endpoint,
-      compact_payload,
-      admission_endpoint: local_endpoint,
-      request_opts: Map.put(opts, :compaction_trigger_bridge?, true)
-    )
-    |> CompactionTrigger.adapt_gateway_result()
+    result =
+      PublicGatewayDispatch.dispatch_json_payload(
+        conn,
+        auth,
+        compact_endpoint,
+        upstream_endpoint,
+        compact_endpoint,
+        compact_payload,
+        admission_endpoint: local_endpoint,
+        request_opts: Map.put(opts, :compaction_trigger_bridge?, true)
+      )
+
+    if stream?, do: CompactionTrigger.adapt_gateway_result(result), else: result
   end
 
   defp serve_models(conn, endpoint) do

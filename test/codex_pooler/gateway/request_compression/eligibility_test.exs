@@ -86,6 +86,28 @@ defmodule CodexPooler.Gateway.RequestCompression.EligibilityTest do
       )
     end
 
+    test "enabled pool attempts eligible V2 compact bodies bridged to the Responses endpoint as a safe no-op" do
+      body = response_body()
+
+      {context, request_options} =
+        request_context(body,
+          endpoint: @compact_endpoint,
+          upstream_endpoint: @responses_endpoint,
+          route_class: RouteClass.proxy_compact(),
+          transport: "http_compact_json"
+        )
+
+      assert {^body, compressed_options} =
+               RequestCompression.maybe_compress(body, context, request_options)
+
+      assert_attempted_noop_metadata(
+        compressed_options.runtime.payload_compression,
+        "proxy_compact",
+        "http_compact_json",
+        byte_size(body)
+      )
+    end
+
     test "enabled pool attempts eligible websocket response create bodies as a safe no-op" do
       body = response_body(%{"type" => "response.create"})
 

@@ -1310,7 +1310,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       fixture = CompatibilityMatrix.fixture!(:responses_chat)
 
       assert responses_chat.contract =~ "terminal compaction_trigger backend payloads bridge"
-      assert responses_chat.contract =~ "/backend-api/codex/responses/compact"
+      assert responses_chat.contract =~ "V2 endpoint at /backend-api/codex/responses"
       assert responses_chat.contract =~ "preserves only schema-backed string replay identity"
       assert responses_chat.contract =~ "drops other compact-result fields"
       assert responses_chat.contract =~ "malformed trigger placement is rejected before dispatch"
@@ -1339,11 +1339,12 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  routes: ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"],
                  behavior: "terminal_trigger_bridges_to_compact",
                  compact_endpoint: "/backend-api/codex/responses/compact",
+                 upstream_endpoint: "/backend-api/codex/responses",
                  route_class: "proxy_compact",
                  transport: "http_compact_json",
                  valid_trigger: "exactly_one_final_input_item",
                  malformed_trigger: %{status: 400, param: "input", upstream_dispatch: false},
-                 strips: ["compaction_trigger", "stream", "include", "store"],
+                 strips: ["stream", "include", "store"],
                  preserves: [
                    "model",
                    "instructions",

@@ -86,6 +86,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     %{
       local_path: "/backend-api/codex/responses",
       canonical_upstream_path: "/backend-api/codex/responses",
+      accounting_endpoint: "/backend-api/codex/responses",
       compact?: false,
       fake_response:
         FakeUpstream.json_response(%{
@@ -99,6 +100,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     %{
       local_path: "/backend-api/codex/v1/responses",
       canonical_upstream_path: "/backend-api/codex/responses",
+      accounting_endpoint: "/backend-api/codex/responses",
       compact?: false,
       fake_response:
         FakeUpstream.json_response(%{
@@ -111,7 +113,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     },
     %{
       local_path: "/backend-api/codex/responses/compact",
-      canonical_upstream_path: "/backend-api/codex/responses/compact",
+      canonical_upstream_path: "/backend-api/codex/responses",
+      accounting_endpoint: "/backend-api/codex/responses/compact",
       compact?: true,
       fake_response:
         FakeUpstream.json_response(%{
@@ -121,7 +124,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     },
     %{
       local_path: "/backend-api/codex/v1/responses/compact",
-      canonical_upstream_path: "/backend-api/codex/responses/compact",
+      canonical_upstream_path: "/backend-api/codex/responses",
+      accounting_endpoint: "/backend-api/codex/responses/compact",
       compact?: true,
       fake_response:
         FakeUpstream.json_response(%{
@@ -3410,6 +3414,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   for %{
         local_path: local_path,
         canonical_upstream_path: canonical_upstream_path,
+        accounting_endpoint: accounting_endpoint,
         compact?: compact?,
         fake_response: fake_response
       } <- @code_mode_turn_metadata_projection_routes do
@@ -3451,6 +3456,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       assert_code_mode_turn_metadata_header_projected!(captured, metadata)
 
       if unquote(compact?) do
+        assert List.last(captured.json["input"]) == %{"type" => "compaction_trigger"}
         refute Map.has_key?(captured.json, "client_metadata")
       else
         assert_code_mode_client_metadata_preserved!(captured, metadata)
@@ -3460,7 +3466,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       assert_disallowed_client_headers_not_forwarded!(captured, setup)
 
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
-      assert request.endpoint == unquote(canonical_upstream_path)
+      assert request.endpoint == unquote(accounting_endpoint)
 
       assert request.transport ==
                if(unquote(compact?), do: "http_compact_json", else: "http_json")
@@ -10629,7 +10635,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert %{"object" => "response.compaction"} = json_response(conn, 200)
     assert [captured] = FakeUpstream.requests(upstream)
-    assert captured.path == "/backend-api/codex/responses/compact"
+    assert captured.path == "/backend-api/codex/responses"
     refute Map.has_key?(captured.json, "max_output_tokens")
     refute Map.has_key?(captured.json, "temperature")
     refute Map.has_key?(captured.json, "top_p")
@@ -10684,8 +10690,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert %{"object" => "response.compaction"} = json_response(conn, 200)
     assert [captured] = FakeUpstream.requests(upstream)
-    assert captured.path == "/backend-api/codex/responses/compact"
-    assert captured.json["input"] == native_text_input("compact without candidate output")
+    assert captured.path == "/backend-api/codex/responses"
+
+    assert captured.json["input"] ==
+             native_text_input("compact without candidate output") ++
+               [%{"type" => "compaction_trigger"}]
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses/compact"
@@ -10736,7 +10745,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert get_resp_header(conn, "x-codex-turn-state") == [response_turn_state]
 
     assert [captured] = FakeUpstream.requests(upstream)
-    assert captured.path == "/backend-api/codex/responses/compact"
+    assert captured.path == "/backend-api/codex/responses"
     assert Map.new(captured.headers)["x-codex-turn-state"] == request_turn_state
 
     assert_turn_state_not_persisted!(setup, request_turn_state)
@@ -11493,7 +11502,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              FakeUpstream.requests(upstream)
 
     for captured <- [first_upstream_request, second_upstream_request, third_upstream_request] do
-      assert captured.path == "/backend-api/codex/responses/compact"
+      assert captured.path == "/backend-api/codex/responses"
       captured_headers = Map.new(captured.headers)
 
       refute Map.has_key?(captured_headers, "session-id")
@@ -11527,7 +11536,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert %{"object" => "response.compaction"} = json_response(conn, 200)
     assert get_resp_header(conn, "x-models-etag") == []
     assert [captured] = FakeUpstream.requests(upstream)
-    assert captured.path == "/backend-api/codex/responses/compact"
+    assert captured.path == "/backend-api/codex/responses"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses/compact"
@@ -11550,7 +11559,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     body =
       Jason.encode!(%{
         "model" => setup.model.exposed_model_id,
-        "input" => large_entry
+        "input" => native_text_input(large_entry)
       })
 
     assert byte_size(body) > 8_000_000
@@ -11565,8 +11574,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert %{"object" => "response.compaction"} = json_response(conn, 200)
     assert [captured] = FakeUpstream.requests(upstream)
-    assert captured.path == "/backend-api/codex/responses/compact"
-    assert byte_size(captured.json["input"]) == byte_size(large_entry)
+    assert captured.path == "/backend-api/codex/responses"
+    assert List.last(captured.json["input"]) == %{"type" => "compaction_trigger"}
+    captured_text = captured.json["input"] |> hd() |> Map.fetch!("content") |> hd() |> Map.fetch!("text")
+    assert byte_size(captured_text) == byte_size(large_entry)
   end
 
   test "POST /backend-api/codex/responses/compact finalizes upstream demand failures", %{
@@ -11607,7 +11618,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert get_resp_header(conn, "x-codex-turn-state") == [response_turn_state]
 
     assert [captured] = FakeUpstream.requests(upstream)
-    assert captured.path == "/backend-api/codex/responses/compact"
+    assert captured.path == "/backend-api/codex/responses"
     assert Map.new(captured.headers)["x-codex-turn-state"] == request_turn_state
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -11653,7 +11664,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert %{"object" => "response.compaction"} = json_response(conn, 200)
     assert [captured] = FakeUpstream.requests(upstream)
-    assert captured.path == "/backend-api/codex/responses/compact"
+    assert captured.path == "/backend-api/codex/responses"
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses/compact"
     assert request.transport == "http_compact_json"
@@ -11690,7 +11701,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert %{"object" => "response.compaction"} = json_response(conn, 200)
 
     assert [captured] = FakeUpstream.requests(upstream)
-    assert captured.path == "/backend-api/codex/responses/compact"
+    assert captured.path == "/backend-api/codex/responses"
 
     captured_headers = Map.new(captured.headers)
 
@@ -11773,7 +11784,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert %{"object" => "response.compaction"} = json_response(conn, 200)
 
     assert [captured] = FakeUpstream.requests(upstream)
-    assert captured.path == "/backend-api/codex/responses/compact"
+    assert captured.path == "/backend-api/codex/responses"
 
     captured_headers = Map.new(captured.headers)
 

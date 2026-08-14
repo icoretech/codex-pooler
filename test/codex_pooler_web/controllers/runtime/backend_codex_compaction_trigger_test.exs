@@ -56,7 +56,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
   end
 
   @tag :manual_fake_upstream
-  test "singleton compaction trigger bridges empty compact input and relays the provider rejection",
+  test "singleton compaction trigger dispatches to v2 and relays the provider rejection",
        %{conn: conn} do
     upstream =
       start_upstream(
@@ -94,8 +94,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     refute response.resp_body =~ "compaction_trigger must be the final input item"
 
     assert [captured] = FakeUpstream.requests(upstream)
-    assert captured.path == "/backend-api/codex/responses/compact"
-    assert captured.json["input"] == []
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["input"] == [compaction_trigger()]
     refute Map.has_key?(captured.json, "stream")
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -176,7 +176,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
       assert response.status == 200
       assert [captured] = FakeUpstream.requests(upstream)
-      assert captured.path == "/backend-api/codex/responses/compact"
+      assert captured.path == "/backend-api/codex/responses"
+      assert List.last(captured.json["input"]) == compaction_trigger()
       assert captured.json["reasoning"] == %{"effort" => "high"}
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
       assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
@@ -256,15 +257,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       assert_compact_mode_matrix_response!(lite_response, stream?)
 
       assert [full_capture, lite_capture] = FakeUpstream.requests(upstream)
-      assert full_capture.path == "/backend-api/codex/responses/compact"
-      assert lite_capture.path == "/backend-api/codex/responses/compact"
+      assert full_capture.path == "/backend-api/codex/responses"
+      assert lite_capture.path == "/backend-api/codex/responses"
       assert full_capture.json["model"] == setup.model.upstream_model_id
       assert lite_capture.json["model"] == setup.model.upstream_model_id
 
       assert full_capture.json["model"] == lite_capture.json["model"]
       assert full_capture.json["instructions"] == payload["instructions"]
       assert full_capture.json["tools"] == payload["tools"]
-      assert full_capture.json["input"] == payload["input"]
+      assert full_capture.json["input"] == payload["input"] ++ [compaction_trigger()]
 
       assert get_in(lite_capture.json, ["reasoning", "context"]) == "all_turns"
       assert lite_capture.json["parallel_tool_calls"] == false
@@ -276,6 +277,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
       assert get_in(lite_capture.json, ["input", Access.at(2), "content", Access.at(0), "detail"]) ==
                nil
+
+      assert List.last(lite_capture.json["input"]) == compaction_trigger()
 
       assert_compact_mode_matrix_headers!(full_capture, lite_capture)
       assert_compact_mode_matrix_metadata!(setup, ["full", "lite"])
@@ -325,7 +328,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       assert_compact_mode_matrix_response!(response, false)
 
       assert [captured] = FakeUpstream.requests(upstream)
-      assert captured.path == "/backend-api/codex/responses/compact"
+      assert captured.path == "/backend-api/codex/responses"
+      assert List.last(captured.json["input"]) == compaction_trigger()
 
       assert MapSet.new(Map.keys(captured.json)) ==
                MapSet.new(~w(
@@ -537,7 +541,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     refute response(conn, 200) =~ "raw_compact_detail"
 
     assert [captured] = FakeUpstream.requests(upstream)
-    assert captured.path == "/backend-api/codex/responses/compact"
+    assert captured.path == "/backend-api/codex/responses"
     assert Map.new(captured.headers)["x-codex-turn-state"] == request_turn_state
 
     assert Map.new(captured.headers)["x-codex-routing-hint"] ==
@@ -554,7 +558,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
                  %{"type" => "input_text", "text" => "compact bridge visible fixture"},
                  %{"type" => "input_text", "text" => "compact bridge second content item"}
                ]
-             }
+             },
+             compaction_trigger()
            ]
 
     assert captured.json["reasoning"] == %{"effort" => "low"}
@@ -586,7 +591,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
                text
              ))
 
-    refute inspect(captured.json) =~ "compaction_trigger"
+    assert inspect(captured.json) =~ "compaction_trigger"
     refute Map.has_key?(captured.json, "previous_response_id")
     refute Map.has_key?(captured.json, "conversation")
     refute Map.has_key?(captured.json, "tool_choice")
@@ -721,9 +726,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     refute response_body =~ audio_url
 
     assert [captured] = FakeUpstream.requests(upstream)
-    assert captured.path == "/backend-api/codex/responses/compact"
-    assert captured.json["input"] == input
-    refute inspect(captured.json) =~ "compaction_trigger"
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["input"] == input ++ [compaction_trigger()]
+    assert inspect(captured.json) =~ "compaction_trigger"
 
     assert_audio_accounting_metadata_only!(setup.pool, [audio_source, audio_data, audio_url])
   end
@@ -857,9 +862,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       end
 
       assert [captured] = FakeUpstream.requests(upstream)
-      assert captured.path == "/backend-api/codex/responses/compact"
+      assert captured.path == "/backend-api/codex/responses"
       assert Map.new(captured.headers)["x-codex-turn-state"] == request_turn_state
-      refute inspect(captured.json) =~ "compaction_trigger"
+      assert inspect(captured.json) =~ "compaction_trigger"
 
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
       assert request.endpoint == "/backend-api/codex/responses/compact"
@@ -1075,7 +1080,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
       assert %{"error" => ^expected_error} = json_response(response, 502)
 
       assert [captured] = FakeUpstream.requests(upstream)
-      assert captured.path == "/backend-api/codex/responses/compact"
+      assert captured.path == "/backend-api/codex/responses"
       refute response.resp_body =~ "cmp-without-content"
       refute response.resp_body =~ "cmp-fallback-without-content"
       refute response.resp_body =~ "malformed-compact-json"
@@ -1129,23 +1134,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     assert Repo.aggregate(Attempt, :count) == 0
   end
 
-  test "compact SSE terminal failure finalizes as a failure without duplicating relayed blocks",
-       %{conn: conn} do
-    # Regression: the compact stream writer must classify terminal events like
-    # every other SSE stream. Before the fix, a compact stream ending in
-    # response.failed was relayed and finalized as a SUCCESSFUL request, and the
-    # exhaustion path replayed the full retained body (duplicating blocks that
-    # had already been written downstream).
-    rate_limits_block =
-      "event: codex.rate_limits\n" <>
-        "data: #{Jason.encode!(%{"type" => "codex.rate_limits", "rate_limits" => %{"secondary" => %{"used_percent" => 11, "window_minutes" => 10_080, "reset_at" => DateTime.to_unix(DateTime.add(DateTime.utc_now(), 3, :day))}}})}\n\n"
+  test "compact upstream failure finalizes as a failure", %{conn: conn} do
+    # V2 compaction is buffered: an upstream error response must be relayed and
+    # finalize the request as a failure (never as a successful compaction).
+    upstream =
+      start_upstream(
+        {:json_error, 500,
+         %{"error" => %{"code" => "server_error", "message" => "synthetic compact failure"}}}
+      )
 
-    {_event, failed_payload} = first_event_terminal_payload("response.failed", "server_error")
-
-    failure_block =
-      "event: response.failed\n" <> "data: #{Jason.encode!(failed_payload)}\n\n"
-
-    upstream = start_upstream({:sse, [rate_limits_block, failure_block]})
     setup = gateway_setup(upstream, compact?: true)
 
     response =
@@ -1157,11 +1154,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
         "stream" => true
       })
 
-    # The client received the terminal failure exactly once, and the already
-    # relayed rate-limits block was not replayed by the final delivery.
-    body = response.resp_body
-    assert length(String.split(body, "event: response.failed")) == 2
-    assert length(String.split(body, "event: codex.rate_limits")) == 2
+    assert response.status == 500
+    assert response.resp_body =~ "synthetic compact failure"
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses/compact"
@@ -1259,17 +1253,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
   end
 
   defp compact_mode_matrix_upstream(true) do
-    FakeUpstream.sse_stream([
-      {"response.completed",
-       %{
-         "type" => "response.completed",
-         "response" => %{
-           "id" => "resp_compact_mode_matrix",
-           "status" => "completed",
-           "output" => []
-         }
-       }}
-    ])
+    FakeUpstream.json_response(%{
+      "id" => "resp_compact_mode_matrix",
+      "object" => "response.compaction",
+      "output" => [
+        %{"type" => "compaction", "encrypted_content" => "encrypted-compact-mode-fixture"}
+      ]
+    })
   end
 
   defp compact_mode_matrix_upstream(false) do
