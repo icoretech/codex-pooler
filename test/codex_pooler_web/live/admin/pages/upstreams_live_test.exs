@@ -121,6 +121,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute html =~ "system job state"
   end
 
+  test "keeps desktop nav geometry out of route-change transitions", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    nav_html = view |> element("#admin-nav-pools") |> render()
+
+    assert nav_html =~ "xl:transition-[background-color,border-color,color,opacity]"
+  end
+
   test "renders token burn completeness states without false zero claims", %{
     conn: conn
   } do

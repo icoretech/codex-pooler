@@ -332,7 +332,7 @@ defmodule CodexPoolerWeb.Admin.Components.Shell do
 
   defp admin_nav_item_class(active?) do
     [
-      "group flex w-full items-center justify-center gap-3 border-l-[3px] border-transparent px-3 py-2.5 font-mono text-[0.58rem] font-semibold uppercase tracking-[0.12em] text-base-content/55 opacity-75 outline-none transition-all duration-200 hover:bg-base-300/70 hover:text-base-content hover:opacity-100 focus-visible:border-primary focus-visible:text-base-content rail-open:justify-start rail-open:px-4 rail-open:text-xs",
+      "group flex w-full items-center justify-center gap-3 border-l-[3px] border-transparent px-3 py-2.5 font-mono text-[0.58rem] font-semibold uppercase tracking-[0.12em] text-base-content/55 opacity-75 outline-none transition-all duration-200 xl:transition-[background-color,border-color,color,opacity] hover:bg-base-300/70 hover:text-base-content hover:opacity-100 focus-visible:border-primary focus-visible:text-base-content rail-open:justify-start rail-open:px-4 rail-open:text-xs",
       active? && "!border-l-primary bg-base-300 text-base-content opacity-100"
     ]
   end
