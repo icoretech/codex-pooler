@@ -198,7 +198,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
       configured_mode: "full",
       effective_mode: "full",
       source: "override"
-    } and ordinary_responses_endpoint?(request_options)
+    } and ordinary_responses_endpoint?(request_options) and
+      not request_options.payload_context.compaction_trigger_bridge?
   end
 
   def explicit_full_ordinary_responses?(_request_options), do: false

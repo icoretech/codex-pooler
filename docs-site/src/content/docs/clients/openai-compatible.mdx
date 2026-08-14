@@ -383,7 +383,7 @@ No. `/v1/realtime` and OpenAI Realtime SDK websocket or session routes are unsup
 
 No. `POST /v1/responses/compact` is routed only so clients receive a deterministic OpenAI-shaped `unsupported_endpoint` error. Codex backend-compatible compact requests should use `POST /backend-api/codex/responses/compact`.
 
-Codex backend clients that send a terminal `compaction_trigger` to `POST /backend-api/codex/responses` or `/backend-api/codex/v1/responses` are bridged through the backend compact route and receive backend Responses SSE compaction output.
+Codex backend clients that send a terminal `compaction_trigger` to `POST /backend-api/codex/responses` or `/backend-api/codex/v1/responses` retain that final item and use the normal backend Responses upstream endpoint. The request remains compact-accounted and buffered through the compact transport, then receives canonical backend Responses SSE compaction output. Direct backend compact aliases remain supported and use the canonical legacy `/backend-api/codex/responses/compact` upstream endpoint.
 
 ### Can I use the same key for `/v1` and `/mcp`?
 

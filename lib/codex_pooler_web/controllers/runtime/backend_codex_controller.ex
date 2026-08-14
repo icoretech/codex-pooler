@@ -178,7 +178,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
     |> PublicGatewayDispatch.dispatch_json_payload(
       auth,
       compact_endpoint,
-      compact_endpoint,
+      "/backend-api/codex/responses",
       compact_endpoint,
       compact_payload,
       admission_endpoint: local_endpoint,

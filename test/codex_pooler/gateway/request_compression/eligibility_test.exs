@@ -86,6 +86,29 @@ defmodule CodexPooler.Gateway.RequestCompression.EligibilityTest do
       )
     end
 
+    @tag :compaction_v2_request_compression
+    test "enabled pool attempts compact-accounted terminal-trigger bodies on Responses upstream" do
+      body = response_body()
+
+      {context, request_options} =
+        request_context(body,
+          endpoint: @compact_endpoint,
+          upstream_endpoint: @responses_endpoint,
+          route_class: RouteClass.proxy_compact(),
+          transport: "http_compact_json"
+        )
+
+      assert {^body, compressed_options} =
+               RequestCompression.maybe_compress(body, context, request_options)
+
+      assert_attempted_noop_metadata(
+        compressed_options.runtime.payload_compression,
+        "proxy_compact",
+        "http_compact_json",
+        byte_size(body)
+      )
+    end
+
     test "enabled pool attempts eligible websocket response create bodies as a safe no-op" do
       body = response_body(%{"type" => "response.create"})
 
@@ -219,6 +242,64 @@ defmodule CodexPooler.Gateway.RequestCompression.EligibilityTest do
                "status" => "ineligible",
                "reason" => "route_ineligible"
              } = compressed_options.runtime.payload_compression
+    end
+
+    test "ordinary and public compact near-misses remain ineligible on Responses upstream" do
+      body = response_body()
+
+      cases = [
+        [
+          endpoint: @responses_endpoint,
+          upstream_endpoint: @responses_endpoint,
+          route_class: RouteClass.proxy_compact(),
+          transport: "http_compact_json"
+        ],
+        [
+          endpoint: @public_unsupported_compact_endpoint,
+          upstream_endpoint: @responses_endpoint,
+          route_class: RouteClass.proxy_compact(),
+          transport: "http_compact_json"
+        ],
+        [
+          endpoint: @compact_endpoint,
+          upstream_endpoint: @responses_endpoint,
+          source_endpoint: @responses_endpoint,
+          translated_endpoint: @responses_endpoint,
+          route_class: RouteClass.proxy_compact(),
+          transport: "http_compact_json"
+        ],
+        [
+          endpoint: @responses_endpoint,
+          upstream_endpoint: @responses_endpoint,
+          source_endpoint: @compact_endpoint,
+          translated_endpoint: @responses_endpoint,
+          route_class: RouteClass.proxy_compact(),
+          transport: "http_compact_json"
+        ],
+        [
+          endpoint: @compact_endpoint,
+          upstream_endpoint: @responses_endpoint,
+          route_class: RouteClass.proxy_compact(),
+          transport: "http_json"
+        ]
+      ]
+
+      for opts <- cases do
+        {context, request_options} = request_context(body, opts)
+        expected_transport = request_options.transport.transport
+
+        assert {^body, compressed_options} =
+                 RequestCompression.maybe_compress(body, context, request_options)
+
+        assert %{
+                 "enabled" => true,
+                 "attempted" => true,
+                 "status" => "ineligible",
+                 "reason" => "route_ineligible",
+                 "route_class" => "proxy_compact",
+                 "transport" => ^expected_transport
+               } = compressed_options.runtime.payload_compression
+      end
     end
 
     test "metadata never echoes body content" do
