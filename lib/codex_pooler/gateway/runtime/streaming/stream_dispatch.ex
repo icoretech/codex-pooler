@@ -197,11 +197,18 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   defp put_first_event_state(%{} = state, %{} = first_event_state),
     do: Map.put(state, :first_event, first_event_state)
 
-  defp rate_limit_state(%{rate_limit: %{buffer: buffer}}) when is_binary(buffer),
-    do: %{buffer: buffer}
+  defp rate_limit_state(%{
+         rate_limit: %{buffer: buffer, skip_leading_lf?: skip_leading_lf?} = state
+       })
+       when is_binary(buffer) and is_boolean(skip_leading_lf?),
+       do: state
 
-  defp put_rate_limit_state(%{} = state, %{buffer: buffer}) when is_binary(buffer),
-    do: Map.put(state, :rate_limit, %{buffer: buffer})
+  defp put_rate_limit_state(
+         %{} = state,
+         %{buffer: buffer, skip_leading_lf?: skip_leading_lf?} = rate_limit_state
+       )
+       when is_binary(buffer) and is_boolean(skip_leading_lf?),
+       do: Map.put(state, :rate_limit, rate_limit_state)
 
   defp usage_state(%{usage_observer: %{} = usage_state}), do: usage_state
   defp usage_state(_state), do: StreamUsageObserver.new()
