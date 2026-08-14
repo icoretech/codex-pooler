@@ -142,10 +142,10 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.BulkheadEditor do
         <table class="table table-sm min-w-xl bg-base-100">
           <thead>
             <tr class="text-[0.62rem] uppercase tracking-[0.08em] text-base-content/45">
-              <th scope="col" class="w-full min-w-56">Route class</th>
-              <th scope="col" class="min-w-24">Max concurrent</th>
-              <th scope="col" class="min-w-24">Queue limit</th>
-              <th scope="col" class="min-w-24">Timeout (ms)</th>
+              <th scope="col" class="w-full min-w-56 border-b-0">Route class</th>
+              <th scope="col" class="min-w-24 border-b-0">Max concurrent</th>
+              <th scope="col" class="min-w-24 border-b-0">Queue limit</th>
+              <th scope="col" class="min-w-24 border-b-0">Timeout (ms)</th>
             </tr>
           </thead>
           <.bulkhead_group
@@ -175,7 +175,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.BulkheadEditor do
         <th
           scope="rowgroup"
           colspan="4"
-          class="border-t border-base-300 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/50"
+          class="border-t border-t-base-300 py-2 text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-base-content/50"
         >
           {@label}
         </th>

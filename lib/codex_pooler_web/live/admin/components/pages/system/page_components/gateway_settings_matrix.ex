@@ -34,15 +34,11 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.GatewaySettingsMatrix do
         <table class="table table-sm min-w-xl bg-base-100">
           <thead>
             <tr class="text-[0.62rem] uppercase tracking-[0.08em] text-base-content/45">
-              <th scope="col" class="w-full min-w-64">Setting</th>
-              <th scope="col" class="min-w-64">Current value</th>
+              <th scope="col" class="w-full min-w-64 border-b-0">Setting</th>
+              <th scope="col" class="min-w-64 border-b-0">Current value</th>
             </tr>
           </thead>
-          <.settings_group
-            :for={{group, index} <- Enum.with_index(@groups)}
-            group={group}
-            first?={index == 0}
-          />
+          <.settings_group :for={group <- @groups} group={group} />
         </table>
       </div>
 
@@ -54,7 +50,6 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.GatewaySettingsMatrix do
   end
 
   attr :group, :map, required: true
-  attr :first?, :boolean, required: true
 
   defp settings_group(assigns) do
     ~H"""
@@ -66,7 +61,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.GatewaySettingsMatrix do
         <th
           scope="rowgroup"
           colspan="2"
-          class={["py-2", not @first? && "border-t border-t-base-300"]}
+          class="border-t border-t-base-300 py-2"
         >
           <div class="flex items-center justify-between gap-4">
             <span class="min-w-0">

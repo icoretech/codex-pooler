@@ -290,8 +290,13 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
 
     assert has_element?(
              view,
-             "#instance-settings-bulkhead-group-supporting > th.border-t.border-base-300",
+             "#instance-settings-bulkhead-group-supporting > th.border-t.border-t-base-300",
              "Supporting lanes"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-bulkhead-scroll-region thead th.border-b-0"
            )
   end
 
@@ -318,9 +323,14 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     assert has_element?(view, "#instance-settings-gateway-scalar-matrix")
     assert has_element?(view, "#instance-settings-gateway-scalar-group-streaming", "Streaming")
 
-    refute has_element?(
+    assert has_element?(
              view,
-             "#instance-settings-gateway-scalar-group-streaming > th.border-t"
+             "#instance-settings-gateway-scalar-group-streaming > th.border-t.border-t-base-300"
+           )
+
+    assert has_element?(
+             view,
+             "#instance-settings-gateway-scalar-scroll-region thead th.border-b-0"
            )
 
     assert has_element?(
