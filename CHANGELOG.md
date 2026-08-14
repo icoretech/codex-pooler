@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.6.2](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.1...codex-pooler-v0.6.2) (2026-08-14)
+
+
+### Bug Fixes
+
+* **accounting:** preserve reported reasoning and zero cache reads ([54027b5](https://github.com/icoretech/codex-pooler/commit/54027b525d777e5c8e19839b12d01ecee53db563))
+* **admin:** align upstream token leaderboard columns ([d1e1ce4](https://github.com/icoretech/codex-pooler/commit/d1e1ce4606fae405e01c010580048296b6dc507c))
+* **admin:** clarify traffic series and separate chart colors ([8cd613b](https://github.com/icoretech/codex-pooler/commit/8cd613b717e07f19ec120ea12fc39351b9275c39))
+* **admin:** rebalance upstream cards across tablet widths ([28f8eeb](https://github.com/icoretech/codex-pooler/commit/28f8eeb1fd686f3ab4a4c9cb8cf8ebdb1cf06389))
+* **admin:** stop sidebar labels resizing during navigation ([1f1ecd9](https://github.com/icoretech/codex-pooler/commit/1f1ecd9118c7e0efdfb602203f38d1e495470933))
+* **gateway:** accept standalone CR SSE framing ([8533b96](https://github.com/icoretech/codex-pooler/commit/8533b9624d378b450fe3c8a068ccd39ee033efbc))
+* **gateway:** forward compaction triggers through Responses ([35ec313](https://github.com/icoretech/codex-pooler/commit/35ec313187682bc41f1e186ac7417a389474b0b2))
+* **gateway:** observe standalone CR rate limits ([f5b771d](https://github.com/icoretech/codex-pooler/commit/f5b771dc143a7f6481e1f367836888d60132725b))
+* **gateway:** retain full SSE state for quota events ([888c8e7](https://github.com/icoretech/codex-pooler/commit/888c8e71daba601b4306fa0ace1ca8aaca973c32))
+* **settings:** exclude writer cache from invalidations ([dcf2702](https://github.com/icoretech/codex-pooler/commit/dcf27027ccf8e54c78cde31d1b7439701014de5a))
+* **stats:** cover rolling windows with bounded projections ([ace36cc](https://github.com/icoretech/codex-pooler/commit/ace36cc4dd4ba300abc632b6bb029b76541b6b91))
+* **test:** isolate bundle import job assertions ([d10a869](https://github.com/icoretech/codex-pooler/commit/d10a869581f5fb725530970d4bc1a616b609676d))
+* **test:** synchronize websocket concurrency checks ([a820bd6](https://github.com/icoretech/codex-pooler/commit/a820bd6f9e43ec290d9b1e2484ebad4a823d25e3))
+
 ## [0.6.1](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.0...codex-pooler-v0.6.1) (2026-08-13)
 
 
