@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   """
 
   alias CodexPooler.Gateway.Contracts
+  alias CodexPooler.Gateway.OpenAICompatibility.Error
   alias CodexPooler.Gateway.OpenAICompatibility.Responses
   alias CodexPooler.Gateway.Payloads.PayloadNormalizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -16,11 +17,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   @type decode_error :: :invalid_json | :not_object
   @type gateway_error :: Contracts.gateway_error()
   @type deliver_result :: :ok | {:error, gateway_error()}
+  @type stream_id_result :: :omitted | {:ok, String.t()} | {:error, gateway_error()}
   @type coerced_request :: %{
           required(:endpoint) => String.t(),
           required(:payload) => map(),
           required(:request_options) => RequestOptions.t()
         }
+
+  @stream_id_pattern ~r/\A[A-Za-z0-9_.-]+\z/
 
   @spec decode_payload(binary()) :: {:ok, map()} | {:error, decode_error()}
   def decode_payload(payload) when is_binary(payload) do
@@ -35,6 +39,23 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
         {:error, :invalid_json}
     end
   end
+
+  @spec stream_id(term()) :: stream_id_result()
+  def stream_id(payload) when is_binary(payload) do
+    case decode_payload(payload) do
+      {:ok, decoded} -> stream_id(decoded)
+      {:error, _reason} -> :omitted
+    end
+  end
+
+  def stream_id(%{} = payload) do
+    case Map.fetch(payload, "stream_id") do
+      :error -> :omitted
+      {:ok, value} -> validate_stream_id(value)
+    end
+  end
+
+  def stream_id(_payload), do: :omitted
 
   @spec deliver_result(map(), (binary() -> any())) :: deliver_result()
   def deliver_result(%{websocket_stream: stream}, _push_frame) do
@@ -254,12 +275,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
          %{"type" => "response.create"} = payload,
          %RequestOptions{openai_compatibility: %{public_openai_responses_stream: true}} = opts
        ) do
-    payload
-    |> Map.drop(["type", "generate"])
-    |> Responses.coerce(opts)
-    |> case do
-      {:ok, coerced} -> {:ok, %{coerced | payload: Map.put(coerced.payload, "generate", true)}}
-      {:error, reason} -> {:error, reason}
+    with {:ok, payload} <- without_stream_id(payload) do
+      payload
+      |> Map.drop(["type", "generate"])
+      |> Responses.coerce(opts)
+      |> case do
+        {:ok, coerced} -> {:ok, %{coerced | payload: Map.put(coerced.payload, "generate", true)}}
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 
@@ -316,4 +339,29 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   end
 
   defp continuity_ordered_payload(_payload), do: false
+
+  defp without_stream_id(payload) do
+    case stream_id(payload) do
+      :omitted -> {:ok, payload}
+      {:ok, _stream_id} -> {:ok, Map.delete(payload, "stream_id")}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp validate_stream_id(stream_id) when is_binary(stream_id) do
+    if byte_size(stream_id) in 1..256 and Regex.match?(@stream_id_pattern, stream_id) do
+      {:ok, stream_id}
+    else
+      {:error, invalid_stream_id_error()}
+    end
+  end
+
+  defp validate_stream_id(_stream_id), do: {:error, invalid_stream_id_error()}
+
+  defp invalid_stream_id_error do
+    Error.invalid_request(
+      "stream_id must be 1-256 ASCII characters matching [A-Za-z0-9_.-]+",
+      "stream_id"
+    )
+  end
 end

@@ -59,6 +59,33 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     v1_unsupported_public_surface
   )a
 
+  @url_citation_fixture_id "vercel-ai.responses.url_citation_replay.v1"
+  @stream_id_fixture_id "openai.responses.websocket_stream_id.v1"
+  @url_citation_keys ["type", "start_index", "end_index", "url", "title"]
+  @stream_id_contract %{
+    scope: "GET /v1/responses websocket response.create only",
+    validator: %{
+      type: "string",
+      byte_length: 1..256,
+      pattern: "^[A-Za-z0-9_.-]+$"
+    },
+    conditional_echo: "every attributable Open Responses server event for an accepted create",
+    same_id_fifo: "guaranteed_by_existing_per_connection_serialization",
+    cross_id_concurrency: "unspecified; different IDs remain per-connection serialized",
+    previous_response_id: "independent_conversation_lineage",
+    upstream: "stripped_before_coercion_request_options_continuity_and_upstream_dispatch",
+    privacy:
+      "transient_queue_and_active_socket_turn_only; excluded_from_persistence_accounting_logs_telemetry_metadata_and_owner_contracts",
+    exclusions: [
+      "POST /v1/responses",
+      "native backend HTTP and WebSockets",
+      "Chat",
+      "compact",
+      "batches",
+      "response-output storage"
+    ]
+  }
+
   setup do
     old_config = Application.get_env(:codex_pooler, Files, [])
 
@@ -97,6 +124,90 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
     test "has no pending compatibility gaps" do
       assert CompatibilityMatrix.pending_gaps() == []
+    end
+
+    test "keeps the baseline matrix characterization intact before specialized contracts" do
+      assert CompatibilityMatrix.feature_slugs() == @expected_features
+      assert CompatibilityMatrix.pending_gaps() == []
+
+      assert Enum.all?(CompatibilityMatrix.features(), fn feature ->
+               feature.status == :supported and not is_nil(feature.current) and
+                 is_map(CompatibilityMatrix.fixture!(feature.fixture))
+             end)
+    end
+
+    test "locks the exact URL citation and Responses WebSocket stream ID machine contracts" do
+      citation_fixture = sdk_shape_fixture!(@url_citation_fixture_id)
+      stream_fixture = sdk_shape_fixture!(@stream_id_fixture_id)
+      v1_fixture = CompatibilityMatrix.fixture!(:v1_supported_surface)
+      openclaw_fixture = v1_fixture.openclaw_assistant_thinking_replay
+      stream_contract = v1_fixture.open_responses_websocket_stream_id
+
+      assert citation_fixture["endpoint"] == "/v1/responses"
+      assert citation_fixture["http_method"] == "POST or WEBSOCKET response.create"
+      assert citation_fixture["expected_decision"]["status"] == "translate"
+
+      assert citation_fixture["structural_summary"] == %{
+               "payload_kind" => "vercel_ai_open_responses_url_citation_replay",
+               "assistant_output_text_annotations_present" => true,
+               "annotation_type" => "url_citation",
+               "annotation_exact_keys" => @url_citation_keys,
+               "annotation_order_preserved" => true,
+               "explicit_empty_annotations_preserved" => true,
+               "omitted_annotations_preserved" => true,
+               "malformed_or_unsupported_annotations" => "reject_before_dispatch",
+               "raw_payload_stored" => false,
+               "placeholder_values_only" => true,
+               "notes" => [
+                 "Only the exact URL-citation schema is accepted for assistant output_text replay.",
+                 "The fixture intentionally omits raw assistant text and citation values."
+               ]
+             }
+
+      assert openclaw_fixture.output_text_annotations == %{
+               accepted_type: "url_citation",
+               exact_keys: @url_citation_keys,
+               preserves: ["order", "exact_values", "explicit_empty_list", "omission"],
+               malformed: "reject_before_dispatch"
+             }
+
+      assert stream_fixture["endpoint"] == "/v1/responses"
+      assert stream_fixture["http_method"] == "WEBSOCKET response.create"
+      assert stream_fixture["expected_decision"]["status"] == "accept"
+
+      assert stream_contract == @stream_id_contract
+
+      assert stream_fixture["structural_summary"] == %{
+               "payload_kind" => "openai_responses_websocket_stream_id",
+               "websocket_only" => true,
+               "rest_post_responses_excluded" => true,
+               "native_backend_routes_excluded" => true,
+               "validator" => %{
+                 "type" => "string",
+                 "byte_length" => [1, 256],
+                 "pattern" => "^[A-Za-z0-9_.-]+$"
+               },
+               "conditional_echo" =>
+                 "every attributable Open Responses server event when the accepted response.create supplied stream_id",
+               "same_stream_id_ordering" => "FIFO",
+               "cross_stream_id_concurrency" => "unspecified",
+               "previous_response_id_relation" => "independent conversation lineage",
+               "upstream_handling" => "stripped before upstream dispatch",
+               "privacy" =>
+                 "transient socket-turn state only; excluded from request options, persistence, accounting, logs, telemetry, and metadata",
+               "raw_payload_stored" => false,
+               "placeholder_values_only" => true
+             }
+    end
+
+    test "rejects a temporary malformed stream contract copy missing a required field" do
+      contract =
+        CompatibilityMatrix.fixture!(:v1_supported_surface).open_responses_websocket_stream_id
+
+      malformed_contract = Map.delete(contract, :upstream)
+
+      assert exact_stream_id_contract?(contract)
+      refute exact_stream_id_contract?(malformed_contract)
     end
 
     test "documents the pruned runtime helper firewall matrix" do
@@ -2211,6 +2322,22 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
         }
     end
   end
+
+  defp sdk_shape_fixture!(scenario_id) do
+    fixtures_dir = Path.expand("../../../fixtures/openai_compatibility/sdk_shapes", __DIR__)
+
+    fixtures_dir
+    |> Path.join("*.json")
+    |> Path.wildcard()
+    |> Enum.map(&Jason.decode!(File.read!(&1)))
+    |> Enum.find(&(&1["scenario_id"] == scenario_id))
+    |> case do
+      nil -> flunk("missing SDK-shape fixture: #{scenario_id}")
+      fixture -> fixture
+    end
+  end
+
+  defp exact_stream_id_contract?(contract), do: contract == @stream_id_contract
 
   describe "baseline route and gap contracts" do
     test "supported files contract requires API-key auth before JSON shape validation", %{

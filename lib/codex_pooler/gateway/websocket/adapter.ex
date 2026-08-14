@@ -92,8 +92,10 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
 
   @spec public_responses_turn_state() ::
           StreamProtocol.public_openai_responses_websocket_state()
-  def public_responses_turn_state do
-    StreamProtocol.public_openai_responses_websocket_state()
+  @spec public_responses_turn_state(String.t() | nil) ::
+          StreamProtocol.public_openai_responses_websocket_state()
+  def public_responses_turn_state(stream_id \\ nil) do
+    StreamProtocol.public_openai_responses_websocket_state(stream_id)
   end
 
   @spec public_responses_stream?(socket_state()) :: boolean()

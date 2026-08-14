@@ -111,6 +111,17 @@ the map keys are `type`, `start_index`, `end_index`, `url`, and `title`, with
 lists, and omission. Malformed or unsupported annotation maps reject before
 dispatch; do not call this generic annotation passthrough.
 
+Narrow `GET /v1/responses` websocket `response.create` alone accepts optional
+`stream_id`: a 1 through 256 byte string matching `^[A-Za-z0-9_.-]+$`. A valid
+accepted value is echoed only on attributable Open Responses server events, is
+stripped before upstream dispatch, and remains transient socket-turn state. It
+is excluded from request options, persistence, accounting, logs, telemetry, and
+metadata. Same-ID creates are FIFO. Different IDs are accepted and echoed but
+remain conservatively serialized per connection, so public docs must never claim
+cross-ID concurrency or fairness. `previous_response_id` remains independent
+conversation lineage. Do not extend this field to REST `POST /v1/responses`,
+native backend WebSockets, Chat, compact, batches, or response-output storage.
+
 Direct public Responses may repair only a missing nested object or array type in
 strict flat-function parameters with a typed object root and complete,
 unambiguous structural evidence. This applies to top-level flat functions and

@@ -2155,6 +2155,29 @@ defmodule CodexPooler.CompatibilityMatrix do
         requires_previous_response_id: false,
         metadata_only: true
       },
+      open_responses_websocket_stream_id: %{
+        scope: "GET /v1/responses websocket response.create only",
+        validator: %{
+          type: "string",
+          byte_length: 1..256,
+          pattern: "^[A-Za-z0-9_.-]+$"
+        },
+        conditional_echo: "every attributable Open Responses server event for an accepted create",
+        same_id_fifo: "guaranteed_by_existing_per_connection_serialization",
+        cross_id_concurrency: "unspecified; different IDs remain per-connection serialized",
+        previous_response_id: "independent_conversation_lineage",
+        upstream: "stripped_before_coercion_request_options_continuity_and_upstream_dispatch",
+        privacy:
+          "transient_queue_and_active_socket_turn_only; excluded_from_persistence_accounting_logs_telemetry_metadata_and_owner_contracts",
+        exclusions: [
+          "POST /v1/responses",
+          "native backend HTTP and WebSockets",
+          "Chat",
+          "compact",
+          "batches",
+          "response-output storage"
+        ]
+      },
       continuity_precedence: [
         "x-codex-window-id",
         "x-codex-session-id",

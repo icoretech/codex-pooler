@@ -236,6 +236,52 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   end
 
   @tag :capture_log
+  test "busy public revocation retains the active stream id through the final error frame" do
+    snapshot = Cache.snapshot_for_test()
+    on_exit(fn -> Cache.restore_for_test(snapshot) end)
+    original = cached_settings()
+    denied = firewall_settings(original, original.lock_version + 1, ["203.0.113.10"])
+    :ok = publish_cache_snapshot(denied)
+    task_pid = owner_turn_pid()
+
+    state =
+      public_turn_state(task_pid, %{
+        firewall_client_ip: {127, 0, 0, 1},
+        firewall_applied_version: original.lock_version,
+        firewall_revoked?: false,
+        firewall_close_sent?: false,
+        public_response_stream_id: "lane-revoked",
+        queued_response_payloads:
+          :queue.from_list([public_create_payload("lane-dropped", "dropped")])
+      })
+
+    assert {:ok, revoked_state} =
+             CodexResponsesSocket.handle_info(applied_message(denied.lock_version), state)
+
+    assert revoked_state.firewall_revoked?
+    assert revoked_state.public_response_stream_id == "lane-revoked"
+    assert :queue.is_empty(revoked_state.queued_response_payloads)
+
+    error = %{status: 502, code: :upstream_failed, message: "safe failure", param: nil}
+
+    {_result, logs} =
+      with_native_turn_log(:info, fn ->
+        assert {:stop, :normal, @revocation_close, [{:text, payload}], closed_state} =
+                 CodexResponsesSocket.handle_info(
+                   {:codex_response_done, task_pid, {:error, error}},
+                   revoked_state
+                 )
+
+        assert Jason.decode!(payload)["stream_id"] == "lane-revoked"
+        assert closed_state.public_response_stream_id == nil
+        assert closed_state.public_responses_websocket_state == nil
+        assert closed_state.firewall_close_sent?
+      end)
+
+    assert_native_turn_logs(logs, 1, "upstream_failed")
+  end
+
+  @tag :capture_log
   test "revoked task DOWN cannot start queued work or close twice" do
     snapshot = Cache.snapshot_for_test()
     on_exit(fn -> Cache.restore_for_test(snapshot) end)
@@ -351,6 +397,214 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
              "sequence_number" => 0,
              "response" => Map.put_new(legacy_response, "status", "completed")
            }
+
+    refute Map.has_key?(Jason.decode!(payload), "stream_id")
+  end
+
+  test "public GET echoes the active accepted stream id" do
+    suppress_response_task_logs(fn ->
+      assert {:ok, state} =
+               CodexResponsesSocket.handle_in(
+                 {public_create_payload("lane-active", "normal"), [opcode: :text]},
+                 public_socket_state()
+               )
+
+      task_pid = state.public_response_task_pid
+      assert is_pid(task_pid)
+
+      frame = Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "visible"})
+
+      assert {:push, {:text, payload}, next_state} =
+               CodexResponsesSocket.handle_info(
+                 {:codex_response_chunk, task_pid, frame},
+                 state
+               )
+
+      assert Jason.decode!(payload)["stream_id"] == "lane-active"
+      assert next_state.public_response_stream_id == "lane-active"
+      cleanup_response_task(next_state, task_pid)
+    end)
+  end
+
+  test "public response.create validates before dispatch and never echoes a rejected stream id" do
+    invalid_payload =
+      Jason.encode!(%{
+        "type" => "response.create",
+        "model" => "gpt-test",
+        "input" => "ignored",
+        "stream_id" => "invalid/id"
+      })
+
+    state = public_socket_state()
+
+    assert {:ok, pending_state} =
+             CodexResponsesSocket.handle_in({invalid_payload, [opcode: :text]}, state)
+
+    assert MapSet.size(pending_state.tasks) == 0
+    assert pending_state.public_response_task_pid == nil
+    assert pending_state.public_response_stream_id == nil
+    assert is_reference(pending_state.public_response_start_error_ref)
+
+    assert_receive {:public_response_start_error, ref, reason}
+
+    assert {:push, {:text, payload}, settled_state} =
+             CodexResponsesSocket.handle_info(
+               {:public_response_start_error, ref, reason},
+               pending_state
+             )
+
+    decoded = Jason.decode!(payload)
+    assert decoded["status"] == 400
+    assert decoded["error"]["param"] == "stream_id"
+    refute Map.has_key?(decoded, "stream_id")
+    refute payload =~ "invalid/id"
+    assert MapSet.size(settled_state.tasks) == 0
+    assert settled_state.public_response_task_pid == nil
+    assert settled_state.public_response_start_error_ref == nil
+  end
+
+  test "queued public creates keep stream ids isolated and start in FIFO order" do
+    first = public_create_payload("lane-first", "first")
+    second = public_create_payload("lane-second", "second")
+    state = public_socket_state()
+
+    assert {:ok, first_state} = CodexResponsesSocket.handle_in({first, [opcode: :text]}, state)
+    first_task_pid = first_state.public_response_task_pid
+    assert is_pid(first_task_pid)
+    assert first_state.public_response_stream_id == "lane-first"
+
+    assert {:ok, queued_state} =
+             CodexResponsesSocket.handle_in({second, [opcode: :text]}, first_state)
+
+    assert :queue.to_list(queued_state.queued_response_payloads) == [second]
+    assert queued_state.public_response_stream_id == "lane-first"
+    cleanup_response_task(queued_state, first_task_pid)
+
+    assert {:ok, second_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_done, first_task_pid, :ok},
+               queued_state
+             )
+
+    second_task_pid = second_state.public_response_task_pid
+    assert is_pid(second_task_pid)
+    refute second_task_pid == first_task_pid
+    assert second_state.public_response_stream_id == "lane-second"
+    assert :queue.is_empty(second_state.queued_response_payloads)
+
+    cleanup_response_task(second_state, second_task_pid)
+  end
+
+  test "two creates sharing a stream id retain FIFO turn ownership" do
+    first = public_create_payload("lane-shared", "first")
+    second = public_create_payload("lane-shared", "second")
+    state = public_socket_state()
+
+    assert {:ok, first_state} = CodexResponsesSocket.handle_in({first, [opcode: :text]}, state)
+    first_task_pid = first_state.public_response_task_pid
+
+    assert {:ok, queued_state} =
+             CodexResponsesSocket.handle_in({second, [opcode: :text]}, first_state)
+
+    assert queued_state.public_response_stream_id == "lane-shared"
+    assert :queue.to_list(queued_state.queued_response_payloads) == [second]
+    cleanup_response_task(queued_state, first_task_pid)
+
+    assert {:ok, second_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_done, first_task_pid, :ok},
+               queued_state
+             )
+
+    assert second_state.public_response_stream_id == "lane-shared"
+    assert second_state.public_response_task_pid != first_task_pid
+    cleanup_response_task(second_state, second_state.public_response_task_pid)
+  end
+
+  test "public task failures echo the accepted stream id before cleanup" do
+    error = %{status: 502, code: :synthetic_failure, message: "safe failure", param: nil}
+
+    results = [
+      {:response_task_failure, {:error, error}},
+      {:response_task_result, {:error, error}, false},
+      {:error, error}
+    ]
+
+    {_results, logs} =
+      with_native_turn_log(:info, fn ->
+        Enum.map(results, fn result ->
+          task_pid = owner_turn_pid()
+          state = public_turn_state(task_pid, %{public_response_stream_id: "lane-error"})
+
+          assert {:push, {:text, payload}, settled_state} =
+                   CodexResponsesSocket.handle_info(
+                     {:codex_response_done, task_pid, result},
+                     state
+                   )
+
+          assert Jason.decode!(payload)["stream_id"] == "lane-error"
+          assert settled_state.public_response_stream_id == nil
+          assert settled_state.public_responses_websocket_state == nil
+          assert settled_state.public_response_task_pid == nil
+        end)
+      end)
+
+    assert_native_turn_logs(logs, 2, "synthetic_failure")
+  end
+
+  test "an attributable retarget error echoes once and clears before queued work" do
+    payload =
+      %{
+        "type" => "response.create",
+        "model" => "gpt-test",
+        "input" => "retarget",
+        "stream_id" => "lane-retarget",
+        "previous_response_id" => "resp_missing_owner"
+      }
+      |> Jason.encode!()
+
+    state =
+      public_socket_state(%{
+        websocket_owner_downstream: %{
+          pid: self(),
+          epoch: 31,
+          correlation_id: "corr-retarget",
+          active_turn_reconnect?: false
+        }
+      })
+
+    assert {:ok, active_state} =
+             CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+
+    task_pid = active_state.public_response_task_pid
+    assert is_pid(task_pid)
+    assert active_state.public_response_stream_id == "lane-retarget"
+
+    assert {:ok, queued_state} =
+             CodexResponsesSocket.handle_in(
+               {public_create_payload(nil, "next-without-id"), [opcode: :text]},
+               active_state
+             )
+
+    assert_receive {:codex_response_done, ^task_pid, {:error, error}}
+
+    {_result, logs} =
+      with_native_turn_log(:info, fn ->
+        assert {:push, {:text, payload}, next_state} =
+                 CodexResponsesSocket.handle_info(
+                   {:codex_response_done, task_pid, {:error, error}},
+                   queued_state
+                 )
+
+        assert Jason.decode!(payload)["stream_id"] == "lane-retarget"
+        assert next_state.public_response_stream_id == nil
+        assert is_pid(next_state.public_response_task_pid)
+        assert next_state.public_response_task_pid != task_pid
+        refute Map.has_key?(next_state.public_responses_websocket_state, :stream_id)
+        cleanup_response_task(next_state, next_state.public_response_task_pid)
+      end)
+
+    assert_native_turn_logs(logs, 1, "owner_unavailable")
   end
 
   @tag :task_1_red
@@ -477,6 +731,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         end
 
       assert closed_state.public_response_task_pid == nil
+      assert closed_state.public_response_stream_id == nil
       assert closed_state.public_responses_websocket_state == nil
       refute closed_state.public_turn_task_done?
       refute closed_state.public_turn_owner_complete?
@@ -663,7 +918,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       overflow_latched?: false
     }
 
-    state = public_turn_state(task_pid, %{public_responses_websocket_state: tracker})
+    state =
+      public_turn_state(task_pid, %{
+        public_response_stream_id: "lane-overflow",
+        public_responses_websocket_state: Map.put(tracker, :stream_id, "lane-overflow")
+      })
+
     frame = Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "overflow"})
 
     assert {:push, {:text, payload}, state} =
@@ -675,6 +935,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert %{
              "type" => "error",
              "status" => 500,
+             "stream_id" => "lane-overflow",
              "error" => %{"code" => "websocket_sequence_exhausted"}
            } = Jason.decode!(payload)
 
@@ -825,6 +1086,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     state =
       public_turn_state(task_pid, %{
+        public_response_stream_id: "lane-owner-upstream",
         websocket_owner_downstream: %{
           pid: self(),
           epoch: 23,
@@ -848,6 +1110,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         assert Jason.decode!(payload) == %{
                  "type" => "error",
                  "status" => 502,
+                 "stream_id" => "lane-owner-upstream",
                  "error" => %{
                    "type" => "invalid_request_error",
                    "code" => "server_error",
@@ -866,6 +1129,64 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       end)
 
     assert_native_turn_logs(logs, 1, "server_error")
+  end
+
+  test "generic owner errors echo the active accepted stream id without ending the turn" do
+    task_pid = self()
+
+    state =
+      public_turn_state(task_pid, %{
+        public_response_stream_id: "lane-owner-generic",
+        websocket_owner_downstream: %{
+          pid: self(),
+          epoch: 25,
+          correlation_id: "corr-owner-generic",
+          active_turn_reconnect?: false
+        }
+      })
+
+    assert {:ok, safe_payload} =
+             WebsocketOwnerContract.safe_error_payload(:owner_unavailable, nil)
+
+    frame =
+      {:websocket_owner_frame, "corr-owner-generic", 25, task_pid,
+       {:error, :owner_unavailable, safe_payload}}
+
+    assert {:push, {:text, payload}, ^state} =
+             CodexResponsesSocket.handle_info(frame, state)
+
+    assert Jason.decode!(payload)["stream_id"] == "lane-owner-generic"
+  end
+
+  test "successful public completion clears the active accepted stream id" do
+    task_pid = owner_turn_pid()
+    state = public_turn_state(task_pid, %{public_response_stream_id: "lane-complete"})
+
+    assert {:ok, settled_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_done, task_pid, :ok},
+               state
+             )
+
+    assert settled_state.public_response_stream_id == nil
+    assert settled_state.public_responses_websocket_state == nil
+    assert settled_state.public_response_task_pid == nil
+  end
+
+  test "socket termination completes with an active accepted stream id remaining transient" do
+    state =
+      public_socket_state(%{
+        public_response_stream_id: "lane-terminate",
+        public_responses_websocket_state: Adapter.public_responses_turn_state("lane-terminate"),
+        request_response_work_started?: true,
+        codex_session: nil
+      })
+
+    assert :ok = CodexResponsesSocket.terminate(:normal, state)
+
+    fresh_state = public_socket_state()
+    assert fresh_state.public_response_stream_id == nil
+    assert fresh_state.public_responses_websocket_state == nil
   end
 
   test "owner-forwarded liveness failure closes without fabricating a terminal" do
@@ -899,6 +1220,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
       state =
         public_turn_state(task_pid, %{
+          public_response_stream_id: "lane-abort",
           task_monitors: %{task_pid => monitor},
           websocket_owner_downstream: %{
             pid: self(),
@@ -930,6 +1252,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                )
 
       assert aborted_state.public_turn_aborted?
+      assert aborted_state.public_response_stream_id == nil
+      assert aborted_state.public_responses_websocket_state == nil
       assert :queue.len(aborted_state.queued_response_payloads) == 0
       assert MapSet.size(aborted_state.tasks) == 0
 
@@ -947,6 +1271,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     state =
       public_turn_state(task_pid, %{
+        public_response_stream_id: "lane-drain",
         websocket_owner_downstream: %{
           pid: self(),
           epoch: 15,
@@ -968,7 +1293,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                  CodexResponsesSocket.handle_info(drain_frame, state)
 
         assert Jason.decode!(payload)["error"]["code"] == "owner_drained"
+        assert Jason.decode!(payload)["stream_id"] == "lane-drain"
         assert aborted_state.public_turn_aborted?
+        assert aborted_state.public_response_stream_id == nil
+        assert aborted_state.public_responses_websocket_state == nil
         assert aborted_state.websocket_owner_drain_observed?
         assert :queue.len(aborted_state.queued_response_payloads) == 0
 
@@ -1346,6 +1674,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         task_monitors: %{},
         queued_response_payloads: :queue.new(),
         public_response_task_pid: task_pid,
+        public_response_stream_id: nil,
+        public_response_start_error_ref: nil,
         public_responses_websocket_state: nil,
         public_turn_task_done?: false,
         public_turn_owner_complete?: false,
@@ -1354,6 +1684,46 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       },
       overrides
     )
+  end
+
+  defp public_socket_state(overrides \\ %{}) do
+    opts =
+      %{}
+      |> RequestOptions.for_websocket()
+      |> RequestOptions.put_openai_compatibility(public_openai_responses_stream: true)
+
+    Map.merge(
+      %{
+        auth: nil,
+        opts: opts,
+        tasks: MapSet.new(),
+        task_monitors: %{},
+        queued_response_payloads: :queue.new(),
+        public_response_task_pid: nil,
+        public_response_stream_id: nil,
+        public_response_start_error_ref: nil,
+        public_responses_websocket_state: nil,
+        public_turn_task_done?: false,
+        public_turn_owner_complete?: false,
+        public_turn_aborted?: false,
+        public_turn_output_committed?: false,
+        native_turn_output_task_pids: MapSet.new(),
+        firewall_revoked?: false
+      },
+      overrides
+    )
+  end
+
+  defp public_create_payload(stream_id, input) do
+    %{
+      "type" => "response.create",
+      "model" => "gpt-test",
+      "input" => input
+    }
+    |> then(fn payload ->
+      if is_binary(stream_id), do: Map.put(payload, "stream_id", stream_id), else: payload
+    end)
+    |> Jason.encode!()
   end
 
   defp firewall_socket_state(applied_version, overrides \\ %{}) do
@@ -1440,6 +1810,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     after
       Logger.configure(level: previous_level)
     end
+  end
+
+  defp suppress_response_task_logs(fun) when is_function(fun, 0) do
+    {result, _logs} = ExUnit.CaptureLog.with_log([level: :error], fun)
+    result
   end
 
   defp assert_native_turn_logs(logs, expected_count, cleartext_codes)

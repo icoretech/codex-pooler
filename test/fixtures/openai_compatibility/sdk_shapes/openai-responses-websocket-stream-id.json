@@ -1,0 +1,70 @@
+{
+  "schema_version": "2026-05-24.sdk-shape-corpus.v1",
+  "scenario_id": "openai.responses.websocket_stream_id.v1",
+  "sdk_name": "OpenAI Responses WebSocket",
+  "sdk_package": "openai",
+  "sdk_version": "openai-node 156a8db2e41a72e28ac0a103f91858db209811aa; openai-python d9029e3ada3c008b4631d78a425743445730892a",
+  "version_provenance": "Pinned local references/openai-node commit 156a8db2e41a72e28ac0a103f91858db209811aa and references/openai-python commit d9029e3ada3c008b4631d78a425743445730892a define stream_id on WebSocket response.create and conditional server-event echo.",
+  "endpoint": "/v1/responses",
+  "http_method": "WEBSOCKET response.create",
+  "scenario": "OpenAI Responses WebSocket response.create with an optional stream_id that identifies a response lane.",
+  "top_level_keys": [
+    "type",
+    "model",
+    "input",
+    "stream_id",
+    "previous_response_id"
+  ],
+  "input_item_types": [
+    "message:user"
+  ],
+  "content_part_types": [
+    "input_text"
+  ],
+  "tool_shape_keys": [],
+  "expected_decision": {
+    "status": "accept",
+    "allowed_values": [
+      "accept",
+      "translate",
+      "reject",
+      "passthrough"
+    ]
+  },
+  "owner_placeholder": "open_responses_websocket_stream_id",
+  "synthetic_data_policy": {
+    "model_placeholder": "sample-model",
+    "stream_id_placeholder": "sample-stream-id",
+    "previous_response_placeholder": "sample-response-id",
+    "user_message_placeholder": "sample-user-message"
+  },
+  "structural_summary": {
+    "payload_kind": "openai_responses_websocket_stream_id",
+    "websocket_only": true,
+    "rest_post_responses_excluded": true,
+    "native_backend_routes_excluded": true,
+    "validator": {
+      "type": "string",
+      "byte_length": [
+        1,
+        256
+      ],
+      "pattern": "^[A-Za-z0-9_.-]+$"
+    },
+    "conditional_echo": "every attributable Open Responses server event when the accepted response.create supplied stream_id",
+    "same_stream_id_ordering": "FIFO",
+    "cross_stream_id_concurrency": "unspecified",
+    "previous_response_id_relation": "independent conversation lineage",
+    "upstream_handling": "stripped before upstream dispatch",
+    "privacy": "transient socket-turn state only; excluded from request options, persistence, accounting, logs, telemetry, and metadata",
+    "raw_payload_stored": false,
+    "placeholder_values_only": true
+  },
+  "redaction_status": {
+    "metadata_only": true,
+    "contains_real_prompt": false,
+    "contains_credentials": false,
+    "contains_headers": false,
+    "contains_media_or_file_bytes": false
+  }
+}

@@ -25,15 +25,17 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   alias CodexPooler.Gateway, as: RuntimeGateway
   alias CodexPooler.Gateway.OpenAICompatibility.Responses, as: ResponsesCompat
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Runtime.Finalization.ResponseUsage
   alias CodexPooler.Gateway.Transports.Streaming.{RetainedBody, WebsocketBridgeStream}
-  alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
+  alias CodexPooler.Gateway.Transports.Websocket.{RolloutDrain, WebsocketOwnerContract}
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
+  alias CodexPoolerWeb.CodexResponsesSocket
 
   setup do
     previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
@@ -386,6 +388,193 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert completed_id(response.resp_body) == "resp_parity"
     assert FakeUpstream.websocket_connection_count(upstream) == 1
     assert event_types(response.resp_body) == ["response.created", "response.completed"]
+  end
+
+  test "owner-forwarded generic errors echo the accepted public stream id" do
+    task_pid = self()
+    state = owner_forwarded_public_state(task_pid, "lane-owner-error")
+
+    assert {:ok, safe_payload} =
+             WebsocketOwnerContract.safe_error_payload(:owner_unavailable, nil)
+
+    owner_frame =
+      {:websocket_owner_frame, "corr-owner-error", 7, task_pid,
+       {:error, :owner_unavailable, safe_payload}}
+
+    assert {:push, {:text, payload}, ^state} =
+             CodexResponsesSocket.handle_info(owner_frame, state)
+
+    assert Jason.decode!(payload)["stream_id"] == "lane-owner-error"
+    refute Map.has_key?(safe_payload, "stream_id")
+    refute Map.has_key?(state.websocket_owner_downstream, :stream_id)
+    assert tuple_size(owner_frame) == 5
+  end
+
+  test "direct and owner-forwarded normal and terminal frames share stream attribution without owner lane state" do
+    task_pid = self()
+    stream_id = "lane-owner-parity"
+    direct_state = direct_public_state(task_pid, stream_id)
+    owner_state = owner_forwarded_public_state(task_pid, stream_id)
+
+    delta =
+      Jason.encode!(%{
+        "type" => "response.output_text.delta",
+        "delta" => "synthetic visible output"
+      })
+
+    owner_delta_frame =
+      {:websocket_owner_frame, "corr-owner-error", 7, task_pid, {:data, delta}}
+
+    assert {:push, {:text, direct_delta}, direct_delta_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_chunk, task_pid, delta},
+               direct_state
+             )
+
+    assert {:push, {:text, owner_delta}, owner_delta_state} =
+             CodexResponsesSocket.handle_info(owner_delta_frame, owner_state)
+
+    assert Jason.decode!(direct_delta) == Jason.decode!(owner_delta)
+    assert Jason.decode!(owner_delta)["stream_id"] == stream_id
+    refute Map.has_key?(Jason.decode!(delta), "stream_id")
+    refute Map.has_key?(owner_delta_state.websocket_owner_downstream, :stream_id)
+
+    stale_turn_pid = spawn(fn -> receive do: (:stop -> :ok) end)
+    on_exit(fn -> send(stale_turn_pid, :stop) end)
+
+    stale_frame =
+      {:websocket_owner_frame, "corr-owner-error", 7, stale_turn_pid, {:data, delta}}
+
+    assert {:ok, ^owner_delta_state} =
+             CodexResponsesSocket.handle_info(stale_frame, owner_delta_state)
+
+    terminal =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_owner_parity", "status" => "completed"}
+      })
+
+    assert {:push, {:text, direct_terminal}, direct_terminal_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_chunk, task_pid, terminal},
+               direct_delta_state
+             )
+
+    owner_terminal_frame =
+      {:websocket_owner_frame, "corr-owner-error", 7, task_pid, {:data, terminal}}
+
+    assert {:push, {:text, owner_terminal}, owner_terminal_state} =
+             CodexResponsesSocket.handle_info(owner_terminal_frame, owner_delta_state)
+
+    assert Jason.decode!(direct_terminal) == Jason.decode!(owner_terminal)
+    assert Jason.decode!(owner_terminal)["stream_id"] == stream_id
+    assert direct_terminal_state.public_responses_websocket_state.terminal_latched?
+    assert owner_terminal_state.public_responses_websocket_state.terminal_latched?
+  end
+
+  test "owner-forwarded upstream stream errors echo the active accepted stream id" do
+    task_pid = self()
+    state = owner_forwarded_public_state(task_pid, "lane-owner-upstream")
+
+    assert {:ok, safe_payload} =
+             WebsocketOwnerContract.safe_error_payload(:upstream_stream_error, nil)
+
+    owner_frame =
+      {:websocket_owner_frame, "corr-owner-error", 7, task_pid,
+       {:error, :upstream_stream_error, safe_payload}}
+
+    {_result, log} =
+      with_log(fn ->
+        assert {:push, {:text, payload}, ^state} =
+                 CodexResponsesSocket.handle_info(owner_frame, state)
+
+        assert Jason.decode!(payload)["stream_id"] == "lane-owner-upstream"
+      end)
+
+    refute log =~ "lane-owner-upstream"
+    refute Map.has_key?(safe_payload, "stream_id")
+  end
+
+  test "owner drain echoes the active accepted stream id and clears queued turn state" do
+    task_pid = owner_turn_pid()
+    state = owner_forwarded_public_state(task_pid, "lane-owner-drain")
+
+    assert {:ok, safe_payload} =
+             WebsocketOwnerContract.safe_error_payload(:owner_drained, nil)
+
+    owner_frame =
+      {:websocket_owner_frame, "corr-owner-error", 7, task_pid,
+       {:error, :owner_drained, safe_payload}}
+
+    {_result, log} =
+      with_log(fn ->
+        assert {:push, {:text, payload}, aborted_state} =
+                 CodexResponsesSocket.handle_info(owner_frame, state)
+
+        assert Jason.decode!(payload)["stream_id"] == "lane-owner-drain"
+        assert aborted_state.public_turn_aborted?
+        assert aborted_state.public_response_stream_id == nil
+        assert aborted_state.public_responses_websocket_state == nil
+        assert :queue.is_empty(aborted_state.queued_response_payloads)
+      end)
+
+    refute log =~ "lane-owner-drain"
+    refute Map.has_key?(safe_payload, "stream_id")
+  end
+
+  test "owner retarget failure echoes its accepted stream id before the queued next turn" do
+    upstream = start_upstream(FakeUpstream.sse_stream([completed_event("should_not_dispatch")]))
+
+    retarget_payload =
+      Jason.encode!(%{
+        "type" => "response.create",
+        "model" => "gpt-test",
+        "input" => "synthetic stale retarget",
+        "previous_response_id" => "resp_missing_owner",
+        "stream_id" => "lane-owner-retarget"
+      })
+
+    next_payload =
+      Jason.encode!(%{
+        "type" => "response.create",
+        "model" => "gpt-test",
+        "input" => "synthetic queued next turn"
+      })
+
+    state = owner_forwarded_idle_state()
+
+    assert {:ok, active_state} =
+             CodexResponsesSocket.handle_in({retarget_payload, [opcode: :text]}, state)
+
+    retarget_task_pid = active_state.public_response_task_pid
+    assert is_pid(retarget_task_pid)
+    assert active_state.public_response_stream_id == "lane-owner-retarget"
+
+    assert {:ok, queued_state} =
+             CodexResponsesSocket.handle_in({next_payload, [opcode: :text]}, active_state)
+
+    assert :queue.to_list(queued_state.queued_response_payloads) == [next_payload]
+    assert_receive {:codex_response_done, ^retarget_task_pid, {:error, reason}}, 1_000
+
+    {_result, log} =
+      with_log(fn ->
+        assert {:push, {:text, retarget_frame}, next_state} =
+                 CodexResponsesSocket.handle_info(
+                   {:codex_response_done, retarget_task_pid, {:error, reason}},
+                   queued_state
+                 )
+
+        assert Jason.decode!(retarget_frame)["stream_id"] == "lane-owner-retarget"
+        assert next_state.public_response_stream_id == nil
+        assert is_pid(next_state.public_response_task_pid)
+        assert next_state.public_response_task_pid != retarget_task_pid
+        refute Map.has_key?(next_state.public_responses_websocket_state, :stream_id)
+        assert :queue.is_empty(next_state.queued_response_payloads)
+        cleanup_response_task(next_state, next_state.public_response_task_pid)
+      end)
+
+    refute log =~ "lane-owner-retarget"
+    assert FakeUpstream.count(upstream) == 0
   end
 
   test "synthetic JSON-frame bridge remains a single successful terminal", %{conn: conn} do
@@ -2388,6 +2577,96 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
         drain_telemetry_events(handler_id, [{event, measurements, metadata} | events])
     after
       0 -> Enum.reverse(events)
+    end
+  end
+
+  defp direct_public_state(task_pid, stream_id) when is_pid(task_pid) do
+    public_turn_state(task_pid, stream_id, %{})
+  end
+
+  defp owner_forwarded_public_state(task_pid, stream_id) when is_pid(task_pid) do
+    public_turn_state(task_pid, stream_id, %{
+      websocket_owner_downstream: %{
+        pid: self(),
+        epoch: 7,
+        correlation_id: "corr-owner-error",
+        active_turn_reconnect?: false
+      }
+    })
+  end
+
+  defp owner_forwarded_idle_state do
+    opts =
+      %{}
+      |> RequestOptions.for_websocket()
+      |> RequestOptions.put_openai_compatibility(public_openai_responses_stream: true)
+
+    %{
+      auth: nil,
+      opts: opts,
+      tasks: MapSet.new(),
+      task_monitors: %{},
+      queued_response_payloads: :queue.new(),
+      public_response_task_pid: nil,
+      public_response_stream_id: nil,
+      public_response_start_error_ref: nil,
+      public_responses_websocket_state: nil,
+      public_turn_task_done?: false,
+      public_turn_owner_complete?: false,
+      public_owner_retarget_error?: false,
+      public_turn_aborted?: false,
+      public_turn_output_committed?: false,
+      native_turn_output_task_pids: MapSet.new(),
+      firewall_revoked?: false,
+      websocket_owner_downstream: %{
+        pid: self(),
+        epoch: 7,
+        correlation_id: "corr-owner-error",
+        active_turn_reconnect?: false
+      }
+    }
+  end
+
+  defp public_turn_state(task_pid, stream_id, overrides) when is_pid(task_pid) do
+    opts =
+      %{}
+      |> RequestOptions.for_websocket()
+      |> RequestOptions.put_openai_compatibility(public_openai_responses_stream: true)
+
+    Map.merge(
+      %{
+        opts: opts,
+        tasks: MapSet.new([task_pid]),
+        task_monitors: %{},
+        queued_response_payloads: :queue.new(),
+        public_response_task_pid: task_pid,
+        public_response_stream_id: stream_id,
+        public_response_start_error_ref: nil,
+        public_responses_websocket_state: nil,
+        public_turn_task_done?: false,
+        public_turn_owner_complete?: false,
+        public_owner_retarget_error?: false,
+        public_turn_aborted?: false,
+        public_turn_output_committed?: false,
+        native_turn_output_task_pids: MapSet.new(),
+        firewall_revoked?: false
+      },
+      overrides
+    )
+  end
+
+  defp owner_turn_pid do
+    pid = spawn(fn -> receive do: (:stop -> :ok) end)
+    on_exit(fn -> send(pid, :stop) end)
+    pid
+  end
+
+  defp cleanup_response_task(state, task_pid) when is_pid(task_pid) do
+    if Process.alive?(task_pid), do: Process.exit(task_pid, :kill)
+
+    case Map.get(state.task_monitors, task_pid) do
+      monitor when is_reference(monitor) -> Process.demonitor(monitor, [:flush])
+      _missing -> :ok
     end
   end
 

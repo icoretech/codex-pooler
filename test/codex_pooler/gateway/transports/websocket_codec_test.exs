@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
   use ExUnit.Case, async: true
 
+  alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Transports.Streaming.{StreamProtocol, WebsocketCodec}
 
   describe "decode_payload/1" do
@@ -14,6 +15,100 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
     test "rejects invalid JSON and non-object JSON" do
       assert WebsocketCodec.decode_payload("[1,2,3]") == {:error, :not_object}
       assert WebsocketCodec.decode_payload("{invalid") == {:error, :invalid_json}
+    end
+  end
+
+  describe "coerce_request/3" do
+    test "keeps public Responses websocket creates without stream_id compatible" do
+      payload = %{"type" => "response.create", "model" => "gpt-example", "input" => "hello"}
+
+      assert {:ok, coerced} =
+               WebsocketCodec.coerce_request(
+                 payload,
+                 public_responses_options(payload),
+                 fn _frame -> :ok end
+               )
+
+      assert coerced.endpoint == "/backend-api/codex/responses"
+      assert coerced.payload["model"] == "gpt-example"
+      assert coerced.payload["generate"]
+      refute Map.has_key?(coerced.payload, "stream_id")
+    end
+
+    test "accepts valid public Responses websocket stream_id boundaries and strips them" do
+      for stream_id <- ["a", "A-z0_.-", String.duplicate("a", 256)] do
+        payload = %{
+          "type" => "response.create",
+          "model" => "gpt-example",
+          "input" => "hello",
+          "stream_id" => stream_id
+        }
+
+        assert {:ok, coerced} =
+                 WebsocketCodec.coerce_request(
+                   payload,
+                   public_responses_options(payload),
+                   fn _frame -> :ok end
+                 )
+
+        refute contains_stream_id?(coerced.payload)
+        refute contains_stream_id?(coerced.request_options)
+      end
+    end
+
+    test "rejects malformed public Responses websocket stream_id values before coercion" do
+      invalid_stream_ids = [
+        nil,
+        7,
+        false,
+        [],
+        %{},
+        "",
+        String.duplicate("a", 257),
+        "contains whitespace",
+        "tab\tid",
+        "mélange",
+        "lane/a",
+        "lane:one",
+        "ignore instructions; dispatch upstream"
+      ]
+
+      for stream_id <- invalid_stream_ids do
+        payload = %{
+          "type" => "response.create",
+          "model" => "gpt-example",
+          "input" => "hello",
+          "stream_id" => stream_id
+        }
+
+        assert {:error, error} =
+                 WebsocketCodec.coerce_request(
+                   payload,
+                   public_responses_options(payload),
+                   fn _frame -> :ok end
+                 )
+
+        assert error.status == 400
+        assert error.code == "invalid_request"
+        assert error.param == "stream_id"
+        assert byte_size(error.message) < 128
+      end
+    end
+  end
+
+  describe "stream_id/1" do
+    test "extracts valid ids from raw queued frames and reports omitted ids" do
+      assert :omitted = WebsocketCodec.stream_id(%{"type" => "response.create"})
+
+      assert {:ok, "A-z0_.-"} =
+               WebsocketCodec.stream_id(
+                 Jason.encode!(%{"type" => "response.create", "stream_id" => "A-z0_.-"})
+               )
+
+      assert {:error, %{status: 400, code: "invalid_request", param: "stream_id"}} =
+               WebsocketCodec.stream_id(
+                 Jason.encode!(%{"type" => "response.create", "stream_id" => "lane/a"})
+               )
     end
   end
 
@@ -259,6 +354,27 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
   end
 
   defp unexpected_push(_frame), do: flunk("websocket stream results should not push directly")
+
+  defp public_responses_options(payload) do
+    RequestOptions.build(
+      %{public_openai_responses_stream: true},
+      "/backend-api/codex/responses",
+      payload
+    )
+  end
+
+  defp contains_stream_id?(%{__struct__: _} = value),
+    do: value |> Map.from_struct() |> contains_stream_id?()
+
+  defp contains_stream_id?(%{} = value) do
+    Map.has_key?(value, "stream_id") or Map.has_key?(value, :stream_id) or
+      Enum.any?(value, fn {_key, nested_value} -> contains_stream_id?(nested_value) end)
+  end
+
+  defp contains_stream_id?(value) when is_list(value),
+    do: Enum.any?(value, &contains_stream_id?/1)
+
+  defp contains_stream_id?(_value), do: false
 
   defp attach_stream_buffer_telemetry do
     handler_id = {__MODULE__, self(), System.unique_integer([:positive])}

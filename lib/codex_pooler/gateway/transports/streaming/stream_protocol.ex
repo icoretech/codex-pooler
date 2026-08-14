@@ -36,8 +36,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   end
 
   @spec public_openai_responses_websocket_state() :: public_openai_responses_websocket_state()
-  def public_openai_responses_websocket_state do
-    PublicResponsesWebsocket.new_state()
+  @spec public_openai_responses_websocket_state(String.t() | nil) ::
+          public_openai_responses_websocket_state()
+  def public_openai_responses_websocket_state(stream_id \\ nil) do
+    PublicResponsesWebsocket.new_state(stream_id)
   end
 
   @spec normalize_public_openai_responses_websocket_data(

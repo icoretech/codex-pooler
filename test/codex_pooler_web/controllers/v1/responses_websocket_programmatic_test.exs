@@ -1509,6 +1509,521 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
+  test "direct GET /v1/responses echoes a valid stream id on visible output and synthetic interruption only" do
+    stream_id = "lane-direct-error"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_sse_then_close(
+          [
+            {"response.output_text.delta",
+             %{"type" => "response.output_text.delta", "delta" => "synthetic visible output"}}
+          ],
+          code: 1001,
+          reason: "synthetic interrupted stream"
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "direct-stream-id-error-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {{conn, websocket, delta_frame, error_frame}, log} =
+        with_log(fn ->
+          {conn, websocket} =
+            send_response_create!(conn, websocket, ref, setup, %{
+              "input" => "synthetic interruption input",
+              "stream_id" => stream_id
+            })
+
+          {conn, websocket, delta_frame} =
+            public_websocket_receive_text!(conn, websocket, ref)
+
+          {conn, websocket, error_frame} =
+            public_websocket_receive_text!(conn, websocket, ref)
+
+          {conn, websocket, Jason.decode!(delta_frame), Jason.decode!(error_frame)}
+        end)
+
+      assert delta_frame["type"] == "response.output_text.delta"
+      assert delta_frame["stream_id"] == stream_id
+      assert error_frame["type"] == "error"
+      assert error_frame["status"] == 502
+      assert error_frame["stream_id"] == stream_id
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      refute Map.has_key?(captured.json, "stream_id")
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+      observable_text =
+        inspect({
+          captured.json,
+          request.request_metadata,
+          attempt.response_metadata,
+          RequestLogs.list(setup.pool),
+          log
+        })
+
+      refute observable_text =~ stream_id
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "GET /v1/responses websocket forwards exact replay citations and echoes a valid stream id" do
+    stream_id = "lane-citation-replay"
+
+    annotations = [
+      %{
+        "type" => "url_citation",
+        "start_index" => 0,
+        "end_index" => 8.5,
+        "url" => "https://example.com/first",
+        "title" => "First citation"
+      },
+      %{
+        "type" => "url_citation",
+        "start_index" => 10.25,
+        "end_index" => 21,
+        "url" => "https://example.com/second",
+        "title" => "Second citation"
+      }
+    ]
+
+    input = [
+      %{
+        "type" => "message",
+        "role" => "assistant",
+        "content" => [
+          %{
+            "type" => "output_text",
+            "text" => "synthetic cited replay",
+            "annotations" => annotations
+          }
+        ]
+      }
+    ]
+
+    response = %{
+      "id" => "resp_ws_citation_replay",
+      "status" => "completed",
+      "output" => input,
+      "usage" => %{"input_tokens" => 3, "output_tokens" => 2, "total_tokens" => 5}
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"response.output_text.delta",
+             %{"type" => "response.output_text.delta", "delta" => "synthetic cited reply"}},
+            {"response.completed", %{"type" => "response.completed", "response" => response}}
+          ],
+          done: false
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "citation-replay-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {{conn, websocket, frames}, log} =
+        with_log(fn ->
+          {conn, websocket} =
+            send_response_create!(conn, websocket, ref, setup, %{
+              "input" => input,
+              "stream_id" => stream_id
+            })
+
+          receive_websocket_until_terminal!(conn, websocket, ref, [])
+        end)
+
+      assert Enum.map(frames, & &1["type"]) == [
+               "response.output_text.delta",
+               "response.completed"
+             ]
+
+      assert Enum.all?(frames, &(&1["stream_id"] == stream_id))
+      assert get_in(List.last(frames), ["response", "output"]) == input
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.json["input"] == input
+      assert captured.json["stream"] == true
+      assert captured.json["store"] == false
+      assert captured.json["generate"] == true
+      refute Map.has_key?(captured.json, "stream_id")
+
+      assert_receive {Events, %{reason: "request_finalized", payload: lifecycle_payload}},
+                     @websocket_frame_timeout
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+      persistence_text =
+        inspect({
+          request.request_metadata,
+          attempt.response_metadata,
+          lifecycle_payload,
+          RequestLogs.list(setup.pool),
+          log
+        })
+
+      refute persistence_text =~ stream_id
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "GET /v1/responses websocket rejects malformed replay citations without dispatch or leakage" do
+    stream_id = "lane-invalid-citation"
+    text_sentinel = "MALFORMED_ANNOTATION_TEXT_SENTINEL"
+    title_sentinel = "IGNORE_PRIOR_INSTRUCTIONS_TITLE_SENTINEL"
+    file_sentinel = "MALFORMED_ANNOTATION_FILE_SENTINEL"
+    url_sentinel = "MALFORMED_ANNOTATION_URL_SENTINEL"
+    extra_sentinel = "MALFORMED_ANNOTATION_EXTRA_SENTINEL"
+
+    privacy_sentinels = [
+      text_sentinel,
+      title_sentinel,
+      file_sentinel,
+      url_sentinel,
+      extra_sentinel
+    ]
+
+    upstream = start_upstream(completed_websocket_response("should_not_dispatch_annotations"))
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "invalid-citation-#{System.unique_integer([:positive])}"
+      )
+
+    malformed_annotations = [
+      [
+        %{
+          "type" => "file_citation",
+          "file_id" => file_sentinel,
+          "title" => title_sentinel
+        }
+      ],
+      [
+        %{
+          "type" => "url_citation",
+          "start_index" => 0,
+          "end_index" => 1,
+          "url" => "https://example.com/#{url_sentinel}",
+          "title" => title_sentinel,
+          "extra" => extra_sentinel
+        }
+      ]
+    ]
+
+    try do
+      post_upgrade_baseline = settled_post_upgrade_counts!(upstream)
+
+      {{conn, websocket}, log} =
+        with_log(fn ->
+          Enum.reduce(malformed_annotations, {conn, websocket}, fn annotations,
+                                                                   {conn, websocket} ->
+            {conn, websocket} =
+              send_response_create!(conn, websocket, ref, setup, %{
+                "stream_id" => stream_id,
+                "input" => [
+                  %{
+                    "role" => "assistant",
+                    "content" => [
+                      %{
+                        "type" => "output_text",
+                        "text" => text_sentinel,
+                        "annotations" => annotations
+                      }
+                    ]
+                  }
+                ]
+              })
+
+            {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+            decoded = Jason.decode!(frame)
+
+            assert decoded["type"] == "error"
+            assert decoded["status"] == 400
+            assert decoded["error"]["code"] == "invalid_request"
+            assert decoded["error"]["param"] == "input"
+            assert decoded["stream_id"] == stream_id
+            assert byte_size(frame) < 512
+
+            for sentinel <- privacy_sentinels do
+              refute frame =~ sentinel
+            end
+
+            {conn, websocket}
+          end)
+        end)
+
+      assert lifecycle_counts(upstream) == post_upgrade_baseline
+      assert FakeUpstream.count(upstream) == 0
+      assert Repo.aggregate(Request, :count) == 0
+      assert Repo.aggregate(Attempt, :count) == 0
+      assert Repo.aggregate(LedgerEntry, :count) == 0
+      refute_received {Events, %{reason: "request_finalized"}}
+
+      observable_text =
+        inspect({
+          FakeUpstream.requests(upstream),
+          Repo.all(Request),
+          Repo.all(Attempt),
+          Repo.all(LedgerEntry),
+          lifecycle_counts(upstream),
+          RequestLogs.list(setup.pool),
+          log
+        })
+
+      for sentinel <- [stream_id | privacy_sentinels] do
+        refute observable_text =~ sentinel
+      end
+
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "GET /v1/responses websocket rejects invalid stream ids and clears them before omitted-id recovery" do
+    invalid_ids = [
+      "invalid/id",
+      "IGNORE_PRIOR_INSTRUCTIONS;dispatch",
+      String.duplicate("x", 257)
+    ]
+
+    upstream = start_upstream(completed_websocket_response("resp_after_invalid_stream_ids"))
+    setup = gateway_setup(upstream)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "invalid-stream-id-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      post_upgrade_baseline = settled_post_upgrade_counts!(upstream)
+
+      {{conn, websocket}, log} =
+        with_log(fn ->
+          Enum.reduce(invalid_ids, {conn, websocket}, fn invalid_id, {conn, websocket} ->
+            {conn, websocket} =
+              send_response_create!(conn, websocket, ref, setup, %{
+                "input" => "synthetic invalid stream id input",
+                "stream_id" => invalid_id
+              })
+
+            {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+            decoded = Jason.decode!(frame)
+
+            assert decoded["type"] == "error"
+            assert decoded["status"] == 400
+            assert decoded["error"]["code"] == "invalid_request"
+            assert decoded["error"]["param"] == "stream_id"
+            refute Map.has_key?(decoded, "stream_id")
+            refute frame =~ invalid_id
+            {conn, websocket}
+          end)
+        end)
+
+      assert lifecycle_counts(upstream) == post_upgrade_baseline
+      assert FakeUpstream.count(upstream) == 0
+
+      for invalid_id <- invalid_ids do
+        refute log =~ invalid_id
+      end
+
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic omitted stream id recovery"
+        })
+
+      {conn, websocket, frames} = receive_websocket_until_terminal!(conn, websocket, ref, [])
+      assert Enum.map(frames, & &1["type"]) == ["response.completed"]
+      assert Enum.all?(frames, &(not Map.has_key?(&1, "stream_id")))
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      refute Map.has_key?(captured.json, "stream_id")
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "GET /v1/responses websocket keeps two creates sharing a stream id FIFO" do
+    stream_id = "lane-shared-fifo"
+    release_ref = make_ref()
+
+    first_terminal =
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{
+           "id" => "resp_fifo_first",
+           "status" => "completed",
+           "output" => [],
+           "usage" => %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}
+         }
+       }}
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.delayed_terminal_sse_stream([], first_terminal,
+             notify: self(),
+             release_ref: release_ref
+           ),
+           completed_websocket_response("resp_fifo_second")
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "same-stream-id-fifo-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic fifo first",
+          "stream_id" => stream_id
+        })
+
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic fifo second",
+          "stream_id" => stream_id
+        })
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid,
+                      ^release_ref},
+                     @websocket_frame_timeout
+
+      assert FakeUpstream.count(upstream) == 1
+      send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
+
+      {conn, websocket, first_frame} = public_websocket_receive_text!(conn, websocket, ref)
+      {conn, websocket, second_frame} = public_websocket_receive_text!(conn, websocket, ref)
+      first = Jason.decode!(first_frame)
+      second = Jason.decode!(second_frame)
+
+      assert {first["type"], first["response"]["id"], first["stream_id"]} ==
+               {"response.completed", "resp_fifo_first", stream_id}
+
+      assert {second["type"], second["response"]["id"], second["stream_id"]} ==
+               {"response.completed", "resp_fifo_second", stream_id}
+
+      assert Enum.map(FakeUpstream.requests(upstream), fn captured ->
+               get_in(captured.json, ["input", Access.at(0), "content", Access.at(0), "text"])
+             end) == ["synthetic fifo first", "synthetic fifo second"]
+
+      assert Enum.all?(FakeUpstream.requests(upstream), fn captured ->
+               not Map.has_key?(captured.json, "stream_id")
+             end)
+
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "GET /v1/responses websocket accepts different stream ids and echoes each turn" do
+    first_id = "lane-different-first"
+    second_id = "lane-different-second"
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           completed_websocket_response("resp_different_first"),
+           completed_websocket_response("resp_different_second")
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "different-stream-ids-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic different first",
+          "stream_id" => first_id
+        })
+
+      {conn, websocket, first_frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic different second",
+          "stream_id" => second_id
+        })
+
+      {conn, websocket, second_frame} = public_websocket_receive_text!(conn, websocket, ref)
+      first = Jason.decode!(first_frame)
+      second = Jason.decode!(second_frame)
+
+      assert {first["response"]["id"], first["stream_id"]} ==
+               {"resp_different_first", first_id}
+
+      assert {second["response"]["id"], second["stream_id"]} ==
+               {"resp_different_second", second_id}
+
+      assert Enum.map(FakeUpstream.requests(upstream), fn captured ->
+               get_in(captured.json, ["input", Access.at(0), "content", Access.at(0), "text"])
+             end) == ["synthetic different first", "synthetic different second"]
+
+      assert Enum.all?(FakeUpstream.requests(upstream), fn captured ->
+               not Map.has_key?(captured.json, "stream_id")
+             end)
+
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   defp public_v1_websocket_connect!(port, setup, turn_state) do
     {:ok, conn} = Mint.HTTP.connect(:http, "127.0.0.1", port, protocols: [:http1])
 

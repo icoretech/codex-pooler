@@ -285,6 +285,21 @@ For public SSE, an absent, blank, or whitespace-only `event:` label is treated a
 
 On narrow `GET /v1/responses` websocket compatibility, malformed JSON and JSON values that are not objects are ignored without consuming a sequence number or creating a local terminal. This applies to direct and accepted owner-forwarded public clients; native backend websocket behavior is unchanged.
 
+### Responses WebSocket stream IDs
+
+Narrow `GET /v1/responses` websocket `response.create` accepts an optional
+`stream_id` only when it is a 1 through 256 byte string matching
+`^[A-Za-z0-9_.-]+$`. A valid accepted ID is echoed on every attributable Open
+Responses server event and is stripped before upstream dispatch. It is transient
+socket-turn state and is not stored in request metadata, accounting, logs, or
+telemetry.
+
+Requests with the same ID are FIFO. Different valid IDs are accepted and echoed,
+but Codex Pooler conservatively serializes public turns per connection; it does
+not promise cross-ID concurrency or fairness. `previous_response_id` controls
+conversation lineage independently. REST `POST /v1/responses`, native backend
+WebSockets, Chat, compact, and batches do not accept this field.
+
 ### Relayed terminal errors
 
 When the Codex backend returns a genuine terminal error, Codex Pooler preserves its trimmed `error.code` only when
