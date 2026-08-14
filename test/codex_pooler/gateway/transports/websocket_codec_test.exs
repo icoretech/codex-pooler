@@ -1,7 +1,7 @@
 defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
   use ExUnit.Case, async: true
 
-  alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
+  alias CodexPooler.Gateway.Transports.Streaming.{StreamProtocol, WebsocketCodec}
 
   describe "decode_payload/1" do
     test "accepts response.create through the generic object contract" do
@@ -124,19 +124,25 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
   describe "stream_messages/3" do
     test "returns explicit buffer for split SSE frames without process state" do
       request_id = "websocket-buffer-explicit"
+      state = StreamProtocol.new_sse_block_state()
 
-      assert {[], buffer} =
-               WebsocketCodec.stream_messages(request_id, "data: {\"type\":\"response.", "")
+      assert {[], state} =
+               WebsocketCodec.stream_messages(
+                 request_id,
+                 "data: {\"type\":\"response.",
+                 state
+               )
 
-      assert buffer == "data: {\"type\":\"response."
+      assert state.buffer == "data: {\"type\":\"response."
 
-      assert {[message], ""} =
+      assert {[message], state} =
                WebsocketCodec.stream_messages(
                  request_id,
                  "completed\",\"response\":{\"id\":\"resp_123\"}}\n\n",
-                 buffer
+                 state
                )
 
+      assert state == StreamProtocol.new_sse_block_state()
       assert Jason.decode!(message)["type"] == "response.completed"
       refute Process.get({:websocket_sse_buffer, request_id})
     end
@@ -158,7 +164,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
           }) <>
           "\n\n"
 
-      assert {[message], ""} = WebsocketCodec.stream_messages(request_id, sse, "")
+      assert {[message], state} =
+               WebsocketCodec.stream_messages(
+                 request_id,
+                 sse,
+                 StreamProtocol.new_sse_block_state()
+               )
+
+      assert state == StreamProtocol.new_sse_block_state()
 
       assert %{
                "type" => "response.output_text.delta",
@@ -172,6 +185,25 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
              }
     end
 
+    test "emits standalone-CR SSE once and consumes its optional following LF" do
+      request_id = "websocket-standalone-cr"
+
+      payload = %{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_websocket_cr", "status" => "completed"}
+      }
+
+      state = StreamProtocol.new_sse_block_state()
+      source = "data: " <> Jason.encode!(payload) <> "\r\r"
+
+      assert {[message], state} = WebsocketCodec.stream_messages(request_id, source, state)
+      assert Jason.decode!(message) == payload
+      assert state.skip_leading_lf?
+
+      assert {[], state} = WebsocketCodec.stream_messages(request_id, "\n", state)
+      assert state == StreamProtocol.new_sse_block_state()
+    end
+
     test "canonicalizes a decoded SSE terminal identically to a direct JSON message" do
       request_id = "websocket-decoded-sse-terminal"
 
@@ -181,10 +213,23 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
           "error" => %{"code" => "previous_response_not_found"}
         })
 
-      assert {[message], ""} =
-               WebsocketCodec.stream_messages(request_id, "data: #{frame}\n\n", "")
+      assert {[message], state} =
+               WebsocketCodec.stream_messages(
+                 request_id,
+                 "data: #{frame}\n\n",
+                 StreamProtocol.new_sse_block_state()
+               )
 
-      assert {[direct_message], ^frame} = WebsocketCodec.stream_messages(request_id, frame, "")
+      assert state == StreamProtocol.new_sse_block_state()
+
+      assert {[direct_message], state} =
+               WebsocketCodec.stream_messages(
+                 request_id,
+                 frame,
+                 StreamProtocol.new_sse_block_state()
+               )
+
+      assert state.buffer == frame
       assert message == direct_message
 
       assert %{"type" => "response.failed", "error" => %{"code" => "stream_incomplete"}} =
@@ -196,7 +241,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
       request_id = "websocket-buffer-oversized"
       oversized = String.duplicate("data: unavailable-upstream-prefix", 260_000)
 
-      assert {[], ""} = WebsocketCodec.stream_messages(request_id, oversized, "")
+      assert {[], state} =
+               WebsocketCodec.stream_messages(
+                 request_id,
+                 oversized,
+                 StreamProtocol.new_sse_block_state()
+               )
+
+      assert state == StreamProtocol.new_sse_block_state()
 
       assert_receive {[:codex_pooler, :gateway, :stream_buffer, :oversized],
                       %{bytes: bytes, count: 1, max_bytes: 8_388_608},

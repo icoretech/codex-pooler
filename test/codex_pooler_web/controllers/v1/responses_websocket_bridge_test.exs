@@ -388,6 +388,40 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert event_types(response.resp_body) == ["response.created", "response.completed"]
   end
 
+  test "synthetic JSON-frame bridge remains a single successful terminal", %{conn: conn} do
+    completed =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{
+          "id" => "resp_bridge_stateful_sse_regression",
+          "status" => "completed",
+          "output" => [],
+          "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+        }
+      })
+
+    upstream = start_upstream(FakeUpstream.websocket_text_frames([completed]))
+    setup = gateway_setup(upstream)
+    session = "stateful-sse-bridge-#{System.unique_integer([:positive])}"
+
+    response = post_stream(conn, setup, session, stream_payload(setup, "bridge regression"))
+
+    assert response.status == 200
+    assert completed_id(response.resp_body) == "resp_bridge_stateful_sse_regression"
+    assert event_types(response.resp_body) == ["response.created", "response.completed"]
+    assert Enum.count(event_types(response.resp_body), &(&1 == "response.completed")) == 1
+
+    request = latest_request(setup.pool)
+    assert request.status == "succeeded"
+    assert request.transport == "http_sse"
+    assert [attempt] = attempts_for(request)
+    assert attempt.status == "succeeded"
+    assert attempt.transport == "websocket"
+    assert attempt.response_metadata["upstream_websocket_bridge"] == true
+    assert attempt.response_metadata["upstream_transport"] == "websocket"
+    assert settlement_count(request) == 1
+  end
+
   test "the owner-forwarded bridge preserves a function-only namespace and exact typed choice", %{
     conn: conn
   } do

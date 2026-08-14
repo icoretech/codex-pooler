@@ -7,6 +7,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser do
   @max_incomplete_sse_block_bytes 8_388_608
   @max_incomplete_terminal_sse_block_bytes 64 * 1024 * 1024
 
+  @type block_state :: %{
+          required(:buffer) => binary(),
+          required(:skip_leading_lf?) => boolean()
+        }
+
   @spec max_incomplete_sse_block_bytes() :: pos_integer()
   def max_incomplete_sse_block_bytes, do: @max_incomplete_sse_block_bytes
 
@@ -22,70 +27,128 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser do
   def oversized_incomplete_terminal_sse_block?(buffer) when is_binary(buffer),
     do: byte_size(buffer) > @max_incomplete_terminal_sse_block_bytes
 
-  # Incremental form for streaming callers that accumulate `residue <> data`
-  # chunk by chunk. Callers must feed back only residues returned by this
-  # function (or ""); a residue assembled any other way may hide complete
-  # blocks and break the shortcut. Appending may skip the full
-  # normalize-and-split scan only when it cannot create a block separator
-  # anywhere: the new data carries no CR and no separator of its own, and the
-  # junction with the retained residue is inert. Any returned residue, once
-  # CRLF-normalized, contains no complete separator, so the skipped append
-  # preserves that invariant and a later full scan finds exactly the blocks it
-  # would have found without the shortcut.
-  @spec complete_sse_blocks(binary(), binary(), keyword()) :: {[binary()], binary()}
-  def complete_sse_blocks(residue, data, opts)
-      when is_binary(residue) and is_binary(data) do
-    if appendable_without_scan?(residue, data) do
-      bounded? = Keyword.fetch!(opts, :bounded?)
-      {[], maybe_bound_incomplete_sse_block(residue <> data, bounded?)}
+  @spec new_block_state() :: block_state()
+  def new_block_state, do: %{buffer: "", skip_leading_lf?: false}
+
+  # A trailing standalone CR completes its line immediately. If that CR is the
+  # last byte in a chunk, the next chunk may start with its optional LF
+  # continuation; retaining that one bit of state prevents the LF from being
+  # counted as another line ending.
+  @spec complete_sse_blocks(block_state(), binary(), keyword()) :: {[binary()], block_state()}
+  def complete_sse_blocks(
+        %{buffer: buffer, skip_leading_lf?: skip_leading_lf?} = state,
+        data,
+        opts
+      )
+      when is_binary(buffer) and is_boolean(skip_leading_lf?) and is_binary(data) do
+    bounded? = Keyword.fetch!(opts, :bounded?)
+
+    if appendable_without_scan?(state, data) do
+      next_state = %{state | buffer: buffer <> data}
+      {[], maybe_bound_incomplete_sse_state(next_state, bounded?)}
     else
-      complete_sse_blocks(residue <> data, opts)
+      {data, pending_skip_leading_lf?} =
+        consume_optional_leading_lf(data, skip_leading_lf?)
+
+      {blocks, residue, trailing_skip_leading_lf?} = split_complete_blocks(buffer <> data)
+
+      next_state = %{
+        buffer: residue,
+        skip_leading_lf?: pending_skip_leading_lf? or trailing_skip_leading_lf?
+      }
+
+      {blocks, maybe_bound_incomplete_sse_state(next_state, bounded?)}
     end
   end
 
-  defp appendable_without_scan?("", _data), do: false
+  defp appendable_without_scan?(%{buffer: ""}, _data), do: false
+  defp appendable_without_scan?(%{skip_leading_lf?: true}, _data), do: false
 
-  defp appendable_without_scan?(residue, data) do
-    not String.ends_with?(residue, "\r") and
-      not (String.ends_with?(residue, "\n") and String.starts_with?(data, "\n")) and
+  defp appendable_without_scan?(%{buffer: buffer}, data) do
+    not String.ends_with?(buffer, "\r") and
+      not (String.ends_with?(buffer, "\n") and String.starts_with?(data, "\n")) and
       not String.contains?(data, ["\r", "\n\n"])
   end
 
-  # CRLF collapses to its fixpoint in one pass: repeatedly replacing "\r\n"
-  # with "\n" consumes one trailing CR of a "\r"+ run per pass, so the fixpoint
-  # is the whole run collapsing into the newline. A retained residue therefore
-  # can never hide a separator behind a partially collapsed sequence such as
-  # "\r\r\n", and adversarial CR runs stay linear instead of looping one scan
-  # per CR.
-  @crlf_run ~r/\r+\n/
-  defp normalize_crlf(data) do
-    if String.contains?(data, "\r") do
-      String.replace(data, @crlf_run, "\n")
-    else
+  defp consume_optional_leading_lf("", true), do: {"", true}
+  defp consume_optional_leading_lf(<<"\n", rest::binary>>, true), do: {rest, false}
+  defp consume_optional_leading_lf(data, true), do: {data, false}
+  defp consume_optional_leading_lf(data, false), do: {data, false}
+
+  @spec complete_sse_blocks(binary(), keyword()) :: {[binary()], binary()}
+  def complete_sse_blocks(data, opts) when is_binary(data) do
+    {blocks, state} = complete_sse_blocks(new_block_state(), data, opts)
+    {blocks, state.buffer}
+  end
+
+  defp split_complete_blocks(data) do
+    {blocks, residue_start, skip_leading_lf?} =
+      scan_complete_blocks(data, 0, 0, [])
+
+    residue =
       data
+      |> binary_part(residue_start, byte_size(data) - residue_start)
+      |> :binary.copy()
+
+    {Enum.reverse(blocks), residue, skip_leading_lf?}
+  end
+
+  defp scan_complete_blocks(data, block_start, scan_index, blocks)
+       when scan_index >= byte_size(data),
+       do: {blocks, block_start, false}
+
+  defp scan_complete_blocks(data, block_start, scan_index, blocks) do
+    first_ending_length = line_ending_length(data, scan_index)
+
+    if first_ending_length == 0 do
+      scan_complete_blocks(data, block_start, scan_index + 1, blocks)
+    else
+      scan_after_first_ending(data, block_start, scan_index, first_ending_length, blocks)
     end
   end
 
-  @spec complete_sse_blocks(binary(), keyword()) :: {[binary()], binary()}
-  def complete_sse_blocks(data, opts) do
-    data = normalize_crlf(data)
-    bounded? = Keyword.fetch!(opts, :bounded?)
+  defp scan_after_first_ending(data, block_start, scan_index, first_ending_length, blocks) do
+    second_ending_index = scan_index + first_ending_length
+    second_ending_length = line_ending_length(data, second_ending_index)
 
-    if String.contains?(data, "\n\n") do
-      parts = String.split(data, "\n\n")
-      ends_with_separator? = String.ends_with?(data, "\n\n")
-
-      {complete, buffer} =
-        if ends_with_separator? do
-          {parts, ""}
-        else
-          {Enum.drop(parts, -1), List.last(parts) || ""}
-        end
-
-      {Enum.reject(complete, &(&1 == "")), maybe_bound_incomplete_sse_block(buffer, bounded?)}
+    if second_ending_length == 0 do
+      scan_complete_blocks(data, block_start, second_ending_index, blocks)
     else
-      {[], maybe_bound_incomplete_sse_block(data, bounded?)}
+      block = binary_part(data, block_start, scan_index - block_start)
+      blocks = if block == "", do: blocks, else: [canonicalize_line_endings(block) | blocks]
+      next_index = second_ending_index + second_ending_length
+
+      if next_index == byte_size(data) do
+        trailing_cr? =
+          second_ending_length == 1 and :binary.at(data, second_ending_index) == ?\r
+
+        {blocks, next_index, trailing_cr?}
+      else
+        scan_complete_blocks(data, next_index, next_index, blocks)
+      end
     end
+  end
+
+  defp line_ending_length(data, index) when index >= byte_size(data), do: 0
+
+  defp line_ending_length(data, index) do
+    case :binary.at(data, index) do
+      ?\n ->
+        1
+
+      ?\r ->
+        if index + 1 < byte_size(data) and :binary.at(data, index + 1) == ?\n, do: 2, else: 1
+
+      _byte ->
+        0
+    end
+  end
+
+  defp canonicalize_line_endings(block) do
+    block
+    |> :binary.replace("\r\n", "\n", [:global])
+    |> :binary.replace("\r", "\n", [:global])
+    |> String.trim_leading("\n")
   end
 
   @spec sse_field(binary(), binary()) :: binary() | nil
@@ -150,9 +213,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser do
     end
   end
 
-  defp maybe_bound_incomplete_sse_block(buffer, false), do: buffer
+  defp maybe_bound_incomplete_sse_state(state, false), do: state
 
-  defp maybe_bound_incomplete_sse_block(buffer, true) do
-    if oversized_incomplete_sse_block?(buffer), do: "", else: buffer
+  defp maybe_bound_incomplete_sse_state(%{buffer: buffer} = state, true) do
+    if oversized_incomplete_sse_block?(buffer), do: new_block_state(), else: state
   end
 end

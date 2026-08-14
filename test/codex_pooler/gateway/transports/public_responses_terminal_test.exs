@@ -137,6 +137,26 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
              )
   end
 
+  test "public Responses normalizes a standalone-CR terminal before stream close" do
+    terminal = completed("resp_public_cr")
+
+    source =
+      "event: response.completed\rdata: " <> Jason.encode!(terminal) <> "\r\r"
+
+    {output, state} = normalize_sse(source)
+
+    assert [%{event: "response.created"}, %{event: "response.completed", data: decoded}] =
+             public_events(output)
+
+    assert decoded["response"]["id"] == "resp_public_cr"
+    assert state.sequence.terminal_latched?
+
+    assert {"", next_state} =
+             StreamProtocol.normalize_public_openai_responses_sse_data("\n", state)
+
+    assert next_state.sequence == state.sequence
+  end
+
   test "blank public SSE labels use the data type while nonblank mismatches remain rejected" do
     failed =
       failed_without_nested_code("resp_blank_label")

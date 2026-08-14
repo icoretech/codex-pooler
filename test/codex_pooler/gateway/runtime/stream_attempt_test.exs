@@ -373,18 +373,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamAttemptTest do
   defp dynamic_term(term), do: term |> :erlang.term_to_binary() |> :erlang.binary_to_term()
 
   defp assert_classified_state(state) do
-    assert state == %{
-             classified?: true,
-             buffer: "",
-             parser: %{
-               residue_empty?: true,
-               residue_chunks: [],
-               pending_bytes: 0,
-               residue_tail: nil,
-               blocks_seen: 0,
-               matched: nil
-             }
-           }
+    assert state == %{StreamAttempt.first_event_state() | classified?: true}
   end
 
   defp sse_event(event, payload) do

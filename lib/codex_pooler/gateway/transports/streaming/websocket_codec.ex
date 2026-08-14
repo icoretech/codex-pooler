@@ -167,21 +167,26 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   @spec stream_messages(Ecto.UUID.t() | %{optional(:id) => Ecto.UUID.t()}, term()) :: [binary()]
   def stream_messages(request, data) do
-    {messages, _buffer} = stream_messages(request, data, "")
+    {messages, _state} =
+      stream_messages(request, data, StreamProtocol.new_sse_block_state())
+
     messages
   end
 
-  @spec stream_messages(Ecto.UUID.t() | %{optional(:id) => Ecto.UUID.t()}, term(), binary()) ::
-          {[binary()], binary()}
-  def stream_messages(%{id: request_id}, data, buffer),
-    do: stream_messages(request_id, data, buffer)
+  @spec stream_messages(
+          Ecto.UUID.t() | %{optional(:id) => Ecto.UUID.t()},
+          term(),
+          StreamProtocol.sse_block_state()
+        ) :: {[binary()], StreamProtocol.sse_block_state()}
+  def stream_messages(%{id: request_id}, data, state),
+    do: stream_messages(request_id, data, state)
 
-  def stream_messages(request_id, data, buffer)
+  def stream_messages(request_id, data, %{buffer: buffer} = state)
       when is_binary(request_id) and is_binary(data) and is_binary(buffer) do
     buffered_size = byte_size(buffer) + byte_size(data)
-    {blocks, buffer} = StreamProtocol.complete_sse_blocks(buffer, data, bounded?: true)
+    {blocks, state} = StreamProtocol.complete_sse_blocks(state, data, bounded?: true)
 
-    if oversized_incomplete_sse_prefix?(blocks, buffer, buffered_size) do
+    if oversized_incomplete_sse_prefix?(blocks, state.buffer, buffered_size) do
       BufferTelemetry.record_oversized_incomplete(
         "websocket_sse",
         buffered_size,
@@ -195,10 +200,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
         messages -> messages
       end
 
-    {messages, buffer}
+    {messages, state}
   end
 
-  def stream_messages(_request_id, _data, _buffer), do: {[], ""}
+  def stream_messages(_request_id, _data, _state),
+    do: {[], StreamProtocol.new_sse_block_state()}
 
   defp oversized_incomplete_sse_prefix?([], "", buffered_size),
     do: buffered_size > StreamProtocol.max_incomplete_sse_block_bytes()

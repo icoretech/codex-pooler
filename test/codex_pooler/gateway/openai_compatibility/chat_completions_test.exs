@@ -52,6 +52,26 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletionsTest do
   end
 
   describe "normalize_stream_data/2" do
+    test "normalizes a terminal event framed by standalone CR before stream close" do
+      state = ChatCompletions.stream_state(%{"model" => "gpt-example"})
+
+      terminal =
+        "event: response.completed\r" <>
+          "data: " <>
+          Jason.encode!(%{
+            "type" => "response.completed",
+            "response" => %{"id" => "resp_chat_cr", "status" => "completed", "output" => []}
+          }) <>
+          "\r\r"
+
+      assert {output, state} = ChatCompletions.normalize_stream_data(terminal, state)
+      assert state.terminal_seen?
+      assert output =~ "\"finish_reason\":\"stop\""
+
+      assert {"", state} = ChatCompletions.normalize_stream_data("\n", state)
+      assert state.terminal_seen?
+    end
+
     test "carries split stream parser state explicitly" do
       state = ChatCompletions.stream_state(%{"model" => "gpt-example"})
 

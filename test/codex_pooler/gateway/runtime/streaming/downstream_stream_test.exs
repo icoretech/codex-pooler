@@ -295,6 +295,34 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
                )
     end
 
+    test "normalizes standalone-CR backend Responses events on normal and compact endpoints" do
+      payload = %{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_backend_cr", "status" => "completed"}
+      }
+
+      source = "event: response.completed\rdata: " <> Jason.encode!(payload) <> "\r\r"
+
+      for endpoint <- [
+            "/backend-api/codex/responses",
+            "/backend-api/codex/responses/compact"
+          ] do
+        opts = RequestOptions.build(%{}, endpoint, %{"stream" => true})
+        state = DownstreamStream.initial_state(:relay, opts)
+
+        assert {normalized, state} =
+                 DownstreamStream.normalize_data(source, endpoint, opts, state)
+
+        assert normalized ==
+                 "event: response.completed\ndata: " <> Jason.encode!(payload) <> "\n\n"
+
+        assert state.codex_responses_sse_block_state.skip_leading_lf?
+
+        assert {"", state} = DownstreamStream.normalize_data("\n", endpoint, opts, state)
+        assert state.codex_responses_sse_block_state == StreamProtocol.new_sse_block_state()
+      end
+    end
+
     test "passes through oversized incomplete backend codex SSE prefixes without retaining them" do
       attach_stream_buffer_telemetry()
       opts = RequestOptions.build(%{}, "/backend-api/codex/responses", %{"stream" => true})
@@ -309,7 +337,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
                  state
                )
 
-      assert state.codex_responses_sse_buffer == ""
+      assert state.codex_responses_sse_block_state == StreamProtocol.new_sse_block_state()
 
       assert_receive {[:codex_pooler, :gateway, :stream_buffer, :oversized],
                       %{bytes: bytes, count: 1, max_bytes: 8_388_608},

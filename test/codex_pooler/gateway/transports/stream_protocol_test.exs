@@ -8,10 +8,48 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   describe "complete_sse_blocks/2" do
+    test "emits records framed by every valid pair of SSE line endings" do
+      delimiters = [
+        "\n\n",
+        "\n\r",
+        "\n\r\n",
+        "\r\r",
+        "\r\r\n",
+        "\r\n\n",
+        "\r\n\r",
+        "\r\n\r\n"
+      ]
+
+      for delimiter <- delimiters do
+        assert {["data: x"], ""} =
+                 StreamProtocol.complete_sse_blocks(
+                   "data: x" <> delimiter,
+                   bounded?: false
+                 )
+      end
+    end
+
     test "bounds oversized incomplete SSE blocks when requested" do
       oversized = String.duplicate("data: unavailable-upstream-prefix", 260_000)
 
       assert {[], ""} = StreamProtocol.complete_sse_blocks(oversized, bounded?: true)
+    end
+
+    test "bounding resets retained bytes and pending CRLF continuation state" do
+      state = %{
+        StreamProtocol.new_sse_block_state()
+        | buffer:
+            String.duplicate(
+              "x",
+              StreamProtocol.max_incomplete_sse_block_bytes() + 1
+            ),
+          skip_leading_lf?: true
+      }
+
+      assert {[], next_state} =
+               StreamProtocol.complete_sse_blocks(state, "", bounded?: true)
+
+      assert next_state == StreamProtocol.new_sse_block_state()
     end
   end
 

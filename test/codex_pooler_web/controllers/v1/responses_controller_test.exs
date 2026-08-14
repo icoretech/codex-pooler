@@ -1527,6 +1527,68 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute Map.has_key?(log.token_counts, :output_tokens_details)
   end
 
+  test "POST /v1/responses relays standalone-CR upstream SSE through the live HTTP endpoint" do
+    terminal = %{
+      "type" => "response.completed",
+      "response" => %{
+        "id" => "resp_v1_standalone_cr",
+        "object" => "response",
+        "status" => "completed",
+        "output" => [],
+        "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+      }
+    }
+
+    source =
+      "event: response.completed\rdata: " <> Jason.encode!(terminal) <> "\r\r"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.chunked_response([source, "\n"],
+          headers: [{"content-type", "text/event-stream"}]
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    port = start_public_endpoint!()
+
+    payload = %{
+      "model" => setup.model.exposed_model_id,
+      "input" => "synthetic standalone CR response",
+      "stream" => true
+    }
+
+    {:ok, http_conn, ref, started} = start_public_v1_responses_request(port, setup, payload)
+
+    try do
+      {http_conn, status, response_headers, _elapsed_ms, chunks, done?} =
+        await_public_response_headers!(http_conn, ref, started, @timing_observation_timeout_ms)
+
+      assert status == 200
+      assert header_value(response_headers, "content-type") =~ "text/event-stream"
+
+      {body, :eof} =
+        await_public_response_eof!(
+          http_conn,
+          ref,
+          chunks,
+          done?,
+          @timing_observation_timeout_ms
+        )
+
+      assert [%{"event" => "response.created"}, %{"event" => "response.completed"} = event] =
+               public_sse_events(body)
+
+      assert get_in(event, ["data", "response", "id"]) == "resp_v1_standalone_cr"
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.status == "succeeded"
+      assert request.transport == "http_sse"
+    after
+      Mint.HTTP.close(http_conn)
+    end
+  end
+
   @tag :external_issues_229_231
   @tag :issue_231
   test "POST /v1/responses uses a divergent healthy canonical alternate for JSON and SSE", %{
@@ -5810,6 +5872,24 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute inspect(error) =~ "upstream.internal.example"
     refute inspect(error) =~ "/internal/rate"
     refute inspect(error) =~ "provider_stack"
+  end
+
+  test "POST /v1/responses SSE collection accepts standalone-CR terminal framing" do
+    terminal = %{
+      "type" => "response.completed",
+      "response" => %{
+        "id" => "resp_v1_collect_standalone_cr",
+        "status" => "completed",
+        "output" => []
+      }
+    }
+
+    body = "event: response.completed\rdata: " <> Jason.encode!(terminal) <> "\r\r"
+
+    assert {:ok, response} = Responses.response_from_sse(body)
+    assert response["id"] == "resp_v1_collect_standalone_cr"
+    assert response["status"] == "completed"
+    assert response["object"] == "response"
   end
 
   # The real Codex backend sends `"output": []` in every terminal

@@ -218,16 +218,22 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   defp normalize_public_openai_responses_stream_data(data, state), do: {data, state}
 
   defp normalize_codex_responses_stream_data(data, endpoint, opts, state) when is_binary(data) do
-    buffer = Map.get(state, :codex_responses_sse_buffer, "")
+    sse_block_state =
+      Map.get(state, :codex_responses_sse_block_state, StreamProtocol.new_sse_block_state())
 
-    if buffer == "" and not codex_responses_sse_chunk?(data) do
+    buffer = sse_block_state.buffer
+
+    if buffer == "" and not sse_block_state.skip_leading_lf? and
+         not codex_responses_sse_chunk?(data) do
       {data, state}
     else
       previous_buffer = buffer
       buffered_size = byte_size(previous_buffer) + byte_size(data)
 
-      {blocks, buffer} =
-        StreamProtocol.complete_sse_blocks(previous_buffer, data, bounded?: true)
+      {blocks, sse_block_state} =
+        StreamProtocol.complete_sse_blocks(sse_block_state, data, bounded?: true)
+
+      buffer = sse_block_state.buffer
 
       data =
         if oversized_incomplete_sse_prefix?(blocks, buffer, buffered_size) do
@@ -246,7 +252,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
           |> IO.iodata_to_binary()
         end
 
-      {data, Map.put(state, :codex_responses_sse_buffer, buffer)}
+      {data, Map.put(state, :codex_responses_sse_block_state, sse_block_state)}
     end
   end
 
@@ -276,8 +282,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
 
   defp codex_responses_sse_chunk?(data) when is_binary(data) do
     String.starts_with?(data, "event: ") or String.starts_with?(data, "data: ") or
-      String.contains?(data, "\nevent: ") or String.contains?(data, "\ndata: ") or
-      String.contains?(data, "\n\n")
+      String.contains?(data, ["\nevent: ", "\revent: "]) or
+      String.contains?(data, ["\ndata: ", "\rdata: "]) or
+      String.contains?(data, ["\n\n", "\n\r", "\r\r"])
   end
 
   defp oversized_incomplete_sse_prefix?([], "", buffered_size),

@@ -28,6 +28,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
         }
   @type state :: %{
           required(:buffer) => binary(),
+          required(:sse_block_state) => StreamProtocol.sse_block_state(),
           required(:buffer_candidate?) => boolean(),
           required(:created?) => boolean(),
           required(:text_delta?) => boolean(),
@@ -47,6 +48,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   def new_state(custom_tool_namespaces \\ %{}) when is_map(custom_tool_namespaces) do
     %{
       buffer: "",
+      sse_block_state: StreamProtocol.new_sse_block_state(),
       buffer_candidate?: false,
       created?: false,
       text_delta?: false,
@@ -108,20 +110,36 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     normalize_public_json_message(canonical, canonical_data)
   end
 
-  defp normalize_data_chunk(_data, %{sequence: %{terminal_latched?: true}} = state),
-    do: {"", %{state | buffer: "", buffer_candidate?: false, passthrough?: false}}
+  defp normalize_data_chunk(_data, %{sequence: %{terminal_latched?: true}} = state) do
+    {"",
+     %{
+       state
+       | buffer: "",
+         sse_block_state: StreamProtocol.new_sse_block_state(),
+         buffer_candidate?: false,
+         passthrough?: false
+     }}
+  end
 
   defp normalize_data_chunk(data, state) do
     previous_buffer = state.buffer
 
-    {blocks, buffer} =
-      StreamProtocol.complete_sse_blocks(previous_buffer, data, bounded?: false)
+    {blocks, sse_block_state} =
+      StreamProtocol.complete_sse_blocks(state.sse_block_state, data, bounded?: false)
 
+    buffer = sse_block_state.buffer
     candidate? = incremental_buffer_candidate?(state, previous_buffer, data, blocks, buffer)
-    state = %{state | buffer_candidate?: candidate?}
+
+    state = %{
+      state
+      | buffer: buffer,
+        sse_block_state: sse_block_state,
+        buffer_candidate?: candidate?
+    }
 
     cond do
       structurally_complete_terminal_buffer?(buffer, candidate?) ->
+        state = %{state | sse_block_state: StreamProtocol.new_sse_block_state()}
         normalize_blocks(blocks ++ [buffer], "", state)
 
       candidate? and StreamProtocol.oversized_incomplete_terminal_sse_block?(buffer) ->
@@ -185,7 +203,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     {iodata, state, _terminal_in_batch?} =
       normalize_complete_blocks(
         blocks,
-        %{state | buffer: "", buffer_candidate?: false, passthrough?: false}
+        %{
+          state
+          | buffer: "",
+            sse_block_state: StreamProtocol.new_sse_block_state(),
+            buffer_candidate?: false,
+            passthrough?: false
+        }
       )
 
     if state.sequence.terminal_latched? do
@@ -849,6 +873,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
     %{
       state
       | buffer: "",
+        sse_block_state: StreamProtocol.new_sse_block_state(),
         buffer_candidate?: false,
         created?: false,
         text_delta?: false,

@@ -27,6 +27,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
         }
   @type public_openai_responses_stream_state :: PublicResponses.state()
   @type public_openai_responses_websocket_state :: PublicResponsesWebsocket.state()
+  @type sse_block_state :: SSEParser.block_state()
   @type websocket_frame_headers :: %{optional(String.t()) => String.t()}
 
   @spec public_openai_responses_stream_state(map()) :: public_openai_responses_stream_state()
@@ -130,8 +131,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   @spec websocket_error_frame_headers(binary() | map()) :: websocket_frame_headers()
   defdelegate websocket_error_frame_headers(data), to: WebsocketErrorHeaders
 
-  @spec complete_sse_blocks(binary(), binary(), keyword()) :: {[binary()], binary()}
-  defdelegate complete_sse_blocks(residue, data, opts), to: SSEParser
+  @spec new_sse_block_state() :: sse_block_state()
+  defdelegate new_sse_block_state(), to: SSEParser, as: :new_block_state
+
+  @spec complete_sse_blocks(sse_block_state(), binary(), keyword()) ::
+          {[binary()], sse_block_state()}
+  defdelegate complete_sse_blocks(state, data, opts), to: SSEParser
 
   @spec complete_sse_blocks(binary(), keyword()) :: {[binary()], binary()}
   defdelegate complete_sse_blocks(data, opts), to: SSEParser

@@ -36,26 +36,20 @@ defmodule CodexPooler.Gateway.Transports.SSEParserIncrementalTest do
   end
 
   defp fold_incremental(chunks, bounded?) do
-    Enum.reduce(chunks, {[], ""}, fn chunk, {blocks, residue} ->
-      {new_blocks, residue} =
-        StreamProtocol.complete_sse_blocks(residue, chunk, bounded?: bounded?)
+    {blocks, state} =
+      Enum.reduce(chunks, {[], StreamProtocol.new_sse_block_state()}, fn chunk, {blocks, state} ->
+        {new_blocks, state} =
+          StreamProtocol.complete_sse_blocks(state, chunk, bounded?: bounded?)
 
-      {blocks ++ new_blocks, residue}
-    end)
+        {blocks ++ new_blocks, state}
+      end)
+
+    {blocks, state.buffer}
   end
 
   defp fold_reference(chunks, bounded?) do
     Enum.reduce(chunks, {[], ""}, fn chunk, {blocks, residue} ->
       {new_blocks, residue} = reference_complete_sse_blocks(residue <> chunk, bounded?)
-      {blocks ++ new_blocks, residue}
-    end)
-  end
-
-  defp fold_current_two_arity(chunks, bounded?) do
-    Enum.reduce(chunks, {[], ""}, fn chunk, {blocks, residue} ->
-      {new_blocks, residue} =
-        StreamProtocol.complete_sse_blocks(residue <> chunk, bounded?: bounded?)
-
       {blocks ++ new_blocks, residue}
     end)
   end
@@ -94,6 +88,68 @@ defmodule CodexPooler.Gateway.Transports.SSEParserIncrementalTest do
       end
 
     {IO.iodata_to_binary(events) <> tail, rng}
+  end
+
+  defp random_mixed_ending_stream(rng) do
+    delimiters = [
+      "\n\n",
+      "\n\r",
+      "\n\r\n",
+      "\r\r",
+      "\r\r\n",
+      "\r\n\n",
+      "\r\n\r",
+      "\r\n\r\n"
+    ]
+
+    {event_count, rng} = rand_range(rng, 1, 8)
+
+    {events, rng} =
+      Enum.map_reduce(1..event_count, rng, fn event_index, rng ->
+        {label?, rng} = rand_pick(rng, [true, false])
+        {line_count, rng} = rand_range(rng, 1, 3)
+        {delimiter, rng} = rand_pick(rng, delimiters)
+
+        {data_lines, rng} =
+          Enum.map_reduce(1..line_count, rng, fn line_index, rng ->
+            {payload_size, rng} = rand_range(rng, 0, 300)
+            {payload, rng} = rand_alnum(rng, payload_size)
+
+            {~s(data: {"event":#{event_index},"line":#{line_index},"value":"#{payload}"}), rng}
+          end)
+
+        {raw_lines, canonical_lines, rng} =
+          if label? do
+            {line_ending, rng} = rand_pick(rng, ["\n", "\r", "\r\n"])
+            label = "event: response.output_text.delta"
+
+            {[label, line_ending | Enum.intersperse(data_lines, line_ending)],
+             [label | data_lines], rng}
+          else
+            {line_ending, rng} = rand_pick(rng, ["\n", "\r", "\r\n"])
+            {Enum.intersperse(data_lines, line_ending), data_lines, rng}
+          end
+
+        event = IO.iodata_to_binary([raw_lines, delimiter])
+        canonical = Enum.join(canonical_lines, "\n")
+        {{event, canonical}, rng}
+      end)
+
+    {tail?, rng} = rand_pick(rng, [true, false])
+
+    {tail, rng} =
+      if tail? do
+        {payload_size, rng} = rand_range(rng, 1, 200)
+        {payload, rng} = rand_alnum(rng, payload_size)
+        {"data: {\"incomplete\":\"" <> payload, rng}
+      else
+        {"", rng}
+      end
+
+    stream = events |> Enum.map(&elem(&1, 0)) |> IO.iodata_to_binary()
+    expected = Enum.map(events, &elem(&1, 1))
+
+    {stream <> tail, expected, tail, rng}
   end
 
   defp random_chunking(rng, stream) do
@@ -153,7 +209,6 @@ defmodule CodexPooler.Gateway.Transports.SSEParserIncrementalTest do
 
       {reference_blocks, reference_residue} = fold_reference(chunks, false)
       {incremental_blocks, incremental_residue} = fold_incremental(chunks, false)
-      {two_arity_blocks, two_arity_residue} = fold_current_two_arity(chunks, false)
 
       assert incremental_blocks == reference_blocks,
              "iteration #{iteration}: block mismatch for chunking #{inspect(Enum.map(chunks, &byte_size/1))}"
@@ -161,11 +216,48 @@ defmodule CodexPooler.Gateway.Transports.SSEParserIncrementalTest do
       assert incremental_residue == reference_residue,
              "iteration #{iteration}: residue mismatch"
 
-      assert two_arity_blocks == reference_blocks
-      assert two_arity_residue == reference_residue
-
       rng
     end)
+  end
+
+  test "incremental parsing emits every valid pair of SSE line endings" do
+    delimiters = [
+      "\n\n",
+      "\n\r",
+      "\n\r\n",
+      "\r\r",
+      "\r\r\n",
+      "\r\n\n",
+      "\r\n\r",
+      "\r\n\r\n"
+    ]
+
+    for delimiter <- delimiters do
+      stream = "data: x" <> delimiter
+      chunks = for <<byte::binary-size(1) <- stream>>, do: byte
+
+      assert {["data: x"], ""} = fold_incremental([stream], false)
+      assert fold_incremental(chunks, false) == fold_incremental([stream], false)
+    end
+  end
+
+  test "incremental parsing consumes an LF that continues an emitted trailing CR" do
+    state = StreamProtocol.new_sse_block_state()
+
+    assert {["data: x"], state} =
+             StreamProtocol.complete_sse_blocks(state, "data: x\r\r", bounded?: false)
+
+    assert state.buffer == ""
+    assert state.skip_leading_lf?
+
+    assert {["data: y"], state} =
+             StreamProtocol.complete_sse_blocks(
+               state,
+               "\ndata: y\n\n",
+               bounded?: false
+             )
+
+    assert state == StreamProtocol.new_sse_block_state()
   end
 
   test "incremental parsing is chunking independent" do
@@ -178,6 +270,23 @@ defmodule CodexPooler.Gateway.Transports.SSEParserIncrementalTest do
 
       assert fold_incremental(chunks_a, false) == fold_incremental(chunks_b, false)
       assert fold_incremental([stream], false) == fold_incremental(chunks_a, false)
+
+      rng
+    end)
+  end
+
+  test "mixed CR, LF, and CRLF multiline streams are chunking independent" do
+    rng = :rand.seed_s(:exsss, {20_260_814, 8, 14})
+
+    Enum.reduce(1..200, rng, fn iteration, rng ->
+      {stream, expected_blocks, expected_residue, rng} = random_mixed_ending_stream(rng)
+      {chunks, rng} = random_chunking(rng, stream)
+
+      assert {expected_blocks, expected_residue} == fold_incremental([stream], false)
+
+      assert {expected_blocks, expected_residue} == fold_incremental(chunks, false),
+             "iteration #{iteration}: mixed-ending parse diverged for chunking " <>
+               inspect(Enum.map(chunks, &byte_size/1))
 
       rng
     end)
@@ -332,7 +441,7 @@ defmodule CodexPooler.Gateway.Transports.SSEParserIncrementalTest do
         )
       end)
 
-    assert blocks == ["data: a\ndata: b"]
+    assert blocks == ["data: a", "data: b"]
     assert residue == ""
 
     # One collapse pass, not one scan per CR: the pre-fix fixpoint loop needed

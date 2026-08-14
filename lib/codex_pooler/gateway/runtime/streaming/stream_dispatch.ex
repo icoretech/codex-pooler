@@ -150,12 +150,12 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
       {data, state} =
         normalize_stream_data(response_context, state, data, &visible_websocket_data?/1)
 
-      {messages, websocket_sse_buffer} =
-        WebsocketCodec.stream_messages(request, data, websocket_sse_buffer(state))
+      {messages, websocket_sse_block_state} =
+        WebsocketCodec.stream_messages(request, data, websocket_sse_block_state(state))
 
       Enum.each(messages, writer)
 
-      {:ok, put_websocket_sse_buffer(state, websocket_sse_buffer)}
+      {:ok, put_websocket_sse_block_state(state, websocket_sse_block_state)}
     end
   end
 
@@ -171,7 +171,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     |> put_first_event_state(StreamAttempt.first_event_state())
     |> put_rate_limit_state(RateLimitObserver.event_state())
     |> put_usage_state(StreamUsageObserver.new())
-    |> Map.put(:websocket_sse_buffer, "")
+    |> Map.put(:websocket_sse_block_state, StreamProtocol.new_sse_block_state())
   end
 
   defp stream_relay_state(target, %RequestOptions{} = opts, response) do
@@ -209,10 +209,15 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   defp put_usage_state(%{} = state, %{} = usage_state),
     do: Map.put(state, :usage_observer, usage_state)
 
-  defp websocket_sse_buffer(%{websocket_sse_buffer: buffer}) when is_binary(buffer), do: buffer
+  defp websocket_sse_block_state(%{websocket_sse_block_state: %{buffer: buffer} = state})
+       when is_binary(buffer),
+       do: state
 
-  defp put_websocket_sse_buffer(%{} = state, buffer) when is_binary(buffer),
-    do: Map.put(state, :websocket_sse_buffer, buffer)
+  defp websocket_sse_block_state(_state), do: StreamProtocol.new_sse_block_state()
+
+  defp put_websocket_sse_block_state(%{} = state, %{buffer: buffer} = sse_block_state)
+       when is_binary(buffer),
+       do: Map.put(state, :websocket_sse_block_state, sse_block_state)
 
   defp update_relay_target(%{target: target} = state, fun) when is_function(fun, 1) do
     case fun.(target) do

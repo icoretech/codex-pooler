@@ -29,6 +29,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
 
   @type stream_state :: %{
           required(:buffer) => binary(),
+          required(:sse_block_state) => StreamProtocol.sse_block_state(),
           required(:id) => String.t(),
           required(:created) => integer(),
           required(:model) => String.t() | nil,
@@ -81,7 +82,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
 
   def normalize_stream_data(data, state) when is_binary(data) and is_map(state) do
     buffered_size = byte_size(state.buffer) + byte_size(data)
-    {blocks, buffer} = StreamProtocol.complete_sse_blocks(state.buffer, data, bounded?: false)
+
+    {blocks, sse_block_state} =
+      StreamProtocol.complete_sse_blocks(state.sse_block_state, data, bounded?: false)
+
+    buffer = sse_block_state.buffer
+    state = %{state | buffer: buffer, sse_block_state: sse_block_state}
 
     if oversized_incomplete_sse_block?(buffer) do
       BufferTelemetry.record_oversized_incomplete(
@@ -91,13 +97,21 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
       )
 
       {iodata, state, _terminal_in_batch?} =
-        normalize_complete_blocks(blocks, %{state | buffer: ""})
+        normalize_complete_blocks(
+          blocks,
+          %{state | buffer: "", sse_block_state: StreamProtocol.new_sse_block_state()}
+        )
 
       {oversized_iodata, state} = oversized_incomplete_prefix_chunk(buffer, state)
 
       {
         [iodata, oversized_iodata] |> IO.iodata_to_binary(),
-        %{state | buffer: "", discarding_oversized?: true}
+        %{
+          state
+          | buffer: "",
+            sse_block_state: StreamProtocol.new_sse_block_state(),
+            discarding_oversized?: true
+        }
       }
     else
       normalize_stream_blocks(blocks, buffer, state)
@@ -108,11 +122,22 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
 
   defp discard_oversized_data(data, state) do
     case sse_block_separator(data) do
-      {index, separator_size} ->
+      {index, separator_size, skip_leading_lf?} ->
         discard_size = index + separator_size
         rest = binary_part(data, discard_size, byte_size(data) - discard_size)
 
-        state = %{state | discarding_oversized?: false, buffer: ""}
+        sse_block_state = %{
+          StreamProtocol.new_sse_block_state()
+          | skip_leading_lf?: skip_leading_lf?
+        }
+
+        state = %{
+          state
+          | discarding_oversized?: false,
+            buffer: "",
+            sse_block_state: sse_block_state
+        }
+
         {normalized_rest, state} = normalize_stream_data(rest, state)
 
         {normalized_rest, state}
@@ -126,7 +151,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
     {iodata, state, terminal_in_batch?} =
       normalize_complete_blocks(blocks, %{state | buffer: buffer})
 
-    state = if terminal_in_batch?, do: %{state | buffer: ""}, else: state
+    state =
+      if terminal_in_batch? do
+        %{state | buffer: "", sse_block_state: StreamProtocol.new_sse_block_state()}
+      else
+        state
+      end
 
     {IO.iodata_to_binary(iodata), state}
   end
@@ -379,6 +409,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
   defp initial_state(chat_payload) do
     %{
       buffer: "",
+      sse_block_state: StreamProtocol.new_sse_block_state(),
       id: "chatcmpl_" <> Ecto.UUID.generate(),
       created: System.system_time(:second),
       model: Map.get(chat_payload, "model"),
@@ -606,13 +637,23 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.ChatCompletions do
   defp codex_event?(type) when is_binary(type), do: String.starts_with?(type, "codex.")
 
   defp sse_block_separator(data) do
-    ["\n\n", "\r\n\r\n"]
+    ["\r\n\r\n", "\n\r\n", "\r\r\n", "\r\n\n", "\r\n\r", "\n\n", "\n\r", "\r\r"]
     |> Enum.map(fn separator -> {separator, :binary.match(data, separator)} end)
     |> Enum.flat_map(fn
-      {separator, {index, _size}} -> [{index, byte_size(separator)}]
+      {separator, {index, _size}} -> [{index, separator}]
       {_separator, :nomatch} -> []
     end)
-    |> Enum.min_by(fn {index, _size} -> index end, fn -> nil end)
+    |> Enum.min_by(fn {index, separator} -> {index, -byte_size(separator)} end, fn -> nil end)
+    |> case do
+      {index, separator} ->
+        separator_size = byte_size(separator)
+        discard_size = index + separator_size
+        skip_leading_lf? = String.ends_with?(separator, "\r") and discard_size == byte_size(data)
+        {index, separator_size, skip_leading_lf?}
+
+      nil ->
+        nil
+    end
   end
 
   defp decoded_string(decoded, key) when is_map(decoded) do

@@ -198,6 +198,25 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
     end
   end
 
+  test "standalone-CR terminal framing commits the first event immediately" do
+    terminal =
+      "event: response.completed\rdata: " <>
+        Jason.encode!(%{
+          "type" => "response.completed",
+          "response" => %{"id" => "resp_first_cr", "status" => "completed"}
+        }) <>
+        "\r\r"
+
+    assert {{:write, ^terminal}, state} =
+             StreamAttempt.classify_first_event(
+               terminal,
+               StreamAttempt.first_event_state(),
+               false
+             )
+
+    assert state_projection(state) == %{classified?: true, buffer: ""}
+  end
+
   test "malformed and incomplete data remains buffered rather than becoming internal" do
     for data <- ["{", ~s({"type":), "event: codex.response.metadata\ndata: {"] do
       refute StreamProtocol.internal_control_event?(data)
@@ -238,8 +257,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
     assert {:buffered, state} =
              StreamAttempt.classify_first_event(slice, StreamAttempt.first_event_state())
 
-    assert state.parser.residue_chunks == []
-    assert state.parser.pending_bytes == byte_size(slice)
+    retained = state.parser.block_state.buffer
+    assert retained == slice
+    assert :binary.referenced_byte_size(retained) == byte_size(retained)
   end
 
   test "materialized parser residue owns only its retained bytes" do
@@ -251,7 +271,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
              StreamAttempt.classify_first_event(first, StreamAttempt.first_event_state())
 
     assert {:buffered, state} = StreamAttempt.classify_first_event(second, state)
-    assert [retained] = state.parser.residue_chunks
+    retained = state.parser.block_state.buffer
 
     assert byte_size(retained) == byte_size("remainder")
     assert :binary.referenced_byte_size(retained) == byte_size(retained)
@@ -302,7 +322,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
     {:buffered, state} = module.classify_first_event("\\n\\nremainder", state)
 
     true = state.buffer == "ordinary\\n\\nremainder"
-    ["remainder"] = state.parser.residue_chunks
+    "remainder" = state.parser.block_state.buffer
     IO.puts("production ordinary residue: ok")
     """
 
@@ -486,12 +506,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
              classified?: true,
              buffer: "",
              parser: %{
+               block_state: %{buffer: "", skip_leading_lf?: false},
                residue_empty?: true,
-               residue_chunks: [],
-               pending_bytes: 0,
-               residue_tail: nil,
                blocks_seen: 0,
-               matched: nil
+               matched: nil,
+               line_skip_leading_lf?: false
              }
            }
   end
