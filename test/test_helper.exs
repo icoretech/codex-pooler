@@ -21,4 +21,10 @@ native_turn_console_filter = :codex_pooler_test_native_turn_console_filter
 # proving a message never arrives stays cheap.
 ExUnit.start(assert_receive_timeout: 5_000)
 
+# The cache process can start while the reset test database is still being
+# migrated. Publish one authoritative snapshot before manual sandbox ownership
+# makes background retries unable to read the Repo.
+settings = CodexPooler.InstanceSettings.ensure_singleton!()
+:ok = CodexPooler.InstanceSettings.Cache.put_for_test(settings)
+
 Ecto.Adapters.SQL.Sandbox.mode(CodexPooler.Repo, :manual)
