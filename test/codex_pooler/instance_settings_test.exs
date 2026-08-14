@@ -243,6 +243,25 @@ defmodule CodexPooler.InstanceSettingsTest do
     assert lock_version == updated.lock_version
   end
 
+  test "distributed invalidation does not reload the local writer cache" do
+    settings = InstanceSettings.current()
+    updated = %{settings | lock_version: settings.lock_version + 1}
+    :ok = Cache.subscribe()
+
+    assert :ok = Cache.put_for_test(updated)
+
+    Application.put_env(:codex_pooler, InstanceSettings, repo: ScriptedRepo)
+    configure_scripted_repo(updated, :none)
+    flush_scripted_repo_calls()
+
+    assert :ok = Cache.broadcast_update(updated)
+    assert_receive {Cache, {:updated, lock_version}}
+    assert lock_version == updated.lock_version
+    _ = :sys.get_state(Cache)
+
+    refute_received {ScriptedRepo, _operation}
+  end
+
   test "duplicate singleton rows are rejected by the database and ensure_singleton!/0 is idempotent" do
     first = InstanceSettings.ensure_singleton!()
     second = InstanceSettings.ensure_singleton!()

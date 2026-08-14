@@ -46,7 +46,12 @@ defmodule CodexPooler.InstanceSettings.Cache do
 
   @spec broadcast_update(Settings.t()) :: :ok | {:error, term()}
   def broadcast_update(%Settings{} = settings) do
-    PubSub.broadcast(@pubsub, @topic, {@message_tag, {:updated, settings.lock_version}})
+    message = {@message_tag, {:updated, settings.lock_version}}
+
+    case Process.whereis(__MODULE__) do
+      cache when is_pid(cache) -> PubSub.broadcast_from(@pubsub, cache, @topic, message)
+      nil -> PubSub.broadcast(@pubsub, @topic, message)
+    end
   end
 
   @spec subscribe() :: :ok | {:error, term()}
