@@ -306,6 +306,8 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
     scope = owner_scope()
     subscribe_forwarder!(target_pool)
 
+    before_jobs = Repo.aggregate(Oban.Job, :count)
+
     assert {:ok, bundle, _receipt} = UpstreamAccountBundle.export_bundle(source_pool, @password)
 
     assert {:ok, receipt} =
@@ -335,7 +337,7 @@ defmodule CodexPooler.Dev.UpstreamAccountBundleTest do
       refute rendered =~ source.identity.account_email
     end
 
-    assert Repo.aggregate(Oban.Job, :count) == 0
+    assert Repo.aggregate(Oban.Job, :count) == before_jobs
   end
 
   test "caller-owned trusted import refuses to run outside a durable transaction" do
