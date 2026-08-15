@@ -44,6 +44,7 @@ defmodule CodexPooler.Admin.Stats do
         }
   @type pool_usage_opt :: PoolUsage.pool_usage_opt()
   @type pool_usage_metrics :: PoolUsage.pool_usage_metrics()
+  @type pool_usage_result :: PoolUsage.pool_usage_result()
 
   @spec build_dashboard(Scope.t(), map() | keyword()) ::
           {:ok, dashboard()} | {:error, access_error()}
@@ -104,6 +105,11 @@ defmodule CodexPooler.Admin.Stats do
         }
   def pool_usage_metrics_by_pool_ids(pool_ids, opts \\ []) do
     PoolUsage.metrics_by_pool_ids(pool_ids, opts)
+  end
+
+  @spec pool_usage_by_pool_ids([Ecto.UUID.t()], [pool_usage_opt()]) :: pool_usage_result()
+  def pool_usage_by_pool_ids(pool_ids, opts \\ []) do
+    PoolUsage.usage_by_pool_ids(pool_ids, opts)
   end
 
   defp do_build_dashboard(scope, filters) do

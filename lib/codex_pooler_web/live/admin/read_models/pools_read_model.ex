@@ -52,16 +52,21 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
           required(:token_usage) => token_usage(),
           required(:token_histogram) => [map()],
           required(:request_histogram) => [map()],
+          required(:histogram_state) => :unobserved | :loading | :ready | :error,
           required(:settled_cost_micros) => non_neg_integer(),
           required(:traffic_window) => String.t(),
           required(:traffic_window_label) => String.t(),
           required(:routing_strategy) => String.t(),
           required(:compat_flags) => compat_flags()
         }
-  @type usage_by_pool_id :: %{optional(Ecto.UUID.t()) => Stats.pool_usage_metrics()}
+  @type traffic_usage :: Stats.pool_usage_result()
   @type traffic_result :: %{
           required(:traffic_window) => String.t(),
-          required(:usage_by_pool_id) => usage_by_pool_id()
+          required(:usage) => traffic_usage()
+        }
+  @type legacy_traffic_result :: %{
+          required(:traffic_window) => String.t(),
+          required(:usage_by_pool_id) => traffic_usage()
         }
   @type page_state :: %{
           required(:pools) => [pool_row()],
@@ -104,33 +109,60 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
 
   # The expensive multi-aggregate read. Callers must run this off the LiveView
   # process (start_async) so pending clicks never queue behind it.
-  @spec traffic_metrics([Ecto.UUID.t()], String.t()) :: traffic_result()
+  @spec traffic_metrics([Ecto.UUID.t()], String.t()) :: legacy_traffic_result()
   def traffic_metrics(pool_ids, traffic_window) do
     traffic_window = PoolForm.normalize_traffic_window(traffic_window)
 
     %{
       traffic_window: traffic_window,
       usage_by_pool_id:
-        Stats.pool_usage_metrics_by_pool_ids(pool_ids, traffic_window: traffic_window)
+        Stats.pool_usage_by_pool_ids(pool_ids,
+          traffic_window: traffic_window,
+          histogram_pool_ids: pool_ids
+        )
+    }
+  end
+
+  @spec traffic_metrics([Ecto.UUID.t()], [Ecto.UUID.t()], String.t()) :: traffic_result()
+  def traffic_metrics(pool_ids, histogram_pool_ids, traffic_window) do
+    traffic_window = PoolForm.normalize_traffic_window(traffic_window)
+
+    %{
+      traffic_window: traffic_window,
+      usage:
+        Stats.pool_usage_by_pool_ids(pool_ids,
+          traffic_window: traffic_window,
+          histogram_pool_ids: histogram_pool_ids
+        )
     }
   end
 
   # Merges by pool id and touches only traffic fields, so pools that vanished
   # mid-flight are ignored and dialog/form assigns are never rebuilt.
-  @spec merge_traffic([pool_row()], metrics(), usage_by_pool_id(), [Ecto.UUID.t()]) ::
+  @spec merge_traffic(
+          [pool_row()],
+          metrics(),
+          traffic_usage(),
+          [Ecto.UUID.t()]
+        ) ::
           {[pool_row()], metrics()}
-  def merge_traffic(pool_rows, pool_metrics, usage_by_pool_id, traffic_pool_ids) do
+  def merge_traffic(
+        pool_rows,
+        pool_metrics,
+        %{summary_by_pool_id: summary_by_pool_id, histogram_by_pool_id: histogram_by_pool_id},
+        traffic_pool_ids
+      ) do
     merged_rows =
       Enum.map(pool_rows, fn pool_row ->
-        case Map.fetch(usage_by_pool_id, pool_row.pool.id) do
-          {:ok, usage} -> put_row_usage(pool_row, usage)
+        case Map.fetch(summary_by_pool_id, pool_row.pool.id) do
+          {:ok, summary} -> put_row_usage(pool_row, summary, histogram_by_pool_id)
           :error -> pool_row
         end
       end)
 
     usages =
       traffic_pool_ids
-      |> Enum.map(&Map.get(usage_by_pool_id, &1))
+      |> Enum.map(&Map.get(summary_by_pool_id, &1))
       |> Enum.reject(&is_nil/1)
 
     total_tokens = usages |> Enum.map(& &1.total_tokens) |> Enum.sum()
@@ -194,6 +226,7 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
         token_usage: @empty_token_usage,
         token_histogram: [],
         request_histogram: [],
+        histogram_state: :unobserved,
         settled_cost_micros: 0,
         traffic_window: traffic_window,
         traffic_window_label: traffic_window_label,
@@ -207,18 +240,34 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
     end)
   end
 
-  defp put_row_usage(pool_row, usage) do
-    %{
+  defp put_row_usage(pool_row, usage, histogram_by_pool_id) do
+    row = %{
       pool_row
       | request_count: usage.request_count,
         tokens_per_second: usage.tokens_per_second,
         total_tokens: usage.total_tokens,
         latency_ms: usage.latency_ms,
         token_usage: usage.token_usage,
-        token_histogram: usage.token_histogram,
-        request_histogram: usage.request_histogram,
         settled_cost_micros: usage.settled_cost_micros
     }
+
+    case Map.fetch(histogram_by_pool_id, pool_row.pool.id) do
+      {:ok, histogram} ->
+        %{
+          row
+          | token_histogram: histogram.token_histogram,
+            request_histogram: histogram.request_histogram,
+            histogram_state: :ready
+        }
+
+      :error ->
+        %{
+          row
+          | token_histogram: [],
+            request_histogram: [],
+            histogram_state: :unobserved
+        }
+    end
   end
 
   defp filter_pool_rows(pool_rows, filters) do

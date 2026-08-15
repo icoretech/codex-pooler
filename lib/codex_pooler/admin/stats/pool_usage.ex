@@ -22,24 +22,42 @@ defmodule CodexPooler.Admin.Stats.PoolUsage do
           {:as_of, DateTime.t()}
           | {:started_at, DateTime.t()}
           | {:histogram_started_at, DateTime.t()}
+          | {:histogram_pool_ids, [Ecto.UUID.t()]}
           | {:traffic_window, String.t() | atom()}
           | {:histogram_window, String.t() | atom()}
+  @type pool_usage_summary :: %{
+          required(:request_count) => non_neg_integer(),
+          required(:tokens_per_second) => number() | nil,
+          required(:total_tokens) => non_neg_integer(),
+          required(:latency_ms) => non_neg_integer(),
+          required(:token_usage) => map(),
+          required(:settled_cost_micros) => non_neg_integer()
+        }
+  @type pool_usage_histogram :: %{
+          required(:token_histogram) => [map()],
+          required(:request_histogram) => [map()]
+        }
   @type pool_usage_metrics :: %{
           required(:request_count) => non_neg_integer(),
           required(:tokens_per_second) => number() | nil,
           required(:total_tokens) => non_neg_integer(),
           required(:latency_ms) => non_neg_integer(),
           required(:token_usage) => map(),
+          required(:settled_cost_micros) => non_neg_integer(),
           required(:token_histogram) => [map()],
-          required(:request_histogram) => [map()],
-          required(:settled_cost_micros) => non_neg_integer()
+          required(:request_histogram) => [map()]
+        }
+  @type pool_usage_result :: %{
+          required(:summary_by_pool_id) => %{optional(Ecto.UUID.t()) => pool_usage_summary()},
+          required(:histogram_by_pool_id) => %{
+            optional(Ecto.UUID.t()) => pool_usage_histogram()
+          }
         }
 
-  @spec metrics_by_pool_ids([Ecto.UUID.t()], [pool_usage_opt()]) :: %{
-          optional(Ecto.UUID.t()) => pool_usage_metrics()
-        }
-  def metrics_by_pool_ids(pool_ids, opts) when is_list(pool_ids) and is_list(opts) do
+  @spec usage_by_pool_ids([Ecto.UUID.t()], [pool_usage_opt()]) :: pool_usage_result()
+  def usage_by_pool_ids(pool_ids, opts) when is_list(pool_ids) and is_list(opts) do
     pool_ids = pool_ids |> Enum.filter(&is_binary/1) |> Enum.uniq()
+    histogram_pool_ids = eligible_histogram_pool_ids(pool_ids, opts)
     ended_at = Keyword.get_lazy(opts, :as_of, &now/0)
     window = pool_window(opts)
 
@@ -50,35 +68,94 @@ defmodule CodexPooler.Admin.Stats.PoolUsage do
         pool_default_started_at(ended_at, window)
       )
 
+    histogram_started_at = Keyword.get(opts, :histogram_started_at, started_at)
+
+    %{
+      summary_by_pool_id: pool_summaries(pool_ids, started_at, ended_at),
+      histogram_by_pool_id:
+        pool_histograms(
+          histogram_pool_ids,
+          histogram_started_at,
+          ended_at,
+          window
+        )
+    }
+  end
+
+  def usage_by_pool_ids(_pool_ids, _opts),
+    do: %{summary_by_pool_id: %{}, histogram_by_pool_id: %{}}
+
+  @spec metrics_by_pool_ids([Ecto.UUID.t()], [pool_usage_opt()]) :: %{
+          optional(Ecto.UUID.t()) => pool_usage_metrics()
+        }
+  def metrics_by_pool_ids(pool_ids, opts) when is_list(pool_ids) and is_list(opts) do
+    pool_ids = pool_ids |> Enum.filter(&is_binary/1) |> Enum.uniq()
+    result = usage_by_pool_ids(pool_ids, Keyword.put(opts, :histogram_pool_ids, pool_ids))
+
+    Map.new(pool_ids, fn pool_id ->
+      {pool_id,
+       result.summary_by_pool_id
+       |> Map.fetch!(pool_id)
+       |> Map.merge(Map.fetch!(result.histogram_by_pool_id, pool_id))}
+    end)
+  end
+
+  def metrics_by_pool_ids(_pool_ids, _opts), do: %{}
+
+  defp eligible_histogram_pool_ids(pool_ids, opts) do
+    authorized_ids = MapSet.new(pool_ids)
+
+    opts
+    |> Keyword.get(:histogram_pool_ids, [])
+    |> Enum.filter(&is_binary/1)
+    |> Enum.uniq()
+    |> Enum.filter(&MapSet.member?(authorized_ids, &1))
+  end
+
+  defp pool_summaries(pool_ids, started_at, ended_at) do
     request_counts = GatewayReadModel.request_counts_by_pool_ids(pool_ids, started_at, ended_at)
     token_totals = AccountingReporting.token_totals_by_pool_ids(pool_ids, started_at, ended_at)
     latency_totals = GatewayReadModel.latency_totals_by_pool_ids(pool_ids, started_at, ended_at)
     token_usage = AccountingReporting.token_usage_by_pool_ids(pool_ids, started_at, ended_at)
 
-    histogram_started_at =
-      Keyword.get(
-        opts,
-        :histogram_started_at,
-        started_at
-      )
+    cost_micros =
+      AccountingReporting.settled_cost_totals_by_pool_ids(pool_ids, started_at, ended_at)
 
+    Map.new(pool_ids, fn pool_id ->
+      total_tokens = Map.get(token_totals, pool_id, 0)
+      latency_ms = Map.get(latency_totals, pool_id, 0)
+
+      {pool_id,
+       %{
+         request_count: Map.get(request_counts, pool_id, 0),
+         tokens_per_second: pool_tokens_per_second(total_tokens, latency_ms),
+         total_tokens: total_tokens,
+         latency_ms: latency_ms,
+         token_usage: Map.get(token_usage, pool_id, Aggregates.empty_token_usage()),
+         settled_cost_micros: Map.get(cost_micros, pool_id, 0)
+       }}
+    end)
+  end
+
+  defp pool_histograms([], _started_at, _ended_at, _window), do: %{}
+
+  defp pool_histograms(pool_ids, started_at, ended_at, window) do
     settlement_usage_buckets =
       AccountingReporting.settlement_usage_buckets_for_pool_ids(
         pool_ids,
         pool_bucket_granularity(window),
-        histogram_started_at,
+        started_at,
         ended_at
       )
 
     token_histograms = pool_token_histograms(pool_ids, settlement_usage_buckets, ended_at, window)
-    cost_micros = pool_settled_cost_micros(pool_ids, settlement_usage_buckets)
 
     request_histograms =
       pool_request_histograms(
         pool_ids,
         GatewayReadModel.bucketed_request_counts_by_pool_ids(
           pool_ids,
-          histogram_started_at,
+          started_at,
           ended_at,
           pool_bucket_granularity(window)
         ),
@@ -86,26 +163,14 @@ defmodule CodexPooler.Admin.Stats.PoolUsage do
         window
       )
 
-    Enum.into(pool_ids, %{}, fn pool_id ->
-      total_tokens = Map.get(token_totals, pool_id, 0)
-      latency_ms = Map.get(latency_totals, pool_id, 0)
-      tokens_per_second = pool_tokens_per_second(total_tokens, latency_ms)
-
+    Map.new(pool_ids, fn pool_id ->
       {pool_id,
        %{
-         request_count: Map.get(request_counts, pool_id, 0),
-         tokens_per_second: tokens_per_second,
-         total_tokens: total_tokens,
-         latency_ms: latency_ms,
-         token_usage: Map.get(token_usage, pool_id, Aggregates.empty_token_usage()),
          token_histogram: Map.fetch!(token_histograms, pool_id),
-         request_histogram: Map.fetch!(request_histograms, pool_id),
-         settled_cost_micros: Map.fetch!(cost_micros, pool_id)
+         request_histogram: Map.fetch!(request_histograms, pool_id)
        }}
     end)
   end
-
-  def metrics_by_pool_ids(_pool_ids, _opts), do: %{}
 
   defp pool_tokens_per_second(total_tokens, latency_ms) when total_tokens > 0 and latency_ms > 0,
     do: Float.round(total_tokens / (latency_ms / 1000), 2)
@@ -177,15 +242,6 @@ defmodule CodexPooler.Admin.Stats.PoolUsage do
         end)
 
       {pool_id, rows}
-    end)
-  end
-
-  defp pool_settled_cost_micros(pool_ids, settlements) do
-    entries_by_pool_id = Enum.group_by(settlements, & &1.pool_id)
-
-    Map.new(pool_ids, fn pool_id ->
-      entries = Map.get(entries_by_pool_id, pool_id, [])
-      {pool_id, Aggregates.sum_decimal_integer(entries, :settled_cost_micros)}
     end)
   end
 

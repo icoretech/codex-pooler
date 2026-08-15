@@ -1401,6 +1401,102 @@ defmodule CodexPooler.Admin.StatsTest do
     assert Enum.sum(Enum.map(seven_day_metrics[pool.id].request_histogram, & &1.requests)) == 2
   end
 
+  test "pool_usage_by_pool_ids/2 keeps every summary while selecting histogram pools" do
+    # Given
+    pool = pool_fixture(%{slug: "stats-selective-histogram", name: "Selective Histogram"})
+
+    other_pool =
+      pool_fixture(%{slug: "stats-selective-histogram-other", name: "Selective Other"})
+
+    hidden_pool =
+      pool_fixture(%{slug: "stats-selective-histogram-hidden", name: "Selective Hidden"})
+
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{api_key: other_api_key} = active_api_key_fixture(other_pool)
+    %{api_key: hidden_api_key} = active_api_key_fixture(hidden_pool)
+    %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
+
+    %{identity: other_identity, assignment: other_assignment} =
+      upstream_assignment_fixture(other_pool)
+
+    %{identity: hidden_identity, assignment: hidden_assignment} =
+      upstream_assignment_fixture(hidden_pool)
+
+    as_of = ~U[2026-01-10 12:00:00.000000Z]
+    occurred_at = ~U[2026-01-10 11:30:00.000000Z]
+
+    insert_timed_usage!(pool, api_key, assignment, identity, occurred_at, 100)
+
+    insert_timed_usage!(
+      other_pool,
+      other_api_key,
+      other_assignment,
+      other_identity,
+      occurred_at,
+      50
+    )
+
+    insert_timed_usage!(
+      hidden_pool,
+      hidden_api_key,
+      hidden_assignment,
+      hidden_identity,
+      occurred_at,
+      25
+    )
+
+    # When
+    result =
+      Stats.pool_usage_by_pool_ids([pool.id, other_pool.id, hidden_pool.id],
+        as_of: as_of,
+        histogram_pool_ids: [pool.id, pool.id, Ecto.UUID.generate()]
+      )
+
+    # Then
+    assert Map.keys(result.summary_by_pool_id) |> MapSet.new() ==
+             MapSet.new([pool.id, other_pool.id, hidden_pool.id])
+
+    assert result.summary_by_pool_id[pool.id].total_tokens == 100
+    assert result.summary_by_pool_id[other_pool.id].total_tokens == 50
+    assert result.summary_by_pool_id[hidden_pool.id].total_tokens == 25
+    assert Map.keys(result.histogram_by_pool_id) == [pool.id]
+
+    assert Enum.sum(
+             Enum.map(result.histogram_by_pool_id[pool.id].token_histogram, & &1.total_tokens)
+           ) == 100
+
+    assert Enum.sum(
+             Enum.map(result.histogram_by_pool_id[pool.id].request_histogram, & &1.requests)
+           ) == 1
+  end
+
+  test "pool_usage_by_pool_ids/2 bypasses histogram queries when no pool is eligible" do
+    # Given
+    pool = pool_fixture(%{slug: "stats-no-histogram", name: "No Histogram"})
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
+    as_of = ~U[2026-01-10 12:00:00.000000Z]
+    occurred_at = ~U[2026-01-10 11:30:00.000000Z]
+    insert_timed_usage!(pool, api_key, assignment, identity, occurred_at, 100)
+
+    # When
+    {result, query_events} =
+      collect_repo_query_events(fn ->
+        Stats.pool_usage_by_pool_ids([pool.id], as_of: as_of, histogram_pool_ids: [])
+      end)
+
+    # Then
+    assert result.summary_by_pool_id[pool.id].total_tokens == 100
+    assert result.summary_by_pool_id[pool.id].settled_cost_micros == 100
+    assert result.histogram_by_pool_id == %{}
+
+    refute Enum.any?(query_events, &(&1.projection == :settlement_usage_buckets))
+
+    assert query_events
+           |> Enum.filter(&(&1.source == "requests" and &1.command == "SELECT"))
+           |> length() == 1
+  end
+
   test "pool_usage_metrics_by_pool_ids/2 excludes unknown usage estimates from consumption totals" do
     pool = pool_fixture(%{slug: "stats-known-only", name: "Stats Known Only"})
     %{api_key: api_key} = active_api_key_fixture(pool)

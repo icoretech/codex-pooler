@@ -53,6 +53,10 @@ defmodule CodexPooler.Accounting.ReportingTest do
              }
            }
 
+    assert Reporting.settled_cost_totals_by_pool_ids([pool.id], started_at, ended_at) == %{
+             pool.id => 700_000
+           }
+
     settlements = Reporting.settlements_for_pool_ids([pool.id], started_at, ended_at)
 
     assert Enum.sum(Enum.map(settlements, & &1.request_count)) == 2
@@ -308,6 +312,10 @@ defmodule CodexPooler.Accounting.ReportingTest do
     raw_settlements = Reporting.settlements_for_pool_ids([pool.id], started_at, ended_at)
 
     assert Aggregates.sum_decimal_integer(raw_settlements, :settled_cost_micros) == 2
+
+    assert Reporting.settled_cost_totals_by_pool_ids([pool.id], started_at, ended_at) == %{
+             pool.id => 2
+           }
 
     assert [bucket] =
              Reporting.settlement_usage_buckets_for_pool_ids(
