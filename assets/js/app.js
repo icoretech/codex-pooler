@@ -24,6 +24,7 @@ import {
 	observatoryRefreshConnectParams,
 } from "./observatory_refresh.mjs";
 import { HoldToLaunch } from "./hold_to_launch.mjs";
+import { PoolTrafficVisibility } from "./pool_traffic_visibility.mjs";
 import { RelativeCountdown } from "./relative_countdown.mjs";
 import {
 	connectionActionLabel,
@@ -1363,6 +1364,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
 		ModelServingTools,
 		OtpInput,
 		ObservatoryRefresh,
+		PoolTrafficVisibility,
 		QuotaPressureChart,
 		RelativeCountdown,
 		TotpSetupTools,
