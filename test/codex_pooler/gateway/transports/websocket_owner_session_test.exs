@@ -598,6 +598,39 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert_receive {:websocket_owner_frame, "request-result", 1, :complete}
   end
 
+  test "observer-bearing requests return owner acceptance through the call result", context do
+    terminal_frame = terminal_frame("response.completed", "resp_owner_acceptance")
+
+    upstream =
+      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(),
+        messages: [terminal_frame],
+        return_request_result?: true
+      )
+
+    {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    {:ok, downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("owner-acceptance"))
+
+    test_pid = self()
+
+    request = %{
+      websocket_request()
+      | submission_observer: fn ->
+          send(test_pid, {:owner_submission_observer_ran, self()})
+        end
+    }
+
+    assert {:websocket_owner_submission_accepted,
+            {:ok, %{terminal: "response.completed", status: 200}}} =
+             WebsocketOwnerSession.submit_request(owner, downstream, request)
+
+    refute_received {:owner_submission_observer_ran, _observer_pid}
+    assert_receive {:websocket_owner_frame, "owner-acceptance", 1, {:data, ^terminal_frame}}
+    assert_receive {:websocket_owner_frame, "owner-acceptance", 1, :complete}
+  end
+
   test "terminal-first delivery waits for the matching upstream task result", context do
     terminal_frame = terminal_frame("response.completed", "resp_terminal_first")
     controls = WebsocketOwnerNodeHarness.two_sender_controls()

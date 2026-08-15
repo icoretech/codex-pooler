@@ -10,11 +10,14 @@ defmodule CodexPooler.Gateway.WebsocketTest do
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway, as: RuntimeGateway
+  alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, BridgeSessionAlias, CodexSession}
+  alias CodexPooler.Gateway.Transports.Admission
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
+  alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Pools
@@ -119,6 +122,86 @@ defmodule CodexPooler.Gateway.WebsocketTest do
     assert function_exported?(WebsocketOwnerForwarder, :remote_attach_downstream, 2)
     assert function_exported?(WebsocketOwnerForwarder, :remote_attach_downstream, 3)
     assert function_exported?(WebsocketOwnerForwarder, :remote_submit_request, 4)
+  end
+
+  test "socket-only execution tags outer websocket admission rejection as local completion" do
+    previous_settings = Application.get_env(:codex_pooler, OperationalSettings)
+    Admission.reset_for_test()
+
+    Application.put_env(:codex_pooler, OperationalSettings,
+      settings: websocket_saturation_settings()
+    )
+
+    on_exit(fn ->
+      Admission.reset_for_test()
+
+      case previous_settings do
+        nil -> Application.delete_env(:codex_pooler, OperationalSettings)
+        value -> Application.put_env(:codex_pooler, OperationalSettings, value)
+      end
+    end)
+
+    assert {:ok, lease} =
+             Admission.acquire("proxy_websocket", %{request_id: "held-websocket-admission"})
+
+    opts = RequestOptions.for_websocket(%{request_id: "rejected-websocket-admission"})
+
+    assert {:socket_response_result, :local_complete,
+            {:error, %{code: "server_is_overloaded", accounting_disposition: :zero_work}}} =
+             Gateway.run_websocket_response_for_socket(%{}, "{}", opts, fn _frame -> :ok end)
+
+    Admission.release(lease)
+  end
+
+  test "socket-only execution keeps a previous-release remote owner behind its completion barrier" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "unused_remote_result"}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    remote_node = :"codex_pooler@previous-release-owner.example"
+
+    assert {:ok, session} =
+             Gateway.start_codex_session(auth, %{
+               accepted_turn_state: owner_turn_state("previous-release-owner"),
+               owner_instance_id: Atom.to_string(remote_node)
+             })
+
+    forwarder_opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => {:return, :ok}}
+      )
+
+    opts =
+      Gateway.websocket_owner_response_options(
+        %{
+          request_id: "previous-release-owner-request",
+          websocket_owner_forwarder_opts: forwarder_opts
+        },
+        session,
+        session.owner_lease_token,
+        %{pid: self(), epoch: 1, correlation_id: "previous-release-owner-correlation"}
+      )
+
+    payload =
+      Jason.encode!(%{
+        "type" => "response.create",
+        "model" => setup.model.exposed_model_id,
+        "input" => [%{"type" => "message", "role" => "user", "content" => "synthetic"}],
+        "stream" => true,
+        "generate" => true
+      })
+
+    assert {:socket_response_result, :owner_completion_pending, :ok} =
+             Gateway.run_websocket_response_for_socket(auth, payload, opts, fn _frame -> :ok end)
+
+    assert_receive {:websocket_owner_harness_node_call,
+                    %{
+                      node: ^remote_node,
+                      function: :remote_submit_request,
+                      arity: 4,
+                      mode: {:return, :ok}
+                    }}
+
+    assert FakeUpstream.count(upstream) == 0
   end
 
   describe "retarget_websocket_owner_runtime/4" do
@@ -952,6 +1035,20 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       "/v1/responses",
       "/backend-api/codex/responses"
     )
+  end
+
+  defp websocket_saturation_settings do
+    %OperationalSettings{
+      bulkheads:
+        Map.new(Admission.route_classes(), fn route_class ->
+          {route_class, %{max_concurrency: 4, queue_limit: 4, queue_timeout_ms: 1_000}}
+        end)
+        |> Map.put("proxy_websocket", %{
+          max_concurrency: 1,
+          queue_limit: 0,
+          queue_timeout_ms: 1_000
+        })
+    }
   end
 
   defp backend_tool_output_payload(setup, output, call_id) do

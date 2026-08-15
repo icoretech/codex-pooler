@@ -29,9 +29,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
   alias CodexPooler.Gateway.Runtime.Streaming.StreamDispatch
   alias CodexPooler.Gateway.Runtime.Streaming.StreamLifecycle
   alias CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver
+  alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
   alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream
   alias CodexPooler.Repo
+  alias Ecto.Adapters.SQL.Sandbox
 
   @endpoint_path "/backend-api/codex/responses"
   @public_responses_endpoint "/v1/responses"
@@ -265,6 +267,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
     payload = payload(setup)
     request_options = request_options(auth, payload, setup)
+
     body = backend_response_success_sse("resp_transport_resolution")
 
     cases = [
@@ -1197,6 +1200,72 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
     assert Repo.all(from(c in RoutingCircuitState)) == []
   end
 
+  test "misalignment first-event terminal never retries and persists only the fixed accounting message" do
+    source = misalignment_terminal_sse("provider wording must stay private")
+
+    {setup, first_upstream, fallback_upstream} =
+      stream_retry_setup(
+        FakeUpstream.sse_stream([source], done: false),
+        FakeUpstream.sse_stream([])
+      )
+
+    circuit = misalignment_half_open_circuit!(setup)
+
+    log =
+      capture_log(fn ->
+        assert {:ok, stream_conn} = execute_misalignment_stream(setup, "first-event")
+        assert stream_conn.resp_body == source
+      end)
+
+    refute log =~ "provider wording must stay private"
+
+    assert FakeUpstream.count(first_upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 0
+
+    assert_misalignment_stream_finalized!(setup, circuit, "provider wording must stay private")
+  end
+
+  test "misalignment later terminal never retries and persists only the fixed accounting message" do
+    release_ref = make_ref()
+    provider_message = "later provider wording must stay private"
+    source = public_response_created_sse() <> misalignment_terminal_sse(provider_message)
+
+    first_mode =
+      FakeUpstream.delayed_terminal_sse_stream(
+        [public_response_created_sse()],
+        misalignment_terminal_sse(provider_message),
+        notify: self(),
+        release_ref: release_ref
+      )
+
+    {setup, first_upstream, fallback_upstream} =
+      stream_retry_setup(first_mode, FakeUpstream.sse_stream([]))
+
+    circuit = misalignment_half_open_circuit!(setup)
+    parent = self()
+
+    stream_task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+        execute_misalignment_stream(setup, "later-terminal")
+      end)
+
+    assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid, ^release_ref},
+                   1_000
+
+    log =
+      capture_log(fn ->
+        send(upstream_pid, {:fake_upstream_release_timeout, release_ref})
+        assert {:ok, stream_conn} = Task.await(stream_task, 2_000)
+        assert stream_conn.resp_body == source
+      end)
+
+    refute log =~ provider_message
+    assert FakeUpstream.count(first_upstream) == 1
+    assert FakeUpstream.count(fallback_upstream) == 0
+    assert_misalignment_stream_finalized!(setup, circuit, provider_message)
+  end
+
   test "pre-first-event silent stream after headers finalizes idle timeout without retry" do
     release_ref = make_ref()
 
@@ -1782,6 +1851,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
   end
 
   for {case_name, health_neutral_code, health_headers} <- [
+        {"misalignment_policy_violation", "misalignment_policy_violation", %{}},
         {"server_error", "server_error", %{}},
         {"overloaded_error", "overloaded_error", %{}},
         {"server_is_overloaded", "server_is_overloaded", %{}},
@@ -1875,7 +1945,21 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
       assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
       assert attempt.status == "failed"
       assert attempt.network_error_code == health_neutral_code
-      assert attempt.response_metadata["upstream_error_param"] == "reasoning.summary"
+
+      if health_neutral_code == MisalignmentPolicyViolation.code() do
+        assert attempt.error_message == MisalignmentPolicyViolation.fallback_message()
+        refute Map.has_key?(attempt.response_metadata, "upstream_error_param")
+
+        assert Repo.aggregate(
+                 from(entry in CodexPooler.Accounting.LedgerEntry,
+                   where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+                 ),
+                 :count,
+                 :id
+               ) == 1
+      else
+        assert attempt.response_metadata["upstream_error_param"] == "reasoning.summary"
+      end
 
       assert Repo.all(from(d in BridgeDemotion)) == []
 
@@ -1960,6 +2044,111 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamLifecycleTest do
   defp backend_response_success_sse(response_id) do
     ~s(event: response.completed\ndata: {"type":"response.completed","response":{"id":"#{response_id}","usage":{"input_tokens":4,"output_tokens":3,"total_tokens":7}}}\n\n) <>
       "data: [DONE]\n\n"
+  end
+
+  defp misalignment_terminal_sse(message) do
+    error = %{
+      "code" => MisalignmentPolicyViolation.code(),
+      "message" => message,
+      "param" => "private.param",
+      "provider_sibling" => "private-sibling"
+    }
+
+    ~s(event: response.failed\ndata: #{Jason.encode!(%{"type" => "response.failed", "error" => error, "response" => %{"status" => "failed", "error" => error}})}\n\n)
+  end
+
+  defp misalignment_half_open_circuit!(setup) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    %RoutingCircuitState{
+      pool_id: setup.pool.id,
+      pool_upstream_assignment_id: setup.assignment.id,
+      upstream_identity_id: setup.identity.id,
+      model_identifier: setup.model.exposed_model_id,
+      route_class: "proxy_stream",
+      status: "half_open",
+      reason_code: "upstream_5xx",
+      failure_count: 3,
+      success_count: 0,
+      opened_at: DateTime.add(now, -120, :second),
+      half_opened_at: now,
+      metadata: %{"probe_in_flight_count" => 0},
+      created_at: DateTime.add(now, -120, :second),
+      updated_at: now
+    }
+    |> Repo.insert!()
+  end
+
+  defp execute_misalignment_stream(setup, request_suffix) do
+    with {:ok, stream} <- prepare_misalignment_stream(setup, request_suffix) do
+      run_misalignment_stream(stream)
+    end
+  end
+
+  defp prepare_misalignment_stream(setup, request_suffix) do
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    request_payload = payload(setup)
+
+    assert {:ok, %{stream: stream}} =
+             Gateway.execute(
+               auth,
+               @endpoint_path,
+               request_payload,
+               RequestOptions.build(
+                 %{
+                   request_id: deterministic_rotation_seed(2, 0),
+                   upstream_endpoint: @endpoint_path,
+                   correlation_id:
+                     "misalignment-#{request_suffix}-#{System.unique_integer([:positive])}"
+                 },
+                 @endpoint_path,
+                 request_payload
+               )
+             )
+
+    {:ok, stream}
+  end
+
+  defp run_misalignment_stream(stream) do
+    stream_conn =
+      Phoenix.ConnTest.build_conn()
+      |> Plug.Conn.put_resp_content_type("text/event-stream")
+      |> Plug.Conn.send_chunked(200)
+
+    stream.(stream_conn)
+  end
+
+  defp assert_misalignment_stream_finalized!(setup, circuit, provider_message) do
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert request.retry_count == 0
+    assert request.last_error_code == MisalignmentPolicyViolation.code()
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    refute attempt.retryable
+    assert attempt.network_error_code == MisalignmentPolicyViolation.code()
+    assert attempt.error_message == MisalignmentPolicyViolation.fallback_message()
+    refute Map.has_key?(attempt.response_metadata, "upstream_error_param")
+
+    refute inspect({request.request_metadata, attempt.response_metadata}) =~ provider_message
+
+    assert Repo.aggregate(
+             from(entry in CodexPooler.Accounting.LedgerEntry,
+               where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+             ),
+             :count,
+             :id
+           ) == 1
+
+    assert Repo.all(from(d in BridgeDemotion)) == []
+
+    updated = Repo.reload!(circuit)
+    assert updated.status == "half_open"
+    assert updated.reason_code == "upstream_5xx"
+    assert updated.failure_count == 3
+    assert updated.success_count == 0
+    assert updated.metadata["probe_in_flight_count"] == 0
   end
 
   defp public_response_created_sse do

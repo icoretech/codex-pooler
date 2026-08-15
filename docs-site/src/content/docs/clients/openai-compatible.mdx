@@ -192,7 +192,9 @@ annotation shapes are rejected before dispatch rather than filtered.
 
 Provider clients that expose an OpenAI compaction option can use the normal
 `/v1/responses` route. For example, Vercel AI SDK can append the closed trigger
-shape with `providerOptions.openai.compactionTrigger: true`:
+shape with `providerOptions.openai.compactionTrigger: true`. This requires
+`@ai-sdk/openai` 4.0.42 or later, where that option serializes the terminal
+trigger:
 
 ```ts
 import {
@@ -229,6 +231,12 @@ content out of durable metadata. Non-terminal, duplicate, hidden-only, or
 otherwise malformed triggers return a sanitized `400` before upstream dispatch.
 This does not enable direct `POST /v1/responses/compact`.
 
+On a narrow Responses websocket turn, the trigger first retains the normal
+`proxy_websocket` admission, then receives nested `proxy_compact` admission
+before compact execution. Local websocket completion returns the same compact
+terminal item as the HTTP JSON and SSE surfaces. This does not change legacy
+Codex backend compaction behavior.
+
 ### Replay a remote-compaction item
 
 When a remote compaction response supplies an encrypted `type: "compaction"`
@@ -238,11 +246,14 @@ omit `previous_response_id` rather than using the compact response id. Codex
 Pooler preserves accepted compaction items and their input order over collected
 JSON, public SSE, and narrow Responses websocket turns.
 
-The stable public replay fields are `type`, a nonblank string
-`encrypted_content`, and optional `id`. The `id` key may be absent, a string, or
-explicitly `null`; key presence is preserved exactly. Unknown compaction fields
-or malformed values are rejected before upstream dispatch. Treat encrypted
-content as opaque and do not log or persist it in application telemetry.
+The stable public replay fields are `type`, a nonblank opaque
+`encrypted_content` string, and optional `id`. The `id` key may be absent, a
+string, or explicitly `null`; key presence is preserved exactly. Each public
+terminal carries the identical normalized item. Native metadata and unknown
+fields are stripped from public compact output, while malformed upstream compact
+output returns a sanitized `502`. Unknown replay fields or malformed values are
+rejected before upstream dispatch. Treat encrypted content as opaque and do not
+log or persist it in application telemetry.
 
 This replay path is separate from the explicit terminal-trigger bridge.
 `POST /v1/responses/compact` remains unsupported.
@@ -360,6 +371,15 @@ is an empty string, and `instructions`, `metadata`, `temperature`, and `top_p` a
 Top-level and nested errors are sanitized independently and are never copied between locations. A safe code remains
 unchanged at its original location, while every invalid code becomes `upstream_error`; message and type remain the
 fixed `upstream request failed` and `server_error` values.
+
+One narrow exception applies to `misalignment_policy_violation`. An eligible
+direct `400` or `403`, or an exact terminal SSE or websocket failure, is
+health-neutral and non-retryable. Public clients receive the exact code,
+`invalid_request_error`, and the nonblank provider message when available, or a
+fixed safe fallback when it is blank. The error never includes a provider
+`param`, body, or sibling fields. Durable accounting and logs retain only the
+exact code, fixed accounting text, and bounded facts. Every other provider error
+continues to use the generic redaction above.
 
 Schema-strict clients that enforce the platform enum cannot accept every relayed Codex-backend code. In
 `openai-python`, leave `_strict_response_validation` at its default `false` when using this compatibility surface.

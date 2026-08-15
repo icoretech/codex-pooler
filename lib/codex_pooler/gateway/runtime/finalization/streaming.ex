@@ -16,6 +16,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   alias CodexPooler.Gateway.Runtime.Routing.DispatchLifecycle
   alias CodexPooler.Gateway.Runtime.Streaming.{DownstreamStream, StreamUsageObserver}
   alias CodexPooler.Gateway.Runtime.Streaming.Types, as: StreamTypes
+  alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
   alias CodexPooler.Gateway.Transports.ModelUnavailability
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream
@@ -169,13 +170,14 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
               context,
               response.status,
               code,
-              "upstream stream returned first event #{code}",
+              terminal_failure_message(code, "upstream stream returned first event #{code}"),
               first_event_attempt_metadata(
                 response_context,
                 websocket_attempt_metadata,
                 failure,
                 "first_event_stream_failure"
               )
+              |> terminal_failure_attempt_metadata(code)
             )
           )
 
@@ -234,6 +236,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
             code
           )
           |> Metadata.maybe_put_upstream_error_param(terminal_failure)
+          |> terminal_failure_attempt_metadata(code)
           |> TransportFailureReason.maybe_put_upstream_stream_interrupted_metadata(reason, body)
           |> merge_websocket_transport_failure(
             websocket_attempt_metadata.transport_failure,
@@ -249,7 +252,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
               context,
               response.status,
               code,
-              Metadata.safe_reason(reason),
+              terminal_failure_message(code, Metadata.safe_reason(reason)),
               attempt_metadata
             )
           )
@@ -459,6 +462,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
       "invalid_request",
       "invalid_request_error",
       "invalid_previous_response_id",
+      "misalignment_policy_violation",
       "missing_required_parameter",
       "overloaded_error",
       "previous_response_not_found",
@@ -485,6 +489,18 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
       "workspace_owner_credits_depleted",
       "workspace_owner_usage_limit_reached"
     ]
+  end
+
+  defp terminal_failure_message(code, default) do
+    if code == MisalignmentPolicyViolation.code(),
+      do: MisalignmentPolicyViolation.fallback_message(),
+      else: default
+  end
+
+  defp terminal_failure_attempt_metadata(metadata, code) do
+    if code == MisalignmentPolicyViolation.code(),
+      do: Map.delete(metadata, "upstream_error_param"),
+      else: metadata
   end
 
   defp terminal_failure_reason({:terminal_stream_failure, %{} = failure}), do: failure

@@ -37,6 +37,12 @@ assert.equal(classifierSourcePath.endsWith(classifierSourceFile), true);
 
 const adapterSourceBytes = await readFile(resolve(adapterSourcePath));
 const classifierSourceBytes = await readFile(resolve(classifierSourcePath));
+
+if (check) {
+  await verifyPinnedArtifacts({ adapterSourceBytes, classifierSourceBytes });
+  process.exit(0);
+}
+
 const adapterExtraction = extractAdapter(adapterSourceBytes.toString("utf8"));
 const classifierExtraction = extractClassifier(classifierSourceBytes.toString("utf8"));
 
@@ -329,4 +335,37 @@ function sourceRecord({
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
+}
+
+async function verifyPinnedArtifacts({ adapterSourceBytes, classifierSourceBytes }) {
+  const provenance = JSON.parse(await readFile(provenancePath, "utf8"));
+  const [adapterSource, classifierSource] = provenance.sources;
+
+  assert.equal(sha256(adapterSourceBytes), adapterSource.source_file_sha256);
+  assert.equal(sha256(classifierSourceBytes), classifierSource.source_file_sha256);
+
+  const adapterText = adapterSourceBytes.toString("utf8");
+  const adapterSpan = adapterText.slice(adapterSource.byte_span.start, adapterSource.byte_span.end);
+  assert.equal(adapterSpan, 'case "error":\n      return Effect.fail(event.error)');
+  assert.equal(sha256(adapterSpan), adapterSource.byte_span_sha256);
+
+  const classifierText = classifierSourceBytes.toString("utf8");
+  const classifierSpan = classifierSource.byte_span
+    .map(({ start, end }) => classifierText.slice(start, end))
+    .join("\n\n");
+  assert.equal(sha256(classifierSpan), classifierSource.byte_span_sha256);
+  assert.match(classifierSpan, /^function json\(input: unknown\)/);
+  assert.match(classifierSpan, /export function parseStreamError\(input: unknown\)/);
+  assert.match(classifierSpan, /if \(body.type !== "error"\) return/);
+  assert.match(classifierSpan, /case "server_error":/);
+  assert.match(classifierSpan, /isRetryable: true/);
+
+  assert.equal(
+    sha256(await readFile(adapterGeneratedPath)),
+    adapterSource.generated_file_sha256,
+  );
+  assert.equal(
+    sha256(await readFile(classifierGeneratedPath)),
+    classifierSource.generated_file_sha256,
+  );
 }

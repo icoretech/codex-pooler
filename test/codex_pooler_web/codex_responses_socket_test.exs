@@ -676,6 +676,97 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert :queue.len(next_state.queued_response_payloads) == 1
   end
 
+  test "owner socket local completion closes the turn without an owner complete frame" do
+    task_pid = self()
+
+    state =
+      public_turn_state(task_pid, %{
+        websocket_owner_downstream: %{
+          pid: self(),
+          epoch: 1,
+          correlation_id: "corr-local-completion"
+        }
+      })
+
+    assert {:ok, next_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_done, task_pid, {:socket_response_result, :local_complete, :ok}},
+               state
+             )
+
+    assert next_state.public_response_task_pid == nil
+    refute next_state.public_turn_task_done?
+    refute next_state.public_turn_owner_complete?
+  end
+
+  test "owner socket submitted completion keeps the real owner barrier" do
+    task_pid = self()
+
+    state =
+      public_turn_state(task_pid, %{
+        websocket_owner_downstream: %{
+          pid: self(),
+          epoch: 1,
+          correlation_id: "corr-owner-submitted"
+        }
+      })
+
+    assert {:ok, next_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_done, task_pid,
+                {:socket_response_result, :owner_completion_pending, :ok}},
+               state
+             )
+
+    assert next_state.public_response_task_pid == task_pid
+    assert next_state.public_turn_task_done?
+    refute next_state.public_turn_owner_complete?
+  end
+
+  test "legacy remote owner acceptance keeps turn two queued until matching owner complete" do
+    first_task_pid = owner_turn_pid()
+    on_exit(fn -> send(first_task_pid, :stop) end)
+    correlation_id = "corr-legacy-owner-pending"
+    epoch = 3
+    queued_payload = ~s({"type":"response.create","model":"gpt-test","input":"queued"})
+
+    state =
+      public_turn_state(first_task_pid, %{
+        auth: nil,
+        websocket_owner_downstream: %{
+          pid: self(),
+          epoch: epoch,
+          correlation_id: correlation_id,
+          active_turn_reconnect?: false
+        },
+        queued_response_payloads: :queue.from_list([queued_payload])
+      })
+
+    assert {:ok, waiting_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_done, first_task_pid,
+                {:socket_response_result, :owner_completion_pending, :ok}},
+               state
+             )
+
+    assert waiting_state.public_response_task_pid == first_task_pid
+    assert waiting_state.public_turn_task_done?
+    refute waiting_state.public_turn_owner_complete?
+    assert :queue.len(waiting_state.queued_response_payloads) == 1
+
+    assert {:ok, turn_two_state} =
+             CodexResponsesSocket.handle_info(
+               {:websocket_owner_frame, correlation_id, epoch, first_task_pid, :complete},
+               waiting_state
+             )
+
+    second_task_pid = turn_two_state.public_response_task_pid
+    assert is_pid(second_task_pid)
+    refute second_task_pid == first_task_pid
+    assert :queue.is_empty(turn_two_state.queued_response_payloads)
+    cleanup_response_task(turn_two_state, second_task_pid)
+  end
+
   test "public owner completion barrier closes in either signal order" do
     correlation_id = "corr-public-barrier"
     epoch = 4

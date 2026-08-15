@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
   use ExUnit.Case, async: true
 
+  alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
   alias CodexPooler.Gateway.Websocket.Adapter
@@ -1031,6 +1032,46 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
       refute wire =~ "nested_provider_type"
       refute wire =~ "top provider message"
       refute wire =~ "nested provider message"
+    end
+  end
+
+  test "public SSE exposes only the safe misalignment code and normalized message" do
+    for {message, expected_message} <- [
+          {"provider-safe wording", "provider-safe wording"},
+          {" \t ", MisalignmentPolicyViolation.fallback_message()}
+        ] do
+      private_error = %{
+        "code" => MisalignmentPolicyViolation.code(),
+        "message" => message,
+        "param" => "private.param",
+        "provider_sibling" => "private-sibling"
+      }
+
+      terminal = %{
+        "type" => "response.failed",
+        "error" => private_error,
+        "response" => %{
+          "id" => "resp_misalignment_safe",
+          "status" => "failed",
+          "error" => private_error,
+          "provider_sibling" => "private-response-sibling"
+        }
+      }
+
+      {wire, decoded} = normalize_public_wire(:sse, terminal)
+
+      expected_error = %{
+        "code" => MisalignmentPolicyViolation.code(),
+        "message" => expected_message,
+        "type" => "invalid_request_error"
+      }
+
+      assert decoded["error"] == expected_error
+      assert decoded["response"]["error"] == expected_error
+      refute Map.has_key?(decoded["error"], "param")
+      refute wire =~ "private.param"
+      refute wire =~ "private-sibling"
+      refute wire =~ "private-response-sibling"
     end
   end
 

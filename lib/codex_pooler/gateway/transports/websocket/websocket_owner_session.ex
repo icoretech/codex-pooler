@@ -57,6 +57,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         }
 
   @type start_result :: {:ok, pid()} | {:ok, pid(), :existing} | {:error, term()}
+  @type request_result ::
+          :ok
+          | {:ok, term()}
+          | {:error, UpstreamWebsocketSession.request_failure()}
+          | {:error, WebsocketOwnerContract.owner_error() | term()}
+  @type submitted_request_result ::
+          request_result() | {:websocket_owner_submission_accepted, request_result()}
 
   @type owner_status :: %{
           required(:codex_session_id) => binary(),
@@ -207,10 +214,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   @spec submit_request(GenServer.server(), downstream(), UpstreamWebsocketSession.Request.t()) ::
-          :ok
-          | {:ok, term()}
-          | {:error, UpstreamWebsocketSession.request_failure()}
-          | {:error, WebsocketOwnerContract.owner_error() | term()}
+          submitted_request_result()
   def submit_request(owner, downstream, %UpstreamWebsocketSession.Request{} = request)
       when is_map(downstream) do
     submit_upstream(owner, downstream, request)
@@ -414,7 +418,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
           pending_result: nil,
           terminal_delivery_timeout: nil,
           terminal_delivery_timer_ref: nil,
-          output_commit_probe: nil
+          output_commit_probe: nil,
+          submission_observed?: submission_observer?(upstream_payload)
         }
 
         {:noreply, %{state | active_turn: active_turn}}
@@ -649,6 +654,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     end)
   end
 
+  defp submission_observer?(%UpstreamWebsocketSession.Request{submission_observer: observer}),
+    do: is_function(observer, 0)
+
+  defp submission_observer?(_upstream_payload), do: false
+
   defp handle_upstream_frame(state, payload, terminal?) do
     case classify_terminal_delivery_frame(state.active_turn.terminal_forwarded?, terminal?) do
       :duplicate_terminal ->
@@ -739,6 +749,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   defp send_downstream_message(pid, message) do
     send(pid, message)
     :ok
+  end
+
+  defp reply_active_turn(
+         %{
+           active_turn: %{reply_to: reply_to, submission_observed?: true}
+         },
+         result
+       ) do
+    GenServer.reply(reply_to, {:websocket_owner_submission_accepted, result})
   end
 
   defp reply_active_turn(%{active_turn: %{reply_to: reply_to}}, result) do

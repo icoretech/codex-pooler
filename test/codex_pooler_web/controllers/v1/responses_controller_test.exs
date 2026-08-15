@@ -2468,7 +2468,12 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
             "output" => [
               %{
                 "type" => "compaction",
-                "encrypted_content" => "synthetic-public-trigger-encrypted-#{stream?}"
+                "encrypted_content" => "synthetic-public-trigger-encrypted-#{stream?}",
+                "id" => nil,
+                "internal_chat_message_metadata_passthrough" => %{
+                  "turn_id" => "native-public-turn-must-drop"
+                },
+                "summary" => "plaintext-public-summary-must-drop"
               }
             ],
             "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8}
@@ -2484,37 +2489,66 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         |> post("/v1/responses", %{
           "model" => setup.model.exposed_model_id,
           "input" => public_compaction_trigger_input("synthetic public compact #{stream?}"),
-          "stream" => stream?
+          "stream" => stream?,
+          "include" => ["reasoning.encrypted_content"],
+          "store" => false,
+          "prompt_cache_key" => "public-compaction-cache-#{stream?}",
+          "prompt_cache_options" => %{"mode" => "explicit", "ttl" => "30m"}
         })
 
-      if stream? do
-        assert response.status == 200
-        assert [content_type] = get_resp_header(response, "content-type")
-        assert content_type =~ "text/event-stream"
+      public_items =
+        if stream? do
+          assert response.status == 200
+          assert [content_type] = get_resp_header(response, "content-type")
+          assert content_type =~ "text/event-stream"
 
-        events = public_sse_events(response.resp_body)
+          events = public_sse_events(response.resp_body)
 
-        assert Enum.map(events, & &1["event"]) == [
-                 "response.output_item.done",
-                 "response.completed"
-               ]
+          assert Enum.map(events, & &1["event"]) == [
+                   "response.output_item.done",
+                   "response.completed"
+                 ]
 
-        assert get_in(List.last(events), ["data", "response", "object"]) == "response"
+          done_item = get_in(List.first(events), ["data", "item"])
+          completed_item = List.first(get_in(List.last(events), ["data", "response", "output"]))
+          assert done_item == completed_item
+          assert get_in(List.last(events), ["data", "response", "object"]) == "response"
 
-        assert response.resp_body =~ "data: [DONE]\n\n"
-      else
-        assert %{
-                 "id" => ^response_id,
-                 "object" => "response",
-                 "status" => "completed",
-                 "output" => [%{"type" => "compaction"}],
-                 "usage" => %{"total_tokens" => 8}
-               } = json_response(response, 200)
+          assert response.resp_body =~ "data: [DONE]\n\n"
+          [done_item, completed_item]
+        else
+          assert %{
+                   "id" => ^response_id,
+                   "object" => "response",
+                   "status" => "completed",
+                   "output" => [item],
+                   "usage" => %{"total_tokens" => 8}
+                 } = json_response(response, 200)
+
+          [item]
+        end
+
+      for item <- public_items do
+        assert item == %{
+                 "type" => "compaction",
+                 "encrypted_content" => "synthetic-public-trigger-encrypted-#{stream?}",
+                 "id" => nil
+               }
+
+        assert {:ok, %{payload: %{"input" => [^item]}}} =
+                 Responses.coerce(%{
+                   "model" => setup.model.exposed_model_id,
+                   "input" => [item]
+                 })
       end
 
       assert [captured] = FakeUpstream.requests(upstream)
       assert captured.path == "/backend-api/codex/responses"
       refute Map.has_key?(captured.json, "stream")
+      refute Map.has_key?(captured.json, "include")
+      refute Map.has_key?(captured.json, "store")
+      refute Map.has_key?(captured.json, "prompt_cache_options")
+      assert captured.json["prompt_cache_key"] == "public-compaction-cache-#{stream?}"
       assert List.last(captured.json["input"]) == %{"type" => "compaction_trigger"}
 
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -2522,11 +2556,30 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert request.transport == "http_compact_json"
       assert request.status == "succeeded"
 
+      assert get_in(request.request_metadata, ["reservation_snapshot_inputs", "route_class"]) ==
+               "proxy_compact"
+
       assert get_in(request.request_metadata, ["openai_compatibility", "source_endpoint"]) ==
                "/v1/responses"
 
       assert get_in(request.request_metadata, ["openai_compatibility", "translated_endpoint"]) ==
                "/backend-api/codex/responses"
+
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.transport == "http_compact_json"
+      assert attempt.status == "succeeded"
+
+      assert Repo.aggregate(
+               from(entry in LedgerEntry,
+                 where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+               ),
+               :count
+             ) == 1
+
+      persisted = inspect({request, attempt, RequestLogs.list(setup.pool)})
+      refute persisted =~ "synthetic-public-trigger-encrypted-#{stream?}"
+      refute persisted =~ "native-public-turn-must-drop"
+      refute persisted =~ "plaintext-public-summary-must-drop"
     end
   end
 
@@ -2628,6 +2681,77 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert FakeUpstream.count(upstream) == 0
     assert Repo.aggregate(Request, :count) == 0
     assert Repo.aggregate(Attempt, :count) == 0
+  end
+
+  test "POST /v1/responses finalizes invalid selected compaction output across JSON and SSE", %{
+    conn: conn
+  } do
+    invalid_items = [
+      %{"type" => "compaction"},
+      %{"type" => "compaction", "encrypted_content" => ""},
+      %{"type" => "compaction", "encrypted_content" => " \t\n"}
+    ]
+
+    for stream? <- [false, true], invalid_item <- invalid_items do
+      encrypted_later =
+        "synthetic-invalid-public-later-#{stream?}-#{System.unique_integer([:positive])}"
+
+      upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "output" => [
+              invalid_item,
+              %{"type" => "compaction", "encrypted_content" => encrypted_later}
+            ]
+          })
+        )
+
+      setup = gateway_setup(upstream, compact?: true)
+
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => public_compaction_trigger_input("invalid public compact #{stream?}"),
+          "stream" => stream?
+        })
+
+      assert %{
+               "error" => %{
+                 "code" => "invalid_compaction_response",
+                 "message" =>
+                   "upstream compact response did not include encrypted compaction content",
+                 "type" => "invalid_request_error"
+               }
+             } = json_response(response, 502)
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.endpoint == "/backend-api/codex/responses/compact"
+      assert request.status == "failed"
+      assert request.completed_at
+      assert request.last_error_code == "invalid_compaction_response"
+
+      assert get_in(request.request_metadata, ["reservation_snapshot_inputs", "route_class"]) ==
+               "proxy_compact"
+
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.status == "failed"
+      assert attempt.completed_at
+      assert attempt.network_error_code == "invalid_compaction_response"
+
+      assert Repo.aggregate(
+               from(entry in LedgerEntry,
+                 where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+               ),
+               :count
+             ) == 1
+
+      persisted = inspect({request, attempt, RequestLogs.list(setup.pool)})
+      refute response.resp_body =~ encrypted_later
+      refute persisted =~ encrypted_later
+    end
   end
 
   test "POST /v1/responses preserves verified compaction variants across JSON and SSE", %{

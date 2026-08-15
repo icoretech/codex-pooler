@@ -36,6 +36,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   alias CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
 
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request,
     as: UpstreamWebsocketRequest
@@ -761,11 +762,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
       )
 
+    assignment_ids = [setup.assignment.id, fallback.assignment.id]
+
     request_id =
-      seed_preferring_assignment(
-        [setup.assignment.id, fallback.assignment.id],
-        setup.assignment.id
-      )
+      Enum.find_value(1..500, fn index ->
+        seed = "native-policy-reuse-bridge-ring-seed-#{index}"
+        preferred = Enum.max_by(assignment_ids, &rendezvous_score(seed, &1))
+
+        if preferred == setup.assignment.id, do: seed
+      end) || raise "missing native policy routing seed"
 
     scope = model_serving_scope()
     revision = set_model_serving_mode!(scope, setup, "lite")
@@ -853,10 +858,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       )
 
     request_id =
-      seed_preferring_assignment(
-        [setup.assignment.id, fallback.assignment.id],
-        setup.assignment.id
-      )
+      Enum.find_value(1..500, fn index ->
+        seed = "bridge-ring-request-seed-#{index}"
+
+        preferred =
+          [setup.assignment.id, fallback.assignment.id]
+          |> Enum.max_by(&rendezvous_score(seed, &1))
+
+        if preferred == setup.assignment.id, do: seed
+      end) || raise "missing bridge ring request seed for #{setup.assignment.id}"
 
     scope = model_serving_scope()
     revision = set_model_serving_mode!(scope, setup, "full")
@@ -9647,6 +9657,310 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert Repo.all(from(c in RoutingCircuitState)) == []
   end
 
+  test "native websocket remains reusable after a neutral misalignment policy terminal" do
+    previous_owner_forwarding =
+      Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+
+    Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
+
+    on_exit(fn ->
+      stop_registered_websocket_owner_sessions()
+
+      case previous_owner_forwarding do
+        nil ->
+          Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+
+        value ->
+          Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
+      end
+    end)
+
+    provider_wording = "Provider policy wording remains transient."
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.sse_stream(
+             [
+               {"response.failed",
+                %{
+                  "type" => "response.failed",
+                  "sequence_number" => 9,
+                  "headers" => %{"authorization" => "must-not-survive"},
+                  "response" => %{
+                    "id" => "resp_ws_policy_terminal",
+                    "status" => "failed",
+                    "error" => %{
+                      "type" => "provider_policy_type",
+                      "code" => "misalignment_policy_violation",
+                      "message" => provider_wording,
+                      "param" => "provider.policy.param",
+                      "provider_sibling" => "native-sentinel"
+                    }
+                  }
+                }}
+             ],
+             done: false
+           ),
+           FakeUpstream.json_response(%{
+             "id" => "resp_ws_after_policy_terminal",
+             "object" => "response",
+             "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+           })
+         ]}
+      )
+
+    fallback_upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_ws_policy_fallback_must_not_run",
+          "object" => "response"
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    fallback =
+      gateway_upstream(setup.pool, fallback_upstream, "upstream-token-policy-fallback",
+        compact?: false
+      )
+
+    prime_routing_quota!(fallback.identity)
+    use_routing_strategy!(setup.pool, "bridge_ring", 2)
+
+    setup.pool
+    |> Pools.ensure_routing_settings()
+    |> Ecto.Changeset.change(%{sticky_websocket_sessions: false})
+    |> Repo.update!()
+
+    setup =
+      Map.put(
+        setup,
+        :model,
+        put_model_source_assignments!(setup.model, [setup.assignment, fallback.assignment])
+      )
+
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    circuit =
+      %RoutingCircuitState{
+        pool_id: setup.pool.id,
+        pool_upstream_assignment_id: setup.assignment.id,
+        upstream_identity_id: setup.assignment.upstream_identity_id,
+        model_identifier: setup.model.exposed_model_id,
+        route_class: "proxy_websocket",
+        status: "half_open",
+        reason_code: "upstream_5xx",
+        failure_count: 3,
+        success_count: 0,
+        opened_at: DateTime.add(now, -120, :second),
+        half_opened_at: now,
+        metadata: %{"probe_in_flight_count" => 0},
+        created_at: DateTime.add(now, -120, :second),
+        updated_at: now
+      }
+      |> Repo.insert!()
+
+    request_id =
+      Enum.find_value(1..500, fn index ->
+        seed = "native-policy-reuse-bridge-ring-seed-#{index}"
+
+        preferred =
+          [setup.assignment.id, fallback.assignment.id]
+          |> Enum.max_by(&rendezvous_score(seed, &1))
+
+        if preferred == setup.assignment.id, do: seed
+      end) || raise "missing native policy routing seed for #{setup.assignment.id}"
+
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref, _response_headers} =
+      public_websocket_connect_with_request_headers!(
+        port,
+        setup,
+        "native-policy-reuse-#{System.unique_integer([:positive])}",
+        "/backend-api/codex/responses",
+        [{"x-request-id", request_id}]
+      )
+
+    try do
+      first_payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => native_text_input("synthetic policy terminal"),
+          "stream" => true,
+          "generate" => true
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, first_payload)
+      {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{
+               "type" => "response.failed",
+               "sequence_number" => 9,
+               "response" => %{
+                 "id" => "resp_ws_policy_terminal",
+                 "status" => "failed",
+                 "error" => %{
+                   "type" => "provider_policy_type",
+                   "code" => "misalignment_policy_violation",
+                   "message" => ^provider_wording,
+                   "param" => "provider.policy.param",
+                   "provider_sibling" => "native-sentinel"
+                 }
+               }
+             } = Jason.decode!(frame)
+
+      refute frame =~ "authorization"
+
+      assert_receive {Events,
+                      %{
+                        reason: "request_finalized",
+                        payload: %{
+                          "request_id" => failed_request_id,
+                          "status" => "failed"
+                        }
+                      }},
+                     @websocket_frame_timeout
+
+      neutral = Repo.reload!(circuit)
+      assert neutral.status == "half_open"
+      assert neutral.reason_code == "upstream_5xx"
+      assert neutral.failure_count == 3
+      assert neutral.success_count == 0
+      assert neutral.metadata["probe_in_flight_count"] == 0
+
+      second_payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => native_text_input("synthetic ordinary turn after policy terminal"),
+          "stream" => true,
+          "generate" => true
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, second_payload)
+      {_conn, _websocket, second_frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{"id" => "resp_ws_after_policy_terminal"} = Jason.decode!(second_frame)
+
+      assert_receive {Events,
+                      %{
+                        reason: "request_finalized",
+                        payload: %{
+                          "request_id" => succeeded_request_id,
+                          "status" => "succeeded"
+                        }
+                      }},
+                     @websocket_frame_timeout
+
+      barrier_payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => [],
+          "stream" => true,
+          "generate" => false
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, barrier_payload)
+      {conn, websocket, barrier_created} = public_websocket_receive_text!(conn, websocket, ref)
+
+      {_conn, _websocket, barrier_completed} =
+        public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{"type" => "response.created"} = Jason.decode!(barrier_created)
+      assert %{"type" => "response.completed"} = Jason.decode!(barrier_completed)
+
+      assert [first_upstream_request, second_upstream_request] = FakeUpstream.requests(upstream)
+      assert first_upstream_request.method == "WEBSOCKET"
+      assert second_upstream_request.method == "WEBSOCKET"
+
+      assert first_upstream_request.websocket_connection_id ==
+               second_upstream_request.websocket_connection_id
+
+      assert FakeUpstream.websocket_connection_count(upstream) == 1
+      assert FakeUpstream.count(fallback_upstream) == 0
+
+      assert [failed_request, succeeded_request] =
+               Repo.all(
+                 from(request in Request,
+                   where: request.pool_id == ^setup.pool.id,
+                   order_by: [asc: request.admitted_at]
+                 )
+               )
+
+      assert failed_request.id == failed_request_id
+      assert failed_request.status == "failed"
+      assert failed_request.retry_count == 0
+      assert failed_request.last_error_code == "misalignment_policy_violation"
+
+      assert succeeded_request.id == succeeded_request_id
+      assert succeeded_request.status == "succeeded"
+      assert succeeded_request.retry_count == 0
+      assert succeeded_request.last_error_code == nil
+
+      assert [failed_attempt] =
+               Repo.all(from(a in Attempt, where: a.request_id == ^failed_request.id))
+
+      assert failed_attempt.pool_upstream_assignment_id == setup.assignment.id
+      assert failed_attempt.status == "failed"
+      refute failed_attempt.retryable
+      assert failed_attempt.network_error_code == "misalignment_policy_violation"
+
+      assert failed_attempt.error_message ==
+               "This request was blocked due to a misalignment policy violation."
+
+      assert [succeeded_attempt] =
+               Repo.all(from(a in Attempt, where: a.request_id == ^succeeded_request.id))
+
+      assert succeeded_attempt.pool_upstream_assignment_id == setup.assignment.id
+      assert succeeded_attempt.status == "succeeded"
+
+      assert Repo.aggregate(
+               from(entry in LedgerEntry,
+                 where:
+                   entry.request_id == ^failed_request.id and entry.entry_kind == "settlement"
+               ),
+               :count
+             ) == 1
+
+      assert Repo.aggregate(
+               from(entry in LedgerEntry,
+                 where:
+                   entry.request_id == ^succeeded_request.id and
+                     entry.entry_kind == "settlement"
+               ),
+               :count
+             ) == 1
+
+      assert Repo.all(from(d in BridgeDemotion)) == []
+
+      updated = Repo.reload!(circuit)
+      assert updated.status == "closed"
+      assert updated.reason_code == nil
+      assert updated.failure_count == 0
+      assert updated.success_count == 1
+      assert updated.metadata["probe_in_flight_count"] == 0
+
+      persisted =
+        inspect(
+          {failed_request.request_metadata, failed_attempt.response_metadata,
+           succeeded_request.request_metadata, succeeded_attempt.response_metadata,
+           RequestLogs.list(setup.pool)}
+        )
+
+      refute persisted =~ provider_wording
+      refute persisted =~ "provider.policy.param"
+      refute persisted =~ "provider_policy_type"
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   test "websocket invalid first-present error param does not fall back or persist raw values" do
     raw_sentinel = "raw-param-sentinel"
 
@@ -12218,6 +12532,21 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         push_frame.(frame)
       end
     end)
+  end
+
+  defp stop_registered_websocket_owner_sessions do
+    capture_log(fn ->
+      WebsocketOwnerSession.Registry
+      |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
+      |> Enum.each(&stop_websocket_owner_session/1)
+    end)
+  end
+
+  defp stop_websocket_owner_session(codex_session_id) do
+    case WebsocketOwnerSession.lookup(codex_session_id) do
+      {:ok, owner_pid} -> GenServer.stop(owner_pid, :shutdown, 1_000)
+      {:error, _reason} -> :ok
+    end
   end
 
   defp metadata_control_frame?(%{"type" => "codex.response.metadata"}), do: true

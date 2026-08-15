@@ -797,6 +797,73 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
                |> Jason.decode!()
     end
 
+    test "normalizes blank native misalignment policy messages and preserves nonblank wording" do
+      fallback = "This request was blocked due to a misalignment policy violation."
+
+      for blank <- [nil, "", "  \n\t"] do
+        event = %{
+          "type" => "response.failed",
+          "sequence_number" => 7,
+          "response" => %{
+            "id" => "resp_policy_blank",
+            "status" => "failed",
+            "error" => %{
+              "type" => "provider_policy_type",
+              "code" => "misalignment_policy_violation",
+              "message" => blank,
+              "param" => "provider.policy.param",
+              "provider_sibling" => "must-not-survive"
+            }
+          },
+          "headers" => %{"authorization" => "must-not-survive"}
+        }
+
+        assert %{
+                 "type" => "response.failed",
+                 "sequence_number" => 7,
+                 "response" => %{
+                   "id" => "resp_policy_blank",
+                   "status" => "failed",
+                   "error" => %{
+                     "type" => "provider_policy_type",
+                     "code" => "misalignment_policy_violation",
+                     "message" => ^fallback,
+                     "param" => "provider.policy.param",
+                     "provider_sibling" => "must-not-survive"
+                   }
+                 }
+               } =
+                 event
+                 |> Jason.encode!()
+                 |> StreamProtocol.canonicalize_native_codex_responses_json_message()
+                 |> Jason.decode!()
+      end
+
+      provider_message = "Provider policy wording remains exact."
+
+      assert %{
+               "response" => %{
+                 "error" => %{
+                   "code" => "misalignment_policy_violation",
+                   "message" => ^provider_message
+                 }
+               }
+             } =
+               %{
+                 "type" => "response.failed",
+                 "response" => %{
+                   "status" => "failed",
+                   "error" => %{
+                     "code" => "misalignment_policy_violation",
+                     "message" => provider_message
+                   }
+                 }
+               }
+               |> Jason.encode!()
+               |> StreamProtocol.canonicalize_native_codex_responses_json_message()
+               |> Jason.decode!()
+    end
+
     test "normalizes type-only public failures before the first websocket mapper and stateful adapter" do
       public_options = [
         RequestOptions.build(

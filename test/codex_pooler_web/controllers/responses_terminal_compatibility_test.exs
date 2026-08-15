@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
 
   alias CodexPooler.CompatibilityMatrix
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
 
   @terminal_shapes [
@@ -226,6 +227,59 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
     end
   end
 
+  test "backend POST SSE preserves misalignment terminal bytes exactly", %{conn: conn} do
+    source = misalignment_terminal_sse("Synthetic provider wording")
+
+    setup =
+      source
+      |> then(&FakeUpstream.sse_stream([&1], done: false))
+      |> start_upstream()
+      |> gateway_setup()
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", stream_payload(setup, :misalignment))
+
+    assert response.status == 200
+    assert response.resp_body == source
+  end
+
+  test "public POST SSE safely projects misalignment messages", %{conn: conn} do
+    for {provider_message, expected_message} <- [
+          {"Synthetic safe provider wording", "Synthetic safe provider wording"},
+          {" \t\n", MisalignmentPolicyViolation.fallback_message()}
+        ] do
+      setup =
+        provider_message
+        |> misalignment_terminal_sse()
+        |> then(&FakeUpstream.sse_stream([&1], done: false))
+        |> start_upstream()
+        |> gateway_setup()
+
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/responses", stream_payload(setup, :misalignment))
+
+      assert response.status == 200
+
+      assert terminal =
+               Enum.find(decoded_sse_payloads(response.resp_body), fn event ->
+                 event["type"] == "response.failed"
+               end)
+
+      assert terminal["response"]["error"] == %{
+               "code" => MisalignmentPolicyViolation.code(),
+               "message" => expected_message,
+               "type" => "invalid_request_error"
+             }
+
+      refute Map.has_key?(terminal["response"]["error"], "param")
+    end
+  end
+
   test "public GET websocket keeps canonical terminal error transformations" do
     for owner_forwarding? <- [false, true],
         {shape, payload, expected_code} <- @failure_shapes do
@@ -317,6 +371,17 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
         _missing -> []
       end
     end)
+  end
+
+  defp misalignment_terminal_sse(message) do
+    error = %{
+      "code" => MisalignmentPolicyViolation.code(),
+      "message" => message,
+      "param" => "private.param",
+      "provider_sibling" => "private-sibling"
+    }
+
+    ~s(event: response.failed\ndata: #{Jason.encode!(%{"type" => "response.failed", "error" => error, "response" => %{"status" => "failed", "error" => error}})}\n\n)
   end
 
   defp assert_public_completed(payload, shape) do

@@ -11,6 +11,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Transport do
     :websocket_writer,
     :upstream_websocket_session,
     :websocket_owner,
+    :websocket_owner_submission_observer,
     :route_class,
     forwarded_metadata_headers: [],
     upstream_websocket_bridge?: false
@@ -25,6 +26,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Transport do
           forwarded_metadata_headers: [{String.t(), String.t()}],
           upstream_websocket_session: term(),
           websocket_owner: WebsocketOwnerContext.t(),
+          websocket_owner_submission_observer: (-> any()) | nil,
           route_class: String.t() | nil,
           upstream_websocket_bridge?: boolean()
         }
@@ -41,6 +43,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Transport do
         Normalization.forwarded_headers(Map.get(opts, :forwarded_headers, [])),
       upstream_websocket_session: Map.get(opts, :upstream_websocket_session),
       websocket_owner: WebsocketOwnerContext.build(opts),
+      websocket_owner_submission_observer: Map.get(opts, :websocket_owner_submission_observer),
       route_class: route_class(opts, endpoint, payload)
     }
   end

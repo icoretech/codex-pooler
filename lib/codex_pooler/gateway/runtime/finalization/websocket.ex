@@ -1,7 +1,7 @@
 defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   @moduledoc false
 
-  alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
 
   alias CodexPooler.Gateway.Runtime.Finalization.{
@@ -13,6 +13,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
     Streaming
   }
 
+  alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.TransportFailureReason
@@ -20,6 +21,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
 
   @spec finalize_completed(SelectedCandidateContext.t(), map()) :: {:ok, map()} | {:error, map()}
   def finalize_completed(context, finalization) do
+    case validate_public_compaction_response(context, finalization) do
+      :ok ->
+        finalize_completed_success(context, finalization)
+
+      {:error, error} ->
+        finalize_invalid_public_compaction(context, finalization, error)
+    end
+  end
+
+  defp finalize_completed_success(context, finalization) do
     %{
       body: body,
       status: status,
@@ -33,8 +44,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
       attempt: attempt,
       payload: payload,
       request_options: request_options
-    } =
-      context
+    } = context
 
     usage = ResponseUsage.from_websocket_body(body)
     transports = resolved_transports(context)
@@ -71,6 +81,56 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
 
       {:error, gateway_error} = error ->
         emit_settlement_failure(error, transports)
+        {:error, gateway_error}
+    end
+  end
+
+  defp validate_public_compaction_response(
+         %SelectedCandidateContext{
+           request_options: %RequestOptions{
+             payload_context: %{compaction_trigger_bridge?: true},
+             openai_compatibility: %{source_endpoint: "/v1/responses"}
+           }
+         },
+         %{body: body, status: status, headers: headers}
+       ) do
+    result = {:ok, %{status: status, headers: headers, raw_body: body}}
+
+    case CompactionTrigger.adapt_gateway_result(result, :websocket) do
+      {:ok, _adapted} -> :ok
+      {:error, error} -> {:error, error}
+    end
+  end
+
+  defp validate_public_compaction_response(%SelectedCandidateContext{}, _finalization), do: :ok
+
+  defp finalize_invalid_public_compaction(context, finalization, error) do
+    %{reserved: reserved, attempt: attempt, request_options: request_options} = context
+    transports = resolved_transports(context)
+
+    attrs =
+      SettlementAttrs.failure(
+        context,
+        error.status,
+        error.code,
+        error.message,
+        Metadata.websocket_response_metadata(
+          finalization.headers,
+          error.code,
+          request_options,
+          Map.get(finalization, :websocket_frame_headers, %{}),
+          Map.get(finalization, :upstream_websocket_connection)
+        ),
+        started: finalization.started
+      )
+
+    case AttemptSettlement.finalize_failure(reserved.request, attempt, attrs) do
+      {:ok, _finalized} = result ->
+        emit_settlement_outcome(result, "failed", transports)
+        {:error, Map.put(error, :public_compaction_error?, true)}
+
+      {:error, gateway_error} = failure ->
+        emit_settlement_failure(failure, transports)
         {:error, gateway_error}
     end
   end
@@ -159,7 +219,14 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
     )
     |> Metadata.maybe_put_masked_error_metadata(upstream_code, code)
     |> Metadata.maybe_put_upstream_error_param(%{upstream_error_param: upstream_error_param})
+    |> terminal_failure_attempt_metadata(code)
     |> maybe_put_terminal_transport_failure(continuation_guard)
+  end
+
+  defp terminal_failure_attempt_metadata(metadata, code) do
+    if code == MisalignmentPolicyViolation.code(),
+      do: Map.delete(metadata, "upstream_error_param"),
+      else: metadata
   end
 
   defp maybe_put_terminal_transport_failure(metadata, transport_failure)
@@ -185,7 +252,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
              context,
              finalization.status,
              code,
-             code,
+             terminal_accounting_message(code),
              attempt_metadata,
              started: finalization.started
            )
@@ -202,6 +269,12 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
 
   defp websocket_terminal_outcome("response.completed", _body), do: {:ok, %{kind: :completed}}
   defp websocket_terminal_outcome(_terminal, body), do: StreamProtocol.terminal_outcome(body)
+
+  defp terminal_accounting_message(code) do
+    if code == MisalignmentPolicyViolation.code(),
+      do: MisalignmentPolicyViolation.fallback_message(),
+      else: code
+  end
 
   @spec finalize_failed(SelectedCandidateContext.t(), map()) :: {:error, map()}
   def finalize_failed(context, %{reason: :client_disconnected} = finalization) do

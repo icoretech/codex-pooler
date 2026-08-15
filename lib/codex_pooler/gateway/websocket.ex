@@ -637,6 +637,29 @@ defmodule CodexPooler.Gateway.Websocket do
     end)
   end
 
+  @doc false
+  @spec run_websocket_response_for_socket(auth(), binary(), opts(), (binary() -> any())) ::
+          {:socket_response_result,
+           CodexPooler.Gateway.Runtime.Service.socket_completion_source(),
+           :ok | {:error, Contracts.gateway_error()}}
+  def run_websocket_response_for_socket(auth, payload, opts, push_frame)
+      when is_binary(payload) and is_function(push_frame, 1) do
+    result =
+      Admission.run(RouteClass.proxy_websocket(), websocket_metadata(opts), fn ->
+        CodexPooler.Gateway.execute_websocket_response_for_socket(
+          auth,
+          payload,
+          opts,
+          push_frame
+        )
+      end)
+
+    case result do
+      {:socket_response_result, _completion_source, _result} = socket_result -> socket_result
+      {:error, _reason} = error -> {:socket_response_result, :local_complete, error}
+    end
+  end
+
   @spec detach_websocket_owner_downstream(
           CodexSession.t() | nil,
           String.t() | nil,

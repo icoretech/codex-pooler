@@ -541,6 +541,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp handle_public_response_done(pid, result, state) do
     state = remove_tracked_response_task(state, pid)
+    {completion_source, result} = socket_response_result(result)
 
     cond do
       public_turn_aborted?(state) ->
@@ -549,7 +550,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       Map.get(state, :public_owner_retarget_error?, false) ->
         handle_public_retarget_error_done(pid, result, state)
 
-      owner_forwarded_socket?(state) ->
+      owner_completion_pending?(completion_source, state) ->
         handle_public_owner_response_done(result, state)
 
       match?({:response_task_failure, {:error, _reason}}, result) ->
@@ -576,6 +577,16 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         {:ok, finish_public_turn(state)}
     end
   end
+
+  defp socket_response_result({:socket_response_result, completion_source, result})
+       when completion_source in [:local_complete, :owner_completion_pending],
+       do: {completion_source, result}
+
+  defp socket_response_result(result), do: {:legacy, result}
+
+  defp owner_completion_pending?(:owner_completion_pending, _state), do: true
+  defp owner_completion_pending?(:legacy, state), do: owner_forwarded_socket?(state)
+  defp owner_completion_pending?(:local_complete, _state), do: false
 
   defp handle_public_owner_response_done(result, state) do
     if not Map.get(state, :public_turn_owner_complete?, false) and owner_liveness_error?(result) do
@@ -605,6 +616,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       |> maybe_start_queued_response_task()
 
     {:ok, state}
+  end
+
+  defp handle_non_public_response_done(
+         pid,
+         {:socket_response_result, _completion_source, result},
+         state
+       ) do
+    handle_non_public_response_done(pid, result, state)
   end
 
   defp handle_non_public_response_done(
@@ -1121,13 +1140,26 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp run_response(parent, task_pid, auth, payload, opts) do
-    Websocket.run_websocket_response(auth, payload, opts, fn data ->
+    run_websocket_response(auth, payload, opts, fn data ->
       unless StreamProtocol.internal_control_event?(data) do
         Process.put(:response_task_visible_output?, true)
       end
 
       send(parent, {:codex_response_chunk, task_pid, data})
     end)
+  end
+
+  defp run_websocket_response(
+         auth,
+         payload,
+         %{openai_compatibility: %{public_openai_responses_stream: true}} = opts,
+         push_frame
+       ) do
+    Websocket.run_websocket_response_for_socket(auth, payload, opts, push_frame)
+  end
+
+  defp run_websocket_response(auth, payload, opts, push_frame) do
+    Websocket.run_websocket_response(auth, payload, opts, push_frame)
   end
 
   defp response_task_visible_output? do

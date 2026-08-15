@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
     :writer,
     :message_mapper,
     :frame_observer,
+    :submission_observer,
     :reset_probe,
     :native_codex_response_control,
     assignment_advertised?: false,
@@ -40,6 +41,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
           message_mapper:
             CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.message_mapper(),
           frame_observer: frame_observer(),
+          submission_observer: (-> any()) | nil,
           reset_probe: ResetProbe.t() | nil,
           native_codex_response_control: TurnSnapshot.t() | nil,
           assignment_advertised?: boolean(),

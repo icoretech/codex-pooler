@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeSessionAlias, CodexSession}
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
+  alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.RejectionBody
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
@@ -707,6 +708,61 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     assert Metadata.response_body(response) == ""
   end
 
+  test "streaming exact policy rejection attaches only its sanitized summary beside the private body" do
+    body =
+      Jason.encode!(%{
+        "error" => %{
+          "code" => "misalignment_policy_violation",
+          "message" => "  exact provider wording  ",
+          "param" => "input[0].content"
+        },
+        "sibling" => "must remain private"
+      })
+
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        FakeUpstream.chunked_response(
+          [binary_part(body, 0, 11), binary_part(body, 11, byte_size(body) - 11)],
+          status: 403
+        )
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+
+    payload = %{"model" => "example-model", "stream" => true}
+
+    request = %UpstreamDispatch.Request{
+      url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
+      token: "redacted",
+      upstream_payload: Jason.encode!(payload),
+      original_payload: payload,
+      identity: upstream_identity(),
+      request_options:
+        RequestOptions.build(
+          %{receive_timeout_ms: 5_000},
+          "/backend-api/codex/responses",
+          payload
+        )
+    }
+
+    assert {:ok, response} = UpstreamDispatch.http_request(request)
+    assert response.status == 403
+    assert %Req.Response.Async{} = response.body
+    assert RejectionBody.fetch(response) == body
+
+    assert MisalignmentPolicyViolation.fetch_summary(response) == %{
+             code: "misalignment_policy_violation",
+             message: "  exact provider wording  "
+           }
+
+    assert Map.keys(MisalignmentPolicyViolation.fetch_summary(response)) |> Enum.sort() ==
+             [:code, :message]
+
+    assert Metadata.response_body(response) == ""
+    refute inspect(MisalignmentPolicyViolation.fetch_summary(response)) =~ "input[0].content"
+    refute inspect(MisalignmentPolicyViolation.fetch_summary(response)) =~ "must remain private"
+  end
+
   test "rejection drain processes ordered multipart parsed parts, ignores trailers, and preserves foreign mailbox messages" do
     {response, ref} =
       async_response(self(), nil, fn stream_ref, message ->
@@ -748,20 +804,27 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     send(self(), {ref, :multipart})
 
-    assert RejectionDrain.drain(response) == ""
+    drained_body = RejectionDrain.drain(response)
+
+    assert drained_body == ""
+    assert_policy_not_classified(drained_body)
     assert_receive {:rejection_cancelled, ^ref}
   end
 
   test "rejection drain discards over-cap and error prefixes and cancels" do
     {cap_response, cap_ref} = async_response(self())
     send(self(), {cap_ref, {:data, String.duplicate("x", 65_537)}})
-    assert RejectionDrain.drain(cap_response) == ""
+    cap_body = RejectionDrain.drain(cap_response)
+    assert cap_body == ""
+    assert_policy_not_classified(cap_body)
     assert_receive {:rejection_cancelled, ^cap_ref}
 
     {error_response, error_ref} = async_response(self())
     send(self(), {error_ref, {:data, "partial"}})
     send(self(), {error_ref, {:error, :closed}})
-    assert RejectionDrain.drain(error_response) == ""
+    error_body = RejectionDrain.drain(error_response)
+    assert error_body == ""
+    assert_policy_not_classified(error_body)
     assert_receive {:rejection_cancelled, ^error_ref}
   end
 
@@ -771,7 +834,10 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     send(self(), {ref, {:data, "partial"}})
     started_at = System.monotonic_time(:millisecond)
 
-    assert RejectionDrain.drain(response) == ""
+    drained_body = RejectionDrain.drain(response)
+
+    assert drained_body == ""
+    assert_policy_not_classified(drained_body)
     elapsed_ms = System.monotonic_time(:millisecond) - started_at
 
     assert elapsed_ms in 1_900..2_500
@@ -785,7 +851,10 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       end)
 
     send(self(), {ref, {:error, :closed}})
-    assert RejectionDrain.drain(response) == ""
+    drained_body = RejectionDrain.drain(response)
+
+    assert drained_body == ""
+    assert_policy_not_classified(drained_body)
   end
 
   test "regular runtime headers use only the effective serving-mode snapshot for Lite markers" do
@@ -973,6 +1042,11 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
         %{pid: self(), epoch: 1, correlation_id: "corr-legacy-owner-result"},
         forwarder_opts
       )
+      |> RequestOptions.put_transport(
+        websocket_owner_submission_observer: fn ->
+          send(self(), :legacy_remote_owner_submission_observed)
+        end
+      )
 
     alias_ids_before =
       Repo.all(
@@ -1000,6 +1074,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     assert result == %{body: "", terminal: "response.completed", status: 200, headers: []}
     refute Map.has_key?(result, :response_id)
+    assert_received :legacy_remote_owner_submission_observed
 
     assert Repo.all(
              from(alias_record in BridgeSessionAlias,
@@ -1008,6 +1083,77 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
                order_by: [asc: alias_record.id]
              )
            ) == alias_ids_before
+
+    assert_receive {:websocket_owner_harness_node_call,
+                    %{node: ^remote_node, function: :remote_submit_request, arity: 4}}
+  end
+
+  test "accepted remote owner errors notify the socket before returning the error", %{auth: auth} do
+    remote_node = :"codex_pooler@accepted-error-owner.example"
+
+    %{session: session, lease_token: lease_token} =
+      owner_session_fixture(auth, Atom.to_string(remote_node))
+
+    forwarder_opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{
+          remote_node =>
+            {:return, {:websocket_owner_submission_accepted, {:error, :owner_drained}}}
+        }
+      )
+
+    test_pid = self()
+    observer_release_ref = make_ref()
+
+    observer_coordinator =
+      spawn(fn ->
+        receive do
+          {:accepted_owner_error_observer_started, observer_pid, ^observer_release_ref} ->
+            refute_received {:accepted_owner_error_call_returned, _result}
+            send(observer_pid, {:release_accepted_owner_error_observer, observer_release_ref})
+
+            receive do
+              {:accepted_owner_error_call_returned, result} ->
+                send(test_pid, {:accepted_owner_error_sequence, result})
+            end
+        end
+      end)
+
+    request_options =
+      session
+      |> websocket_owner_request_options(
+        lease_token,
+        %{pid: self(), epoch: 1, correlation_id: "corr-accepted-owner-error"},
+        forwarder_opts
+      )
+      |> RequestOptions.put_transport(
+        websocket_owner_submission_observer: fn ->
+          send(
+            observer_coordinator,
+            {:accepted_owner_error_observer_started, self(), observer_release_ref}
+          )
+
+          receive do
+            {:release_accepted_owner_error_observer, ^observer_release_ref} -> :ok
+          end
+        end
+      )
+
+    request = %UpstreamDispatch.Request{
+      url: "https://upstream.example.test/backend-api/codex/responses",
+      token: "redacted",
+      upstream_payload: "{}",
+      identity: upstream_identity(),
+      accounting_request: nil,
+      writer: fn _message -> :ok end,
+      request_options: request_options
+    }
+
+    result = UpstreamDispatch.websocket_request(request)
+    send(observer_coordinator, {:accepted_owner_error_call_returned, result})
+
+    assert result == {:error, %{body: "", reason: :owner_drained, headers: [], started: false}}
+    assert_receive {:accepted_owner_error_sequence, ^result}
 
     assert_receive {:websocket_owner_harness_node_call,
                     %{node: ^remote_node, function: :remote_submit_request, arity: 4}}
@@ -1252,6 +1398,13 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
   defp upstream_identity do
     %UpstreamIdentity{chatgpt_account_id: "acct_owner_submit_timeout"}
+  end
+
+  defp assert_policy_not_classified(body) do
+    request_options =
+      RequestOptions.build(%{}, "/backend-api/codex/responses", %{"stream" => true})
+
+    assert MisalignmentPolicyViolation.classify_http(403, body, request_options) == :no_match
   end
 
   defp restore_operational_settings(nil) do

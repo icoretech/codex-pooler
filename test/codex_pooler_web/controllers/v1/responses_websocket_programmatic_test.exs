@@ -21,13 +21,17 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestLogs}
   alias CodexPooler.Events
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.OpenAICompatibility.Responses, as: ResponsesCompat
+  alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Transports.Admission
 
   alias CodexPooler.Gateway.Persistence.{
     BridgeOwnerLease,
     BridgeSessionAlias,
     CodexSession,
     CodexTurn,
-    IdempotencyKey
+    IdempotencyKey,
+    RoutingCircuitState
   }
 
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
@@ -243,6 +247,169 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       for sentinel <- programmatic_sentinels() do
         refute persistence_text =~ sentinel
       end
+
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "GET /v1/responses websocket keeps the socket reusable after a misalignment policy terminal" do
+    provider_wording = "Provider policy wording must not persist."
+
+    policy_terminal =
+      FakeUpstream.sse_stream(
+        [
+          {"response.failed",
+           %{
+             "type" => "response.failed",
+             "sequence_number" => 41,
+             "headers" => %{"authorization" => "must-not-survive"},
+             "response" => %{
+               "id" => "resp_public_policy_terminal",
+               "status" => "failed",
+               "error" => %{
+                 "type" => "provider_policy_type",
+                 "code" => "misalignment_policy_violation",
+                 "message" => provider_wording,
+                 "param" => "provider.policy.param",
+                 "provider_sibling" => "must-not-survive"
+               }
+             },
+             "ordinary_sibling" => "must-not-survive"
+           }}
+        ],
+        done: false
+      )
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [policy_terminal, completed_websocket_response("resp_after_public_policy_terminal")]}
+      )
+
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "policy-terminal-reuse-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic policy terminal turn"
+        })
+
+      {conn, websocket, failed_frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{
+               "type" => "response.failed",
+               "sequence_number" => 41,
+               "response" => %{
+                 "status" => "failed",
+                 "error" => %{
+                   "type" => "invalid_request_error",
+                   "code" => "misalignment_policy_violation",
+                   "message" => ^provider_wording
+                 }
+               }
+             } = Jason.decode!(failed_frame)
+
+      refute failed_frame =~ "provider.policy.param"
+      refute failed_frame =~ "provider_policy_type"
+      refute failed_frame =~ "provider_sibling"
+      refute failed_frame =~ "ordinary_sibling"
+      refute failed_frame =~ "authorization"
+
+      assert_receive {Events,
+                      %{
+                        reason: "request_finalized",
+                        payload: %{
+                          "request_id" => failed_request_id,
+                          "status" => "failed"
+                        }
+                      }},
+                     @websocket_frame_timeout
+
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic ordinary turn after policy terminal"
+        })
+
+      {conn, websocket, completed_frame} =
+        public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{
+               "type" => "response.completed",
+               "response" => %{"id" => "resp_after_public_policy_terminal"}
+             } = Jason.decode!(completed_frame)
+
+      assert_receive {Events,
+                      %{
+                        reason: "request_finalized",
+                        payload: %{
+                          "request_id" => succeeded_request_id,
+                          "status" => "succeeded"
+                        }
+                      }},
+                     @websocket_frame_timeout
+
+      assert FakeUpstream.count(upstream) == 2
+      assert FakeUpstream.websocket_connection_count(upstream) == 1
+
+      requests =
+        Repo.all(
+          from(request in Request,
+            where: request.pool_id == ^setup.pool.id,
+            order_by: [asc: request.admitted_at]
+          )
+        )
+
+      assert [failed_request, succeeded_request] = requests
+      assert failed_request.id == failed_request_id
+      assert succeeded_request.id == succeeded_request_id
+      assert failed_request.status == "failed"
+      assert failed_request.retry_count == 0
+      assert failed_request.last_error_code == "misalignment_policy_violation"
+      assert succeeded_request.status == "succeeded"
+
+      assert [failed_attempt] =
+               Repo.all(
+                 from(attempt in Attempt,
+                   where: attempt.request_id == ^failed_request.id
+                 )
+               )
+
+      assert failed_attempt.status == "failed"
+      assert failed_attempt.retryable == false
+      assert failed_attempt.network_error_code == "misalignment_policy_violation"
+
+      assert failed_attempt.error_message ==
+               "This request was blocked due to a misalignment policy violation."
+
+      for request <- requests do
+        assert Repo.aggregate(
+                 from(entry in LedgerEntry,
+                   where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+                 ),
+                 :count
+               ) == 1
+      end
+
+      assert Repo.all(RoutingCircuitState) == []
+
+      persistence_text =
+        inspect({requests, Repo.all(Attempt), RequestLogs.list(setup.pool)})
+
+      refute persistence_text =~ provider_wording
+      refute persistence_text =~ "provider.policy.param"
+      refute persistence_text =~ "provider_policy_type"
+      refute persistence_text =~ "provider_sibling"
 
       {conn, websocket}
     after
@@ -1304,7 +1471,12 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
           "output" => [
             %{
               "type" => "compaction",
-              "encrypted_content" => "synthetic-websocket-trigger-encrypted"
+              "encrypted_content" => "synthetic-websocket-trigger-encrypted",
+              "id" => nil,
+              "internal_chat_message_metadata_passthrough" => %{
+                "turn_id" => "native-websocket-turn-must-drop"
+              },
+              "summary" => "plaintext-websocket-summary-must-drop"
             }
           ],
           "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8}
@@ -1337,10 +1509,22 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
                "response.completed"
              ]
 
-      assert get_in(List.first(frames), ["item", "type"]) == "compaction"
+      done_item = get_in(List.first(frames), ["item"])
+      completed_item = get_in(List.last(frames), ["response", "output", Access.at(0)])
 
-      assert get_in(List.last(frames), ["response", "output", Access.at(0), "type"]) ==
-               "compaction"
+      assert done_item == completed_item
+
+      assert done_item == %{
+               "type" => "compaction",
+               "encrypted_content" => "synthetic-websocket-trigger-encrypted",
+               "id" => nil
+             }
+
+      assert {:ok, %{payload: %{"input" => [^done_item]}}} =
+               ResponsesCompat.coerce(%{
+                 "model" => setup.model.exposed_model_id,
+                 "input" => [done_item]
+               })
 
       assert get_in(List.last(frames), ["response", "object"]) == "response"
 
@@ -1359,11 +1543,237 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       assert request.transport == "http_compact_json"
       assert request.status == "succeeded"
 
+      assert get_in(request.request_metadata, ["reservation_snapshot_inputs", "route_class"]) ==
+               "proxy_compact"
+
       assert [attempt] =
                Repo.all(from(attempt in Attempt, where: attempt.request_id == ^request.id))
 
       assert attempt.transport == "http_compact_json"
       assert attempt.status == "succeeded"
+
+      assert Repo.aggregate(
+               from(entry in LedgerEntry,
+                 where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+               ),
+               :count
+             ) == 1
+
+      persisted = inspect({request, attempt, RequestLogs.list(setup.pool)})
+      refute persisted =~ "synthetic-websocket-trigger-encrypted"
+      refute persisted =~ "native-websocket-turn-must-drop"
+      refute persisted =~ "plaintext-websocket-summary-must-drop"
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "GET /v1/responses websocket rejects compact work at the nested compact admission boundary" do
+    old_config = Application.get_env(:codex_pooler, OperationalSettings)
+    Admission.reset_for_test()
+
+    Application.put_env(:codex_pooler, OperationalSettings,
+      settings: compact_saturation_settings()
+    )
+
+    on_exit(fn ->
+      Admission.reset_for_test()
+
+      if old_config do
+        Application.put_env(:codex_pooler, OperationalSettings, old_config)
+      else
+        Application.delete_env(:codex_pooler, OperationalSettings)
+      end
+    end)
+
+    upstream = start_upstream(FakeUpstream.json_response(%{}))
+    setup = gateway_setup(upstream, compact?: true)
+    port = start_public_endpoint!()
+    assert {:ok, compact_lease} = Admission.acquire("proxy_compact", %{request_id: "held"})
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "compact-admission-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => websocket_compaction_trigger_input("synthetic compact admission"),
+          "stream" => false
+        })
+
+      {_conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert Jason.decode!(frame) == %{
+               "type" => "error",
+               "status" => 503,
+               "error" => %{
+                 "code" => "server_is_overloaded",
+                 "message" => "gateway route class is temporarily overloaded",
+                 "param" => nil,
+                 "type" => "server_error"
+               }
+             }
+
+      assert FakeUpstream.count(upstream) == 0
+      assert Repo.aggregate(Request, :count) == 0
+      assert Repo.aggregate(Attempt, :count) == 0
+      assert Repo.aggregate(LedgerEntry, :count) == 0
+
+      assert {:ok, saturation} = Admission.saturation()
+      assert saturation["proxy_compact"] == %{running: 1, queued: 0}
+      assert saturation["proxy_websocket"] == %{running: 0, queued: 0}
+    after
+      Admission.release(compact_lease)
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "owner-forwarded websocket completes local compact work and starts the queued ordinary turn" do
+    enable_owner_forwarding!()
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.json_response(%{
+             "id" => "resp_local_compact",
+             "output" => [
+               %{
+                 "type" => "compaction",
+                 "encrypted_content" => "synthetic-local-compact-content"
+               }
+             ]
+           }),
+           completed_websocket_response("resp_after_local_compact")
+         ]}
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "owner-local-compact-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => websocket_compaction_trigger_input("synthetic local compact"),
+          "stream" => false,
+          "stream_id" => "compact-local"
+        })
+
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic ordinary turn",
+          "stream" => true,
+          "stream_id" => "ordinary-after-compact"
+        })
+
+      {conn, websocket, compact_frames} =
+        receive_websocket_until_terminal_or_error!(conn, websocket, ref, [])
+
+      assert Enum.map(compact_frames, & &1["type"]) == [
+               "response.output_item.done",
+               "response.completed"
+             ]
+
+      assert Enum.all?(compact_frames, &(&1["stream_id"] == "compact-local"))
+
+      {_conn, _websocket, ordinary_frames} =
+        receive_websocket_until_terminal_or_error!(conn, websocket, ref, [])
+
+      assert List.last(ordinary_frames)["type"] == "response.completed"
+      assert Enum.all?(ordinary_frames, &(&1["stream_id"] == "ordinary-after-compact"))
+
+      assert [compact_request, ordinary_request] = FakeUpstream.requests(upstream)
+      assert compact_request.method == "POST"
+      assert ordinary_request.method == "WEBSOCKET"
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "GET /v1/responses websocket finalizes an invalid selected compaction output once" do
+    encrypted_later = "synthetic-invalid-websocket-later"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "output" => [
+            %{"type" => "compaction"},
+            %{"type" => "compaction_summary", "encrypted_content" => encrypted_later}
+          ]
+        })
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "invalid-selected-compaction-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => websocket_compaction_trigger_input("invalid selected websocket compact"),
+          "stream" => false
+        })
+
+      {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert Jason.decode!(frame) == %{
+               "type" => "error",
+               "status" => 502,
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_compaction_response",
+                 "message" =>
+                   "upstream compact response did not include encrypted compaction content",
+                 "param" => nil
+               }
+             }
+
+      assert [request] =
+               Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
+
+      assert request.endpoint == "/backend-api/codex/responses/compact"
+      assert request.status == "failed"
+      assert request.completed_at
+      assert request.last_error_code == "invalid_compaction_response"
+
+      assert get_in(request.request_metadata, ["reservation_snapshot_inputs", "route_class"]) ==
+               "proxy_compact"
+
+      assert [attempt] =
+               Repo.all(from(attempt in Attempt, where: attempt.request_id == ^request.id))
+
+      assert attempt.status == "failed"
+      assert attempt.completed_at
+      assert attempt.network_error_code == "invalid_compaction_response"
+
+      assert Repo.aggregate(
+               from(entry in LedgerEntry,
+                 where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+               ),
+               :count
+             ) == 1
+
+      persisted = inspect({request, attempt, RequestLogs.list(setup.pool)})
+      refute frame =~ encrypted_later
+      refute persisted =~ encrypted_later
+      {conn, websocket}
     after
       Mint.HTTP.close(conn)
     end
@@ -2196,6 +2606,20 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       },
       %{"type" => "compaction_trigger"}
     ]
+  end
+
+  defp compact_saturation_settings do
+    %OperationalSettings{
+      bulkheads:
+        Map.new(Admission.route_classes(), fn route_class ->
+          {route_class, %{max_concurrency: 4, queue_limit: 4, queue_timeout_ms: 1_000}}
+        end)
+        |> Map.put("proxy_compact", %{
+          max_concurrency: 1,
+          queue_limit: 0,
+          queue_timeout_ms: 1_000
+        })
+    }
   end
 
   defp completed_websocket_response(response_id, output \\ []) do

@@ -542,7 +542,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
       timeouts: %{}
     }
 
-    assert {:ok, %{body: body, terminal: "response.completed", status: 200}} =
+    assert {:websocket_owner_submission_accepted,
+            {:ok, %{body: body, terminal: "response.completed", status: 200}}} =
              WebsocketOwnerForwarder.submit_request(
                session,
                token,
@@ -578,7 +579,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     %{session: new_session, token: new_token} =
       owner_session_fixture(auth, remote_node_string, "recover-owner-new")
 
-    assert {:ok, %{body: new_body, terminal: "response.completed", status: 200}} =
+    assert {:websocket_owner_submission_accepted,
+            {:ok, %{body: new_body, terminal: "response.completed", status: 200}}} =
              WebsocketOwnerForwarder.submit_request(
                new_session,
                new_token,
@@ -654,7 +656,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
       reset_probe: reset_probe
     }
 
-    assert {:ok, %{terminal: "response.completed", status: 200}} =
+    assert {:websocket_owner_submission_accepted,
+            {:ok, %{terminal: "response.completed", status: 200}}} =
              WebsocketOwnerForwarder.submit_request(session, token, attached, request, opts)
 
     assert_receive {:websocket_owner_harness_node_call,
@@ -675,6 +678,99 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
                     {:data, ^terminal_frame}}
 
     assert_receive {:websocket_owner_frame, "corr-remote-bridge", ^epoch, :complete}
+  end
+
+  test "remote owner acceptance remains causally attached to the RPC result", %{auth: auth} do
+    remote_node = :"codex_pooler@acceptance-owner-app.example"
+    remote_node_string = Atom.to_string(remote_node)
+    %{session: session, token: token} = owner_session_fixture(auth, remote_node_string)
+    terminal_frame = terminal_frame("resp_remote_acceptance")
+
+    upstream =
+      WebsocketOwnerNodeHarness.fake_upstream_boundary(self(),
+        messages: [terminal_frame],
+        return_request_result?: true
+      )
+
+    {:ok, _owner} = start_owner(session, upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+    attached = attach_downstream(session.id, "corr-remote-acceptance")
+
+    opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => :success}
+      )
+
+    test_pid = self()
+
+    request = %{
+      request("remote-acceptance")
+      | submission_observer: fn ->
+          send(test_pid, {:remote_submission_observer_ran, self()})
+        end
+    }
+
+    assert {:websocket_owner_submission_accepted,
+            {:ok, %{terminal: "response.completed", status: 200}}} =
+             WebsocketOwnerForwarder.submit_request(session, token, attached, request, opts)
+
+    refute_received {:remote_submission_observer_ran, _observer_pid}
+
+    assert_receive {:websocket_owner_harness_node_call,
+                    %{node: ^remote_node, function: :remote_submit_request, arity: 4}}
+  end
+
+  test "legacy remote owner success remains causally marked as an accepted submission", %{
+    auth: auth
+  } do
+    remote_node = :"codex_pooler@legacy-acceptance-owner-app.example"
+    remote_node_string = Atom.to_string(remote_node)
+
+    for {suffix, legacy_result} <- [ok: :ok, structured: {:ok, %{status: 200}}] do
+      %{session: session, token: token} =
+        owner_session_fixture(auth, remote_node_string, "legacy-acceptance-#{suffix}")
+
+      opts =
+        WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+          calls: %{remote_node => {:return, legacy_result}}
+        )
+
+      assert {:websocket_owner_submission_accepted, ^legacy_result} =
+               WebsocketOwnerForwarder.submit_request(
+                 session,
+                 token,
+                 downstream("corr-legacy-acceptance-#{suffix}"),
+                 request("legacy-acceptance-#{suffix}"),
+                 opts
+               )
+    end
+  end
+
+  test "accepted malformed remote owner results retain submission causality", %{auth: auth} do
+    remote_node = :"codex_pooler@malformed-acceptance-owner-app.example"
+    remote_node_string = Atom.to_string(remote_node)
+
+    for {suffix, malformed_result} <-
+          [unknown: :unexpected, unknown_error: {:error, :unexpected_owner_error}] do
+      %{session: session, token: token} =
+        owner_session_fixture(auth, remote_node_string, "malformed-acceptance-#{suffix}")
+
+      opts =
+        WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+          calls: %{
+            remote_node => {:return, {:websocket_owner_submission_accepted, malformed_result}}
+          }
+        )
+
+      assert {:websocket_owner_submission_accepted, {:error, :owner_crashed}} =
+               WebsocketOwnerForwarder.submit_request(
+                 session,
+                 token,
+                 downstream("corr-malformed-acceptance-#{suffix}"),
+                 request("malformed-acceptance-#{suffix}"),
+                 opts
+               )
+    end
   end
 
   test "remote request preserves structured upstream failure maps", %{auth: auth} do
@@ -739,7 +835,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
         calls: %{remote_node => {:return, {:ok, structured_result}}}
       )
 
-    assert {:ok, ^structured_result} =
+    assert {:websocket_owner_submission_accepted, {:ok, ^structured_result}} =
              WebsocketOwnerForwarder.submit_request(
                session,
                token,

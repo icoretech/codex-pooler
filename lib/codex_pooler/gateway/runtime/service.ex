@@ -23,10 +23,12 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Runtime.Dispatch.PreDispatch
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt
+  alias CodexPooler.Gateway.Transports.Admission
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Gateway.Transports.Websocket.ResponseProcessed
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPooler.Repo
+  alias CodexPooler.RouteClass
 
   @backend_transcription_model "gpt-4o-transcribe"
   @native_image_endpoints [
@@ -471,7 +473,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       when is_binary(raw_payload) and is_function(push_frame, 1) do
     with {:ok, payload} <- decode_websocket_payload(raw_payload),
          {:ok, result} <-
-           execute_websocket_payload(auth, payload, opts, push_frame) do
+           execute_websocket_payload(auth, payload, opts, push_frame, false) do
       WebsocketCodec.deliver_result(result, push_frame)
     end
   end
@@ -480,7 +482,55 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     {:error, error(400, "invalid_request", "websocket message must be a text JSON frame")}
   end
 
-  defp execute_websocket_payload(auth, payload, opts, push_frame) do
+  @type socket_completion_source :: :local_complete | :owner_completion_pending
+
+  @spec execute_websocket_response_for_socket(
+          auth(),
+          binary(),
+          opts(),
+          (binary() -> any())
+        ) ::
+          {:socket_response_result, socket_completion_source(), :ok | {:error, gateway_error()}}
+  def execute_websocket_response_for_socket(
+        auth,
+        raw_payload,
+        %RequestOptions{} = opts,
+        push_frame
+      )
+      when is_binary(raw_payload) and is_function(push_frame, 1) do
+    submission_ref = make_ref()
+    caller = self()
+
+    opts =
+      RequestOptions.put_transport(opts,
+        websocket_owner_submission_observer: fn ->
+          send(caller, {:websocket_owner_request_submitted, submission_ref})
+        end
+      )
+
+    result =
+      with {:ok, payload} <- decode_websocket_payload(raw_payload),
+           {:ok, result} <-
+             execute_websocket_payload(auth, payload, opts, push_frame, true) do
+        WebsocketCodec.deliver_result(result, push_frame)
+      end
+
+    completion_source =
+      receive do
+        {:websocket_owner_request_submitted, ^submission_ref} -> :owner_completion_pending
+      after
+        0 -> :local_complete
+      end
+
+    {:socket_response_result, completion_source, result}
+  end
+
+  def execute_websocket_response_for_socket(_auth, _raw_payload, _opts, _push_frame) do
+    {:socket_response_result, :local_complete,
+     {:error, error(400, "invalid_request", "websocket message must be a text JSON frame")}}
+  end
+
+  defp execute_websocket_payload(auth, payload, opts, push_frame, compact_admission?) do
     cond do
       WebsocketCodec.response_processed_payload?(payload) ->
         ResponseProcessed.handle(auth, payload, opts)
@@ -490,8 +540,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
       true ->
         with {:ok, coerced} <- WebsocketCodec.coerce_request(payload, opts, push_frame) do
-          auth
-          |> execute(coerced.endpoint, coerced.payload, coerced.request_options)
+          coerced
+          |> execute_coerced_websocket_payload(auth, compact_admission?)
           |> adapt_websocket_result(coerced)
         end
     end
@@ -502,6 +552,32 @@ defmodule CodexPooler.Gateway.Runtime.Service do
        do: result_adapter.(result)
 
   defp adapt_websocket_result(result, _coerced), do: result
+
+  defp execute_coerced_websocket_payload(
+         %{request_options: %{transport: %{route_class: route_class}}} = coerced,
+         auth,
+         true
+       ) do
+    if route_class == RouteClass.proxy_compact() do
+      Admission.run(route_class, websocket_admission_metadata(coerced), fn ->
+        execute(auth, coerced.endpoint, coerced.payload, coerced.request_options)
+      end)
+    else
+      execute(auth, coerced.endpoint, coerced.payload, coerced.request_options)
+    end
+  end
+
+  defp execute_coerced_websocket_payload(coerced, auth, _compact_admission?) do
+    execute(auth, coerced.endpoint, coerced.payload, coerced.request_options)
+  end
+
+  defp websocket_admission_metadata(%{endpoint: endpoint, request_options: request_options}) do
+    %{
+      request_id: request_options.request_metadata.request_id,
+      endpoint: endpoint,
+      transport: request_options.transport.transport
+    }
+  end
 
   defp dispatch_candidates(
          auth,

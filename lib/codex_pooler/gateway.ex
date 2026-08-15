@@ -44,4 +44,16 @@ defmodule CodexPooler.Gateway do
   @spec execute_websocket_response(auth(), binary(), RequestOptions.t(), (binary() -> any())) ::
           :ok | {:error, Contracts.gateway_error()}
   defdelegate execute_websocket_response(auth, raw_payload, opts, push_frame), to: Service
+
+  @doc false
+  @spec execute_websocket_response_for_socket(
+          auth(),
+          binary(),
+          RequestOptions.t(),
+          (binary() -> any())
+        ) ::
+          {:socket_response_result, Service.socket_completion_source(),
+           :ok | {:error, Contracts.gateway_error()}}
+  defdelegate execute_websocket_response_for_socket(auth, raw_payload, opts, push_frame),
+    to: Service
 end

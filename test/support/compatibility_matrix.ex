@@ -1124,6 +1124,12 @@ defmodule CodexPooler.CompatibilityMatrix do
           accounting_endpoint: "/backend-api/codex/responses/compact",
           admission_endpoint: "/v1/responses",
           route_class: "proxy_compact",
+          websocket_admission: %{
+            outer_route_class: "proxy_websocket",
+            nested_route_class: "proxy_compact",
+            timing: "after_coercion_before_compact_execution",
+            completion: "local_websocket_completion"
+          },
           transport: "http_compact_json",
           closed_item: %{"type" => "compaction_trigger"},
           valid_trigger: "exactly_one_final_after_visible_input",
@@ -2419,6 +2425,42 @@ defmodule CodexPooler.CompatibilityMatrix do
         bridge_attach_arity: 3,
         old_owner_native_attach: "compatible_without_connection_metadata",
         old_owner_bridge_attach: "fail_closed_http_fallback"
+      }
+    },
+    misalignment_policy_violation: %{
+      code: "misalignment_policy_violation",
+      eligibility: %{
+        direct_http_statuses: [400, 403],
+        terminal_transports: ["sse", "websocket"],
+        route_scope: "eligible_direct_or_translated_responses_and_chat_routes_only",
+        exact_error_envelope: true
+      },
+      lifecycle: %{
+        retryable: false,
+        health_neutral: true,
+        demotion: false,
+        circuit_failure: false,
+        settlement: "exactly_once"
+      },
+      public_error: %{
+        code: "misalignment_policy_violation",
+        type: "invalid_request_error",
+        message: "nonblank_provider_message_or_fixed_safe_fallback",
+        provider_param: false,
+        provider_body: false,
+        provider_siblings: false
+      },
+      durable_metadata: %{
+        exact_code: true,
+        accounting_message: "fixed",
+        bounded_facts_only: true,
+        raw_provider_message: false,
+        raw_provider_body: false
+      },
+      generic_provider_errors: %{
+        message: "upstream request failed",
+        type: "server_error",
+        unchanged: true
       }
     },
     image_generation_permission: %{

@@ -3,7 +3,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   Finalizes gateway runtime dispatch attempts after upstream transport returns.
   """
 
-  alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
   alias CodexPooler.Gateway.Runtime.Dispatch.ResponseContext
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.RateLimitObserver
@@ -21,7 +21,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
 
   alias CodexPooler.Gateway.Routing.ModelMetadata
   alias CodexPooler.Gateway.Runtime.Routing.DispatchLifecycle
-  alias CodexPooler.Gateway.Transports.ModelUnavailability
+  alias CodexPooler.Gateway.Transports.{MisalignmentPolicyViolation, ModelUnavailability}
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.RouteClass
 
@@ -114,7 +114,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
           finalize_invalid_json_response(response, context)
 
         true ->
-          finalize_successful_json_response(response, context, body, callbacks)
+          finalize_valid_json_response(response, context, body, callbacks)
       end
     end
   end
@@ -142,13 +142,72 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   defp normalize_stream_result({:error, reason}), do: {:error, reason}
   defp normalize_stream_result(result), do: {:ok, result}
 
-  defp finalize_non_success_response(%Req.Response{status: status} = response, context, body) do
-    if assignment_model_unavailable?(status, body, context) do
-      finalize_assignment_model_unavailable(response, context, body)
-    else
-      with :ok <- maybe_record_unauthorized_route_failure(status, context) do
-        finalize_upstream_status_failure(response, context, body)
-      end
+  defp finalize_non_success_response(%Req.Response{} = response, context, body) do
+    case misalignment_policy_violation_summary(response, context, body) do
+      {:ok, summary} ->
+        finalize_misalignment_policy_violation(response, context, summary)
+
+      :no_match ->
+        finalize_other_non_success_response(response, context, body)
+    end
+  end
+
+  defp finalize_other_non_success_response(
+         %Req.Response{status: status} = response,
+         context,
+         body
+       ) do
+    cond do
+      public_ineligible_misalignment_policy_violation?(status, body, context) ->
+        finalize_upstream_status_failure(response, context, body,
+          failure_projection: :canonical_full
+        )
+
+      assignment_model_unavailable?(status, body, context) ->
+        finalize_assignment_model_unavailable(response, context, body)
+
+      true ->
+        with :ok <- maybe_record_unauthorized_route_failure(status, context) do
+          finalize_upstream_status_failure(response, context, body)
+        end
+    end
+  end
+
+  defp misalignment_policy_violation_summary(response, context, body) do
+    case MisalignmentPolicyViolation.fetch_summary(response) do
+      %{code: _code, message: _message} = summary ->
+        {:ok, summary}
+
+      nil ->
+        MisalignmentPolicyViolation.classify_http(response.status, body, context.request_options)
+    end
+  end
+
+  defp finalize_misalignment_policy_violation(response, context, summary) do
+    with :ok <- DispatchLifecycle.neutral_completion(context) do
+      finalize_upstream_status_failure(response, context, "",
+        error_code: summary.code,
+        accounting_message: MisalignmentPolicyViolation.fallback_message(),
+        failure_projection: {:misalignment_policy_violation, summary}
+      )
+    end
+  end
+
+  defp public_ineligible_misalignment_policy_violation?(status, body, context)
+       when status in [400, 403] and is_binary(body) do
+    request_options = context.request_options
+
+    is_binary(request_options.openai_compatibility.source_endpoint) and
+      not MisalignmentPolicyViolation.eligible_route?(request_options) and
+      direct_misalignment_policy_violation_body?(body)
+  end
+
+  defp public_ineligible_misalignment_policy_violation?(_status, _body, _context), do: false
+
+  defp direct_misalignment_policy_violation_body?(body) do
+    case Jason.decode(body) do
+      {:ok, %{"error" => %{"code" => code}}} -> code == MisalignmentPolicyViolation.code()
+      _other -> false
     end
   end
 
@@ -426,14 +485,20 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     } = context
 
     status = response.status
-    error_code = Metadata.upstream_status_error_code(status, request_options)
+
+    error_code =
+      Keyword.get_lazy(opts, :error_code, fn ->
+        Metadata.upstream_status_error_code(status, request_options)
+      end)
+
+    accounting_message = Keyword.get(opts, :accounting_message, "upstream returned #{status}")
 
     attrs =
       SettlementAttrs.failure(
         context,
         status,
         error_code,
-        "upstream returned #{status}",
+        accounting_message,
         Metadata.response_metadata(response, error_code, request_options),
         latency_ms: elapsed_ms(context.started),
         usage: %{status: "usage_unknown", source: "upstream_status"}
@@ -462,6 +527,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   defp failure_result(status, headers, body, request_options, opts) do
     case {Keyword.get(opts, :failure_projection, :mode_scoped),
           Metadata.explicit_full_ordinary_responses?(request_options)} do
+      {{:misalignment_policy_violation, summary}, _explicit_full?} ->
+        %{
+          status: status,
+          headers: headers,
+          raw_body:
+            Jason.encode!(%{
+              "error" => %{"code" => summary.code, "message" => summary.message}
+            })
+        }
+
+      {:canonical_full, _explicit_full?} ->
+        %{status: status, headers: headers, body: @canonical_full_failure_body}
+
       {:mode_scoped, true} ->
         %{status: status, headers: headers, body: @canonical_full_failure_body}
 
@@ -519,6 +597,57 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
 
       {:error, gateway_error} ->
         {:error, gateway_error}
+    end
+  end
+
+  defp validate_public_compaction_response(
+         response,
+         %SelectedCandidateContext{
+           request_options: %RequestOptions{
+             payload_context: %{compaction_trigger_bridge?: true},
+             openai_compatibility: %{source_endpoint: "/v1/responses"}
+           }
+         } = context,
+         body
+       ) do
+    result =
+      {:ok,
+       %{
+         status: response.status,
+         headers: Metadata.response_headers(response, false, context.request_options),
+         raw_body: body
+       }}
+
+    case CompactionTrigger.adapt_gateway_result(result, :response) do
+      {:ok, _adapted} -> :ok
+      {:error, error} -> finalize_invalid_public_compaction(response, context, error)
+    end
+  end
+
+  defp validate_public_compaction_response(_response, %SelectedCandidateContext{}, _body), do: :ok
+
+  defp finalize_valid_json_response(response, context, body, callbacks) do
+    with :ok <- validate_public_compaction_response(response, context, body) do
+      finalize_successful_json_response(response, context, body, callbacks)
+    end
+  end
+
+  defp finalize_invalid_public_compaction(response, context, error) do
+    %{reserved: reserved, attempt: attempt, request_options: request_options} = context
+
+    attrs =
+      SettlementAttrs.failure(
+        context,
+        error.status,
+        error.code,
+        error.message,
+        Metadata.response_metadata(response, error.code, request_options),
+        latency_ms: elapsed_ms(context.started)
+      )
+
+    case AttemptSettlement.finalize_failure(reserved.request, attempt, attrs) do
+      {:ok, _finalized} -> {:error, Map.put(error, :public_compaction_error?, true)}
+      {:error, gateway_error} -> {:error, gateway_error}
     end
   end
 

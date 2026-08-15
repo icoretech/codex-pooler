@@ -10,6 +10,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   alias CodexPooler.Gateway.Persistence.SessionContinuity, as: PersistenceSessionContinuity
   alias CodexPooler.Gateway.Runtime.RateLimitObserver
   alias CodexPooler.Gateway.Transports.BoundedResponseBody
+  alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
   alias CodexPooler.Gateway.Transports.RejectionBody
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.TransportFailureReason
@@ -291,7 +292,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
     result = Req.post(url, request_options)
     CloudflareCookies.store_from_result(url, result)
-    result = maybe_drain_rejection_body(result)
+    result = maybe_drain_rejection_body(result, opts)
 
     result
     |> normalize_upstream_transport_result(identity, opts)
@@ -362,7 +363,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
     result = Req.post(url, request_options)
     CloudflareCookies.store_from_result(url, result)
-    result = maybe_drain_rejection_body(result)
+    result = maybe_drain_rejection_body(result, opts)
 
     result
     |> normalize_upstream_transport_result(identity, opts)
@@ -415,6 +416,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       writer: task14_observing_writer(writer, observation),
       message_mapper: message_mapper,
       frame_observer: websocket_frame_observer(identity, observation),
+      submission_observer: request_options.transport.websocket_owner_submission_observer,
       reset_probe: request_options.routing.reset_probe,
       native_codex_response_control: native_codex_response_control,
       assignment_advertised?: assignment_advertised?,
@@ -431,6 +433,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           upstream_request,
           owner_request_forwarder_opts(forwarder_opts, request_options)
         )
+        |> observe_owner_request_submission(request_options)
         |> owner_request_result(identity, request, request_options)
 
       :local ->
@@ -771,6 +774,32 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     {:error, %{body: "", reason: reason, headers: [], started: false}}
   end
 
+  defp observe_owner_request_submission(
+         {:websocket_owner_submission_accepted, result},
+         %RequestOptions{transport: %{websocket_owner_submission_observer: observer}}
+       )
+       when is_function(observer, 0) do
+    observe_owner_request_submission(observer)
+    result
+  end
+
+  defp observe_owner_request_submission(
+         {:websocket_owner_submission_accepted, result},
+         %RequestOptions{}
+       ),
+       do: result
+
+  defp observe_owner_request_submission(result, %RequestOptions{}), do: result
+
+  defp observe_owner_request_submission(observer) do
+    observer.()
+    :ok
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
   defp contain_malformed_owner_reply(problem, request_options) do
     {reply_shape, detail} = owner_reply_log_detail(problem)
 
@@ -1078,13 +1107,28 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           %Req.Response{
             status: status,
             body: %Req.Response.Async{}
-          } = response}
+          } = response},
+         %RequestOptions{} = request_options
        )
        when status in 400..499 and status != 429 do
-    {:ok, RejectionBody.put(response, RejectionDrain.drain(response))}
+    body = RejectionDrain.drain(response)
+
+    response =
+      response
+      |> RejectionBody.put(body)
+      |> maybe_put_misalignment_policy_violation(status, body, request_options)
+
+    {:ok, response}
   end
 
-  defp maybe_drain_rejection_body(result), do: result
+  defp maybe_drain_rejection_body(result, %RequestOptions{}), do: result
+
+  defp maybe_put_misalignment_policy_violation(response, status, body, request_options) do
+    case MisalignmentPolicyViolation.classify_http(status, body, request_options) do
+      {:ok, summary} -> MisalignmentPolicyViolation.put_summary(response, summary)
+      :no_match -> response
+    end
+  end
 
   defp upstream_transport_error(reason) do
     TransportFailureReason.upstream_transport_error(reason, %{phase: :request})

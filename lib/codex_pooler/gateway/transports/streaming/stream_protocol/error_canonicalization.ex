@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonicalization do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.EventSummary
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser
@@ -173,8 +174,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
     do: not is_nil(ErrorCodes.sse_error_code(decoded))
 
   defp codex_responses_error_needs_canonical_response?("response.failed", decoded) do
-    is_nil(ErrorCodes.nested_string(decoded, ["response", "error", "code"])) and
-      not is_nil(ErrorCodes.sse_error_code(decoded))
+    upstream_code = ErrorCodes.upstream_error_code(decoded)
+
+    upstream_code == MisalignmentPolicyViolation.code() or
+      (is_nil(ErrorCodes.nested_string(decoded, ["response", "error", "code"])) and
+         not is_nil(ErrorCodes.sse_error_code(decoded)))
   end
 
   defp codex_responses_error_needs_canonical_response?("response.incomplete", decoded),
@@ -247,10 +251,19 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
 
     error = Map.put(error, "code", code)
 
-    if ErrorCodes.previous_response_miss_code?(upstream_code) do
-      Map.put(error, "message", message)
-    else
-      Map.put_new(error, "message", message)
+    cond do
+      upstream_code == MisalignmentPolicyViolation.code() ->
+        Map.put(
+          error,
+          "message",
+          error |> Map.get("message") |> MisalignmentPolicyViolation.normalize_message()
+        )
+
+      ErrorCodes.previous_response_miss_code?(upstream_code) ->
+        Map.put(error, "message", message)
+
+      true ->
+        Map.put_new(error, "message", message)
     end
   end
 

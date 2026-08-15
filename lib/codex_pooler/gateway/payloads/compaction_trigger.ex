@@ -106,7 +106,7 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
       when mode in [:sse, :public_sse, :response, :websocket] and is_integer(status) and
              status >= 200 and status < 300 do
     with {:ok, decoded} <- decode_result(result),
-         {:ok, item} <- compaction_item(decoded) do
+         {:ok, item} <- compaction_item(decoded, mode) do
       {:ok, adapted_result(result, decoded, item, mode)}
     else
       {:error, :invalid_json} ->
@@ -278,6 +278,11 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
 
   defp compaction_item(decoded), do: compaction_item_from_summary(decoded)
 
+  defp compaction_item(decoded, :sse), do: compaction_item(decoded)
+
+  defp compaction_item(decoded, mode) when mode in [:public_sse, :response, :websocket],
+    do: public_compaction_item(decoded)
+
   defp compaction_item_from_summary(%{
          "compaction_summary" => %{"encrypted_content" => content} = item
        })
@@ -285,6 +290,50 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
        do: {:ok, normalize_compaction_item(item)}
 
   defp compaction_item_from_summary(_decoded), do: {:error, :missing_encrypted_content}
+
+  defp public_compaction_item(%{"output" => output} = decoded) when is_list(output) do
+    case Enum.find(output, &public_compaction_candidate?/1) do
+      nil -> public_compaction_item_from_summary(decoded)
+      candidate -> validate_public_compaction_item(candidate)
+    end
+  end
+
+  defp public_compaction_item(decoded), do: public_compaction_item_from_summary(decoded)
+
+  defp public_compaction_candidate?(%{"type" => type})
+       when type in ["compaction", "compaction_summary"],
+       do: true
+
+  defp public_compaction_candidate?(_item), do: false
+
+  defp public_compaction_item_from_summary(%{"compaction_summary" => item}) when is_map(item),
+    do: validate_public_compaction_item(item)
+
+  defp public_compaction_item_from_summary(_decoded), do: {:error, :missing_encrypted_content}
+
+  defp validate_public_compaction_item(%{"encrypted_content" => content} = source_item)
+       when is_binary(content) do
+    if String.trim(content) == "" do
+      {:error, :missing_encrypted_content}
+    else
+      {:ok, normalize_public_compaction_item(source_item)}
+    end
+  end
+
+  defp validate_public_compaction_item(_source_item),
+    do: {:error, :missing_encrypted_content}
+
+  defp normalize_public_compaction_item(source_item) do
+    item = %{
+      "type" => "compaction",
+      "encrypted_content" => source_item["encrypted_content"]
+    }
+
+    case Map.fetch(source_item, "id") do
+      {:ok, id} when is_nil(id) or is_binary(id) -> Map.put(item, "id", id)
+      _result -> item
+    end
+  end
 
   defp normalize_compaction_item(source_item) do
     %{

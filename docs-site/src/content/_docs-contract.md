@@ -169,6 +169,20 @@ Unsupported public `/v1` routes that may be named as unsupported:
 - `DELETE /v1/responses/:response_id`
 - `/v1/realtime` and OpenAI Realtime SDK websocket or session routes
 
+Public `POST /v1/responses` compaction triggers require visible input followed
+by exactly one final `compaction_trigger`. When documenting Vercel AI SDK,
+require `@ai-sdk/openai` 4.0.42 or later for
+`providerOptions.openai.compactionTrigger` serialization and retain the normal
+`/v1/responses` route claim. Direct `POST /v1/responses/compact` remains
+unsupported. Public compact replay documents only `type`, opaque nonblank
+`encrypted_content`, and optional absent, binary, or null `id`; identical
+normalized terminal items are emitted for collected JSON, public SSE, and narrow
+Responses websocket completion. Native metadata and unknown fields are not a
+public contract. Invalid upstream compact output is a sanitized `502`. Websocket
+trigger turns retain outer `proxy_websocket` admission and receive nested
+`proxy_compact` admission before compact execution. Legacy backend compact
+behavior remains unchanged.
+
 ### API Key Observatory
 
 The Observatory is a separate read-only browser surface for a single eligible
@@ -264,6 +278,15 @@ Forbidden fields and examples:
 - Bearer tokens, Pool API keys, MCP tokens, cookies, access tokens, refresh tokens, `auth.json`, TOTP secrets, SMTP secrets, signing secrets, and raw idempotency keys
 - Internal incident procedures, cluster names, pod names, private hostnames, real account identifiers, raw OpenAI user subjects, raw emails, and private IP addresses
 
+The generic provider-error rule remains fixed redaction: `upstream request
+failed` and `server_error`, with no provider body, parameter, or siblings. The
+only public exception is an eligible direct `400` or `403`, or exact terminal
+SSE or websocket failure, with code `misalignment_policy_violation`. It is
+health-neutral and non-retryable. Public output may expose the exact code,
+`invalid_request_error`, and a nonblank provider message or fixed safe fallback,
+but never a provider parameter, body, or siblings. Durable records may retain
+only the exact code, fixed accounting text, and bounded facts.
+
 ## Runtime ingress firewall contract
 
 Public configuration may describe the runtime firewall only as an ingress policy
@@ -330,6 +353,7 @@ Use these tracked sources as the source of truth for public route claims. Do not
 | Pool-model serving modes (Auto, Lite, Full) | `lib/codex_pooler/pools/model_serving_mode.ex`, `lib/codex_pooler/pools/model_serving_modes.ex`, `lib/codex_pooler/pools/model_serving_override.ex`, `lib/codex_pooler/gateway/payloads/payload_normalizer.ex`, `lib/codex_pooler/gateway/payloads/request_options/routing.ex`, `lib/codex_pooler/gateway/transports/upstream_dispatch.ex`, `lib/codex_pooler/gateway/metadata/canonical_model_source.ex`, `lib/codex_pooler/gateway/routing/model_metadata.ex`, `lib/codex_pooler/gateway/runtime/finalization/metadata.ex`, `lib/codex_pooler/accounting/metadata.ex`, `test/codex_pooler/pools/model_serving_mode_test.exs`, `test/codex_pooler/pools/model_serving_modes_test.exs`, `test/codex_pooler_web/controllers/runtime/backend_codex_controller_test.exs`, `test/codex_pooler_web/controllers/runtime/backend_codex_websocket_test.exs` | A serving mode belongs to one Pool and one canonical exposed model id and never changes the route, model id, credentials, response shape, transport choice, routing eligibility, context window, or accounting. Auto selects Lite only on a literal `true` from a routable catalog source, otherwise Full; explicit `lite`/`full` record source `override`. Lite rewrites the outgoing valid request: top-level `tools` and `instructions` move into leading `additional_tools` and developer message `input` items, `parallel_tool_calls` becomes `false`, `reasoning.context` becomes `all_turns`, `input_image` `detail` is dropped, and Codex Pooler owns the Lite marker (HTTP header, or the websocket `client_metadata` key) in both directions. The rewrite is idempotent. On native non-compact backend Responses routes, both modes reject a present non-list `input` or `tools` before dispatch with `invalid_request`; narrow `/v1` string input is normalized before serving-mode handling. Lite rejects map-shaped `tool_choice` before dispatch with `unsupported_parameter`. `GET /backend-api/codex/models` reports `use_responses_lite` as the effective mode; `GET /v1/models` carries no serving-mode field. The mode is an immutable per-request or per-`response.create`-turn snapshot |
 | OpenAI Responses web-search domain filters | `lib/codex_pooler/gateway/openai_compatibility/responses.ex`, `test/codex_pooler/gateway/openai_compatibility/core_test.exs` | `web_search.filters` accepts only optional `allowed_domains` and `blocked_domains` lists, each bounded to 1 through 100 nonblank strings without leading-whitespace, case-insensitive HTTP(S) schemes. Both lists may coexist and accepted values are forwarded unchanged. `external_web_access` is optional. This is local validation and forwarding, not an upstream availability or enforcement guarantee |
 | Unsupported `/v1` routes | `lib/codex_pooler_web/controllers/v1/unsupported_routes.ex`, `test/support/compatibility_matrix.ex`, `test/codex_pooler_web/controllers/v1/route_auth_test.exs`, `test/codex_pooler_web/controllers/runtime/compatibility_contract_test.exs` | Explicit unsupported `/v1` routes return deterministic OpenAI-shaped unsupported endpoint errors before gateway dispatch |
+| Exact policy-error exception | `lib/codex_pooler/gateway/transports/misalignment_policy_violation.ex`, `lib/codex_pooler/gateway/openai_compatibility/public_response.ex`, `test/support/compatibility_matrix.ex`, `test/codex_pooler_web/controllers/misalignment_policy_violation_http_test.exs`, `test/codex_pooler_web/controllers/runtime/compatibility_contract_test.exs` | Only eligible direct `400` or `403`, and exact terminal SSE or websocket, `misalignment_policy_violation` errors are health-neutral and non-retryable. Public output keeps the exact code, `invalid_request_error`, and a nonblank message or fixed safe fallback, while parameters, bodies, and siblings remain excluded. Durable records keep the exact code, fixed accounting text, and bounded facts. Generic provider errors remain redacted |
 | Realtime exclusion | `lib/codex_pooler_web/router.ex`, `test/support/compatibility_matrix.ex`, `test/codex_pooler_web/route_surface_test.exs`, `test/codex_pooler_web/controllers/v1/route_auth_test.exs` | `/v1/realtime` and OpenAI Realtime SDK websocket or session routes are not supported |
 | MCP endpoint | `lib/codex_pooler_web/router.ex`, `test/codex_pooler_web/route_surface_test.exs`, `test/codex_pooler_web/controllers/mcp_contract_test.exs`, `test/codex_pooler_web/controllers/mcp_controller_test.exs` | `/mcp` is a root metadata-only, read-only operator endpoint using operator MCP bearer tokens, not Pool API keys or browser sessions |
 | API Key Observatory | `lib/codex_pooler_web/router.ex`, `lib/codex_pooler_web/controllers/observatory/login_controller.ex`, `lib/codex_pooler_web/plugs/observatory_auth.ex`, `lib/codex_pooler_web/observatory_auth.ex`, `lib/codex_pooler/access/dashboard_sessions.ex`, `lib/codex_pooler/accounting/usage/observatory.ex`, `test/codex_pooler_web/route_surface_test.exs`, `test/codex_pooler_web/controllers/browser/observatory_login_controller_test.exs`, `test/codex_pooler/access/api_key_dashboard_sessions_test.exs`, `test/codex_pooler/accounting/observatory_contract_test.exs`, `test/codex_pooler_web/live/observatory_live_test.exs` | `/observatory` is a separate key-local read-only browser surface using an eligible Pool API key, a dedicated opaque dashboard token, and a minimal signed LiveView handoff; it does not grant runtime or `/admin/*` authority and exposes only bounded sanitized usage metadata |

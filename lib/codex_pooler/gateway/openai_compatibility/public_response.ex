@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
+
   @type success_normalizer :: (map() -> map())
   @type error_status :: integer() | String.t() | nil
   @type error_origin :: :local_validation
@@ -48,6 +50,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
     status = error_status(error, opts)
 
     cond do
+      misalignment_policy_violation?(error) -> misalignment_policy_violation_error(error)
       overload_error?(error) -> overload_error()
       local_validation_error?(error, status, opts) -> explicit_error(error, status)
       true -> redacted_error(error)
@@ -64,12 +67,25 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   end
 
   @spec redacted_gateway_error?(term()) :: boolean()
+  def redacted_gateway_error?(%{public_compaction_error?: true}), do: false
+
   def redacted_gateway_error?(%{} = error) do
     not public_recovery_error_token?(field(error, "code")) and
       public_failure_error?(error, error_status(error, []))
   end
 
   def redacted_gateway_error?(_error), do: false
+
+  defp misalignment_policy_violation_error(error) do
+    %{
+      "message" =>
+        error
+        |> field("message")
+        |> MisalignmentPolicyViolation.normalize_message(),
+      "type" => "invalid_request_error",
+      "code" => MisalignmentPolicyViolation.code()
+    }
+  end
 
   defp explicit_error(error, status) do
     %{
@@ -142,6 +158,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
     field(error, "code") == @overload_code and
       field(error, "internal_reason") in @bulkhead_reasons
   end
+
+  defp misalignment_policy_violation?(error),
+    do: field(error, "code") == MisalignmentPolicyViolation.code()
 
   defp public_recovery_error_token?(value) when is_binary(value),
     do: value in @public_recovery_error_tokens

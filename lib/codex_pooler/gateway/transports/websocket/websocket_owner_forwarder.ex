@@ -36,6 +36,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
         ]
   @type submit_error ::
           WebsocketOwnerContract.owner_error() | UpstreamWebsocketSession.request_failure()
+  @type request_result :: :ok | {:ok, term()} | {:error, submit_error()}
+  @type submitted_request_result ::
+          request_result() | {:websocket_owner_submission_accepted, request_result()}
 
   @spec submit_frame(
           CodexSession.t(),
@@ -62,7 +65,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
           UpstreamWebsocketSession.Request.t(),
           submit_opts()
         ) ::
-          :ok | {:ok, term()} | {:error, submit_error()}
+          submitted_request_result()
   def submit_request(
         %CodexSession{} = session,
         owner_lease_token,
@@ -86,7 +89,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
           WebsocketOwnerContract.downstream_payload(),
           submit_opts()
         ) ::
-          :ok | {:ok, term()} | {:error, WebsocketOwnerContract.owner_error()}
+          request_result()
   def push_downstream(%CodexSession{} = session, owner_lease_token, payload, opts \\ [])
       when is_binary(owner_lease_token) do
     with :ok <- SessionContinuity.validate_owner_token(session, owner_lease_token),
@@ -167,7 +170,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
           UpstreamWebsocketSession.Request.t(),
           submit_opts()
         ) ::
-          :ok | {:ok, term()} | {:error, WebsocketOwnerContract.owner_error()}
+          submitted_request_result()
   def remote_submit_request(codex_session_id, downstream, request, opts \\ [])
       when is_binary(codex_session_id) and is_map(downstream) and
              is_struct(request, UpstreamWebsocketSession.Request) do
@@ -264,7 +267,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
       )
 
     result =
-      call_remote(
+      call_remote_submission(
         node,
         :remote_submit_request,
         [codex_session_id, downstream, request, opts],
@@ -578,7 +581,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
 
   @doc false
   @spec call_remote(node(), atom(), [term()], submit_opts()) ::
-          :ok | {:ok, term()} | {:error, submit_error()}
+          request_result()
   def call_remote(node, function, args, opts)
       when is_atom(node) and is_atom(function) and is_list(args) and is_list(opts) do
     timeout = Keyword.get(opts, :timeout, WebsocketOwnerContract.default_forward_timeout_ms())
@@ -587,6 +590,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     |> node_client()
     |> safe_remote_call(node, __MODULE__, function, args, timeout)
     |> normalize_forward_result()
+  end
+
+  defp call_remote_submission(node, function, args, opts) do
+    timeout = Keyword.get(opts, :timeout, WebsocketOwnerContract.default_forward_timeout_ms())
+
+    opts
+    |> node_client()
+    |> safe_remote_call(node, __MODULE__, function, args, timeout)
+    |> normalize_submitted_request_result()
   end
 
   defp safe_remote_call(node_client, node, module, function, args, timeout) do
@@ -609,6 +621,32 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   end
 
   defp normalize_forward_result(_unsafe_result), do: {:error, :owner_crashed}
+
+  defp normalize_submitted_request_result({:websocket_owner_submission_accepted, result}) do
+    {:websocket_owner_submission_accepted, normalize_accepted_request_result(result)}
+  end
+
+  defp normalize_submitted_request_result(:ok),
+    do: {:websocket_owner_submission_accepted, :ok}
+
+  defp normalize_submitted_request_result({:ok, _value} = result),
+    do: {:websocket_owner_submission_accepted, result}
+
+  defp normalize_submitted_request_result(result), do: normalize_forward_result(result)
+
+  defp normalize_accepted_request_result(:ok), do: :ok
+  defp normalize_accepted_request_result({:ok, _value} = result), do: result
+
+  defp normalize_accepted_request_result({:error, %{body: _body, reason: _reason}} = result),
+    do: result
+
+  defp normalize_accepted_request_result({:error, reason}) do
+    if WebsocketOwnerContract.owner_error?(reason),
+      do: {:error, reason},
+      else: {:error, :owner_crashed}
+  end
+
+  defp normalize_accepted_request_result(_unsafe_result), do: {:error, :owner_crashed}
 
   defp map_remote_failure(:timeout), do: :owner_forward_timeout
   defp map_remote_failure({:erpc, :timeout}), do: :owner_forward_timeout
