@@ -34,6 +34,7 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
   @type filter_values :: %{
           required(String.t()) => String.t()
         }
+  @type filter_input :: term()
   @type option :: {String.t(), String.t()}
   @type model_serving_snapshot :: %{
           required(:overrides) => [ModelServingOverride.t()],
@@ -80,17 +81,25 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
           required(:rows) => [map()]
         }
 
-  @spec filter(map() | keyword()) :: filter_values()
+  @spec filter(filter_input()) :: filter_values()
   def filter(attrs \\ %{}) do
-    attrs = Map.new(attrs)
-    status = attrs |> value_for("status", "all") |> to_string()
-    traffic_window = attrs |> value_for("traffic_window", "24h") |> normalize_traffic_window()
+    cond do
+      is_map(attrs) -> normalize_filter(attrs)
+      is_list(attrs) and Keyword.keyword?(attrs) -> normalize_filter(attrs)
+      true -> default_filter()
+    end
+  end
 
-    %{
-      "query" => attrs |> value_for("query", "") |> to_string() |> String.trim(),
-      "status" => if(status in ["all" | @pool_statuses], do: status, else: "all"),
-      "traffic_window" => traffic_window
-    }
+  @spec query_params(filter_input()) :: %{optional(String.t()) => String.t()}
+  def query_params(attrs \\ %{}) do
+    attrs
+    |> filter()
+    |> Enum.reduce(%{}, fn
+      {"query", ""}, params -> params
+      {"status", "all"}, params -> params
+      {"traffic_window", "24h"}, params -> params
+      {key, value}, params -> Map.put(params, key, value)
+    end)
   end
 
   @spec filter_form(map() | keyword()) :: Phoenix.HTML.Form.t()
@@ -111,10 +120,27 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
     do: Map.get(@traffic_window_short_labels, normalize_traffic_window(window), "24h")
 
   @spec normalize_traffic_window(term()) :: String.t()
-  def normalize_traffic_window(window) do
-    window = to_string(window || "")
+  def normalize_traffic_window(window) when is_binary(window) do
     if window in @traffic_windows, do: window, else: "24h"
   end
+
+  def normalize_traffic_window(_window), do: "24h"
+
+  defp normalize_filter(attrs) do
+    status = value_for(attrs, "status", "all")
+
+    %{
+      "query" => normalize_query(value_for(attrs, "query", "")),
+      "status" => if(status in ["all" | @pool_statuses], do: status, else: "all"),
+      "traffic_window" =>
+        attrs |> value_for("traffic_window", "24h") |> normalize_traffic_window()
+    }
+  end
+
+  defp default_filter, do: %{"query" => "", "status" => "all", "traffic_window" => "24h"}
+
+  defp normalize_query(query) when is_binary(query), do: String.trim(query)
+  defp normalize_query(_query), do: ""
 
   def create_form(attrs \\ %{}, errors \\ []) do
     attrs
@@ -555,14 +581,23 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
     end)
   end
 
-  defp value_for(attrs, "query", default),
+  defp value_for(attrs, "query", default) when is_map(attrs),
     do: Map.get(attrs, "query") || Map.get(attrs, :query) || default
 
-  defp value_for(attrs, "status", default),
+  defp value_for(attrs, "status", default) when is_map(attrs),
     do: Map.get(attrs, "status") || Map.get(attrs, :status) || default
 
-  defp value_for(attrs, "traffic_window", default),
+  defp value_for(attrs, "traffic_window", default) when is_map(attrs),
     do: Map.get(attrs, "traffic_window") || Map.get(attrs, :traffic_window) || default
+
+  defp value_for(attrs, "query", default) when is_list(attrs),
+    do: Keyword.get(attrs, :query, default)
+
+  defp value_for(attrs, "status", default) when is_list(attrs),
+    do: Keyword.get(attrs, :status, default)
+
+  defp value_for(attrs, "traffic_window", default) when is_list(attrs),
+    do: Keyword.get(attrs, :traffic_window, default)
 
   defp list_input_values(nil), do: []
 

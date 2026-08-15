@@ -32,6 +32,467 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
   setup :register_and_log_in_user
 
+  @tag :admin_pool_url_filters
+  test "plain Pool route loads the default projection once per LiveView phase", %{
+    conn: conn,
+    scope: scope
+  } do
+    # Given
+    {:ok, active_pool} =
+      Pools.create_pool(scope, %{slug: "url-default-active", name: "URL Default Active"})
+
+    {:ok, disabled_pool} =
+      Pools.create_pool(scope, %{slug: "url-default-disabled", name: "URL Default Disabled"})
+
+    assert {:ok, disabled_pool} = Pools.change_pool_status(scope, disabled_pool, "disabled")
+    projection_ref = attach_pool_projection_telemetry()
+
+    # When
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view, activate_histograms?: false)
+    projection_events = drain_pool_projection_telemetry(projection_ref)
+
+    # Then
+    assert has_element?(view, "#pool_filters_status[value='all']")
+    assert has_element?(view, "#pool_filters_traffic_window[value='24h']")
+    assert has_element?(view, "#pool-row-#{active_pool.id}")
+    assert has_element?(view, "#pool-row-#{disabled_pool.id}")
+    assert has_element?(view, "#pool-metric-requests", "Requests 24h")
+
+    assert structural_projection_count(projection_events, view) == 2
+    assert traffic_projection_pids(projection_events, view) |> MapSet.size() == 1
+    assert traffic_projection_windows(projection_events, view) == MapSet.new([:twenty_four_hours])
+  end
+
+  @tag :admin_pool_url_filters
+  test "direct non-default Pool URL owns the initial structural and traffic projection", %{
+    conn: conn,
+    scope: scope
+  } do
+    # Given
+    {:ok, target_pool} =
+      Pools.create_pool(scope, %{slug: "url-target-disabled", name: "URL Target Disabled"})
+
+    assert {:ok, target_pool} = Pools.change_pool_status(scope, target_pool, "disabled")
+
+    {:ok, other_pool} =
+      Pools.create_pool(scope, %{slug: "url-other-active", name: "URL Other Active"})
+
+    projection_ref = attach_pool_projection_telemetry()
+
+    # When
+    {:ok, view, _html} =
+      live(conn, ~p"/admin/pools?query=target&status=disabled&traffic_window=7d")
+
+    _ = await_pool_traffic(view, activate_histograms?: false)
+    projection_events = drain_pool_projection_telemetry(projection_ref)
+
+    # Then
+    assert has_element?(view, "#pool_filters_query[value='target']")
+    assert has_element?(view, "#pool_filters_status[value='disabled']")
+    assert has_element?(view, "#pool_filters_traffic_window[value='7d']")
+    assert has_element?(view, "#pool-row-#{target_pool.id}")
+    refute has_element?(view, "#pool-row-#{other_pool.id}")
+    assert has_element?(view, "#pool-metric-requests", "Requests 7d")
+
+    assert structural_projection_count(projection_events, view) == 2
+    assert traffic_projection_pids(projection_events, view) |> MapSet.size() == 1
+    assert traffic_projection_windows(projection_events, view) == MapSet.new([:seven_days])
+  end
+
+  @tag :admin_pool_url_filters
+  test "editor-only patch with the same normalized filters does not reload Pool projections", %{
+    conn: conn,
+    scope: scope
+  } do
+    # Given
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "url-editor-target", name: "URL Editor Target"})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+
+    _ = await_pool_traffic(view, activate_histograms?: false)
+    projection_ref = attach_pool_projection_telemetry()
+
+    # When
+    render_patch(view, ~p"/admin/pools?edit_pool_id=#{pool.id}&step=details")
+
+    _ = :sys.get_state(view.pid)
+    projection_events = drain_pool_projection_telemetry(projection_ref)
+
+    # Then
+    assert has_element?(view, "#pool-edit-dialog[open]")
+    assert has_element?(view, "#pool_edit_id[value='#{pool.id}']")
+    assert structural_projection_count(projection_events, view) == 0
+    assert traffic_projection_pids(projection_events, view) == MapSet.new()
+  end
+
+  @tag :admin_pool_url_filters
+  test "filter URL changes prune viewport payload until a fresh visibility event", %{
+    conn: conn,
+    scope: scope
+  } do
+    # Given
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "url-viewport-target", name: "URL Viewport Target"})
+
+    %{api_key: api_key} = api_key_fixture(pool)
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    insert_timed_usage!(pool, api_key, assignment, DateTime.utc_now(), 75, 750_000, 1_500)
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view, activate_histograms?: false)
+
+    render_hook(view, "set_pool_traffic_visibility", %{
+      "pool_id" => pool.id,
+      "visible" => true
+    })
+
+    _ = await_pool_traffic(view, activate_histograms?: false)
+    assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram-plot")
+    projection_ref = attach_pool_projection_telemetry()
+
+    # When
+    render_patch(view, ~p"/admin/pools?query=no-match")
+    _ = :sys.get_state(view.pid)
+
+    # Then
+    refute has_element?(view, "#pool-row-#{pool.id}")
+    state = :sys.get_state(view.pid).socket.assigns
+    refute MapSet.member?(state.pool_traffic_viewport_ids, pool.id)
+    refute Map.has_key?(state.pool_traffic_usage.histogram_by_pool_id, pool.id)
+
+    # When: browser Back is represented by the same canonical render-patch.
+    render_patch(view, ~p"/admin/pools")
+    _ = :sys.get_state(view.pid)
+    projection_events = drain_pool_projection_telemetry(projection_ref)
+
+    # Then: the row returns, but its chart payload does not return implicitly.
+    assert has_element?(view, "#pool-row-#{pool.id}")
+    refute has_element?(view, "#pool-row-#{pool.id}-traffic-histogram-plot")
+    refute has_element?(view, "#pool-row-#{pool.id}-traffic-histogram [data-chart-series]")
+
+    refute MapSet.member?(
+             :sys.get_state(view.pid).socket.assigns.pool_traffic_viewport_ids,
+             pool.id
+           )
+
+    assert structural_projection_count(projection_events, view) == 2
+    assert traffic_projection_pids(projection_events, view) == MapSet.new()
+
+    # When: the browser hook reports the row visible again.
+    render_hook(view, "set_pool_traffic_visibility", %{
+      "pool_id" => pool.id,
+      "visible" => true
+    })
+
+    _ = await_pool_traffic(view, activate_histograms?: false)
+
+    # Then
+    assert has_element?(view, "#pool-row-#{pool.id}-traffic-histogram-plot")
+  end
+
+  @tag :admin_pool_url_filters
+  test "permalink editor defers lifecycle PubSub and flushes once with current URL filters", %{
+    conn: conn,
+    scope: scope
+  } do
+    # Given
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "url-deferred-target", name: "URL Deferred Target"})
+
+    {:ok, view, _html} =
+      live(conn, ~p"/admin/pools?query=deferred&status=active&traffic_window=7d")
+
+    _ = await_pool_traffic(view, activate_histograms?: false)
+    view |> element("#edit-pool-#{pool.id}") |> render_click()
+
+    assert_pool_patch_params(view, %{
+      "edit_pool_id" => pool.id,
+      "query" => "deferred",
+      "status" => "active",
+      "step" => "details",
+      "traffic_window" => "7d"
+    })
+
+    assert {:ok, _event} = Events.broadcast_pools(pool.id, "pool_changed", %{})
+
+    assert {:ok, _event} =
+             Events.broadcast_upstreams(pool.id, "upstream_assignment_changed", %{})
+
+    _ = :sys.get_state(view.pid)
+    deferred_state = :sys.get_state(view.pid).socket.assigns
+    assert deferred_state.pool_traffic_dirty?
+    assert is_nil(deferred_state.pool_traffic_refresh_timer)
+
+    render_patch(
+      view,
+      ~p"/admin/pools?query=no-match&status=active&traffic_window=7d&edit_pool_id=#{pool.id}&step=details"
+    )
+
+    assert_pool_patch_params(view, %{
+      "edit_pool_id" => pool.id,
+      "query" => "no-match",
+      "status" => "active",
+      "step" => "details",
+      "traffic_window" => "7d"
+    })
+
+    assert has_element?(view, "#pool-edit-dialog[open]")
+    refute has_element?(view, "#pool-row-#{pool.id}")
+    projection_ref = attach_pool_projection_telemetry()
+
+    # When
+    view |> element("#pool-edit-cancel") |> render_click()
+
+    assert_pool_patch_params(view, %{
+      "query" => "no-match",
+      "status" => "active",
+      "traffic_window" => "7d"
+    })
+
+    _ = await_pool_traffic(view, activate_histograms?: false)
+    projection_events = drain_pool_projection_telemetry(projection_ref)
+
+    # Then
+    refute has_element?(view, "#pool-edit-dialog")
+    assert has_element?(view, "#pool_filters_query[value='no-match']")
+    assert has_element?(view, "#pool_filters_status[value='active']")
+    assert has_element?(view, "#pool_filters_traffic_window[value='7d']")
+    refute has_element?(view, "#pool-row-#{pool.id}")
+    assert structural_projection_count(projection_events, view) == 1
+    assert traffic_projection_pids(projection_events, view) |> MapSet.size() == 1
+    assert traffic_projection_windows(projection_events, view) == MapSet.new([:seven_days])
+    assert_no_pending_pool_traffic_refresh(view)
+  end
+
+  @tag :admin_pool_url_filters
+  test "subsequent Pool route filters reload only the projection layer they change", %{
+    conn: conn,
+    scope: scope
+  } do
+    # Given
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "url-transition-target", name: "URL Transition Target"})
+
+    assert {:ok, pool} = Pools.change_pool_status(scope, pool, "disabled")
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view, activate_histograms?: false)
+    structural_ref = attach_pool_projection_telemetry()
+
+    # When
+    render_patch(view, ~p"/admin/pools?query=target&status=disabled")
+    _ = :sys.get_state(view.pid)
+    structural_events = drain_pool_projection_telemetry(structural_ref)
+
+    # Then
+    assert has_element?(view, "#pool-row-#{pool.id}")
+    assert structural_projection_count(structural_events, view) == 1
+    assert traffic_projection_pids(structural_events, view) == MapSet.new()
+
+    # Given
+    _ = expire_pool_traffic_cooldown(view)
+    traffic_ref = attach_pool_projection_telemetry()
+
+    # When
+    render_patch(view, ~p"/admin/pools?query=target&status=disabled&traffic_window=7d")
+    _ = await_pool_traffic(view, activate_histograms?: false)
+    traffic_events = drain_pool_projection_telemetry(traffic_ref)
+
+    # Then
+    assert structural_projection_count(traffic_events, view) == 1
+    assert traffic_projection_pids(traffic_events, view) |> MapSet.size() == 1
+    assert traffic_projection_windows(traffic_events, view) == MapSet.new([:seven_days])
+  end
+
+  @tag :admin_pool_url_filters
+  test "filter and editor navigation preserve the surviving canonical tuple", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "url-tuple-target", name: "URL Tuple Target"})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view, activate_histograms?: false)
+
+    view |> element("#edit-pool-#{pool.id}") |> render_click()
+
+    assert_pool_patch_params(view, %{
+      "edit_pool_id" => pool.id,
+      "step" => "details"
+    })
+
+    view |> element("#pool-edit-dialog-tab-upstreams") |> render_click()
+
+    assert_pool_patch_params(view, %{
+      "edit_pool_id" => pool.id,
+      "step" => "upstreams"
+    })
+
+    view
+    |> element("#pool-filter-form")
+    |> render_change(%{
+      "pool_filters" => %{
+        "query" => "tuple",
+        "status" => "all",
+        "traffic_window" => "24h"
+      }
+    })
+
+    assert_pool_patch_params(view, %{
+      "edit_pool_id" => pool.id,
+      "query" => "tuple",
+      "step" => "upstreams"
+    })
+
+    view
+    |> element("#pool-status-filter [data-status='disabled']")
+    |> render_click()
+
+    assert_pool_patch_params(view, %{
+      "edit_pool_id" => pool.id,
+      "query" => "tuple",
+      "status" => "disabled",
+      "step" => "upstreams"
+    })
+
+    assert has_element?(view, "#pool-edit-dialog[open]")
+    assert has_element?(view, "#pool_edit_id[value='#{pool.id}']")
+    refute has_element?(view, "#pool-row-#{pool.id}")
+
+    view
+    |> element("#pool-traffic-window-filter [data-window='7d']")
+    |> render_click()
+
+    assert_pool_patch_params(view, %{
+      "edit_pool_id" => pool.id,
+      "query" => "tuple",
+      "status" => "disabled",
+      "step" => "upstreams",
+      "traffic_window" => "7d"
+    })
+
+    view |> element("#pool-filter-query-clear") |> render_click()
+
+    assert_pool_patch_params(view, %{
+      "edit_pool_id" => pool.id,
+      "status" => "disabled",
+      "step" => "upstreams",
+      "traffic_window" => "7d"
+    })
+
+    view |> element("#pool-edit-cancel") |> render_click()
+
+    assert_pool_patch_params(view, %{
+      "status" => "disabled",
+      "traffic_window" => "7d"
+    })
+
+    refute has_element?(view, "#pool-edit-dialog")
+  end
+
+  @tag :admin_pool_url_filters
+  test "combined filter URL opens an authorized editor hidden from the Pool cards", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "url-hidden-editor", name: "URL Hidden Editor"})
+
+    {:ok, view, _html} =
+      live(
+        conn,
+        ~p"/admin/pools?query=no-match&status=disabled&traffic_window=7d&edit_pool_id=#{pool.id}&step=upstreams"
+      )
+
+    assert has_element?(view, "#pool_filters_query[value='no-match']")
+    assert has_element?(view, "#pool_filters_status[value='disabled']")
+    assert has_element?(view, "#pool_filters_traffic_window[value='7d']")
+    refute has_element?(view, "#pool-row-#{pool.id}")
+    assert has_element?(view, "#pool-edit-dialog[open]")
+    assert has_element?(view, "#pool_edit_id[value='#{pool.id}']")
+    assert has_element?(view, "#pool-edit-dialog-tab-upstreams[aria-selected='true']")
+  end
+
+  @tag :admin_pool_url_filters
+  test "valid editor with an invalid step repairs once to the normalized editor URL", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "url-invalid-step", name: "URL Invalid Step"})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view, activate_histograms?: false)
+
+    requested_path = "/admin/pools?edit_pool_id=#{pool.id}&step=bogus&unknown=drop"
+    render_patch(view, requested_path)
+    assert_patch(view, requested_path)
+
+    assert_pool_patch_params(view, %{
+      "edit_pool_id" => pool.id,
+      "step" => "details"
+    })
+
+    refute_patched(view)
+    assert has_element?(view, "#pool-edit-dialog[open]")
+    assert has_element?(view, "#pool-edit-dialog-tab-details[aria-selected='true']")
+  end
+
+  @tag :admin_pool_url_filters
+  test "malformed filters and unauthorized editor repair once without projection reload", %{
+    scope: scope
+  } do
+    {:ok, unauthorized_pool} =
+      Pools.create_pool(scope, %{slug: "url-unauthorized-editor", name: "URL Unauthorized Editor"})
+
+    %{user: admin, temporary_password: temporary_password} =
+      operator_fixture(scope, %{
+        "email" => "url-repair-admin@example.com",
+        "password_change_required" => "false"
+      })
+
+    assert {:ok, %{token: token}} =
+             Accounts.login_user(%{"email" => admin.email, "password" => temporary_password})
+
+    admin_conn = log_in_user(build_conn(), admin, token)
+    {:ok, view, _html} = live(admin_conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view, activate_histograms?: false)
+    projection_ref = attach_pool_projection_telemetry()
+
+    requested_path =
+      "/admin/pools?status[bad]=1&traffic_window=bogus&query[]=x&edit_pool_id=#{unauthorized_pool.id}&step=bogus&unknown=drop"
+
+    render_patch(view, requested_path)
+    assert_patch(view, requested_path)
+
+    assert_pool_patch_params(view, %{})
+    refute_patched(view)
+    _ = :sys.get_state(view.pid)
+
+    projection_events = drain_pool_projection_telemetry(projection_ref)
+
+    assert has_element?(view, "#pool_filters_query[value='']")
+    assert has_element?(view, "#pool_filters_status[value='all']")
+    assert has_element?(view, "#pool_filters_traffic_window[value='24h']")
+    refute has_element?(view, "#pool-edit-dialog")
+    assert structural_projection_count(projection_events, view) == 0
+    assert traffic_projection_pids(projection_events, view) == MapSet.new()
+
+    stable_ref = attach_pool_projection_telemetry()
+    render_patch(view, ~p"/admin/pools")
+    assert_patch(view, ~p"/admin/pools")
+    _ = :sys.get_state(view.pid)
+
+    stable_events = drain_pool_projection_telemetry(stable_ref)
+
+    refute_patched(view)
+    assert structural_projection_count(stable_events, view) == 0
+    assert traffic_projection_pids(stable_events, view) == MapSet.new()
+  end
+
+  @tag :admin_pool_url_filters
   test "pool editor permalink opens the requested Pool on the Upstreams step and clears on cancel",
        %{
          conn: conn,
@@ -61,6 +522,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute has_element?(view, "#pool-edit-dialog")
   end
 
+  @tag :admin_pool_url_filters
   test "Pool edit actions and wizard steps keep the editor state in the URL", %{
     conn: conn,
     scope: scope
@@ -82,6 +544,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-edit-dialog-tab-upstreams[aria-selected='true']")
   end
 
+  @tag :admin_pool_url_filters
   test "Pool editor permalinks are rejected outside the management scope", %{
     scope: scope
   } do
@@ -980,6 +1443,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
   end
 
   @tag :lazy_pool_histograms
+  @tag :admin_pool_url_filters
   test "viewport leave prunes payload and rapid eligibility changes coalesce", %{
     conn: conn,
     scope: scope
@@ -1189,6 +1653,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
   end
 
   @tag :shared_pool_traffic_gate
+  @tag :admin_pool_url_filters
   test "same operator sessions share one Pool traffic projection lane", %{
     conn: conn,
     scope: scope,
@@ -1409,7 +1874,11 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     _ = await_pool_traffic(view)
   end
 
-  test "rapid traffic window changes settle on the latest window", %{conn: conn, scope: scope} do
+  @tag :admin_pool_url_filters
+  test "rapid traffic window URL changes reject a stale completion and settle on 24h", %{
+    conn: conn,
+    scope: scope
+  } do
     {:ok, pool} = Pools.create_pool(scope, %{slug: "window-race", name: "Window Race Pool"})
     %{api_key: api_key} = api_key_fixture(pool)
     %{assignment: assignment} = upstream_assignment_fixture(pool)
@@ -1431,16 +1900,85 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
     _ = await_pool_traffic(view)
+    _ = expire_pool_traffic_cooldown(view)
 
-    view |> element("#pool-traffic-window-filter [data-window='7d']") |> render_click()
-    view |> element("#pool-traffic-window-filter [data-window='24h']") |> render_click()
+    test_pid = self()
+    projection_ref = make_ref()
+    handler_id = {__MODULE__, :stale_pool_window, projection_ref}
+    first_seven_day_projection = :atomics.new(1, signed: false)
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo do
+            query_pid = self()
+            send(test_pid, {projection_ref, query_pid, metadata})
+
+            if traffic_projection_window(metadata) == :seven_days and
+                 :atomics.compare_exchange(first_seven_day_projection, 1, 0, 1) == :ok do
+              send(test_pid, {handler_id, :held, query_pid})
+
+              receive do
+                {^handler_id, :release} -> :ok
+              after
+                5_000 -> flunk("timed out waiting to release stale seven-day projection")
+              end
+            end
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    render_patch(view, ~p"/admin/pools?traffic_window=7d")
+    assert_receive {^handler_id, :held, seven_day_query_pid}, 2_000
+
+    {_proxy_ref, _proxy_topic, proxy_pid} = view.proxy
+    view_pid = view.pid
+    :erlang.trace(proxy_pid, true, [:send])
+
+    patch_task =
+      Task.async(fn ->
+        render_patch(view, ~p"/admin/pools")
+      end)
+
+    assert_receive {:trace, ^proxy_pid, :send,
+                    %Phoenix.Socket.Message{
+                      event: "live_patch",
+                      payload: %{"url" => "http://www.example.com/admin/pools"}
+                    }, ^view_pid},
+                   2_000
+
+    :erlang.trace(proxy_pid, false, [:send])
+    seven_day_monitor = Process.monitor(seven_day_query_pid)
+    send(seven_day_query_pid, {handler_id, :release})
+    _ = Task.await(patch_task, 2_000)
+    assert_receive {:DOWN, ^seven_day_monitor, :process, ^seven_day_query_pid, :normal}, 2_000
+
+    _ = render_async(view, 2_000)
+
+    stale_completion_state = :sys.get_state(view.pid).socket.assigns
+    assert stale_completion_state.pool_filters["traffic_window"] == "24h"
+    refute stale_completion_state.pool_traffic_running?
+    assert stale_completion_state.pool_traffic_rerun?
+    assert is_reference(stale_completion_state.pool_traffic_cooldown_timer)
+    assert is_nil(stale_completion_state.pool_traffic_usage)
+    assert has_element?(view, "#pool-metric-requests", "Requests 24h")
+    assert has_element?(view, "#pool-metric-requests", "…")
 
     _ = await_pool_traffic(view)
+    projection_events = drain_pool_projection_telemetry(projection_ref)
 
     assert has_element?(view, "#pool-metric-requests", "Requests 24h")
     assert has_element?(view, "#pool-metric-requests", "1")
     assert has_element?(view, "#pool-row-#{pool.id}-request-throughput", "1 / 50")
     refute has_element?(view, "#pool-metric-requests", "…")
+
+    assert traffic_projection_windows(projection_events, view) ==
+             MapSet.new([:twenty_four_hours, :seven_days])
   end
 
   test "renders the pools shell and protected controls for authenticated admins", %{
@@ -1712,6 +2250,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute has_element?(view, "#pool_slug")
   end
 
+  @tag :admin_pool_url_filters
   test "filters the pool inventory from the toolbar", %{conn: conn, scope: scope} do
     {:ok, active_pool} =
       Pools.create_pool(scope, %{slug: "filter-active", name: "Filter Active"})
@@ -3781,7 +4320,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     assert has_element?(view, "#pool-row-#{pool.id}-settled-cost", "$1.25")
   end
 
-  test "fallback tick holds while live updates are paused and refreshes on resume", %{
+  @tag :admin_pool_url_filters
+  test "fallback tick holds while paused and resumes with URL-derived filters", %{
     conn: conn,
     scope: scope
   } do
@@ -3789,22 +4329,29 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     %{api_key: api_key} = api_key_fixture(pool, %{scope: scope})
     %{assignment: assignment} = upstream_assignment_fixture(pool)
 
-    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    {:ok, view, _html} =
+      live(conn, ~p"/admin/pools?query=paused&status=active&traffic_window=7d")
+
     _ = await_pool_traffic(view)
     render_hook(view, "set_live_updates", %{"paused" => true})
 
-    insert_timed_usage!(pool, api_key, assignment, DateTime.utc_now(), 100, 750_000, 1_000)
+    timestamp = DateTime.utc_now() |> DateTime.add(-5, :day) |> DateTime.truncate(:microsecond)
+    insert_timed_usage!(pool, api_key, assignment, timestamp, 100, 750_000, 1_000)
     send(view.pid, :fallback_refresh_pool_traffic)
     _ = :sys.get_state(view.pid)
 
     refute :sys.get_state(view.pid).socket.assigns.pool_traffic_running?
     assert has_element?(view, "#pool-row-#{pool.id}-request-count", "0")
+    assert has_element?(view, "#pool_filters_query[value='paused']")
+    assert has_element?(view, "#pool_filters_status[value='active']")
+    assert has_element?(view, "#pool_filters_traffic_window[value='7d']")
 
     render_hook(view, "set_live_updates", %{"paused" => false})
     _ = await_pool_traffic(view)
 
     assert has_element?(view, "#pool-row-#{pool.id}-request-count", "1")
     assert has_element?(view, "#pool-row-#{pool.id}-settled-cost", "$0.75")
+    assert has_element?(view, "#pool-metric-requests", "Requests 7d")
   end
 
   test "coalesces traffic refreshes, ignores request logs, and makes stale timers harmless", %{
@@ -4355,6 +4902,105 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     metadata[:repo] == Repo and
       not String.contains?(query, "admin_pool_traffic") and
       not String.contains?(query, "pg_advisory")
+  end
+
+  defp attach_pool_projection_telemetry do
+    test_pid = self()
+    telemetry_ref = make_ref()
+    handler_id = {__MODULE__, :pool_projection, telemetry_ref}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo do
+            send(test_pid, {telemetry_ref, self(), metadata})
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+    telemetry_ref
+  end
+
+  defp assert_pool_patch_params(view, expected_params) do
+    patched_path = assert_patch(view)
+    uri = URI.parse(patched_path)
+
+    assert uri.path == "/admin/pools"
+    assert URI.decode_query(uri.query || "") == expected_params
+
+    patched_path
+  end
+
+  defp drain_pool_projection_telemetry(telemetry_ref, events \\ []) do
+    receive do
+      {^telemetry_ref, query_pid, metadata} ->
+        drain_pool_projection_telemetry(telemetry_ref, [{query_pid, metadata} | events])
+    after
+      0 -> Enum.reverse(events)
+    end
+  end
+
+  defp structural_projection_count(events, view) do
+    structural_pids = MapSet.new([self(), view.pid])
+
+    Enum.count(events, fn {query_pid, metadata} ->
+      MapSet.member?(structural_pids, query_pid) and
+        to_string(metadata[:source]) == "upstream_identities"
+    end)
+  end
+
+  defp traffic_projection_pids(events, view) do
+    excluded_pids = MapSet.new([self(), view.pid])
+
+    Enum.reduce(events, MapSet.new(), fn {query_pid, metadata}, query_pids ->
+      if not MapSet.member?(excluded_pids, query_pid) and traffic_projection_query?(metadata) do
+        MapSet.put(query_pids, query_pid)
+      else
+        query_pids
+      end
+    end)
+  end
+
+  defp traffic_projection_query?(metadata) do
+    pool_traffic_projection_query?(metadata) and
+      Enum.any?(metadata[:params] || [], &match?(%DateTime{}, &1))
+  end
+
+  defp traffic_projection_window(metadata) do
+    now = DateTime.utc_now()
+
+    metadata[:params]
+    |> List.wrap()
+    |> Enum.find_value(fn
+      %DateTime{} = timestamp ->
+        age_seconds = DateTime.diff(now, timestamp, :second)
+
+        cond do
+          age_seconds in (20 * 60 * 60)..(28 * 60 * 60) -> :twenty_four_hours
+          age_seconds in (5 * 24 * 60 * 60)..(8 * 24 * 60 * 60) -> :seven_days
+          true -> nil
+        end
+
+      _other ->
+        nil
+    end)
+  end
+
+  defp traffic_projection_windows(events, view) do
+    traffic_pids = traffic_projection_pids(events, view)
+
+    events
+    |> Enum.filter(fn {query_pid, _metadata} -> MapSet.member?(traffic_pids, query_pid) end)
+    |> Enum.reduce(MapSet.new(), fn {_query_pid, metadata}, windows ->
+      case traffic_projection_window(metadata) do
+        nil -> windows
+        window -> MapSet.put(windows, window)
+      end
+    end)
   end
 
   defp hold_pool_traffic_advisory_lock(operator_id, holder_ref) do

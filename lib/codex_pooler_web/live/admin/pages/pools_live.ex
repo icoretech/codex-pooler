@@ -49,6 +49,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
        pool_wizard_step: "details",
        pool_filters: PoolForm.filter(),
        pool_filter_form: PoolForm.filter_form(),
+       pool_filters_loaded?: false,
        pool_compat_panels: %{},
        pool_metrics: PoolsReadModel.empty_metrics(),
        data_load_warnings: [],
@@ -65,14 +66,18 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
        pool_traffic_cooldown_timer: nil,
        pool_traffic_cooldown_token: nil
      )
-     |> load_structural()
-     |> start_pool_traffic_load()
      |> maybe_start_connected_refresh()}
   end
 
   @impl true
   def handle_params(params, _uri, socket) do
-    {:noreply, apply_pool_editor_permalink(socket, params)}
+    socket =
+      socket
+      |> apply_pool_filters(PoolForm.filter(params))
+      |> apply_pool_editor_permalink(params)
+      |> canonicalize_pool_url(params)
+
+    {:noreply, socket}
   end
 
   @impl true
@@ -137,7 +142,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   def handle_event("edit_pool", %{"id" => pool_id}, socket) do
     case editable_pool(socket, pool_id) do
       {:ok, pool} ->
-        {:noreply, push_patch(socket, to: pool_editor_path(pool.id, "details"))}
+        {:noreply,
+         push_patch(socket,
+           to: pool_path(socket.assigns.pool_filters, pool, "details")
+         )}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, error_message(reason))}
@@ -180,7 +188,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     step = PoolWizardComponents.normalize_step(step, mode)
 
     if mode == :edit && socket.assigns.editing_pool do
-      {:noreply, push_patch(socket, to: pool_editor_path(socket.assigns.editing_pool.id, step))}
+      {:noreply,
+       push_patch(socket,
+         to: pool_path(socket.assigns.pool_filters, socket.assigns.editing_pool, step)
+       )}
     else
       {:noreply, assign(socket, :pool_wizard_step, step)}
     end
@@ -191,7 +202,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     socket = socket |> clear_editing() |> flush_deferred_pool_traffic_refresh()
 
     if permalink_editor? do
-      {:noreply, push_patch(socket, to: ~p"/admin/pools")}
+      {:noreply, push_patch(socket, to: pool_path(socket.assigns.pool_filters))}
     else
       {:noreply, socket}
     end
@@ -390,25 +401,41 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   end
 
   def handle_event("filter_pools", %{"pool_filters" => filter_params}, socket) do
-    {:noreply, apply_pool_filters(socket, PoolForm.filter(filter_params))}
+    filters = PoolForm.filter(filter_params)
+
+    {:noreply,
+     push_patch(socket,
+       to: pool_path(filters, current_permalink_editor(socket), socket.assigns.pool_wizard_step),
+       replace: true
+     )}
   end
 
   def handle_event("clear_pool_query_filter", _params, socket) do
     filters = PoolForm.filter(Map.put(socket.assigns.pool_filters, "query", ""))
 
-    {:noreply, apply_pool_filters(socket, filters)}
+    {:noreply,
+     push_patch(socket,
+       to: pool_path(filters, current_permalink_editor(socket), socket.assigns.pool_wizard_step),
+       replace: true
+     )}
   end
 
   def handle_event("select_pool_status_filter", %{"status" => status}, socket) do
     filters = PoolForm.filter(Map.put(socket.assigns.pool_filters, "status", status))
 
-    {:noreply, apply_pool_filters(socket, filters)}
+    {:noreply,
+     push_patch(socket,
+       to: pool_path(filters, current_permalink_editor(socket), socket.assigns.pool_wizard_step)
+     )}
   end
 
   def handle_event("select_pool_traffic_window_filter", %{"window" => window}, socket) do
     filters = PoolForm.filter(Map.put(socket.assigns.pool_filters, "traffic_window", window))
 
-    {:noreply, apply_pool_filters(socket, filters)}
+    {:noreply,
+     push_patch(socket,
+       to: pool_path(filters, current_permalink_editor(socket), socket.assigns.pool_wizard_step)
+     )}
   end
 
   def handle_event(
@@ -763,21 +790,39 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   end
 
   defp apply_pool_filters(socket, filters) do
-    previous_window = current_traffic_window(socket)
+    initial_transition? = not socket.assigns.pool_filters_loaded?
+    previous_filters = pool_filter_tuple(socket.assigns.pool_filters)
+    next_filters = pool_filter_tuple(filters)
 
     socket =
       socket
       |> assign(:pool_filters, filters)
       |> assign(:pool_filter_form, PoolForm.filter_form(filters))
+      |> assign(:pool_filters_loaded?, true)
 
-    if current_traffic_window(socket) == previous_window do
-      load_structural(socket)
-    else
-      socket
-      |> assign(pool_traffic_usage: nil, pool_traffic_loading?: true)
-      |> load_structural()
-      |> start_pool_traffic_load()
+    cond do
+      initial_transition? ->
+        socket
+        |> load_structural()
+        |> start_pool_traffic_load()
+
+      next_filters == previous_filters ->
+        socket
+
+      elem(next_filters, 2) != elem(previous_filters, 2) ->
+        socket
+        |> assign(pool_traffic_usage: nil, pool_traffic_loading?: true)
+        |> load_structural()
+        |> start_pool_traffic_load()
+
+      true ->
+        load_structural(socket)
     end
+  end
+
+  defp pool_filter_tuple(filters) do
+    {Map.fetch!(filters, "query"), Map.fetch!(filters, "status"),
+     Map.fetch!(filters, "traffic_window")}
   end
 
   # The traffic aggregate is the expensive read; running it on this process
@@ -1006,33 +1051,72 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   end
 
   defp clear_invalid_pool_editor_permalink(socket) do
-    socket =
-      if socket.assigns.pool_editor_mode == :edit do
-        socket
-        |> clear_editing()
-        |> flush_deferred_pool_traffic_refresh()
-      else
-        socket
-      end
-
-    if connected?(socket), do: push_patch(socket, to: ~p"/admin/pools"), else: socket
-  end
-
-  defp editable_pool(socket, pool_id) do
-    case find_pool(socket, pool_id) do
-      nil ->
-        {:error, %{message: "Pool was not found"}}
-
-      pool ->
-        case ensure_can_manage_pool(socket, pool) do
-          :ok -> {:ok, pool}
-          {:error, reason} -> {:error, reason}
-        end
+    if socket.assigns.pool_editor_mode == :edit do
+      socket
+      |> clear_editing()
+      |> flush_deferred_pool_traffic_refresh()
+    else
+      socket
     end
   end
 
-  defp pool_editor_path(pool_id, step),
-    do: ~p"/admin/pools?edit_pool_id=#{pool_id}&step=#{step}"
+  defp editable_pool(socket, pool_id) do
+    with {:ok, pools} <- Pools.list_pools_for_management(socket.assigns.current_scope),
+         %{} = pool <- Enum.find(pools, &(&1.id == pool_id)),
+         {:ok, _decision} <-
+           Pools.require_capability(
+             socket.assigns.current_scope,
+             Pools.capability(:pool_manage),
+             pool_id: pool.id
+           ) do
+      {:ok, pool}
+    else
+      nil -> {:error, %{message: "Pool was not found"}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp canonicalize_pool_url(socket, params) do
+    canonical_params =
+      canonical_pool_params(
+        socket.assigns.pool_filters,
+        current_permalink_editor(socket),
+        socket.assigns.pool_wizard_step
+      )
+
+    if connected?(socket) && params != canonical_params do
+      push_patch(socket,
+        to:
+          pool_path(
+            socket.assigns.pool_filters,
+            current_permalink_editor(socket),
+            socket.assigns.pool_wizard_step
+          ),
+        replace: true
+      )
+    else
+      socket
+    end
+  end
+
+  defp pool_path(filters, editing_pool \\ nil, step \\ "details") do
+    params = canonical_pool_params(filters, editing_pool, step)
+    ~p"/admin/pools?#{params}"
+  end
+
+  defp canonical_pool_params(filters, %{id: pool_id}, step) when is_binary(pool_id) do
+    filters
+    |> PoolForm.query_params()
+    |> Map.put(@edit_pool_id_param, pool_id)
+    |> Map.put(@pool_editor_step_param, PoolWizardComponents.normalize_step(step, :edit))
+  end
+
+  defp canonical_pool_params(filters, _editing_pool, _step),
+    do: PoolForm.query_params(filters)
+
+  defp current_permalink_editor(socket) do
+    if socket.assigns.pool_editor_mode == :edit, do: socket.assigns.editing_pool
+  end
 
   defp maybe_subscribe_pool_events(socket, pool_rows) do
     pool_rows
@@ -1051,17 +1135,6 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
       :ok
     else
       {:error, %{message: "Pool management is not available for this session"}}
-    end
-  end
-
-  defp ensure_can_manage_pool(socket, pool) do
-    case Pools.require_capability(
-           socket.assigns.current_scope,
-           Pools.capability(:pool_manage),
-           pool_id: pool.id
-         ) do
-      {:ok, _decision} -> :ok
-      {:error, reason} -> {:error, reason}
     end
   end
 
