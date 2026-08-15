@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       auth: 2,
       await_public_websocket_upgrade: 2,
       gateway_setup: 1,
+      gateway_setup: 2,
       mint_websocket_new!: 4,
       public_websocket_receive_text!: 3,
       public_websocket_send_text!: 4,
@@ -1294,6 +1295,137 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
+  test "GET /v1/responses websocket bridges a terminal compaction trigger over compact HTTP" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_v1_websocket_compaction_trigger",
+          "object" => "response.compaction",
+          "output" => [
+            %{
+              "type" => "compaction",
+              "encrypted_content" => "synthetic-websocket-trigger-encrypted"
+            }
+          ],
+          "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8}
+        })
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "compaction-trigger-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => websocket_compaction_trigger_input("synthetic websocket compact"),
+          "stream" => false,
+          "stream_id" => "compaction-trigger-stream"
+        })
+
+      {_conn, _websocket, frames} =
+        receive_websocket_until_terminal_or_error!(conn, websocket, ref, [])
+
+      assert Enum.map(frames, & &1["type"]) == [
+               "response.output_item.done",
+               "response.completed"
+             ]
+
+      assert get_in(List.first(frames), ["item", "type"]) == "compaction"
+
+      assert get_in(List.last(frames), ["response", "output", Access.at(0), "type"]) ==
+               "compaction"
+
+      assert get_in(List.last(frames), ["response", "object"]) == "response"
+
+      assert Enum.all?(frames, &(&1["stream_id"] == "compaction-trigger-stream"))
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.method == "POST"
+      assert captured.path == "/backend-api/codex/responses"
+      refute Map.has_key?(captured.json, "stream")
+      assert List.last(captured.json["input"]) == %{"type" => "compaction_trigger"}
+
+      assert [request] =
+               Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
+
+      assert request.endpoint == "/backend-api/codex/responses/compact"
+      assert request.transport == "http_compact_json"
+      assert request.status == "succeeded"
+
+      assert [attempt] =
+               Repo.all(from(attempt in Attempt, where: attempt.request_id == ^request.id))
+
+      assert attempt.transport == "http_compact_json"
+      assert attempt.status == "succeeded"
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "GET /v1/responses websocket rejects malformed compaction trigger placement before dispatch" do
+    upstream = start_upstream(completed_websocket_response("should_not_dispatch_trigger"))
+    setup = gateway_setup(upstream, compact?: true)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "invalid-compaction-trigger-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      post_upgrade_baseline = settled_post_upgrade_counts!(upstream)
+      visible = hd(websocket_compaction_trigger_input("visible websocket trigger fixture"))
+      trigger = %{"type" => "compaction_trigger"}
+
+      invalid_inputs = [
+        [trigger],
+        [trigger, visible],
+        [visible, trigger, trigger],
+        [%{"type" => "reasoning", "encrypted_content" => "hidden-only-trigger-fixture"}, trigger]
+      ]
+
+      {conn, websocket} =
+        Enum.reduce(invalid_inputs, {conn, websocket}, fn input, {conn, websocket} ->
+          {conn, websocket} =
+            send_response_create!(conn, websocket, ref, setup, %{
+              "input" => input,
+              "stream" => false
+            })
+
+          {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+          assert Jason.decode!(frame) == %{
+                   "type" => "error",
+                   "status" => 400,
+                   "error" => %{
+                     "type" => "invalid_request_error",
+                     "code" => "invalid_request",
+                     "message" =>
+                       "compaction_trigger must be the final input item and must follow visible input",
+                     "param" => "input"
+                   }
+                 }
+
+          {conn, websocket}
+        end)
+
+      assert lifecycle_counts(upstream) == post_upgrade_baseline
+      assert FakeUpstream.count(upstream) == 0
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   test "GET /v1/responses websocket rejects extra compaction metadata before dispatch" do
     upstream = start_upstream(completed_websocket_response("should_not_dispatch_compaction"))
     setup = gateway_setup(upstream)
@@ -2055,6 +2187,17 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     public_websocket_send_text!(conn, websocket, ref, Jason.encode!(payload))
   end
 
+  defp websocket_compaction_trigger_input(text) do
+    [
+      %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "input_text", "text" => text}]
+      },
+      %{"type" => "compaction_trigger"}
+    ]
+  end
+
   defp completed_websocket_response(response_id, output \\ []) do
     FakeUpstream.sse_stream(
       [
@@ -2308,6 +2451,18 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       {conn, websocket, Enum.reverse(frames)}
     else
       receive_websocket_until_terminal!(conn, websocket, ref, frames)
+    end
+  end
+
+  defp receive_websocket_until_terminal_or_error!(conn, websocket, ref, frames) do
+    {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+    decoded = Jason.decode!(frame)
+    frames = [decoded | frames]
+
+    if decoded["type"] in ["response.completed", "error"] do
+      {conn, websocket, Enum.reverse(frames)}
+    else
+      receive_websocket_until_terminal_or_error!(conn, websocket, ref, frames)
     end
   end
 

@@ -1423,6 +1423,9 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert responses_chat.contract =~
                "terminal compaction_trigger backend payloads on either backend Responses alias retain the final trigger"
 
+      assert responses_chat.contract =~
+               "public /v1/responses HTTP and Responses websocket turns accept exactly one final compaction_trigger after visible input"
+
       assert responses_chat.contract =~ "/backend-api/codex/responses"
       assert responses_chat.contract =~ "/backend-api/codex/responses/compact"
       assert responses_chat.contract =~ "buffered JSON"
@@ -1509,6 +1512,30 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                    upstream_endpoint: "/backend-api/codex/responses/compact",
                    behavior: "legacy_compact_route_unchanged"
                  }
+               },
+               public_v1_compaction_trigger: %{
+                 client_route: "/v1/responses",
+                 surfaces: ["http_json", "http_sse", "responses_websocket"],
+                 upstream_endpoint: "/backend-api/codex/responses",
+                 accounting_endpoint: "/backend-api/codex/responses/compact",
+                 admission_endpoint: "/v1/responses",
+                 route_class: "proxy_compact",
+                 transport: "http_compact_json",
+                 closed_item: %{"type" => "compaction_trigger"},
+                 valid_trigger: "exactly_one_final_after_visible_input",
+                 malformed_trigger: %{status: 400, param: "input", upstream_dispatch: false},
+                 retained: ["final_compaction_trigger"],
+                 strips: ["stream", "include", "store", "prompt_cache_options"],
+                 response_adaptation: %{
+                   upstream: "buffered_responses_json",
+                   downstream: %{
+                     http_json: ["response"],
+                     http_sse: ["response.output_item.done", "response.completed", "[DONE]"],
+                     responses_websocket: ["response.output_item.done", "response.completed"]
+                   }
+                 },
+                 public_compact_route_supported: false,
+                 hidden_replay: false
                },
                context_overflow: %{
                  recovery_owner: "client_or_upstream",

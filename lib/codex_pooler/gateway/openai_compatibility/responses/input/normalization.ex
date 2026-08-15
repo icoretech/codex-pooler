@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
     message
     reasoning
     compaction
+    compaction_trigger
     program
     program_output
     function_call
@@ -244,6 +245,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
   defp normalize_input_item(%{"type" => "reasoning"} = item), do: {:ok, item}
 
   defp normalize_input_item(%{"type" => "compaction"} = item), do: {:ok, item}
+  defp normalize_input_item(%{"type" => "compaction_trigger"} = item), do: {:ok, item}
 
   defp normalize_input_item(%{"type" => "program"} = item), do: {:ok, item}
   defp normalize_input_item(%{"type" => "program_output"} = item), do: {:ok, item}

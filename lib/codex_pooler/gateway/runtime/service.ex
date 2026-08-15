@@ -490,10 +490,18 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
       true ->
         with {:ok, coerced} <- WebsocketCodec.coerce_request(payload, opts, push_frame) do
-          execute(auth, coerced.endpoint, coerced.payload, coerced.request_options)
+          auth
+          |> execute(coerced.endpoint, coerced.payload, coerced.request_options)
+          |> adapt_websocket_result(coerced)
         end
     end
   end
+
+  defp adapt_websocket_result(result, %{result_adapter: result_adapter})
+       when is_function(result_adapter, 1),
+       do: result_adapter.(result)
+
+  defp adapt_websocket_result(result, _coerced), do: result
 
   defp dispatch_candidates(
          auth,

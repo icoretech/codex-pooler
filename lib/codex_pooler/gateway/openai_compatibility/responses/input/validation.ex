@@ -63,6 +63,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
   defp validate_input_item(%{"type" => "compaction"} = item, _payload),
     do: validate_compaction_replay_item(item)
 
+  defp validate_input_item(%{"type" => "compaction_trigger"} = item, _payload),
+    do: validate_exact_item_keys(item, ["type"])
+
   defp validate_input_item(%{"type" => "program"} = item, _payload),
     do: validate_program_replay_item(item)
 

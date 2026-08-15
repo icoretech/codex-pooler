@@ -20,6 +20,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     only: [
       auth: 2,
       await_public_websocket_upgrade: 2,
+      curl_json_request!: 4,
       gateway_setup: 1,
       gateway_setup: 2,
       gateway_upstream: 4,
@@ -2451,6 +2452,182 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute Map.has_key?(captured.json, "tools")
     refute Map.has_key?(captured.json, "instructions")
     refute Map.has_key?(captured.json, "max_output_tokens")
+  end
+
+  test "POST /v1/responses bridges a terminal compaction trigger across JSON and SSE", %{
+    conn: conn
+  } do
+    for stream? <- [false, true] do
+      response_id = "resp_v1_compaction_trigger_#{stream?}"
+
+      upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "id" => response_id,
+            "object" => "response.compaction",
+            "output" => [
+              %{
+                "type" => "compaction",
+                "encrypted_content" => "synthetic-public-trigger-encrypted-#{stream?}"
+              }
+            ],
+            "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8}
+          })
+        )
+
+      setup = gateway_setup(upstream, compact?: true)
+
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => public_compaction_trigger_input("synthetic public compact #{stream?}"),
+          "stream" => stream?
+        })
+
+      if stream? do
+        assert response.status == 200
+        assert [content_type] = get_resp_header(response, "content-type")
+        assert content_type =~ "text/event-stream"
+
+        events = public_sse_events(response.resp_body)
+
+        assert Enum.map(events, & &1["event"]) == [
+                 "response.output_item.done",
+                 "response.completed"
+               ]
+
+        assert get_in(List.last(events), ["data", "response", "object"]) == "response"
+
+        assert response.resp_body =~ "data: [DONE]\n\n"
+      else
+        assert %{
+                 "id" => ^response_id,
+                 "object" => "response",
+                 "status" => "completed",
+                 "output" => [%{"type" => "compaction"}],
+                 "usage" => %{"total_tokens" => 8}
+               } = json_response(response, 200)
+      end
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.path == "/backend-api/codex/responses"
+      refute Map.has_key?(captured.json, "stream")
+      assert List.last(captured.json["input"]) == %{"type" => "compaction_trigger"}
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.endpoint == "/backend-api/codex/responses/compact"
+      assert request.transport == "http_compact_json"
+      assert request.status == "succeeded"
+
+      assert get_in(request.request_metadata, ["openai_compatibility", "source_endpoint"]) ==
+               "/v1/responses"
+
+      assert get_in(request.request_metadata, ["openai_compatibility", "translated_endpoint"]) ==
+               "/backend-api/codex/responses"
+    end
+  end
+
+  @tag :public_compaction_trigger_http_qa
+  test "live curl bridges a public terminal compaction trigger as Responses SSE" do
+    prompt_text = "synthetic public compaction curl input"
+    encrypted_content = "synthetic-public-compaction-curl-encrypted"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_public_compaction_curl",
+          "object" => "response.compaction",
+          "output" => [
+            %{"type" => "compaction", "encrypted_content" => encrypted_content}
+          ],
+          "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8}
+        })
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    {_server, port} = start_public_endpoint_with_server!()
+
+    {headers, response_body} =
+      curl_json_request!(
+        port,
+        setup.authorization,
+        %{
+          "model" => setup.model.exposed_model_id,
+          "input" => public_compaction_trigger_input(prompt_text),
+          "stream" => true
+        },
+        "/v1/responses"
+      )
+
+    assert String.starts_with?(headers, "HTTP/1.1 200")
+    assert String.downcase(headers) =~ "content-type: text/event-stream"
+
+    events = public_sse_events(response_body)
+
+    assert Enum.map(events, & &1["event"]) == [
+             "response.output_item.done",
+             "response.completed"
+           ]
+
+    assert get_in(List.last(events), ["data", "response", "object"]) == "response"
+    assert response_body =~ "data: [DONE]\n\n"
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    refute Map.has_key?(captured.json, "stream")
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses/compact"
+    assert request.transport == "http_compact_json"
+    assert request.status == "succeeded"
+
+    metadata_text = inspect(request.request_metadata)
+    refute metadata_text =~ prompt_text
+    refute metadata_text =~ encrypted_content
+  end
+
+  test "POST /v1/responses rejects malformed compaction trigger placement before dispatch", %{
+    conn: conn
+  } do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream, compact?: true)
+    visible = hd(public_compaction_trigger_input("visible public trigger fixture"))
+    trigger = %{"type" => "compaction_trigger"}
+
+    invalid_inputs = [
+      [trigger],
+      [trigger, visible],
+      [visible, trigger, trigger],
+      [%{"type" => "reasoning", "encrypted_content" => "hidden-only-trigger-fixture"}, trigger]
+    ]
+
+    for input <- invalid_inputs do
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => input,
+          "stream" => true
+        })
+
+      assert %{
+               "error" => %{
+                 "code" => "invalid_request",
+                 "message" =>
+                   "compaction_trigger must be the final input item and must follow visible input",
+                 "param" => "input"
+               }
+             } = json_response(response, 400)
+    end
+
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
   end
 
   test "POST /v1/responses preserves verified compaction variants across JSON and SSE", %{
@@ -8987,6 +9164,17 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         |> Ecto.Changeset.change(mode: mode, updated_at: timestamp)
         |> Repo.update!()
     end
+  end
+
+  defp public_compaction_trigger_input(text) do
+    [
+      %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "input_text", "text" => text}]
+      },
+      %{"type" => "compaction_trigger"}
+    ]
   end
 
   defp public_mode_matrix_upstream do

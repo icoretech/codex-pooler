@@ -2213,6 +2213,34 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       refute Map.has_key?(coerced, "parallel_tool_calls")
     end
 
+    test "terminal compaction trigger survives public Responses coercion for bridge dispatch" do
+      trigger = %{"type" => "compaction_trigger"}
+
+      payload = %{
+        "model" => "gpt-fixture-text",
+        "stream" => true,
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [%{"type" => "input_text", "text" => "synthetic compact history"}]
+          },
+          trigger
+        ]
+      }
+
+      assert {:ok, %{payload: coerced}} = Responses.coerce(payload)
+      assert List.last(coerced["input"]) == trigger
+
+      assert {:error, %{code: "invalid_request", param: "input"}} =
+               Responses.coerce(%{
+                 payload
+                 | "input" => [
+                     hd(payload["input"]),
+                     Map.put(trigger, "unexpected", "must-not-pass")
+                   ]
+               })
+    end
+
     test "OMP post-compaction replay forwards encrypted compaction item" do
       payload = %{
         "model" => "gpt-fixture-text",

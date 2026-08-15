@@ -4,6 +4,8 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.OpenAICompatibility.Error
 
+  @public_response_endpoint "/v1/responses"
+
   @backend_response_endpoints [
     "/backend-api/codex/responses",
     "/backend-api/codex/v1/responses"
@@ -31,8 +33,16 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
 
   @type payload :: %{optional(String.t()) => term()}
   @type bridge_decision :: :passthrough | {:ok, payload()} | {:error, Contracts.gateway_error()}
+  @type result_mode :: :sse | :public_sse | :response | :websocket
 
   @spec prepare_bridge(String.t(), payload()) :: bridge_decision()
+  def prepare_bridge(@public_response_endpoint, %{"input" => input} = payload)
+      when is_list(input) do
+    prepare_input_bridge(payload, require_visible?: true)
+  end
+
+  def prepare_bridge(@public_response_endpoint, payload) when is_map(payload), do: :passthrough
+
   def prepare_bridge(local_endpoint, payload)
       when is_binary(local_endpoint) and is_map(payload) do
     cond do
@@ -49,7 +59,7 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
         :passthrough
 
       true ->
-        prepare_input_bridge(payload)
+        prepare_input_bridge(payload, require_visible?: false)
     end
   end
 
@@ -84,16 +94,20 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
           | {:error, Contracts.gateway_error()}
         ) ::
           {:ok, Contracts.gateway_result()} | {:error, Contracts.gateway_error()}
-  def adapt_gateway_result({:ok, %{status: status} = result})
-      when is_integer(status) and status >= 200 and status < 300 do
+  def adapt_gateway_result(result), do: adapt_gateway_result(result, :sse)
+
+  @spec adapt_gateway_result(
+          {:ok, Contracts.gateway_result()}
+          | {:error, Contracts.gateway_error()},
+          result_mode()
+        ) ::
+          {:ok, Contracts.gateway_result()} | {:error, Contracts.gateway_error()}
+  def adapt_gateway_result({:ok, %{status: status} = result}, mode)
+      when mode in [:sse, :public_sse, :response, :websocket] and is_integer(status) and
+             status >= 200 and status < 300 do
     with {:ok, decoded} <- decode_result(result),
          {:ok, item} <- compaction_item(decoded) do
-      {:ok,
-       %{
-         status: 200,
-         headers: stream_headers(result),
-         raw_body: sse_body(decoded, item)
-       }}
+      {:ok, adapted_result(result, decoded, item, mode)}
     else
       {:error, :invalid_json} ->
         {:error,
@@ -113,15 +127,18 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
     end
   end
 
-  def adapt_gateway_result(result), do: result
+  def adapt_gateway_result(result, _mode), do: result
 
-  defp prepare_input_bridge(%{"input" => [%{"type" => "compaction_trigger"}]} = payload) do
+  defp prepare_input_bridge(
+         %{"input" => [%{"type" => "compaction_trigger"}]} = payload,
+         require_visible?: false
+       ) do
     payload
     |> compact_payload()
     |> validate_compact_payload()
   end
 
-  defp prepare_input_bridge(%{"input" => input} = payload) do
+  defp prepare_input_bridge(%{"input" => input} = payload, require_visible?: _require_visible?) do
     trigger_indexes = trigger_indexes(input)
 
     cond do
@@ -291,14 +308,8 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
 
   defp maybe_put_turn_id(item, _source_item), do: item
 
-  defp sse_body(decoded, item) do
-    response =
-      %{
-        "id" => response_id(decoded),
-        "status" => "completed",
-        "output" => [item]
-      }
-      |> maybe_put_usage(decoded)
+  defp sse_body(decoded, item, response_builder \\ &response/2) do
+    response = response_builder.(decoded, item)
 
     [
       sse_block("response.output_item.done", %{
@@ -312,6 +323,54 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
       "data: [DONE]\n\n"
     ]
     |> IO.iodata_to_binary()
+  end
+
+  defp adapted_result(result, decoded, item, :sse) do
+    %{
+      status: 200,
+      headers: stream_headers(result),
+      raw_body: sse_body(decoded, item)
+    }
+  end
+
+  defp adapted_result(result, decoded, item, :public_sse) do
+    %{
+      status: 200,
+      headers: stream_headers(result),
+      raw_body: sse_body(decoded, item, &public_response/2)
+    }
+  end
+
+  defp adapted_result(result, decoded, item, :response) do
+    response = public_response(decoded, item)
+
+    %{
+      status: 200,
+      headers: json_headers(result),
+      raw_body: Jason.encode!(response)
+    }
+  end
+
+  defp adapted_result(result, decoded, item, :websocket) do
+    %{
+      status: 200,
+      headers: json_headers(result),
+      websocket_messages: [
+        %{"type" => "response.output_item.done", "item" => item},
+        %{"type" => "response.completed", "response" => public_response(decoded, item)}
+      ]
+    }
+  end
+
+  defp public_response(decoded, item), do: Map.put(response(decoded, item), "object", "response")
+
+  defp response(decoded, item) do
+    %{
+      "id" => response_id(decoded),
+      "status" => "completed",
+      "output" => [item]
+    }
+    |> maybe_put_usage(decoded)
   end
 
   defp response_id(%{"id" => id}) when is_binary(id), do: id
@@ -334,5 +393,15 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
       normalized in ["content-type", "content-length"]
     end)
     |> Kernel.++(@stream_headers)
+  end
+
+  defp json_headers(result) do
+    result
+    |> Map.get(:headers, [])
+    |> Enum.reject(fn {key, _value} ->
+      normalized = String.downcase(key)
+      normalized in ["content-type", "content-length"]
+    end)
+    |> Kernel.++([{"content-type", "application/json"}])
   end
 end

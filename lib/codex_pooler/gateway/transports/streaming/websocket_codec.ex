@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.OpenAICompatibility.Error
   alias CodexPooler.Gateway.OpenAICompatibility.Responses
+  alias CodexPooler.Gateway.Payloads.CompactionTrigger
   alias CodexPooler.Gateway.Payloads.PayloadNormalizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.ToolResultShape
@@ -16,12 +17,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   @type decode_error :: :invalid_json | :not_object
   @type gateway_error :: Contracts.gateway_error()
+  @type gateway_call_result :: {:ok, Contracts.gateway_result()} | {:error, gateway_error()}
   @type deliver_result :: :ok | {:error, gateway_error()}
   @type stream_id_result :: :omitted | {:ok, String.t()} | {:error, gateway_error()}
   @type coerced_request :: %{
           required(:endpoint) => String.t(),
           required(:payload) => map(),
-          required(:request_options) => RequestOptions.t()
+          required(:request_options) => RequestOptions.t(),
+          optional(:result_adapter) => (gateway_call_result() -> gateway_call_result())
         }
 
   @stream_id_pattern ~r/\A[A-Za-z0-9_.-]+\z/
@@ -117,17 +120,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   def coerce_request(payload, %RequestOptions{} = opts, push_frame)
       when is_map(payload) and is_function(push_frame, 1) do
     with {:ok, coerced} <- coerce_response_payload(payload, opts) do
-      push_frame = namespace_restoring_writer(push_frame, coerced.request_options)
-
       request_options =
-        coerced.request_options
-        |> RequestOptions.for_payload(coerced.endpoint, coerced.payload)
-        |> RequestOptions.put_transport(
-          transport: "websocket",
-          upstream_endpoint: coerced.endpoint,
-          route_class: RouteClass.proxy_websocket(),
-          websocket_writer: push_frame
-        )
+        coerced
+        |> request_options(push_frame)
         |> maybe_put_backend_turn_state(coerced.endpoint, coerced.payload)
         |> RequestOptions.put_continuity(
           codex_turn_id: SessionContinuity.websocket_turn_id(coerced.payload)
@@ -146,6 +141,24 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   end
 
   defp namespace_restoring_writer(push_frame, %RequestOptions{}), do: push_frame
+
+  defp request_options(%{result_adapter: result_adapter} = coerced, _push_frame)
+       when is_function(result_adapter, 1) do
+    RequestOptions.for_payload(coerced.request_options, coerced.endpoint, coerced.payload)
+  end
+
+  defp request_options(coerced, push_frame) do
+    push_frame = namespace_restoring_writer(push_frame, coerced.request_options)
+
+    coerced.request_options
+    |> RequestOptions.for_payload(coerced.endpoint, coerced.payload)
+    |> RequestOptions.put_transport(
+      transport: "websocket",
+      upstream_endpoint: coerced.endpoint,
+      route_class: RouteClass.proxy_websocket(),
+      websocket_writer: push_frame
+    )
+  end
 
   defp restore_custom_tool_call_namespaces(data, namespaces) do
     case Jason.decode(data) do
@@ -280,14 +293,50 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
       |> Map.drop(["type", "generate"])
       |> Responses.coerce(opts)
       |> case do
-        {:ok, coerced} -> {:ok, %{coerced | payload: Map.put(coerced.payload, "generate", true)}}
-        {:error, reason} -> {:error, reason}
+        {:ok, coerced} ->
+          coerced
+          |> Map.update!(:payload, &Map.put(&1, "generate", true))
+          |> prepare_public_compaction_bridge()
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
   end
 
   defp coerce_response_payload(payload, opts) do
     {:ok, %{endpoint: "/backend-api/codex/responses", payload: payload, request_options: opts}}
+  end
+
+  defp prepare_public_compaction_bridge(%{payload: payload} = coerced) do
+    case CompactionTrigger.prepare_bridge("/v1/responses", payload) do
+      :passthrough ->
+        {:ok, coerced}
+
+      {:ok, compact_payload} ->
+        request_options =
+          coerced.request_options
+          |> RequestOptions.retarget("/backend-api/codex/responses/compact", compact_payload)
+          |> RequestOptions.put_transport(
+            transport: "http_compact_json",
+            upstream_endpoint: "/backend-api/codex/responses",
+            route_class: RouteClass.proxy_compact(),
+            websocket_writer: nil
+          )
+          |> RequestOptions.put_payload_context(compaction_trigger_bridge?: true)
+
+        {:ok,
+         %{
+           coerced
+           | endpoint: "/backend-api/codex/responses/compact",
+             payload: compact_payload,
+             request_options: request_options
+         }
+         |> Map.put(:result_adapter, &CompactionTrigger.adapt_gateway_result(&1, :websocket))}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   defp maybe_put_backend_turn_state(

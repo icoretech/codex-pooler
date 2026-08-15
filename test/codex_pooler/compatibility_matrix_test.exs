@@ -5,6 +5,35 @@ defmodule CodexPooler.CompatibilityMatrixTest do
   alias CodexPooler.Pools.RoutingSettings
 
   describe "catalog and Responses runtime contract" do
+    test "distinguishes public terminal compaction triggers from the unsupported compact route" do
+      fixture = CompatibilityMatrix.fixture!(:responses_chat)
+
+      assert fixture.compaction_recovery_boundary.public_v1_compaction_trigger == %{
+               client_route: "/v1/responses",
+               surfaces: ["http_json", "http_sse", "responses_websocket"],
+               upstream_endpoint: "/backend-api/codex/responses",
+               accounting_endpoint: "/backend-api/codex/responses/compact",
+               admission_endpoint: "/v1/responses",
+               route_class: "proxy_compact",
+               transport: "http_compact_json",
+               closed_item: %{"type" => "compaction_trigger"},
+               valid_trigger: "exactly_one_final_after_visible_input",
+               malformed_trigger: %{status: 400, param: "input", upstream_dispatch: false},
+               retained: ["final_compaction_trigger"],
+               strips: ["stream", "include", "store", "prompt_cache_options"],
+               response_adaptation: %{
+                 upstream: "buffered_responses_json",
+                 downstream: %{
+                   http_json: ["response"],
+                   http_sse: ["response.output_item.done", "response.completed", "[DONE]"],
+                   responses_websocket: ["response.output_item.done", "response.completed"]
+                 }
+               },
+               public_compact_route_supported: false,
+               hidden_replay: false
+             }
+    end
+
     test "pins fast as a priority alias without collapsing relay and translation fidelity" do
       backend = CompatibilityMatrix.by_slug!(:backend_fast_service_tier)
       translated = CompatibilityMatrix.by_slug!(:responses_chat)

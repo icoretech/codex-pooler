@@ -6,7 +6,7 @@ head:
     attrs:
       type: application/ld+json
     content: |
-      {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Can I use the official OpenAI SDK with Codex Pooler?","acceptedAnswer":{"@type":"Answer","text":"Yes, for selected SDK routes. Set the SDK base_url or baseURL to https://codex-pooler.example.com/v1, use a Pool API key as the bearer credential, and keep requests on supported route shapes such as responses, chat completions, models, usage, files, audio transcription, and image generation or edits."}},{"@type":"Question","name":"Should Codex backend clients use /v1?","acceptedAnswer":{"@type":"Answer","text":"No. Codex backend-compatible clients should use /backend-api/codex. The /v1 surface is for selected OpenAI SDK-compatible clients and translates supported requests into Codex-compatible work."}},{"@type":"Question","name":"Does /v1 support OpenAI Realtime?","acceptedAnswer":{"@type":"Answer","text":"No. /v1/realtime and OpenAI Realtime SDK websocket or session routes are unsupported. GET /v1/responses is narrow Responses websocket compatibility only, not OpenAI Realtime support."}},{"@type":"Question","name":"Does /v1/responses/compact work?","acceptedAnswer":{"@type":"Answer","text":"No. POST /v1/responses/compact is routed only so clients receive a deterministic OpenAI-shaped unsupported_endpoint error. Codex backend-compatible compact requests should use POST /backend-api/codex/responses/compact."}},{"@type":"Question","name":"Can I use the same key for /v1 and /mcp?","acceptedAnswer":{"@type":"Answer","text":"No. /v1 uses Pool API keys for runtime work. /mcp uses operator-owned MCP bearer tokens for metadata-only lookup. Keep those credentials separate in client configuration and storage."}}]}
+      {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Can I use the official OpenAI SDK with Codex Pooler?","acceptedAnswer":{"@type":"Answer","text":"Yes, for selected SDK routes. Set the SDK base_url or baseURL to https://codex-pooler.example.com/v1, use a Pool API key as the bearer credential, and keep requests on supported route shapes such as responses, chat completions, models, usage, files, audio transcription, and image generation or edits."}},{"@type":"Question","name":"Should Codex backend clients use /v1?","acceptedAnswer":{"@type":"Answer","text":"No. Codex backend-compatible clients should use /backend-api/codex. The /v1 surface is for selected OpenAI SDK-compatible clients and translates supported requests into Codex-compatible work."}},{"@type":"Question","name":"Does /v1 support OpenAI Realtime?","acceptedAnswer":{"@type":"Answer","text":"No. /v1/realtime and OpenAI Realtime SDK websocket or session routes are unsupported. GET /v1/responses is narrow Responses websocket compatibility only, not OpenAI Realtime support."}},{"@type":"Question","name":"Does /v1/responses/compact work?","acceptedAnswer":{"@type":"Answer","text":"No. POST /v1/responses/compact returns a deterministic unsupported_endpoint error. Explicit compaction through selected provider clients is supported on normal /v1/responses requests when the client appends exactly one final compaction_trigger after visible input."}},{"@type":"Question","name":"Can I use the same key for /v1 and /mcp?","acceptedAnswer":{"@type":"Answer","text":"No. /v1 uses Pool API keys for runtime work. /mcp uses operator-owned MCP bearer tokens for metadata-only lookup. Keep those credentials separate in client configuration and storage."}}]}
 ---
 
 Codex Pooler provides narrow OpenAI-compatible `/v1` support for selected SDK routes. It translates supported requests into Codex-compatible work, then sends them through the same Pool routing, limit checks, account selection, and accounting path used by Codex backend clients.
@@ -186,7 +186,48 @@ accepts only ordered `url_citation` annotations with exactly `type`,
 explicit empty annotation lists, and omission exactly. Malformed or unsupported
 annotation shapes are rejected before dispatch rather than filtered.
 
-`GET /v1/models` may include `context_length` for clients that probe OpenAI-compatible model lists, such as Hermes. The official OpenAI SDK request APIs and Vercel AI SDK generation APIs do not expose Codex model-catalog context controls. Use their output-budget fields only when your application needs one: `max_output_tokens` in OpenAI Responses, `max_completion_tokens` in Chat Completions, and `maxOutputTokens` at the Vercel AI SDK layer. Codex Pooler's public `/v1/responses` currently rejects `context_management`, and public `/v1/responses/compact` is routed but unsupported, so do not document SDK-side compaction as a Codex Pooler feature.
+`GET /v1/models` may include `context_length` for clients that probe OpenAI-compatible model lists, such as Hermes. The official OpenAI SDK request APIs and Vercel AI SDK generation APIs do not expose Codex model-catalog context controls. Use their output-budget fields only when your application needs one: `max_output_tokens` in OpenAI Responses, `max_completion_tokens` in Chat Completions, and `maxOutputTokens` at the Vercel AI SDK layer. Codex Pooler's public `/v1/responses` rejects `context_management`, and direct `POST /v1/responses/compact` remains unsupported. Selected provider clients can instead request an explicit compaction turn by appending a terminal `compaction_trigger` to a normal `/v1/responses` request.
+
+### Request an explicit compaction turn
+
+Provider clients that expose an OpenAI compaction option can use the normal
+`/v1/responses` route. For example, Vercel AI SDK can append the closed trigger
+shape with `providerOptions.openai.compactionTrigger: true`:
+
+```ts
+import {
+  createOpenAI,
+  type OpenAILanguageModelResponsesOptions,
+} from "@ai-sdk/openai";
+import { generateText } from "ai";
+
+const pooler = createOpenAI({
+  apiKey: process.env.CODEX_POOLER_API_KEY,
+  baseURL: "https://codex-pooler.example.com/v1",
+});
+
+const result = await generateText({
+  model: pooler.responses("gpt-5.6-terra"),
+  providerOptions: {
+    openai: {
+      compactionTrigger: true,
+    } satisfies OpenAILanguageModelResponsesOptions,
+  },
+  prompt: "Compact the visible conversation context.",
+});
+
+const compaction = result.content.find(
+  (part) => part.type === "custom" && part.kind === "openai.compaction",
+);
+```
+
+The request must contain visible input followed by exactly one final
+`{"type":"compaction_trigger"}` item. Codex Pooler dispatches it through the
+buffered compact bridge, returns the compacted item as collected JSON, public
+SSE, or narrow Responses websocket events, and keeps prompt and encrypted
+content out of durable metadata. Non-terminal, duplicate, hidden-only, or
+otherwise malformed triggers return a sanitized `400` before upstream dispatch.
+This does not enable direct `POST /v1/responses/compact`.
 
 ### Replay a remote-compaction item
 
@@ -203,8 +244,8 @@ explicitly `null`; key presence is preserved exactly. Unknown compaction fields
 or malformed values are rejected before upstream dispatch. Treat encrypted
 content as opaque and do not log or persist it in application telemetry.
 
-This is replay compatibility only. `POST /v1/responses/compact` remains
-unsupported, and Codex Pooler does not claim general SDK-side compaction.
+This replay path is separate from the explicit terminal-trigger bridge.
+`POST /v1/responses/compact` remains unsupported.
 
 ## Supported or translated route support
 
@@ -402,9 +443,9 @@ No. `/v1/realtime` and OpenAI Realtime SDK websocket or session routes are unsup
 
 ### Does `/v1/responses/compact` work?
 
-No. `POST /v1/responses/compact` is routed only so clients receive a deterministic OpenAI-shaped `unsupported_endpoint` error. Codex backend-compatible compact requests should use `POST /backend-api/codex/responses/compact`.
+No. `POST /v1/responses/compact` returns a deterministic OpenAI-shaped `unsupported_endpoint` error. Explicit compaction through selected provider clients is supported on normal `/v1/responses` requests when the client appends exactly one final `compaction_trigger` after visible input.
 
-Codex backend clients that send a terminal `compaction_trigger` to `POST /backend-api/codex/responses` or `/backend-api/codex/v1/responses` retain that final item and use the normal backend Responses upstream endpoint. The request remains compact-accounted and buffered through the compact transport, then receives canonical backend Responses SSE compaction output. Direct backend compact aliases remain supported and use the canonical legacy `/backend-api/codex/responses/compact` upstream endpoint.
+Codex backend clients that send the same terminal trigger to `POST /backend-api/codex/responses` or `/backend-api/codex/v1/responses` retain that final item and use the normal backend Responses upstream endpoint. The request remains compact-accounted and buffered through the compact transport, then receives canonical backend Responses SSE compaction output. Direct backend compact aliases remain supported and use the canonical legacy `/backend-api/codex/responses/compact` upstream endpoint.
 
 ### Can I use the same key for `/v1` and `/mcp`?
 
