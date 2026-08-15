@@ -28,6 +28,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
   alias CodexPooler.Upstreams.Schemas.PoolUpstreamAssignment
   alias CodexPoolerWeb.Admin.PoolForm
   alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel
+  alias Ecto.Adapters.SQL.Sandbox
 
   setup :register_and_log_in_user
 
@@ -993,40 +994,18 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     _ = await_pool_traffic(view, activate_histograms?: false)
     _initial_cooldown_token = expire_pool_traffic_cooldown(view)
 
-    test_pid = self()
-    handler_id = {__MODULE__, :lazy_histogram_query, System.unique_integer([:positive])}
-    query_counter = :atomics.new(1, signed: false)
+    holder_ref = make_ref()
+    advisory_holder = hold_pool_traffic_advisory_lock(scope.user.id, holder_ref)
+    assert_receive {^holder_ref, :lock_held, holder_pid}, 1_000
 
-    :ok =
-      :telemetry.attach(
-        handler_id,
-        [:codex_pooler, :repo, :query],
-        fn _event, _measurements, metadata, _config ->
-          if metadata[:repo] == Repo and self() != view.pid do
-            query_number = :atomics.add_get(query_counter, 1, 1)
-            send(test_pid, {handler_id, :query, self()})
-
-            if query_number == 1 do
-              receive do
-                {^handler_id, :release} -> :ok
-              after
-                2_000 -> :ok
-              end
-            end
-          end
-        end,
-        nil
-      )
-
-    on_exit(fn -> :telemetry.detach(handler_id) end)
-
-    # When: eligibility changes while its traffic task is held at the real Repo boundary.
+    # When: another PostgreSQL session owns the operator gate while viewport
+    # eligibility changes.
     render_hook(view, "set_pool_traffic_visibility", %{
       "pool_id" => pool.id,
       "visible" => true
     })
 
-    assert_receive {^handler_id, :query, query_pid}, 1_000
+    _ = render_async(view, 2_000)
 
     render_hook(view, "set_pool_traffic_visibility", %{
       "pool_id" => pool.id,
@@ -1036,18 +1015,14 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     state = :sys.get_state(view.pid)
 
     # Then: the existing lane represents every extra request with one rerun flag.
-    assert state.socket.assigns.pool_traffic_running?
+    refute state.socket.assigns.pool_traffic_running?
     assert state.socket.assigns.pool_traffic_rerun?
+    assert is_reference(state.socket.assigns.pool_traffic_cooldown_timer)
 
-    send(query_pid, {handler_id, :release})
+    send(holder_pid, {holder_ref, :release})
+    assert :ok = Task.await(advisory_holder, 2_000)
 
     _ = await_pool_traffic(view, activate_histograms?: false)
-
-    query_pids = drain_lazy_query_pids(handler_id, MapSet.new([query_pid]))
-    assert MapSet.size(query_pids) == 2
-    assert query_pids |> MapSet.delete(query_pid) |> MapSet.size() == 1
-
-    :ok = :telemetry.detach(handler_id)
 
     refute has_element?(view, "#pool-row-#{pool.id}-traffic-histogram-plot")
     refute has_element?(view, "#pool-row-#{pool.id}-traffic-histogram [data-chart-series]")
@@ -1117,7 +1092,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         handler_id,
         [:codex_pooler, :repo, :query],
         fn _event, _measurements, metadata, _config ->
-          if metadata[:repo] == Repo and self() != view.pid do
+          if pool_traffic_projection_query?(metadata) and self() != view.pid do
             send(test_pid, {handler_id, :query, self()})
           end
         end,
@@ -1200,6 +1175,86 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute stale_token_state.pool_traffic_running?
     refute stale_token_state.pool_traffic_rerun?
     assert drain_lazy_query_pids(handler_id, completed_query_pids) == completed_query_pids
+  end
+
+  @tag :shared_pool_traffic_gate
+  test "same operator sessions share one Pool traffic projection lane", %{
+    conn: conn,
+    scope: scope,
+    user: user
+  } do
+    # Given: two authenticated LiveViews for the same operator have completed
+    # their initial structural traffic load.
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "shared-gate-pool", name: "Shared Gate Pool"})
+
+    %{api_key: api_key} = api_key_fixture(pool)
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    insert_timed_usage!(pool, api_key, assignment, DateTime.utc_now(), 75, 750_000, 1_500)
+
+    second_conn = log_in_user(build_conn(), user, get_session(conn, :user_token))
+
+    {:ok, first_view, _html} = live(conn, ~p"/admin/pools")
+    {:ok, second_view, _html} = live(second_conn, ~p"/admin/pools")
+
+    _ = await_pool_traffic(first_view, activate_histograms?: false)
+    _ = await_pool_traffic(second_view, activate_histograms?: false)
+    _ = expire_pool_traffic_cooldown(first_view)
+    _ = expire_pool_traffic_cooldown(second_view)
+
+    test_pid = self()
+    handler_id = {__MODULE__, :shared_pool_traffic_gate, System.unique_integer([:positive])}
+    first_projection = :atomics.new(1, signed: false)
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if pool_traffic_projection_query?(metadata) and
+               self() not in [first_view.pid, second_view.pid] do
+            send(test_pid, {handler_id, :query, self()})
+
+            if :atomics.compare_exchange(first_projection, 1, 0, 1) == 0 do
+              receive do
+                {^handler_id, :release} -> :ok
+              after
+                2_000 -> :ok
+              end
+            end
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    # When: the first session holds the expensive projection and the second
+    # session requests the same operator-scoped projection.
+    render_hook(first_view, "set_pool_traffic_visibility", %{
+      "pool_id" => pool.id,
+      "visible" => true
+    })
+
+    assert_receive {^handler_id, :query, first_query_pid}, 1_000
+
+    render_hook(second_view, "set_pool_traffic_visibility", %{
+      "pool_id" => pool.id,
+      "visible" => true
+    })
+
+    _ = render_async(second_view, 2_000)
+
+    # Then: only the first session reaches the expensive Repo boundary. The
+    # denied session settles through the shared gate without entering it.
+    query_pids = drain_lazy_query_pids(handler_id, MapSet.new([first_query_pid]))
+    assert query_pids == MapSet.new([first_query_pid])
+
+    :ok = :telemetry.detach(handler_id)
+    send(first_query_pid, {handler_id, :release})
+    _ = await_pool_traffic(first_view, activate_histograms?: false)
+    _ = expire_pool_traffic_cooldown(second_view)
+    _ = await_pool_traffic(second_view, activate_histograms?: false)
   end
 
   test "traffic window selector updates throughput cost and chart metrics", %{
@@ -4198,6 +4253,16 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     cooldown_token = Map.get(assigns, :pool_traffic_cooldown_token)
 
     if is_reference(timer_ref) and is_reference(cooldown_token) do
+      Repo.query!(
+        """
+        UPDATE admin_pool_traffic_gates
+        SET cooldown_until = statement_timestamp(), updated_at = statement_timestamp()
+        WHERE operator_id = $1::text::uuid
+          AND owner_token IS NULL
+        """,
+        [assigns.current_scope.user.id]
+      )
+
       Process.cancel_timer(timer_ref, async: false, info: false)
       send(view.pid, {:pool_traffic_cooldown_elapsed, cooldown_token})
       _ = :sys.get_state(view.pid)
@@ -4271,6 +4336,57 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     after
       0 -> query_pids
     end
+  end
+
+  defp pool_traffic_projection_query?(metadata) do
+    query = to_string(metadata[:query] || "")
+
+    metadata[:repo] == Repo and
+      not String.contains?(query, "admin_pool_traffic") and
+      not String.contains?(query, "pg_advisory")
+  end
+
+  defp hold_pool_traffic_advisory_lock(operator_id, holder_ref) do
+    test_pid = self()
+
+    Task.async(fn ->
+      run_pool_traffic_advisory_lock_connection(operator_id, holder_ref, test_pid)
+    end)
+  end
+
+  defp run_pool_traffic_advisory_lock_connection(operator_id, holder_ref, test_pid) do
+    Sandbox.unboxed_run(Repo, fn ->
+      Repo.checkout(fn ->
+        run_pool_traffic_advisory_lock_holder(operator_id, holder_ref, test_pid)
+      end)
+    end)
+  end
+
+  defp run_pool_traffic_advisory_lock_holder(operator_id, holder_ref, test_pid) do
+    assert {:ok, %{rows: [[lock_key, true]]}} =
+             Repo.query(
+               """
+               SELECT
+                 hashtextextended('admin_pool_traffic:' || $1::text, 0),
+                 pg_try_advisory_lock(
+                   hashtextextended('admin_pool_traffic:' || $1::text, 0)
+                 )
+               """,
+               [operator_id]
+             )
+
+    send(test_pid, {holder_ref, :lock_held, self()})
+
+    receive do
+      {^holder_ref, :release} -> :ok
+    after
+      2_000 -> flunk("timed out waiting to release Pool traffic advisory lock")
+    end
+
+    assert {:ok, %{rows: [[true]]}} =
+             Repo.query("SELECT pg_advisory_unlock($1)", [lock_key])
+
+    :ok
   end
 
   defp assert_policy_editor_docs_link(view, dialog_id) do

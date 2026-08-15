@@ -27,6 +27,7 @@ defmodule CodexPooler.SchemaContractTest do
     RequestLogFact
   }
 
+  alias CodexPooler.Admin.PoolTrafficGate
   alias CodexPooler.Catalog.{Model, PricingSnapshot}
   alias CodexPooler.Files.FileRecord
   alias CodexPooler.Gateway.Persistence.{BridgeSessionAlias, RoutingCircuitState}
@@ -38,7 +39,7 @@ defmodule CodexPooler.SchemaContractTest do
   alias CodexPooler.Upstreams.Schemas.{OAuthFlow, UpstreamIdentity}
 
   @expected_tables ~w(
-    account_quota_windows alert_channels alert_delivery_attempts alert_incident_receipts alert_incident_targets alert_incidents
+    account_quota_windows admin_pool_traffic_gates alert_channels alert_delivery_attempts alert_incident_receipts alert_incident_targets alert_incidents
     alert_rule_channels alert_rules api_key_policy_bindings api_keys attempts audit_events bridge_owner_leases
     bridge_session_aliases codex_files codex_sessions codex_turns daily_rollup_coverages daily_rollups hourly_model_usage_rollups
     encrypted_secrets gateway_idempotency_keys instance_settings invite_acceptances invites ledger_entries memberships
@@ -53,6 +54,7 @@ defmodule CodexPooler.SchemaContractTest do
     CodexPooler.Accounts.Session,
     CodexPooler.Accounts.TOTPSetting,
     CodexPooler.Accounts.User,
+    PoolTrafficGate,
     APIKey,
     APIKeyPolicyBinding,
     CodexPooler.Access.Invite,
@@ -112,6 +114,31 @@ defmodule CodexPooler.SchemaContractTest do
     assert [["pending"]] = Repo.query!("SELECT status FROM platform_bootstrap_state").rows
   end
 
+  @tag :shared_pool_traffic_gate
+  test "stores the operator-scoped Pool traffic gate with fenced lease and cascade cleanup" do
+    columns = table_columns("admin_pool_traffic_gates")
+
+    assert columns == %{
+             "operator_id" => {"uuid", "NO"},
+             "owner_token" => {"uuid", "YES"},
+             "lease_expires_at" => {"timestamp without time zone", "YES"},
+             "cooldown_until" => {"timestamp without time zone", "NO"},
+             "inserted_at" => {"timestamp without time zone", "NO"},
+             "updated_at" => {"timestamp without time zone", "NO"}
+           }
+
+    constraints = constraint_definitions()
+
+    assert constraints["admin_pool_traffic_gates_owner_lease_pair_check"] =~
+             "(owner_token IS NULL) = (lease_expires_at IS NULL)"
+
+    assert fk_action("admin_pool_traffic_gates_operator_id_fkey") == {"c", "a"}
+    assert PoolTrafficGate.__schema__(:primary_key) == [:operator_id]
+    assert PoolTrafficGate.__schema__(:type, :owner_token) == :binary_id
+    assert PoolTrafficGate.__schema__(:type, :lease_expires_at) == :utc_datetime_usec
+    assert PoolTrafficGate.__schema__(:type, :cooldown_until) == :utc_datetime_usec
+  end
+
   test "preserves required unique, partial, and functional indexes" do
     indexes =
       Repo.query!("""
@@ -123,6 +150,7 @@ defmodule CodexPooler.SchemaContractTest do
 
     for name <- [
           "users_email_active_uq",
+          "admin_pool_traffic_gates_pkey",
           "pools_slug_uq",
           "operator_pool_assignments_user_pool_active_uq",
           "api_key_policy_default_active_uq",

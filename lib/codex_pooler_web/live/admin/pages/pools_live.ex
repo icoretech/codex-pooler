@@ -1,7 +1,7 @@
 defmodule CodexPoolerWeb.Admin.PoolsLive do
   use CodexPoolerWeb, :admin_live_view
 
-  alias CodexPooler.Admin.PoolWorkflow
+  alias CodexPooler.Admin.{PoolTrafficGate, PoolWorkflow}
   alias CodexPooler.Catalog
   alias CodexPooler.Events
   alias CodexPooler.Gateway.Routing.CandidateEligibility
@@ -541,11 +541,11 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   end
 
   @impl true
-  def handle_async(:pool_traffic, {:ok, traffic}, socket) do
+  def handle_async(:pool_traffic, {:ok, {:ok, traffic, cooldown_ms}}, socket) do
     socket =
       socket
       |> assign(:pool_traffic_running?, false)
-      |> schedule_pool_traffic_load_cooldown()
+      |> schedule_pool_traffic_load_cooldown(cooldown_ms)
 
     if traffic.traffic_window == current_traffic_window(socket) do
       eligible_ids = eligible_pool_traffic_ids(socket)
@@ -567,22 +567,34 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     end
   end
 
-  def handle_async(:pool_traffic, {:exit, _reason}, socket) do
-    socket =
-      socket
-      |> assign(:pool_traffic_running?, false)
-      |> schedule_pool_traffic_load_cooldown()
+  def handle_async(:pool_traffic, {:ok, {:busy, retry_after_ms}}, socket) do
+    {:noreply,
+     socket
+     |> assign(pool_traffic_running?: false, pool_traffic_rerun?: true)
+     |> schedule_pool_traffic_load_cooldown(retry_after_ms)}
+  end
 
-    if socket.assigns.pool_traffic_rerun? do
-      {:noreply, socket}
-    else
-      # Without merged usage the structural zeros are placeholders, not data:
-      # keep the loading affordance instead of presenting them as settled.
-      {:noreply,
-       socket
-       |> assign(:pool_traffic_loading?, is_nil(socket.assigns.pool_traffic_usage))
-       |> reconcile_pool_histogram_states(:error)}
-    end
+  def handle_async(:pool_traffic, {:ok, {:error, :stale_owner}}, socket) do
+    {:noreply,
+     socket
+     |> assign(pool_traffic_running?: false, pool_traffic_rerun?: true)
+     |> schedule_pool_traffic_load_cooldown(@pool_traffic_load_cooldown_ms)}
+  end
+
+  def handle_async(:pool_traffic, {:ok, {:error, :gate_unavailable}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:pool_traffic_running?, false)
+     |> schedule_pool_traffic_load_cooldown(@pool_traffic_load_cooldown_ms)
+     |> pool_traffic_load_error()}
+  end
+
+  def handle_async(:pool_traffic, {:exit, _reason}, socket) do
+    {:noreply,
+     socket
+     |> assign(:pool_traffic_running?, false)
+     |> schedule_pool_traffic_load_cooldown(@pool_traffic_load_cooldown_ms)
+     |> pool_traffic_load_error()}
   end
 
   defp pool_event_kind(topics, pool_id) when is_list(topics) and is_binary(pool_id) do
@@ -770,8 +782,8 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
 
   # The traffic aggregate is the expensive read; running it on this process
   # would queue clicks and dialog opens behind it. One task at a time, followed
-  # by a fixed server-side cooldown: extra requests in either phase coalesce
-  # into a single re-run that reads the latest eligible set.
+  # by a PostgreSQL-shared operator gate: extra requests in either phase
+  # coalesce into a single re-run that reads the latest eligible set.
   defp start_pool_traffic_load(socket) do
     cond do
       not connected?(socket) ->
@@ -787,19 +799,34 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
         pool_ids = socket.assigns.traffic_pool_ids
         eligible_pool_ids = eligible_pool_traffic_ids(socket)
         traffic_window = current_traffic_window(socket)
+        current_scope = socket.assigns.current_scope
+        owner_token = Ecto.UUID.generate()
 
         socket
         |> assign(pool_traffic_running?: true, pool_traffic_rerun?: false)
         |> reconcile_pool_histogram_states(:loading)
         |> start_async(:pool_traffic, fn ->
-          pool_ids
-          |> PoolsReadModel.traffic_metrics(MapSet.to_list(eligible_pool_ids), traffic_window)
-          |> Map.put(:eligible_pool_ids, eligible_pool_ids)
+          load_pool_traffic(
+            current_scope,
+            owner_token,
+            pool_ids,
+            eligible_pool_ids,
+            traffic_window
+          )
         end)
     end
   end
 
-  defp schedule_pool_traffic_load_cooldown(socket) do
+  defp load_pool_traffic(current_scope, owner_token, pool_ids, eligible_pool_ids, traffic_window) do
+    PoolTrafficGate.run(current_scope, owner_token, fn ->
+      pool_ids
+      |> PoolsReadModel.traffic_metrics(MapSet.to_list(eligible_pool_ids), traffic_window)
+      |> Map.put(:eligible_pool_ids, eligible_pool_ids)
+    end)
+  end
+
+  defp schedule_pool_traffic_load_cooldown(socket, cooldown_ms)
+       when is_integer(cooldown_ms) and cooldown_ms > 0 do
     case socket.assigns.pool_traffic_cooldown_timer do
       timer_ref when is_reference(timer_ref) ->
         socket
@@ -811,13 +838,25 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
           Process.send_after(
             self(),
             {:pool_traffic_cooldown_elapsed, cooldown_token},
-            @pool_traffic_load_cooldown_ms
+            cooldown_ms
           )
 
         assign(socket,
           pool_traffic_cooldown_timer: timer_ref,
           pool_traffic_cooldown_token: cooldown_token
         )
+    end
+  end
+
+  defp pool_traffic_load_error(socket) do
+    if socket.assigns.pool_traffic_rerun? do
+      socket
+    else
+      # Without merged usage the structural zeros are placeholders, not data:
+      # keep the loading affordance instead of presenting them as settled.
+      socket
+      |> assign(:pool_traffic_loading?, is_nil(socket.assigns.pool_traffic_usage))
+      |> reconcile_pool_histogram_states(:error)
     end
   end
 
