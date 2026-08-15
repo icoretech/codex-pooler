@@ -1,6 +1,6 @@
 # Codex Pooler Public Docs For Agents
 
-Last reviewed: 2026-08-11
+Last reviewed: 2026-08-15
 
 Inventory scope: curated primary and discovery pages listed below; this index intentionally excludes other rendered pages.
 
@@ -62,6 +62,7 @@ Service-tier compatibility:
 - Use priority as the canonical service_tier spelling for new client configuration. fast is an accepted equivalent request spelling.
 - /backend-api/codex relays provider bytes, frames, and service-tier vocabulary unchanged.
 - /v1 translates supported OpenAI request and response shapes while preserving any projected provider service_tier value in its literal provider vocabulary.
+- Direct /v1/responses accepts literal ultrafast only for HTTP JSON, HTTP SSE, and the Responses WebSocket. The selected provider must advertise ultrafast in service_tiers or additional_speed_tiers; /v1/chat/completions rejects it as invalid_request at service_tier.
 
 Supported route families:
 - /backend-api: Codex backend compatibility route for authenticated Codex clients. Important paths include /backend-api/codex/models, /backend-api/codex/responses, /backend-api/codex/responses/compact, /backend-api/codex/v1/* aliases, /backend-api/files, /backend-api/transcribe, and usage routes such as /backend-api/wham/usage.

@@ -150,6 +150,13 @@ frames, and service-tier vocabulary unchanged. The narrow `/v1` surface
 translates supported request and response shapes, while any projected provider
 `service_tier` value retains its literal provider vocabulary.
 
+Document `ultrafast` separately from the `fast` and `priority` alias. It is
+accepted only by direct `/v1/responses` JSON, SSE, and Responses WebSocket
+requests when selected model metadata advertises it. Returned `ultrafast`
+remains literal. Direct `/v1/chat/completions` rejects it. Upstream providers
+control availability, access, and price, so do not promise a model, entitlement,
+or price.
+
 Routed public `/v1` endpoints that must be described as deterministic unsupported behavior:
 
 - `POST /v1/responses/compact`, deterministic unsupported compact route before gateway dispatch

@@ -43,6 +43,23 @@ its literal provider vocabulary. Codex backend relay routes under
 `/backend-api/codex` preserve provider bytes, frames, and service-tier
 vocabulary unchanged.
 
+`ultrafast` is a separate tier, not an alias for `fast` or `priority`. Use
+`service_tier: "ultrafast"` only with direct `/v1/responses` requests when the
+selected model metadata advertises it:
+
+```python
+response = client.responses.create(
+    model="your-model-id",
+    input="Your request input.",
+    service_tier="ultrafast",
+)
+```
+
+JSON, SSE, and narrow Responses WebSocket requests preserve a returned
+`ultrafast` tier literally. `POST /v1/chat/completions` rejects `ultrafast`.
+Provider availability, access, and price control whether the tier can be used;
+model metadata advertisement is not an entitlement or price promise.
+
 ## Tool-specific setup pages
 
 Use the dedicated setup pages when configuring an agent or editor that has its own provider shape:
