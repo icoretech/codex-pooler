@@ -1281,13 +1281,15 @@ verified live as the orange "Pro" / green "Free" pills.
   remains a static section with the established `Traffic` header, totals,
   empty state, and chart selector
   `#pool-row-<id>-traffic-histogram-plot[phx-hook="ApexTimeSeriesChart"][phx-update="ignore"]`.
-  There is no disclosure, toggle, lifecycle label, or other user-facing load
-  affordance.
+  There is no disclosure, toggle, or manual load affordance. A near-viewport
+  row waiting for its traffic projection renders the shared admin loading icon
+  and `Loading traffic` status inside the existing plot-height region.
 - **Lifecycle:** offscreen rows retain the static layout but contain no plot or
   `data-chart-series`. Near-viewport rows load through the existing traffic
-  lane and render the unchanged totals plus chart or no-traffic state when
-  ready. Leaving the viewport prunes histogram payload immediately; a later
-  re-entry loads it again.
+  lane, show the non-interactive loading status while that read is pending, and
+  render the unchanged totals plus chart or no-traffic state when ready.
+  Leaving the viewport prunes histogram payload immediately; a later re-entry
+  loads it again.
 - **Authorization:** viewport visibility is only an optimization hint.
   Server-side scope and the currently rendered Pool rows remain authoritative,
   and events cannot activate a hidden or unauthorized Pool.

@@ -1007,6 +1007,17 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     _ = render_async(view, 2_000)
 
+    assert has_element?(
+             view,
+             "#pool-row-#{pool.id}-traffic-histogram [data-role='pool-traffic-loading-placeholder'][role='status']",
+             "Loading traffic"
+           )
+
+    assert has_element?(
+             view,
+             "#pool-row-#{pool.id}-traffic-histogram [data-role='pool-traffic-loading-icon'] .admin-loading-icon"
+           )
+
     render_hook(view, "set_pool_traffic_visibility", %{
       "pool_id" => pool.id,
       "visible" => false

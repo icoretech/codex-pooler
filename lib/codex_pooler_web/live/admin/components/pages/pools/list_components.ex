@@ -634,7 +634,22 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
           </p>
         </div>
         <div
-          :if={@pool_row.histogram_state != :ready}
+          :if={@pool_row.histogram_state == :loading}
+          class="pool-activity-empty-state"
+          data-role="pool-traffic-loading-placeholder"
+          role="status"
+        >
+          <span
+            class="pool-activity-empty-state-icon"
+            data-role="pool-traffic-loading-icon"
+            aria-hidden="true"
+          >
+            <.icon name="hero-arrow-path" class="admin-loading-icon size-4" />
+          </span>
+          <p class="pool-activity-empty-copy">Loading traffic</p>
+        </div>
+        <div
+          :if={@pool_row.histogram_state in [:unobserved, :error]}
           class="pool-token-histogram-plot admin-apex-bar-chart"
           aria-hidden="true"
         >
