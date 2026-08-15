@@ -106,6 +106,41 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModelTest do
     assert merged_metrics.tokens_per_second == 100.0
   end
 
+  test "reconcile_histogram_states/3 keeps eligible data and prunes inactive payloads" do
+    eligible_id = Ecto.UUID.generate()
+    inactive_id = Ecto.UUID.generate()
+
+    ready_row =
+      eligible_id
+      |> structural_row("Eligible")
+      |> Map.merge(%{
+        histogram_state: :ready,
+        token_histogram: [%{bucket: "now", value: 10}],
+        request_histogram: [%{bucket: "now", value: 1}]
+      })
+
+    inactive_row =
+      inactive_id
+      |> structural_row("Inactive")
+      |> Map.merge(%{
+        histogram_state: :ready,
+        token_histogram: [%{bucket: "now", value: 20}],
+        request_histogram: [%{bucket: "now", value: 2}]
+      })
+
+    [eligible, inactive] =
+      PoolsReadModel.reconcile_histogram_states(
+        [ready_row, inactive_row],
+        MapSet.new([eligible_id]),
+        :loading
+      )
+
+    assert eligible == ready_row
+    assert inactive.histogram_state == :unobserved
+    assert inactive.token_histogram == []
+    assert inactive.request_histogram == []
+  end
+
   defp structural_row(pool_id, name) do
     %{
       pool: %Pool{id: pool_id, name: name, slug: String.downcase(name), status: "active"},

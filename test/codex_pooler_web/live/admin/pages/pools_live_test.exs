@@ -795,6 +795,276 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute has_element?(view, "#pool-row-#{pool.id}", "Weekly quota")
   end
 
+  @tag :lazy_pool_histograms
+  test "loads Pool histograms only after a card becomes eligible", %{
+    scope: scope
+  } do
+    # Given
+    {:ok, target_pool} =
+      Pools.create_pool(scope, %{slug: "lazy-target", name: "Lazy Target"})
+
+    {:ok, inactive_pool} =
+      Pools.create_pool(scope, %{slug: "lazy-inactive", name: "Lazy Inactive"})
+
+    {:ok, unassigned_pool} =
+      Pools.create_pool(scope, %{slug: "lazy-unassigned", name: "Lazy Unassigned"})
+
+    %{user: admin, temporary_password: temporary_password} =
+      operator_fixture(scope, %{
+        "email" => "lazy-pool-admin@example.com",
+        "password_change_required" => "false"
+      })
+
+    operator_pool_assignment_fixture(admin, target_pool, created_by_user_id: scope.user.id)
+    operator_pool_assignment_fixture(admin, inactive_pool, created_by_user_id: scope.user.id)
+
+    assert {:ok, %{token: token}} =
+             Accounts.login_user(%{"email" => admin.email, "password" => temporary_password})
+
+    admin_conn = log_in_user(build_conn(), admin, token)
+
+    %{api_key: api_key} = api_key_fixture(target_pool)
+    %{assignment: assignment} = upstream_assignment_fixture(target_pool)
+    %{api_key: inactive_api_key} = api_key_fixture(inactive_pool)
+    %{assignment: inactive_assignment} = upstream_assignment_fixture(inactive_pool)
+
+    insert_timed_usage!(
+      target_pool,
+      api_key,
+      assignment,
+      DateTime.utc_now(),
+      100,
+      1_000_000,
+      2_000
+    )
+
+    insert_timed_usage!(
+      inactive_pool,
+      inactive_api_key,
+      inactive_assignment,
+      DateTime.utc_now(),
+      50,
+      500_000,
+      1_000
+    )
+
+    {:ok, view, _html} = live(admin_conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view, activate_histograms?: false)
+
+    # Then: the initial summary read leaves both cards inactive and ships no chart payload.
+    for pool <- [target_pool, inactive_pool] do
+      assert has_element?(
+               view,
+               "#pool-row-#{pool.id}-activity[phx-hook='PoolTrafficVisibility'][data-pool-id='#{pool.id}']"
+             )
+
+      assert has_element?(
+               view,
+               "#pool-row-#{pool.id}-traffic-histogram[data-role='pool-traffic-histogram'][data-histogram-state='unobserved'] #pool-row-#{pool.id}-traffic-disclosure[data-role='pool-traffic-disclosure']"
+             )
+
+      assert has_element?(
+               view,
+               "#pool-row-#{pool.id}-traffic-disclosure > summary [data-role='pool-traffic-disclosure-cue'][class*='group-open/traffic:rotate-180']"
+             )
+
+      refute has_element?(view, "#pool-row-#{pool.id}-traffic-histogram-plot")
+      refute has_element?(view, "#pool-row-#{pool.id}-traffic-histogram [data-chart-series]")
+    end
+
+    render_hook(view, "set_pool_traffic_visibility", %{
+      "pool_id" => unassigned_pool.id,
+      "reason" => "viewport",
+      "visible" => true
+    })
+
+    refute MapSet.member?(
+             :sys.get_state(view.pid).socket.assigns.pool_traffic_viewport_ids,
+             unassigned_pool.id
+           )
+
+    refute has_element?(view, "#pool-row-#{unassigned_pool.id}")
+
+    # When
+    render_hook(view, "set_pool_traffic_visibility", %{
+      "pool_id" => target_pool.id,
+      "reason" => "viewport",
+      "visible" => true
+    })
+
+    _ = await_pool_traffic(view, activate_histograms?: false)
+
+    # Then
+    assert has_element?(
+             view,
+             "#pool-row-#{target_pool.id}-traffic-histogram[data-role='pool-traffic-histogram'][data-histogram-state='ready']"
+           )
+
+    assert has_element?(
+             view,
+             "#pool-row-#{target_pool.id}-traffic-histogram-plot[phx-hook='ApexTimeSeriesChart'][phx-update='ignore'][data-chart-series]"
+           )
+
+    refute has_element?(view, "#pool-row-#{inactive_pool.id}-traffic-histogram-plot")
+
+    refute has_element?(
+             view,
+             "#pool-row-#{inactive_pool.id}-traffic-histogram [data-chart-series]"
+           )
+
+    # When: a ready card leaves the viewport without an explicit disclosure override.
+    render_hook(view, "set_pool_traffic_visibility", %{
+      "pool_id" => target_pool.id,
+      "reason" => "viewport",
+      "visible" => false
+    })
+
+    # Then: its payload is pruned before the follow-up read completes.
+    refute has_element?(view, "#pool-row-#{target_pool.id}-traffic-histogram-plot")
+    refute has_element?(view, "#pool-row-#{target_pool.id}-traffic-histogram [data-chart-series]")
+
+    assert has_element?(
+             view,
+             "#pool-row-#{target_pool.id}-traffic-histogram[data-histogram-state='unobserved']"
+           )
+
+    _ = await_pool_traffic(view, activate_histograms?: false)
+    state = :sys.get_state(view.pid)
+    refute MapSet.member?(state.socket.assigns.pool_traffic_viewport_ids, target_pool.id)
+
+    refute Map.has_key?(
+             state.socket.assigns.pool_traffic_usage.histogram_by_pool_id,
+             target_pool.id
+           )
+
+    render_hook(view, "set_pool_traffic_visibility", %{
+      "pool_id" => target_pool.id,
+      "reason" => "viewport",
+      "visible" => true
+    })
+
+    _ = await_pool_traffic(view, activate_histograms?: false)
+
+    # When: another active card is later hidden by the structural filter.
+    render_hook(view, "set_pool_traffic_visibility", %{
+      "pool_id" => inactive_pool.id,
+      "reason" => "viewport",
+      "visible" => true
+    })
+
+    _ = await_pool_traffic(view, activate_histograms?: false)
+
+    view
+    |> element("#pool-filter-form")
+    |> render_change(%{
+      "pool_filters" => %{"query" => "Lazy Target", "status" => "all"}
+    })
+
+    # Then: rendering state is pruned synchronously, but both authorized summaries
+    # still contribute to the top strip.
+    state = :sys.get_state(view.pid)
+    refute MapSet.member?(state.socket.assigns.pool_traffic_viewport_ids, inactive_pool.id)
+    refute MapSet.member?(state.socket.assigns.pool_traffic_expanded_ids, inactive_pool.id)
+    refute has_element?(view, "#pool-row-#{inactive_pool.id}")
+    assert has_element?(view, "#pool-metric-requests", "2")
+  end
+
+  @tag :lazy_pool_histograms
+  test "collapse prunes payload and rapid eligibility changes coalesce", %{
+    conn: conn,
+    scope: scope
+  } do
+    # Given
+    {:ok, pool} = Pools.create_pool(scope, %{slug: "lazy-collapse", name: "Lazy Collapse"})
+    %{api_key: api_key} = api_key_fixture(pool)
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    insert_timed_usage!(pool, api_key, assignment, DateTime.utc_now(), 75, 750_000, 1_500)
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view, activate_histograms?: false)
+
+    test_pid = self()
+    handler_id = {__MODULE__, :lazy_histogram_query, System.unique_integer([:positive])}
+    query_counter = :atomics.new(1, signed: false)
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and self() != view.pid do
+            query_number = :atomics.add_get(query_counter, 1, 1)
+            send(test_pid, {handler_id, :query, self()})
+
+            if query_number == 1 do
+              receive do
+                {^handler_id, :release} -> :ok
+              after
+                2_000 -> :ok
+              end
+            end
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    # When: eligibility changes while its traffic task is held at the real Repo boundary.
+    render_hook(view, "set_pool_traffic_visibility", %{
+      "pool_id" => pool.id,
+      "reason" => "viewport",
+      "visible" => true
+    })
+
+    assert_receive {^handler_id, :query, query_pid}, 1_000
+
+    render_hook(view, "set_pool_traffic_visibility", %{
+      "pool_id" => pool.id,
+      "reason" => "disclosure",
+      "visible" => false
+    })
+
+    state = :sys.get_state(view.pid)
+
+    # Then: the existing lane represents every extra request with one rerun flag.
+    assert state.socket.assigns.pool_traffic_running?
+    assert state.socket.assigns.pool_traffic_rerun?
+
+    send(query_pid, {handler_id, :release})
+
+    _ = await_pool_traffic(view, activate_histograms?: false)
+
+    query_pids = drain_lazy_query_pids(handler_id, MapSet.new([query_pid]))
+    assert MapSet.size(query_pids) == 2
+    assert query_pids |> MapSet.delete(query_pid) |> MapSet.size() == 1
+
+    :ok = :telemetry.detach(handler_id)
+
+    refute has_element?(view, "#pool-row-#{pool.id}-traffic-histogram-plot")
+    refute has_element?(view, "#pool-row-#{pool.id}-traffic-histogram [data-chart-series]")
+
+    assert has_element?(
+             view,
+             "#pool-row-#{pool.id}-traffic-histogram[data-role='pool-traffic-histogram'][data-histogram-state='unobserved']"
+           )
+
+    # When: reopening explicitly removes the manual-collapse override.
+    render_hook(view, "set_pool_traffic_visibility", %{
+      "pool_id" => pool.id,
+      "reason" => "disclosure",
+      "visible" => true
+    })
+
+    _ = await_pool_traffic(view, activate_histograms?: false)
+
+    # Then
+    assert has_element?(
+             view,
+             "#pool-row-#{pool.id}-traffic-histogram-plot[phx-hook='ApexTimeSeriesChart'][phx-update='ignore']"
+           )
+  end
+
   test "traffic window selector updates throughput cost and chart metrics", %{
     conn: conn,
     scope: scope
@@ -3753,12 +4023,28 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
   # Waits for the async traffic task, including coalesced re-runs, so tests
   # never leave a task holding a sandbox connection when the view is killed.
-  defp await_pool_traffic(view) do
+  defp await_pool_traffic(view, opts \\ []) do
+    if Keyword.get(opts, :activate_histograms?, true) do
+      state = :sys.get_state(view.pid)
+
+      Enum.each(state.socket.assigns.pools, fn pool_row ->
+        render_hook(view, "set_pool_traffic_visibility", %{
+          "pool_id" => pool_row.pool.id,
+          "reason" => "viewport",
+          "visible" => true
+        })
+      end)
+    end
+
+    await_pool_traffic_tasks(view)
+  end
+
+  defp await_pool_traffic_tasks(view) do
     html = render_async(view, 2_000)
     state = :sys.get_state(view.pid)
 
     if state.socket.assigns.pool_traffic_running? or state.socket.assigns.pool_traffic_rerun? do
-      await_pool_traffic(view)
+      await_pool_traffic_tasks(view)
     else
       html
     end
@@ -3819,6 +4105,15 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       {^handler_id, source} -> drain_repo_query_sources(handler_id, [to_string(source) | sources])
     after
       0 -> Enum.reverse(sources)
+    end
+  end
+
+  defp drain_lazy_query_pids(handler_id, query_pids) do
+    receive do
+      {^handler_id, :query, query_pid} ->
+        drain_lazy_query_pids(handler_id, MapSet.put(query_pids, query_pid))
+    after
+      0 -> query_pids
     end
   end
 

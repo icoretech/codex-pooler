@@ -177,6 +177,27 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
     {merged_rows, merged_metrics}
   end
 
+  @spec reconcile_histogram_states(
+          [pool_row()],
+          MapSet.t(Ecto.UUID.t()),
+          :loading | :error
+        ) :: [pool_row()]
+  def reconcile_histogram_states(pool_rows, eligible_pool_ids, missing_state)
+      when missing_state in [:loading, :error] do
+    Enum.map(pool_rows, fn pool_row ->
+      cond do
+        not MapSet.member?(eligible_pool_ids, pool_row.pool.id) ->
+          reset_histogram(pool_row, :unobserved)
+
+        pool_row.histogram_state == :ready ->
+          pool_row
+
+        true ->
+          reset_histogram(pool_row, missing_state)
+      end
+    end)
+  end
+
   @spec format_metric_integer(integer() | nil) :: String.t()
   def format_metric_integer(nil), do: "0"
   def format_metric_integer(value) when is_integer(value), do: Integer.to_string(value)
@@ -268,6 +289,15 @@ defmodule CodexPoolerWeb.Admin.PoolsReadModel do
             histogram_state: :unobserved
         }
     end
+  end
+
+  defp reset_histogram(pool_row, state) do
+    %{
+      pool_row
+      | token_histogram: [],
+        request_histogram: [],
+        histogram_state: state
+    }
   end
 
   defp filter_pool_rows(pool_rows, filters) do

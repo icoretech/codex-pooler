@@ -1268,6 +1268,36 @@ verified live as the orange "Pro" / green "Free" pills.
   data-chart-source="interval">` mirrors every interval value; mode changes
   announce through an `aria-live="polite"` description.
 
+### Pool traffic disclosure
+
+- **Source:** `pool_activity_panel/1` in
+  [`list_components.ex`](lib/codex_pooler_web/live/admin/components/pages/pools/list_components.ex),
+  with visibility lifecycle in `PoolTrafficVisibility` and the Pools LiveView.
+- **Purpose:** preserves the compact Pool traffic instrument while deferring
+  histogram queries, JSON payloads, and Apex mounting until the card is near
+  the viewport or the operator explicitly opens it.
+- **Anatomy:** the activity root keeps the existing tonal band and exposes the
+  Pool id to `phx-hook="PoolTrafficVisibility"`. The established histogram
+  section keeps its id and `data-role`; its native `<details>` adds the stable
+  disclosure id, `data-preserve-open`, and a summary built from the existing
+  histogram header: `Traffic` plus the active window on the left and a total
+  or lifecycle label on the right. A trailing chevron is always visible and
+  rotates only to communicate the native open state; reduced-motion sessions
+  keep the state change without its transition. The chart selector remains
+  `#pool-row-<id>-traffic-histogram-plot` with `ApexTimeSeriesChart` and
+  `phx-update="ignore"`.
+- **States:** `unobserved` says `Open to load` and contains no plot or chart
+  data attributes; `loading` uses the shared loading icon and a fixed-height
+  activity placeholder; `error` uses the same fixed-height placeholder with
+  text-plus-icon failure copy; `ready` renders either the established no-traffic
+  state or the chart and its screen-reader interval list. Explicit collapse
+  removes the payload even while the card remains near the viewport.
+- **Responsive and accessibility:** the disclosure owns no horizontal scroll,
+  keeps the existing 84px plot/placeholder height, and uses the native summary
+  keyboard contract with the standard primary focus outline. Visibility is an
+  optimization only: server-side scope and the currently rendered Pool rows
+  remain authoritative for every event.
+
 ### Policy editor dialog and wizard
 
 - **Source:** `policy_editor_dialog/1` in

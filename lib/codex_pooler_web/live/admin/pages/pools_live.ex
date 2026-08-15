@@ -56,6 +56,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
        pool_traffic_refresh_timer: nil,
        pool_traffic_refresh_token: nil,
        traffic_pool_ids: [],
+       pool_traffic_viewport_ids: MapSet.new(),
+       pool_traffic_expanded_ids: MapSet.new(),
+       pool_traffic_manually_collapsed_ids: MapSet.new(),
        pool_traffic_usage: nil,
        pool_traffic_loading?: true,
        pool_traffic_running?: false,
@@ -407,6 +410,35 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     {:noreply, apply_pool_filters(socket, filters)}
   end
 
+  def handle_event(
+        "set_pool_traffic_visibility",
+        %{"pool_id" => pool_id, "reason" => reason, "visible" => visible},
+        socket
+      )
+      when is_binary(pool_id) and reason in ["viewport", "disclosure"] and
+             is_boolean(visible) do
+    if rendered_pool_id?(socket, pool_id) do
+      previous_eligible_ids = eligible_pool_traffic_ids(socket)
+
+      socket =
+        socket
+        |> update_pool_traffic_visibility(pool_id, reason, visible)
+        |> prune_pool_traffic_state()
+        |> apply_pool_traffic()
+        |> reconcile_pool_histogram_states(:loading)
+
+      if eligible_pool_traffic_ids(socket) == previous_eligible_ids do
+        {:noreply, socket}
+      else
+        {:noreply, start_pool_traffic_load(socket)}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("set_pool_traffic_visibility", _params, socket), do: {:noreply, socket}
+
   @impl true
   def handle_info({Events, %{pool_id: pool_id, topics: topics}}, socket) do
     case pool_event_kind(topics, pool_id) do
@@ -495,10 +527,15 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     socket = assign(socket, :pool_traffic_running?, false)
 
     if traffic.traffic_window == current_traffic_window(socket) do
+      eligible_ids = eligible_pool_traffic_ids(socket)
+      active_result_ids = MapSet.intersection(traffic.eligible_pool_ids, eligible_ids)
+      usage = filter_pool_traffic_histograms(traffic.usage, active_result_ids)
+
       socket =
         socket
-        |> assign(pool_traffic_usage: traffic.usage_by_pool_id, pool_traffic_loading?: false)
+        |> assign(pool_traffic_usage: usage, pool_traffic_loading?: false)
         |> apply_pool_traffic()
+        |> reconcile_pool_histogram_states(:loading)
 
       if socket.assigns.pool_traffic_rerun? do
         {:noreply, start_pool_traffic_load(socket)}
@@ -521,7 +558,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
       # Without merged usage the structural zeros are placeholders, not data:
       # keep the loading affordance instead of presenting them as settled.
       {:noreply,
-       assign(socket, :pool_traffic_loading?, is_nil(socket.assigns.pool_traffic_usage))}
+       socket
+       |> assign(:pool_traffic_loading?, is_nil(socket.assigns.pool_traffic_usage))
+       |> reconcile_pool_histogram_states(:error)}
     end
   end
 
@@ -685,7 +724,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     socket
     |> assign(page_state)
     |> maybe_subscribe_pool_events(page_state.pools)
+    |> prune_pool_traffic_state()
     |> apply_pool_traffic()
+    |> reconcile_pool_histogram_states(:loading)
   end
 
   defp apply_pool_filters(socket, filters) do
@@ -719,12 +760,16 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
 
       true ->
         pool_ids = socket.assigns.traffic_pool_ids
+        eligible_pool_ids = eligible_pool_traffic_ids(socket)
         traffic_window = current_traffic_window(socket)
 
         socket
         |> assign(pool_traffic_running?: true, pool_traffic_rerun?: false)
+        |> reconcile_pool_histogram_states(:loading)
         |> start_async(:pool_traffic, fn ->
-          PoolsReadModel.traffic_metrics(pool_ids, traffic_window)
+          pool_ids
+          |> PoolsReadModel.traffic_metrics(MapSet.to_list(eligible_pool_ids), traffic_window)
+          |> Map.put(:eligible_pool_ids, eligible_pool_ids)
         end)
     end
   end
@@ -761,6 +806,94 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
 
         assign(socket, pools: pools, pool_metrics: pool_metrics)
     end
+  end
+
+  defp reconcile_pool_histogram_states(socket, missing_state) do
+    assign(
+      socket,
+      :pools,
+      PoolsReadModel.reconcile_histogram_states(
+        socket.assigns.pools,
+        eligible_pool_traffic_ids(socket),
+        missing_state
+      )
+    )
+  end
+
+  defp update_pool_traffic_visibility(socket, pool_id, "viewport", visible) do
+    assign(
+      socket,
+      :pool_traffic_viewport_ids,
+      update_pool_id_set(socket.assigns.pool_traffic_viewport_ids, pool_id, visible)
+    )
+  end
+
+  defp update_pool_traffic_visibility(socket, pool_id, "disclosure", true) do
+    assign(socket,
+      pool_traffic_expanded_ids: MapSet.put(socket.assigns.pool_traffic_expanded_ids, pool_id),
+      pool_traffic_manually_collapsed_ids:
+        MapSet.delete(socket.assigns.pool_traffic_manually_collapsed_ids, pool_id)
+    )
+  end
+
+  defp update_pool_traffic_visibility(socket, pool_id, "disclosure", false) do
+    assign(socket,
+      pool_traffic_expanded_ids: MapSet.delete(socket.assigns.pool_traffic_expanded_ids, pool_id),
+      pool_traffic_manually_collapsed_ids:
+        MapSet.put(socket.assigns.pool_traffic_manually_collapsed_ids, pool_id)
+    )
+  end
+
+  defp update_pool_id_set(pool_ids, pool_id, true), do: MapSet.put(pool_ids, pool_id)
+  defp update_pool_id_set(pool_ids, pool_id, false), do: MapSet.delete(pool_ids, pool_id)
+
+  defp eligible_pool_traffic_ids(socket) do
+    visible_ids =
+      MapSet.difference(
+        socket.assigns.pool_traffic_viewport_ids,
+        socket.assigns.pool_traffic_manually_collapsed_ids
+      )
+
+    socket.assigns.pool_traffic_expanded_ids
+    |> MapSet.union(visible_ids)
+    |> MapSet.intersection(rendered_pool_ids(socket))
+  end
+
+  defp rendered_pool_ids(socket) do
+    socket.assigns.pools
+    |> Enum.map(& &1.pool.id)
+    |> MapSet.new()
+  end
+
+  defp rendered_pool_id?(socket, pool_id), do: MapSet.member?(rendered_pool_ids(socket), pool_id)
+
+  defp prune_pool_traffic_state(socket) do
+    rendered_ids = rendered_pool_ids(socket)
+
+    socket =
+      assign(socket,
+        pool_traffic_viewport_ids:
+          MapSet.intersection(socket.assigns.pool_traffic_viewport_ids, rendered_ids),
+        pool_traffic_expanded_ids:
+          MapSet.intersection(socket.assigns.pool_traffic_expanded_ids, rendered_ids),
+        pool_traffic_manually_collapsed_ids:
+          MapSet.intersection(socket.assigns.pool_traffic_manually_collapsed_ids, rendered_ids)
+      )
+
+    eligible_ids = eligible_pool_traffic_ids(socket)
+
+    update(socket, :pool_traffic_usage, fn
+      nil -> nil
+      usage -> filter_pool_traffic_histograms(usage, eligible_ids)
+    end)
+  end
+
+  defp filter_pool_traffic_histograms(usage, eligible_ids) do
+    Map.update!(usage, :histogram_by_pool_id, fn histograms ->
+      Map.filter(histograms, fn {pool_id, _histogram} ->
+        MapSet.member?(eligible_ids, pool_id)
+      end)
+    end)
   end
 
   defp current_traffic_window(socket),
