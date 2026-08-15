@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.6.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.4...codex-pooler-v0.6.5) (2026-08-15)
+
+
+### Features
+
+* **accounting:** define complete Pool daily rollups ([b2f340b](https://github.com/icoretech/codex-pooler/commit/b2f340bd3d588dfbae85404e38e7796fb67293c7))
+* **accounting:** maintain exact Pool daily usage ([0ee6d3a](https://github.com/icoretech/codex-pooler/commit/0ee6d3a6240f4297983c1c24c53091b6612dba77))
+* **admin:** observe Pool traffic card visibility ([4ff6e85](https://github.com/icoretech/codex-pooler/commit/4ff6e85feddf0884924901ed15a7fc24482e0441))
+* **openai:** accept ultrafast Responses service tier ([c91ce94](https://github.com/icoretech/codex-pooler/commit/c91ce948d9a6088b37a5429b071f60b382f1d4c7))
+
+
+### Bug Fixes
+
+* **accounting:** fence complete Pool daily rollups ([ee8c2ac](https://github.com/icoretech/codex-pooler/commit/ee8c2ac9983e8c1836ed16157f877f2550b5ecf4))
+* **admin:** bound Pool traffic viewport reloads ([76fa929](https://github.com/icoretech/codex-pooler/commit/76fa92975e5ede7214d96e5725e5adf202b3163b))
+* **admin:** keep Pool traffic loading viewport-only ([78af2e1](https://github.com/icoretech/codex-pooler/commit/78af2e12acde034980c85de5afe2424ebb095f71))
+* **admin:** restore Pool traffic loading feedback ([b898a4c](https://github.com/icoretech/codex-pooler/commit/b898a4ce6bed6a7a4bbf6cdf68db045d7d38d7af))
+* **admin:** share Pool traffic projection limits ([d7a812c](https://github.com/icoretech/codex-pooler/commit/d7a812ce92169bb60258bba719823f9bbae9d80b))
+* **deps:** update dependency daisyui to v5.7.17 ([#286](https://github.com/icoretech/codex-pooler/issues/286)) ([64b2e10](https://github.com/icoretech/codex-pooler/commit/64b2e10c29300914916ef8b009c245d2dc61d784))
+* **dev:** tolerate server exit during stop signals ([5b2f5c1](https://github.com/icoretech/codex-pooler/commit/5b2f5c124ed84b884a2928bda2aa64515e97ec59))
+* **gateway:** harden compaction and policy failure handling ([0ad6e4b](https://github.com/icoretech/codex-pooler/commit/0ad6e4b26febe1cc57951097f78570aac28241b4))
+* **openai:** bridge public compaction triggers ([a589116](https://github.com/icoretech/codex-pooler/commit/a589116bb733fb53c58520637ea70382c68e6bd3))
+
+
+### Performance Improvements
+
+* **admin:** lazy-load Pool traffic histograms ([8b585fe](https://github.com/icoretech/codex-pooler/commit/8b585fe804462cd48c382fd4b9fe15c4aa3d56e9))
+* **admin:** serve seven-day Pool traffic from rollups ([4d61466](https://github.com/icoretech/codex-pooler/commit/4d61466e4d3df95e1b2ba6e94813853053091fe0))
+
 ## [0.6.4](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.3...codex-pooler-v0.6.4) (2026-08-14)
 
 
