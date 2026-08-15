@@ -1,7 +1,5 @@
 export const POOL_TRAFFIC_VIEWPORT_ROOT_MARGIN = "200px 0px";
 
-const disclosureSelector = "[data-role='pool-traffic-disclosure']";
-
 const poolIdFor = (element) => element?.dataset?.poolId || null;
 
 const createPoolTrafficVisibilityController = ({
@@ -10,45 +8,12 @@ const createPoolTrafficVisibilityController = ({
 	onTransition,
 }) => {
 	let destroyed = false;
-	let disclosure = null;
-	let disclosureVisible = null;
 	let poolId = poolIdFor(activityRoot);
 	let viewportVisible = null;
 
-	const emit = (reason, visible) => {
+	const emit = (visible) => {
 		if (destroyed || !poolId) return;
-		onTransition({ poolId, reason, visible });
-	};
-	const syncDisclosure = () => {
-		const nextDisclosure = activityRoot.querySelector?.(disclosureSelector) ?? null;
-		const nextVisible = nextDisclosure?.open === true;
-
-		if (nextDisclosure === disclosure) {
-			if (disclosureVisible === null || nextVisible === disclosureVisible) return;
-
-			disclosureVisible = nextVisible;
-			emit("disclosure", nextVisible);
-			return;
-		}
-
-		disclosure?.removeEventListener("toggle", handleDisclosureToggle);
-		disclosure = nextDisclosure;
-		const previousVisible = disclosureVisible;
-		disclosureVisible = nextVisible;
-		disclosure?.addEventListener("toggle", handleDisclosureToggle);
-
-		if (previousVisible !== null && previousVisible !== disclosureVisible) {
-			emit("disclosure", disclosureVisible);
-		} else if (disclosureVisible) {
-			emit("disclosure", true);
-		}
-	};
-	const handleDisclosureToggle = () => {
-		const visible = disclosure?.open === true;
-		if (destroyed || visible === disclosureVisible) return;
-
-		disclosureVisible = visible;
-		emit("disclosure", visible);
+		onTransition({ poolId, visible });
 	};
 	// Preload a card shortly before it enters the viewport without eagerly
 	// serializing charts for every Pool on a long operator page.
@@ -63,7 +28,7 @@ const createPoolTrafficVisibilityController = ({
 					if (visible === viewportVisible) continue;
 
 					viewportVisible = visible;
-					emit("viewport", visible);
+					emit(visible);
 				}
 			}, {
 				rootMargin: POOL_TRAFFIC_VIEWPORT_ROOT_MARGIN,
@@ -71,7 +36,6 @@ const createPoolTrafficVisibilityController = ({
 			})
 			: null;
 
-	syncDisclosure();
 	observer?.observe(activityRoot);
 
 	return {
@@ -80,17 +44,14 @@ const createPoolTrafficVisibilityController = ({
 			const nextPoolId = poolIdFor(activityRoot);
 			const poolChanged = nextPoolId !== poolId;
 			poolId = nextPoolId;
-			syncDisclosure();
 
 			if (!poolChanged) return;
-			if (viewportVisible !== null) emit("viewport", viewportVisible);
-			if (disclosureVisible === true) emit("disclosure", true);
+			if (viewportVisible !== null) emit(viewportVisible);
 		},
 		destroy() {
 			if (destroyed) return;
 			destroyed = true;
 			observer?.disconnect();
-			disclosure?.removeEventListener("toggle", handleDisclosureToggle);
 		},
 	};
 };
@@ -101,10 +62,9 @@ export const createPoolTrafficVisibilityHook = (options = {}) => ({
 		this.poolTrafficVisibilityController = createPoolTrafficVisibilityController({
 			Observer,
 			activityRoot: this.el,
-			onTransition: ({ poolId, reason, visible }) => {
+			onTransition: ({ poolId, visible }) => {
 				this.pushEvent("set_pool_traffic_visibility", {
 					pool_id: poolId,
-					reason,
 					visible,
 				});
 			},

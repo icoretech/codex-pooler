@@ -30,38 +30,10 @@ class FakeObserver {
 	}
 }
 
-class FakeDisclosure {
-	constructor(open = false) {
-		this.open = open;
-		this.listeners = new Map();
-	}
-
-	addEventListener(name, listener) {
-		this.listeners.set(name, listener);
-	}
-
-	removeEventListener(name, listener) {
-		if (this.listeners.get(name) === listener) this.listeners.delete(name);
-	}
-
-	toggle(open) {
-		this.open = open;
-		this.listeners.get("toggle")?.();
-	}
-
-	get listenerCount() {
-		return this.listeners.size;
-	}
-}
-
-const buildHook = ({ disclosure = null, poolId = "pool-a", observer = FakeObserver } = {}) => {
+const buildHook = ({ poolId = "pool-a", observer = FakeObserver } = {}) => {
 	FakeObserver.instances = [];
 	const events = [];
-	const element = {
-		dataset: { poolId },
-		querySelector: (selector) =>
-			selector === "[data-role='pool-traffic-disclosure']" ? disclosure : null,
-	};
+	const element = { dataset: { poolId } };
 	const hook = createPoolTrafficVisibilityHook({ IntersectionObserver: observer });
 	const bound = Object.assign(Object.create(hook), {
 		el: element,
@@ -88,34 +60,11 @@ test("viewport samples emit one enter and one leave transition", () => {
 	assert.deepEqual(events, [
 		{
 			event: "set_pool_traffic_visibility",
-			payload: { pool_id: "pool-a", reason: "viewport", visible: true },
+			payload: { pool_id: "pool-a", visible: true },
 		},
 		{
 			event: "set_pool_traffic_visibility",
-			payload: { pool_id: "pool-a", reason: "viewport", visible: false },
-		},
-	]);
-});
-
-test("a native disclosure emits independent expansion transitions", () => {
-	// Given: an offscreen Pool with a closed accessible disclosure.
-	const disclosure = new FakeDisclosure(false);
-	const { events } = buildHook({ disclosure });
-
-	// When: the operator opens then closes it without viewport observation.
-	disclosure.toggle(true);
-	disclosure.toggle(true);
-	disclosure.toggle(false);
-
-	// Then: expansion transitions are preserved independently of viewport state.
-	assert.deepEqual(events, [
-		{
-			event: "set_pool_traffic_visibility",
-			payload: { pool_id: "pool-a", reason: "disclosure", visible: true },
-		},
-		{
-			event: "set_pool_traffic_visibility",
-			payload: { pool_id: "pool-a", reason: "disclosure", visible: false },
+			payload: { pool_id: "pool-a", visible: false },
 		},
 	]);
 });
@@ -136,61 +85,29 @@ test("updates reuse the observer and resynchronize an active Pool id", () => {
 	assert.deepEqual(events, [
 		{
 			event: "set_pool_traffic_visibility",
-			payload: { pool_id: "pool-b", reason: "viewport", visible: true },
+			payload: { pool_id: "pool-b", visible: true },
 		},
 	]);
 });
 
-test("an update reports a server-synchronized disclosure close", () => {
-	// Given: an open disclosure whose browser state was already reported.
-	const disclosure = new FakeDisclosure(true);
-	const { bound, events } = buildHook({ disclosure });
-	events.length = 0;
-
-	// When: a LiveView patch updates the native disclosure state in place.
-	disclosure.open = false;
-	bound.updated();
-
-	// Then: the server receives the distinct collapsed transition.
-	assert.deepEqual(events, [
-		{
-			event: "set_pool_traffic_visibility",
-			payload: { pool_id: "pool-a", reason: "disclosure", visible: false },
-		},
-	]);
-});
-
-test("unsupported observers leave loading to the explicit disclosure", () => {
+test("unsupported observers remain inert", () => {
 	// Given: a browser without IntersectionObserver.
-	const disclosure = new FakeDisclosure(false);
-	const { events } = buildHook({ disclosure, observer: null });
+	const { events } = buildHook({ observer: null });
 
-	// When: the hook mounts before the operator acts.
+	// When: the viewport-only hook mounts without an observer implementation.
 	assert.deepEqual(events, []);
-
-	// Then: only an explicit disclosure open activates traffic work.
-	disclosure.toggle(true);
-	assert.deepEqual(events, [
-		{
-			event: "set_pool_traffic_visibility",
-			payload: { pool_id: "pool-a", reason: "disclosure", visible: true },
-		},
-	]);
 });
 
-test("destroy tears down observer and disclosure callbacks", () => {
-	// Given: a mounted activity root with both browser integrations.
-	const disclosure = new FakeDisclosure(false);
-	const { bound, element, events } = buildHook({ disclosure });
+test("destroy tears down observer callbacks", () => {
+	// Given: a mounted activity root with viewport observation.
+	const { bound, element, events } = buildHook();
 	const observer = FakeObserver.instances[0];
 
 	// When: LiveView destroys the root and stale browser callbacks arrive.
 	bound.destroyed();
 	observer.emit(element, true);
-	disclosure.toggle(true);
 
-	// Then: neither stale callback reaches the server.
+	// Then: no stale callback reaches the server.
 	assert.equal(observer.disconnected, true);
-	assert.equal(disclosure.listenerCount, 0);
 	assert.deepEqual(events, []);
 });

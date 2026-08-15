@@ -57,8 +57,6 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
        pool_traffic_refresh_token: nil,
        traffic_pool_ids: [],
        pool_traffic_viewport_ids: MapSet.new(),
-       pool_traffic_expanded_ids: MapSet.new(),
-       pool_traffic_manually_collapsed_ids: MapSet.new(),
        pool_traffic_usage: nil,
        pool_traffic_loading?: true,
        pool_traffic_running?: false,
@@ -412,17 +410,16 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
 
   def handle_event(
         "set_pool_traffic_visibility",
-        %{"pool_id" => pool_id, "reason" => reason, "visible" => visible},
+        %{"pool_id" => pool_id, "visible" => visible} = params,
         socket
       )
-      when is_binary(pool_id) and reason in ["viewport", "disclosure"] and
-             is_boolean(visible) do
+      when map_size(params) == 2 and is_binary(pool_id) and is_boolean(visible) do
     if rendered_pool_id?(socket, pool_id) do
       previous_eligible_ids = eligible_pool_traffic_ids(socket)
 
       socket =
         socket
-        |> update_pool_traffic_visibility(pool_id, reason, visible)
+        |> update_pool_traffic_visibility(pool_id, visible)
         |> prune_pool_traffic_state()
         |> apply_pool_traffic()
         |> reconcile_pool_histogram_states(:loading)
@@ -820,7 +817,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     )
   end
 
-  defp update_pool_traffic_visibility(socket, pool_id, "viewport", visible) do
+  defp update_pool_traffic_visibility(socket, pool_id, visible) do
     assign(
       socket,
       :pool_traffic_viewport_ids,
@@ -828,34 +825,11 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     )
   end
 
-  defp update_pool_traffic_visibility(socket, pool_id, "disclosure", true) do
-    assign(socket,
-      pool_traffic_expanded_ids: MapSet.put(socket.assigns.pool_traffic_expanded_ids, pool_id),
-      pool_traffic_manually_collapsed_ids:
-        MapSet.delete(socket.assigns.pool_traffic_manually_collapsed_ids, pool_id)
-    )
-  end
-
-  defp update_pool_traffic_visibility(socket, pool_id, "disclosure", false) do
-    assign(socket,
-      pool_traffic_expanded_ids: MapSet.delete(socket.assigns.pool_traffic_expanded_ids, pool_id),
-      pool_traffic_manually_collapsed_ids:
-        MapSet.put(socket.assigns.pool_traffic_manually_collapsed_ids, pool_id)
-    )
-  end
-
   defp update_pool_id_set(pool_ids, pool_id, true), do: MapSet.put(pool_ids, pool_id)
   defp update_pool_id_set(pool_ids, pool_id, false), do: MapSet.delete(pool_ids, pool_id)
 
   defp eligible_pool_traffic_ids(socket) do
-    visible_ids =
-      MapSet.difference(
-        socket.assigns.pool_traffic_viewport_ids,
-        socket.assigns.pool_traffic_manually_collapsed_ids
-      )
-
-    socket.assigns.pool_traffic_expanded_ids
-    |> MapSet.union(visible_ids)
+    socket.assigns.pool_traffic_viewport_ids
     |> MapSet.intersection(rendered_pool_ids(socket))
   end
 
@@ -873,11 +847,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     socket =
       assign(socket,
         pool_traffic_viewport_ids:
-          MapSet.intersection(socket.assigns.pool_traffic_viewport_ids, rendered_ids),
-        pool_traffic_expanded_ids:
-          MapSet.intersection(socket.assigns.pool_traffic_expanded_ids, rendered_ids),
-        pool_traffic_manually_collapsed_ids:
-          MapSet.intersection(socket.assigns.pool_traffic_manually_collapsed_ids, rendered_ids)
+          MapSet.intersection(socket.assigns.pool_traffic_viewport_ids, rendered_ids)
       )
 
     eligible_ids = eligible_pool_traffic_ids(socket)

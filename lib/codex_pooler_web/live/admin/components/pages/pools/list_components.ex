@@ -558,11 +558,7 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
 
   defp pool_activity_panel(assigns) do
     assigns =
-      if assigns.pool_row.histogram_state == :ready do
-        assign(assigns, :traffic_histogram_card, pool_traffic_histogram_card(assigns.pool_row))
-      else
-        assign(assigns, :traffic_histogram_card, nil)
-      end
+      assign(assigns, :traffic_histogram_card, pool_traffic_histogram_card(assigns.pool_row))
 
     ~H"""
     <div
@@ -575,133 +571,83 @@ defmodule CodexPoolerWeb.Admin.PoolListComponents do
       <section
         id={"pool-row-#{@pool_row.pool.id}-traffic-histogram"}
         data-role="pool-traffic-histogram"
-        data-histogram-state={@pool_row.histogram_state}
+        class="pool-token-histogram"
       >
-        <details
-          id={"pool-row-#{@pool_row.pool.id}-traffic-disclosure"}
-          data-role="pool-traffic-disclosure"
-          data-preserve-open
-          class="group/traffic pool-token-histogram"
+        <div class="pool-token-histogram-header">
+          <div class="grid gap-1">
+            <h3>
+              <span class="pool-token-histogram-label">Traffic</span>
+              <span class="pool-token-histogram-value">
+                {@pool_row.traffic_window_label}
+              </span>
+            </h3>
+          </div>
+          <span
+            id={"pool-row-#{@pool_row.pool.id}-traffic-histogram-total"}
+            class="pool-token-histogram-total"
+          >
+            <span class="pool-token-histogram-value">
+              {@traffic_histogram_card.token_total_label}
+            </span>
+            <span class="pool-token-histogram-label"> tokens</span>
+            <span aria-hidden="true"> / </span>
+            <span class="pool-token-histogram-value">
+              {@traffic_histogram_card.request_total_label}
+            </span>
+            <span class="pool-token-histogram-label">
+              {" " <> @traffic_histogram_card.request_total_unit}
+            </span>
+          </span>
+        </div>
+        <div
+          :if={@pool_row.histogram_state == :ready && !@traffic_histogram_card.empty?}
+          id={"pool-row-#{@pool_row.pool.id}-traffic-histogram-plot"}
+          class="pool-token-histogram-plot admin-apex-bar-chart"
+          phx-hook="ApexTimeSeriesChart"
+          phx-update="ignore"
+          role="img"
+          aria-label={@traffic_histogram_card.aria_label}
+          data-chart-categories={@traffic_histogram_card.categories}
+          data-chart-series={@traffic_histogram_card.series}
+          data-chart-units={@traffic_histogram_card.units}
+          data-chart-yaxis={@traffic_histogram_card.yaxis}
+          data-chart-height="84"
+          data-chart-colors={@traffic_histogram_card.colors}
+          data-chart-compact="true"
+          data-chart-legend="false"
         >
-          <summary class="pool-token-histogram-header cursor-pointer list-none rounded-field focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary [&::-webkit-details-marker]:hidden">
-            <div class="grid gap-1">
-              <h3>
-                <span class="pool-token-histogram-label">Traffic</span>
-                <span class="pool-token-histogram-value">
-                  {@pool_row.traffic_window_label}
-                </span>
-              </h3>
-            </div>
-            <span
-              :if={@pool_row.histogram_state == :ready}
-              id={"pool-row-#{@pool_row.pool.id}-traffic-histogram-total"}
-              class="pool-token-histogram-total"
-            >
-              <span class="pool-token-histogram-value">
-                {@traffic_histogram_card.token_total_label}
-              </span>
-              <span class="pool-token-histogram-label"> tokens</span>
-              <span aria-hidden="true"> / </span>
-              <span class="pool-token-histogram-value">
-                {@traffic_histogram_card.request_total_label}
-              </span>
-              <span class="pool-token-histogram-label">
-                {" " <> @traffic_histogram_card.request_total_unit}
-              </span>
-            </span>
-            <span
-              :if={@pool_row.histogram_state != :ready}
-              data-role={"pool-traffic-#{@pool_row.histogram_state}-state"}
-              class="pool-token-histogram-total inline-flex items-center gap-1.5"
-            >
-              <.icon
-                :if={@pool_row.histogram_state == :loading}
-                name="hero-arrow-path"
-                class="admin-loading-icon size-3.5"
-              />
-              {pool_histogram_state_label(@pool_row.histogram_state)}
-            </span>
-            <span
-              data-role="pool-traffic-disclosure-cue"
-              class="grid size-6 shrink-0 place-items-center rounded-field text-base-content/45 transition-[color,transform] group-open/traffic:rotate-180 group-open/traffic:text-base-content/70 motion-reduce:transition-none"
-              aria-hidden="true"
-            >
-              <.icon name="hero-chevron-down" class="size-4" />
-            </span>
-          </summary>
-          <div
-            :if={@pool_row.histogram_state == :ready && !@traffic_histogram_card.empty?}
-            id={"pool-row-#{@pool_row.pool.id}-traffic-histogram-plot"}
-            class="pool-token-histogram-plot admin-apex-bar-chart"
-            phx-hook="ApexTimeSeriesChart"
-            phx-update="ignore"
-            role="img"
-            aria-label={@traffic_histogram_card.aria_label}
-            data-chart-categories={@traffic_histogram_card.categories}
-            data-chart-series={@traffic_histogram_card.series}
-            data-chart-units={@traffic_histogram_card.units}
-            data-chart-yaxis={@traffic_histogram_card.yaxis}
-            data-chart-height="84"
-            data-chart-colors={@traffic_histogram_card.colors}
-            data-chart-compact="true"
-            data-chart-legend="false"
+        </div>
+        <div
+          :if={@pool_row.histogram_state == :ready && @traffic_histogram_card.empty?}
+          class="pool-activity-empty-state"
+          data-role="pool-traffic-empty-state"
+        >
+          <span
+            class="pool-activity-empty-state-icon"
+            data-role="pool-traffic-empty-icon"
+            aria-hidden="true"
           >
-          </div>
-          <div
-            :if={@pool_row.histogram_state == :ready && @traffic_histogram_card.empty?}
-            class="pool-activity-empty-state"
-            data-role="pool-traffic-empty-state"
-          >
-            <span
-              class="pool-activity-empty-state-icon"
-              data-role="pool-traffic-empty-icon"
-              aria-hidden="true"
-            >
-              <.icon name="hero-chart-bar" class="size-4" />
-            </span>
-            <p class="pool-activity-empty-copy">
-              No traffic in the last {@traffic_histogram_card.window_label}
-            </p>
-          </div>
-          <div
-            :if={@pool_row.histogram_state in [:loading, :error]}
-            class="pool-activity-empty-state"
-            data-role={"pool-traffic-#{@pool_row.histogram_state}-placeholder"}
-          >
-            <span class="pool-activity-empty-state-icon" aria-hidden="true">
-              <.icon
-                name={
-                  if @pool_row.histogram_state == :loading,
-                    do: "hero-arrow-path",
-                    else: "hero-exclamation-triangle"
-                }
-                class={[
-                  "size-4",
-                  @pool_row.histogram_state == :loading && "admin-loading-icon"
-                ]}
-              />
-            </span>
-            <p class="pool-activity-empty-copy">
-              {pool_histogram_placeholder_label(@pool_row.histogram_state)}
-            </p>
-          </div>
-          <ul :if={@pool_row.histogram_state == :ready} class="sr-only">
-            <li :for={point <- @traffic_histogram_card.points}>
-              {point.label}: {point.tokens} tokens, {point.requests} requests
-            </li>
-          </ul>
-        </details>
+            <.icon name="hero-chart-bar" class="size-4" />
+          </span>
+          <p class="pool-activity-empty-copy">
+            No traffic in the last {@traffic_histogram_card.window_label}
+          </p>
+        </div>
+        <div
+          :if={@pool_row.histogram_state != :ready}
+          class="pool-token-histogram-plot admin-apex-bar-chart"
+          aria-hidden="true"
+        >
+        </div>
+        <ul :if={@pool_row.histogram_state == :ready} class="sr-only">
+          <li :for={point <- @traffic_histogram_card.points}>
+            {point.label}: {point.tokens} tokens, {point.requests} requests
+          </li>
+        </ul>
       </section>
     </div>
     """
   end
-
-  defp pool_histogram_state_label(:unobserved), do: "Open to load"
-  defp pool_histogram_state_label(:loading), do: "Loading"
-  defp pool_histogram_state_label(:error), do: "Unavailable"
-
-  defp pool_histogram_placeholder_label(:loading), do: "Loading traffic"
-  defp pool_histogram_placeholder_label(:error), do: "Traffic is temporarily unavailable"
 
   attr :pool_row, :map, required: true
   attr :can_manage_pools?, :boolean, required: true

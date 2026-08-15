@@ -860,21 +860,29 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
       assert has_element?(
                view,
-               "#pool-row-#{pool.id}-traffic-histogram[data-role='pool-traffic-histogram'][data-histogram-state='unobserved'] #pool-row-#{pool.id}-traffic-disclosure[data-role='pool-traffic-disclosure']"
+               "#pool-row-#{pool.id}-traffic-histogram[data-role='pool-traffic-histogram'].pool-token-histogram > .pool-token-histogram-header"
              )
 
       assert has_element?(
                view,
-               "#pool-row-#{pool.id}-traffic-disclosure > summary [data-role='pool-traffic-disclosure-cue'][class*='group-open/traffic:rotate-180']"
+               "#pool-row-#{pool.id}-traffic-histogram > .pool-token-histogram-header #pool-row-#{pool.id}-traffic-histogram-total.pool-token-histogram-total"
              )
 
       refute has_element?(view, "#pool-row-#{pool.id}-traffic-histogram-plot")
       refute has_element?(view, "#pool-row-#{pool.id}-traffic-histogram [data-chart-series]")
+      refute has_element?(view, "#pool-row-#{pool.id}-traffic-histogram details")
+      refute has_element?(view, "#pool-row-#{pool.id}-traffic-histogram summary")
+
+      refute has_element?(
+               view,
+               "#pool-row-#{pool.id}-traffic-histogram [data-role='pool-traffic-disclosure-cue']"
+             )
+
+      refute render(view) =~ "Open to load"
     end
 
     render_hook(view, "set_pool_traffic_visibility", %{
       "pool_id" => unassigned_pool.id,
-      "reason" => "viewport",
       "visible" => true
     })
 
@@ -885,10 +893,20 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     refute has_element?(view, "#pool-row-#{unassigned_pool.id}")
 
+    render_hook(view, "set_pool_traffic_visibility", %{
+      "pool_id" => target_pool.id,
+      "reason" => "disclosure",
+      "visible" => true
+    })
+
+    refute MapSet.member?(
+             :sys.get_state(view.pid).socket.assigns.pool_traffic_viewport_ids,
+             target_pool.id
+           )
+
     # When
     render_hook(view, "set_pool_traffic_visibility", %{
       "pool_id" => target_pool.id,
-      "reason" => "viewport",
       "visible" => true
     })
 
@@ -897,7 +915,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     # Then
     assert has_element?(
              view,
-             "#pool-row-#{target_pool.id}-traffic-histogram[data-role='pool-traffic-histogram'][data-histogram-state='ready']"
+             "#pool-row-#{target_pool.id}-traffic-histogram[data-role='pool-traffic-histogram'].pool-token-histogram > .pool-token-histogram-header #pool-row-#{target_pool.id}-traffic-histogram-total"
            )
 
     assert has_element?(
@@ -912,21 +930,15 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              "#pool-row-#{inactive_pool.id}-traffic-histogram [data-chart-series]"
            )
 
-    # When: a ready card leaves the viewport without an explicit disclosure override.
+    # When: a ready card leaves the viewport.
     render_hook(view, "set_pool_traffic_visibility", %{
       "pool_id" => target_pool.id,
-      "reason" => "viewport",
       "visible" => false
     })
 
     # Then: its payload is pruned before the follow-up read completes.
     refute has_element?(view, "#pool-row-#{target_pool.id}-traffic-histogram-plot")
     refute has_element?(view, "#pool-row-#{target_pool.id}-traffic-histogram [data-chart-series]")
-
-    assert has_element?(
-             view,
-             "#pool-row-#{target_pool.id}-traffic-histogram[data-histogram-state='unobserved']"
-           )
 
     _ = await_pool_traffic(view, activate_histograms?: false)
     state = :sys.get_state(view.pid)
@@ -939,7 +951,6 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     render_hook(view, "set_pool_traffic_visibility", %{
       "pool_id" => target_pool.id,
-      "reason" => "viewport",
       "visible" => true
     })
 
@@ -948,7 +959,6 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     # When: another active card is later hidden by the structural filter.
     render_hook(view, "set_pool_traffic_visibility", %{
       "pool_id" => inactive_pool.id,
-      "reason" => "viewport",
       "visible" => true
     })
 
@@ -964,13 +974,12 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     # still contribute to the top strip.
     state = :sys.get_state(view.pid)
     refute MapSet.member?(state.socket.assigns.pool_traffic_viewport_ids, inactive_pool.id)
-    refute MapSet.member?(state.socket.assigns.pool_traffic_expanded_ids, inactive_pool.id)
     refute has_element?(view, "#pool-row-#{inactive_pool.id}")
     assert has_element?(view, "#pool-metric-requests", "2")
   end
 
   @tag :lazy_pool_histograms
-  test "collapse prunes payload and rapid eligibility changes coalesce", %{
+  test "viewport leave prunes payload and rapid eligibility changes coalesce", %{
     conn: conn,
     scope: scope
   } do
@@ -1013,7 +1022,6 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     # When: eligibility changes while its traffic task is held at the real Repo boundary.
     render_hook(view, "set_pool_traffic_visibility", %{
       "pool_id" => pool.id,
-      "reason" => "viewport",
       "visible" => true
     })
 
@@ -1021,7 +1029,6 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     render_hook(view, "set_pool_traffic_visibility", %{
       "pool_id" => pool.id,
-      "reason" => "disclosure",
       "visible" => false
     })
 
@@ -1044,15 +1051,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     refute has_element?(view, "#pool-row-#{pool.id}-traffic-histogram-plot")
     refute has_element?(view, "#pool-row-#{pool.id}-traffic-histogram [data-chart-series]")
 
-    assert has_element?(
-             view,
-             "#pool-row-#{pool.id}-traffic-histogram[data-role='pool-traffic-histogram'][data-histogram-state='unobserved']"
-           )
-
-    # When: reopening explicitly removes the manual-collapse override.
+    # When: the card re-enters the viewport.
     render_hook(view, "set_pool_traffic_visibility", %{
       "pool_id" => pool.id,
-      "reason" => "disclosure",
       "visible" => true
     })
 
@@ -4030,7 +4031,6 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       Enum.each(state.socket.assigns.pools, fn pool_row ->
         render_hook(view, "set_pool_traffic_visibility", %{
           "pool_id" => pool_row.pool.id,
-          "reason" => "viewport",
           "visible" => true
         })
       end)
