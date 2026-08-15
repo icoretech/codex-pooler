@@ -5,7 +5,7 @@ defmodule CodexPooler.Accounting.Reporting do
 
   import Ecto.Query
 
-  alias CodexPooler.Accounting.{DailyRollup, LedgerEntry}
+  alias CodexPooler.Accounting.{DailyRollup, DailyRollupCoverage, LedgerEntry}
   alias CodexPooler.Accounting.Reporting.ModelUsage
   alias CodexPooler.Repo
 
@@ -39,6 +39,7 @@ defmodule CodexPooler.Accounting.Reporting do
           required(:rows) => [model_usage_bucket()]
         }
   @type settlement_bucket_granularity :: :hour | :day
+  @type daily_rollup_coverage_status :: :complete | :missing | :incompatible
   @type settlement_usage_bucket :: %{
           required(:pool_id) => Ecto.UUID.t(),
           required(:bucket) => DateTime.t(),
@@ -50,6 +51,35 @@ defmodule CodexPooler.Accounting.Reporting do
           required(:total_tokens) => non_neg_integer(),
           required(:settled_cost_micros) => non_neg_integer()
         }
+
+  @spec daily_rollup_coverage_statuses([Date.t()]) :: %{
+          optional(Date.t()) => daily_rollup_coverage_status()
+        }
+  def daily_rollup_coverage_statuses(dates) when is_list(dates) do
+    requested_dates = dates |> Enum.filter(&match?(%Date{}, &1)) |> Enum.uniq()
+
+    versions_by_date =
+      DailyRollupCoverage
+      |> where([coverage], coverage.rollup_date in ^requested_dates)
+      |> select([coverage], {coverage.rollup_date, coverage.contract_version})
+      |> Repo.all()
+      |> Map.new()
+
+    expected_contract_version = DailyRollupCoverage.contract_version()
+
+    Map.new(requested_dates, fn date ->
+      status =
+        case Map.get(versions_by_date, date) do
+          nil -> :missing
+          ^expected_contract_version -> :complete
+          _version -> :incompatible
+        end
+
+      {date, status}
+    end)
+  end
+
+  def daily_rollup_coverage_statuses(_dates), do: %{}
 
   @spec settlements_for_pool_ids([Ecto.UUID.t()], DateTime.t(), DateTime.t()) :: [map()]
   def settlements_for_pool_ids([], _started_at, _ended_at), do: []

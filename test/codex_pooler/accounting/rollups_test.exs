@@ -3,8 +3,11 @@ defmodule CodexPooler.Accounting.RollupsTest do
 
   alias Ecto.Migration.Runner
 
+  alias CodexPooler.Accounting
+
   alias CodexPooler.Accounting.{
     DailyRollup,
+    DailyRollupCoverage,
     HourlyModelUsageRollup,
     LedgerEntry,
     Request,
@@ -87,6 +90,67 @@ defmodule CodexPooler.Accounting.RollupsTest do
 
       assert {:ok, 2} = Rollups.rebuild_for_date(rollup_date)
       assert daily_rollup_summary_rows(rollup_date, "api_key") == incremental_rows
+    end
+  end
+
+  describe "daily rollup coverage" do
+    @tag :daily_rollup_coverage
+    test "distinguishes complete zero-row dates from missing and incompatible coverage" do
+      setup = accounting_setup()
+      complete_date = ~D[2026-08-07]
+      incompatible_date = ~D[2026-08-08]
+      missing_date = ~D[2026-08-09]
+      completed_at = ~U[2026-08-10 00:17:00.000000Z]
+
+      Repo.insert!(%DailyRollupCoverage{
+        rollup_date: complete_date,
+        contract_version: DailyRollupCoverage.contract_version(),
+        completed_at: completed_at,
+        created_at: completed_at,
+        updated_at: completed_at
+      })
+
+      Repo.insert!(%DailyRollupCoverage{
+        rollup_date: incompatible_date,
+        contract_version: DailyRollupCoverage.contract_version() + 1,
+        completed_at: completed_at,
+        created_at: completed_at,
+        updated_at: completed_at
+      })
+
+      assert [] =
+               DailyRollup
+               |> where([rollup], rollup.rollup_date == ^complete_date)
+               |> Repo.all()
+
+      {1, _rows} =
+        Repo.insert_all(DailyRollup, [
+          %{
+            rollup_date: missing_date,
+            dimension_kind: "pool",
+            pool_id: setup.pool.id,
+            created_at: completed_at,
+            updated_at: completed_at
+          }
+        ])
+
+      assert [%DailyRollup{pool_id: pool_id}] =
+               DailyRollup
+               |> where([rollup], rollup.rollup_date == ^missing_date)
+               |> Repo.all()
+
+      assert pool_id == setup.pool.id
+
+      assert Accounting.daily_rollup_coverage_statuses([
+               missing_date,
+               incompatible_date,
+               complete_date,
+               complete_date
+             ]) == %{
+               complete_date => :complete,
+               incompatible_date => :incompatible,
+               missing_date => :missing
+             }
     end
   end
 

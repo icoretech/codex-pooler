@@ -2,6 +2,8 @@ defmodule CodexPooler.Accounting.DailyRollup do
   @moduledoc false
   use CodexPooler.Schema
 
+  @type t :: %__MODULE__{}
+
   schema "daily_rollups" do
     field :rollup_date, :date
     field :dimension_kind, :string
@@ -11,6 +13,7 @@ defmodule CodexPooler.Accounting.DailyRollup do
     field :upstream_identity_id, :binary_id
     field :model_id, :binary_id
     field :request_count, :integer
+    field :admitted_request_count, :integer
     field :success_count, :integer
     field :failure_count, :integer
     field :retry_count, :integer
@@ -21,6 +24,7 @@ defmodule CodexPooler.Accounting.DailyRollup do
     field :total_tokens, :integer
     field :estimated_cost_micros, :decimal
     field :settled_cost_micros, :decimal
+    field :rounded_settled_cost_micros, :decimal
     field :created_at, :utc_datetime_usec
     field :updated_at, :utc_datetime_usec
   end

@@ -235,6 +235,11 @@ defmodule CodexPooler.Accounting do
               ),
               to: Reporting
 
+  @spec daily_rollup_coverage_statuses([Date.t()]) :: %{
+          optional(Date.t()) => Reporting.daily_rollup_coverage_status()
+        }
+  defdelegate daily_rollup_coverage_statuses(dates), to: Reporting
+
   @spec build_api_key_self_usage(term(), term(), keyword()) ::
           {:ok, map()} | {:error, accounting_error()}
   defdelegate build_api_key_self_usage(pool_or_id, api_key_or_id, opts \\ []),
