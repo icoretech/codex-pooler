@@ -17,6 +17,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
 
   @pool_event_topics ["model_sync", "pools", "upstreams", "usage"]
   @pool_traffic_refresh_delay_ms 1_000
+  @pool_traffic_load_cooldown_ms 1_000
   @pool_traffic_fallback_refresh_ms 60_000
   @edit_pool_id_param "edit_pool_id"
   @pool_editor_step_param "step"
@@ -60,7 +61,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
        pool_traffic_usage: nil,
        pool_traffic_loading?: true,
        pool_traffic_running?: false,
-       pool_traffic_rerun?: false
+       pool_traffic_rerun?: false,
+       pool_traffic_cooldown_timer: nil,
+       pool_traffic_cooldown_token: nil
      )
      |> load_structural()
      |> start_pool_traffic_load()
@@ -461,6 +464,24 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
     end
   end
 
+  def handle_info({:pool_traffic_cooldown_elapsed, cooldown_token}, socket) do
+    if socket.assigns.pool_traffic_cooldown_token == cooldown_token do
+      socket =
+        assign(socket,
+          pool_traffic_cooldown_timer: nil,
+          pool_traffic_cooldown_token: nil
+        )
+
+      if socket.assigns.pool_traffic_rerun? do
+        {:noreply, start_pool_traffic_load(socket)}
+      else
+        {:noreply, socket}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
   # Gateway usage events remain the fast path. This conservative fallback lets
   # rolling-window rows age out, and retries a failed async read, even when the
   # instance is otherwise quiet. It keeps ticking while paused so resume can
@@ -521,7 +542,10 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
 
   @impl true
   def handle_async(:pool_traffic, {:ok, traffic}, socket) do
-    socket = assign(socket, :pool_traffic_running?, false)
+    socket =
+      socket
+      |> assign(:pool_traffic_running?, false)
+      |> schedule_pool_traffic_load_cooldown()
 
     if traffic.traffic_window == current_traffic_window(socket) do
       eligible_ids = eligible_pool_traffic_ids(socket)
@@ -534,23 +558,23 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
         |> apply_pool_traffic()
         |> reconcile_pool_histogram_states(:loading)
 
-      if socket.assigns.pool_traffic_rerun? do
-        {:noreply, start_pool_traffic_load(socket)}
-      else
-        {:noreply, socket}
-      end
+      {:noreply, socket}
     else
       # The traffic window changed while this result was in flight; the stale
-      # aggregate must not merge, so discard it and load the current window.
-      {:noreply, start_pool_traffic_load(socket)}
+      # aggregate must not merge. Queue the current window behind the same
+      # cooldown that bounds every other completed traffic load.
+      {:noreply, assign(socket, :pool_traffic_rerun?, true)}
     end
   end
 
   def handle_async(:pool_traffic, {:exit, _reason}, socket) do
-    socket = assign(socket, :pool_traffic_running?, false)
+    socket =
+      socket
+      |> assign(:pool_traffic_running?, false)
+      |> schedule_pool_traffic_load_cooldown()
 
     if socket.assigns.pool_traffic_rerun? do
-      {:noreply, start_pool_traffic_load(socket)}
+      {:noreply, socket}
     else
       # Without merged usage the structural zeros are placeholders, not data:
       # keep the loading affordance instead of presenting them as settled.
@@ -745,14 +769,18 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
   end
 
   # The traffic aggregate is the expensive read; running it on this process
-  # would queue clicks and dialog opens behind it. One task at a time: extra
-  # requests while one is in flight coalesce into a single re-run.
+  # would queue clicks and dialog opens behind it. One task at a time, followed
+  # by a fixed server-side cooldown: extra requests in either phase coalesce
+  # into a single re-run that reads the latest eligible set.
   defp start_pool_traffic_load(socket) do
     cond do
       not connected?(socket) ->
         socket
 
       socket.assigns.pool_traffic_running? ->
+        assign(socket, :pool_traffic_rerun?, true)
+
+      is_reference(socket.assigns.pool_traffic_cooldown_timer) ->
         assign(socket, :pool_traffic_rerun?, true)
 
       true ->
@@ -768,6 +796,28 @@ defmodule CodexPoolerWeb.Admin.PoolsLive do
           |> PoolsReadModel.traffic_metrics(MapSet.to_list(eligible_pool_ids), traffic_window)
           |> Map.put(:eligible_pool_ids, eligible_pool_ids)
         end)
+    end
+  end
+
+  defp schedule_pool_traffic_load_cooldown(socket) do
+    case socket.assigns.pool_traffic_cooldown_timer do
+      timer_ref when is_reference(timer_ref) ->
+        socket
+
+      nil ->
+        cooldown_token = make_ref()
+
+        timer_ref =
+          Process.send_after(
+            self(),
+            {:pool_traffic_cooldown_elapsed, cooldown_token},
+            @pool_traffic_load_cooldown_ms
+          )
+
+        assign(socket,
+          pool_traffic_cooldown_timer: timer_ref,
+          pool_traffic_cooldown_token: cooldown_token
+        )
     end
   end
 

@@ -991,6 +991,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/admin/pools")
     _ = await_pool_traffic(view, activate_histograms?: false)
+    _initial_cooldown_token = expire_pool_traffic_cooldown(view)
 
     test_pid = self()
     handler_id = {__MODULE__, :lazy_histogram_query, System.unique_integer([:positive])}
@@ -1064,6 +1065,141 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              view,
              "#pool-row-#{pool.id}-traffic-histogram-plot[phx-hook='ApexTimeSeriesChart'][phx-update='ignore']"
            )
+  end
+
+  @tag :lazy_pool_histograms
+  test "completed visibility loads observe a server cooldown and coalesce the latest eligible set",
+       %{
+         conn: conn,
+         scope: scope
+       } do
+    # Given
+    {:ok, first_pool} =
+      Pools.create_pool(scope, %{slug: "cooldown-first", name: "Cooldown First"})
+
+    {:ok, second_pool} =
+      Pools.create_pool(scope, %{slug: "cooldown-second", name: "Cooldown Second"})
+
+    %{api_key: first_api_key} = api_key_fixture(first_pool)
+    %{assignment: first_assignment} = upstream_assignment_fixture(first_pool)
+    %{api_key: second_api_key} = api_key_fixture(second_pool)
+    %{assignment: second_assignment} = upstream_assignment_fixture(second_pool)
+
+    insert_timed_usage!(
+      first_pool,
+      first_api_key,
+      first_assignment,
+      DateTime.utc_now(),
+      75,
+      750_000,
+      1_500
+    )
+
+    insert_timed_usage!(
+      second_pool,
+      second_api_key,
+      second_assignment,
+      DateTime.utc_now(),
+      50,
+      500_000,
+      1_000
+    )
+
+    {:ok, view, _html} = live(conn, ~p"/admin/pools")
+    _ = await_pool_traffic(view, activate_histograms?: false)
+    _initial_cooldown_token = expire_pool_traffic_cooldown(view)
+
+    test_pid = self()
+    handler_id = {__MODULE__, :pool_traffic_cooldown, System.unique_integer([:positive])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and self() != view.pid do
+            send(test_pid, {handler_id, :query, self()})
+          end
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    render_hook(view, "set_pool_traffic_visibility", %{
+      "pool_id" => first_pool.id,
+      "visible" => true
+    })
+
+    _ = await_pool_traffic(view, activate_histograms?: false)
+    first_query_pids = drain_lazy_query_pids(handler_id, MapSet.new())
+    assert MapSet.size(first_query_pids) == 1
+
+    assert has_element?(view, "#pool-row-#{first_pool.id}-traffic-histogram-plot")
+
+    completed_state = :sys.get_state(view.pid).socket.assigns
+    refute completed_state.pool_traffic_running?
+    assert is_reference(completed_state.pool_traffic_cooldown_timer)
+    completed_cooldown_token = completed_state.pool_traffic_cooldown_token
+
+    # When: valid visibility hints alternate after the completed query while
+    # the server-side cooldown is active. The final viewport state keeps only
+    # the second Pool eligible.
+    for visible <- [false, true, false, true, false] do
+      render_hook(view, "set_pool_traffic_visibility", %{
+        "pool_id" => first_pool.id,
+        "visible" => visible
+      })
+    end
+
+    for visible <- [true, false, true] do
+      render_hook(view, "set_pool_traffic_visibility", %{
+        "pool_id" => second_pool.id,
+        "visible" => visible
+      })
+    end
+
+    # Then: pruning is immediate, no query starts inside the cooldown, and all
+    # hints collapse into one pending reload of the latest eligible set.
+    refute has_element?(view, "#pool-row-#{first_pool.id}-traffic-histogram-plot")
+    refute has_element?(view, "#pool-row-#{first_pool.id}-traffic-histogram [data-chart-series]")
+
+    cooldown_state = :sys.get_state(view.pid).socket.assigns
+    refute cooldown_state.pool_traffic_running?
+    assert cooldown_state.pool_traffic_rerun?
+    assert cooldown_state.pool_traffic_viewport_ids == MapSet.new([second_pool.id])
+    assert drain_lazy_query_pids(handler_id, first_query_pids) == first_query_pids
+    refute_receive {^handler_id, :query, _query_pid}, 0
+
+    assert completed_cooldown_token == expire_pool_traffic_cooldown(view)
+    assert_receive {^handler_id, :query, followup_query_pid}, 1_000
+    _ = await_pool_traffic(view, activate_histograms?: false)
+
+    completed_query_pids =
+      drain_lazy_query_pids(handler_id, MapSet.put(first_query_pids, followup_query_pid))
+
+    assert MapSet.size(completed_query_pids) == 2
+
+    assert completed_query_pids
+           |> MapSet.difference(first_query_pids)
+           |> MapSet.size() == 1
+
+    assert has_element?(view, "#pool-row-#{second_pool.id}-traffic-histogram-plot")
+    refute has_element?(view, "#pool-row-#{first_pool.id}-traffic-histogram-plot")
+
+    # A stale, already-consumed token cannot interrupt the next cooldown or
+    # launch another query.
+    next_cooldown_state = :sys.get_state(view.pid).socket.assigns
+    next_cooldown_token = next_cooldown_state.pool_traffic_cooldown_token
+    assert next_cooldown_token != completed_cooldown_token
+
+    send(view.pid, {:pool_traffic_cooldown_elapsed, completed_cooldown_token})
+    stale_token_state = :sys.get_state(view.pid).socket.assigns
+
+    assert stale_token_state.pool_traffic_cooldown_token == next_cooldown_token
+    refute stale_token_state.pool_traffic_running?
+    refute stale_token_state.pool_traffic_rerun?
+    assert drain_lazy_query_pids(handler_id, completed_query_pids) == completed_query_pids
   end
 
   test "traffic window selector updates throughput cost and chart metrics", %{
@@ -4043,11 +4179,31 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     html = render_async(view, 2_000)
     state = :sys.get_state(view.pid)
 
-    if state.socket.assigns.pool_traffic_running? or state.socket.assigns.pool_traffic_rerun? do
-      await_pool_traffic_tasks(view)
-    else
-      html
+    cond do
+      state.socket.assigns.pool_traffic_running? ->
+        await_pool_traffic_tasks(view)
+
+      state.socket.assigns.pool_traffic_rerun? ->
+        _cooldown_token = expire_pool_traffic_cooldown(view)
+        await_pool_traffic_tasks(view)
+
+      true ->
+        html
     end
+  end
+
+  defp expire_pool_traffic_cooldown(view) do
+    assigns = :sys.get_state(view.pid).socket.assigns
+    timer_ref = Map.get(assigns, :pool_traffic_cooldown_timer)
+    cooldown_token = Map.get(assigns, :pool_traffic_cooldown_token)
+
+    if is_reference(timer_ref) and is_reference(cooldown_token) do
+      Process.cancel_timer(timer_ref, async: false, info: false)
+      send(view.pid, {:pool_traffic_cooldown_elapsed, cooldown_token})
+      _ = :sys.get_state(view.pid)
+    end
+
+    cooldown_token
   end
 
   defp assert_deferred_traffic_refresh(view, pool_id) do
