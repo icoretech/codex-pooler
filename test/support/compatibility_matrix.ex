@@ -962,6 +962,45 @@ defmodule CodexPooler.CompatibilityMatrix do
         },
         public_response_headers: %{downgrade_marker: :absent}
       },
+      service_tier_boundary: %{
+        ultrafast: %{
+          accepted_surfaces: [
+            %{method: :post, path: "/v1/responses", transport: "http_json"},
+            %{method: :post, path: "/v1/responses", transport: "http_sse"},
+            %{method: :get, path: "/v1/responses", transport: "responses_websocket"}
+          ],
+          candidate_metadata: %{
+            required: true,
+            advertised_fields: ["service_tiers", "additional_speed_tiers"],
+            required_literal: "ultrafast",
+            eligible_candidates: "only_exact_ultrafast_advertisements"
+          },
+          literal_vocabulary: %{
+            returned_service_tier: "ultrafast",
+            accounting_fields: [
+              "requested_service_tier",
+              "actual_service_tier",
+              "service_tier"
+            ]
+          }
+        },
+        chat_completions: %{
+          method: :post,
+          path: "/v1/chat/completions",
+          accepted: false,
+          rejection: %{
+            status: 400,
+            code: "invalid_request",
+            param: "service_tier",
+            upstream_dispatch: false
+          }
+        },
+        fast_priority_alias: %{
+          client_literal: "fast",
+          upstream_literal: "priority",
+          unchanged: true
+        }
+      },
       chat_input_fallback: %{
         messages_precedence: "non_empty_messages",
         fallback_when: ["messages_absent", "messages_empty"],

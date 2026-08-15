@@ -16,7 +16,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
 
   @reasoning_contexts ~w(auto current_turn all_turns)
   @reasoning_summaries ~w(auto concise detailed)
-  @service_tiers ~w(auto default flex priority scale)
+  @service_tiers ~w(auto default flex priority scale ultrafast)
   @truncation_modes ~w(auto disabled)
   @locally_unsupported_fields ~w(background context_management conversation max_tool_calls prompt top_logprobs user)
 

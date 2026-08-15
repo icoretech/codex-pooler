@@ -124,6 +124,186 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
+  @tag :ultrafast_service_tier
+  test "GET /v1/responses websocket forwards and settles an advertised ultrafast terminal" do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"response.completed",
+             %{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => "resp_v1_websocket_ultrafast",
+                 "status" => "completed",
+                 "service_tier" => "ultrafast",
+                 "output" => [],
+                 "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+               }
+             }}
+          ],
+          done: false
+        )
+      )
+
+    setup =
+      gateway_setup(upstream,
+        model_metadata: %{
+          "upstream_model" => %{"service_tiers" => [%{"id" => "ultrafast"}]}
+        }
+      )
+
+    ultrafast_pricing =
+      BackendCodexTestSupport.pricing_snapshot!(setup.model, %{
+        config: BackendCodexTestSupport.pricing_config(%{"service_tier" => "ultrafast"}),
+        input_token_micros: Decimal.new(100),
+        output_token_micros: Decimal.new(200)
+      })
+
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "ultrafast-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic ultrafast websocket request",
+          "service_tier" => "ultrafast"
+        })
+
+      {conn, websocket, frames} = receive_websocket_until_terminal!(conn, websocket, ref, [])
+
+      assert [
+               %{
+                 "type" => "response.completed",
+                 "response" => %{
+                   "id" => "resp_v1_websocket_ultrafast",
+                   "service_tier" => "ultrafast"
+                 }
+               }
+             ] = frames
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.method == "WEBSOCKET"
+      assert captured.path == "/backend-api/codex/responses"
+      assert captured.json["service_tier"] == "ultrafast"
+
+      assert_receive {Events,
+                      %{
+                        reason: "request_finalized",
+                        payload: %{"status" => "succeeded"}
+                      }},
+                     @websocket_frame_timeout
+
+      assert [request] =
+               Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
+
+      assert request.endpoint == "/v1/responses"
+      assert request.transport == "websocket"
+      assert request.status == "succeeded"
+      assert request.requested_service_tier == "ultrafast"
+      assert request.actual_service_tier == "ultrafast"
+      assert request.service_tier == "ultrafast"
+      assert request.request_metadata["pricing"]["requested_service_tier"] == "ultrafast"
+      assert request.request_metadata["pricing"]["actual_service_tier"] == "ultrafast"
+      assert request.request_metadata["pricing"]["service_tier"] == "ultrafast"
+
+      assert [attempt] =
+               Repo.all(from(attempt in Attempt, where: attempt.request_id == ^request.id))
+
+      assert attempt.transport == "websocket"
+      assert attempt.status == "succeeded"
+      assert attempt.pricing_snapshot_id == ultrafast_pricing.id
+
+      assert [settlement] =
+               Repo.all(
+                 from(entry in LedgerEntry,
+                   where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+                 )
+               )
+
+      assert settlement.pricing_snapshot_id == ultrafast_pricing.id
+      assert Decimal.equal?(settlement.settled_cost_micros, Decimal.new(400))
+      assert settlement.details["requested_service_tier"] == "ultrafast"
+      assert settlement.details["actual_service_tier"] == "ultrafast"
+      assert settlement.details["service_tier"] == "ultrafast"
+
+      assert %{items: [log], total: 1} =
+               RequestLogs.list(setup.pool, filters: %{request_id: request.id})
+
+      assert log.transport == "websocket"
+      assert log.status == "succeeded"
+      assert log.requested_service_tier == "ultrafast"
+      assert log.actual_service_tier == "ultrafast"
+      assert log.service_tier == "ultrafast"
+      assert log.cost.status == "priced"
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  @tag :ultrafast_service_tier
+  test "GET /v1/responses websocket rejects ultrafast against priority-only metadata before dispatch" do
+    upstream = start_upstream(completed_websocket_response("must_not_dispatch_ultrafast"))
+
+    setup =
+      gateway_setup(upstream,
+        model_metadata: %{
+          "upstream_model" => %{"service_tiers" => [%{"id" => "priority"}]}
+        }
+      )
+
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "priority-only-ultrafast-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      post_upgrade_baseline = settled_post_upgrade_counts!(upstream)
+
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic unsupported ultrafast websocket request",
+          "service_tier" => "ultrafast"
+        })
+
+      {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{
+               "type" => "error",
+               "status" => 503,
+               "error" => %{"code" => "no_compatible_backend", "param" => "model"}
+             } = Jason.decode!(frame)
+
+      assert FakeUpstream.count(upstream) == 0
+      assert Repo.aggregate(Attempt, :count) == 0
+      assert ledger_entry_count("reservation") == 0
+      assert ledger_entry_count("settlement") == 0
+
+      assert_lifecycle_delta!(post_upgrade_baseline, lifecycle_counts(upstream), %{
+        upstream_requests: 0,
+        attempts: 0,
+        reservations: 0,
+        settlements: 0
+      })
+
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   test "GET /v1/responses websocket relays a stateless programmatic replay and finalizes metadata-only" do
     upstream =
       start_upstream(

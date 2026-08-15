@@ -1528,6 +1528,196 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     refute Map.has_key?(log.token_counts, :output_tokens_details)
   end
 
+  @tag :ultrafast_service_tier
+  test "POST /v1/responses forwards, projects, and accounts for ultrafast JSON responses", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_v1_ultrafast_json",
+          "object" => "response",
+          "status" => "completed",
+          "service_tier" => "ultrafast",
+          "output" => [],
+          "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+        })
+      )
+
+    setup =
+      gateway_setup(upstream,
+        model_metadata: %{
+          "upstream_model" => %{"service_tiers" => [%{"id" => "ultrafast"}]}
+        }
+      )
+
+    ultrafast_pricing =
+      pricing_snapshot!(setup.model, %{
+        config: pricing_config(%{"service_tier" => "ultrafast"}),
+        input_token_micros: Decimal.new(100),
+        output_token_micros: Decimal.new(200)
+      })
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic ultrafast JSON request",
+        "service_tier" => "ultrafast"
+      })
+
+    assert %{
+             "id" => "resp_v1_ultrafast_json",
+             "object" => "response",
+             "service_tier" => "ultrafast"
+           } = json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["service_tier"] == "ultrafast"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+    assert request.requested_service_tier == "ultrafast"
+    assert request.actual_service_tier == "ultrafast"
+    assert request.service_tier == "ultrafast"
+    assert request.request_metadata["pricing"]["status"] == "priced"
+    assert request.request_metadata["pricing"]["requested_service_tier"] == "ultrafast"
+    assert request.request_metadata["pricing"]["actual_service_tier"] == "ultrafast"
+    assert request.request_metadata["pricing"]["service_tier"] == "ultrafast"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+    assert attempt.pricing_snapshot_id == ultrafast_pricing.id
+
+    assert [settlement] =
+             Repo.all(
+               from(l in LedgerEntry,
+                 where:
+                   l.request_id == ^request.id and l.entry_kind == "settlement" and
+                     l.amount_status == "recorded"
+               )
+             )
+
+    assert settlement.pricing_snapshot_id == ultrafast_pricing.id
+    assert settlement.details["pricing_status"] == "priced"
+    assert settlement.details["requested_service_tier"] == "ultrafast"
+    assert settlement.details["actual_service_tier"] == "ultrafast"
+    assert settlement.details["service_tier"] == "ultrafast"
+
+    assert %{items: [log], total: 1} =
+             RequestLogs.list(setup.pool, filters: %{request_id: request.id})
+
+    assert log.requested_service_tier == "ultrafast"
+    assert log.actual_service_tier == "ultrafast"
+    assert log.service_tier == "ultrafast"
+    assert log.cost.status == "priced"
+  end
+
+  @tag :ultrafast_service_tier
+  test "POST /v1/responses forwards, projects, and accounts for ultrafast SSE responses", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_v1_ultrafast_sse",
+               "status" => "completed",
+               "service_tier" => "ultrafast",
+               "output" => [],
+               "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+             }
+           }}
+        ])
+      )
+
+    setup =
+      gateway_setup(upstream,
+        model_metadata: %{
+          "upstream_model" => %{"service_tiers" => [%{"id" => "ultrafast"}]}
+        }
+      )
+
+    ultrafast_pricing =
+      pricing_snapshot!(setup.model, %{
+        config: pricing_config(%{"service_tier" => "ultrafast"}),
+        input_token_micros: Decimal.new(100),
+        output_token_micros: Decimal.new(200)
+      })
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic ultrafast SSE request",
+        "service_tier" => "ultrafast",
+        "stream" => true
+      })
+
+    assert conn.status == 200
+    assert [content_type] = get_resp_header(conn, "content-type")
+    assert content_type =~ "text/event-stream"
+
+    completed =
+      conn.resp_body
+      |> public_sse_events()
+      |> Enum.find(&(&1["event"] == "response.completed"))
+
+    assert %{"data" => completed} = completed
+
+    assert completed["response"]["id"] == "resp_v1_ultrafast_sse"
+    assert completed["response"]["service_tier"] == "ultrafast"
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["service_tier"] == "ultrafast"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.transport == "http_sse"
+    assert request.status == "succeeded"
+    assert request.requested_service_tier == "ultrafast"
+    assert request.actual_service_tier == "ultrafast"
+    assert request.service_tier == "ultrafast"
+    assert request.request_metadata["pricing"]["status"] == "priced"
+    assert request.request_metadata["pricing"]["requested_service_tier"] == "ultrafast"
+    assert request.request_metadata["pricing"]["actual_service_tier"] == "ultrafast"
+    assert request.request_metadata["pricing"]["service_tier"] == "ultrafast"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.transport == "http_sse"
+    assert attempt.status == "succeeded"
+    assert attempt.pricing_snapshot_id == ultrafast_pricing.id
+
+    assert [settlement] =
+             Repo.all(
+               from(l in LedgerEntry,
+                 where:
+                   l.request_id == ^request.id and l.entry_kind == "settlement" and
+                     l.amount_status == "recorded"
+               )
+             )
+
+    assert settlement.pricing_snapshot_id == ultrafast_pricing.id
+    assert settlement.details["pricing_status"] == "priced"
+    assert settlement.details["requested_service_tier"] == "ultrafast"
+    assert settlement.details["actual_service_tier"] == "ultrafast"
+    assert settlement.details["service_tier"] == "ultrafast"
+
+    assert %{items: [log], total: 1} =
+             RequestLogs.list(setup.pool, filters: %{request_id: request.id})
+
+    assert log.requested_service_tier == "ultrafast"
+    assert log.actual_service_tier == "ultrafast"
+    assert log.service_tier == "ultrafast"
+    assert log.cost.status == "priced"
+  end
+
   test "POST /v1/responses relays standalone-CR upstream SSE through the live HTTP endpoint" do
     terminal = %{
       "type" => "response.completed",
@@ -1754,7 +1944,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
     setup = gateway_setup(upstream)
 
-    for tier <- ["ultrafast", nil, 1, []] do
+    for tier <- ["latency_preview", nil, 1, []] do
       response =
         conn
         |> recycle()

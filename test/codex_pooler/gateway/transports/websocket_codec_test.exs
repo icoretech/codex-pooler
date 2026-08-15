@@ -35,6 +35,51 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
       refute Map.has_key?(coerced.payload, "stream_id")
     end
 
+    test "coerces padded mixed ultrafast service tiers through the shared Responses adapter" do
+      for service_tier <- [" UlTrAfAsT ", "\tulTRafast\n"] do
+        payload = %{
+          "type" => "response.create",
+          "model" => "gpt-example",
+          "input" => "hello",
+          "service_tier" => service_tier
+        }
+
+        assert {:ok, coerced} =
+                 WebsocketCodec.coerce_request(
+                   payload,
+                   public_responses_options(payload),
+                   fn _frame -> :ok end
+                 )
+
+        assert coerced.endpoint == "/backend-api/codex/responses"
+        assert coerced.payload["service_tier"] == "ultrafast"
+      end
+    end
+
+    test "rejects unsupported and non-string service tiers without leaking the input shape" do
+      for service_tier <- ["ultra-fast", %{"requested" => "ultrafast"}] do
+        payload = %{
+          "type" => "response.create",
+          "model" => "gpt-example",
+          "input" => "hello",
+          "service_tier" => service_tier
+        }
+
+        assert {:error, error} =
+                 WebsocketCodec.coerce_request(
+                   payload,
+                   public_responses_options(payload),
+                   fn _frame -> :ok end
+                 )
+
+        assert error.status == 400
+        assert error.code == "invalid_request"
+        assert error.param == "service_tier"
+        refute error.message =~ "ultra-fast"
+        refute error.message =~ "requested"
+      end
+    end
+
     test "accepts valid public Responses websocket stream_id boundaries and strips them" do
       for stream_id <- ["a", "A-z0_.-", String.duplicate("a", 256)] do
         payload = %{

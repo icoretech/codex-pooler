@@ -909,6 +909,7 @@ defmodule CodexPooler.Accounting.PricingResolution do
   defp mapped_service_tier("standard"), do: {:ok, "standard"}
   defp mapped_service_tier("flex"), do: {:ok, "flex"}
   defp mapped_service_tier("priority"), do: {:ok, "priority"}
+  defp mapped_service_tier("ultrafast"), do: {:ok, "ultrafast"}
   defp mapped_service_tier("batch"), do: {:ok, "batch"}
   defp mapped_service_tier(_tier), do: {:unpriced, "unpriced_unsupported_tier"}
 

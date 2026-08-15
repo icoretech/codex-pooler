@@ -301,6 +301,97 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
       end
     end
 
+    test "ultrafast requires an exact per-assignment advertisement without changing model metadata" do
+      model = %Model{
+        metadata: %{
+          "source_assignment_models" => %{
+            "assignment-service-ultrafast" => tier_metadata(service_tiers: ["ultrafast"]),
+            "assignment-speed-ultrafast" => tier_metadata(additional_speed_tiers: ["ultrafast"]),
+            "assignment-priority" => tier_metadata(service_tiers: ["priority"]),
+            "assignment-fast" => tier_metadata(additional_speed_tiers: ["fast"]),
+            "assignment-flex" => tier_metadata(service_tiers: ["flex"])
+          }
+        }
+      }
+
+      original_metadata = :erlang.term_to_binary(model.metadata)
+
+      candidates =
+        Enum.map(
+          [
+            "assignment-service-ultrafast",
+            "assignment-speed-ultrafast",
+            "assignment-priority",
+            "assignment-fast",
+            "assignment-flex",
+            "assignment-absent"
+          ],
+          &candidate/1
+        )
+
+      ultrafast_payload = %{
+        "model" => "gpt-4.1",
+        "input" => "hello",
+        "service_tier" => "ultrafast"
+      }
+
+      ultrafast_request_options =
+        RequestOptions.build(%{}, "/backend-api/codex/responses", ultrafast_payload)
+
+      assert {:ok, ultrafast_filtered} =
+               CandidateEligibility.filter_runtime_compatible_candidates(
+                 filter_input(model, ultrafast_payload, ultrafast_request_options, candidates)
+               )
+
+      assert candidate_ids(ultrafast_filtered) == [
+               "assignment-service-ultrafast",
+               "assignment-speed-ultrafast"
+             ]
+
+      priority_payload = Map.put(ultrafast_payload, "service_tier", "priority")
+
+      priority_request_options =
+        RequestOptions.build(%{}, "/backend-api/codex/responses", priority_payload)
+
+      assert {:ok, priority_filtered} =
+               CandidateEligibility.filter_runtime_compatible_candidates(
+                 filter_input(model, priority_payload, priority_request_options, candidates)
+               )
+
+      assert candidate_ids(priority_filtered) == ["assignment-priority", "assignment-fast"]
+      assert :erlang.term_to_binary(model.metadata) == original_metadata
+    end
+
+    test "ultrafast returns no compatible backend when no candidate advertises it" do
+      model = %Model{
+        metadata: %{
+          "source_assignment_models" => %{
+            "assignment-priority" => tier_metadata(service_tiers: ["priority"]),
+            "assignment-fast" => tier_metadata(additional_speed_tiers: ["fast"]),
+            "assignment-flex" => tier_metadata(service_tiers: ["flex"])
+          }
+        }
+      }
+
+      original_metadata = :erlang.term_to_binary(model.metadata)
+
+      candidates =
+        Enum.map(
+          ["assignment-priority", "assignment-fast", "assignment-flex", "assignment-absent"],
+          &candidate/1
+        )
+
+      payload = %{"model" => "gpt-4.1", "input" => "hello", "service_tier" => "ultrafast"}
+      request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+
+      assert {:error, %{code: "no_compatible_backend"}} =
+               CandidateEligibility.filter_runtime_compatible_candidates(
+                 filter_input(model, payload, request_options, candidates)
+               )
+
+      assert :erlang.term_to_binary(model.metadata) == original_metadata
+    end
+
     test "a concrete unsupported tier produces no compatible backend" do
       model = model_with_tier_support("assignment-supported", "priority")
       candidates = [candidate("assignment-supported"), candidate("assignment-plain")]
@@ -951,6 +1042,14 @@ defmodule CodexPooler.Gateway.Routing.CandidateEligibilityTest do
           }
         }
       }
+    }
+  end
+
+  defp tier_metadata(options) do
+    %{
+      "capabilities" => %{"responses" => true},
+      "service_tiers" => Keyword.get(options, :service_tiers, []),
+      "additional_speed_tiers" => Keyword.get(options, :additional_speed_tiers, [])
     }
   end
 

@@ -853,20 +853,26 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   @tag :responses_coercion
-  test "Responses canonicalizes the fast service tier alias before forwarding" do
-    assert {:ok, result} =
-             Responses.coerce(%{
-               "model" => "gpt-fixture-text",
-               "input" => "synthetic input",
-               "service_tier" => " FAST "
-             })
+  test "Responses canonicalizes supported service tiers before forwarding" do
+    for {tier, canonical} <- [
+          {" ultrafast ", "ultrafast"},
+          {"ULTRAFAST", "ultrafast"},
+          {" FAST ", "priority"}
+        ] do
+      assert {:ok, result} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => "synthetic input",
+                 "service_tier" => tier
+               })
 
-    assert result.payload["service_tier"] == "priority"
+      assert result.payload["service_tier"] == canonical
+    end
   end
 
   @tag :responses_coercion
   test "Responses retains service tier validation for unsupported and non-string values" do
-    for tier <- ["ultrafast", nil, 1, []] do
+    for tier <- ["ultra-fast", nil, 1, []] do
       assert {:error, %{status: 400, code: "invalid_request", param: "service_tier"}} =
                Responses.coerce(%{
                  "model" => "gpt-fixture-text",
@@ -5713,7 +5719,16 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
       refute Map.has_key?(result.payload, "service_tier")
 
-      for tier <- ["auto", "default", "flex", "priority", "scale"] do
+      for {tier, canonical} <- [
+            {"auto", "auto"},
+            {"default", "default"},
+            {"flex", "flex"},
+            {"priority", "priority"},
+            {"scale", "scale"},
+            {" ultrafast ", "ultrafast"},
+            {"ULTRAFAST", "ultrafast"},
+            {"fast", "priority"}
+          ] do
         payload = %{
           "model" => "gpt-fixture-text",
           "input" => "synthetic input",
@@ -5721,12 +5736,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
         }
 
         assert {:ok, result} = Responses.coerce(payload)
-        assert result.payload["service_tier"] == tier
+        assert result.payload["service_tier"] == canonical
       end
     end
 
     test "Responses rejects unsupported service_tier variants deterministically" do
-      for tier <- ["unsupported", "ultrafast", "", 123, true] do
+      for tier <- ["unsupported", "ultra-fast", "", nil, 123, []] do
         assert {:error,
                 %{
                   status: 400,

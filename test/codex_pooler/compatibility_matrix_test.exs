@@ -98,6 +98,50 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert translated.contract =~ "preserve literal provider service_tier output"
     end
 
+    test "keeps ultrafast Responses-only behind advertised candidate metadata" do
+      fixture = CompatibilityMatrix.fixture!(:responses_chat)
+
+      assert fixture.service_tier_boundary == %{
+               ultrafast: %{
+                 accepted_surfaces: [
+                   %{method: :post, path: "/v1/responses", transport: "http_json"},
+                   %{method: :post, path: "/v1/responses", transport: "http_sse"},
+                   %{method: :get, path: "/v1/responses", transport: "responses_websocket"}
+                 ],
+                 candidate_metadata: %{
+                   required: true,
+                   advertised_fields: ["service_tiers", "additional_speed_tiers"],
+                   required_literal: "ultrafast",
+                   eligible_candidates: "only_exact_ultrafast_advertisements"
+                 },
+                 literal_vocabulary: %{
+                   returned_service_tier: "ultrafast",
+                   accounting_fields: [
+                     "requested_service_tier",
+                     "actual_service_tier",
+                     "service_tier"
+                   ]
+                 }
+               },
+               chat_completions: %{
+                 method: :post,
+                 path: "/v1/chat/completions",
+                 accepted: false,
+                 rejection: %{
+                   status: 400,
+                   code: "invalid_request",
+                   param: "service_tier",
+                   upstream_dispatch: false
+                 }
+               },
+               fast_priority_alias: %{
+                 client_literal: "fast",
+                 upstream_literal: "priority",
+                 unchanged: true
+               }
+             }
+    end
+
     @tag :external_issues_229_231
     test "makes backend model catalog ETag derivation and surface capacity machine-readable" do
       feature = CompatibilityMatrix.by_slug!(:backend_models_etag)
