@@ -46,24 +46,34 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
 
   @impl true
   def handle_params(params, _uri, socket) do
-    {:noreply, request_stats_dashboard(socket, params)}
+    canonical_params = canonical_stats_params(params)
+
+    socket =
+      if canonical_params != socket.assigns.current_params or
+           socket.assigns.stats_dashboard_generation == 0 do
+        request_stats_dashboard(socket, canonical_params)
+      else
+        socket
+      end
+
+    {:noreply, canonicalize_stats_url(socket, params, canonical_params)}
   end
 
   @impl true
   def handle_event("filter", %{"filters" => filter_params}, socket) do
-    {:noreply, push_patch(socket, to: ~p"/admin/stats?#{query_params(filter_params)}")}
+    {:noreply, push_patch(socket, to: stats_path(socket, filter_params))}
   end
 
   def handle_event("select_pool_filter", %{"pool-id" => pool_id}, socket) do
     params = socket.assigns.filter_form.params |> Map.put("pool_id", pool_id)
 
-    {:noreply, push_patch(socket, to: ~p"/admin/stats?#{query_params(params)}")}
+    {:noreply, push_patch(socket, to: stats_path(socket, params))}
   end
 
   def handle_event("select_window_filter", %{"window" => window}, socket) do
     params = socket.assigns.filter_form.params |> Map.put("window", window)
 
-    {:noreply, push_patch(socket, to: ~p"/admin/stats?#{query_params(params)}")}
+    {:noreply, push_patch(socket, to: stats_path(socket, params))}
   end
 
   def handle_event("set_leaderboard_sort", %{"sort" => sort}, socket)
@@ -476,10 +486,10 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
   defp telemetry_error_code(%{code: code}), do: code
 
   defp stats_filters(params) do
-    params = Map.new(params)
+    params = canonical_stats_params(params)
 
     %{
-      "pool_id" => params |> Map.get("pool_id") |> blank_to_nil(),
+      "pool_id" => Map.get(params, "pool_id"),
       "window" => normalize_window(Map.get(params, "window"))
     }
     |> maybe_put_as_of(parse_as_of(Map.get(params, "as_of")))
@@ -512,16 +522,60 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
     }
   end
 
-  defp query_params(filter_params) do
-    filter_params
-    |> Map.take(~w(pool_id window))
-    |> Enum.reject(fn {_key, value} -> blank?(value) end)
-    |> Enum.sort_by(fn {key, _value} -> query_param_order(key) end)
+  defp canonical_stats_params(params) when is_map(params) do
+    %{}
+    |> maybe_put_param("pool_id", normalize_pool_id(Map.get(params, "pool_id")))
+    |> maybe_put_window(normalize_window(Map.get(params, "window")))
+    |> maybe_put_as_of_param(parse_as_of(Map.get(params, "as_of")))
   end
 
-  defp query_param_order("pool_id"), do: 0
-  defp query_param_order("window"), do: 1
-  defp query_param_order(_key), do: 2
+  defp canonical_stats_params(_params), do: %{}
+
+  defp maybe_put_param(params, _key, nil), do: params
+  defp maybe_put_param(params, key, value), do: Map.put(params, key, value)
+
+  defp maybe_put_window(params, "24h"), do: params
+  defp maybe_put_window(params, window), do: Map.put(params, "window", window)
+
+  defp maybe_put_as_of_param(params, %DateTime{} = as_of) do
+    Map.put(params, "as_of", serialize_as_of(as_of))
+  end
+
+  defp maybe_put_as_of_param(params, _as_of), do: params
+
+  defp serialize_as_of(as_of) do
+    as_of
+    |> DateTime.truncate(:microsecond)
+    |> Map.update!(:microsecond, fn {microsecond, _precision} -> {microsecond, 6} end)
+    |> DateTime.to_iso8601()
+  end
+
+  defp normalize_pool_id(pool_id) when is_binary(pool_id), do: blank_to_nil(pool_id)
+  defp normalize_pool_id(_pool_id), do: nil
+
+  defp stats_path(socket, filter_params) do
+    params =
+      filter_params
+      |> Map.new()
+      |> preserve_current_as_of(socket.assigns.current_params)
+      |> canonical_stats_params()
+
+    ~p"/admin/stats?#{params}"
+  end
+
+  defp preserve_current_as_of(params, %{"as_of" => as_of}) do
+    Map.put(params, "as_of", as_of)
+  end
+
+  defp preserve_current_as_of(params, _current_params), do: params
+
+  defp canonicalize_stats_url(socket, params, canonical_params) do
+    if connected?(socket) and params != canonical_params do
+      push_patch(socket, to: ~p"/admin/stats?#{canonical_params}", replace: true)
+    else
+      socket
+    end
+  end
 
   defp pool_filter_options(%{pool_options: pool_options}) do
     case pool_options do
@@ -569,8 +623,4 @@ defmodule CodexPoolerWeb.Admin.StatsLive do
       trimmed -> trimmed
     end
   end
-
-  defp blank_to_nil(value), do: value
-  defp blank?(nil), do: true
-  defp blank?(value), do: String.trim(to_string(value)) == ""
 end

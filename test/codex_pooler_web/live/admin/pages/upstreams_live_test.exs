@@ -2586,6 +2586,218 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
            ) == 0
   end
 
+  @tag :admin_url_canonicalization
+  test "copied non-default upstream filters and workflow permalinks survive remounts", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "url-canonical-pool", name: "URL Canonical Pool"})
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        account_label: "URL Canonical Account",
+        identity_status: "paused",
+        assignment_status: "paused",
+        eligibility_status: "ineligible"
+      })
+
+    filter_path =
+      ~p"/admin/upstreams?query=Canonical&pool_id=#{pool.id}&status=paused"
+
+    for _mount <- 1..2 do
+      {:ok, view, _html} = live(conn, filter_path)
+
+      assert has_element?(view, "#filters_query[value='Canonical']")
+      assert has_element?(view, "#filters_pool_id[value='#{pool.id}']")
+      assert has_element?(view, "#filters_status[value='paused']")
+      assert has_element?(view, "#upstream-account-#{identity.id}")
+      refute_patched(view)
+    end
+
+    {:ok, editor_view, _html} =
+      live(
+        conn,
+        ~p"/admin/upstreams?query=Canonical&pool_id=#{pool.id}&status=paused&edit_pool_id=#{pool.id}&step=upstreams"
+      )
+
+    assert has_element?(editor_view, "#pool-edit-dialog[open]")
+    assert has_element?(editor_view, "#pool-edit-dialog-tab-upstreams[aria-selected='true']")
+    refute_patched(editor_view)
+
+    {:ok, invite_view, _html} =
+      live(
+        conn,
+        ~p"/admin/upstreams?query=Canonical&pool_id=#{pool.id}&status=paused&create_invite=1"
+      )
+
+    assert has_element?(invite_view, "#pool-invite-dialog[open]")
+    refute_patched(invite_view)
+  end
+
+  @tag :admin_url_canonicalization
+  test "filter events omit defaults and retain deliberate workflow navigation", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "url-event-pool", name: "URL Event Pool"})
+
+    upstream_assignment_fixture(pool, %{account_label: "URL Event Account"})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    render_click(view, "select_pool_filter", %{"pool-id" => "missing"})
+    assert_patch(view, ~p"/admin/upstreams")
+
+    render_click(view, "select_status_filter", %{"status" => "deleted"})
+    assert_patch(view, ~p"/admin/upstreams")
+
+    render_change(view, "filter", %{
+      "filters" => %{
+        "query" => %{"bad" => "shape"},
+        "pool_id" => %{"bad" => "shape"},
+        "status" => %{"bad" => "shape"}
+      }
+    })
+
+    assert_patch(view, ~p"/admin/upstreams")
+
+    view
+    |> element("#upstream-filter-form")
+    |> render_change(%{
+      "filters" => %{"query" => "  URL Event  ", "pool_id" => "", "status" => ""}
+    })
+
+    assert_patch(view, ~p"/admin/upstreams?query=URL+Event")
+
+    view |> element("#upstream-filter-query-clear") |> render_click()
+    assert_patch(view, ~p"/admin/upstreams")
+
+    view
+    |> element("#upstream-pool-filter button[data-pool-id='#{pool.id}']")
+    |> render_click()
+
+    assert_patch(view, ~p"/admin/upstreams?pool_id=#{pool.id}")
+
+    view |> element("#upstream-page-create-invite-action") |> render_click()
+    assert_patch(view, ~p"/admin/upstreams?create_invite=1&pool_id=#{pool.id}")
+    assert has_element?(view, "#pool-invite-dialog[open]")
+
+    view
+    |> element("#upstream-filter-form")
+    |> render_change(%{
+      "filters" => %{"query" => "invite", "pool_id" => pool.id, "status" => ""}
+    })
+
+    assert_patch(view, ~p"/admin/upstreams?create_invite=1&pool_id=#{pool.id}&query=invite")
+    assert has_element?(view, "#pool-invite-dialog[open]")
+
+    view |> element("#pool-invite-cancel") |> render_click()
+    assert_patch(view, ~p"/admin/upstreams?pool_id=#{pool.id}&query=invite")
+  end
+
+  @tag :admin_url_canonicalization
+  test "malformed filters and unusable workflow params repair once without reloading upstreams",
+       %{
+         conn: conn,
+         scope: scope
+       } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "url-repair-pool", name: "URL Repair Pool"})
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{account_label: "URL Repair Account"})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+    initial_generation = :sys.get_state(view.pid).socket.assigns.upstreams_reload_generation
+
+    filter_only_path =
+      "/admin/upstreams?query[bad]=shape&pool_id=missing&status=bogus&unknown=drop"
+
+    render_patch(view, filter_only_path)
+    assert_patch(view, filter_only_path)
+    assert_patch(view, ~p"/admin/upstreams")
+    refute_patched(view)
+
+    assert :sys.get_state(view.pid).socket.assigns.upstreams_reload_generation ==
+             initial_generation
+
+    malformed_path =
+      "/admin/upstreams?query[bad]=shape&pool_id=missing&status=bogus&edit_pool_id=not-a-uuid&step=bogus&create_invite=wrong&unknown=drop"
+
+    {_, query_sources} =
+      capture_repo_queries(view.pid, fn ->
+        render_patch(view, malformed_path)
+        assert_patch(view, malformed_path)
+        assert_patch(view, ~p"/admin/upstreams")
+        _ = :sys.get_state(view.pid)
+      end)
+
+    refute_patched(view)
+    assert has_element?(view, "#filters_query[value='']")
+    assert has_element?(view, "#filters_pool_id[value='']")
+    assert has_element?(view, "#filters_status[value='']")
+    assert has_element?(view, "#upstream-account-#{identity.id}")
+    refute has_element?(view, "#pool-edit-dialog")
+    refute has_element?(view, "#pool-invite-dialog")
+
+    assert :sys.get_state(view.pid).socket.assigns.upstreams_reload_generation ==
+             initial_generation
+
+    refute "upstream_identities" in query_sources
+    refute "pool_upstream_assignments" in query_sources
+
+    render_patch(view, ~p"/admin/upstreams")
+    assert_patch(view, ~p"/admin/upstreams")
+    refute_patched(view)
+
+    assert :sys.get_state(view.pid).socket.assigns.upstreams_reload_generation ==
+             initial_generation
+  end
+
+  @tag :admin_url_canonicalization
+  test "canonical repair retains one usable workflow with normalized keys", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "url-workflow-pool", name: "URL Workflow Pool"})
+
+    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+
+    editor_path =
+      "/admin/upstreams?query=workflow&edit_pool_id=#{pool.id}&step=bogus&unknown=drop"
+
+    render_patch(view, editor_path)
+    assert_patch(view, editor_path)
+
+    assert_upstreams_patch_params(view, %{
+      "edit_pool_id" => pool.id,
+      "query" => "workflow",
+      "step" => "details"
+    })
+
+    refute_patched(view)
+    assert has_element?(view, "#pool-edit-dialog[open]")
+    assert has_element?(view, "#pool-edit-dialog-tab-details[aria-selected='true']")
+
+    combined_path =
+      "/admin/upstreams?query=workflow&edit_pool_id=#{pool.id}&step=upstreams&create_invite=1&unknown=drop"
+
+    render_patch(view, combined_path)
+    assert_patch(view, combined_path)
+
+    assert_upstreams_patch_params(view, %{
+      "create_invite" => "1",
+      "query" => "workflow"
+    })
+
+    refute_patched(view)
+    refute has_element?(view, "#pool-edit-dialog")
+    assert has_element?(view, "#pool-invite-dialog[open]")
+  end
+
   @tag :upstream_filters
   test "renders URL-backed upstream filter controls without legacy select fallbacks", %{
     conn: conn,
@@ -8369,6 +8581,16 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   defp normalize_repo_query_value(value) when is_binary(value), do: value
   defp normalize_repo_query_value(value) when is_atom(value), do: Atom.to_string(value)
   defp normalize_repo_query_value(value), do: to_string(value)
+
+  defp assert_upstreams_patch_params(view, expected_params) do
+    patched_path = assert_patch(view)
+    uri = URI.parse(patched_path)
+
+    assert uri.path == "/admin/upstreams"
+    assert URI.decode_query(uri.query || "") == expected_params
+
+    patched_path
+  end
 
   defp update_identity_subject_slot!(identity, account_id, workspace_id, raw_subject) do
     identity

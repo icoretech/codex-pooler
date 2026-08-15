@@ -12,7 +12,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamFilterForm do
     filter_params
     |> filter_values()
     |> Map.take(@filter_keys)
-    |> Enum.reject(fn {_key, value} -> blank?(value) end)
+    |> Enum.reject(fn {_key, value} -> value == "" end)
     |> Map.new()
   end
 
@@ -120,6 +120,4 @@ defmodule CodexPoolerWeb.Admin.UpstreamFilterForm do
   defp blank_to_empty(value) when is_binary(value), do: String.trim(value)
   defp blank_to_empty(nil), do: ""
   defp blank_to_empty(_value), do: ""
-
-  defp blank?(value), do: String.trim(to_string(value || "")) == ""
 end

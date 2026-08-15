@@ -95,7 +95,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
      |> close_account_workflow_dialogs()
      |> maybe_load_upstreams(params)
      |> apply_pool_editor_params(params)
-     |> apply_invite_params(params)}
+     |> apply_invite_params(params)
+     |> canonicalize_upstreams_url(params)}
   end
 
   @impl true
@@ -156,31 +157,50 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
 
   @impl true
   def handle_event("filter", %{"filters" => filter_params}, socket) do
+    filter_values = UpstreamFilterForm.filter_values(filter_params, socket.assigns.pools)
+
     {:noreply,
      push_patch(socket,
-       to: ~p"/admin/upstreams?#{UpstreamFilterForm.query_params(filter_params)}"
+       to: upstreams_path(socket, filter_values, current_workflow_params(socket)),
+       replace: true
      )}
   end
 
   def handle_event("select_pool_filter", %{"pool-id" => pool_id}, socket) do
-    params = Map.put(socket.assigns.filter_values, "pool_id", pool_id)
+    filter_values =
+      socket.assigns.filter_values
+      |> Map.put("pool_id", pool_id)
+      |> UpstreamFilterForm.filter_values(socket.assigns.pools)
 
     {:noreply,
-     push_patch(socket, to: ~p"/admin/upstreams?#{UpstreamFilterForm.query_params(params)}")}
+     push_patch(socket,
+       to: upstreams_path(socket, filter_values, current_workflow_params(socket))
+     )}
   end
 
   def handle_event("clear_upstream_query_filter", _params, socket) do
-    params = Map.put(socket.assigns.filter_values, "query", "")
+    filter_values =
+      socket.assigns.filter_values
+      |> Map.put("query", "")
+      |> UpstreamFilterForm.filter_values(socket.assigns.pools)
 
     {:noreply,
-     push_patch(socket, to: ~p"/admin/upstreams?#{UpstreamFilterForm.query_params(params)}")}
+     push_patch(socket,
+       to: upstreams_path(socket, filter_values, current_workflow_params(socket)),
+       replace: true
+     )}
   end
 
   def handle_event("select_status_filter", %{"status" => status}, socket) do
-    params = Map.put(socket.assigns.filter_values, "status", status)
+    filter_values =
+      socket.assigns.filter_values
+      |> Map.put("status", status)
+      |> UpstreamFilterForm.filter_values(socket.assigns.pools)
 
     {:noreply,
-     push_patch(socket, to: ~p"/admin/upstreams?#{UpstreamFilterForm.query_params(params)}")}
+     push_patch(socket,
+       to: upstreams_path(socket, filter_values, current_workflow_params(socket))
+     )}
   end
 
   def handle_event("pool_wizard_step", %{"step" => step}, socket) do
@@ -737,8 +757,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
         |> defer_upstreams_reload()
 
       {:error, _reason} ->
-        socket = PoolEditorWorkflow.close(socket)
-        if connected?(socket), do: push_patch(socket, to: upstreams_path(socket)), else: socket
+        PoolEditorWorkflow.close(socket)
     end
   end
 
@@ -778,13 +797,46 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLive do
   end
 
   defp upstreams_path(socket, extra_params \\ %{}) do
+    upstreams_path(socket, socket.assigns.filter_values, extra_params)
+  end
+
+  defp upstreams_path(socket, filter_params, extra_params) do
     params =
-      socket.assigns.filter_values
+      filter_params
+      |> UpstreamFilterForm.filter_values(socket.assigns.pools)
       |> UpstreamFilterForm.query_params()
       |> Map.merge(extra_params)
 
     ~p"/admin/upstreams?#{params}"
   end
+
+  defp canonicalize_upstreams_url(socket, params) do
+    canonical_params =
+      socket.assigns.filter_values
+      |> UpstreamFilterForm.filter_values(socket.assigns.pools)
+      |> UpstreamFilterForm.query_params()
+      |> Map.merge(current_workflow_params(socket))
+
+    if connected?(socket) and params != canonical_params do
+      push_patch(socket, to: ~p"/admin/upstreams?#{canonical_params}", replace: true)
+    else
+      socket
+    end
+  end
+
+  defp current_workflow_params(%{assigns: %{creating_invite: true}}),
+    do: %{"create_invite" => "1"}
+
+  defp current_workflow_params(%{
+         assigns: %{editing_pool: %{id: pool_id}, pool_editor_step: step}
+       }) do
+    %{
+      "edit_pool_id" => pool_id,
+      "step" => PoolWizardComponents.normalize_step(step, :edit)
+    }
+  end
+
+  defp current_workflow_params(_socket), do: %{}
 
   defp schedule_upstreams_reload(socket) do
     cond do

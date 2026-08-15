@@ -417,6 +417,218 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       end)
     end
 
+    @tag :admin_url_canonicalization
+    test "canonical repair drops malformed defaults and unknown params without rebuilding", %{
+      conn: conn
+    } do
+      {:ok, view, _html} = live_stats(conn, ~p"/admin/stats")
+      initial_state = :sys.get_state(view.pid)
+
+      malformed_path =
+        "/admin/stats?window=24h&as_of=bad&pool_id[bad]=shape&unknown=drop"
+
+      {_, query_sources} =
+        capture_repo_queries(view.pid, fn ->
+          render_patch(view, malformed_path)
+          assert_patch(view, malformed_path)
+          assert_stats_patch_params(view, %{})
+          _ = :sys.get_state(view.pid)
+        end)
+
+      refute_patched(view)
+
+      repaired_state = :sys.get_state(view.pid)
+
+      assert repaired_state.socket.assigns.current_params == %{}
+
+      assert repaired_state.socket.assigns.stats_dashboard_generation ==
+               initial_state.socket.assigns.stats_dashboard_generation
+
+      assert repaired_state.socket.assigns.stats_dashboard_preparation ==
+               initial_state.socket.assigns.stats_dashboard_preparation
+
+      assert repaired_state.socket.assigns.dashboard == initial_state.socket.assigns.dashboard
+
+      assert repaired_state.socket.assigns.subscribed_pool_ids ==
+               initial_state.socket.assigns.subscribed_pool_ids
+
+      assert repaired_state.socket.assigns.stats_reload_timer ==
+               initial_state.socket.assigns.stats_reload_timer
+
+      assert query_sources == []
+    end
+
+    @tag :admin_url_canonicalization
+    test "valid as of survives every filter path and default window omission", %{
+      conn: conn,
+      scope: scope
+    } do
+      {:ok, pool} =
+        Pools.create_pool(scope, %{slug: "stats-url-as-of", name: "Stats URL As Of"})
+
+      as_of = ~U[2026-01-10 12:00:00.000000Z]
+      as_of_iso = DateTime.to_iso8601(as_of)
+
+      stats_usage_fixture(pool, %{
+        total_tokens: 17,
+        correlation_id: "stats-url-as-of",
+        inserted_at: as_of
+      })
+
+      canonical_path =
+        ~p"/admin/stats?pool_id=#{pool.id}&window=1h&as_of=#{as_of_iso}"
+
+      for _mount <- 1..2 do
+        {:ok, mounted_view, _html} = live_stats(conn, canonical_path)
+        refute_patched(mounted_view)
+        assert has_element?(mounted_view, "#stats-pool-filter[value='#{pool.id}']")
+        assert has_element?(mounted_view, "#stats-time-filter[value='1h']")
+      end
+
+      {:ok, view, _html} = live_stats(conn, canonical_path)
+
+      view
+      |> element("#stats-time-filter-control button[data-window='24h']")
+      |> render_click()
+
+      assert_stats_patch_params(view, %{"as_of" => as_of_iso, "pool_id" => pool.id})
+
+      _ =
+        await_stats_dashboard_params(view, %{
+          "as_of" => as_of_iso,
+          "pool_id" => pool.id
+        })
+
+      view
+      |> element("#stats-pool-filter-control button[data-pool-id='']")
+      |> render_click()
+
+      assert_stats_patch_params(view, %{"as_of" => as_of_iso})
+
+      view
+      |> element("#stats-filter-form")
+      |> render_submit(%{"filters" => %{"pool_id" => pool.id, "window" => "1h"}})
+
+      assert_stats_patch_params(view, %{
+        "as_of" => as_of_iso,
+        "pool_id" => pool.id,
+        "window" => "1h"
+      })
+    end
+
+    @tag :admin_url_canonicalization
+    test "canonical repair retains a syntactically valid unavailable Pool filter", %{
+      conn: conn,
+      scope: scope
+    } do
+      {:ok, pool} =
+        Pools.create_pool(scope, %{slug: "stats-url-unavailable", name: "Stats URL Unavailable"})
+
+      admin_conn = log_in_scoped_admin(conn, scope, [])
+
+      {:ok, view, _html} = live(admin_conn, ~p"/admin/stats")
+
+      malformed_path =
+        "/admin/stats?pool_id=#{pool.id}&window=24h&unknown=drop"
+
+      render_patch(view, malformed_path)
+      assert_patch(view, malformed_path)
+
+      assert_stats_patch_params(view, %{"pool_id" => pool.id})
+      refute_patched(view)
+
+      state = :sys.get_state(view.pid)
+      assert state.socket.assigns.current_params == %{"pool_id" => pool.id}
+      assert state.socket.assigns.stats_dashboard_generation == 2
+      assert has_element?(view, "#stats-filter-error", "pool filter is not available")
+      refute has_element?(view, "#stats-kpis")
+    end
+
+    @tag :admin_url_canonicalization
+    test "one canonical filter generation replaces a stale dashboard and retains as of", %{
+      conn: conn,
+      scope: scope
+    } do
+      {:ok, first_pool} =
+        Pools.create_pool(scope, %{slug: "stats-url-first", name: "Stats URL First"})
+
+      {:ok, second_pool} =
+        Pools.create_pool(scope, %{slug: "stats-url-second", name: "Stats URL Second"})
+
+      stats_usage_fixture(first_pool, %{total_tokens: 12, correlation_id: "stats-url-first"})
+      stats_usage_fixture(second_pool, %{total_tokens: 21, correlation_id: "stats-url-second"})
+
+      as_of = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      as_of_iso = DateTime.to_iso8601(as_of)
+
+      {:ok, view, _html} =
+        live_stats(
+          conn,
+          ~p"/admin/stats?pool_id=#{first_pool.id}&as_of=#{as_of_iso}"
+        )
+
+      stats_usage_fixture(first_pool, %{
+        total_tokens: 88,
+        correlation_id: "stats-url-first-late"
+      })
+
+      handler_id = {__MODULE__, :blocked_url_stats_query, make_ref()}
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:codex_pooler, :repo, :query],
+          fn _event, _measurements, metadata, _config ->
+            if metadata[:repo] == Repo and self() != view.pid and
+                 metadata[:options][:reporting_projection] ==
+                   :stats_request_status_buckets do
+              send(test_pid, {handler_id, self()})
+
+              receive do
+                {^handler_id, :release} -> :ok
+              after
+                5_000 -> :ok
+              end
+            end
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      assert {:ok, _event} = Events.broadcast_usage(first_pool.id, "usage_updated", %{rows: 1})
+      execute_scheduled_reload(view, await?: false)
+      assert_receive {^handler_id, dashboard_task_pid}
+
+      reload_generation =
+        :sys.get_state(view.pid).socket.assigns.stats_dashboard_generation
+
+      view
+      |> element("#stats-filter-form")
+      |> render_submit(%{"filters" => %{"pool_id" => second_pool.id, "window" => "1h"}})
+
+      assert_stats_patch_params(view, %{
+        "as_of" => as_of_iso,
+        "pool_id" => second_pool.id,
+        "window" => "1h"
+      })
+
+      assert :sys.get_state(view.pid).socket.assigns.stats_dashboard_generation ==
+               reload_generation + 1
+
+      send(dashboard_task_pid, {handler_id, :release})
+      assert_receive {^handler_id, replacement_task_pid}
+      refute replacement_task_pid == dashboard_task_pid
+      send(replacement_task_pid, {handler_id, :release})
+      _ = await_stats_dashboard(view)
+
+      assert has_element?(view, "#stats-pool-filter[value='#{second_pool.id}']")
+      assert has_element?(view, "#stats-time-filter[value='1h']")
+      assert has_element?(view, "#stats-kpi-tokens", "21")
+      refute has_element?(view, "#stats-traffic-chart", "100 tokens")
+    end
+
     test "renders a rotating icon while the initial dashboard is loading", %{
       conn: conn,
       scope: scope
@@ -456,7 +668,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       on_exit(fn -> :telemetry.detach(handler_id) end)
 
       {:ok, view, _html} =
-        live(conn, ~p"/admin/stats?pool_id=#{pool.id}&window=24h")
+        live(conn, ~p"/admin/stats?pool_id=#{pool.id}")
 
       assert_receive {^handler_id, query_pid}, 1_000
 
@@ -498,7 +710,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       other_setup =
         stats_usage_fixture(other_pool, %{total_tokens: 33, correlation_id: "stats-other"})
 
-      {:ok, view, _html} = live_stats(conn, ~p"/admin/stats?pool_id=#{pool.id}&window=24h")
+      {:ok, view, _html} = live_stats(conn, ~p"/admin/stats?pool_id=#{pool.id}")
 
       for selector <- required_selectors() do
         assert has_element?(view, selector)
@@ -1079,7 +1291,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
         stats_usage_fixture(second_pool, %{total_tokens: 27, correlation_id: "stats-second"})
 
       {:ok, view, _html} =
-        live_stats(conn, ~p"/admin/stats?pool_id=#{first_pool.id}&window=24h")
+        live_stats(conn, ~p"/admin/stats?pool_id=#{first_pool.id}")
 
       assert has_element?(
                view,
@@ -1094,12 +1306,11 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       |> element("#stats-pool-filter-control button[data-pool-id='#{second_pool.id}']")
       |> render_click()
 
-      assert_patch(view, ~p"/admin/stats?pool_id=#{second_pool.id}&window=24h")
+      assert_patch(view, ~p"/admin/stats?pool_id=#{second_pool.id}")
 
       _ =
         await_stats_dashboard_params(view, %{
-          "pool_id" => second_pool.id,
-          "window" => "24h"
+          "pool_id" => second_pool.id
         })
 
       assert has_element?(view, "#stats-pool-filter[value='#{second_pool.id}']")
@@ -1181,7 +1392,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
 
       admin_conn = log_in_scoped_admin(conn, scope, [pool_a, pool_b])
 
-      {:ok, view, _html} = live_stats(admin_conn, ~p"/admin/stats?window=24h")
+      {:ok, view, _html} = live_stats(admin_conn, ~p"/admin/stats")
 
       assert has_element?(view, "#stats-pool-filter[type='hidden'][value='']")
       assert has_element?(view, "#stats-pool-filter-control", "All Pools")
@@ -1240,10 +1451,10 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       |> element("#stats-pool-filter-control button[data-pool-id='#{pool_b.id}']")
       |> render_click()
 
-      assert_patch(view, ~p"/admin/stats?pool_id=#{pool_b.id}&window=24h")
+      assert_patch(view, ~p"/admin/stats?pool_id=#{pool_b.id}")
 
       _ =
-        await_stats_dashboard_params(view, %{"pool_id" => pool_b.id, "window" => "24h"})
+        await_stats_dashboard_params(view, %{"pool_id" => pool_b.id})
 
       assert has_element?(view, "#stats-pool-filter[value='#{pool_b.id}']")
       assert has_element?(view, "#stats-kpi-tokens", "20")
@@ -1281,7 +1492,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       refute render(view) =~ hidden_c.raw_key
 
       {:ok, blocked_view, _html} =
-        live_stats(admin_conn, ~p"/admin/stats?pool_id=#{pool_c.id}&window=24h")
+        live_stats(admin_conn, ~p"/admin/stats?pool_id=#{pool_c.id}")
 
       assert has_element?(blocked_view, "#stats-filter-error", "pool filter is not available")
       refute has_element?(blocked_view, "#stats-kpis")
@@ -1340,7 +1551,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
 
       admin_conn = log_in_scoped_admin(conn, scope, [])
 
-      {:ok, view, _html} = live_stats(admin_conn, ~p"/admin/stats?window=24h")
+      {:ok, view, _html} = live_stats(admin_conn, ~p"/admin/stats")
 
       assert has_element?(view, "#stats-pool-filter[type='hidden'][value='']")
 
@@ -1436,7 +1647,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       stats_usage_fixture(second_pool, %{total_tokens: 21, correlation_id: "stats-async-second"})
 
       {:ok, view, _html} =
-        live_stats(conn, ~p"/admin/stats?pool_id=#{first_pool.id}&window=24h")
+        live_stats(conn, ~p"/admin/stats?pool_id=#{first_pool.id}")
 
       stats_usage_fixture(first_pool, %{
         total_tokens: 88,
@@ -1500,7 +1711,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
           name: "Stats Realtime Selected"
         })
 
-      {:ok, view, _html} = live_stats(conn, ~p"/admin/stats?pool_id=#{pool.id}&window=24h")
+      {:ok, view, _html} = live_stats(conn, ~p"/admin/stats?pool_id=#{pool.id}")
 
       assert has_element?(
                view,
@@ -1542,7 +1753,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
         })
 
       {:ok, view, _html} =
-        live_stats(conn, ~p"/admin/stats?pool_id=#{selected_pool.id}&window=24h")
+        live_stats(conn, ~p"/admin/stats?pool_id=#{selected_pool.id}")
 
       assert has_element?(
                view,
@@ -1572,7 +1783,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
     test "rapid events coalesce into one debounced reload", %{conn: conn, scope: scope} do
       {:ok, pool} = Pools.create_pool(scope, %{slug: "stats-realtime-burst", name: "Stats Burst"})
 
-      {:ok, view, _html} = live_stats(conn, ~p"/admin/stats?pool_id=#{pool.id}&window=24h")
+      {:ok, view, _html} = live_stats(conn, ~p"/admin/stats?pool_id=#{pool.id}")
 
       assert has_element?(view, "#stats-kpi-tokens", "0")
 
@@ -1609,7 +1820,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       stats_usage_fixture(second_pool, %{total_tokens: 21, correlation_id: "stats-sub-second"})
 
       {:ok, view, _html} =
-        live_stats(conn, ~p"/admin/stats?pool_id=#{first_pool.id}&window=24h")
+        live_stats(conn, ~p"/admin/stats?pool_id=#{first_pool.id}")
 
       assert has_element?(
                view,
@@ -1623,12 +1834,11 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       |> element("#stats-filter-form")
       |> render_submit(%{"filters" => %{"pool_id" => second_pool.id, "window" => "24h"}})
 
-      assert_patch(view, ~p"/admin/stats?pool_id=#{second_pool.id}&window=24h")
+      assert_patch(view, ~p"/admin/stats?pool_id=#{second_pool.id}")
 
       _ =
         await_stats_dashboard_params(view, %{
-          "pool_id" => second_pool.id,
-          "window" => "24h"
+          "pool_id" => second_pool.id
         })
 
       assert has_element?(
@@ -1670,7 +1880,7 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
       stats_usage_fixture(second_pool, %{total_tokens: 21, correlation_id: "stats-stale-second"})
 
       {:ok, view, _html} =
-        live_stats(conn, ~p"/admin/stats?pool_id=#{first_pool.id}&window=24h")
+        live_stats(conn, ~p"/admin/stats?pool_id=#{first_pool.id}")
 
       assert has_element?(view, "#stats-kpi-tokens", "12")
 
@@ -1938,6 +2148,50 @@ defmodule CodexPoolerWeb.Admin.StatsLiveTest do
     flunk(
       "stats dashboard did not load params #{inspect(expected_params)}: #{inspect(:sys.get_state(view.pid))}"
     )
+  end
+
+  defp assert_stats_patch_params(view, expected_params) do
+    patched_path = assert_patch(view)
+    uri = URI.parse(patched_path)
+
+    assert uri.path == "/admin/stats"
+    assert URI.decode_query(uri.query || "") == expected_params
+
+    patched_path
+  end
+
+  defp capture_repo_queries(query_pid, fun)
+       when is_pid(query_pid) and is_function(fun, 0) do
+    test_pid = self()
+    handler_id = {__MODULE__, :stats_repo_query, test_pid, System.unique_integer([:positive])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and self() == query_pid do
+            send(test_pid, {handler_id, metadata[:source]})
+          end
+        end,
+        nil
+      )
+
+    try do
+      result = fun.()
+      {result, drain_repo_query_sources(handler_id, [])}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_repo_query_sources(handler_id, sources) do
+    receive do
+      {^handler_id, source} ->
+        drain_repo_query_sources(handler_id, [normalize_repo_query_value(source) | sources])
+    after
+      0 -> Enum.reverse(sources)
+    end
   end
 
   defp normalize_repo_query_value(value) when is_binary(value), do: value
