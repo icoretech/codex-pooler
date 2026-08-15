@@ -14,6 +14,7 @@ defmodule CodexPooler.Accounting.RollupsTest do
     Rollups
   }
 
+  alias CodexPooler.Admin.GatewayReadModel
   alias CodexPooler.Repo
 
   import CodexPooler.AccountingTestSupport
@@ -151,6 +152,202 @@ defmodule CodexPooler.Accounting.RollupsTest do
                incompatible_date => :incompatible,
                missing_date => :missing
              }
+    end
+  end
+
+  describe "Pool usage daily rollups" do
+    @tag :pool_usage_rollup_parity
+    test "incremental admissions and per-entry rounded settlement costs match a covered rebuild" do
+      setup = accounting_setup()
+      rollup_date = ~D[2026-08-12]
+      day_start = DateTime.new!(rollup_date, ~T[00:00:00.000000], "Etc/UTC")
+
+      first = reserve_request!(setup, DateTime.add(day_start, 5, :minute), "pool-rollup-first")
+
+      assert {:ok, %{request: turn_claim}} =
+               Accounting.claim_websocket_turn(setup.auth, setup.model, %{
+                 endpoint: "/backend-api/codex/responses",
+                 correlation_id: "pool-rollup-turn",
+                 now: DateTime.add(day_start, 10, :minute)
+               })
+
+      assert {:ok, second} =
+               Accounting.reserve(
+                 setup.auth,
+                 setup.model,
+                 %{"model" => setup.model.exposed_model_id, "max_output_tokens" => 5},
+                 %{
+                   correlation_id: turn_claim.correlation_id,
+                   now: turn_claim.admitted_at,
+                   turn_claim: turn_claim
+                 }
+               )
+
+      first_settlement =
+        insert_settlement!(first.request, %{
+          occurred_at: DateTime.add(day_start, 20, :minute),
+          input_tokens: 3,
+          output_tokens: 2,
+          total_tokens: 5,
+          settled_cost_micros: "0.5"
+        })
+
+      second_settlement =
+        insert_settlement!(second.request, %{
+          occurred_at: DateTime.add(day_start, 30, :minute),
+          input_tokens: 7,
+          output_tokens: 4,
+          total_tokens: 11,
+          settled_cost_micros: "0.5"
+        })
+
+      assert :ok = Rollups.accumulate!(first.request, first_settlement)
+      assert :ok = Rollups.accumulate!(second.request, second_settlement)
+
+      assert %{setup.pool.id => 2} ==
+               GatewayReadModel.request_counts_by_pool_ids(
+                 [setup.pool.id],
+                 day_start,
+                 DateTime.add(day_start, 1, :day)
+               )
+
+      assert %{admitted_request_count: 2, request_count: 2, rounded_cost: "2"} =
+               pool_rollup_summary!(setup.pool.id, rollup_date)
+
+      replacement =
+        first_settlement
+        |> Ecto.Changeset.change(settled_cost_micros: Decimal.new("1.5"))
+        |> Repo.update!()
+
+      assert :ok =
+               Rollups.replace!(
+                 first.request,
+                 first_settlement,
+                 first.request,
+                 replacement
+               )
+
+      incremental = pool_rollup_summary!(setup.pool.id, rollup_date)
+
+      assert incremental.admitted_request_count == 2
+      assert incremental.request_count == 2
+      assert incremental.total_tokens == 16
+      assert incremental.settled_cost == "2"
+      assert incremental.rounded_cost == "3"
+
+      assert {:ok, 2} = Rollups.rebuild_for_date(rollup_date)
+      assert pool_rollup_summary!(setup.pool.id, rollup_date) == incremental
+
+      assert Accounting.daily_rollup_coverage_statuses([rollup_date]) == %{
+               rollup_date => :complete
+             }
+
+      late = reserve_request!(setup, DateTime.add(day_start, 40, :minute), "pool-rollup-late")
+
+      late_settlement =
+        insert_settlement!(late.request, %{
+          occurred_at: DateTime.add(day_start, 50, :minute),
+          input_tokens: 1,
+          total_tokens: 1,
+          settled_cost_micros: "0.4"
+        })
+
+      assert :ok = Rollups.accumulate!(late.request, late_settlement)
+
+      assert %{
+               admitted_request_count: 3,
+               request_count: 3,
+               total_tokens: 17,
+               settled_cost: "2.4",
+               rounded_cost: "3"
+             } = pool_rollup_summary!(setup.pool.id, rollup_date)
+
+      assert Accounting.daily_rollup_coverage_statuses([rollup_date]) == %{
+               rollup_date => :complete
+             }
+    end
+
+    test "unsettled and usage-unknown admitted requests preserve raw request semantics" do
+      setup = accounting_setup()
+      rollup_date = ~D[2026-08-11]
+      day_start = DateTime.new!(rollup_date, ~T[00:00:00.000000], "Etc/UTC")
+
+      _unsettled =
+        reserve_request!(setup, DateTime.add(day_start, 5, :minute), "pool-rollup-unsettled")
+
+      unknown =
+        reserve_request!(setup, DateTime.add(day_start, 10, :minute), "pool-rollup-unknown")
+
+      unknown_settlement =
+        insert_settlement!(unknown.request, %{
+          usage_status: "usage_unknown",
+          occurred_at: DateTime.add(day_start, 20, :minute),
+          input_tokens: 900,
+          output_tokens: 800,
+          total_tokens: 1_700,
+          settled_cost_micros: "999.9"
+        })
+
+      assert :ok = Rollups.accumulate!(unknown.request, unknown_settlement)
+
+      assert %{
+               admitted_request_count: 2,
+               request_count: 1,
+               total_tokens: 0,
+               settled_cost: "0",
+               rounded_cost: "0"
+             } = pool_rollup_summary!(setup.pool.id, rollup_date)
+    end
+
+    test "an empty-day rebuild removes stale rows and writes compatible coverage" do
+      setup = accounting_setup()
+      rollup_date = ~D[2026-08-10]
+
+      insert_stale_pool_rollup!(setup.pool, rollup_date, %{
+        admitted_request_count: 9,
+        request_count: 7,
+        total_tokens: 777,
+        rounded_settled_cost_micros: "123"
+      })
+
+      assert {:ok, 0} = Rollups.rebuild_for_date(rollup_date)
+      assert Repo.all(from rollup in DailyRollup, where: rollup.rollup_date == ^rollup_date) == []
+
+      assert Accounting.daily_rollup_coverage_statuses([rollup_date]) == %{
+               rollup_date => :complete
+             }
+    end
+
+    @tag :pool_usage_rollup_atomic_failure
+    test "a failure before coverage publication rolls back both rebuild sources" do
+      setup = accounting_setup()
+      rollup_date = ~D[2026-08-09]
+      completed_at = ~U[2026-08-10 00:05:00.000000Z]
+
+      stale =
+        insert_stale_pool_rollup!(setup.pool, rollup_date, %{
+          admitted_request_count: 4,
+          request_count: 3,
+          total_tokens: 444,
+          rounded_settled_cost_micros: "22"
+        })
+
+      Repo.insert!(%DailyRollupCoverage{
+        rollup_date: rollup_date,
+        contract_version: DailyRollupCoverage.contract_version(),
+        completed_at: completed_at,
+        created_at: completed_at,
+        updated_at: completed_at
+      })
+
+      assert {:error, :injected_coverage_failure} =
+               Rollups.rebuild_for_date(rollup_date,
+                 before_coverage: fn -> Repo.rollback(:injected_coverage_failure) end
+               )
+
+      assert Repo.reload!(stale).admitted_request_count == 4
+      assert Repo.reload!(stale).total_tokens == 444
+      assert Repo.get!(DailyRollupCoverage, rollup_date).completed_at == completed_at
     end
   end
 
@@ -709,6 +906,35 @@ defmodule CodexPooler.Accounting.RollupsTest do
     end)
   end
 
+  defp reserve_request!(setup, admitted_at, correlation_id) do
+    assert {:ok, reservation} =
+             Accounting.reserve(
+               setup.auth,
+               setup.model,
+               %{"model" => setup.model.exposed_model_id, "max_output_tokens" => 5},
+               %{correlation_id: correlation_id, now: admitted_at}
+             )
+
+    reservation
+  end
+
+  defp pool_rollup_summary!(pool_id, rollup_date) do
+    rollup =
+      Repo.get_by!(DailyRollup,
+        pool_id: pool_id,
+        rollup_date: rollup_date,
+        dimension_kind: "pool"
+      )
+
+    %{
+      admitted_request_count: rollup.admitted_request_count,
+      request_count: rollup.request_count,
+      total_tokens: rollup.total_tokens,
+      settled_cost: decimal_string(rollup.settled_cost_micros),
+      rounded_cost: decimal_string(rollup.rounded_settled_cost_micros)
+    }
+  end
+
   defp insert_settlement!(%Request{} = request, attrs) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     occurred_at = Map.get(attrs, :occurred_at, now)
@@ -768,6 +994,37 @@ defmodule CodexPooler.Accounting.RollupsTest do
       total_tokens: total_tokens,
       estimated_cost_micros: decimal_value(Map.get(attrs, :estimated_cost_micros, 0)),
       settled_cost_micros: decimal_value(Map.get(attrs, :settled_cost_micros, 0)),
+      created_at: Map.get(attrs, :created_at, now),
+      updated_at: now
+    }
+    |> Repo.insert!()
+  end
+
+  defp insert_stale_pool_rollup!(pool, rollup_date, attrs) do
+    now =
+      Map.get(
+        attrs,
+        :updated_at,
+        DateTime.utc_now() |> DateTime.add(-3_600, :second) |> DateTime.truncate(:microsecond)
+      )
+
+    %DailyRollup{
+      rollup_date: rollup_date,
+      dimension_kind: "pool",
+      pool_id: pool.id,
+      admitted_request_count: Map.get(attrs, :admitted_request_count, 0),
+      request_count: Map.get(attrs, :request_count, 0),
+      success_count: Map.get(attrs, :success_count, 0),
+      failure_count: Map.get(attrs, :failure_count, 0),
+      retry_count: Map.get(attrs, :retry_count, 0),
+      input_tokens: Map.get(attrs, :input_tokens, 0),
+      cached_input_tokens: Map.get(attrs, :cached_input_tokens, 0),
+      output_tokens: Map.get(attrs, :output_tokens, 0),
+      reasoning_tokens: Map.get(attrs, :reasoning_tokens, 0),
+      total_tokens: Map.get(attrs, :total_tokens, 0),
+      estimated_cost_micros: decimal_value(Map.get(attrs, :estimated_cost_micros, 0)),
+      settled_cost_micros: decimal_value(Map.get(attrs, :settled_cost_micros, 0)),
+      rounded_settled_cost_micros: decimal_value(Map.get(attrs, :rounded_settled_cost_micros, 0)),
       created_at: Map.get(attrs, :created_at, now),
       updated_at: now
     }

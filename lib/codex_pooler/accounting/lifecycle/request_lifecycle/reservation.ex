@@ -8,7 +8,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     PricingResolution,
     Request,
     RequestLogFacts,
-    ReservationPolicy
+    ReservationPolicy,
+    Rollups
   }
 
   alias CodexPooler.Accounting.RequestLifecycle.LedgerEntries
@@ -47,6 +48,7 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         }
         |> Repo.insert!()
 
+      Rollups.accumulate_admission!(request)
       RequestLogFacts.record_request_created!(request)
       %{request: request}
     end)
@@ -107,7 +109,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         timestamp: timestamp
       }
 
-      request = insert_reserved_request!(request_context)
+      {request, admission_status} = insert_reserved_request!(request_context)
+      maybe_accumulate_admission!(request, admission_status)
       RequestLogFacts.record_request_created!(request)
 
       reservation =
@@ -152,8 +155,10 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
           opts: opts
         })
 
-      request = insert_or_update_claimed_request!(attrs, attr(opts, :turn_claim))
+      {request, admission_status} =
+        insert_or_update_claimed_request!(attrs, attr(opts, :turn_claim))
 
+      maybe_accumulate_admission!(request, admission_status)
       RequestLogFacts.record_request_created!(request)
 
       %{request: request}
@@ -187,12 +192,15 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   end
 
   defp insert_or_update_claimed_request!(attrs, %Request{} = turn_claim),
-    do: update_claimed_request!(turn_claim, attrs)
+    do: {update_claimed_request!(turn_claim, attrs), :existing}
 
   defp insert_or_update_claimed_request!(attrs, nil) do
-    %Request{}
-    |> Ecto.Changeset.change(attrs)
-    |> Repo.insert!()
+    request =
+      %Request{}
+      |> Ecto.Changeset.change(attrs)
+      |> Repo.insert!()
+
+    {request, :inserted}
   end
 
   defp update_claimed_request!(%Request{id: request_id}, attrs) do
@@ -248,14 +256,22 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
     case attr(context.opts, :turn_claim) do
       %Request{} = turn_claim ->
-        update_claimed_request!(turn_claim, attrs)
+        {update_claimed_request!(turn_claim, attrs), :existing}
 
       nil ->
-        %Request{}
-        |> Ecto.Changeset.change(attrs)
-        |> Repo.insert!()
+        request =
+          %Request{}
+          |> Ecto.Changeset.change(attrs)
+          |> Repo.insert!()
+
+        {request, :inserted}
     end
   end
+
+  defp maybe_accumulate_admission!(%Request{} = request, :inserted),
+    do: Rollups.accumulate_admission!(request)
+
+  defp maybe_accumulate_admission!(%Request{}, :existing), do: :ok
 
   defp reserve_metadata(auth, pricing, estimate, opts) do
     opts_metadata = attr(opts, :request_metadata) || %{}

@@ -5,7 +5,14 @@ defmodule CodexPooler.Accounting.Rollups do
 
   import Ecto.Query
 
-  alias CodexPooler.Accounting.{DailyRollup, HourlyModelUsageRollup, LedgerEntry, Request}
+  alias CodexPooler.Accounting.{
+    DailyRollup,
+    DailyRollupCoverage,
+    HourlyModelUsageRollup,
+    LedgerEntry,
+    Request
+  }
+
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Repo
 
@@ -66,7 +73,11 @@ defmodule CodexPooler.Accounting.Rollups do
       CASE
         WHEN entry.usage_status = 'usage_known' THEN COALESCE(entry.settled_cost_micros, 0::numeric)
         ELSE 0::numeric
-      END AS settled_cost_micros
+      END AS settled_cost_micros,
+      CASE
+        WHEN entry.usage_status = 'usage_known' THEN ROUND(COALESCE(entry.settled_cost_micros, 0::numeric), 0)
+        ELSE 0::numeric
+      END AS rounded_settled_cost_micros
     FROM public.ledger_entries AS entry
     INNER JOIN public.requests AS request ON request.id = entry.request_id
     WHERE entry.entry_kind = 'settlement'
@@ -94,7 +105,8 @@ defmodule CodexPooler.Accounting.Rollups do
       reasoning_tokens,
       total_tokens,
       estimated_cost_micros,
-      settled_cost_micros
+      settled_cost_micros,
+      rounded_settled_cost_micros
     FROM source
 
     UNION ALL
@@ -118,7 +130,8 @@ defmodule CodexPooler.Accounting.Rollups do
       reasoning_tokens,
       total_tokens,
       estimated_cost_micros,
-      settled_cost_micros
+      settled_cost_micros,
+      rounded_settled_cost_micros
     FROM source
 
     UNION ALL
@@ -142,7 +155,8 @@ defmodule CodexPooler.Accounting.Rollups do
       reasoning_tokens,
       total_tokens,
       estimated_cost_micros,
-      settled_cost_micros
+      settled_cost_micros,
+      rounded_settled_cost_micros
     FROM source
     WHERE pool_upstream_assignment_id IS NOT NULL
 
@@ -167,7 +181,8 @@ defmodule CodexPooler.Accounting.Rollups do
       reasoning_tokens,
       total_tokens,
       estimated_cost_micros,
-      settled_cost_micros
+      settled_cost_micros,
+      rounded_settled_cost_micros
     FROM source
     WHERE upstream_identity_id IS NOT NULL
 
@@ -192,7 +207,8 @@ defmodule CodexPooler.Accounting.Rollups do
       reasoning_tokens,
       total_tokens,
       estimated_cost_micros,
-      settled_cost_micros
+      settled_cost_micros,
+      rounded_settled_cost_micros
     FROM source
     WHERE model_id IS NOT NULL
   ),
@@ -216,6 +232,7 @@ defmodule CodexPooler.Accounting.Rollups do
       total_tokens,
       estimated_cost_micros,
       settled_cost_micros,
+      rounded_settled_cost_micros,
       created_at,
       updated_at
     )
@@ -242,6 +259,12 @@ defmodule CodexPooler.Accounting.Rollups do
       sum(total_tokens)::bigint AS total_tokens,
       sum(estimated_cost_micros) AS estimated_cost_micros,
       sum(settled_cost_micros) AS settled_cost_micros,
+      sum(
+        CASE
+          WHEN dimension_kind = 'pool' THEN rounded_settled_cost_micros
+          ELSE 0::numeric
+        END
+      ) AS rounded_settled_cost_micros,
       $4,
       $4
     FROM dims
@@ -257,6 +280,43 @@ defmodule CodexPooler.Accounting.Rollups do
   SELECT
     (SELECT count(*) FROM source)::bigint AS settlement_count,
     (SELECT count(*) FROM inserted)::bigint AS rollup_count
+  """
+
+  @daily_pool_admission_rebuild_sql """
+  WITH source AS MATERIALIZED (
+    SELECT
+      request.pool_id,
+      count(*)::bigint AS admitted_request_count
+    FROM public.requests AS request
+    WHERE request.admitted_at >= $2
+      AND request.admitted_at < $3
+    GROUP BY request.pool_id
+  ),
+  upserted AS (
+    INSERT INTO public.daily_rollups (
+      rollup_date,
+      dimension_kind,
+      pool_id,
+      admitted_request_count,
+      created_at,
+      updated_at
+    )
+    SELECT
+      $1,
+      'pool',
+      pool_id,
+      admitted_request_count,
+      $4,
+      $4
+    FROM source
+    ON CONFLICT (rollup_date, pool_id) WHERE dimension_kind = 'pool' DO UPDATE SET
+      admitted_request_count = EXCLUDED.admitted_request_count,
+      updated_at = EXCLUDED.updated_at
+    RETURNING 1
+  )
+  SELECT
+    COALESCE((SELECT sum(admitted_request_count) FROM source), 0)::bigint AS admission_count,
+    (SELECT count(*) FROM upserted)::bigint AS rollup_count
   """
 
   @hourly_model_usage_rebuild_sql """
@@ -416,6 +476,36 @@ defmodule CodexPooler.Accounting.Rollups do
     (SELECT count(*) FROM deleted)::bigint AS deleted_count
   """
 
+  @spec accumulate_admission!(Request.t()) :: :ok
+  def accumulate_admission!(%Request{pool_id: pool_id, admitted_at: %DateTime{} = admitted_at})
+      when is_binary(pool_id) do
+    now = now()
+
+    Repo.insert_all(
+      DailyRollup,
+      [
+        %{
+          rollup_date: DateTime.to_date(admitted_at),
+          dimension_kind: "pool",
+          pool_id: pool_id,
+          admitted_request_count: 1,
+          created_at: now,
+          updated_at: now
+        }
+      ],
+      on_conflict:
+        from(rollup in DailyRollup,
+          update: [
+            set: [updated_at: ^now],
+            inc: [admitted_request_count: 1]
+          ]
+        ),
+      conflict_target: Map.fetch!(@daily_rollup_conflict_targets, "pool")
+    )
+
+    :ok
+  end
+
   @spec accumulate!(Request.t(), LedgerEntry.t()) :: :ok
   def accumulate!(
         %Request{} = request,
@@ -426,7 +516,9 @@ defmodule CodexPooler.Accounting.Rollups do
 
     request
     |> daily_rollup_identities(settlement)
-    |> Enum.each(&upsert_rollup!(&1, date, delta))
+    |> Enum.each(fn identity ->
+      upsert_rollup!(identity, date, daily_rollup_delta(identity, settlement, delta))
+    end)
 
     upsert_hourly_model_usage_rollup!(request, settlement, delta)
 
@@ -452,7 +544,9 @@ defmodule CodexPooler.Accounting.Rollups do
 
     request
     |> daily_rollup_identities(settlement)
-    |> Enum.each(&subtract_rollup!(&1, date, delta))
+    |> Enum.each(fn identity ->
+      subtract_rollup!(identity, date, daily_rollup_delta(identity, settlement, delta))
+    end)
 
     subtract_hourly_model_usage_rollup!(request, settlement, delta)
   end
@@ -513,11 +607,14 @@ defmodule CodexPooler.Accounting.Rollups do
     |> Repo.all()
   end
 
-  @spec rebuild_for_date(Date.t()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def rebuild_for_date(%Date{} = date) do
+  @spec rebuild_for_date(Date.t(), keyword()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def rebuild_for_date(date, opts \\ [])
+
+  def rebuild_for_date(%Date{} = date, opts) when is_list(opts) do
     start_at = DateTime.new!(date, ~T[00:00:00], "Etc/UTC")
     end_at = DateTime.add(start_at, 1, :day)
     now = now()
+    before_coverage = Keyword.get(opts, :before_coverage, fn -> :ok end)
 
     Repo.transaction(fn ->
       Repo.delete_all(from r in DailyRollup, where: r.rollup_date == ^date)
@@ -525,12 +622,18 @@ defmodule CodexPooler.Accounting.Rollups do
       %{rows: [[settlement_count, _rollup_count]]} =
         Repo.query!(@daily_rollup_rebuild_sql, [date, start_at, end_at, now])
 
+      %{rows: [[_admission_count, _admission_rollup_count]]} =
+        Repo.query!(@daily_pool_admission_rebuild_sql, [date, start_at, end_at, now])
+
+      before_coverage.()
+      upsert_coverage!(date, now)
+
       settlement_count
     end)
     |> unwrap_transaction()
   end
 
-  def rebuild_for_date(_date), do: {:error, :invalid_rollup_date}
+  def rebuild_for_date(_date, _opts), do: {:error, :invalid_rollup_date}
 
   @spec rebuild_hourly_model_usage_rollups_for_hour(DateTime.t()) ::
           {:ok, non_neg_integer()} | {:error, term()}
@@ -689,6 +792,11 @@ defmodule CodexPooler.Accounting.Rollups do
             fragment("? + EXCLUDED.estimated_cost_micros", rollup.estimated_cost_micros),
           settled_cost_micros:
             fragment("? + EXCLUDED.settled_cost_micros", rollup.settled_cost_micros),
+          rounded_settled_cost_micros:
+            fragment(
+              "? + EXCLUDED.rounded_settled_cost_micros",
+              rollup.rounded_settled_cost_micros
+            ),
           updated_at: ^now
         ],
         inc: [
@@ -722,9 +830,48 @@ defmodule CodexPooler.Accounting.Rollups do
       raise Ecto.NoResultsError, queryable: schema
     end
 
-    Repo.delete_all(from(rollup in schema, where: ^filters, where: rollup.request_count == 0))
+    delete_drained_rollup(schema, filters)
 
     :ok
+  end
+
+  defp subtract_query(DailyRollup, filters, delta, now) do
+    from rollup in DailyRollup,
+      where: ^filters,
+      update: [
+        set: [
+          estimated_cost_micros:
+            fragment(
+              "? - ?",
+              rollup.estimated_cost_micros,
+              type(^delta.estimated_cost_micros, :decimal)
+            ),
+          settled_cost_micros:
+            fragment(
+              "? - ?",
+              rollup.settled_cost_micros,
+              type(^delta.settled_cost_micros, :decimal)
+            ),
+          rounded_settled_cost_micros:
+            fragment(
+              "? - ?",
+              rollup.rounded_settled_cost_micros,
+              type(^delta.rounded_settled_cost_micros, :decimal)
+            ),
+          updated_at: ^now
+        ],
+        inc: [
+          request_count: ^(-delta.request_count),
+          success_count: ^(-delta.success_count),
+          failure_count: ^(-delta.failure_count),
+          retry_count: ^(-delta.retry_count),
+          input_tokens: ^(-delta.input_tokens),
+          cached_input_tokens: ^(-delta.cached_input_tokens),
+          output_tokens: ^(-delta.output_tokens),
+          reasoning_tokens: ^(-delta.reasoning_tokens),
+          total_tokens: ^(-delta.total_tokens)
+        ]
+      ]
   end
 
   defp subtract_query(schema, filters, delta, now) do
@@ -773,6 +920,14 @@ defmodule CodexPooler.Accounting.Rollups do
 
   defp rollup_lookup(identity, date), do: Map.merge(identity, %{rollup_date: date})
 
+  defp daily_rollup_delta(%{dimension_kind: "pool"}, settlement, delta) do
+    Map.put(delta, :rounded_settled_cost_micros, rounded_settled_rollup_cost(settlement))
+  end
+
+  defp daily_rollup_delta(_identity, _settlement, delta) do
+    Map.put(delta, :rounded_settled_cost_micros, Decimal.new(0))
+  end
+
   defp rollup_delta(request, settlement) do
     %{
       request_count: 1,
@@ -800,6 +955,16 @@ defmodule CodexPooler.Accounting.Rollups do
 
   defp settled_rollup_cost(%LedgerEntry{}), do: Decimal.new(0)
 
+  defp rounded_settled_rollup_cost(%LedgerEntry{
+         usage_status: @usage_known,
+         settled_cost_micros: cost
+       }) do
+    (cost || Decimal.new(0))
+    |> Decimal.round(0)
+  end
+
+  defp rounded_settled_rollup_cost(%LedgerEntry{}), do: Decimal.new(0)
+
   defp known_usage_integer(%LedgerEntry{usage_status: @usage_known} = settlement, field),
     do: Map.fetch!(settlement, field) || 0
 
@@ -809,6 +974,37 @@ defmodule CodexPooler.Accounting.Rollups do
     do: Map.fetch!(settlement, field) || Decimal.new(0)
 
   defp known_usage_decimal(%LedgerEntry{}, _field), do: Decimal.new(0)
+
+  defp delete_drained_rollup(DailyRollup, filters) do
+    Repo.delete_all(
+      from rollup in DailyRollup,
+        where: ^filters,
+        where: rollup.request_count == 0 and rollup.admitted_request_count == 0
+    )
+  end
+
+  defp delete_drained_rollup(schema, filters) do
+    Repo.delete_all(from rollup in schema, where: ^filters, where: rollup.request_count == 0)
+  end
+
+  defp upsert_coverage!(date, completed_at) do
+    Repo.insert_all(
+      DailyRollupCoverage,
+      [
+        %{
+          rollup_date: date,
+          contract_version: DailyRollupCoverage.contract_version(),
+          completed_at: completed_at,
+          created_at: completed_at,
+          updated_at: completed_at
+        }
+      ],
+      on_conflict: {:replace, [:contract_version, :completed_at, :updated_at]},
+      conflict_target: [:rollup_date]
+    )
+
+    :ok
+  end
 
   defp maybe_where_dimension(query, nil), do: query
 
