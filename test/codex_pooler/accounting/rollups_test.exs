@@ -99,6 +99,7 @@ defmodule CodexPooler.Accounting.RollupsTest do
     test "distinguishes complete zero-row dates from missing and incompatible coverage" do
       setup = accounting_setup()
       complete_date = ~D[2026-08-07]
+      incomplete_date = ~D[2026-08-06]
       incompatible_date = ~D[2026-08-08]
       missing_date = ~D[2026-08-09]
       completed_at = ~U[2026-08-10 00:17:00.000000Z]
@@ -107,6 +108,15 @@ defmodule CodexPooler.Accounting.RollupsTest do
         rollup_date: complete_date,
         contract_version: DailyRollupCoverage.contract_version(),
         completed_at: completed_at,
+        created_at: completed_at,
+        updated_at: completed_at
+      })
+
+      Repo.insert!(%DailyRollupCoverage{
+        rollup_date: incomplete_date,
+        contract_version: DailyRollupCoverage.contract_version(),
+        completed_at: nil,
+        mutation_version: 3,
         created_at: completed_at,
         updated_at: completed_at
       })
@@ -145,10 +155,12 @@ defmodule CodexPooler.Accounting.RollupsTest do
       assert Accounting.daily_rollup_coverage_statuses([
                missing_date,
                incompatible_date,
+               incomplete_date,
                complete_date,
                complete_date
              ]) == %{
                complete_date => :complete,
+               incomplete_date => :incomplete,
                incompatible_date => :incompatible,
                missing_date => :missing
              }
@@ -157,7 +169,8 @@ defmodule CodexPooler.Accounting.RollupsTest do
 
   describe "Pool usage daily rollups" do
     @tag :pool_usage_rollup_parity
-    test "incremental admissions and per-entry rounded settlement costs match a covered rebuild" do
+    @tag :pool_usage_rollup_concurrency
+    test "Pool admission counts and rounded costs remain rebuild-only" do
       setup = accounting_setup()
       rollup_date = ~D[2026-08-12]
       day_start = DateTime.new!(rollup_date, ~T[00:00:00.000000], "Etc/UTC")
@@ -211,7 +224,7 @@ defmodule CodexPooler.Accounting.RollupsTest do
                  DateTime.add(day_start, 1, :day)
                )
 
-      assert %{admitted_request_count: 2, request_count: 2, rounded_cost: "2"} =
+      assert %{admitted_request_count: 0, request_count: 2, rounded_cost: "0"} =
                pool_rollup_summary!(setup.pool.id, rollup_date)
 
       replacement =
@@ -227,16 +240,18 @@ defmodule CodexPooler.Accounting.RollupsTest do
                  replacement
                )
 
-      incremental = pool_rollup_summary!(setup.pool.id, rollup_date)
-
-      assert incremental.admitted_request_count == 2
-      assert incremental.request_count == 2
-      assert incremental.total_tokens == 16
-      assert incremental.settled_cost == "2"
-      assert incremental.rounded_cost == "3"
+      assert %{admitted_request_count: 0, request_count: 2, rounded_cost: "0"} =
+               pool_rollup_summary!(setup.pool.id, rollup_date)
 
       assert {:ok, 2} = Rollups.rebuild_for_date(rollup_date)
-      assert pool_rollup_summary!(setup.pool.id, rollup_date) == incremental
+
+      assert %{
+               admitted_request_count: 2,
+               request_count: 2,
+               total_tokens: 16,
+               settled_cost: "2",
+               rounded_cost: "3"
+             } = pool_rollup_summary!(setup.pool.id, rollup_date)
 
       assert Accounting.daily_rollup_coverage_statuses([rollup_date]) == %{
                rollup_date => :complete
@@ -254,17 +269,13 @@ defmodule CodexPooler.Accounting.RollupsTest do
 
       assert :ok = Rollups.accumulate!(late.request, late_settlement)
 
-      assert %{
-               admitted_request_count: 3,
-               request_count: 3,
-               total_tokens: 17,
-               settled_cost: "2.4",
-               rounded_cost: "3"
-             } = pool_rollup_summary!(setup.pool.id, rollup_date)
+      flush_rollup_mutation_triggers!()
 
       assert Accounting.daily_rollup_coverage_statuses([rollup_date]) == %{
-               rollup_date => :complete
+               rollup_date => :incomplete
              }
+
+      assert pool_rollup_summary!(setup.pool.id, rollup_date).admitted_request_count == 2
     end
 
     test "unsettled and usage-unknown admitted requests preserve raw request semantics" do
@@ -291,14 +302,18 @@ defmodule CodexPooler.Accounting.RollupsTest do
       assert :ok = Rollups.accumulate!(unknown.request, unknown_settlement)
 
       assert %{
-               admitted_request_count: 2,
+               admitted_request_count: 0,
                request_count: 1,
                total_tokens: 0,
                settled_cost: "0",
                rounded_cost: "0"
              } = pool_rollup_summary!(setup.pool.id, rollup_date)
+
+      assert {:ok, 1} = Rollups.rebuild_for_date(rollup_date)
+      assert pool_rollup_summary!(setup.pool.id, rollup_date).admitted_request_count == 2
     end
 
+    @tag :pool_usage_rollup_concurrency
     test "an empty-day rebuild removes stale rows and writes compatible coverage" do
       setup = accounting_setup()
       rollup_date = ~D[2026-08-10]
@@ -310,6 +325,8 @@ defmodule CodexPooler.Accounting.RollupsTest do
         rounded_settled_cost_micros: "123"
       })
 
+      insert_stale_daily_rollup!(setup.pool, setup.api_key, rollup_date, %{request_count: 4})
+
       assert {:ok, 0} = Rollups.rebuild_for_date(rollup_date)
       assert Repo.all(from rollup in DailyRollup, where: rollup.rollup_date == ^rollup_date) == []
 
@@ -319,25 +336,17 @@ defmodule CodexPooler.Accounting.RollupsTest do
     end
 
     @tag :pool_usage_rollup_atomic_failure
-    test "a failure before coverage publication rolls back both rebuild sources" do
+    @tag :pool_usage_rollup_concurrency
+    test "a first rebuild failure rolls back actual admission and settlement source projections" do
       setup = accounting_setup()
       rollup_date = ~D[2026-08-09]
-      completed_at = ~U[2026-08-10 00:05:00.000000Z]
+      day_start = DateTime.new!(rollup_date, ~T[00:00:00.000000], "Etc/UTC")
+      reserved = reserve_request!(setup, DateTime.add(day_start, 5, :minute), "rollback-source")
 
-      stale =
-        insert_stale_pool_rollup!(setup.pool, rollup_date, %{
-          admitted_request_count: 4,
-          request_count: 3,
-          total_tokens: 444,
-          rounded_settled_cost_micros: "22"
-        })
-
-      Repo.insert!(%DailyRollupCoverage{
-        rollup_date: rollup_date,
-        contract_version: DailyRollupCoverage.contract_version(),
-        completed_at: completed_at,
-        created_at: completed_at,
-        updated_at: completed_at
+      insert_settlement!(reserved.request, %{
+        occurred_at: DateTime.add(day_start, 10, :minute),
+        total_tokens: 8,
+        settled_cost_micros: "1.6"
       })
 
       assert {:error, :injected_coverage_failure} =
@@ -345,9 +354,333 @@ defmodule CodexPooler.Accounting.RollupsTest do
                  before_coverage: fn -> Repo.rollback(:injected_coverage_failure) end
                )
 
-      assert Repo.reload!(stale).admitted_request_count == 4
-      assert Repo.reload!(stale).total_tokens == 444
-      assert Repo.get!(DailyRollupCoverage, rollup_date).completed_at == completed_at
+      refute Repo.get(DailyRollupCoverage, rollup_date)
+      assert Repo.all(from rollup in DailyRollup, where: rollup.rollup_date == ^rollup_date) == []
+    end
+
+    @tag :pool_usage_rollup_rolling_safety
+    @tag :pool_usage_rollup_concurrency
+    test "legacy request and settlement commits after the rebuild scan prevent publication without deadlock" do
+      setup = Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, &accounting_setup/0)
+      rollup_date = Date.add(~D[2024-01-01], -rem(System.unique_integer([:positive]), 10_000))
+      day_start = DateTime.new!(rollup_date, ~T[00:00:00.000000], "Etc/UTC")
+      on_exit(fn -> cleanup_unboxed_pool!(setup.pool.id, rollup_date) end)
+      parent = self()
+
+      rebuild =
+        Task.async(fn ->
+          Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+            Rollups.rebuild_for_date(rollup_date,
+              before_coverage: fn ->
+                send(parent, {:rebuild_at_barrier, self()})
+
+                receive do
+                  :release_rebuild -> :ok
+                after
+                  5_000 -> Repo.rollback(:barrier_timeout)
+                end
+              end
+            )
+          end)
+        end)
+
+      assert_receive {:rebuild_at_barrier, rebuild_pid}, 5_000
+
+      mutation =
+        Task.async(fn ->
+          Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+            late =
+              insert_legacy_request!(
+                setup,
+                DateTime.add(day_start, 20, :minute),
+                "legacy-after-scan"
+              )
+
+            insert_settlement!(late, %{
+              occurred_at: DateTime.add(day_start, 25, :minute),
+              total_tokens: 9,
+              settled_cost_micros: "1.5"
+            })
+          end)
+        end)
+
+      assert %LedgerEntry{request_id: late_request_id} = Task.await(mutation, 5_000)
+      send(rebuild_pid, :release_rebuild)
+      assert {:ok, 0} = Task.await(rebuild, 5_000)
+
+      Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+        coverage = Repo.get!(DailyRollupCoverage, rollup_date)
+        assert coverage.completed_at == nil
+        assert coverage.mutation_version > 0
+        assert %Request{id: ^late_request_id} = Repo.get!(Request, late_request_id)
+
+        assert %LedgerEntry{request_id: ^late_request_id, total_tokens: 9} =
+                 Repo.get_by!(LedgerEntry,
+                   request_id: late_request_id,
+                   entry_kind: "settlement",
+                   amount_status: "recorded"
+                 )
+      end)
+    end
+
+    @tag :pool_usage_rollup_rolling_safety
+    @tag :pool_usage_rollup_concurrency
+    test "a settlement-only commit after the rebuild scan prevents publication" do
+      setup = Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, &accounting_setup/0)
+      rollup_date = Date.add(~D[2021-01-01], -rem(System.unique_integer([:positive]), 10_000))
+      day_start = DateTime.new!(rollup_date, ~T[00:00:00.000000], "Etc/UTC")
+      on_exit(fn -> cleanup_unboxed_pool!(setup.pool.id, rollup_date) end)
+
+      request =
+        Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+          request =
+            insert_legacy_request!(
+              setup,
+              DateTime.add(day_start, 10, :minute),
+              "settlement-only-source"
+            )
+
+          Repo.delete_all(
+            from coverage in DailyRollupCoverage, where: coverage.rollup_date == ^rollup_date
+          )
+
+          request
+        end)
+
+      parent = self()
+      rebuild = start_barrier_rebuild(parent, rollup_date, :settlement_only_rebuild_ready)
+      assert_receive {:settlement_only_rebuild_ready, rebuild_pid}, 5_000
+
+      settlement =
+        Task.async(fn ->
+          Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+            insert_settlement!(request, %{
+              occurred_at: DateTime.add(day_start, 25, :minute),
+              total_tokens: 13,
+              settled_cost_micros: "3.5"
+            })
+          end)
+        end)
+
+      assert %LedgerEntry{} = Task.await(settlement, 5_000)
+      send(rebuild_pid, :release_rebuild)
+      assert {:ok, 0} = Task.await(rebuild, 5_000)
+
+      Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+        coverage = Repo.get!(DailyRollupCoverage, rollup_date)
+        assert coverage.completed_at == nil
+        assert coverage.mutation_version == 1
+
+        assert %LedgerEntry{total_tokens: 13, settled_cost_micros: settled_cost} =
+                 Repo.get_by!(LedgerEntry,
+                   request_id: request.id,
+                   entry_kind: "settlement",
+                   amount_status: "recorded"
+                 )
+
+        assert Decimal.equal?(settled_cost, Decimal.new("3.5"))
+      end)
+    end
+
+    @tag :pool_usage_rollup_concurrency
+    test "an absent-row rebuild can publish before a legacy mutation commits and is then invalidated" do
+      setup = Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, &accounting_setup/0)
+      rollup_date = Date.add(~D[2023-01-01], -rem(System.unique_integer([:positive]), 10_000))
+      day_start = DateTime.new!(rollup_date, ~T[00:00:00.000000], "Etc/UTC")
+      on_exit(fn -> cleanup_unboxed_pool!(setup.pool.id, rollup_date) end)
+      parent = self()
+
+      mutation =
+        Task.async(fn ->
+          Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+            Repo.transaction(fn ->
+              late =
+                insert_legacy_request!(
+                  setup,
+                  DateTime.add(day_start, 20, :minute),
+                  "legacy-uncommitted"
+                )
+
+              insert_settlement!(late, %{
+                occurred_at: DateTime.add(day_start, 25, :minute),
+                total_tokens: 11,
+                settled_cost_micros: "2.5"
+              })
+
+              send(parent, {:mutation_before_commit, self()})
+
+              receive do
+                :commit_mutation -> :ok
+              after
+                5_000 -> Repo.rollback(:mutation_timeout)
+              end
+            end)
+          end)
+        end)
+
+      assert_receive {:mutation_before_commit, mutation_pid}, 5_000
+
+      assert {:ok, 0} =
+               Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+                 Rollups.rebuild_for_date(rollup_date)
+               end)
+
+      assert %DailyRollupCoverage{completed_at: %DateTime{}, mutation_version: 0} =
+               Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+                 Repo.get!(DailyRollupCoverage, rollup_date)
+               end)
+
+      send(mutation_pid, :commit_mutation)
+      assert {:ok, :ok} = Task.await(mutation, 5_000)
+
+      coverage =
+        Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+          Repo.get!(DailyRollupCoverage, rollup_date)
+        end)
+
+      assert coverage.completed_at == nil
+      assert coverage.mutation_version > 0
+    end
+
+    @tag :pool_usage_rollup_concurrency
+    test "two new rebuilds serialize without deadlock and publish exact coverage" do
+      setup = Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, &accounting_setup/0)
+      rollup_date = Date.add(~D[2022-01-01], -rem(System.unique_integer([:positive]), 10_000))
+      day_start = DateTime.new!(rollup_date, ~T[00:00:00.000000], "Etc/UTC")
+      on_exit(fn -> cleanup_unboxed_pool!(setup.pool.id, rollup_date) end)
+
+      Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+        insert_legacy_request!(
+          setup,
+          DateTime.add(day_start, 10, :minute),
+          "concurrent-rebuild-source"
+        )
+
+        Repo.delete_all(
+          from coverage in DailyRollupCoverage, where: coverage.rollup_date == ^rollup_date
+        )
+      end)
+
+      parent = self()
+      first = start_barrier_rebuild(parent, rollup_date, :first_rebuild_ready)
+      assert_receive {:first_rebuild_ready, first_pid}, 5_000
+      second = start_barrier_rebuild(parent, rollup_date, :second_rebuild_ready)
+
+      send(first_pid, :release_rebuild)
+      assert {:ok, 0} = Task.await(first, 5_000)
+      assert_receive {:second_rebuild_ready, second_pid}, 5_000
+      send(second_pid, :release_rebuild)
+      assert {:ok, 0} = Task.await(second, 5_000)
+
+      Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+        assert %DailyRollupCoverage{completed_at: %DateTime{}, mutation_version: 0} =
+                 Repo.get!(DailyRollupCoverage, rollup_date)
+
+        assert %DailyRollup{admitted_request_count: 1} =
+                 Repo.get_by!(DailyRollup,
+                   pool_id: setup.pool.id,
+                   rollup_date: rollup_date,
+                   dimension_kind: "pool"
+                 )
+      end)
+    end
+
+    @tag :pool_usage_rollup_rolling_safety
+    test "legacy Pool projection writes and v1 marker publication fail closed" do
+      setup = accounting_setup()
+      rollup_date = ~D[2026-08-07]
+      completed_at = ~U[2026-08-08 00:17:00.000000Z]
+      assert {:ok, 0} = Rollups.rebuild_for_date(rollup_date)
+
+      insert_stale_pool_rollup!(setup.pool, rollup_date, %{request_count: 3})
+
+      Repo.insert_all(
+        DailyRollupCoverage,
+        [
+          %{
+            rollup_date: rollup_date,
+            contract_version: 1,
+            completed_at: completed_at,
+            mutation_version: 0,
+            created_at: completed_at,
+            updated_at: completed_at
+          }
+        ],
+        on_conflict: {:replace, [:contract_version, :completed_at, :updated_at]},
+        conflict_target: [:rollup_date]
+      )
+
+      flush_rollup_mutation_triggers!()
+      coverage = Repo.get!(DailyRollupCoverage, rollup_date)
+      assert coverage.contract_version == 2
+      assert coverage.completed_at == nil
+
+      assert Accounting.daily_rollup_coverage_statuses([rollup_date]) == %{
+               rollup_date => :incomplete
+             }
+    end
+
+    @tag :pool_usage_rollup_rolling_safety
+    test "completed-day mutations invalidate coverage while current and future UTC dates stay off the hot path" do
+      setup = accounting_setup()
+      completed_date = Date.add(Date.utc_today(), -1)
+      current_date = Date.utc_today()
+      future_date = Date.add(current_date, 1)
+      assert {:ok, 0} = Rollups.rebuild_for_date(completed_date)
+      initial_version = Repo.get!(DailyRollupCoverage, completed_date).mutation_version
+
+      for {date, correlation_id} <- [
+            {completed_date, "completed-edge"},
+            {current_date, "current-edge"},
+            {future_date, "future-edge"}
+          ] do
+        reserve_request!(
+          setup,
+          DateTime.new!(date, ~T[00:00:01.000000], "Etc/UTC"),
+          correlation_id
+        )
+      end
+
+      flush_rollup_mutation_triggers!()
+      coverage = Repo.get!(DailyRollupCoverage, completed_date)
+      assert coverage.completed_at == nil
+      assert coverage.mutation_version == initial_version + 1
+      refute Repo.get(DailyRollupCoverage, current_date)
+      refute Repo.get(DailyRollupCoverage, future_date)
+    end
+
+    @tag :pool_usage_rollup_rolling_safety
+    test "current-day recorded settlements do not create coverage or maintain rebuild-only fields" do
+      setup = accounting_setup()
+      current_date = Date.utc_today()
+      day_start = DateTime.new!(current_date, ~T[00:00:00.000000], "Etc/UTC")
+
+      reserved =
+        reserve_request!(setup, DateTime.add(day_start, 5, :minute), "current-settlement")
+
+      settlement =
+        insert_settlement!(reserved.request, %{
+          occurred_at: DateTime.add(day_start, 10, :minute),
+          total_tokens: 7,
+          settled_cost_micros: "2.6"
+        })
+
+      assert :ok = Rollups.accumulate!(reserved.request, settlement)
+      flush_rollup_mutation_triggers!()
+
+      refute Repo.get(DailyRollupCoverage, current_date)
+
+      assert %DailyRollup{
+               admitted_request_count: 0,
+               rounded_settled_cost_micros: rounded_cost
+             } =
+               Repo.get_by!(DailyRollup,
+                 pool_id: setup.pool.id,
+                 rollup_date: current_date,
+                 dimension_kind: "pool"
+               )
+
+      assert Decimal.equal?(rounded_cost, Decimal.new(0))
     end
   end
 
@@ -1100,6 +1433,81 @@ defmodule CodexPooler.Accounting.RollupsTest do
 
   defp decimal_string(%Decimal{} = value),
     do: value |> Decimal.normalize() |> Decimal.to_string(:normal)
+
+  defp flush_rollup_mutation_triggers! do
+    Repo.query!("""
+    SET CONSTRAINTS
+      requests_track_pool_daily_rollup_mutation,
+      ledger_entries_track_pool_daily_rollup_mutation,
+      daily_rollups_track_pool_daily_rollup_mutation
+    IMMEDIATE
+    """)
+
+    Repo.query!("""
+    SET CONSTRAINTS
+      requests_track_pool_daily_rollup_mutation,
+      ledger_entries_track_pool_daily_rollup_mutation,
+      daily_rollups_track_pool_daily_rollup_mutation
+    DEFERRED
+    """)
+  end
+
+  defp cleanup_unboxed_pool!(pool_id, rollup_date) do
+    Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+      Repo.delete_all(
+        from coverage in DailyRollupCoverage, where: coverage.rollup_date == ^rollup_date
+      )
+
+      Repo.delete_all(from rollup in DailyRollup, where: rollup.rollup_date == ^rollup_date)
+      Repo.delete_all(from request in Request, where: request.pool_id == ^pool_id)
+      Repo.delete_all(from pool in CodexPooler.Pools.Pool, where: pool.id == ^pool_id)
+
+      Repo.delete_all(
+        from snapshot in CodexPooler.Catalog.PricingSnapshot,
+          where:
+            snapshot.model_identifier == "provider-gpt-accounting-mini" and
+              snapshot.price_version == "test-v1"
+      )
+    end)
+  end
+
+  defp insert_legacy_request!(setup, admitted_at, correlation_id) do
+    %Request{
+      pool_id: setup.pool.id,
+      api_key_id: setup.api_key.id,
+      model_id: setup.model.id,
+      requested_model: setup.model.exposed_model_id,
+      endpoint: "/backend-api/codex/responses",
+      transport: "http_json",
+      status: "succeeded",
+      usage_status: "usage_known",
+      correlation_id: correlation_id,
+      request_metadata: %{},
+      admitted_at: admitted_at,
+      completed_at: admitted_at,
+      response_status_code: 200,
+      retry_count: 0
+    }
+    |> Repo.insert!()
+  end
+
+  defp start_barrier_rebuild(parent, rollup_date, message) do
+    Task.async(fn ->
+      Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+        Rollups.rebuild_for_date(rollup_date,
+          before_coverage: fn ->
+            send(parent, {message, self()})
+
+            receive do
+              :release_rebuild -> :ok
+            after
+              5_000 -> Repo.rollback(:barrier_timeout)
+            end
+          end
+        )
+      end)
+    end)
+  end
 
   defp run_unknown_usage_projection_migration! do
     Runner.run(

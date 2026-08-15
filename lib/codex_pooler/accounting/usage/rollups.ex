@@ -476,36 +476,6 @@ defmodule CodexPooler.Accounting.Rollups do
     (SELECT count(*) FROM deleted)::bigint AS deleted_count
   """
 
-  @spec accumulate_admission!(Request.t()) :: :ok
-  def accumulate_admission!(%Request{pool_id: pool_id, admitted_at: %DateTime{} = admitted_at})
-      when is_binary(pool_id) do
-    now = now()
-
-    Repo.insert_all(
-      DailyRollup,
-      [
-        %{
-          rollup_date: DateTime.to_date(admitted_at),
-          dimension_kind: "pool",
-          pool_id: pool_id,
-          admitted_request_count: 1,
-          created_at: now,
-          updated_at: now
-        }
-      ],
-      on_conflict:
-        from(rollup in DailyRollup,
-          update: [
-            set: [updated_at: ^now],
-            inc: [admitted_request_count: 1]
-          ]
-        ),
-      conflict_target: Map.fetch!(@daily_rollup_conflict_targets, "pool")
-    )
-
-    :ok
-  end
-
   @spec accumulate!(Request.t(), LedgerEntry.t()) :: :ok
   def accumulate!(
         %Request{} = request,
@@ -617,6 +587,10 @@ defmodule CodexPooler.Accounting.Rollups do
     before_coverage = Keyword.get(opts, :before_coverage, fn -> :ok end)
 
     Repo.transaction(fn ->
+      flush_pending_rollup_mutations!()
+      captured_version = coverage_version(date)
+      set_rebuild_suppression!(true)
+
       Repo.delete_all(from r in DailyRollup, where: r.rollup_date == ^date)
 
       %{rows: [[settlement_count, _rollup_count]]} =
@@ -625,8 +599,10 @@ defmodule CodexPooler.Accounting.Rollups do
       %{rows: [[_admission_count, _admission_rollup_count]]} =
         Repo.query!(@daily_pool_admission_rebuild_sql, [date, start_at, end_at, now])
 
+      flush_rebuild_projection_mutations!()
+      set_rebuild_suppression!(false)
       before_coverage.()
-      upsert_coverage!(date, now)
+      publish_coverage!(date, now, captured_version)
 
       settlement_count
     end)
@@ -792,11 +768,6 @@ defmodule CodexPooler.Accounting.Rollups do
             fragment("? + EXCLUDED.estimated_cost_micros", rollup.estimated_cost_micros),
           settled_cost_micros:
             fragment("? + EXCLUDED.settled_cost_micros", rollup.settled_cost_micros),
-          rounded_settled_cost_micros:
-            fragment(
-              "? + EXCLUDED.rounded_settled_cost_micros",
-              rollup.rounded_settled_cost_micros
-            ),
           updated_at: ^now
         ],
         inc: [
@@ -851,12 +822,6 @@ defmodule CodexPooler.Accounting.Rollups do
               "? - ?",
               rollup.settled_cost_micros,
               type(^delta.settled_cost_micros, :decimal)
-            ),
-          rounded_settled_cost_micros:
-            fragment(
-              "? - ?",
-              rollup.rounded_settled_cost_micros,
-              type(^delta.rounded_settled_cost_micros, :decimal)
             ),
           updated_at: ^now
         ],
@@ -920,13 +885,7 @@ defmodule CodexPooler.Accounting.Rollups do
 
   defp rollup_lookup(identity, date), do: Map.merge(identity, %{rollup_date: date})
 
-  defp daily_rollup_delta(%{dimension_kind: "pool"}, settlement, delta) do
-    Map.put(delta, :rounded_settled_cost_micros, rounded_settled_rollup_cost(settlement))
-  end
-
-  defp daily_rollup_delta(_identity, _settlement, delta) do
-    Map.put(delta, :rounded_settled_cost_micros, Decimal.new(0))
-  end
+  defp daily_rollup_delta(_identity, _settlement, delta), do: delta
 
   defp rollup_delta(request, settlement) do
     %{
@@ -955,16 +914,6 @@ defmodule CodexPooler.Accounting.Rollups do
 
   defp settled_rollup_cost(%LedgerEntry{}), do: Decimal.new(0)
 
-  defp rounded_settled_rollup_cost(%LedgerEntry{
-         usage_status: @usage_known,
-         settled_cost_micros: cost
-       }) do
-    (cost || Decimal.new(0))
-    |> Decimal.round(0)
-  end
-
-  defp rounded_settled_rollup_cost(%LedgerEntry{}), do: Decimal.new(0)
-
   defp known_usage_integer(%LedgerEntry{usage_status: @usage_known} = settlement, field),
     do: Map.fetch!(settlement, field) || 0
 
@@ -987,20 +936,62 @@ defmodule CodexPooler.Accounting.Rollups do
     Repo.delete_all(from rollup in schema, where: ^filters, where: rollup.request_count == 0)
   end
 
-  defp upsert_coverage!(date, completed_at) do
-    Repo.insert_all(
-      DailyRollupCoverage,
-      [
-        %{
-          rollup_date: date,
-          contract_version: DailyRollupCoverage.contract_version(),
-          completed_at: completed_at,
-          created_at: completed_at,
-          updated_at: completed_at
-        }
-      ],
-      on_conflict: {:replace, [:contract_version, :completed_at, :updated_at]},
-      conflict_target: [:rollup_date]
+  defp flush_pending_rollup_mutations! do
+    Repo.query!("""
+    SET CONSTRAINTS
+      requests_track_pool_daily_rollup_mutation,
+      ledger_entries_track_pool_daily_rollup_mutation,
+      daily_rollups_track_pool_daily_rollup_mutation
+    IMMEDIATE
+    """)
+
+    Repo.query!("""
+    SET CONSTRAINTS
+      requests_track_pool_daily_rollup_mutation,
+      ledger_entries_track_pool_daily_rollup_mutation,
+      daily_rollups_track_pool_daily_rollup_mutation
+    DEFERRED
+    """)
+  end
+
+  defp coverage_version(date) do
+    DailyRollupCoverage
+    |> where([coverage], coverage.rollup_date == ^date)
+    |> select([coverage], coverage.mutation_version)
+    |> Repo.one()
+    |> then(&(&1 || 0))
+  end
+
+  defp set_rebuild_suppression!(enabled) do
+    value = if enabled, do: "on", else: "off"
+    Repo.query!("SELECT set_config('codex_pooler.pool_daily_rollup_rebuild', $1, true)", [value])
+  end
+
+  defp flush_rebuild_projection_mutations! do
+    Repo.query!("SET CONSTRAINTS daily_rollups_track_pool_daily_rollup_mutation IMMEDIATE")
+    Repo.query!("SET CONSTRAINTS daily_rollups_track_pool_daily_rollup_mutation DEFERRED")
+  end
+
+  defp publish_coverage!(date, completed_at, captured_version) do
+    Repo.query!(
+      """
+      INSERT INTO public.daily_rollup_coverages (
+        rollup_date,
+        contract_version,
+        completed_at,
+        mutation_version,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $3, $3)
+      ON CONFLICT (rollup_date) DO UPDATE SET
+        contract_version = EXCLUDED.contract_version,
+        completed_at = EXCLUDED.completed_at,
+        updated_at = EXCLUDED.updated_at
+      WHERE public.daily_rollup_coverages.mutation_version = $4
+      RETURNING mutation_version
+      """,
+      [date, DailyRollupCoverage.contract_version(), completed_at, captured_version]
     )
 
     :ok

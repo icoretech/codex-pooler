@@ -512,6 +512,33 @@ defmodule CodexPooler.AccountingTest do
       assert recorded.id == reconciled.settlement.id
       assert recorded.amount_status == "recorded"
 
+      assert %DailyRollup{
+               admitted_request_count: 0,
+               rounded_settled_cost_micros: rounded_before_rebuild
+             } =
+               Repo.get_by!(DailyRollup,
+                 pool_id: setup.pool.id,
+                 rollup_date: DateTime.to_date(known_timestamp),
+                 dimension_kind: "pool"
+               )
+
+      assert Decimal.equal?(rounded_before_rebuild, Decimal.new(0))
+      assert {:ok, 1} = Rollups.rebuild_for_date(DateTime.to_date(known_timestamp))
+
+      rebuilt_pool_rollup =
+        Repo.get_by!(DailyRollup,
+          pool_id: setup.pool.id,
+          rollup_date: DateTime.to_date(known_timestamp),
+          dimension_kind: "pool"
+        )
+
+      assert rebuilt_pool_rollup.admitted_request_count == 1
+
+      assert Decimal.equal?(
+               rebuilt_pool_rollup.rounded_settled_cost_micros,
+               Decimal.round(recorded.settled_cost_micros || Decimal.new(0), 0)
+             )
+
       assert [daily_rollup] =
                Repo.all(
                  from rollup in DailyRollup,
@@ -715,6 +742,71 @@ defmodule CodexPooler.AccountingTest do
 
       assert {:ok, %{stale_turn_claims_recovered: 0}} =
                Accounting.recover_stale_reservations(now)
+    end
+
+    test "standalone denial, claim-to-denial, and duplicate correlation persist exactly one admission each" do
+      setup = accounting_setup()
+      rollup_date = ~D[2026-08-06]
+      admitted_at = DateTime.new!(rollup_date, ~T[12:00:00.000000], "Etc/UTC")
+
+      assert {:ok, %{request: standalone}} =
+               Accounting.record_denied_request(setup.auth, setup.model, %{
+                 correlation_id: "standalone-denial",
+                 now: admitted_at
+               })
+
+      assert {:ok, %{request: claim}} =
+               Accounting.claim_websocket_turn(setup.auth, setup.model, %{
+                 endpoint: "/backend-api/codex/responses",
+                 correlation_id: "claim-to-denial",
+                 now: admitted_at
+               })
+
+      assert {:ok, %{request: denied_claim}} =
+               Accounting.record_denied_request(setup.auth, setup.model, %{
+                 correlation_id: claim.correlation_id,
+                 turn_claim: claim,
+                 now: admitted_at
+               })
+
+      assert denied_claim.id == claim.id
+
+      assert {:ok, %{request: duplicate_target}} =
+               Accounting.claim_websocket_turn(setup.auth, setup.model, %{
+                 endpoint: "/backend-api/codex/responses",
+                 correlation_id: "duplicate-correlation",
+                 now: admitted_at
+               })
+
+      assert {:error, %{code: :duplicate_request}} =
+               Accounting.claim_websocket_turn(setup.auth, setup.model, %{
+                 endpoint: "/backend-api/codex/responses",
+                 correlation_id: duplicate_target.correlation_id,
+                 now: admitted_at
+               })
+
+      request_ids = [standalone.id, denied_claim.id, duplicate_target.id]
+
+      assert Repo.aggregate(
+               from(request in CodexPooler.Accounting.Request, where: request.id in ^request_ids),
+               :count,
+               :id
+             ) == 3
+
+      refute Repo.get_by(DailyRollup,
+               pool_id: setup.pool.id,
+               rollup_date: rollup_date,
+               dimension_kind: "pool"
+             )
+
+      assert {:ok, 0} = Rollups.rebuild_for_date(rollup_date)
+
+      assert %DailyRollup{admitted_request_count: 3, request_count: 0} =
+               Repo.get_by!(DailyRollup,
+                 pool_id: setup.pool.id,
+                 rollup_date: rollup_date,
+                 dimension_kind: "pool"
+               )
     end
 
     test "settles stale dispatched reservations from reserved estimate when usage is unknown" do
@@ -1289,6 +1381,9 @@ defmodule CodexPooler.AccountingTest do
       stale_rollup =
         insert_daily_rollup!(date, %{dimension_kind: "pool", pool_id: fixture.primary.pool.id})
 
+      Repo.query!("SET CONSTRAINTS ALL IMMEDIATE")
+      Repo.query!("SET CONSTRAINTS ALL DEFERRED")
+
       Repo.query!("""
       ALTER TABLE daily_rollups
       ADD CONSTRAINT daily_rollups_rebuild_failure_check CHECK (false) NOT VALID
@@ -1327,7 +1422,7 @@ defmodule CodexPooler.AccountingTest do
       one_total = total_repo_command_count(one_commands)
       many_total = total_repo_command_count(many_commands)
 
-      assert one_total <= 4
+      assert one_total <= 14
 
       assert many_total == one_total,
              "daily rollup rebuild query count must be row-count independent; one settlement used #{one_total}, twenty settlements used #{many_total}"

@@ -39,7 +39,7 @@ defmodule CodexPooler.Accounting.Reporting do
           required(:rows) => [model_usage_bucket()]
         }
   @type settlement_bucket_granularity :: :hour | :day
-  @type daily_rollup_coverage_status :: :complete | :missing | :incompatible
+  @type daily_rollup_coverage_status :: :complete | :incomplete | :missing | :incompatible
   @type settlement_usage_bucket :: %{
           required(:pool_id) => Ecto.UUID.t(),
           required(:bucket) => DateTime.t(),
@@ -58,10 +58,13 @@ defmodule CodexPooler.Accounting.Reporting do
   def daily_rollup_coverage_statuses(dates) when is_list(dates) do
     requested_dates = dates |> Enum.filter(&match?(%Date{}, &1)) |> Enum.uniq()
 
-    versions_by_date =
+    coverage_by_date =
       DailyRollupCoverage
       |> where([coverage], coverage.rollup_date in ^requested_dates)
-      |> select([coverage], {coverage.rollup_date, coverage.contract_version})
+      |> select([coverage], {
+        coverage.rollup_date,
+        {coverage.contract_version, coverage.completed_at}
+      })
       |> Repo.all()
       |> Map.new()
 
@@ -69,10 +72,11 @@ defmodule CodexPooler.Accounting.Reporting do
 
     Map.new(requested_dates, fn date ->
       status =
-        case Map.get(versions_by_date, date) do
+        case Map.get(coverage_by_date, date) do
           nil -> :missing
-          ^expected_contract_version -> :complete
-          _version -> :incompatible
+          {^expected_contract_version, nil} -> :incomplete
+          {^expected_contract_version, %DateTime{}} -> :complete
+          {_version, _completed_at} -> :incompatible
         end
 
       {date, status}

@@ -1,6 +1,8 @@
 defmodule CodexPooler.SchemaContractTest do
   use CodexPooler.DataCase, async: false
 
+  alias Ecto.Migration.Runner
+
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
 
   import CodexPooler.PoolerFixtures
@@ -239,6 +241,9 @@ defmodule CodexPooler.SchemaContractTest do
 
     assert constraints["daily_rollup_coverages_contract_version_check"] ==
              "CHECK ((contract_version > 0))"
+
+    assert constraints["daily_rollup_coverages_mutation_version_check"] ==
+             "CHECK ((mutation_version >= 0))"
 
     assert constraints["api_keys_status_check"] =~ "'paused'"
     refute constraints["api_keys_status_check"] =~ "'disabled'"
@@ -912,7 +917,8 @@ defmodule CodexPooler.SchemaContractTest do
     assert table_columns("daily_rollup_coverages") == %{
              "rollup_date" => {"date", "NO"},
              "contract_version" => {"integer", "NO"},
-             "completed_at" => {"timestamp without time zone", "NO"},
+             "completed_at" => {"timestamp without time zone", "YES"},
+             "mutation_version" => {"bigint", "NO"},
              "created_at" => {"timestamp without time zone", "NO"},
              "updated_at" => {"timestamp without time zone", "NO"}
            }
@@ -922,6 +928,103 @@ defmodule CodexPooler.SchemaContractTest do
     assert DailyRollupCoverage.__schema__(:type, :rollup_date) == :date
     assert DailyRollupCoverage.__schema__(:type, :contract_version) == :integer
     assert DailyRollupCoverage.__schema__(:type, :completed_at) == :utc_datetime_usec
+    assert DailyRollupCoverage.__schema__(:type, :mutation_version) == :integer
+
+    assert trigger_names("requests") =~ "requests_track_pool_daily_rollup_mutation"
+    assert trigger_names("ledger_entries") =~ "ledger_entries_track_pool_daily_rollup_mutation"
+    assert trigger_names("daily_rollups") =~ "daily_rollups_track_pool_daily_rollup_mutation"
+
+    assert trigger_names("daily_rollup_coverages") =~
+             "daily_rollup_coverages_guard_contract"
+
+    deferred_triggers =
+      trigger_contracts([
+        "requests_track_pool_daily_rollup_mutation",
+        "ledger_entries_track_pool_daily_rollup_mutation",
+        "daily_rollups_track_pool_daily_rollup_mutation"
+      ])
+
+    assert Enum.all?(deferred_triggers, fn {_name, constraint_oid, deferrable, initially_deferred} ->
+             constraint_oid != 0 and deferrable and initially_deferred
+           end)
+
+    assert [
+             {"daily_rollup_coverages_guard_contract", 0, false, false}
+           ] = trigger_contracts(["daily_rollup_coverages_guard_contract"])
+
+    assert function_search_paths([
+             "guard_pool_daily_rollup_coverage_contract",
+             "mark_pool_daily_rollup_dates_mutated",
+             "track_daily_rollup_pool_mutation",
+             "track_ledger_pool_daily_rollup_mutation",
+             "track_request_pool_daily_rollup_mutation"
+           ]) ==
+             Map.new(
+               [
+                 "guard_pool_daily_rollup_coverage_contract",
+                 "mark_pool_daily_rollup_dates_mutated",
+                 "track_daily_rollup_pool_mutation",
+                 "track_ledger_pool_daily_rollup_mutation",
+                 "track_request_pool_daily_rollup_mutation"
+               ],
+               &{&1, ["search_path=pg_catalog, public"]}
+             )
+  end
+
+  @tag :pool_usage_rollup_migration_round_trip
+  test "Pool daily coverage fence migration upgrades legacy rows and downgrades fail closed" do
+    completed_at = ~U[2026-08-14 00:17:00.000000Z]
+    rollup_date = ~D[2026-08-13]
+
+    run_pool_daily_coverage_migration!(:down)
+    on_exit(&ensure_pool_daily_coverage_migration_up!/0)
+
+    Repo.query!(
+      """
+      INSERT INTO daily_rollup_coverages (
+        rollup_date, contract_version, completed_at, created_at, updated_at
+      )
+      VALUES ($1, 1, $2, $2, $2)
+      """,
+      [rollup_date, completed_at]
+    )
+
+    run_pool_daily_coverage_migration!(:up)
+
+    assert [[2, nil, 0]] =
+             Repo.query!(
+               """
+               SELECT contract_version, completed_at, mutation_version
+               FROM daily_rollup_coverages
+               WHERE rollup_date = $1
+               """,
+               [rollup_date]
+             ).rows
+
+    run_pool_daily_coverage_migration!(:down)
+
+    assert [[0]] = Repo.query!("SELECT COUNT(*) FROM daily_rollup_coverages").rows
+    refute Map.has_key?(table_columns("daily_rollup_coverages"), "mutation_version")
+
+    assert table_columns("daily_rollup_coverages")["completed_at"] ==
+             {"timestamp without time zone", "NO"}
+
+    assert trigger_contracts([
+             "requests_track_pool_daily_rollup_mutation",
+             "ledger_entries_track_pool_daily_rollup_mutation",
+             "daily_rollups_track_pool_daily_rollup_mutation",
+             "daily_rollup_coverages_guard_contract"
+           ]) == []
+
+    assert function_search_paths([
+             "guard_pool_daily_rollup_coverage_contract",
+             "mark_pool_daily_rollup_dates_mutated",
+             "track_daily_rollup_pool_mutation",
+             "track_ledger_pool_daily_rollup_mutation",
+             "track_request_pool_daily_rollup_mutation"
+           ]) == %{}
+
+    run_pool_daily_coverage_migration!(:up)
   end
 
   test "operator pool assignments preserve the scoped admin grant storage contract" do
@@ -1228,6 +1331,77 @@ defmodule CodexPooler.SchemaContractTest do
       [table_name]
     ).rows
     |> Map.new(fn [name, type, nullable] -> {name, {type, nullable}} end)
+  end
+
+  defp trigger_names(table_name) do
+    Repo.query!(
+      """
+      SELECT tgname
+      FROM pg_trigger
+      WHERE tgrelid = ('public.' || $1)::regclass
+        AND NOT tgisinternal
+      ORDER BY tgname
+      """,
+      [table_name]
+    ).rows
+    |> Enum.map_join(" ", &List.first/1)
+  end
+
+  defp trigger_contracts(names) do
+    Repo.query!(
+      """
+      SELECT tgname, tgconstraint, tgdeferrable, tginitdeferred
+      FROM pg_trigger
+      WHERE tgname = ANY($1::text[])
+      ORDER BY tgname
+      """,
+      [names]
+    ).rows
+    |> Enum.map(fn [name, constraint_oid, deferrable, initially_deferred] ->
+      {name, constraint_oid, deferrable, initially_deferred}
+    end)
+  end
+
+  defp function_search_paths(names) do
+    Repo.query!(
+      """
+      SELECT proname, proconfig
+      FROM pg_proc
+      WHERE pronamespace = 'public'::regnamespace
+        AND proname = ANY($1::text[])
+      ORDER BY proname
+      """,
+      [names]
+    ).rows
+    |> Map.new(fn [name, config] -> {name, config} end)
+  end
+
+  defp run_pool_daily_coverage_migration!(direction) do
+    module = CodexPooler.Repo.Migrations.FencePoolDailyRollupCoverage
+
+    unless Code.ensure_loaded?(module) do
+      Code.require_file(
+        "../../priv/repo/migrations/20260815010747_fence_pool_daily_rollup_coverage.exs",
+        __DIR__
+      )
+    end
+
+    Runner.run(
+      Repo,
+      Repo.config(),
+      20_260_815_010_747,
+      module,
+      :forward,
+      direction,
+      direction,
+      log: false
+    )
+  end
+
+  defp ensure_pool_daily_coverage_migration_up! do
+    unless Map.has_key?(table_columns("daily_rollup_coverages"), "mutation_version") do
+      run_pool_daily_coverage_migration!(:up)
+    end
   end
 
   defp constraint_containing?(constraints, text) do
