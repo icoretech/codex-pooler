@@ -6,7 +6,9 @@ defmodule CodexPooler.Admin.StatsTest do
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
 
-  alias CodexPooler.Accounting.DailyRollup
+  alias CodexPooler.Access.APIKey
+  alias CodexPooler.Accounting.{Attempt, DailyRollup, DailyRollupCoverage, LedgerEntry, Request}
+  alias CodexPooler.Accounting.Rollups
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Admin.GatewayReadModel
   alias CodexPooler.Admin.Stats
@@ -17,9 +19,12 @@ defmodule CodexPooler.Admin.StatsTest do
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Jobs
   alias CodexPooler.Jobs.RuntimeStateCleanupWorker
+  alias CodexPooler.Pools.Pool
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
+  alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
+  alias Ecto.Adapters.SQL.Sandbox
 
   test "top_api_keys/2 retains the ten highest-ranked API keys" do
     # Given
@@ -1424,6 +1429,7 @@ defmodule CodexPooler.Admin.StatsTest do
 
     as_of = ~U[2026-01-10 12:00:00.000000Z]
     occurred_at = ~U[2026-01-10 11:30:00.000000Z]
+    completed_dates = Date.range(~D[2026-01-04], ~D[2026-01-09]) |> Enum.to_list()
 
     insert_timed_usage!(pool, api_key, assignment, identity, occurred_at, 100)
 
@@ -1445,14 +1451,21 @@ defmodule CodexPooler.Admin.StatsTest do
       25
     )
 
+    Enum.each(completed_dates, fn date ->
+      assert {:ok, _count} = Rollups.rebuild_for_date(date)
+    end)
+
     # When
     result =
       Stats.pool_usage_by_pool_ids([pool.id, other_pool.id, hidden_pool.id],
         as_of: as_of,
+        traffic_window: "7d",
         histogram_pool_ids: [pool.id, pool.id, Ecto.UUID.generate()]
       )
 
     # Then
+    assert result.source == :daily_rollups_with_raw_tail
+
     assert Map.keys(result.summary_by_pool_id) |> MapSet.new() ==
              MapSet.new([pool.id, other_pool.id, hidden_pool.id])
 
@@ -1468,6 +1481,221 @@ defmodule CodexPooler.Admin.StatsTest do
     assert Enum.sum(
              Enum.map(result.histogram_by_pool_id[pool.id].request_histogram, & &1.requests)
            ) == 1
+  end
+
+  @tag :pool_usage_rollup_fallback
+  test "seven-day Pool usage falls back wholly when the coverage query is unavailable" do
+    Sandbox.unboxed_run(Repo, fn ->
+      as_of = DateTime.new!(Date.utc_today(), ~T[12:00:00.000000], "Etc/UTC")
+      fixture = insert_unboxed_pool_usage_fixture!(as_of)
+      opts = [as_of: as_of, traffic_window: "7d", histogram_pool_ids: [fixture.pool.id]]
+      raw = Stats.pool_usage_by_pool_ids([fixture.pool.id], Keyword.put(opts, :force_raw, true))
+      parent = self()
+      barrier = make_ref()
+
+      lock_task =
+        Task.async(fn ->
+          Sandbox.unboxed_run(Repo, fn ->
+            Repo.transaction(
+              fn ->
+                Repo.query!("LOCK TABLE daily_rollup_coverages IN ACCESS EXCLUSIVE MODE")
+                send(parent, {barrier, :coverage_locked})
+
+                receive do
+                  {^barrier, :release} -> :released
+                after
+                  5_000 -> raise "timed out waiting to release the coverage table lock"
+                end
+              end,
+              timeout: 10_000
+            )
+          end)
+        end)
+
+      handler_id = {__MODULE__, :pool_usage_rollup_fallback, barrier}
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:codex_pooler, :admin, :pool_usage, :rollup_fallback],
+          fn _event, measurements, metadata, test_pid ->
+            send(test_pid, {handler_id, measurements, metadata})
+          end,
+          parent
+        )
+
+      try do
+        assert_receive {^barrier, :coverage_locked}, 5_000
+        Repo.query!("SET lock_timeout TO '100ms'")
+
+        result =
+          try do
+            Stats.pool_usage_by_pool_ids([fixture.pool.id], opts)
+          after
+            Repo.query!("SET lock_timeout TO DEFAULT")
+          end
+
+        assert result.source == :raw_fallback
+        assert result == raw
+
+        assert_receive {^handler_id, %{count: 1},
+                        %{
+                          reason: :reporting_unavailable,
+                          pool_count: 1,
+                          histogram_pool_count: 1
+                        }},
+                       1_000
+
+        refute_receive {^handler_id, _measurements, _metadata}
+      after
+        :telemetry.detach(handler_id)
+        send(lock_task.pid, {barrier, :release})
+        assert {:ok, :released} = Task.await(lock_task, 5_000)
+        cleanup_unboxed_pool_usage_fixture!(fixture)
+      end
+    end)
+  end
+
+  test "seven-day Pool usage combines covered days with the exact raw current-day tail" do
+    pool = pool_fixture(%{slug: "stats-covered-seven-day", name: "Covered Seven Day"})
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
+    as_of = ~U[2026-01-10 12:00:00.000000Z]
+    completed_dates = Date.range(~D[2026-01-04], ~D[2026-01-09]) |> Enum.to_list()
+
+    for cost <- [Decimal.new("0.5"), Decimal.new("0.5")] do
+      insert_timed_usage!(
+        pool,
+        api_key,
+        assignment,
+        identity,
+        ~U[2026-01-04 00:00:00.000000Z],
+        10,
+        %{
+          input_tokens: 6,
+          cached_input_tokens: 2,
+          output_tokens: 3,
+          reasoning_tokens: 1,
+          settled_cost_micros: cost
+        }
+      )
+    end
+
+    insert_timed_usage!(
+      pool,
+      api_key,
+      assignment,
+      identity,
+      ~U[2026-01-05 09:00:00.000000Z],
+      9_999,
+      %{usage_status: "usage_unknown", settled_cost_micros: 9_999}
+    )
+
+    request_fixture(%{pool: pool, api_key: api_key}, %{
+      correlation_id: "stats-covered-unsettled"
+    })
+    |> set_request_time!(~U[2026-01-06 10:00:00.000000Z])
+
+    insert_timed_usage!(
+      pool,
+      api_key,
+      assignment,
+      identity,
+      ~U[2026-01-10 00:00:00.000000Z],
+      7,
+      %{settled_cost_micros: 3}
+    )
+
+    insert_timed_usage!(pool, api_key, assignment, identity, ~U[2026-01-03 23:59:59.999999Z], 500)
+
+    insert_timed_usage!(
+      pool,
+      api_key,
+      assignment,
+      identity,
+      DateTime.add(as_of, 1, :microsecond),
+      700
+    )
+
+    Enum.each(completed_dates, fn date ->
+      assert {:ok, _count} = Rollups.rebuild_for_date(date)
+    end)
+
+    opts = [as_of: as_of, traffic_window: "7d", histogram_pool_ids: [pool.id]]
+    optimized = Stats.pool_usage_by_pool_ids([pool.id], opts)
+    raw = Stats.pool_usage_by_pool_ids([pool.id], Keyword.put(opts, :force_raw, true))
+
+    assert optimized.source == :daily_rollups_with_raw_tail
+    assert raw.source == :raw_fallback
+    assert %{optimized | source: :raw_fallback} == raw
+    assert optimized.summary_by_pool_id[pool.id].request_count == 5
+
+    assert optimized.summary_by_pool_id[pool.id].token_usage == %{
+             cached_input_tokens: 4,
+             input_tokens: 19,
+             output_tokens: 6,
+             reasoning_tokens: 2,
+             total_tokens: 27
+           }
+
+    assert optimized.summary_by_pool_id[pool.id].settled_cost_micros == 5
+    assert optimized.summary_by_pool_id[pool.id].latency_ms == 400
+    assert optimized.summary_by_pool_id[pool.id].tokens_per_second == 67.5
+    assert length(optimized.histogram_by_pool_id[pool.id].token_histogram) == 7
+
+    assert Enum.sum_by(optimized.histogram_by_pool_id[pool.id].token_histogram, & &1.total_tokens) ==
+             27
+
+    assert Enum.sum_by(optimized.histogram_by_pool_id[pool.id].request_histogram, & &1.requests) ==
+             5
+  end
+
+  @tag :pool_usage_rollup_fallback
+  test "seven-day Pool usage falls back wholly for missing, incompatible, or incomplete coverage" do
+    pool = pool_fixture(%{slug: "stats-seven-day-fallback", name: "Seven Day Fallback"})
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
+    as_of = ~U[2026-01-10 12:00:00.000000Z]
+    completed_dates = Date.range(~D[2026-01-04], ~D[2026-01-09]) |> Enum.to_list()
+
+    insert_timed_usage!(pool, api_key, assignment, identity, ~U[2026-01-04 12:00:00.000000Z], 13)
+
+    Enum.each(completed_dates, fn date ->
+      assert {:ok, _count} = Rollups.rebuild_for_date(date)
+    end)
+
+    opts = [as_of: as_of, traffic_window: "7d", histogram_pool_ids: [pool.id]]
+    raw = Stats.pool_usage_by_pool_ids([pool.id], Keyword.put(opts, :force_raw, true))
+
+    for coverage_change <- [
+          [completed_at: nil],
+          [contract_version: 3],
+          :delete
+        ] do
+      coverage = Repo.get!(DailyRollupCoverage, ~D[2026-01-09])
+
+      case coverage_change do
+        :delete -> Repo.delete!(coverage)
+        changes -> coverage |> Ecto.Changeset.change(changes) |> Repo.update!()
+      end
+
+      result = Stats.pool_usage_by_pool_ids([pool.id], opts)
+      assert result.source == :raw_fallback
+      assert result == raw
+
+      Repo.insert!(
+        %DailyRollupCoverage{
+          rollup_date: ~D[2026-01-09],
+          contract_version: 2,
+          completed_at: as_of,
+          mutation_version: 0,
+          created_at: as_of,
+          updated_at: as_of
+        },
+        on_conflict: :replace_all,
+        conflict_target: :rollup_date
+      )
+    end
   end
 
   test "pool_usage_by_pool_ids/2 bypasses histogram queries when no pool is eligible" do
@@ -1633,6 +1861,15 @@ defmodule CodexPooler.Admin.StatsTest do
       assert length(metrics[pool.id].token_histogram) == bucket_count
       assert Enum.sum(Enum.map(metrics[pool.id].token_histogram, & &1.total_tokens)) == 10
       assert metrics[pool.id].settled_cost_micros == 10
+
+      if window in ["1h", "5h", "24h"] do
+        opts = [as_of: as_of, traffic_window: window, histogram_pool_ids: [pool.id]]
+        raw = Stats.pool_usage_by_pool_ids([pool.id], opts)
+        forced_raw = Stats.pool_usage_by_pool_ids([pool.id], Keyword.put(opts, :force_raw, true))
+
+        assert raw.source == :raw_fallback
+        assert raw == forced_raw
+      end
     end
   end
 
@@ -2143,6 +2380,137 @@ defmodule CodexPooler.Admin.StatsTest do
 
   defp to_utc_datetime_usec(datetime) do
     %{datetime | microsecond: {elem(datetime.microsecond, 0), 6}}
+  end
+
+  defp insert_unboxed_pool_usage_fixture!(as_of) do
+    suffix = System.unique_integer([:positive])
+    occurred_at = DateTime.add(as_of, -30, :minute)
+
+    pool =
+      Repo.insert!(%Pool{
+        slug: "stats-unavailable-#{suffix}",
+        name: "Stats Unavailable #{suffix}",
+        status: "active",
+        created_at: as_of,
+        updated_at: as_of
+      })
+
+    api_key =
+      Repo.insert!(%APIKey{
+        pool_id: pool.id,
+        display_name: "Stats unavailable key",
+        key_prefix: "stats-unavailable-#{suffix}",
+        key_hash: :crypto.hash(:sha256, "stats-unavailable-#{suffix}"),
+        status: "active",
+        dashboard_access: false,
+        metadata: %{},
+        created_at: as_of
+      })
+
+    identity =
+      Repo.insert!(%UpstreamIdentity{
+        account_label: "Stats unavailable upstream #{suffix}",
+        onboarding_method: "import",
+        status: "active",
+        headers_profile_version: 1,
+        created_at: as_of,
+        updated_at: as_of,
+        metadata: %{}
+      })
+
+    assignment =
+      Repo.insert!(%PoolUpstreamAssignment{
+        pool_id: pool.id,
+        upstream_identity_id: identity.id,
+        assignment_label: "Stats unavailable assignment",
+        status: "active",
+        health_status: "active",
+        eligibility_status: "eligible",
+        created_at: as_of,
+        updated_at: as_of,
+        metadata: %{}
+      })
+
+    request =
+      Repo.insert!(%Request{
+        pool_id: pool.id,
+        api_key_id: api_key.id,
+        requested_model: "performance-model",
+        endpoint: "/backend-api/codex/responses",
+        transport: "http_json",
+        status: "succeeded",
+        usage_status: "usage_known",
+        correlation_id: "stats-unavailable-#{suffix}",
+        request_metadata: %{},
+        admitted_at: occurred_at,
+        completed_at: occurred_at,
+        response_status_code: 200,
+        retry_count: 0
+      })
+
+    attempt =
+      Repo.insert!(%Attempt{
+        request_id: request.id,
+        attempt_number: 1,
+        pool_upstream_assignment_id: assignment.id,
+        upstream_identity_id: identity.id,
+        upstream_model_id: "performance-model",
+        transport: "http_json",
+        status: "succeeded",
+        started_at: occurred_at,
+        completed_at: occurred_at,
+        upstream_status_code: 200,
+        retryable: false,
+        latency_ms: 100,
+        usage_status: "usage_known",
+        response_metadata: %{}
+      })
+
+    ledger_entry =
+      Repo.insert!(%LedgerEntry{
+        request_id: request.id,
+        attempt_id: attempt.id,
+        pool_id: pool.id,
+        api_key_id: api_key.id,
+        pool_upstream_assignment_id: assignment.id,
+        upstream_identity_id: identity.id,
+        entry_kind: "settlement",
+        amount_status: "recorded",
+        usage_status: "usage_known",
+        transport: "http_json",
+        currency_code: "USD",
+        input_tokens: 17,
+        cached_input_tokens: 0,
+        output_tokens: 0,
+        reasoning_tokens: 0,
+        total_tokens: 17,
+        request_count: 1,
+        estimated_cost_micros: Decimal.new(17),
+        settled_cost_micros: Decimal.new(17),
+        source_event_id: "stats-unavailable-settlement-#{suffix}",
+        occurred_at: occurred_at,
+        created_at: occurred_at,
+        details: %{}
+      })
+
+    %{
+      pool: pool,
+      identity: identity,
+      request_id: request.id,
+      ledger_entry_id: ledger_entry.id
+    }
+  end
+
+  defp cleanup_unboxed_pool_usage_fixture!(fixture) do
+    Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool.id)
+    Repo.delete_all(from identity in UpstreamIdentity, where: identity.id == ^fixture.identity.id)
+
+    refute Repo.exists?(from request in Request, where: request.id == ^fixture.request_id)
+
+    refute Repo.exists?(
+             from ledger_entry in LedgerEntry,
+               where: ledger_entry.id == ^fixture.ledger_entry_id
+           )
   end
 
   defp set_request_time!(request, timestamp) do

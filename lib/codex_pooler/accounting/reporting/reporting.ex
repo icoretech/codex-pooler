@@ -40,6 +40,17 @@ defmodule CodexPooler.Accounting.Reporting do
         }
   @type settlement_bucket_granularity :: :hour | :day
   @type daily_rollup_coverage_status :: :complete | :incomplete | :missing | :incompatible
+  @type covered_pool_daily_usage_row :: %{
+          required(:pool_id) => Ecto.UUID.t(),
+          required(:rollup_date) => Date.t(),
+          required(:admitted_request_count) => non_neg_integer(),
+          required(:input_tokens) => non_neg_integer(),
+          required(:cached_input_tokens) => non_neg_integer(),
+          required(:output_tokens) => non_neg_integer(),
+          required(:reasoning_tokens) => non_neg_integer(),
+          required(:total_tokens) => non_neg_integer(),
+          required(:rounded_settled_cost_micros) => non_neg_integer()
+        }
   @type settlement_usage_bucket :: %{
           required(:pool_id) => Ecto.UUID.t(),
           required(:bucket) => DateTime.t(),
@@ -444,6 +455,25 @@ defmodule CodexPooler.Accounting.Reporting do
     )
   end
 
+  @spec covered_pool_daily_usage_snapshot([Ecto.UUID.t()], [Date.t()]) ::
+          {:ok, [covered_pool_daily_usage_row()]}
+          | {:fallback, :incomplete_coverage}
+          | {:error, :unavailable}
+  def covered_pool_daily_usage_snapshot(pool_ids, dates)
+      when is_list(pool_ids) and is_list(dates) do
+    pool_ids = valid_pool_ids(pool_ids)
+    dates = dates |> Enum.filter(&match?(%Date{}, &1)) |> Enum.uniq()
+
+    if pool_ids == [] or length(dates) != 6 do
+      {:fallback, :incomplete_coverage}
+    else
+      query_covered_pool_daily_usage_snapshot(pool_ids, dates)
+    end
+  end
+
+  def covered_pool_daily_usage_snapshot(_pool_ids, _dates),
+    do: {:fallback, :incomplete_coverage}
+
   @spec model_usage_buckets_for_pool_ids(
           [Ecto.UUID.t()],
           atom(),
@@ -601,6 +631,104 @@ defmodule CodexPooler.Accounting.Reporting do
       reasoning_tokens: non_negative_integer(row.reasoning_tokens),
       total_tokens: non_negative_integer(row.total_tokens),
       settled_cost_micros: non_negative_integer(row.settled_cost_micros)
+    }
+  end
+
+  defp query_covered_pool_daily_usage_snapshot(pool_ids, dates) do
+    sql = """
+    WITH requested_pools(pool_id) AS (
+      SELECT DISTINCT unnest($1::uuid[])
+    ),
+    requested_dates(rollup_date) AS (
+      SELECT DISTINCT unnest($2::date[])
+    ),
+    coverage AS (
+      SELECT COUNT(coverage.rollup_date) = 6 AS complete
+      FROM requested_dates AS requested
+      LEFT JOIN daily_rollup_coverages AS coverage
+        ON coverage.rollup_date = requested.rollup_date
+       AND coverage.contract_version = 2
+       AND coverage.completed_at IS NOT NULL
+    ),
+    covered_rows AS (
+      SELECT
+        pools.pool_id,
+        dates.rollup_date,
+        COALESCE(rollups.admitted_request_count, 0)::bigint AS admitted_request_count,
+        COALESCE(rollups.input_tokens, 0)::bigint AS input_tokens,
+        COALESCE(rollups.cached_input_tokens, 0)::bigint AS cached_input_tokens,
+        COALESCE(rollups.output_tokens, 0)::bigint AS output_tokens,
+        COALESCE(rollups.reasoning_tokens, 0)::bigint AS reasoning_tokens,
+        COALESCE(rollups.total_tokens, 0)::bigint AS total_tokens,
+        COALESCE(rollups.rounded_settled_cost_micros, 0)::numeric AS rounded_settled_cost_micros
+      FROM requested_pools AS pools
+      CROSS JOIN requested_dates AS dates
+      CROSS JOIN coverage
+      LEFT JOIN daily_rollups AS rollups
+        ON rollups.dimension_kind = 'pool'
+       AND rollups.pool_id = pools.pool_id
+       AND rollups.rollup_date = dates.rollup_date
+      WHERE coverage.complete
+    )
+    SELECT
+      coverage.complete,
+      covered_rows.pool_id,
+      covered_rows.rollup_date,
+      covered_rows.admitted_request_count,
+      covered_rows.input_tokens,
+      covered_rows.cached_input_tokens,
+      covered_rows.output_tokens,
+      covered_rows.reasoning_tokens,
+      covered_rows.total_tokens,
+      covered_rows.rounded_settled_cost_micros
+    FROM coverage
+    LEFT JOIN covered_rows ON coverage.complete
+    ORDER BY covered_rows.rollup_date, covered_rows.pool_id
+    """
+
+    dumped_pool_ids = Enum.map(pool_ids, &Ecto.UUID.dump!/1)
+
+    case Repo.query(sql, [dumped_pool_ids, dates],
+           telemetry_options: [reporting_projection: :covered_pool_daily_usage_snapshot]
+         ) do
+      {:ok, %{rows: [[false | _rest]]}} ->
+        {:fallback, :incomplete_coverage}
+
+      {:ok, %{rows: rows}} ->
+        {:ok, Enum.map(rows, &normalize_covered_pool_daily_usage_row/1)}
+
+      {:error, _error} ->
+        {:error, :unavailable}
+    end
+  rescue
+    _error in [DBConnection.ConnectionError, DBConnection.OwnershipError] ->
+      {:error, :unavailable}
+  end
+
+  defp normalize_covered_pool_daily_usage_row([
+         true,
+         pool_id,
+         rollup_date,
+         admitted_request_count,
+         input_tokens,
+         cached_input_tokens,
+         output_tokens,
+         reasoning_tokens,
+         total_tokens,
+         rounded_settled_cost_micros
+       ]) do
+    {:ok, loaded_pool_id} = Ecto.UUID.load(pool_id)
+
+    %{
+      pool_id: loaded_pool_id,
+      rollup_date: rollup_date,
+      admitted_request_count: non_negative_integer(admitted_request_count),
+      input_tokens: non_negative_integer(input_tokens),
+      cached_input_tokens: non_negative_integer(cached_input_tokens),
+      output_tokens: non_negative_integer(output_tokens),
+      reasoning_tokens: non_negative_integer(reasoning_tokens),
+      total_tokens: non_negative_integer(total_tokens),
+      rounded_settled_cost_micros: non_negative_integer(rounded_settled_cost_micros)
     }
   end
 

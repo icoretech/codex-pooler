@@ -3,9 +3,11 @@ defmodule CodexPooler.Accounting.ReportingTest do
 
   import CodexPooler.PoolerFixtures
 
-  alias CodexPooler.Accounting.{Reporting, Rollups}
+  alias CodexPooler.Accounting.{DailyRollup, DailyRollupCoverage, Reporting, Rollups}
   alias CodexPooler.Admin.Stats.Aggregates
+  alias CodexPooler.Pools.Pool
   alias CodexPooler.Repo
+  alias Ecto.Adapters.SQL.Sandbox
 
   test "reporting consumption totals exclude usage_unknown settlement estimates" do
     pool = pool_fixture(%{slug: "reporting-known-only", name: "Reporting Known Only"})
@@ -326,6 +328,144 @@ defmodule CodexPooler.Accounting.ReportingTest do
              )
 
     assert bucket.settled_cost_micros == 2
+  end
+
+  @tag :covered_pool_daily_usage_snapshot
+  test "covered Pool daily usage snapshot verifies coverage and zero-fills one Pool/date grid in one query" do
+    pool = pool_fixture(%{slug: "reporting-covered-pool-grid"})
+    other_pool = pool_fixture(%{slug: "reporting-covered-pool-grid-other"})
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
+    dates = Date.range(~D[2026-01-04], ~D[2026-01-09]) |> Enum.to_list()
+
+    insert_settlement!(pool, api_key, assignment, identity, ~U[2026-01-04 12:00:00.000000Z], %{
+      total_tokens: 17,
+      input_tokens: 11,
+      cached_input_tokens: 3,
+      output_tokens: 5,
+      reasoning_tokens: 1,
+      settled_cost_micros: Decimal.new("0.5")
+    })
+
+    Enum.each(dates, fn date -> assert {:ok, _count} = Rollups.rebuild_for_date(date) end)
+
+    {result, events} =
+      collect_repo_query_events(fn ->
+        Reporting.covered_pool_daily_usage_snapshot(
+          [pool.id, other_pool.id, pool.id, "not-a-uuid"],
+          dates
+        )
+      end)
+
+    assert {:ok, rows} = result
+    assert length(rows) == 12
+
+    assert Enum.map(rows, &{&1.rollup_date, &1.pool_id}) ==
+             Enum.sort_by(Enum.map(rows, &{&1.rollup_date, &1.pool_id}), & &1)
+
+    assert %{
+             admitted_request_count: 1,
+             input_tokens: 11,
+             cached_input_tokens: 3,
+             output_tokens: 5,
+             reasoning_tokens: 1,
+             total_tokens: 17,
+             rounded_settled_cost_micros: 1
+           } = Enum.find(rows, &(&1.pool_id == pool.id and &1.rollup_date == ~D[2026-01-04]))
+
+    assert %{
+             admitted_request_count: 0,
+             total_tokens: 0,
+             rounded_settled_cost_micros: 0
+           } =
+             Enum.find(rows, &(&1.pool_id == other_pool.id and &1.rollup_date == ~D[2026-01-06]))
+
+    assert [%{projection: :covered_pool_daily_usage_snapshot, row_count: 12}] =
+             Enum.filter(events, &(&1.projection == :covered_pool_daily_usage_snapshot))
+
+    missing_date = ~D[2026-01-09]
+
+    Repo.delete_all(
+      from coverage in CodexPooler.Accounting.DailyRollupCoverage,
+        where: coverage.rollup_date == ^missing_date
+    )
+
+    assert {:fallback, :incomplete_coverage} =
+             Reporting.covered_pool_daily_usage_snapshot([pool.id], dates)
+  end
+
+  @tag :covered_pool_daily_usage_snapshot
+  test "covered Pool daily usage snapshot stays atomic across a concurrent rollup invalidation" do
+    parent = self()
+    end_date = Date.add(~D[2000-01-01], -rem(System.unique_integer([:positive]), 10_000))
+    dates = Date.range(Date.add(end_date, -5), end_date) |> Enum.to_list()
+
+    setup =
+      Sandbox.unboxed_run(Repo, fn ->
+        pool =
+          pool_fixture(%{slug: "reporting-atomic-snapshot-#{System.unique_integer([:positive])}"})
+
+        %{api_key: api_key} = active_api_key_fixture(pool)
+        %{identity: identity, assignment: assignment} = upstream_assignment_fixture(pool)
+        occurred_at = DateTime.new!(hd(dates), ~T[12:00:00.000000], "Etc/UTC")
+
+        insert_settlement!(pool, api_key, assignment, identity, occurred_at, %{
+          total_tokens: 17,
+          input_tokens: 11,
+          output_tokens: 6,
+          settled_cost_micros: 2
+        })
+
+        Enum.each(dates, fn date -> assert {:ok, _count} = Rollups.rebuild_for_date(date) end)
+        %{pool_id: pool.id, identity_id: identity.id, dates: dates}
+      end)
+
+    on_exit(fn ->
+      cleanup_atomic_snapshot_fixture!(setup.pool_id, setup.identity_id, setup.dates)
+    end)
+
+    mutation =
+      Task.async(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          Repo.transaction(fn ->
+            assert {1, nil} =
+                     Repo.update_all(
+                       from(rollup in DailyRollup,
+                         where:
+                           rollup.dimension_kind == "pool" and
+                             rollup.pool_id == ^setup.pool_id and
+                             rollup.rollup_date == ^hd(setup.dates)
+                       ),
+                       set: [total_tokens: 999]
+                     )
+
+            send(parent, {:rollup_mutation_before_commit, self()})
+
+            receive do
+              :commit_rollup_mutation -> :committed
+            after
+              5_000 -> Repo.rollback(:mutation_timeout)
+            end
+          end)
+        end)
+      end)
+
+    assert_receive {:rollup_mutation_before_commit, mutation_pid}, 5_000
+
+    assert {:ok, rows} =
+             Sandbox.unboxed_run(Repo, fn ->
+               Reporting.covered_pool_daily_usage_snapshot([setup.pool_id], setup.dates)
+             end)
+
+    assert Enum.sum_by(rows, & &1.total_tokens) == 17
+
+    send(mutation_pid, :commit_rollup_mutation)
+    assert {:ok, :committed} = Task.await(mutation, 5_000)
+
+    assert {:fallback, :incomplete_coverage} =
+             Sandbox.unboxed_run(Repo, fn ->
+               Reporting.covered_pool_daily_usage_snapshot([setup.pool_id], setup.dates)
+             end)
   end
 
   test "model usage combines fully contained hourly rollups with both exact raw edges and ranks in SQL" do
@@ -746,5 +886,19 @@ defmodule CodexPooler.Accounting.ReportingTest do
     |> Enum.reject(&is_nil/1)
     |> Enum.reduce(Decimal.new(0), &Decimal.add/2)
     |> Decimal.to_integer()
+  end
+
+  defp cleanup_atomic_snapshot_fixture!(pool_id, identity_id, dates) do
+    Sandbox.unboxed_run(Repo, fn ->
+      Repo.delete_all(from pool in Pool, where: pool.id == ^pool_id)
+
+      Repo.delete_all(
+        from identity in CodexPooler.Upstreams.Schemas.UpstreamIdentity,
+          where: identity.id == ^identity_id
+      )
+
+      Repo.delete_all(from rollup in DailyRollup, where: rollup.rollup_date in ^dates)
+      Repo.delete_all(from coverage in DailyRollupCoverage, where: coverage.rollup_date in ^dates)
+    end)
   end
 end
