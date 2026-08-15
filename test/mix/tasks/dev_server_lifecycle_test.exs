@@ -255,6 +255,37 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
     assert output =~ "escalating to KILL"
   end
 
+  test "stop succeeds when the owned process exits while KILL is delivered" do
+    fixture = server_fixture!(start?: false, healthy?: true, cwd: File.cwd!(), ignore_term?: true)
+    bash_env = Path.join(Path.dirname(fixture.log_path), "kill-race.bash")
+    race_marker = Path.join(Path.dirname(fixture.log_path), "kill-race-observed")
+
+    File.write!(bash_env, """
+    kill() {
+      if [ "${1:-}" = "-KILL" ] && [ ! -e "$DEV_SERVER_KILL_RACE_MARKER" ]; then
+        : > "$DEV_SERVER_KILL_RACE_MARKER"
+        builtin kill "$@" >/dev/null 2>&1 || true
+        return 1
+      fi
+
+      builtin kill "$@"
+    }
+    """)
+
+    assert {_output, 0} = lifecycle("start", fixture)
+
+    assert {output, 0} =
+             lifecycle("stop", fixture, [
+               {"BASH_ENV", bash_env},
+               {"DEV_SERVER_KILL_RACE_MARKER", race_marker},
+               {"DEV_SERVER_TERM_ATTEMPTS", "2"}
+             ])
+
+    assert output =~ "escalating to KILL"
+    assert output =~ "owned dev server stopped"
+    assert File.exists?(race_marker)
+  end
+
   test "start rejects malformed commands before creating ownership state" do
     fixture = server_fixture!(start?: false, healthy?: true, cwd: File.cwd!())
     fixture = %{fixture | command: "mix\nphx.server"}

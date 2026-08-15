@@ -23,7 +23,7 @@ process_alive() {
   local pid="$1" state
   kill -0 "$pid" >/dev/null 2>&1 || return 1
   state="$(ps -o stat= -p "$pid" 2>/dev/null || true)"
-  [[ "$state" != *Z* ]]
+  [[ -n "$state" && "$state" != *Z* ]]
 }
 
 listener_pids() {
@@ -269,7 +269,7 @@ stop_server() {
   validate_owned_process
 
   printf 'dev-server: stopping owned dev server pid %s\n' "$owned_pid"
-  kill -TERM "$owned_pid"
+  kill -TERM "$owned_pid" >/dev/null 2>&1 || true
 
   for _attempt in $(seq 1 "$term_attempts"); do
     process_alive "$owned_pid" || break
@@ -278,7 +278,7 @@ stop_server() {
 
   if process_alive "$owned_pid"; then
     printf 'dev-server: owned process ignored TERM; escalating to KILL\n'
-    kill -KILL "$owned_pid"
+    kill -KILL "$owned_pid" >/dev/null 2>&1 || true
   fi
 
   for _attempt in $(seq 1 "$term_attempts"); do
