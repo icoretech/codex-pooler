@@ -3,6 +3,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   use GenServer
 
+  require Logger
+
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
@@ -994,6 +996,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         {:halt, {:failure, state, receive_state, reason}}
 
       :error ->
+        receive_state = maybe_mark_downstream_output_started(receive_state, raw_decoded)
         observe_frame(receive_state, raw_text, raw_decoded)
         receive_state = maybe_write_native_metadata(state, receive_state)
 
@@ -1004,8 +1007,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           )
 
         write_frame(receive_state.writer, text, terminal_discriminator)
-
-        receive_state = maybe_mark_downstream_output_started(receive_state, raw_decoded)
 
         case terminal_discriminator.terminal do
           nil -> {:cont, {:continue, state, receive_state}}
@@ -1250,15 +1251,34 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp observe_frame(%ReceiveState{frame_observer: observer}, text, decoded)
        when is_function(observer, 2) do
-    observer.(text, decoded)
+    try do
+      observer.(text, decoded)
+    rescue
+      exception -> report_frame_observer_failure(:error, exception.__struct__)
+    catch
+      kind, _reason when kind in [:throw, :exit] -> report_frame_observer_failure(kind, nil)
+    end
   end
 
   defp observe_frame(%ReceiveState{frame_observer: observer}, text, _decoded)
        when is_function(observer, 1) do
-    observer.(text)
+    try do
+      observer.(text)
+    rescue
+      exception -> report_frame_observer_failure(:error, exception.__struct__)
+    catch
+      kind, _reason when kind in [:throw, :exit] -> report_frame_observer_failure(kind, nil)
+    end
   end
 
   defp observe_frame(%ReceiveState{}, _text, _decoded), do: :ok
+
+  defp report_frame_observer_failure(failure_kind, exception_class) do
+    Logger.warning(
+      "upstream websocket frame observer failed operation=observe_frame " <>
+        "failure_kind=#{failure_kind} exception_class=#{exception_class || "none"}"
+    )
+  end
 
   defp maybe_write_native_metadata(
          state,

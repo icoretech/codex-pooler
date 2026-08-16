@@ -344,6 +344,132 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     refute result.body =~ "observer-request"
   end
 
+  test "mapper and writer callback failures remain terminal for the upstream session" do
+    terminal =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_mandatory_callback_failure", "status" => "completed"}
+      })
+
+    Enum.each([:mapper, :writer], fn callback_kind ->
+      upstream = start_upstream(FakeUpstream.websocket_text_frames([terminal]))
+      {:ok, session} = GenServer.start(UpstreamWebsocketSession, :new)
+      monitor = Process.monitor(session)
+      parent = self()
+
+      request =
+        case callback_kind do
+          :mapper ->
+            %{
+              websocket_request(FakeUpstream.url(upstream))
+              | message_mapper: fn _text -> raise "synthetic mapper callback failure" end,
+                writer: fn _text -> send(parent, :mapper_writer_called) end
+            }
+
+          :writer ->
+            %{
+              websocket_request(FakeUpstream.url(upstream))
+              | writer: fn _text -> raise "synthetic writer callback failure" end
+            }
+        end
+
+      capture_log(fn ->
+        assert {:error, %{reason: :upstream_websocket_session_unavailable}} =
+                 UpstreamWebsocketSession.request(session, request)
+
+        assert_receive {:DOWN, ^monitor, :process, ^session,
+                        {%RuntimeError{}, callback_stacktrace}},
+                       @detection_timeout_ms
+
+        {expected_function, expected_arity} =
+          if callback_kind == :mapper, do: {:map_message, 3}, else: {:handle_text_frame, 6}
+
+        assert stack_has_mfa?(
+                 callback_stacktrace,
+                 UpstreamWebsocketSession,
+                 expected_function,
+                 expected_arity
+               )
+      end)
+
+      refute_received :mapper_writer_called
+    end)
+  end
+
+  test "observer exception throw and exit are contained before exactly-once terminal delivery" do
+    terminal =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_optional_observer_failure", "status" => "completed"}
+      })
+
+    Enum.each(
+      [
+        {:error, "Elixir.RuntimeError", fn marker -> raise RuntimeError, marker end},
+        {:throw, "none", fn marker -> throw({:observer_throw, marker}) end},
+        {:exit, "none", fn marker -> exit({:observer_exit, marker}) end}
+      ],
+      fn {failure_kind, exception_class, fail_observer} ->
+        marker = private_marker(failure_kind)
+
+        upstream =
+          start_upstream(
+            {:sequence,
+             [
+               FakeUpstream.websocket_text_frames([terminal]),
+               websocket_success("resp_after_optional_observer_failure")
+             ]}
+          )
+
+        {:ok, session} = GenServer.start(UpstreamWebsocketSession, :new)
+        monitor = Process.monitor(session)
+        parent = self()
+
+        request = %{
+          websocket_request(FakeUpstream.url(upstream))
+          | frame_observer: fn _text, _decoded ->
+              send(parent, {:observer_called, failure_kind})
+              fail_observer.(marker)
+            end,
+            writer: fn frame, discriminator ->
+              send(parent, {:observer_failure_writer, failure_kind, frame, discriminator})
+            end
+        }
+
+        {result, logs} =
+          with_log(fn ->
+            UpstreamWebsocketSession.request(session, request)
+          end)
+
+        assert {:ok, %{terminal: "response.completed", status: 200}} = result
+        assert_receive {:observer_called, ^failure_kind}
+
+        assert_receive {:observer_failure_writer, ^failure_kind, ^terminal,
+                        %{terminal: "response.completed"}}
+
+        refute_received {:observer_called, ^failure_kind}
+        refute_received {:observer_failure_writer, ^failure_kind, _frame, _discriminator}
+        refute_received {:DOWN, ^monitor, :process, ^session, _reason}
+        assert Process.alive?(session)
+
+        assert length(Regex.scan(~r/upstream websocket frame observer failed/, logs)) == 1
+        assert logs =~ "operation=observe_frame"
+        assert logs =~ "failure_kind=#{failure_kind}"
+        assert logs =~ "exception_class=#{exception_class}"
+        refute logs =~ marker
+
+        assert {:ok, %{terminal: "response.completed", status: 200}} =
+                 UpstreamWebsocketSession.request(
+                   session,
+                   websocket_request(FakeUpstream.url(upstream))
+                 )
+
+        assert Process.alive?(session)
+        :ok = UpstreamWebsocketSession.close(session)
+      end
+    )
+  end
+
   test "two-argument writers receive the mapped terminal discriminator" do
     terminal =
       Jason.encode!(%{
