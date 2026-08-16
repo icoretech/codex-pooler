@@ -86,6 +86,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
       expected_rate_limit = mapper_fun.(rate_limit)
       expected_terminal = mapper_fun.(terminal)
       release_ref = make_ref()
+      result_release_ref = make_ref()
 
       upstream =
         start_fake_upstream(FakeUpstream.websocket_text_frames([rate_limit, terminal, terminal]))
@@ -99,6 +100,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
       {:ok, owner} =
         start_owner(session,
+          upstream: terminal_result_barrier_upstream(self(), result_release_ref),
           downstream_sender: downstream_sender,
           request_id: "request-#{mapper}"
         )
@@ -160,6 +162,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
       send(barrier_pid, {:websocket_owner_harness_release_terminal_delivery, release_ref})
 
       assert_receive {:websocket_owner_harness_terminal_delivered, ^release_ref}
+      assert_receive {:terminal_result_barrier, result_pid, ^result_release_ref}
+      assert %{active_turn: %{terminal_forwarded?: true}} = :sys.get_state(owner)
+      send(result_pid, {:release_terminal_result, result_release_ref})
 
       assert {:ok, %{status: 200, websocket_messages: []}} =
                Task.await(submitter, @detection_timeout_ms)
@@ -205,6 +210,69 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
       assert_successful_accounting!(accounting)
       assert %{active_turn: nil} = :sys.get_state(owner)
     end
+  end
+
+  test "v1 owner preserves real upstream connection lifecycle metadata", %{auth: auth} do
+    terminals =
+      Enum.map([:fresh, :reused, :reconnected], fn kind ->
+        terminal_frame("resp_connection_#{kind}")
+      end)
+
+    upstream =
+      start_fake_upstream(
+        {:sequence,
+         Enum.map(terminals, fn terminal ->
+           FakeUpstream.websocket_text_frames([terminal])
+         end)}
+      )
+
+    identity = active_upstream_identity_fixture()
+
+    %{session: session, lease_token: lease_token} =
+      owner_session_fixture(auth, :metadata_lifecycle)
+
+    {:ok, owner} = start_owner(session)
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(
+               owner,
+               downstream_target("corr-connection-metadata")
+             )
+
+    connections =
+      Enum.map(Enum.with_index(terminals, 1), fn {terminal, index} ->
+        if index == 3 do
+          assert :ok =
+                   owner
+                   |> :sys.get_state()
+                   |> Map.fetch!(:upstream_pid)
+                   |> UpstreamWebsocketSession.invalidate_connection()
+        end
+
+        payload = websocket_payload("connection-metadata-model")
+
+        request_options =
+          owner_request_options(session, lease_token, downstream, nil, payload: payload)
+
+        request = dispatch_request(upstream, identity, request_options, nil, payload)
+
+        assert {:ok, %{upstream_websocket_connection: connection}} = websocket_request(request)
+        assert_receive {:websocket_owner_frame, "corr-connection-metadata", 1, {:data, ^terminal}}
+        assert_receive {:websocket_owner_frame, "corr-connection-metadata", 1, :complete}
+        connection
+      end)
+
+    assert [fresh, reused, reconnected] = connections
+    assert Ecto.UUID.cast(fresh.lifecycle_id) == {:ok, fresh.lifecycle_id}
+    assert fresh.generation == 1
+    assert fresh.reused == false
+    assert fresh.reconnected == false
+    assert reused == %{fresh | reused: true}
+    assert reconnected.lifecycle_id == fresh.lifecycle_id
+    assert reconnected.generation == 2
+    assert reconnected.reused == false
+    assert reconnected.reconnected == true
+    assert FakeUpstream.websocket_connection_count(upstream) == 2
   end
 
   test "v1 stale epoch is rejected before upstream submission", %{auth: auth} do
@@ -517,6 +585,132 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     assert_failed_accounting!(fixture.accounting, "failed", "owner_crashed")
   end
 
+  test "v1 bound reset probe scope mismatches recover a missing owner", %{auth: auth} do
+    for mismatch <- [:assignment, :identity, :model, :route_class] do
+      terminal = terminal_frame("resp_reset_probe_mismatch_#{mismatch}")
+      recovery_upstream = start_fake_upstream(FakeUpstream.websocket_text_frames([terminal]))
+      correlation_id = "corr-reset-probe-mismatch-#{mismatch}"
+
+      fixture =
+        protocol_runtime_fixture(
+          auth,
+          "reset_probe_mismatch_#{mismatch}",
+          Atom.to_string(node())
+        )
+
+      {:ok, owner} = start_owner(fixture.session)
+
+      assert {:ok, downstream} =
+               WebsocketOwnerSession.attach_downstream(owner, downstream_target(correlation_id))
+
+      owner_ref = Process.monitor(owner)
+      Process.exit(owner, :kill)
+      assert_receive {:DOWN, ^owner_ref, :process, ^owner, :killed}
+
+      reset_probe =
+        fixture.assignment
+        |> bound_reset_probe(fixture.identity, fixture.model.exposed_model_id)
+        |> mismatch_reset_probe_scope(mismatch)
+
+      request_options =
+        owner_request_options(fixture.session, fixture.lease_token, downstream, reset_probe,
+          payload: fixture.payload,
+          request_id: fixture.accounting.request.correlation_id
+        )
+
+      refute ResetProbe.matches?(
+               reset_probe,
+               fixture.assignment.id,
+               fixture.identity.id,
+               request_options.routing.effective_model,
+               RequestOptions.route_class(request_options)
+             )
+
+      {prepared_context, request} =
+        runtime_dispatch_fixture(
+          recovery_upstream,
+          auth,
+          fixture.assignment,
+          fixture.identity,
+          fixture.model,
+          request_options,
+          fixture.accounting,
+          fixture.payload
+        )
+
+      assert {:ok, %{status: 200, websocket_messages: []}} =
+               finalized_websocket_request(prepared_context, request, [])
+
+      assert_receive {:websocket_owner_frame, ^correlation_id, 1, {:data, ^terminal}}
+      assert_receive {:websocket_owner_frame, ^correlation_id, 1, :complete}
+      assert FakeUpstream.count(recovery_upstream) == 1
+      assert {:ok, recovered_owner} = WebsocketOwnerSession.lookup(fixture.session.id)
+
+      assert %{active_turn: nil, downstream: ^downstream} =
+               :sys.get_state(recovered_owner)
+
+      assert_unchanged_owner_lease!(fixture.session, fixture.lease_token)
+      assert_successful_accounting!(fixture.accounting)
+      refute_received {:websocket_owner_runtime_recovered, ^correlation_id, 1, _duplicate}
+    end
+  end
+
+  test "v1 exact bound reset probe suppresses missing owner recovery", %{auth: auth} do
+    recovery_upstream = start_fake_upstream(FakeUpstream.websocket_text_frames([]))
+    correlation_id = "corr-exact-reset-probe-missing-owner"
+
+    fixture =
+      protocol_runtime_fixture(auth, :exact_reset_probe_missing_owner, Atom.to_string(node()))
+
+    {:ok, owner} = start_owner(fixture.session)
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(owner, downstream_target(correlation_id))
+
+    owner_ref = Process.monitor(owner)
+    Process.exit(owner, :kill)
+    assert_receive {:DOWN, ^owner_ref, :process, ^owner, :killed}
+
+    reset_probe =
+      bound_reset_probe(fixture.assignment, fixture.identity, fixture.model.exposed_model_id)
+
+    request_options =
+      owner_request_options(fixture.session, fixture.lease_token, downstream, reset_probe,
+        payload: fixture.payload,
+        request_id: fixture.accounting.request.correlation_id
+      )
+
+    assert ResetProbe.matches?(
+             reset_probe,
+             fixture.assignment.id,
+             fixture.identity.id,
+             request_options.routing.effective_model,
+             RequestOptions.route_class(request_options)
+           )
+
+    {prepared_context, request} =
+      runtime_dispatch_fixture(
+        recovery_upstream,
+        auth,
+        fixture.assignment,
+        fixture.identity,
+        fixture.model,
+        request_options,
+        fixture.accounting,
+        fixture.payload
+      )
+
+    assert {:error, %{code: "owner_unavailable", status: 503}} =
+             finalized_websocket_request(prepared_context, request, [])
+
+    assert FakeUpstream.count(recovery_upstream) == 0
+    assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(fixture.session.id)
+    assert_unchanged_owner_lease!(fixture.session, fixture.lease_token)
+    assert_failed_accounting!(fixture.accounting, "failed", "owner_unavailable")
+    refute_received {:websocket_owner_runtime_recovered, ^correlation_id, 1, _recovery}
+    refute_received {:websocket_owner_frame, ^correlation_id, 1, _payload}
+  end
+
   test "v1 committed output failure probes once and never replays", %{auth: auth} do
     for kind <- [:raise, :throw, :exit] do
       created = response_created_frame()
@@ -618,17 +812,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
   test "v1 mapper and writer faults terminate the owner path", %{auth: auth} do
     for callback_kind <- [:mapper, :writer] do
-      identity = active_upstream_identity_fixture()
       terminal = terminal_frame("resp_mandatory_#{callback_kind}")
       correlation_id = "corr-mandatory-#{callback_kind}"
+      interruption_release_ref = make_ref()
       upstream = start_fake_upstream(FakeUpstream.websocket_text_frames([terminal]))
-
-      %{session: session, lease_token: lease_token} =
-        owner_session_fixture(auth, callback_kind)
+      fixture = protocol_runtime_fixture(auth, callback_kind)
 
       {:ok, owner} =
-        start_owner(session,
-          upstream: mandatory_callback_failure_upstream(self(), callback_kind)
+        start_owner(fixture.session,
+          upstream: mandatory_callback_failure_upstream(self(), callback_kind),
+          persistence: callback_failure_persistence_boundary(self(), interruption_release_ref)
         )
 
       owner_ref = Process.monitor(owner)
@@ -639,17 +832,43 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
                  downstream_target(correlation_id)
                )
 
-      {result, _log} =
-        with_log(fn ->
-          upstream
-          |> dispatch_request(
-            identity,
-            owner_request_options(session, lease_token, downstream, nil)
-          )
-          |> websocket_request()
+      request_options =
+        owner_request_options(
+          fixture.session,
+          fixture.lease_token,
+          downstream,
+          nil,
+          payload: fixture.payload,
+          request_id: fixture.accounting.request.correlation_id
+        )
+
+      {prepared_context, request} =
+        runtime_dispatch_fixture(
+          upstream,
+          auth,
+          fixture.assignment,
+          fixture.identity,
+          fixture.model,
+          request_options,
+          fixture.accounting,
+          fixture.payload
+        )
+
+      finalizer =
+        Task.async(fn ->
+          with_log(fn -> finalized_websocket_request(prepared_context, request, []) end)
         end)
 
-      assert {:error, %{reason: :owner_crashed, started: false}} = result
+      assert_receive {:callback_failure_interruption_ready, interruption_pid,
+                      ^interruption_release_ref}
+
+      assert {result, _log} = Task.await(finalizer, @detection_timeout_ms)
+
+      assert {:error, %{code: "owner_crashed", status: 502}} = result
+      assert_failed_accounting!(fixture.accounting, "failed", "owner_crashed")
+
+      send(interruption_pid, {:release_callback_failure_interruption, interruption_release_ref})
+      assert_receive {:callback_failure_interruption_complete, ^interruption_release_ref}
       assert_receive {:mandatory_callback_invoked, ^callback_kind}
       assert_receive {:DOWN, ^owner_ref, :process, ^owner, _reason}, @detection_timeout_ms
       assert FakeUpstream.count(upstream) == 1
@@ -661,6 +880,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
       assert safe_payload.code == "owner_crashed"
       assert_receive {:websocket_owner_frame, ^correlation_id, 1, :complete}
       refute_received {:websocket_owner_frame, ^correlation_id, 1, _duplicate}
+      assert_failed_accounting!(fixture.accounting, "failed", "owner_crashed")
     end
   end
 
@@ -1037,6 +1257,49 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     }
   end
 
+  defp callback_failure_persistence_boundary(parent, release_ref) do
+    %{
+      renew_owner_token: &CodexPooler.Gateway.Persistence.SessionContinuity.renew_owner_token/3,
+      release_owner_lease:
+        &CodexPooler.Gateway.Persistence.SessionContinuity.release_owner_lease/4,
+      interrupt_codex_session: fn session_id, request_options ->
+        send(parent, {:callback_failure_interruption_ready, self(), release_ref})
+
+        receive do
+          {:release_callback_failure_interruption, ^release_ref} -> :ok
+        after
+          @detection_timeout_ms -> raise "timed out waiting to release owner interruption"
+        end
+
+        result =
+          CodexPooler.Gateway.Runtime.Finalization.Interruption.interrupt_codex_session(
+            session_id,
+            request_options
+          )
+
+        send(parent, {:callback_failure_interruption_complete, release_ref})
+        result
+      end
+    }
+  end
+
+  defp terminal_result_barrier_upstream(parent, release_ref) do
+    %{
+      start: fn -> UpstreamWebsocketSession.start_link([]) end,
+      send: fn upstream_pid, request, writer ->
+        result = UpstreamWebsocketSession.request(upstream_pid, %{request | writer: writer})
+        send(parent, {:terminal_result_barrier, self(), release_ref})
+
+        receive do
+          {:release_terminal_result, ^release_ref} -> result
+        after
+          @detection_timeout_ms -> raise "timed out waiting to release terminal result"
+        end
+      end,
+      close: &UpstreamWebsocketSession.close/1
+    }
+  end
+
   defp invoke_frame_observer(observer, frame, decoded) when is_function(observer, 2),
     do: observer.(frame, decoded)
 
@@ -1302,6 +1565,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
     probe
   end
+
+  defp mismatch_reset_probe_scope(probe, :assignment),
+    do: %{probe | pool_upstream_assignment_id: Ecto.UUID.generate()}
+
+  defp mismatch_reset_probe_scope(probe, :identity),
+    do: %{probe | upstream_identity_id: Ecto.UUID.generate()}
+
+  defp mismatch_reset_probe_scope(probe, :model),
+    do: %{probe | effective_model: "mismatched-model"}
+
+  defp mismatch_reset_probe_scope(probe, :route_class),
+    do: %{probe | route_class: "proxy_stream"}
 
   defp attach_product_observer! do
     handler_id = "owner-protocol-#{System.unique_integer([:positive])}"

@@ -703,10 +703,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
           |> UpstreamDispatch.websocket_request()
 
         {:error, _reason} ->
-          original_error
+          {:error, original_error}
       end
     else
-      original_error
+      {:error, original_error}
     end
   end
 
@@ -737,8 +737,17 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt do
 
   defp bound_reset_probe?(context) do
     case context.request_options.routing.reset_probe do
-      %ResetProbe{} = probe -> ResetProbe.bound?(probe)
-      nil -> false
+      %ResetProbe{} = probe ->
+        ResetProbe.matches?(
+          probe,
+          context.assignment.id,
+          context.identity.id,
+          context.request_options.routing.effective_model || context.model.exposed_model_id,
+          context.route_class
+        )
+
+      nil ->
+        false
     end
   end
 
