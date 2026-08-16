@@ -3619,6 +3619,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
   test "tool-output continuation after reconnect is forwarded through the owner" do
     first_submission_ref = make_ref()
+    second_submission_ref = make_ref()
+
+    refute first_submission_ref == second_submission_ref
 
     upstream =
       start_upstream(
@@ -3630,7 +3633,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
              notify: self(),
              release_ref: first_submission_ref
            ),
-           FakeUpstream.json_response(%{"id" => "resp_owner_tool_second", "object" => "response"})
+           FakeUpstream.barrier_sse_stream(
+             [%{"id" => "resp_owner_tool_second", "object" => "response"}],
+             barrier_after: 0,
+             notify: self(),
+             release_ref: second_submission_ref
+           )
          ]}
       )
 
@@ -3656,6 +3664,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     assert_receive {:fake_upstream_chunk_barrier, 0, first_upstream_pid, ^first_submission_ref},
                    5_000
+
+    assert [first_request] = FakeUpstream.requests(upstream)
+    refute Map.has_key?(first_request.json, "previous_response_id")
 
     send(first_upstream_pid, {:fake_upstream_release_chunk, first_submission_ref})
 
@@ -3726,13 +3737,24 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert {:ok, second_state} =
                CodexResponsesSocket.handle_in({tool_payload, [opcode: :text]}, second_state)
 
+      assert_receive {:fake_upstream_chunk_barrier, 0, second_upstream_pid,
+                      ^second_submission_ref},
+                     5_000
+
+      assert second_upstream_pid == first_upstream_pid
+
+      assert [^first_request, second_request] = FakeUpstream.requests(upstream)
+      assert second_request.json["previous_response_id"] == "resp_owner_tool_first"
+
+      send(second_upstream_pid, {:fake_upstream_release_chunk, second_submission_ref})
+
       assert {:push, {:text, second_frame}, second_state} =
                receive_owner_socket_push(second_state)
 
       assert %{"id" => "resp_owner_tool_second"} = Jason.decode!(second_frame)
       assert {:ok, _second_state} = receive_socket_done(second_state)
 
-      assert [first_request, second_request] = FakeUpstream.requests(upstream)
+      assert [^first_request, ^second_request] = FakeUpstream.requests(upstream)
       assert first_request.websocket_connection_id == second_request.websocket_connection_id
       assert second_request.json["previous_response_id"] == "resp_owner_tool_first"
 
