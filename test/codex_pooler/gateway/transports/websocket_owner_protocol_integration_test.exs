@@ -83,13 +83,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
       reset_at = DateTime.utc_now() |> DateTime.add(900, :second) |> DateTime.truncate(:second)
       rate_limit = Jason.encode!(rate_limit_event(reset_at))
       terminal = terminal_frame("resp_protocol_#{mapper}")
+      duplicate_terminal = terminal_frame("resp_protocol_duplicate_#{mapper}")
       expected_rate_limit = mapper_fun.(rate_limit)
       expected_terminal = mapper_fun.(terminal)
+      expected_duplicate_terminal = mapper_fun.(duplicate_terminal)
       release_ref = make_ref()
       result_release_ref = make_ref()
 
-      upstream =
-        start_fake_upstream(FakeUpstream.websocket_text_frames([rate_limit, terminal, terminal]))
+      upstream = start_fake_upstream(FakeUpstream.websocket_text_frames([rate_limit, terminal]))
 
       %{session: session, lease_token: lease_token} = owner_session_fixture(auth, mapper)
       accounting = accounting_turn_fixture(auth, session, assignment, model, mapper)
@@ -163,7 +164,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
       assert_receive {:websocket_owner_harness_terminal_delivered, ^release_ref}
       assert_receive {:terminal_result_barrier, result_pid, ^result_release_ref}
-      assert %{active_turn: %{terminal_forwarded?: true}} = :sys.get_state(owner)
+
+      assert %{active_turn: %{ref: active_turn_ref, terminal_forwarded?: true}} =
+               :sys.get_state(owner)
+
+      send(
+        owner,
+        {:websocket_owner_upstream_frame, active_turn_ref, expected_duplicate_terminal}
+      )
+
+      assert %{
+               active_turn: %{
+                 ref: ^active_turn_ref,
+                 terminal_forwarded?: true,
+                 pending_result: nil
+               }
+             } = :sys.get_state(owner)
+
       send(result_pid, {:release_terminal_result, result_release_ref})
 
       assert {:ok, %{status: 200, websocket_messages: []}} =
@@ -196,12 +213,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
       expected_terminal_message =
         owner_data_message(mapper, stable_downstream, submitter.pid, expected_terminal)
 
+      expected_duplicate_terminal_message =
+        owner_data_message(mapper, stable_downstream, submitter.pid, expected_duplicate_terminal)
+
       expected_complete_message = owner_complete_message(mapper, stable_downstream, submitter.pid)
 
       assert_receive ^expected_rate_limit_message
       assert_receive ^expected_terminal_message
       assert_receive ^expected_complete_message
       refute_received ^expected_terminal_message
+      refute_received ^expected_duplicate_terminal_message
       refute_received ^expected_complete_message
 
       assert_product_observations()
