@@ -218,7 +218,27 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
           submitted_request_result()
   def submit_request(owner, downstream, %UpstreamWebsocketSession.Request{} = request)
       when is_map(downstream) do
-    submit_upstream(owner, downstream, request)
+    submit_request(owner, downstream, request, submission_observer?(request))
+  end
+
+  @spec submit_request(
+          GenServer.server(),
+          downstream(),
+          UpstreamWebsocketSession.Request.t(),
+          boolean()
+        ) :: submitted_request_result()
+  def submit_request(
+        owner,
+        downstream,
+        %UpstreamWebsocketSession.Request{} = request,
+        submission_notification?
+      )
+      when is_map(downstream) and is_boolean(submission_notification?) do
+    GenServer.call(
+      owner,
+      {:submit_upstream, downstream, request, submission_notification?},
+      :infinity
+    )
   end
 
   defp submit_upstream(owner, downstream, upstream_payload)
@@ -394,6 +414,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   def handle_call(
+        {:submit_upstream, _downstream, _payload, _submission_notification?},
+        _from,
+        %{draining?: true} = state
+      ) do
+    {:reply, {:error, :owner_drained}, state}
+  end
+
+  def handle_call(
         {:submit_upstream, downstream, _payload},
         _from,
         %{active_turn: active_turn} = state
@@ -402,7 +430,48 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     {:reply, DownstreamState.stale_or_busy(state.downstream, downstream), state}
   end
 
+  def handle_call(
+        {:submit_upstream, downstream, _payload, _submission_notification?},
+        _from,
+        %{active_turn: active_turn} = state
+      )
+      when not is_nil(active_turn) do
+    {:reply, DownstreamState.stale_or_busy(state.downstream, downstream), state}
+  end
+
   def handle_call({:submit_upstream, downstream, upstream_payload}, from, state) do
+    accept_upstream_submission(state, from, downstream, upstream_payload, false)
+  end
+
+  def handle_call(
+        {:submit_upstream, downstream, upstream_payload, submission_notification?},
+        from,
+        state
+      )
+      when is_boolean(submission_notification?) do
+    accept_upstream_submission(
+      state,
+      from,
+      downstream,
+      upstream_payload,
+      submission_notification?
+    )
+  end
+
+  def handle_call({:push_downstream, payload}, _from, state) do
+    case send_downstream(state, state.downstream, payload) do
+      :ok -> {:reply, :ok, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp accept_upstream_submission(
+         state,
+         from,
+         downstream,
+         upstream_payload,
+         submission_notification?
+       ) do
     case active_turn_downstream(state.downstream, downstream) do
       {:ok, active_turn_downstream} ->
         ref = make_ref()
@@ -421,20 +490,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
           terminal_delivery_timeout: nil,
           terminal_delivery_timer_ref: nil,
           output_commit_probe: nil,
-          submission_observed?: submission_observer?(upstream_payload)
+          submission_observed?: submission_notification?
         }
 
         {:noreply, %{state | active_turn: active_turn}}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
-    end
-  end
-
-  def handle_call({:push_downstream, payload}, _from, state) do
-    case send_downstream(state, state.downstream, payload) do
-      :ok -> {:reply, :ok, state}
-      {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
@@ -685,8 +747,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   defp submission_observer?(%UpstreamWebsocketSession.Request{submission_observer: observer}),
     do: is_function(observer, 0)
-
-  defp submission_observer?(_upstream_payload), do: false
 
   defp handle_upstream_frame(state, payload, terminal?) do
     case classify_terminal_delivery_frame(state.active_turn.terminal_forwarded?, terminal?) do
