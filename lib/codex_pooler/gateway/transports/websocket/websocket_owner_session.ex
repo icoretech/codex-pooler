@@ -382,7 +382,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
               state
           end
 
-        {:reply, :ok, state}
+        reply_or_retire(state, :ok)
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
@@ -471,9 +471,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       result = DownstreamState.effective_active_turn_result(state.active_turn, result)
 
       if terminal_bearing_result?(result) and not state.active_turn.terminal_forwarded? do
-        {:noreply, retain_terminal_result(state, result)}
+        state
+        |> retain_terminal_result(result)
+        |> continue_or_retire()
       else
-        {:noreply, settle_active_turn(state, result)}
+        state
+        |> settle_active_turn(result)
+        |> continue_or_retire()
       end
     else
       retire_current_upstream(state, :owner_crashed)
@@ -546,7 +550,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       ) do
     DownstreamState.cancel_active_turn_task(active_turn)
 
-    {:noreply, finish_active_turn(state, {:error, :client_disconnected})}
+    state
+    |> finish_active_turn({:error, :client_disconnected})
+    |> continue_or_retire()
   end
 
   def handle_info(
@@ -567,7 +573,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         {:error, reason} -> {:error, reason}
       end
 
-    {:noreply, settle_active_turn(state, result)}
+    state
+    |> settle_active_turn(result)
+    |> continue_or_retire()
   end
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{downstream_monitor: ref} = state) do
@@ -691,8 +699,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
                DownstreamState.active_turn_downstream(state),
                {:data, payload}
              ) do
-          :ok -> {:noreply, maybe_complete_terminal_delivery(state, terminal?)}
-          {:error, reason} -> {:noreply, fail_terminal_delivery(state, terminal?, reason)}
+          :ok ->
+            state
+            |> maybe_complete_terminal_delivery(terminal?)
+            |> continue_or_retire()
+
+          {:error, reason} ->
+            state
+            |> fail_terminal_delivery(terminal?, reason)
+            |> continue_or_retire()
         end
     end
   end
@@ -868,6 +883,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     do: {:stop, :owner_crashed, state}
 
   defp continue_or_retire(state), do: {:noreply, state}
+
+  defp reply_or_retire(%{retire_after_active_turn?: true, active_turn: nil} = state, reply),
+    do: {:stop, :owner_crashed, reply, state}
+
+  defp reply_or_retire(state, reply), do: {:reply, reply, state}
 
   defp retire_current_upstream(state, reason) do
     state = %{state | draining?: true, retire_after_active_turn?: true}
