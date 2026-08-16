@@ -37,6 +37,39 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseFixture do
     :erpc.call(node, :code, :load_binary, [module, ~c"previous_release_fixture", beam])
   end
 
+  @spec load_pre_v1_bridge_forwarder(node()) :: {:module, module()}
+  def load_pre_v1_bridge_forwarder(node) when is_atom(node) do
+    session = CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
+
+    forms = [
+      {:attribute, 1, :module, @forwarder},
+      {:attribute, 1, :export,
+       [remote_attach_downstream: 2, remote_attach_downstream: 3, remote_cancel_downstream: 2]},
+      owner_lookup_function(:remote_attach_downstream, 2, session, :attach_downstream, []),
+      owner_lookup_function(
+        :remote_attach_downstream,
+        3,
+        session,
+        :attach_downstream,
+        :third_arg
+      ),
+      owner_lookup_function(:remote_cancel_downstream, 2, session, :detach_downstream, [])
+    ]
+
+    load_compiled_forms(node, @forwarder, forms, ~c"pre_v1_bridge_forwarder")
+  end
+
+  @spec start_forwarder_v1_trace(pid()) :: {:ok, pid()}
+  def start_forwarder_v1_trace(notify) when is_pid(notify) do
+    tracer = spawn(fn -> forwarder_trace_loop(notify) end)
+    {:module, @forwarder} = :code.ensure_loaded(@forwarder)
+
+    :erlang.trace_pattern({@forwarder, :remote_submit_request_v1, 3}, true, [:local])
+    :erlang.trace(:all, true, [:call, {:tracer, tracer}])
+    :erlang.trace(:new, true, [:call, {:tracer, tracer}])
+    {:ok, tracer}
+  end
+
   @spec load_current_dispatch_identity(node(), binary()) :: binary()
   def load_current_dispatch_identity(node, identity)
       when is_atom(node) and is_binary(identity) do
@@ -613,6 +646,34 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseFixture do
     {:module, ^module} = :erpc.call(node, :code, :load_binary, [module, filename, beam])
   end
 
+  defp owner_lookup_function(name, arity, session, operation, operation_opts) do
+    variables = Enum.map(1..arity, &{:var, 1, String.to_atom("Arg#{&1}")})
+    [session_id, downstream | rest] = variables
+
+    operation_args =
+      case operation_opts do
+        :third_arg -> [downstream, hd(rest)]
+        [] -> [downstream]
+      end
+
+    {:function, 1, name, arity,
+     [
+       {:clause, 1, variables, [],
+        [
+          {:case, 1,
+           {:call, 1, {:remote, 1, {:atom, 1, session}, {:atom, 1, :lookup}}, [session_id]},
+           [
+             {:clause, 1, [{:tuple, 1, [{:atom, 1, :ok}, {:var, 1, :OwnerPid}]}], [],
+              [
+                {:call, 1, {:remote, 1, {:atom, 1, session}, {:atom, 1, operation}},
+                 [{:var, 1, :OwnerPid} | operation_args]}
+              ]},
+             {:clause, 1, [{:var, 1, :Error}], [], [{:var, 1, :Error}]}
+           ]}
+        ]}
+     ]}
+  end
+
   defp network_trace_loop(count) do
     receive do
       {:trace, _pid, :call, {_module, _function, _args}} ->
@@ -623,6 +684,17 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseFixture do
 
       _other ->
         network_trace_loop(count)
+    end
+  end
+
+  defp forwarder_trace_loop(notify) do
+    receive do
+      {:trace, pid, :call, {@forwarder, :remote_submit_request_v1, args}} ->
+        send(notify, {:remote_forwarder_v1_call, pid, args})
+        forwarder_trace_loop(notify)
+
+      _other ->
+        forwarder_trace_loop(notify)
     end
   end
 end
