@@ -11,7 +11,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, CodexTurn}
-  alias CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement
+  alias CodexPooler.Gateway.Routing.{BridgeRing, RoutePlanInput}
+  alias CodexPooler.Gateway.Runtime.Dispatch.{PreparedContext, SelectedCandidateContext}
+  alias CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
@@ -90,6 +92,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
       %{session: session, lease_token: lease_token} = owner_session_fixture(auth, mapper)
       accounting = accounting_turn_fixture(auth, session, assignment, model, mapper)
+      payload = websocket_payload(model.exposed_model_id)
 
       downstream_sender =
         terminal_barrier_downstream_sender(mapper, expected_terminal, release_ref)
@@ -117,7 +120,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
                 session,
                 lease_token,
                 public_turn_downstream(stable_downstream, mapper),
-                reset_probe
+                reset_probe,
+                payload: payload,
+                request_id: accounting.request.correlation_id
               )
             )
             |> RequestOptions.put_transport(
@@ -126,9 +131,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
               end
             )
 
-          request = dispatch_request(upstream, identity, request_options, accounting)
+          {prepared_context, request} =
+            runtime_dispatch_fixture(
+              upstream,
+              auth,
+              assignment,
+              identity,
+              model,
+              request_options,
+              accounting,
+              payload
+            )
 
-          websocket_request(request,
+          finalized_websocket_request(prepared_context, request,
             notify: parent,
             capture_request_to: parent
           )
@@ -140,27 +155,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
       assert Task.yield(submitter, 0) == nil
       assert FakeUpstream.count(upstream) == 1
 
+      await_quota_commit!(quota_handler_id)
+      :telemetry.detach(quota_handler_id)
       send(barrier_pid, {:websocket_owner_harness_release_terminal_delivery, release_ref})
 
       assert_receive {:websocket_owner_harness_terminal_delivered, ^release_ref}
 
-      assert {:ok,
-              %{
-                terminal: "response.completed",
-                status: 200,
-                upstream_websocket_connection: connection
-              }} = Task.await(submitter, @detection_timeout_ms)
-
-      assert Map.keys(connection) |> Enum.sort() == [
-               :generation,
-               :lifecycle_id,
-               :reconnected,
-               :reused
-             ]
-
-      assert connection.generation == 1
-      refute connection.reconnected
-      refute connection.reused
+      assert {:ok, %{status: 200, websocket_messages: []}} =
+               Task.await(submitter, @detection_timeout_ms)
 
       assert_receive {:submission_observed, ^mapper, observer_pid}
       assert observer_pid == submitter.pid
@@ -199,22 +201,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
       assert_product_observations()
 
-      await_quota_commit!(quota_handler_id)
-      :telemetry.detach(quota_handler_id)
       assert_quota_observation(identity, reset_at)
-      finalize_and_assert_successful_accounting!(accounting)
+      assert_successful_accounting!(accounting)
       assert %{active_turn: nil} = :sys.get_state(owner)
     end
   end
 
   test "v1 stale epoch is rejected before upstream submission", %{auth: auth} do
-    identity = active_upstream_identity_fixture()
-
     upstream =
       start_fake_upstream(FakeUpstream.websocket_text_frames([terminal_frame("resp_stale")]))
 
-    %{session: session, lease_token: lease_token} = owner_session_fixture(auth, :stale_epoch)
-    {:ok, owner} = start_owner(session)
+    fixture = protocol_runtime_fixture(auth, :stale_epoch)
+    {:ok, owner} = start_owner(fixture.session)
 
     assert {:ok, stale_downstream} =
              WebsocketOwnerSession.attach_downstream(owner, downstream_target("corr-stale"))
@@ -229,21 +227,34 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     refute_received {:websocket_owner_frame, "corr-stale", 1, _stale_payload}
 
     request_options =
-      owner_request_options(session, lease_token, stale_downstream, nil)
+      owner_request_options(fixture.session, fixture.lease_token, stale_downstream, nil,
+        payload: fixture.payload,
+        request_id: fixture.accounting.request.correlation_id
+      )
 
-    assert {:error, %{reason: :duplicate_downstream, started: false}} =
-             upstream
-             |> dispatch_request(identity, request_options)
-             |> websocket_request()
+    {prepared_context, request} =
+      runtime_dispatch_fixture(
+        upstream,
+        auth,
+        fixture.assignment,
+        fixture.identity,
+        fixture.model,
+        request_options,
+        fixture.accounting,
+        fixture.payload
+      )
+
+    assert {:error, %{code: "duplicate_downstream", status: 409}} =
+             finalized_websocket_request(prepared_context, request, [])
 
     assert FakeUpstream.count(upstream) == 0
     assert %{active_turn: nil, downstream: ^active_downstream} = :sys.get_state(owner)
+    assert_failed_accounting!(fixture.accounting, "failed", "duplicate_downstream")
   end
 
   test "v1 cancellation watcher detaches an owner blocked in real upstream submission", %{
     auth: auth
   } do
-    identity = active_upstream_identity_fixture()
     release_ref = make_ref()
 
     upstream =
@@ -255,8 +266,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
         )
       )
 
-    %{session: session, lease_token: lease_token} = owner_session_fixture(auth, :cancel)
-    {:ok, owner} = start_owner(session)
+    fixture = protocol_runtime_fixture(auth, :cancel)
+    {:ok, owner} = start_owner(fixture.session)
 
     assert {:ok, downstream} =
              WebsocketOwnerSession.attach_downstream(owner, downstream_target("corr-cancel"))
@@ -264,13 +275,26 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     parent = self()
 
     request_options =
-      owner_request_options(session, lease_token, downstream, nil,
-        node_client: CancellationNodeClient
+      owner_request_options(fixture.session, fixture.lease_token, downstream, nil,
+        payload: fixture.payload,
+        request_id: fixture.accounting.request.correlation_id,
+        forwarder_opts: [node_client: CancellationNodeClient]
       )
 
-    request = dispatch_request(upstream, identity, request_options)
+    {prepared_context, request} =
+      runtime_dispatch_fixture(
+        upstream,
+        auth,
+        fixture.assignment,
+        fixture.identity,
+        fixture.model,
+        request_options,
+        fixture.accounting,
+        fixture.payload
+      )
 
-    submitter = Task.async(fn -> websocket_request(request, notify: parent) end)
+    submitter =
+      Task.async(fn -> finalized_websocket_request(prepared_context, request, notify: parent) end)
 
     assert_receive {:fake_upstream_timeout_barrier, :mid_stream, websocket_pid, ^release_ref}
 
@@ -281,6 +305,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     assert %{active_turn: %{task_pid: owner_task}} = :sys.get_state(owner)
     owner_task_ref = Process.monitor(owner_task)
     websocket_ref = Process.monitor(websocket_pid)
+
+    assert {:ok, %{interrupted_turn_count: 1}} =
+             Gateway.interrupt_codex_turn(fixture.session, request_options)
 
     Task.shutdown(submitter, :brutal_kill)
 
@@ -308,84 +335,110 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
                    @detection_timeout_ms
 
     refute_received {:websocket_owner_frame, "corr-cancel", 1, _duplicate}
+
+    assert_failed_accounting!(fixture.accounting, "interrupted", "client_disconnected")
   end
 
-  test "v1 pre-visible owner failure replaces the lease and submits once", %{auth: auth} do
-    identity = active_upstream_identity_fixture()
-    terminal = terminal_frame("resp_recovered_owner")
-    recovery_upstream = start_fake_upstream(FakeUpstream.websocket_text_frames([terminal]))
-    release_ref = make_ref()
-    parent = self()
+  test "v1 pre-visible owner failure recovers requests without a bound reset probe", %{
+    auth: auth
+  } do
+    for {kind, reset_probe} <- [absent: nil, unbound: ResetProbe.new()] do
+      terminal = terminal_frame("resp_recovered_owner_#{kind}")
+      recovery_upstream = start_fake_upstream(FakeUpstream.websocket_text_frames([terminal]))
+      release_ref = make_ref()
+      correlation_id = "corr-pre-visible-recovery-#{kind}"
+      parent = self()
 
-    first_upstream = %{
-      start: fn -> Agent.start_link(fn -> :ready end) end,
-      send: fn _upstream_pid, _request, _writer ->
-        send(parent, {:pre_visible_owner_submit_started, self(), release_ref})
+      first_upstream = %{
+        start: fn -> Agent.start_link(fn -> :ready end) end,
+        send: fn _upstream_pid, request, _writer ->
+          send(
+            parent,
+            {:pre_visible_owner_submit_started, self(), release_ref, request.reset_probe}
+          )
 
-        receive do
-          {:release_pre_visible_owner_submit, ^release_ref} -> :ok
+          receive do
+            {:release_pre_visible_owner_submit, ^release_ref} -> :ok
+          end
+        end,
+        close: fn upstream_pid ->
+          if Process.alive?(upstream_pid), do: Agent.stop(upstream_pid)
         end
-      end,
-      close: fn upstream_pid ->
-        if Process.alive?(upstream_pid), do: Agent.stop(upstream_pid)
-      end
-    }
+      }
 
-    %{session: session, lease_token: lease_token} =
-      owner_session_fixture(auth, :pre_visible_recovery, Atom.to_string(node()))
+      fixture =
+        protocol_runtime_fixture(auth, "pre_visible_recovery_#{kind}", Atom.to_string(node()))
 
-    {:ok, first_owner} = start_owner(session, upstream: first_upstream)
+      {:ok, first_owner} = start_owner(fixture.session, upstream: first_upstream)
 
-    assert {:ok, downstream} =
-             WebsocketOwnerSession.attach_downstream(
-               first_owner,
-               downstream_target("corr-pre-visible-recovery")
-             )
+      assert {:ok, downstream} =
+               WebsocketOwnerSession.attach_downstream(
+                 first_owner,
+                 downstream_target(correlation_id)
+               )
 
-    request_options = owner_request_options(session, lease_token, downstream, nil)
-    request = dispatch_request(recovery_upstream, identity, request_options)
-    submitter = Task.async(fn -> UpstreamDispatch.websocket_request(request) end)
+      request_options =
+        owner_request_options(
+          fixture.session,
+          fixture.lease_token,
+          downstream,
+          reset_probe,
+          payload: fixture.payload,
+          request_id: fixture.accounting.request.correlation_id
+        )
 
-    assert_receive {:pre_visible_owner_submit_started, first_worker, ^release_ref}
+      {prepared_context, request} =
+        runtime_dispatch_fixture(
+          recovery_upstream,
+          auth,
+          fixture.assignment,
+          fixture.identity,
+          fixture.model,
+          request_options,
+          fixture.accounting,
+          fixture.payload
+        )
 
-    first_owner_ref = Process.monitor(first_owner)
-    Process.exit(first_owner, :kill)
-    assert_receive {:DOWN, ^first_owner_ref, :process, ^first_owner, :killed}
-    send(first_worker, {:release_pre_visible_owner_submit, release_ref})
+      submitter =
+        Task.async(fn ->
+          finalized_websocket_request(prepared_context, request, [])
+        end)
 
-    assert_receive {:websocket_owner_runtime_recovered, "corr-pre-visible-recovery", 1,
-                    %{websocket_owner_downstream: recovered_downstream}}
+      assert_receive {:pre_visible_owner_submit_started, first_worker, ^release_ref, ^reset_probe}
 
-    assert recovered_downstream.correlation_id == downstream.correlation_id
-    assert recovered_downstream.epoch == downstream.epoch
+      first_owner_ref = Process.monitor(first_owner)
+      Process.exit(first_owner, :kill)
+      assert_receive {:DOWN, ^first_owner_ref, :process, ^first_owner, :killed}
+      send(first_worker, {:release_pre_visible_owner_submit, release_ref})
 
-    assert_receive {:websocket_owner_frame, "corr-pre-visible-recovery", 1, {:data, ^terminal}}
+      assert_receive {:websocket_owner_runtime_recovered, ^correlation_id, 1,
+                      %{websocket_owner_downstream: recovered_downstream}}
 
-    assert_receive {:websocket_owner_frame, "corr-pre-visible-recovery", 1, :complete}
+      assert recovered_downstream.correlation_id == downstream.correlation_id
+      assert recovered_downstream.epoch == downstream.epoch
 
-    assert {:ok, %{terminal: "response.completed", status: 200}} =
-             Task.await(submitter, @detection_timeout_ms)
+      assert_receive {:websocket_owner_frame, ^correlation_id, 1, {:data, ^terminal}}
+      assert_receive {:websocket_owner_frame, ^correlation_id, 1, :complete}
 
-    assert FakeUpstream.count(recovery_upstream) == 1
-    assert {:ok, recovered_owner} = WebsocketOwnerSession.lookup(session.id)
-    assert recovered_owner != first_owner
+      assert {:ok, %{status: 200, websocket_messages: []}} =
+               Task.await(submitter, @detection_timeout_ms)
 
-    assert_replaced_owner_lease!(session, lease_token)
+      assert FakeUpstream.count(recovery_upstream) == 1
+      assert {:ok, recovered_owner} = WebsocketOwnerSession.lookup(fixture.session.id)
+      assert recovered_owner != first_owner
 
-    assert %{active_turn: nil, downstream: ^recovered_downstream} =
-             :sys.get_state(recovered_owner)
+      assert_replaced_owner_lease!(fixture.session, fixture.lease_token)
+      assert_successful_accounting!(fixture.accounting)
 
-    refute_received {:pre_visible_owner_submit_started, _duplicate_worker, ^release_ref}
+      assert %{active_turn: nil, downstream: ^recovered_downstream} =
+               :sys.get_state(recovered_owner)
 
-    refute_received {:websocket_owner_runtime_recovered, "corr-pre-visible-recovery", 1,
-                     _duplicate}
+      refute_received {:pre_visible_owner_submit_started, _duplicate_worker, ^release_ref}
+      refute_received {:websocket_owner_runtime_recovered, ^correlation_id, 1, _duplicate}
+    end
   end
 
   test "v1 bound reset probe prevents pre-visible owner recovery", %{auth: auth} do
-    %{identity: identity, assignment: assignment} =
-      active_upstream_assignment_fixture(auth.pool)
-
-    model = model_fixture(auth.pool)
     recovery_upstream = start_fake_upstream(FakeUpstream.websocket_text_frames([]))
     release_ref = make_ref()
     parent = self()
@@ -404,10 +457,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
       end
     }
 
-    %{session: session, lease_token: lease_token} =
-      owner_session_fixture(auth, :bound_probe, Atom.to_string(node()))
+    fixture = protocol_runtime_fixture(auth, :bound_probe, Atom.to_string(node()))
 
-    {:ok, owner} = start_owner(session, upstream: first_upstream)
+    {:ok, owner} = start_owner(fixture.session, upstream: first_upstream)
 
     assert {:ok, downstream} =
              WebsocketOwnerSession.attach_downstream(
@@ -415,10 +467,36 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
                downstream_target("corr-bound-probe")
              )
 
-    reset_probe = bound_reset_probe(assignment, identity, model.exposed_model_id)
-    request_options = owner_request_options(session, lease_token, downstream, reset_probe)
-    request = dispatch_request(recovery_upstream, identity, request_options)
-    submitter = Task.async(fn -> UpstreamDispatch.websocket_request(request) end)
+    reset_probe =
+      bound_reset_probe(fixture.assignment, fixture.identity, fixture.model.exposed_model_id)
+
+    request_options =
+      owner_request_options(fixture.session, fixture.lease_token, downstream, reset_probe,
+        payload: fixture.payload,
+        request_id: fixture.accounting.request.correlation_id
+      )
+
+    assert ResetProbe.matches?(
+             reset_probe,
+             fixture.assignment.id,
+             fixture.identity.id,
+             request_options.routing.effective_model,
+             RequestOptions.route_class(request_options)
+           )
+
+    {prepared_context, request} =
+      runtime_dispatch_fixture(
+        recovery_upstream,
+        auth,
+        fixture.assignment,
+        fixture.identity,
+        fixture.model,
+        request_options,
+        fixture.accounting,
+        fixture.payload
+      )
+
+    submitter = Task.async(fn -> finalized_websocket_request(prepared_context, request, []) end)
 
     assert_receive {:bound_probe_owner_submit_started, first_worker, ^release_ref}
     first_worker_ref = Process.monitor(first_worker)
@@ -429,95 +507,113 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     send(first_worker, {:release_bound_probe_owner_submit, release_ref})
     assert_receive {:DOWN, ^first_worker_ref, :process, ^first_worker, _reason}
 
-    assert {:error, %{reason: :owner_crashed, started: false}} =
+    assert {:error, %{code: "owner_crashed", status: 502}} =
              Task.await(submitter, @detection_timeout_ms)
 
     assert FakeUpstream.count(recovery_upstream) == 0
-    assert_unchanged_owner_lease!(session, lease_token)
+    assert_unchanged_owner_lease!(fixture.session, fixture.lease_token)
     refute_received {:websocket_owner_runtime_recovered, "corr-bound-probe", 1, _recovery}
     refute_received {:websocket_owner_frame, "corr-bound-probe", 1, _payload}
+    assert_failed_accounting!(fixture.accounting, "failed", "owner_crashed")
   end
 
   test "v1 committed output failure probes once and never replays", %{auth: auth} do
-    identity = active_upstream_identity_fixture()
-    created = response_created_frame()
-    visible = output_delta_frame()
-    expected_created = StreamProtocol.normalize_public_openai_responses_json_message(created)
-    expected_visible = StreamProtocol.normalize_public_openai_responses_json_message(visible)
+    for kind <- [:raise, :throw, :exit] do
+      created = response_created_frame()
+      visible = output_delta_frame()
+      expected_created = StreamProtocol.normalize_public_openai_responses_json_message(created)
+      expected_visible = StreamProtocol.normalize_public_openai_responses_json_message(visible)
+      correlation_id = "corr-post-visible-#{kind}"
 
-    upstream =
-      start_fake_upstream(
-        FakeUpstream.websocket_sse_then_close([
-          Jason.decode!(created),
-          Jason.decode!(visible)
-        ])
+      upstream =
+        start_fake_upstream(
+          FakeUpstream.websocket_sse_then_close([
+            Jason.decode!(created),
+            Jason.decode!(visible)
+          ])
+        )
+
+      fixture = protocol_runtime_fixture(auth, :"post_visible_#{kind}")
+
+      {:ok, owner} =
+        start_owner(fixture.session, upstream: frame_observer_failure_upstream(self(), kind))
+
+      assert {:ok, stable_downstream} =
+               WebsocketOwnerSession.attach_downstream(
+                 owner,
+                 downstream_target(correlation_id)
+               )
+
+      parent = self()
+
+      submitter =
+        Task.async(fn ->
+          downstream = Map.put(stable_downstream, :owner_turn_id, self())
+
+          request_options =
+            fixture.session
+            |> owner_request_options(fixture.lease_token, downstream, nil,
+              payload: fixture.payload,
+              request_id: fixture.accounting.request.correlation_id
+            )
+            |> RequestOptions.put_openai_compatibility(public_openai_responses_stream: true)
+
+          {prepared_context, request} =
+            runtime_dispatch_fixture(
+              upstream,
+              auth,
+              fixture.assignment,
+              fixture.identity,
+              fixture.model,
+              request_options,
+              fixture.accounting,
+              fixture.payload
+            )
+
+          finalized_websocket_request(prepared_context, request, notify: parent)
+        end)
+
+      owner_turn_id = submitter.pid
+
+      assert_receive {:websocket_owner_output_commit_probe, ^correlation_id, 1, ^owner_turn_id,
+                      active_turn_ref, ^owner, probe_ref}
+
+      assert Task.yield(submitter, 0) == nil
+
+      send(
+        owner,
+        {:websocket_owner_output_commit_ack, correlation_id, 1, owner_turn_id, active_turn_ref,
+         probe_ref, true}
       )
 
-    %{session: session, lease_token: lease_token} = owner_session_fixture(auth, :post_visible)
+      assert_receive {:websocket_owner_frame, ^correlation_id, 1, ^owner_turn_id,
+                      {:error, :upstream_stream_error, safe_payload}}
 
-    {:ok, owner} =
-      start_owner(session, upstream: frame_observer_failure_upstream(self(), :raise))
+      assert safe_payload.code == "server_error"
+      assert_receive {:websocket_owner_frame, ^correlation_id, 1, ^owner_turn_id, :complete}
 
-    assert {:ok, stable_downstream} =
-             WebsocketOwnerSession.attach_downstream(
-               owner,
-               downstream_target("corr-post-visible")
-             )
+      assert_receive {:websocket_owner_frame, ^correlation_id, 1, ^owner_turn_id,
+                      {:data, ^expected_created}}
 
-    parent = self()
+      assert_receive {:websocket_owner_frame, ^correlation_id, 1, ^owner_turn_id,
+                      {:data, ^expected_visible}}
 
-    submitter =
-      Task.async(fn ->
-        downstream = Map.put(stable_downstream, :owner_turn_id, self())
+      assert_receive {:owner_frame_observer_called, ^kind, _owner_upstream_pid,
+                      "response.created"}
 
-        request_options =
-          session
-          |> owner_request_options(lease_token, downstream, nil)
-          |> RequestOptions.put_openai_compatibility(public_openai_responses_stream: true)
+      assert_receive {:owner_frame_observer_called, ^kind, _owner_upstream_pid,
+                      "response.output_text.delta"}
 
-        request = dispatch_request(upstream, identity, request_options)
-        websocket_request(request, notify: parent)
-      end)
+      refute_received {:owner_frame_observer_called, ^kind, _owner_upstream_pid, _duplicate}
 
-    owner_turn_id = submitter.pid
+      assert {:error, %{code: "upstream_request_failed", status: 502}} =
+               Task.await(submitter, @detection_timeout_ms)
 
-    assert_receive {:websocket_owner_output_commit_probe, "corr-post-visible", 1, ^owner_turn_id,
-                    active_turn_ref, ^owner, probe_ref}
-
-    assert Task.yield(submitter, 0) == nil
-
-    send(
-      owner,
-      {:websocket_owner_output_commit_ack, "corr-post-visible", 1, owner_turn_id, active_turn_ref,
-       probe_ref, true}
-    )
-
-    assert_receive {:websocket_owner_frame, "corr-post-visible", 1, ^owner_turn_id,
-                    {:error, :upstream_stream_error, safe_payload}}
-
-    assert safe_payload.code == "server_error"
-
-    assert_receive {:websocket_owner_frame, "corr-post-visible", 1, ^owner_turn_id, :complete}
-
-    assert_receive {:websocket_owner_frame, "corr-post-visible", 1, ^owner_turn_id,
-                    {:data, ^expected_created}}
-
-    assert_receive {:websocket_owner_frame, "corr-post-visible", 1, ^owner_turn_id,
-                    {:data, ^expected_visible}}
-
-    assert_receive {:owner_frame_observer_called, :raise, _owner_upstream_pid, "response.created"}
-
-    assert_receive {:owner_frame_observer_called, :raise, _owner_upstream_pid,
-                    "response.output_text.delta"}
-
-    refute_received {:owner_frame_observer_called, :raise, _owner_upstream_pid, _duplicate}
-
-    assert {:error, failure} = Task.await(submitter, @detection_timeout_ms)
-    assert failure.reason == :upstream_websocket_closed_before_terminal
-    assert failure.transport_failure["upstream_committed"] == true
-    assert FakeUpstream.count(upstream) == 1
-    refute_received {:websocket_owner_frame, "corr-post-visible", 1, ^owner_turn_id, _duplicate}
-    assert %{active_turn: nil} = :sys.get_state(owner)
+      assert FakeUpstream.count(upstream) == 1
+      refute_received {:websocket_owner_frame, ^correlation_id, 1, ^owner_turn_id, _duplicate}
+      assert %{active_turn: nil} = :sys.get_state(owner)
+      assert_failed_accounting!(fixture.accounting, "failed", "upstream_stream_error")
+    end
   end
 
   test "v1 mapper and writer faults terminate the owner path", %{auth: auth} do
@@ -701,15 +797,32 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     %{request: reserved.request, attempt: attempt, turn: turn}
   end
 
-  defp finalize_and_assert_successful_accounting!(accounting) do
-    assert {:ok, %{finalization_disposition: :inserted}} =
-             AttemptSettlement.finalize_success(
-               accounting.request,
-               accounting.attempt,
-               %{status: "usage_known", input_tokens: 1, output_tokens: 1, total_tokens: 2},
-               %{response_status_code: 200}
-             )
+  defp protocol_runtime_fixture(auth, suffix, owner_instance_id \\ Atom.to_string(@remote_node)) do
+    %{identity: identity, assignment: assignment} = active_upstream_assignment_fixture(auth.pool)
 
+    model =
+      model_fixture(auth.pool, %{
+        exposed_model_id: "protocol-#{suffix}-#{System.unique_integer([:positive])}"
+      })
+
+    %{session: session, lease_token: lease_token} =
+      owner_session_fixture(auth, suffix, owner_instance_id)
+
+    accounting = accounting_turn_fixture(auth, session, assignment, model, suffix)
+    payload = websocket_payload(model.exposed_model_id)
+
+    %{
+      accounting: accounting,
+      assignment: assignment,
+      identity: identity,
+      lease_token: lease_token,
+      model: model,
+      payload: payload,
+      session: session
+    }
+  end
+
+  defp assert_successful_accounting!(accounting) do
     assert %Request{
              status: "succeeded",
              usage_status: "usage_known",
@@ -764,6 +877,66 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
              :count
            ) == 1
   end
+
+  defp assert_failed_accounting!(accounting, turn_status, error_code) do
+    response_status_code = failure_status_code(error_code)
+
+    assert %Request{
+             status: "failed",
+             usage_status: "usage_unknown",
+             response_status_code: ^response_status_code,
+             retry_count: 0,
+             last_error_code: ^error_code
+           } = Repo.get!(Request, accounting.request.id)
+
+    assert %Attempt{
+             attempt_number: 1,
+             status: "failed",
+             usage_status: "usage_unknown",
+             upstream_status_code: ^response_status_code,
+             retryable: false,
+             network_error_code: ^error_code
+           } = Repo.get!(Attempt, accounting.attempt.id)
+
+    assert %CodexTurn{
+             status: ^turn_status,
+             final_attempt_id: attempt_id,
+             error_code: ^error_code
+           } = Repo.get!(CodexTurn, accounting.turn.id)
+
+    assert attempt_id == accounting.attempt.id
+
+    assert [reservation, release, settlement] =
+             Repo.all(
+               from entry in LedgerEntry,
+                 where: entry.request_id == ^accounting.request.id,
+                 order_by: [asc: entry.occurred_at, asc: entry.entry_kind]
+             )
+
+    assert reservation.entry_kind == "reservation"
+    assert reservation.attempt_id == nil
+    assert release.entry_kind == "release"
+    assert release.attempt_id == accounting.attempt.id
+    assert release.usage_status == "usage_unknown"
+    assert settlement.entry_kind == "settlement"
+    assert settlement.attempt_id == accounting.attempt.id
+    assert settlement.usage_status == "usage_unknown"
+
+    assert Repo.aggregate(
+             from(attempt in Attempt, where: attempt.request_id == ^accounting.request.id),
+             :count
+           ) == 1
+
+    assert Repo.aggregate(
+             from(turn in CodexTurn, where: turn.request_id == ^accounting.request.id),
+             :count
+           ) == 1
+  end
+
+  defp failure_status_code("client_disconnected"), do: 499
+  defp failure_status_code("duplicate_downstream"), do: 409
+  defp failure_status_code("owner_unavailable"), do: 503
+  defp failure_status_code(_error_code), do: 502
 
   defp assert_replaced_owner_lease!(session, previous_lease_token) do
     assert %BridgeOwnerLease{
@@ -881,15 +1054,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
          lease_token,
          downstream,
          reset_probe,
-         forwarder_opts \\ [node_client: WebsocketOwnerNodeHarness]
+         opts \\ []
        ) do
+    payload = Keyword.get(opts, :payload, websocket_payload("example-model"))
+
     RequestOptions.for_websocket(
       %{
         codex_session: session,
         receive_timeout_ms: 1_000,
         reset_probe: reset_probe,
-        request_id: Ecto.UUID.generate(),
+        request_id: Keyword.get(opts, :request_id, Ecto.UUID.generate()),
         client_request_id: Ecto.UUID.generate(),
+        requested_model: payload["model"],
+        effective_model: payload["model"],
         websocket_owner_forwarding_enabled?: true,
         websocket_owner_session: session,
         websocket_owner_lease_token: lease_token,
@@ -897,9 +1074,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
         websocket_owner_downstream_epoch: downstream.epoch,
         websocket_owner_proxy_instance_id: Atom.to_string(node()),
         websocket_owner_instance_id: session.owner_instance_id,
-        websocket_owner_forwarder_opts: forwarder_opts
+        websocket_owner_forwarder_opts:
+          Keyword.get(opts, :forwarder_opts, node_client: WebsocketOwnerNodeHarness)
       },
-      %{"model" => "example-model"}
+      payload
     )
   end
 
@@ -915,11 +1093,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     )
   end
 
-  defp dispatch_request(upstream, identity, request_options, accounting \\ nil) do
+  defp dispatch_request(
+         upstream,
+         identity,
+         request_options,
+         accounting \\ nil,
+         payload \\ websocket_payload("example-model")
+       ) do
     %UpstreamDispatch.Request{
       url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
       token: "synthetic-token",
-      upstream_payload: Jason.encode!(%{"type" => "response.create", "model" => "example-model"}),
+      upstream_payload: Jason.encode!(Map.put(payload, "type", "response.create")),
       identity: identity,
       routing_hint_authorized?: true,
       accounting_request: accounting && accounting.request,
@@ -929,6 +1113,78 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
       request_options: request_options,
       native_codex_response_control: nil
     }
+  end
+
+  defp runtime_dispatch_fixture(
+         upstream,
+         auth,
+         assignment,
+         identity,
+         model,
+         request_options,
+         accounting,
+         payload
+       ) do
+    context = %SelectedCandidateContext{
+      auth: auth,
+      endpoint: "/backend-api/codex/responses",
+      payload: payload,
+      model: model,
+      reserved: %{request: accounting.request},
+      request_options: request_options,
+      route_plan:
+        BridgeRing.plan_route(%{
+          auth: auth,
+          model: model,
+          candidates: [{assignment, identity}],
+          route_plan_input: RoutePlanInput.from_reserved(%{request: accounting.request}),
+          request_options: request_options
+        }),
+      assignment: assignment,
+      identity: identity,
+      index: 0,
+      retry_count: 0,
+      allow_retry?: false,
+      routing_attempt_metadata: %{},
+      route_class: "proxy_websocket",
+      attempt: accounting.attempt,
+      started: System.monotonic_time(:millisecond)
+    }
+
+    prepared_context = %PreparedContext{
+      context: context,
+      url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
+      token: "synthetic-token",
+      upstream_payload: Jason.encode!(Map.put(payload, "type", "response.create")),
+      routing_hint_authorized?: true
+    }
+
+    {prepared_context, dispatch_request(upstream, identity, request_options, accounting, payload)}
+  end
+
+  defp finalized_websocket_request(prepared_context, request, opts) do
+    WebsocketOwnerNodeHarness.with_node_client(
+      [@remote_node],
+      [
+        calls: %{@remote_node => :success},
+        capture_request_to: Keyword.get(opts, :capture_request_to),
+        notify: Keyword.get(opts, :notify, self())
+      ],
+      fn _node_client_opts ->
+        WebsocketAttempt.dispatch(prepared_context, request, finalization_callbacks())
+      end
+    )
+  end
+
+  defp finalization_callbacks do
+    %{
+      register_continuity: fn _request_options, _payload, _body -> :ok end,
+      stream_result: fn _response, _context -> :ok end
+    }
+  end
+
+  defp websocket_payload(model) do
+    %{"model" => model, "input" => "synthetic protocol turn", "stream" => true}
   end
 
   defp public_turn_downstream(downstream, :public_openai_responses),
@@ -958,7 +1214,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
   defp terminal_frame(response_id) do
     Jason.encode!(%{
       "type" => "response.completed",
-      "response" => %{"id" => response_id, "status" => "completed"}
+      "response" => %{
+        "id" => response_id,
+        "status" => "completed",
+        "usage" => %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}
+      }
     })
   end
 
