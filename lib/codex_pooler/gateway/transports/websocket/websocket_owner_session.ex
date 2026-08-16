@@ -41,6 +41,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     :persistence,
     :request_id,
     :draining?,
+    :retire_after_active_turn?,
     :owner_exit_cause,
     :idle_shutdown_ms,
     :idle_shutdown_ref,
@@ -265,7 +266,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          idle_shutdown_ms: idle_shutdown_ms,
          owner_renewal_ms: owner_renewal_ms,
          owner_renewal_delay: owner_renewal_delay,
-         draining?: false
+         draining?: false,
+         retire_after_active_turn?: false
        }
        |> schedule_owner_renewal()}
     end
@@ -463,13 +465,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   def handle_info({ref, result}, %{active_turn: %{task_ref: ref}} = state) do
     Process.demonitor(ref, [:flush])
-    result = DownstreamState.effective_active_turn_result(state.active_turn, result)
     state = put_in(state.active_turn.task_ref, nil)
 
-    if terminal_bearing_result?(result) and not state.active_turn.terminal_forwarded? do
-      {:noreply, retain_terminal_result(state, result)}
+    if Process.alive?(state.upstream_pid) do
+      result = DownstreamState.effective_active_turn_result(state.active_turn, result)
+
+      if terminal_bearing_result?(result) and not state.active_turn.terminal_forwarded? do
+        {:noreply, retain_terminal_result(state, result)}
+      else
+        {:noreply, settle_active_turn(state, result)}
+      end
     else
-      {:noreply, settle_active_turn(state, result)}
+      retire_current_upstream(state, :owner_crashed)
     end
   end
 
@@ -488,7 +495,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
            probe.probe_ref
          ) do
       {:ok, committed?} ->
-        {:noreply, settle_output_commit_probe(state, committed?)}
+        state
+        |> settle_output_commit_probe(committed?)
+        |> continue_or_retire()
 
       _stale_or_invalid ->
         {:noreply, state}
@@ -506,17 +515,29 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
           }
         } = state
       ) do
-    {:noreply, timeout_output_commit_probe(state)}
+    state
+    |> timeout_output_commit_probe()
+    |> continue_or_retire()
+  end
+
+  def handle_info({:EXIT, upstream_pid, reason}, %{upstream_pid: upstream_pid} = state) do
+    retire_current_upstream(state, reason)
   end
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{active_turn: %{task_ref: ref}} = state) do
-    result =
-      DownstreamState.effective_active_turn_result(
-        state.active_turn,
-        {:error, owner_error(reason)}
-      )
+    if Process.alive?(state.upstream_pid) do
+      result =
+        DownstreamState.effective_active_turn_result(
+          state.active_turn,
+          {:error, owner_error(reason)}
+        )
 
-    {:noreply, settle_active_turn(state, result)}
+      state
+      |> settle_active_turn(result)
+      |> continue_or_retire()
+    else
+      retire_current_upstream(state, :owner_crashed)
+    end
   end
 
   def handle_info(
@@ -568,7 +589,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
           state
       end
 
-    {:noreply, state}
+    continue_or_retire(state)
   end
 
   def handle_info(:idle_shutdown, %{downstream: nil, active_turn: nil} = state) do
@@ -842,6 +863,52 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       finish_active_turn(state, result)
     end
   end
+
+  defp continue_or_retire(%{retire_after_active_turn?: true, active_turn: nil} = state),
+    do: {:stop, :owner_crashed, state}
+
+  defp continue_or_retire(state), do: {:noreply, state}
+
+  defp retire_current_upstream(state, reason) do
+    state = %{state | draining?: true, retire_after_active_turn?: true}
+
+    case state.active_turn do
+      %{output_commit_probe: probe} when is_map(probe) ->
+        {:noreply, state}
+
+      active_turn when is_map(active_turn) ->
+        state = cancel_active_turn_for_upstream_exit(state)
+
+        state
+        |> settle_active_turn(upstream_exit_result(state, reason))
+        |> continue_or_retire()
+
+      nil ->
+        {:stop, :owner_crashed, state}
+    end
+  end
+
+  defp cancel_active_turn_for_upstream_exit(state) do
+    %{task_ref: task_ref} = state.active_turn
+    if is_reference(task_ref), do: Process.demonitor(task_ref, [:flush])
+    DownstreamState.cancel_active_turn_task(state.active_turn)
+    put_in(state.active_turn.task_ref, nil)
+  end
+
+  defp upstream_exit_result(
+         %{active_turn: %{downstream: %{owner_turn_id: owner_turn_id}}},
+         reason
+       )
+       when is_pid(owner_turn_id) do
+    {:error,
+     %{
+       body: "",
+       reason: owner_error(reason),
+       transport_failure: %{"reason" => "owner_crashed"}
+     }}
+  end
+
+  defp upstream_exit_result(_state, reason), do: {:error, owner_error(reason)}
 
   defp retain_output_commit_probe(state, result) do
     downstream = DownstreamState.active_turn_downstream(state)
