@@ -31,8 +31,49 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
   test "fixture records the historical legacy request protocol" do
     assert Fixture.provenance() == %{
              source_commit: @source_commit,
-             legacy_protocol: %{function: :remote_submit_request, arity: 4}
+             source_path:
+               "lib/codex_pooler/gateway/transports/websocket/websocket_owner_forwarder.ex",
+             public_entrypoint: {:remote_submit_request, 4},
+             owner_resolution: {:ensure_remote_owner, 4},
+             submission: {:submit_remote_owner_request, 5},
+             visibility: {:track_request_visibility, 1}
            }
+  end
+
+  test "previous release /4 executes historical owner resolution and submission", %{auth: auth} do
+    caller = start_peer!(:previous_path_caller)
+    owner_peer = start_peer!(:previous_path_owner)
+    start_runtime!(owner_peer.node)
+    assert {:module, WebsocketOwnerForwarder} = Fixture.load_forwarder(owner_peer.node, self())
+
+    %{session: session} = owner_session_fixture(auth, owner_peer.node, "old-old")
+    terminal = Jason.encode!(%{"type" => "response.completed", "response" => %{}})
+    owner = start_owner!(owner_peer.node, session, [terminal])
+    attached = attach!(owner_peer.node, session.id, "corr-old-old")
+    assert {:module, WebsocketOwnerForwarder} = Fixture.load_forwarder(owner_peer.node, self())
+    request = :erpc.call(caller.node, Fixture, :historical_request, [self()])
+    opts = :erpc.call(caller.node, Fixture, :legacy_opts, [self()])
+
+    assert {:ok, %{terminal: "response.completed", status: 200}} =
+             :erpc.call(caller.node, Fixture, :call_current_owner, [
+               owner_peer.node,
+               session.id,
+               attached,
+               request,
+               opts
+             ])
+
+    assert_exactly_once({:previous_release_protocol, :remote_submit_request_4})
+    assert_exactly_once({:previous_release_protocol, :ensure_remote_owner_4})
+    assert_exactly_once({:previous_release_protocol, :submit_remote_owner_request_5})
+    assert_exactly_once({:previous_release_protocol, :do_submit_remote_owner_request_6})
+    assert_exactly_once({:mixed_release_upstream_send, owner_peer.node})
+    assert_exactly_once({:mixed_release_request_materialized, :synthetic})
+    assert_receive {:websocket_owner_frame, "corr-old-old", 1, {:data, ^terminal}}
+    assert_receive {:websocket_owner_frame, "corr-old-old", 1, :complete}
+    assert :erpc.call(owner_peer.node, Process, :alive?, [owner])
+    assert_owner_idle(owner_peer.node, session.id, owner)
+    assert_no_external_network([caller, owner_peer])
   end
 
   test "current v1 proxy rejects a previous owner before callback or upstream work", %{auth: auth} do
@@ -40,7 +81,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
     current = start_peer!(:current_proxy)
     start_runtime!(previous.node)
 
-    assert {:module, WebsocketOwnerForwarder} = Fixture.load_forwarder(previous.node)
+    assert {:module, WebsocketOwnerForwarder} = Fixture.load_forwarder(previous.node, self())
 
     refute :erpc.call(previous.node, :erlang, :function_exported, [
              WebsocketOwnerForwarder,
@@ -53,9 +94,8 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
     attached = attach!(previous.node, session.id, "corr-new-old")
 
     request = owner_request(Ecto.UUID.generate(), version: 1)
-    refute contains_function?(request)
 
-    assert {:error, :owner_unavailable} =
+    assert {:rpc_receipt, rpc_arguments, {:error, :owner_unavailable}} =
              :erpc.call(current.node, Fixture, :call_current_v1, [
                previous.node,
                session.id,
@@ -64,10 +104,13 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
                @peer_timeout
              ])
 
+    refute contains_function?(rpc_arguments)
+
     assert_owner_idle(previous.node, session.id, owner)
     assert :erpc.call(previous.node, Process, :alive?, [owner])
     assert Repo.get!(CodexSession, session.id).owner_lease_token == token
     assert_no_forbidden_work()
+    assert_no_external_network([previous, current])
   end
 
   test "previous caller rejects current legacy entrypoint before every function sentinel", %{
@@ -99,6 +142,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
     assert :erpc.call(current.node, Process, :alive?, [owner])
     assert Repo.get!(CodexSession, session.id).owner_lease_token == token
     assert_no_forbidden_work()
+    assert_no_external_network([previous, current])
   end
 
   test "current peers with different dispatch BEAM identities complete one v1 terminal", %{
@@ -122,10 +166,10 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
     owner = start_owner!(owner_peer.node, session, [terminal])
     attached = attach!(owner_peer.node, session.id, "corr-current-current")
     request = owner_request(upstream_identity_id, version: 1, submission_notification?: true)
-    refute contains_function?(request)
 
-    assert {:websocket_owner_submission_accepted,
-            {:ok, %{terminal: "response.completed", status: 200}}} =
+    assert {:rpc_receipt, rpc_arguments,
+            {:websocket_owner_submission_accepted,
+             {:ok, %{terminal: "response.completed", status: 200}}}} =
              :erpc.call(proxy.node, Fixture, :call_current_v1, [
                owner_peer.node,
                session.id,
@@ -134,26 +178,28 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
                @peer_timeout
              ])
 
-    assert_receive {:mixed_release_upstream_send, _worker}, @peer_timeout
-    assert_receive {:mixed_release_request_materialized, _url}
-    assert_receive {:websocket_owner_frame, "corr-current-current", 1, {:data, ^terminal}}
-    assert_receive {:websocket_owner_frame, "corr-current-current", 1, :complete}
+    refute contains_function?(rpc_arguments)
+
+    assert_exactly_once({:mixed_release_upstream_send, owner_peer.node})
+    assert_exactly_once({:mixed_release_request_materialized, :synthetic})
+    assert_exactly_once({:websocket_owner_frame, "corr-current-current", 1, {:data, terminal}})
+    assert_exactly_once({:websocket_owner_frame, "corr-current-current", 1, :complete})
     refute_received {:websocket_owner_frame, "corr-current-current", 1, _duplicate}
     assert :erpc.call(owner_peer.node, Process, :alive?, [owner])
     assert_owner_idle(owner_peer.node, session.id, owner)
-    refute_received {:external_network_call, _, _, _, _}
+    assert_no_external_network([proxy, owner_peer])
   end
 
   test "unknown v2 rejects before owner lookup or work and preserves function-free remote terms" do
     caller = start_peer!(:future_caller)
     owner_peer = start_peer!(:future_owner)
-    start_runtime!(owner_peer.node)
+    assert :ok = Fixture.load_lookup_sentinels(owner_peer.node)
 
     request = owner_request(Ecto.UUID.generate(), version: 2)
     remote_terms = ["future-session", downstream("corr-future"), request]
     refute contains_function?(remote_terms)
 
-    assert {:error, :owner_unavailable} =
+    assert {:rpc_receipt, rpc_arguments, {:error, :owner_unavailable}} =
              :erpc.call(caller.node, Fixture, :call_current_v1, [
                owner_peer.node,
                "future-session",
@@ -162,10 +208,19 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
                @peer_timeout
              ])
 
-    assert {:error, :owner_unavailable} =
-             :erpc.call(owner_peer.node, WebsocketOwnerSession, :lookup, ["future-session"])
-
+    refute contains_function?(rpc_arguments)
+    assert %{identity: 0, owner: 0} = Fixture.lookup_sentinel_counts(owner_peer.node)
     assert_no_forbidden_work()
+    assert_no_external_network([caller, owner_peer])
+  end
+
+  test "peer cleanup runs after a forced assertion failure" do
+    peer_name = String.to_atom("forced_cleanup_#{System.unique_integer([:positive])}")
+
+    assert {:error, %ExUnit.AssertionError{}} =
+             Fixture.run_forced_failure_cleanup_probe(peer_name)
+
+    assert_peer_absent!(peer_name)
   end
 
   defp start_peer!(prefix) do
@@ -177,20 +232,17 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
                args: [~c"-kernel", ~c"prevent_overlapping_partitions", ~c"false"]
              })
 
-    Process.unlink(peer_pid)
-    assert :ok = :erpc.call(peer_node, :code, :add_paths, [:code.get_path()])
-    tracer = :erpc.call(peer_node, Fixture, :start_external_network_guard, [self()])
-
     on_exit(fn ->
-      if peer_node in Node.list(:connected) do
-        :erpc.call(peer_node, Fixture, :stop_external_network_guard, [tracer])
-      end
-
       if Process.alive?(peer_pid), do: :peer.stop(peer_pid)
       refute peer_node in Node.list(:connected)
+      assert_peer_absent!(peer_name)
     end)
 
-    %{pid: peer_pid, node: peer_node}
+    Process.unlink(peer_pid)
+    assert :ok = :erpc.call(peer_node, :code, :add_paths, [:code.get_path()])
+    assert {:ok, tracer} = :erpc.call(peer_node, Fixture, :start_external_network_guard, [])
+
+    %{name: peer_name, pid: peer_pid, node: peer_node, tracer: tracer}
   end
 
   defp start_runtime!(peer_node) do
@@ -227,6 +279,25 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
     refute_received {:mixed_release_upstream_send, _owner}
     refute_received {:mixed_release_request_materialized, _url}
     refute_received {:external_network_call, _, _, _, _}
+  end
+
+  defp assert_exactly_once(message) do
+    assert_receive ^message, @peer_timeout
+    refute_received ^message
+  end
+
+  defp assert_no_external_network(peers) do
+    Enum.each(peers, fn peer ->
+      assert {:ok, 0} =
+               :erpc.call(peer.node, Fixture, :flush_external_network_guard, [peer.tracer])
+    end)
+
+    refute_received {:external_network_call, _, _, _, _}
+  end
+
+  defp assert_peer_absent!(peer_name) do
+    assert {:ok, names} = :erl_epmd.names()
+    refute Enum.any?(names, fn {name, _port} -> name == Atom.to_charlist(peer_name) end)
   end
 
   defp owner_request(identity_id, opts) do
