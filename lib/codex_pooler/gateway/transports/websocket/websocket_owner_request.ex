@@ -23,6 +23,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest do
     :submission_notification?
   ]
   @observation_fields [:request_id, :client_request_id, :attempt_id, :mode]
+  @timeout_fields [:connect_timeout_ms, :pool_timeout_ms, :receive_timeout_ms]
+  @reset_probe_fields [
+    :token,
+    :version,
+    :pool_upstream_assignment_id,
+    :upstream_identity_id,
+    :effective_model,
+    :route_class
+  ]
+  @native_control_fields [:models_etag]
   @max_headers 128
   @max_header_name_bytes 256
   @max_header_value_bytes 16_384
@@ -162,10 +172,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest do
   defp proper_list?(_tail), do: false
 
   defp valid_timeouts?(%TimeoutConfig{} = timeouts) do
-    Enum.all?(
-      [timeouts.connect_timeout_ms, timeouts.pool_timeout_ms, timeouts.receive_timeout_ms],
-      &(is_integer(&1) and &1 >= 0)
-    )
+    exact_struct_fields?(timeouts, @timeout_fields) and
+      Enum.all?(
+        [timeouts.connect_timeout_ms, timeouts.pool_timeout_ms, timeouts.receive_timeout_ms],
+        &(is_integer(&1) and &1 >= 0)
+      )
   end
 
   defp valid_timeouts?(_timeouts), do: false
@@ -192,16 +203,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest do
 
   defp valid_reset_probe?(nil), do: true
 
-  defp valid_reset_probe?(%ResetProbe{} = probe),
-    do: ResetProbe.unbound?(probe) or ResetProbe.bound?(probe)
+  defp valid_reset_probe?(%ResetProbe{} = probe) do
+    exact_struct_fields?(probe, @reset_probe_fields) and
+      (ResetProbe.unbound?(probe) or ResetProbe.bound?(probe))
+  end
 
   defp valid_reset_probe?(_probe), do: false
 
   defp valid_native_control?(nil), do: true
 
-  defp valid_native_control?(%TurnSnapshot{models_etag: models_etag})
+  defp valid_native_control?(%TurnSnapshot{models_etag: models_etag} = control)
        when is_binary(models_etag) do
-    byte_size(models_etag) in 1..@max_models_etag_bytes and String.valid?(models_etag) and
+    exact_struct_fields?(control, @native_control_fields) and
+      byte_size(models_etag) in 1..@max_models_etag_bytes and String.valid?(models_etag) and
       not contains_ascii_control?(models_etag)
   end
 
@@ -215,6 +229,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest do
 
   defp valid_optional_uuid?(nil), do: true
   defp valid_optional_uuid?(value), do: valid_uuid?(value)
+
+  defp exact_struct_fields?(value, fields) do
+    MapSet.new(Map.keys(value)) == MapSet.new([:__struct__ | fields])
+  end
 
   defp valid_uuid?(value) when is_binary(value), do: Ecto.UUID.cast(value) == {:ok, value}
   defp valid_uuid?(_value), do: false

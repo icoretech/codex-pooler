@@ -127,6 +127,27 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRequestTest do
     end
   end
 
+  test "rejects callback-bearing unknown keys on every nested snapshot" do
+    function = fn -> :not_data end
+    attrs = valid_attrs()
+
+    mutations = [
+      {:timeouts, Map.put(attrs.timeouts, :unexpected_callback, function)},
+      {:reset_probe, Map.put(attrs.reset_probe, :unexpected_callback, function)},
+      {:native_codex_response_control,
+       Map.put(attrs.native_codex_response_control, :unexpected_callback, function)}
+    ]
+
+    assert Enum.map(mutations, fn {field, snapshot} ->
+             attrs |> Map.put(field, snapshot) |> WebsocketOwnerRequest.new()
+           end) ==
+             [
+               {:error, {:invalid_field, :timeouts}},
+               {:error, {:invalid_field, :reset_probe}},
+               {:error, {:invalid_field, :native_codex_response_control}}
+             ]
+  end
+
   test "inspect is opaque" do
     attrs = valid_attrs()
     assert {:ok, request} = WebsocketOwnerRequest.new(attrs)

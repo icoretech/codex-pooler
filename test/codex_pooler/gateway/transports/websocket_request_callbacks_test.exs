@@ -3,7 +3,8 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRequestCallbacksTest do
 
   import CodexPooler.PoolerFixtures
 
-  alias CodexPooler.Gateway.Payloads.RequestOptions.TimeoutConfig
+  alias CodexPooler.Gateway.Payloads.RequestOptions.{ResetProbe, TimeoutConfig}
+  alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
@@ -72,6 +73,31 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRequestCallbacksTest do
 
     assert {:error, {:invalid_owner_request, {:invalid_field, :headers}}} =
              WebsocketRequestCallbacks.materialize(malformed, fn _text -> :written end)
+  end
+
+  test "rejects callback-bearing nested snapshot keys before identity lookup" do
+    function = fn -> :bad end
+    attrs = valid_attrs(Ecto.UUID.generate())
+
+    snapshots = [
+      {:timeouts, Map.put(attrs.timeouts, :unexpected_callback, function)},
+      {:reset_probe,
+       Map.put(%ResetProbe{token: Ecto.UUID.generate()}, :unexpected_callback, function)},
+      {:native_codex_response_control,
+       Map.put(%TurnSnapshot{models_etag: "etag"}, :unexpected_callback, function)}
+    ]
+
+    assert Enum.map(snapshots, fn {field, snapshot} ->
+             attrs
+             |> Map.put(field, snapshot)
+             |> WebsocketRequestCallbacks.materialize(fn _text -> :written end)
+           end) ==
+             [
+               {:error, {:invalid_owner_request, {:invalid_field, :timeouts}}},
+               {:error, {:invalid_owner_request, {:invalid_field, :reset_probe}}},
+               {:error,
+                {:invalid_owner_request, {:invalid_field, :native_codex_response_control}}}
+             ]
   end
 
   test "owner-local writer and frame observer preserve Task14 observation semantics" do
