@@ -137,7 +137,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
           :stale ->
             Logger.owner_stale_replaced(pid, opts)
-            _result = GenServer.stop(pid, {:shutdown, :stale_owner}, owner_call_timeout())
+            :ok = stop_stale_owner(pid)
             :erlang.yield()
             start_owner(opts, attempts - 1)
         end
@@ -743,6 +743,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       Process.flag(:sensitive, true)
       send_upstream(reservation, upstream_payload)
     end)
+  end
+
+  defp stop_stale_owner(pid) do
+    GenServer.stop(pid, {:shutdown, :stale_owner}, owner_call_timeout())
+  catch
+    :exit, {:noproc, _details} -> :ok
   end
 
   defp submission_observer?(%UpstreamWebsocketSession.Request{submission_observer: observer}),

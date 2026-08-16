@@ -20,6 +20,37 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPoolerWeb.CodexResponsesSocket
 
+  defmodule RetiringRegisteredOwner do
+    use GenServer
+
+    def start_link(context, parent) do
+      GenServer.start_link(__MODULE__, {context, parent})
+    end
+
+    @impl GenServer
+    def init({context, parent}) do
+      {:ok, _owner} =
+        Registry.register(WebsocketOwnerSession.Registry, context.codex_session_id, nil)
+
+      send(parent, {:retiring_registered_owner_ready, self()})
+      {:ok, context}
+    end
+
+    @impl GenServer
+    def handle_call(:owner_status, _from, context) do
+      {:stop, :normal,
+       {:ok,
+        %{
+          codex_session_id: context.codex_session_id,
+          owner_lease_token: context.owner_lease_token,
+          owner_instance_id: context.owner_instance_id,
+          upstream_alive?: false,
+          draining?: false,
+          active_turn?: false
+        }}, context}
+    end
+  end
+
   @pending_terminal_observation_timeout_ms 5_000
   @sentinel "SECRET_SENTINEL_DO_NOT_STORE_123"
 
@@ -56,6 +87,27 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert fresh_owner != owner
     assert_receive {:websocket_owner_harness_upstream_started, fresh_upstream_pid}
     assert fresh_upstream_pid != upstream_pid
+  end
+
+  test "replaces a stale registered owner that retires after reporting its status", context do
+    context = %{context | codex_session_id: Ecto.UUID.generate()}
+    on_exit(fn -> cleanup_owner_session(context.codex_session_id) end)
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+    persistence = owner_exit_persistence_spy(self(), context)
+
+    {:ok, stale_owner} = RetiringRegisteredOwner.start_link(context, self())
+    assert_receive {:retiring_registered_owner_ready, ^stale_owner}
+    stale_owner_ref = Process.monitor(stale_owner)
+
+    assert {:ok, replacement_owner} =
+             start_owner(context, upstream: upstream, persistence: persistence)
+
+    assert_receive {:DOWN, ^stale_owner_ref, :process, ^stale_owner, :normal}
+    assert_receive {:websocket_owner_harness_upstream_started, replacement_upstream_pid}
+    assert replacement_owner != stale_owner
+    assert Process.alive?(replacement_owner)
+    assert Process.alive?(replacement_upstream_pid)
+    assert WebsocketOwnerSession.lookup(context.codex_session_id) == {:ok, replacement_owner}
   end
 
   @tag :rollout_drain_t3

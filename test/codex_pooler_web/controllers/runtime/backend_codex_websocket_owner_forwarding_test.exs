@@ -6286,7 +6286,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     try do
       {:ok, replacement_owner_pid} = WebsocketOwnerSession.lookup(session.id)
       assert replacement_owner_pid != owner_pid
-      assert active_owner_lease(session.id).lease_token == old_lease.lease_token
+      replacement_lease = active_owner_lease(session.id)
+      assert replacement_lease.lease_token != old_lease.lease_token
+      assert replacement_lease.lease_token == second_state.websocket_owner_lease_token
+      assert Repo.get!(BridgeOwnerLease, old_lease.id).status == "released"
+
+      assert Repo.get!(BridgeOwnerLease, old_lease.id).metadata["release_reason"] ==
+               "owner_crashed"
+
       assert second_state.websocket_owner_downstream.epoch == 1
 
       payload = websocket_payload(setup, "after stale upstream")
