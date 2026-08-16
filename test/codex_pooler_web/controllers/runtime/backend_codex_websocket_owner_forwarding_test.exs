@@ -46,7 +46,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
-  alias CodexPooler.Gateway.RequestCompression.TokenCounter
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Gateway.Runtime.Service
 
@@ -3619,23 +3618,24 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   test "tool-output continuation after reconnect is forwarded through the owner" do
+    first_submission_ref = make_ref()
+
     upstream =
       start_upstream(
         {:sequence,
          [
-           FakeUpstream.json_response(%{"id" => "resp_owner_tool_first", "object" => "response"}),
+           FakeUpstream.barrier_sse_stream(
+             [%{"id" => "resp_owner_tool_first", "object" => "response"}],
+             barrier_after: 0,
+             notify: self(),
+             release_ref: first_submission_ref
+           ),
            FakeUpstream.json_response(%{"id" => "resp_owner_tool_second", "object" => "response"})
          ]}
       )
 
     setup = gateway_setup(upstream, supported_compression_model_opts())
     enable_request_compression!(setup.pool)
-
-    assert {:ok, _count, _metadata} =
-             TokenCounter.count(
-               @supported_compression_model,
-               "warm tokenizer ranks"
-             )
 
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
@@ -3653,6 +3653,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     assert {:ok, first_state} =
              CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, first_state)
+
+    assert_receive {:fake_upstream_chunk_barrier, 0, first_upstream_pid, ^first_submission_ref},
+                   5_000
+
+    send(first_upstream_pid, {:fake_upstream_release_chunk, first_submission_ref})
 
     assert {:push, {:text, first_frame}, first_state} = receive_owner_socket_push(first_state)
     assert %{"id" => "resp_owner_tool_first"} = Jason.decode!(first_frame)
