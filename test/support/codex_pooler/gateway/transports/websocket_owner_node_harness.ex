@@ -486,16 +486,28 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
 
     send(notify, {
       :websocket_owner_harness_node_call,
-      %{
-        node: node,
-        module: module,
-        function: function,
-        arity: length(args),
-        timeout: timeout,
-        mode: mode
-      }
+      Map.merge(
+        %{
+          node: node,
+          module: module,
+          function: function,
+          arity: length(args),
+          timeout: timeout,
+          mode: mode
+        },
+        request_call_metadata(function, args)
+      )
     })
   end
+
+  defp request_call_metadata(
+         :remote_submit_request_v1,
+         [codex_session_id, downstream, _request]
+       ) do
+    %{codex_session_id: codex_session_id, downstream: downstream}
+  end
+
+  defp request_call_metadata(_function, _args), do: %{}
 
   defp send_request_observation(:remote_submit_request, [_session_id, _downstream, request, _opts]) do
     case __MODULE__ |> Process.get(%{}) |> Map.get(:capture_request_to) do

@@ -65,6 +65,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
@@ -1211,7 +1212,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
             state.opts,
             :websocket_owner_forwarder_opts,
             WebsocketOwnerNodeHarness.node_client_opts([remote_node],
-              calls: %{remote_node => :success}
+              calls: %{remote_node => :success},
+              capture_request_to: self()
             )
           )
     }
@@ -1239,13 +1241,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert %{"id" => "resp_owner_remote_node_success"} = Jason.decode!(frame)
       assert {:ok, _state} = receive_owner_socket_complete(remote_state)
 
-      assert_receive {:websocket_owner_harness_node_call,
-                      %{
-                        node: ^remote_node,
-                        function: :remote_submit_request,
-                        arity: 4,
-                        mode: :success
-                      }}
+      assert_remote_submit_request_v1!(remote_state, remote_node, :success)
 
       assert FakeUpstream.count(upstream) == 1
       assert [captured] = FakeUpstream.requests(upstream)
@@ -1483,7 +1479,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     node_opts =
       WebsocketOwnerNodeHarness.node_client_opts([remote_node],
-        calls: %{remote_node => :success}
+        calls: %{remote_node => :success},
+        capture_request_to: self()
       )
 
     remote_state = unpinned_remote_owner_state(state, remote_node, node_opts)
@@ -1508,13 +1505,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert %{"type" => "response.completed"} = Jason.decode!(completed_frame)
       assert {:ok, _state} = receive_owner_socket_complete(remote_state)
 
-      assert_receive {:websocket_owner_harness_node_call,
-                      %{
-                        node: ^remote_node,
-                        function: :remote_submit_request,
-                        arity: 4,
-                        mode: :success
-                      }}
+      assert_remote_submit_request_v1!(remote_state, remote_node, :success)
 
       refute_received {:websocket_owner_harness_node_call, _duplicate}
     after
@@ -1588,7 +1579,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     node_opts =
       WebsocketOwnerNodeHarness.node_client_opts([remote_node],
-        calls: %{remote_node => :success}
+        calls: %{remote_node => :success},
+        capture_request_to: self()
       )
 
     remote_state = unpinned_remote_owner_state(state, remote_node, node_opts)
@@ -1610,13 +1602,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           assert %{"type" => "response.failed"} = Jason.decode!(terminal_frame)
           assert {:ok, _state} = receive_owner_socket_complete(remote_state)
 
-          assert_receive {:websocket_owner_harness_node_call,
-                          %{
-                            node: ^remote_node,
-                            function: :remote_submit_request,
-                            arity: 4,
-                            mode: :success
-                          }}
+          assert_remote_submit_request_v1!(remote_state, remote_node, :success)
 
           refute_received {:websocket_owner_harness_node_call, _duplicate}
         after
@@ -1705,7 +1691,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
             [remote_node],
             [
               calls: %{remote_node => {:barrier_success, parent, release_ref}},
-              notify: parent
+              notify: parent,
+              capture_request_to: parent
             ],
             fn node_opts ->
               Gateway.run_websocket_response(
@@ -1718,12 +1705,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           )
         end)
 
-      assert_receive {:websocket_owner_harness_node_call,
-                      %{node: ^remote_node, function: :remote_submit_request, arity: 4}},
-                     1_000
+      assert_remote_submit_request_v1!(remote_state, remote_node, nil, 1_000)
 
       assert_receive {:websocket_owner_harness_call_barrier, rpc_pid, ^release_ref,
-                      :remote_submit_request},
+                      :remote_submit_request_v1},
                      1_000
 
       try do
@@ -1743,7 +1728,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert :ok =
                WebsocketOwnerNodeHarness.with_node_client(
                  [remote_node],
-                 [calls: %{remote_node => :success}, notify: self()],
+                 [
+                   calls: %{remote_node => :success},
+                   notify: self(),
+                   capture_request_to: self()
+                 ],
                  fn node_opts ->
                    Gateway.run_websocket_response(
                      auth,
@@ -1754,9 +1743,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                  end
                )
 
-      assert_receive {:websocket_owner_harness_node_call,
-                      %{node: ^remote_node, function: :remote_submit_request, arity: 4}},
-                     1_000
+      assert_remote_submit_request_v1!(remote_state, remote_node, nil, 1_000)
 
       assert {:push, {:text, full_frame}, remote_state} =
                receive_owner_socket_push(remote_state)
@@ -1811,7 +1798,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                 remote_node =>
                   {:barrier_return, parent, release_ref, {:error, :owner_unavailable}}
               },
-              notify: parent
+              notify: parent,
+              capture_request_to: parent
             ],
             fn node_opts ->
               Gateway.run_websocket_response(
@@ -1824,12 +1812,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           )
         end)
 
-      assert_receive {:websocket_owner_harness_node_call,
-                      %{node: ^remote_node, function: :remote_submit_request, arity: 4}},
-                     1_000
+      assert_remote_submit_request_v1!(remote_state, remote_node, nil, 1_000)
 
       assert_receive {:websocket_owner_harness_call_barrier, rpc_pid, ^release_ref,
-                      :remote_submit_request},
+                      :remote_submit_request_v1},
                      1_000
 
       try do
@@ -1945,7 +1931,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         Task.async(fn ->
           WebsocketOwnerNodeHarness.with_node_client(
             [remote_node],
-            [calls: %{remote_node => :success}, notify: parent],
+            [
+              calls: %{remote_node => :success},
+              notify: parent,
+              capture_request_to: parent
+            ],
             fn node_opts ->
               Gateway.run_websocket_response(
                 auth,
@@ -1957,9 +1947,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           )
         end)
 
-      assert_receive {:websocket_owner_harness_node_call,
-                      %{node: ^remote_node, function: :remote_submit_request, arity: 4}},
-                     1_000
+      assert_remote_submit_request_v1!(remote_state, remote_node, nil, 1_000)
 
       assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref}, 1_000
 
@@ -2065,7 +2053,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           assert :ok =
                    WebsocketOwnerNodeHarness.with_node_client(
                      [remote_node],
-                     [calls: %{remote_node => :success}, notify: self()],
+                     [
+                       calls: %{remote_node => :success},
+                       notify: self(),
+                       capture_request_to: self()
+                     ],
                      fn node_opts ->
                        Gateway.run_websocket_response(
                          auth,
@@ -2080,9 +2072,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                      end
                    )
 
-          assert_receive {:websocket_owner_harness_node_call,
-                          %{node: ^remote_node, function: :remote_submit_request, arity: 4}},
-                         1_000
+          assert_remote_submit_request_v1!(next_remote_state, remote_node, nil, 1_000)
 
           assert {:push, {:text, next_frame}, next_remote_state} =
                    receive_owner_socket_push(next_remote_state)
@@ -2219,7 +2209,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     node_opts =
       WebsocketOwnerNodeHarness.node_client_opts([remote_node],
-        calls: %{remote_node => {:return, malformed_reply}}
+        calls: %{remote_node => {:return, malformed_reply}},
+        capture_request_to: self()
       )
 
     remote_state = remote_owner_state(state, remote_node, node_opts)
@@ -2307,8 +2298,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     assert FakeUpstream.count(upstream) == 0
 
-    assert_receive {:websocket_owner_harness_node_call,
-                    %{node: ^remote_node, function: :remote_submit_request, arity: 4}}
+    assert_remote_submit_request_v1!(remote_state, remote_node)
   end
 
   test "live owner-forwarded websocket keeps an accepted model miss on its established lane" do
@@ -7425,6 +7415,55 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     decoded = Jason.decode!(frame)
     decoded["id"] || get_in(decoded, ["response", "id"])
   end
+
+  defp assert_remote_submit_request_v1!(state, remote_node, mode \\ nil, timeout \\ 100) do
+    codex_session_id = state.codex_session.id
+    downstream = state.websocket_owner_downstream
+
+    assert_receive {:websocket_owner_harness_node_call,
+                    %{
+                      node: ^remote_node,
+                      function: :remote_submit_request_v1,
+                      arity: 3,
+                      codex_session_id: ^codex_session_id,
+                      downstream: ^downstream
+                    } = call},
+                   timeout
+
+    if mode, do: assert(call.mode == mode)
+
+    assert_receive {:websocket_owner_harness_request,
+                    %WebsocketOwnerRequest{version: 1} = owner_request},
+                   timeout
+
+    assert :ok = WebsocketOwnerRequest.validate(owner_request)
+    refute contains_function?(owner_request)
+    owner_request
+  end
+
+  defp contains_function?(value) when is_function(value), do: true
+
+  defp contains_function?(%_struct{} = value) do
+    value
+    |> Map.from_struct()
+    |> contains_function?()
+  end
+
+  defp contains_function?(value) when is_map(value) do
+    Enum.any?(value, fn {key, nested_value} ->
+      contains_function?(key) or contains_function?(nested_value)
+    end)
+  end
+
+  defp contains_function?(value) when is_list(value), do: Enum.any?(value, &contains_function?/1)
+
+  defp contains_function?(value) when is_tuple(value) do
+    value
+    |> Tuple.to_list()
+    |> Enum.any?(&contains_function?/1)
+  end
+
+  defp contains_function?(_value), do: false
 
   defp assert_canonical_lite_owner_request!(captured) do
     assert captured.method == "WEBSOCKET"
