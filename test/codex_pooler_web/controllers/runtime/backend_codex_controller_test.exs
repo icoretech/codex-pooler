@@ -37,7 +37,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
 
   alias CodexPooler.Access
-  alias CodexPooler.Accounting.{Attempt, Request, RequestLogs}
+  alias CodexPooler.Accounting.{Attempt, Request, RequestLogFact, RequestLogs}
   alias CodexPooler.Accounting.LedgerEntry
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.FakeUpstream
@@ -3989,6 +3989,80 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert request.status == "succeeded"
   end
 
+  @tag :issue_78
+  test "POST /backend-api/codex/v1/chat/completions rejects strict non-object roots before dispatch",
+       %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    invalid_cases = [
+      {"invalid_json_schema", "text.format.schema",
+       %{
+         "response_format" => %{
+           "type" => "json_schema",
+           "json_schema" => %{
+             "name" => "array_root_fixture",
+             "strict" => true,
+             "schema" => %{"type" => "array", "items" => %{"type" => "string"}}
+           }
+         }
+       }},
+      {"invalid_function_parameters", "tools.0.parameters",
+       %{
+         "tools" => [
+           %{
+             "type" => "function",
+             "function" => %{
+               "name" => "root_ref_fixture",
+               "strict" => true,
+               "parameters" => %{
+                 "$ref" => "#/$defs/arguments",
+                 "$defs" => %{
+                   "arguments" => %{
+                     "type" => "object",
+                     "additionalProperties" => false,
+                     "properties" => %{"value" => %{"type" => "string"}},
+                     "required" => ["value"]
+                   }
+                 }
+               }
+             }
+           }
+         ]
+       }}
+    ]
+
+    counts = issue_78_durable_accounting_counts()
+
+    Enum.each(invalid_cases, fn {expected_code, expected_param, fields} ->
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post(
+          "/backend-api/codex/v1/chat/completions",
+          Map.merge(
+            %{
+              "model" => setup.model.exposed_model_id,
+              "messages" => [%{"role" => "user", "content" => "Synthetic user"}]
+            },
+            fields
+          )
+        )
+
+      assert %{
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => ^expected_code,
+                 "param" => ^expected_param
+               }
+             } = json_response(response, 400)
+
+      assert FakeUpstream.requests(upstream) == []
+      assert issue_78_durable_accounting_counts() == counts
+    end)
+  end
+
   test "POST /backend-api/codex/v1/chat/completions emits a terminal error after visible upstream interruption",
        %{conn: conn} do
     upstream =
@@ -6369,6 +6443,96 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
     assert captured.json["text"]["format"]["schema"] == schema
+  end
+
+  @tag :issue_78
+  test "native backend Responses aliases preserve strict array roots unchanged", %{conn: conn} do
+    schema = %{
+      "type" => "array",
+      "items" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "properties" => %{"value" => %{"type" => "string"}},
+        "required" => ["value"]
+      }
+    }
+
+    Enum.each(
+      ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"],
+      fn path ->
+        upstream =
+          start_upstream(
+            FakeUpstream.json_response(%{
+              "id" => "resp_native_array_root",
+              "status" => "completed",
+              "output" => []
+            })
+          )
+
+        setup = gateway_setup(upstream)
+
+        response =
+          conn
+          |> recycle()
+          |> auth(setup)
+          |> post(path, strict_text_format_payload(schema))
+
+        assert %{"id" => "resp_native_array_root", "status" => "completed"} =
+                 json_response(response, 200)
+
+        assert [captured] = FakeUpstream.requests(upstream)
+        assert captured.path == "/backend-api/codex/responses"
+
+        assert captured.json["text"]["format"]["schema"] == schema
+      end
+    )
+  end
+
+  @tag :issue_78
+  test "native backend Responses aliases preserve strict local root refs unchanged", %{conn: conn} do
+    schema = %{
+      "$ref" => "#/$defs/root",
+      "$defs" => %{
+        "root" => %{
+          "type" => "object",
+          "additionalProperties" => false,
+          "properties" => %{"value" => %{"type" => "string"}},
+          "required" => ["value"]
+        }
+      }
+    }
+
+    Enum.each(
+      ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"],
+      fn path ->
+        upstream =
+          start_upstream(
+            FakeUpstream.json_response(%{
+              "id" => "resp_native_local_root_ref",
+              "status" => "completed",
+              "output" => []
+            })
+          )
+
+        setup = gateway_setup(upstream)
+
+        response =
+          conn
+          |> recycle()
+          |> auth(setup)
+          |> post(path, strict_text_format_payload(schema))
+
+        assert %{"id" => "resp_native_local_root_ref", "status" => "completed"} =
+                 json_response(response, 200)
+
+        assert [captured] = FakeUpstream.requests(upstream)
+        assert captured.path == "/backend-api/codex/responses"
+
+        assert captured.json["text"]["format"]["schema"] == schema
+
+        assert FakeUpstream.count(upstream) == 1
+      end
+    )
   end
 
   @tag :routes_input_file_to_owner_assignment
@@ -14299,6 +14463,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       },
       "required" => ["mode"],
       "additionalProperties" => false
+    }
+  end
+
+  defp issue_78_durable_accounting_counts do
+    %{
+      requests: Repo.aggregate(Request, :count),
+      attempts: Repo.aggregate(Attempt, :count),
+      ledger_entries: Repo.aggregate(LedgerEntry, :count),
+      request_log_facts: Repo.aggregate(RequestLogFact, :count)
     }
   end
 

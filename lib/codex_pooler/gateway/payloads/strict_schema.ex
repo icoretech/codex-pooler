@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchema do
   @error_message_prefix "strict json_schema"
   @function_error_code "invalid_function_parameters"
   @public_types MapSet.new(~w(null boolean object array number integer string))
+  @allow_recursive_refs :allow_recursive_refs
 
   @spec validate(term()) :: :ok | {:error, Error.reason()}
   def validate(payload) when is_map(payload) do
@@ -23,6 +24,20 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchema do
 
   def validate(_payload), do: :ok
 
+  @spec validate_public(term()) :: :ok | {:error, Error.reason()}
+  def validate_public(payload) when is_map(payload) do
+    payload
+    |> strict_schema_targets()
+    |> Enum.reduce_while(:ok, fn target, _acc ->
+      case validate_public_strict_target(target) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  def validate_public(_payload), do: :ok
+
   @spec validate_public_type_vocabulary(term()) :: :ok | {:error, Error.reason()}
   def validate_public_type_vocabulary(payload) when is_map(payload) do
     payload
@@ -37,17 +52,31 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchema do
 
   def validate_public_type_vocabulary(_payload), do: :ok
 
+  @spec validate_public_root_contract(term()) :: :ok | {:error, Error.reason()}
+  def validate_public_root_contract(payload) when is_map(payload) do
+    payload
+    |> strict_schema_targets()
+    |> Enum.reduce_while(:ok, fn target, _acc ->
+      case validate_public_root_target(target) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  def validate_public_root_contract(_payload), do: :ok
+
   @spec repair_direct_responses_function_tools(map()) ::
           {:ok, map()} | {:error, Error.reason()}
   def repair_direct_responses_function_tools(payload) when is_map(payload) do
     with {:ok, repaired_payload} <- Repair.repair(payload, &validate_repair_candidate/3),
-         :ok <- validate(repaired_payload) do
+         :ok <- validate_public(repaired_payload) do
       {:ok, repaired_payload}
     end
   end
 
   defp validate_repair_candidate(schema, path, root_schema) do
-    validate_schema(schema, path, root_schema, [])
+    validate_schema(schema, path, root_schema, [@allow_recursive_refs])
   end
 
   defp strict_schema_targets(payload) do
@@ -174,6 +203,25 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchema do
     {:error, invalid_schema(param, "schema must be an object")}
   end
 
+  defp validate_public_strict_target({schema, param}) when is_map(schema) do
+    validate_schema(schema, param, schema, [@allow_recursive_refs])
+  end
+
+  defp validate_public_strict_target({schema, param, function_name}) when is_map(schema) do
+    case validate_schema(schema, param, schema, [@allow_recursive_refs]) do
+      :ok -> :ok
+      {:error, reason} -> {:error, function_schema_reason(reason, function_name)}
+    end
+  end
+
+  defp validate_public_strict_target({_schema, param, function_name}) do
+    {:error, invalid_function_schema(param, function_name, "schema must be an object")}
+  end
+
+  defp validate_public_strict_target({_schema, param}) do
+    {:error, invalid_schema(param, "schema must be an object")}
+  end
+
   defp validate_public_target({schema, param}) when is_map(schema) do
     validate_public_schema(schema, param)
   end
@@ -191,6 +239,41 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchema do
 
   defp validate_public_target({_schema, param}) do
     {:error, invalid_schema(param, "schema must be an object")}
+  end
+
+  defp validate_public_root_target({schema, param}) when is_map(schema) do
+    validate_public_object_root(schema, param)
+  end
+
+  defp validate_public_root_target({schema, param, function_name}) when is_map(schema) do
+    case validate_public_object_root(schema, param) do
+      :ok -> :ok
+      {:error, reason} -> {:error, function_schema_reason(reason, function_name)}
+    end
+  end
+
+  defp validate_public_root_target({_schema, param, function_name}) do
+    {:error, invalid_function_schema(param, function_name, "schema must be an object")}
+  end
+
+  defp validate_public_root_target({_schema, param}) do
+    {:error, invalid_schema(param, "schema must be an object")}
+  end
+
+  defp validate_public_object_root(schema, path) do
+    cond do
+      Map.has_key?(schema, "$ref") ->
+        {:error, invalid_schema(path, "root schema must not contain $ref")}
+
+      Map.get(schema, "type") != "object" ->
+        {:error, invalid_schema(path, "root schema must have type object")}
+
+      Map.has_key?(schema, "anyOf") ->
+        {:error, invalid_schema(path, "root schema must not contain anyOf")}
+
+      true ->
+        :ok
+    end
   end
 
   defp validate_schema(schema, path) when is_map(schema) do
@@ -232,10 +315,15 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchema do
   defp validate_public_ref_schema(%{"$ref" => ref} = schema, path, root_schema, ref_stack) do
     with :ok <- validate_ref_only_schema(schema, path),
          {:ok, tokens, canonical_ref} <- parse_local_ref(ref, path),
-         :ok <- validate_ref_not_circular(canonical_ref, path, ref_stack),
          {:ok, target_schema} <- resolve_ref_target(root_schema, tokens, path),
          :ok <-
-           validate_public_schema(target_schema, path, root_schema, [canonical_ref | ref_stack]) do
+           validate_public_ref_target(
+             target_schema,
+             canonical_ref,
+             path,
+             root_schema,
+             ref_stack
+           ) do
       validate_public_root_definition_tables(schema, path, root_schema, ref_stack)
     end
   end
@@ -273,9 +361,8 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchema do
   defp validate_ref_schema(%{"$ref" => ref} = schema, path, root_schema, ref_stack) do
     with :ok <- validate_ref_only_schema(schema, path),
          {:ok, tokens, canonical_ref} <- parse_local_ref(ref, path),
-         :ok <- validate_ref_not_circular(canonical_ref, path, ref_stack),
          {:ok, target_schema} <- resolve_ref_target(root_schema, tokens, path) do
-      validate_schema(target_schema, path, root_schema, [canonical_ref | ref_stack])
+      validate_ref_target(target_schema, canonical_ref, path, root_schema, ref_stack)
     end
   end
 
@@ -382,12 +469,34 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchema do
     token |> String.replace("~", "~0") |> String.replace("/", "~1")
   end
 
-  defp validate_ref_not_circular(canonical_ref, path, ref_stack) do
+  defp validate_public_ref_target(target_schema, canonical_ref, path, root_schema, ref_stack) do
     if canonical_ref in ref_stack do
-      {:error, invalid_schema(path <> ".$ref", "circular local $ref is not supported")}
+      validate_recursive_ref_target(target_schema, path)
     else
-      :ok
+      validate_public_schema(target_schema, path, root_schema, [canonical_ref | ref_stack])
     end
+  end
+
+  defp validate_ref_target(target_schema, canonical_ref, path, root_schema, ref_stack) do
+    if canonical_ref in ref_stack do
+      if @allow_recursive_refs in ref_stack do
+        validate_recursive_ref_target(target_schema, path)
+      else
+        circular_ref_error(path)
+      end
+    else
+      validate_schema(target_schema, path, root_schema, [canonical_ref | ref_stack])
+    end
+  end
+
+  defp validate_recursive_ref_target(%{"$ref" => _ref}, path) do
+    circular_ref_error(path)
+  end
+
+  defp validate_recursive_ref_target(_target_schema, _path), do: :ok
+
+  defp circular_ref_error(path) do
+    {:error, invalid_schema(path <> ".$ref", "circular local $ref is not supported")}
   end
 
   defp resolve_ref_target(root_schema, tokens, path) do

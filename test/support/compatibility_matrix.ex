@@ -508,6 +508,26 @@ defmodule CodexPooler.CompatibilityMatrix do
         "strict structured-output schemas are validated before reservation or upstream dispatch"
     },
     %{
+      slug: :public_strict_schema_object_roots,
+      status: :supported,
+      current: :public_pre_dispatch_object_root_rejection,
+      categories: [:route, :auth, :error, :streaming, :ownership],
+      routes: [
+        %{method: :post, path: "/v1/responses"},
+        %{method: :get, path: "/v1/responses", transport: "websocket"},
+        %{method: :post, path: "/v1/chat/completions", translation: "backend_responses"},
+        %{
+          method: :post,
+          path: "/backend-api/codex/v1/chat/completions",
+          translation: "backend_responses"
+        }
+      ],
+      future_routes: [],
+      fixture: :public_strict_schema_object_roots,
+      contract:
+        "strict schemas on public Responses HTTP and websocket, public Chat, and the translated backend Chat alias require a direct concrete object root before dispatch or accounting; omitted, primitive, array, singleton-array, nullable-union, root-ref, root-anyOf, and object-plus-root-anyOf roots are rejected, while nested supported constructs, both definition dialects, non-strict schemas, direct Responses nested repair, and native backend Responses behavior remain unchanged"
+    },
+    %{
       slug: :unsupported_input_image_reference,
       status: :supported,
       current: :pre_reservation_rejection,
@@ -1633,6 +1653,81 @@ defmodule CodexPooler.CompatibilityMatrix do
           }
         }
       }
+    },
+    public_strict_schema_object_roots: %{
+      scope: "public_and_translated_openai_compatibility",
+      strict_target_shapes: [
+        "text.format.schema",
+        "response_format.json_schema.schema",
+        "tools[].parameters",
+        "tools[].function.parameters",
+        "tools[].tools[].parameters"
+      ],
+      required_root: %{
+        shape: "map",
+        type: "object",
+        direct_type_pair: true,
+        root_ref: false,
+        root_any_of: false
+      },
+      rejected_root_families: [
+        "omitted_type",
+        "primitive_type",
+        "array_type",
+        "singleton_type_array",
+        "nullable_object_type_union",
+        "root_ref",
+        "root_any_of",
+        "object_with_root_any_of"
+      ],
+      accepted_nested_constructs: [
+        "local_refs",
+        "recursive_refs",
+        "primitives",
+        "arrays",
+        "nullable_unions",
+        "any_of",
+        "one_of",
+        "all_of"
+      ],
+      accepted_definition_dialects: ["$defs", "definitions"],
+      errors: %{
+        structured_output: %{
+          status: 400,
+          code: "invalid_json_schema",
+          root_param: "text.format.schema"
+        },
+        function_parameters: %{
+          status: 400,
+          code: "invalid_function_parameters",
+          root_params: [
+            "tools.0.parameters",
+            "tools.0.function.parameters",
+            "tools.0.tools.0.parameters"
+          ]
+        }
+      },
+      rejection_boundary: %{
+        upstream_dispatch: false,
+        request_created: false,
+        attempt_created: false,
+        ledger_entry_created: false,
+        request_log_fact_created: false
+      },
+      preservation: %{
+        non_strict_structured_output: "unchanged",
+        non_strict_function_parameters: "unchanged",
+        direct_responses_nested_missing_type_repair: "unchanged",
+        native_backend_strict_array_root: "unchanged",
+        native_backend_strict_local_root_ref: "unchanged"
+      },
+      native_backend_exclusions: [
+        "/backend-api/codex/responses",
+        "/backend-api/codex/v1/responses",
+        "/backend-api/codex/responses websocket",
+        "/backend-api/codex/v1/responses websocket"
+      ],
+      privacy: "schema_shape_only"
     },
     unsupported_input_image_reference: %{
       accepted_url_schemes: ["https", "data:image"],

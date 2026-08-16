@@ -27,7 +27,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
       start_upstream: 1
     ]
 
-  alias CodexPooler.Accounting.{Attempt, Request, RequestLogs}
+  alias CodexPooler.Accounting.{Attempt, Request, RequestLogFact, RequestLogs}
   alias CodexPooler.Accounting.LedgerEntry
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Metadata.CanonicalModelSource
@@ -2231,6 +2231,66 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert_no_chat_dispatch!(upstream)
   end
 
+  @tag :issue_78
+  test "POST /v1/chat/completions rejects strict non-object roots before dispatch", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    invalid_cases = [
+      {"invalid_json_schema", "text.format.schema",
+       %{
+         "response_format" => %{
+           "type" => "json_schema",
+           "json_schema" => %{
+             "name" => "array_root_fixture",
+             "strict" => true,
+             "schema" => %{"type" => "array", "items" => %{"type" => "string"}}
+           }
+         }
+       }},
+      {"invalid_function_parameters", "tools.0.parameters",
+       %{
+         "tools" => [
+           strict_function_tool("root_any_of_fixture", %{
+             "type" => "object",
+             "additionalProperties" => false,
+             "properties" => %{"value" => %{"type" => "string"}},
+             "required" => ["value"],
+             "anyOf" => [
+               %{
+                 "type" => "object",
+                 "additionalProperties" => false,
+                 "properties" => %{"value" => %{"type" => "string"}},
+                 "required" => ["value"]
+               }
+             ]
+           })
+         ]
+       }}
+    ]
+
+    counts = durable_accounting_counts()
+
+    Enum.each(invalid_cases, fn {expected_code, expected_param, fields} ->
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/chat/completions", Map.merge(chat_payload(setup), fields))
+
+      assert %{
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => ^expected_code,
+                 "param" => ^expected_param
+               }
+             } = json_response(response, 400)
+
+      assert_no_chat_dispatch!(upstream)
+      assert durable_accounting_counts() == counts
+    end)
+  end
+
   test "POST /v1/chat/completions translates named tool_choice and parallel tool call flags", %{
     conn: conn
   } do
@@ -2746,6 +2806,15 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert FakeUpstream.count(upstream) == 0
     assert Repo.aggregate(Request, :count) == 0
     assert Repo.aggregate(Attempt, :count) == 0
+  end
+
+  defp durable_accounting_counts do
+    %{
+      requests: Repo.aggregate(Request, :count),
+      attempts: Repo.aggregate(Attempt, :count),
+      ledger_entries: Repo.aggregate(LedgerEntry, :count),
+      request_log_facts: Repo.aggregate(RequestLogFact, :count)
+    }
   end
 
   defp additional_tools_item do

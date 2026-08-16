@@ -1225,6 +1225,90 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
+  @tag :issue_78
+  test "GET /v1/responses websocket rejects a strict array root and recovers on the same socket" do
+    upstream = start_upstream(completed_websocket_response("resp_ws_issue_78_recovery"))
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "strict-array-recovery-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      post_upgrade_baseline = settled_post_upgrade_counts!(upstream)
+
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic invalid strict array root input",
+          "text" => %{
+            "format" => %{
+              "type" => "json_schema",
+              "name" => "strict_array_root_fixture",
+              "strict" => true,
+              "schema" => %{"type" => "array", "items" => %{"type" => "string"}}
+            }
+          }
+        })
+
+      {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{
+               "type" => "error",
+               "status" => 400,
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_json_schema",
+                 "param" => "text.format.schema"
+               }
+             } = Jason.decode!(frame)
+
+      assert lifecycle_counts(upstream) == post_upgrade_baseline
+      refute_received {Events, %{reason: "request_finalized"}}
+
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic valid object root recovery input",
+          "text" => %{
+            "format" => %{
+              "type" => "json_schema",
+              "name" => "object_root_recovery_fixture",
+              "strict" => true,
+              "schema" => %{
+                "type" => "object",
+                "properties" => %{"result" => %{"type" => "string"}},
+                "required" => ["result"],
+                "additionalProperties" => false
+              }
+            }
+          }
+        })
+
+      {conn, websocket, frames} = receive_websocket_until_terminal!(conn, websocket, ref, [])
+      assert Enum.map(frames, & &1["type"]) == ["response.completed"]
+      assert_successful_websocket_lifecycle!(setup)
+
+      assert_lifecycle_delta!(post_upgrade_baseline, lifecycle_counts(upstream), %{
+        upstream_requests: 1,
+        requests: 1,
+        attempts: 1,
+        ledger_entries: 3,
+        turns: 1,
+        reservations: 1,
+        settlements: 1,
+        idempotency_keys: 0
+      })
+
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   test "GET /v1/responses websocket rejects malformed caller, tool, and program output before dispatch" do
     upstream =
       start_upstream(FakeUpstream.sse_stream(programmatic_response_events(), done: false))

@@ -3720,6 +3720,77 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     end)
   end
 
+  @tag :issue_78
+  test "POST /v1/responses rejects strict non-object roots before dispatch", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    invalid_cases = [
+      {"invalid_json_schema", "text.format.schema",
+       %{
+         "text" => %{
+           "format" => %{
+             "type" => "json_schema",
+             "name" => "array_root_fixture",
+             "strict" => true,
+             "schema" => %{"type" => "array", "items" => %{"type" => "string"}}
+           }
+         }
+       }},
+      {"invalid_function_parameters", "tools.0.parameters",
+       %{
+         "tools" => [
+           %{
+             "type" => "function",
+             "name" => "root_ref_fixture",
+             "strict" => true,
+             "parameters" => %{
+               "$ref" => "#/$defs/arguments",
+               "$defs" => %{
+                 "arguments" => %{
+                   "type" => "object",
+                   "additionalProperties" => false,
+                   "properties" => %{"value" => %{"type" => "string"}},
+                   "required" => ["value"]
+                 }
+               }
+             }
+           }
+         ]
+       }}
+    ]
+
+    counts = durable_accounting_counts()
+
+    Enum.each(invalid_cases, fn {expected_code, expected_param, fields} ->
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post(
+          "/v1/responses",
+          Map.merge(
+            %{
+              "model" => setup.model.exposed_model_id,
+              "input" => "synthetic strict root rejection"
+            },
+            fields
+          )
+        )
+
+      assert %{
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => ^expected_code,
+                 "param" => ^expected_param
+               }
+             } = json_response(response, 400)
+
+      assert FakeUpstream.requests(upstream) == []
+      assert durable_accounting_counts() == counts
+    end)
+  end
+
   test "POST /v1/responses preserves schema-bound tool output while compressing an unbound output",
        %{conn: conn} do
     upstream =

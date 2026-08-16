@@ -523,6 +523,21 @@ older nested `function` wrapper shape, or backend routes. Public Responses and
 Chat reject malformed, duplicate, and unsupported explicit type values. This
 strict compatibility repair is not non-strict schema lowering.
 
+Strict structured output and function parameters on the narrow public
+OpenAI-compatible surface require a direct concrete `object` root. A root
+`$ref` or root `anyOf` is rejected. Supported nested constructs, including
+local refs, remain valid below that root. Non-strict requests and native backend
+Responses behavior are unchanged. `POST /backend-api/codex/v1/chat/completions`
+uses translated Chat semantics, so it follows this public strict-root contract.
+Invalid strict structured output returns HTTP `400` with
+`invalid_json_schema` at its root schema parameter, such as
+`text.format.schema` or `response_format.json_schema.schema`. Invalid strict
+function parameters return HTTP `400` with `invalid_function_parameters` at
+the applicable root parameter family: `tools.<index>.parameters`,
+`tools.<index>.function.parameters`, or
+`tools.<namespace_index>.tools.<tool_index>.parameters`. These public
+rejections occur before upstream dispatch and durable accounting.
+
 ### Catalog revision and final Responses envelope
 
 The authenticated backend model routes return the same effective catalog body

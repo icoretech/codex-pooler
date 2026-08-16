@@ -5465,6 +5465,254 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   @tag :responses_coercion
+  test "Responses rejects a strict structured output with an array root" do
+    assert {:error,
+            %{
+              status: 400,
+              code: "invalid_json_schema",
+              param: "text.format.schema"
+            }} =
+             Responses.validate(%{
+               "model" => "gpt-fixture-text",
+               "input" => "synthetic input",
+               "text" => %{
+                 "format" =>
+                   strict_text_format(%{
+                     "type" => "array",
+                     "items" => %{"type" => "string"}
+                   })
+               }
+             })
+  end
+
+  @tag :responses_coercion
+  test "Responses rejects strict function parameters with a root local ref" do
+    assert {:error,
+            %{
+              status: 400,
+              code: "invalid_function_parameters",
+              param: "tools.0.parameters"
+            }} =
+             Responses.validate(%{
+               "model" => "gpt-fixture-text",
+               "input" => "synthetic input",
+               "tools" => [flat_function_tool("lookup_root_ref", root_ref_defs_schema())]
+             })
+  end
+
+  describe "issue 78 public strict schema object roots" do
+    @tag :issue_78
+    test "Responses and translated Chat reject every invalid strict structured-output root" do
+      Enum.each(invalid_public_root_schemas(), fn {_label, schema} ->
+        responses_payload = %{
+          "model" => "gpt-fixture-text",
+          "input" => "synthetic input",
+          "text" => %{"format" => strict_text_format(schema)}
+        }
+
+        chat_payload = %{
+          "model" => "gpt-fixture-text",
+          "messages" => [%{"role" => "user", "content" => "synthetic input"}],
+          "response_format" => %{
+            "type" => "json_schema",
+            "json_schema" => strict_json_schema(schema)
+          }
+        }
+
+        for result <- [Responses.validate(responses_payload), Chat.validate(chat_payload)] do
+          assert {:error,
+                  %{
+                    status: 400,
+                    code: "invalid_json_schema",
+                    param: "text.format.schema"
+                  }} = result
+        end
+      end)
+    end
+
+    @tag :issue_78
+    test "flat Responses and translated nested Chat functions reject every invalid strict root" do
+      Enum.each(invalid_public_root_schemas(), fn {_label, schema} ->
+        responses_payload = %{
+          "model" => "gpt-fixture-text",
+          "input" => "synthetic input",
+          "tools" => [flat_function_tool("lookup_invalid_root", schema)]
+        }
+
+        chat_payload = %{
+          "model" => "gpt-fixture-text",
+          "messages" => [%{"role" => "user", "content" => "synthetic input"}],
+          "tools" => [function_tool("lookup_invalid_root", schema)]
+        }
+
+        for result <- [Responses.validate(responses_payload), Chat.validate(chat_payload)] do
+          assert {:error,
+                  %{
+                    status: 400,
+                    code: "invalid_function_parameters",
+                    param: "tools.0.parameters"
+                  }} = result
+        end
+      end)
+    end
+
+    @tag :issue_78
+    test "public type vocabulary errors retain type-path precedence across adapter targets" do
+      invalid_schemas = [
+        {"unsupported", %{"type" => "future-type"}},
+        {"malformed", %{"type" => ["object", "object"]}}
+      ]
+
+      Enum.each(invalid_schemas, fn {_label, invalid_schema} ->
+        payloads = [
+          {&Responses.validate/1,
+           %{
+             "model" => "gpt-fixture-text",
+             "input" => "synthetic input",
+             "text" => %{"format" => strict_text_format(invalid_schema)}
+           }, "invalid_json_schema", "text.format.schema.type"},
+          {&Chat.validate/1,
+           %{
+             "model" => "gpt-fixture-text",
+             "messages" => [%{"role" => "user", "content" => "synthetic input"}],
+             "response_format" => %{
+               "type" => "json_schema",
+               "json_schema" => strict_json_schema(invalid_schema)
+             }
+           }, "invalid_json_schema", "text.format.schema.type"},
+          {&Responses.validate/1,
+           %{
+             "model" => "gpt-fixture-text",
+             "input" => "synthetic input",
+             "tools" => [flat_function_tool("future_type_fixture", invalid_schema)]
+           }, "invalid_function_parameters", "tools.0.parameters.type"},
+          {&Chat.validate/1,
+           %{
+             "model" => "gpt-fixture-text",
+             "messages" => [%{"role" => "user", "content" => "synthetic input"}],
+             "tools" => [function_tool("future_type_fixture", invalid_schema)]
+           }, "invalid_function_parameters", "tools.0.parameters.type"}
+        ]
+
+        Enum.each(payloads, fn {validate, payload, code, param} ->
+          assert {:error, %{status: 400, code: ^code, param: ^param}} = validate.(payload)
+        end)
+      end)
+    end
+
+    @tag :issue_78
+    test "Responses and translated Chat accept supported schemas below concrete object roots" do
+      Enum.each(valid_public_object_root_schemas(), fn {_label, schema} ->
+        responses_payload = %{
+          "model" => "gpt-fixture-text",
+          "input" => "synthetic input",
+          "text" => %{"format" => strict_text_format(schema)},
+          "tools" => [flat_function_tool("lookup_valid_root", schema)]
+        }
+
+        chat_payload = %{
+          "model" => "gpt-fixture-text",
+          "messages" => [%{"role" => "user", "content" => "synthetic input"}],
+          "response_format" => %{
+            "type" => "json_schema",
+            "json_schema" => strict_json_schema(schema)
+          },
+          "tools" => [function_tool("lookup_valid_root", schema)]
+        }
+
+        assert {:ok, response_result} = Responses.coerce(responses_payload)
+        assert {:ok, chat_result} = Chat.coerce(chat_payload)
+        assert get_in(response_result.payload, ["text", "format", "schema"]) == schema
+        assert get_in(response_result.payload, ["tools", Access.at(0), "parameters"]) == schema
+        assert get_in(chat_result.payload, ["text", "format", "schema"]) == schema
+        assert get_in(chat_result.payload, ["tools", Access.at(0), "parameters"]) == schema
+      end)
+    end
+
+    @tag :issue_78
+    test "Responses and translated Chat accept nested recursive local refs" do
+      schema = recursive_local_ref_schema()
+
+      payloads = [
+        {&Responses.coerce/1,
+         %{
+           "model" => "gpt-fixture-text",
+           "input" => "synthetic input",
+           "text" => %{"format" => strict_text_format(schema)}
+         }},
+        {&Chat.coerce/1,
+         %{
+           "model" => "gpt-fixture-text",
+           "messages" => [%{"role" => "user", "content" => "synthetic input"}],
+           "response_format" => %{
+             "type" => "json_schema",
+             "json_schema" => strict_json_schema(schema)
+           }
+         }},
+        {&Responses.coerce/1,
+         %{
+           "model" => "gpt-fixture-text",
+           "input" => "synthetic input",
+           "tools" => [flat_function_tool("recursive_fixture", schema)]
+         }},
+        {&Chat.coerce/1,
+         %{
+           "model" => "gpt-fixture-text",
+           "messages" => [%{"role" => "user", "content" => "synthetic input"}],
+           "tools" => [function_tool("recursive_fixture", schema)]
+         }}
+      ]
+
+      Enum.each(payloads, fn {coerce, payload} ->
+        assert {:ok, _result} = coerce.(payload)
+      end)
+    end
+
+    @tag :issue_78
+    test "non-strict structured outputs and functions preserve array roots" do
+      array_schema = %{"type" => "array", "items" => %{"type" => "string"}}
+
+      responses_payload = %{
+        "model" => "gpt-fixture-text",
+        "input" => "synthetic input",
+        "text" => %{"format" => strict_text_format(array_schema, false)},
+        "tools" => [
+          flat_function_tool("lookup_false", array_schema, false),
+          flat_function_tool("lookup_omitted", array_schema, nil)
+        ]
+      }
+
+      chat_payload = %{
+        "model" => "gpt-fixture-text",
+        "messages" => [%{"role" => "user", "content" => "synthetic input"}],
+        "response_format" => %{
+          "type" => "json_schema",
+          "json_schema" => strict_json_schema(array_schema, false)
+        },
+        "tools" => [
+          function_tool("lookup_false", array_schema, false),
+          function_tool("lookup_omitted", array_schema, nil)
+        ]
+      }
+
+      assert {:ok, response_result} = Responses.coerce(responses_payload)
+      assert {:ok, chat_result} = Chat.coerce(chat_payload)
+      assert get_in(response_result.payload, ["text", "format", "schema"]) == array_schema
+      assert get_in(chat_result.payload, ["text", "format", "schema"]) == array_schema
+
+      assert Enum.map(response_result.payload["tools"], & &1["parameters"]) == [
+               array_schema,
+               array_schema
+             ]
+
+      assert Enum.map(chat_result.payload["tools"], & &1["parameters"]) == [
+               array_schema,
+               array_schema
+             ]
+    end
+  end
+
+  @tag :responses_coercion
   test "strict function parameters accept local $defs and definitions refs in Chat" do
     payload = %{
       "model" => "gpt-fixture-text",
@@ -5503,15 +5751,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
         ),
         "tools.0.parameters.properties.profile.$ref"
       },
-      {
-        "circular",
-        invalid_local_ref_function_parameters(
-          "#/$defs/node",
-          "node",
-          %{"next" => %{"$ref" => "#/$defs/node"}}
-        ),
-        "tools.0.parameters.properties.profile.properties.next.$ref"
-      },
+      {"ref_only_cycle", ref_only_cycle_function_parameters(),
+       "tools.0.parameters.properties.profile.$ref"},
       {
         "non_map_target",
         invalid_local_ref_function_parameters(
@@ -5620,12 +5861,12 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
         %{
           "model" => "gpt-fixture-text",
           "input" => "synthetic input",
-          "text" => %{"format" => strict_text_format(root_ref_defs_schema())}
+          "text" => %{"format" => strict_text_format(concrete_defs_schema())}
         },
         %{
           "model" => "gpt-fixture-text",
           "input" => "synthetic input",
-          "text" => %{"format" => strict_text_format(root_ref_definitions_schema())}
+          "text" => %{"format" => strict_text_format(concrete_definitions_schema())}
         }
       ]
 
@@ -5657,7 +5898,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
           "json_schema" => %{
             "name" => "fixture_schema",
             "strict" => true,
-            "schema" => root_ref_defs_schema()
+            "schema" => concrete_defs_schema()
           }
         }
       }
@@ -6295,13 +6536,45 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
   defp translated_chat_tool(tool), do: tool
 
-  defp strict_text_format(schema) do
+  defp strict_text_format(schema, strict \\ true) do
     %{
       "type" => "json_schema",
       "name" => "fixture_schema",
-      "strict" => true,
+      "strict" => strict,
       "schema" => schema
     }
+  end
+
+  defp strict_json_schema(schema, strict \\ true) do
+    %{
+      "name" => "fixture_schema",
+      "strict" => strict,
+      "schema" => schema
+    }
+  end
+
+  defp invalid_public_root_schemas do
+    [
+      {"omitted type", %{"properties" => %{}, "required" => [], "additionalProperties" => false}},
+      {"primitive", %{"type" => "string"}},
+      {"array", %{"type" => "array", "items" => %{"type" => "string"}}},
+      {"singleton object type array", %{"type" => ["object"]}},
+      {"nullable object type array", %{"type" => ["object", "null"]}},
+      {"root local ref", root_ref_defs_schema()},
+      {"object with root local ref", Map.put(root_ref_defs_schema(), "type", "object")},
+      {"root anyOf", %{"anyOf" => [empty_object_schema(), empty_object_schema()]}},
+      {"object with root anyOf", Map.put(empty_object_schema(), "anyOf", [empty_object_schema()])}
+    ]
+  end
+
+  defp valid_public_object_root_schemas do
+    [
+      {"$defs", concrete_defs_schema()},
+      {"definitions", concrete_definitions_schema()},
+      {"nested local refs", nested_local_refs_schema()},
+      {"nested arrays primitives and nullable unions", nested_array_union_schema()},
+      {"nested combinators", nested_combinator_schema()}
+    ]
   end
 
   defp local_ref_schema, do: local_ref_function_parameters()
@@ -6321,18 +6594,106 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     }
   end
 
-  defp root_ref_definitions_schema do
+  defp concrete_defs_schema do
     %{
-      "$ref" => "#/definitions/root",
-      "definitions" => %{
-        "root" => %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{"answer" => %{"$ref" => "#/$defs/answer"}},
+      "required" => ["answer"],
+      "$defs" => %{"answer" => %{"type" => "string"}}
+    }
+  end
+
+  defp empty_object_schema do
+    %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{},
+      "required" => []
+    }
+  end
+
+  defp concrete_definitions_schema do
+    %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{"enabled" => %{"$ref" => "#/definitions/enabled"}},
+      "required" => ["enabled"],
+      "definitions" => %{"enabled" => %{"type" => "boolean"}}
+    }
+  end
+
+  defp nested_local_refs_schema do
+    %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{"node" => %{"$ref" => "#/$defs/node"}},
+      "required" => ["node"],
+      "$defs" => %{
+        "node" => %{
           "type" => "object",
           "additionalProperties" => false,
-          "properties" => %{"enabled" => %{"$ref" => "#/definitions/enabled"}},
-          "required" => ["enabled"]
+          "properties" => %{"leaf" => %{"$ref" => "#/$defs/leaf"}},
+          "required" => ["leaf"]
         },
-        "enabled" => %{"type" => "boolean"}
+        "leaf" => %{"type" => "integer"}
       }
+    }
+  end
+
+  defp recursive_local_ref_schema do
+    %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{"node" => %{"$ref" => "#/$defs/node"}},
+      "required" => ["node"],
+      "$defs" => %{
+        "node" => %{
+          "type" => "object",
+          "additionalProperties" => false,
+          "properties" => %{"next" => %{"$ref" => "#/$defs/node"}},
+          "required" => ["next"]
+        }
+      }
+    }
+  end
+
+  defp nested_array_union_schema do
+    %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{
+        "entries" => %{
+          "type" => "array",
+          "items" => %{
+            "type" => "object",
+            "additionalProperties" => false,
+            "properties" => %{
+              "label" => %{"type" => "string"},
+              "score" => %{"type" => ["number", "null"]}
+            },
+            "required" => ["label", "score"]
+          }
+        },
+        "active" => %{"type" => "boolean"}
+      },
+      "required" => ["entries", "active"]
+    }
+  end
+
+  defp nested_combinator_schema do
+    %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{
+        "choice" => %{
+          "type" => "string",
+          "anyOf" => [%{"type" => "string"}],
+          "oneOf" => [%{"type" => "string"}],
+          "allOf" => [%{"type" => "string"}]
+        }
+      },
+      "required" => ["choice"]
     }
   end
 
@@ -6393,6 +6754,16 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       "properties" => %{"profile" => %{"$ref" => ref}},
       "required" => ["profile"],
       "$defs" => %{definition_name => definition_schema}
+    }
+  end
+
+  defp ref_only_cycle_function_parameters do
+    %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{"profile" => %{"$ref" => "#/$defs/node"}},
+      "required" => ["profile"],
+      "$defs" => %{"node" => %{"$ref" => "#/$defs/node"}}
     }
   end
 

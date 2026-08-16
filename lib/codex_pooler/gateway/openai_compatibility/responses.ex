@@ -43,6 +43,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
          :ok <- Input.validate_previous_response_continuation(payload, has_tool_result?),
          :ok <- validate_tools(payload),
          :ok <- StrictSchema.validate_public_type_vocabulary(payload),
+         :ok <- StrictSchema.validate_public_root_contract(payload),
          {:ok, payload} <- maybe_repair_direct_responses_function_tools(payload, surface),
          :ok <- validate_tool_choice(payload),
          :ok <- validate_max_output_tokens(payload),
@@ -51,7 +52,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
          :ok <- validate_service_tier(payload),
          :ok <- validate_truncation(payload),
          :ok <- validate_stream_options(payload),
-         :ok <- StrictSchema.validate(payload),
+         :ok <- StrictSchema.validate_public(payload),
          :ok <- InputShape.validate(payload) do
       Input.normalize_audio_input(payload)
     end

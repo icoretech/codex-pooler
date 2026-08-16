@@ -270,6 +270,168 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchemaRepairTest do
     end
   end
 
+  describe "validate_public_root_contract/1" do
+    test "rejects every non-concrete object root through every strict target layout" do
+      invalid_roots = [
+        {"omitted type",
+         %{"properties" => %{}, "required" => [], "additionalProperties" => false}},
+        {"primitive", %{"type" => "string"}},
+        {"array", %{"type" => "array", "items" => %{"type" => "string"}}},
+        {"singleton object type array", %{"type" => ["object"]}},
+        {"nullable object type array", %{"type" => ["object", "null"]}},
+        {"root local ref",
+         %{
+           "$ref" => "#/$defs/root",
+           "$defs" => %{"root" => strict_object_schema(%{})}
+         }},
+        {"object with root local ref",
+         strict_object_schema(%{}, %{
+           "$ref" => "#/$defs/root",
+           "$defs" => %{"root" => strict_object_schema(%{})}
+         })},
+        {"root anyOf",
+         %{
+           "anyOf" => [strict_object_schema(%{}), strict_object_schema(%{})]
+         }},
+        {"object with root anyOf",
+         strict_object_schema(%{}, %{
+           "anyOf" => [strict_object_schema(%{}), strict_object_schema(%{})]
+         })}
+      ]
+
+      Enum.each(invalid_roots, fn {_root_label, schema} ->
+        Enum.each(strict_target_payloads(schema), fn {_target_label, payload, code, param} ->
+          assert {:error, %{status: 400, code: ^code, param: ^param}} =
+                   StrictSchema.validate_public_root_contract(payload)
+        end)
+      end)
+    end
+
+    test "accepts concrete object roots with supported nested schema families in every layout" do
+      valid_roots = [
+        {"$defs",
+         strict_object_schema(
+           %{"value" => %{"$ref" => "#/$defs/value"}},
+           %{"$defs" => %{"value" => %{"type" => "string"}}}
+         )},
+        {"definitions",
+         strict_object_schema(
+           %{"enabled" => %{"$ref" => "#/definitions/enabled"}},
+           %{"definitions" => %{"enabled" => %{"type" => "boolean"}}}
+         )},
+        {"nested local refs",
+         strict_object_schema(
+           %{"node" => %{"$ref" => "#/$defs/node"}},
+           %{
+             "$defs" => %{
+               "node" => strict_object_schema(%{"leaf" => %{"$ref" => "#/$defs/leaf"}}),
+               "leaf" => %{"type" => "integer"}
+             }
+           }
+         )},
+        {"nested arrays primitives and nullable unions",
+         strict_object_schema(%{
+           "entries" => %{
+             "type" => "array",
+             "items" =>
+               strict_object_schema(%{
+                 "label" => %{"type" => "string"},
+                 "score" => %{"type" => ["number", "null"]}
+               })
+           },
+           "active" => %{"type" => "boolean"}
+         })},
+        {"nested combinators",
+         strict_object_schema(%{
+           "choice" => %{
+             "type" => "string",
+             "anyOf" => [%{"type" => "string"}],
+             "oneOf" => [%{"type" => "string"}],
+             "allOf" => [%{"type" => "string"}]
+           }
+         })}
+      ]
+
+      Enum.each(valid_roots, fn {_root_label, schema} ->
+        Enum.each(strict_target_payloads(schema), fn {_target_label, payload, _code, _param} ->
+          assert :ok = StrictSchema.validate_public_type_vocabulary(payload)
+          assert :ok = StrictSchema.validate_public_root_contract(payload)
+          assert :ok = StrictSchema.validate(payload)
+        end)
+      end)
+    end
+
+    test "accepts productive recursive local refs in every strict target layout" do
+      schema =
+        strict_object_schema(
+          %{"node" => %{"$ref" => "#/$defs/node"}},
+          %{
+            "$defs" => %{
+              "node" => strict_object_schema(%{"next" => %{"$ref" => "#/$defs/node"}})
+            }
+          }
+        )
+
+      Enum.each(strict_target_payloads(schema), fn {_target_label, payload, _code, _param} ->
+        assert :ok = StrictSchema.validate_public_type_vocabulary(payload)
+        assert :ok = StrictSchema.validate_public_root_contract(payload)
+        assert :ok = StrictSchema.validate_public(payload)
+      end)
+    end
+
+    test "generic validation retains productive recursive-ref rejection" do
+      schema =
+        strict_object_schema(
+          %{"node" => %{"$ref" => "#/$defs/node"}},
+          %{
+            "$defs" => %{
+              "node" => strict_object_schema(%{"next" => %{"$ref" => "#/$defs/node"}})
+            }
+          }
+        )
+
+      assert {:error,
+              %{
+                code: "invalid_function_parameters",
+                param: "tools.0.parameters.properties.node.properties.next.$ref"
+              }} =
+               StrictSchema.validate(%{
+                 "tools" => [strict_flat_function_tool("generic_recursive_fixture", schema)]
+               })
+    end
+
+    test "does not apply the public root contract to non-strict or generic schemas" do
+      array_schema = %{"type" => "array", "items" => %{"type" => "string"}}
+
+      root_ref_schema = %{
+        "$ref" => "#/$defs/root",
+        "$defs" => %{"root" => strict_object_schema(%{})}
+      }
+
+      assert :ok =
+               StrictSchema.validate_public_root_contract(%{
+                 "tools" => [
+                   %{
+                     "type" => "function",
+                     "name" => "non_strict_fixture",
+                     "parameters" => array_schema,
+                     "strict" => false
+                   }
+                 ]
+               })
+
+      assert :ok =
+               StrictSchema.validate(%{
+                 "tools" => [strict_flat_function_tool("generic_array_fixture", array_schema)]
+               })
+
+      assert :ok =
+               StrictSchema.validate(%{
+                 "tools" => [strict_flat_function_tool("generic_ref_fixture", root_ref_schema)]
+               })
+    end
+  end
+
   describe "repair_direct_responses_function_tools/1" do
     test "returns a new map with nested object and array types repaired bottom-up" do
       parameters =
@@ -668,5 +830,34 @@ defmodule CodexPooler.Gateway.Payloads.StrictSchemaRepairTest do
       "strict" => true,
       "schema" => schema
     }
+  end
+
+  defp strict_target_payloads(schema) do
+    [
+      {"text format", %{"text" => %{"format" => strict_text_format(schema)}},
+       "invalid_json_schema", "text.format.schema"},
+      {"response format",
+       %{
+         "response_format" => %{
+           "type" => "json_schema",
+           "json_schema" => strict_json_schema(schema)
+         }
+       }, "invalid_json_schema", "response_format.json_schema.schema"},
+      {"flat function", %{"tools" => [strict_flat_function_tool("flat_fixture", schema)]},
+       "invalid_function_parameters", "tools.0.parameters"},
+      {"nested function", %{"tools" => [strict_nested_function_tool("nested_fixture", schema)]},
+       "invalid_function_parameters", "tools.0.function.parameters"},
+      {"namespace function",
+       %{
+         "tools" => [
+           %{
+             "type" => "namespace",
+             "name" => "namespace_fixture",
+             "description" => "Synthetic namespace",
+             "tools" => [strict_flat_function_tool("child_fixture", schema)]
+           }
+         ]
+       }, "invalid_function_parameters", "tools.0.tools.0.parameters"}
+    ]
   end
 end

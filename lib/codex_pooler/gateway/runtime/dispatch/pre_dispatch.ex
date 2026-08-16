@@ -91,7 +91,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
          {:ok, request_options} <-
            SessionContinuity.attach_file_affinity(auth, endpoint, payload, request_options),
          :ok <- ensure_model_supports(model, endpoint, payload, request_options, has_input_image?),
-         :ok <- StrictSchema.validate(payload),
+         :ok <- validate_strict_schema(payload, request_options),
          :ok <- InputShape.validate(payload),
          {:ok, request_options, effective_model_serving_modes} <-
            resolve_model_serving_modes(
@@ -187,6 +187,12 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
 
       {:ok, %{request_options: request_options, candidates: candidates, route_state: route_state}}
     end
+  end
+
+  defp validate_strict_schema(payload, %RequestOptions{openai_compatibility: compatibility}) do
+    if OpenAICompatibility.translated_responses_surface?(compatibility),
+      do: StrictSchema.validate_public(payload),
+      else: StrictSchema.validate(payload)
   end
 
   defp put_valid_canonical_assignment_ids(visible_model_context, %Model{} = model) do

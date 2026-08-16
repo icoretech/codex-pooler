@@ -525,6 +525,74 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                "backend_routes"
              ]
     end
+
+    test "pins every public strict object-root rejection and preservation category" do
+      feature = CompatibilityMatrix.by_slug!(:public_strict_schema_object_roots)
+      fixture = CompatibilityMatrix.fixture!(:public_strict_schema_object_roots)
+
+      assert length(feature.routes) == 4
+
+      assert fixture.strict_target_shapes == [
+               "text.format.schema",
+               "response_format.json_schema.schema",
+               "tools[].parameters",
+               "tools[].function.parameters",
+               "tools[].tools[].parameters"
+             ]
+
+      assert fixture.rejected_root_families == [
+               "omitted_type",
+               "primitive_type",
+               "array_type",
+               "singleton_type_array",
+               "nullable_object_type_union",
+               "root_ref",
+               "root_any_of",
+               "object_with_root_any_of"
+             ]
+
+      assert fixture.accepted_nested_constructs == [
+               "local_refs",
+               "recursive_refs",
+               "primitives",
+               "arrays",
+               "nullable_unions",
+               "any_of",
+               "one_of",
+               "all_of"
+             ]
+
+      assert fixture.accepted_definition_dialects == ["$defs", "definitions"]
+
+      assert fixture.errors.function_parameters == %{
+               status: 400,
+               code: "invalid_function_parameters",
+               root_params: [
+                 "tools.0.parameters",
+                 "tools.0.function.parameters",
+                 "tools.0.tools.0.parameters"
+               ]
+             }
+
+      assert fixture.preservation == %{
+               non_strict_structured_output: "unchanged",
+               non_strict_function_parameters: "unchanged",
+               direct_responses_nested_missing_type_repair: "unchanged",
+               native_backend_strict_array_root: "unchanged",
+               native_backend_strict_local_root_ref: "unchanged"
+             }
+
+      assert fixture.native_backend_exclusions == [
+               "/backend-api/codex/responses",
+               "/backend-api/codex/v1/responses",
+               "/backend-api/codex/responses websocket",
+               "/backend-api/codex/v1/responses websocket"
+             ]
+
+      assert fixture.privacy == "schema_shape_only"
+      refute Map.has_key?(fixture, :json)
+      refute Map.has_key?(fixture, :request_body)
+    end
   end
 
   describe "request compression compatibility contract" do

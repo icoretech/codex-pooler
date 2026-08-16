@@ -2182,6 +2182,52 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert Repo.all(Request) == []
   end
 
+  test "prepare allows productive recursive refs only for translated public requests" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    node_schema = %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{"next" => %{"$ref" => "#/$defs/node"}},
+      "required" => ["next"]
+    }
+
+    payload =
+      strict_text_format_payload(%{
+        "type" => "object",
+        "additionalProperties" => false,
+        "properties" => %{"node" => %{"$ref" => "#/$defs/node"}},
+        "required" => ["node"],
+        "$defs" => %{"node" => node_schema}
+      })
+
+    request_options =
+      request_options(auth, payload,
+        request_id: "pre-dispatch-recursive-#{System.unique_integer([:positive])}",
+        requested_model: setup.model.exposed_model_id,
+        effective_model: setup.model.exposed_model_id
+      )
+
+    translated_options =
+      RequestOptions.mark_openai_compatibility_origin(
+        request_options,
+        "/v1/responses",
+        "/backend-api/codex/responses"
+      )
+
+    assert {:ok, _prepared} =
+             PreDispatch.prepare(auth, @endpoint_path, payload, translated_options, setup.model)
+
+    assert {:error,
+            %{
+              code: "invalid_json_schema",
+              param: "text.format.schema.properties.node.properties.next.$ref"
+            }} = PreDispatch.prepare(auth, @endpoint_path, payload, request_options, setup.model)
+
+    assert Repo.all(Request) == []
+  end
+
   test "prepare authorizes model policy from request options" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)

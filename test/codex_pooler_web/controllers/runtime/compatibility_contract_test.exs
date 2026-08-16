@@ -45,6 +45,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     bulkheads
     degraded_routing
     strict_schema_validation
+    public_strict_schema_object_roots
     unsupported_input_image_reference
     first_event_stream_retry
     request_compression
@@ -1085,6 +1086,48 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert fixture.malformed_duplicate_or_unsupported_explicit_type == "reject"
       assert fixture.strict_function_tools_lowered == false
       assert fixture.strict_structured_outputs_lowered == false
+    end
+
+    test "locks public strict object roots without broadening backend validation or repair" do
+      feature = CompatibilityMatrix.by_slug!(:public_strict_schema_object_roots)
+      fixture = CompatibilityMatrix.fixture!(:public_strict_schema_object_roots)
+      backend = CompatibilityMatrix.by_slug!(:strict_schema_validation)
+      repair = CompatibilityMatrix.by_slug!(:direct_responses_strict_schema_repair)
+
+      assert feature.current == :public_pre_dispatch_object_root_rejection
+
+      assert feature.routes == [
+               %{method: :post, path: "/v1/responses"},
+               %{method: :get, path: "/v1/responses", transport: "websocket"},
+               %{method: :post, path: "/v1/chat/completions", translation: "backend_responses"},
+               %{
+                 method: :post,
+                 path: "/backend-api/codex/v1/chat/completions",
+                 translation: "backend_responses"
+               }
+             ]
+
+      assert fixture.errors.structured_output == %{
+               status: 400,
+               code: "invalid_json_schema",
+               root_param: "text.format.schema"
+             }
+
+      assert fixture.errors.function_parameters.code == "invalid_function_parameters"
+      assert fixture.rejection_boundary.upstream_dispatch == false
+      assert fixture.rejection_boundary.request_created == false
+      assert fixture.rejection_boundary.attempt_created == false
+      assert fixture.rejection_boundary.ledger_entry_created == false
+      assert fixture.rejection_boundary.request_log_fact_created == false
+      assert fixture.privacy == "schema_shape_only"
+
+      assert backend.routes == [%{method: :post, path: "/backend-api/codex/responses"}]
+      assert backend.fixture == :strict_schema_rejection
+
+      assert repair.routes == [
+               %{method: :post, path: "/v1/responses"},
+               %{method: :get, path: "/v1/responses", transport: "websocket"}
+             ]
     end
 
     test "documents request compression supported input shapes" do

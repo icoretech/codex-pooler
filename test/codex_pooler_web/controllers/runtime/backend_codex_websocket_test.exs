@@ -1604,6 +1604,173 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     end
   end
 
+  @tag :issue_78
+  test "GET /backend-api/codex/responses preserves a strict array-root schema" do
+    assert_native_strict_array_root_preserved!(
+      "/backend-api/codex/responses",
+      "resp_native_ws_strict_array_direct"
+    )
+  end
+
+  @tag :issue_78
+  test "GET /backend-api/codex/v1/responses preserves a strict array-root schema" do
+    assert_native_strict_array_root_preserved!(
+      "/backend-api/codex/v1/responses",
+      "resp_native_ws_strict_array_v1_alias"
+    )
+  end
+
+  @tag :issue_78
+  test "GET /backend-api/codex/responses preserves a strict local root-ref schema" do
+    assert_native_strict_local_root_ref_preserved!(
+      "/backend-api/codex/responses",
+      "resp_native_ws_strict_root_ref_direct"
+    )
+  end
+
+  @tag :issue_78
+  test "GET /backend-api/codex/v1/responses preserves a strict local root-ref schema" do
+    assert_native_strict_local_root_ref_preserved!(
+      "/backend-api/codex/v1/responses",
+      "resp_native_ws_strict_root_ref_v1_alias"
+    )
+  end
+
+  defp assert_native_strict_array_root_preserved!(path, response_id) do
+    strict_array_schema = %{
+      "type" => "array",
+      "items" => %{
+        "type" => "object",
+        "properties" => %{"value" => %{"type" => "string"}},
+        "required" => ["value"],
+        "additionalProperties" => false
+      }
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => response_id,
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_websocket_connect!(
+        port,
+        setup,
+        "native-strict-array-#{System.unique_integer([:positive])}",
+        path
+      )
+
+    try do
+      payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => native_text_input("synthetic native strict array request"),
+          "text" => %{
+            "format" => %{
+              "type" => "json_schema",
+              "name" => "native_strict_array_fixture",
+              "strict" => true,
+              "schema" => strict_array_schema
+            }
+          },
+          "stream" => true,
+          "generate" => true
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{"id" => ^response_id} = Jason.decode!(frame)
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.method == "WEBSOCKET"
+      assert captured.path == "/backend-api/codex/responses"
+      assert get_in(captured.json, ["text", "format", "schema"]) == strict_array_schema
+      assert FakeUpstream.count(upstream) == 1
+
+      conn
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  defp assert_native_strict_local_root_ref_preserved!(path, response_id) do
+    strict_local_root_ref_schema = %{
+      "$ref" => "#/$defs/root",
+      "$defs" => %{
+        "root" => %{
+          "type" => "object",
+          "properties" => %{"value" => %{"type" => "string"}},
+          "required" => ["value"],
+          "additionalProperties" => false
+        }
+      }
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => response_id,
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_websocket_connect!(
+        port,
+        setup,
+        "native-strict-root-ref-#{System.unique_integer([:positive])}",
+        path
+      )
+
+    try do
+      payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => native_text_input("synthetic native strict root-ref request"),
+          "text" => %{
+            "format" => %{
+              "type" => "json_schema",
+              "name" => "native_strict_root_ref_fixture",
+              "strict" => true,
+              "schema" => strict_local_root_ref_schema
+            }
+          },
+          "stream" => true,
+          "generate" => true
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
+      {conn, _websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{"id" => ^response_id} = Jason.decode!(frame)
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.method == "WEBSOCKET"
+      assert captured.path == "/backend-api/codex/responses"
+
+      assert get_in(captured.json, ["text", "format", "schema"]) ==
+               strict_local_root_ref_schema
+
+      assert FakeUpstream.count(upstream) == 1
+
+      conn
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   test "backend websocket routes resolve reasoning policy after upgrade" do
     cases = [
       {"/backend-api/codex/responses", [maximum_reasoning_effort: "medium"], %{}, "medium"},
