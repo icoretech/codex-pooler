@@ -2309,6 +2309,252 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert durable_accounting_counts() == counts
   end
 
+  @tag :hosted_shell_history
+  test "POST /v1/responses forwards hosted shell history across JSON and SSE without persistence or execution",
+       %{conn: conn} do
+    fixture = hosted_shell_privacy_fixture!()
+    on_exit(fn -> File.rm_rf(fixture.temp_dir) end)
+
+    assert File.exists?(fixture.temp_dir)
+    refute File.exists?(fixture.marker_path)
+    assert {:ok, %{mode: mode}} = File.stat(fixture.temp_dir)
+    assert Bitwise.band(mode, 0o777) == 0o700
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           hosted_shell_completed_response("resp_hosted_shell_json"),
+           hosted_shell_completed_response("resp_hosted_shell_sse")
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+
+    {{json_response_body, stream_response}, logs} =
+      with_log(fn ->
+        json_response =
+          conn
+          |> auth(setup)
+          |> post(
+            "/v1/responses",
+            hosted_shell_payload(setup.model.exposed_model_id, fixture.input)
+          )
+
+        stream_response =
+          conn
+          |> recycle()
+          |> auth(setup)
+          |> post(
+            "/v1/responses",
+            setup.model.exposed_model_id
+            |> hosted_shell_payload(fixture.input)
+            |> Map.put("stream", true)
+          )
+
+        Logger.flush()
+        {json_response(json_response, 200), stream_response}
+      end)
+
+    assert %{
+             "id" => "resp_hosted_shell_json",
+             "object" => "response",
+             "status" => "completed"
+           } = json_response_body
+
+    assert stream_response.status == 200
+    assert stream_response.resp_body =~ "event: response.completed\n"
+    refute File.exists?(fixture.marker_path)
+
+    captures = FakeUpstream.requests(upstream)
+
+    unless length(captures) == 2 do
+      flunk("expected two hosted shell upstream dispatches")
+    end
+
+    [json_capture, stream_capture] = captures
+
+    assert_hosted_shell_forwarded!(json_capture, fixture.input)
+    assert_hosted_shell_forwarded!(stream_capture, fixture.input)
+
+    requests = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    request_ids = Enum.map(requests, & &1.id)
+    attempts = Repo.all(from(a in Attempt, where: a.request_id in ^request_ids))
+
+    assert length(requests) == 2
+    assert length(attempts) == 2
+
+    observable_text =
+      inspect({
+        Enum.map(requests, & &1.request_metadata),
+        Enum.map(attempts, & &1.response_metadata),
+        RequestLogs.list(setup.pool),
+        CodexPooler.Audit.list_events(setup.pool).items,
+        logs
+      })
+
+    assert_hosted_shell_sentinels_absent!(observable_text, fixture.sentinels)
+  end
+
+  @tag :hosted_shell_history
+  test "POST /v1/responses relays five hosted shell events through SSE in order", %{conn: conn} do
+    events = hosted_shell_sse_events()
+    upstream = start_upstream(FakeUpstream.sse_stream(events))
+    setup = gateway_setup(upstream)
+    input = hosted_shell_history_fixture()
+
+    response =
+      conn
+      |> auth(setup)
+      |> post(
+        "/v1/responses",
+        setup.model.exposed_model_id
+        |> hosted_shell_payload(input)
+        |> Map.put("stream", true)
+      )
+
+    assert response.status == 200
+    assert [content_type] = get_resp_header(response, "content-type")
+    assert content_type =~ "text/event-stream"
+
+    relayed = public_sse_events(response.resp_body)
+    expected_types = Enum.map(events, fn {type, _event} -> type end)
+
+    assert Enum.map(relayed, & &1["event"]) == expected_types
+    assert Enum.all?(relayed, &(&1["event"] == get_in(&1, ["data", "type"])))
+
+    assert Enum.zip(events, relayed)
+           |> Enum.all?(fn {{_type, expected}, %{"data" => actual}} ->
+             Map.delete(actual, "sequence_number") == Map.delete(expected, "sequence_number")
+           end)
+
+    sequences = Enum.map(relayed, &get_in(&1, ["data", "sequence_number"]))
+    assert Enum.all?(sequences, &(is_integer(&1) and &1 >= 0))
+    assert sequences == Enum.sort(sequences)
+    assert sequences == Enum.uniq(sequences)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert_hosted_shell_forwarded!(captured, input)
+  end
+
+  @tag :hosted_shell_history
+  test "POST /v1/responses rejects malformed hosted shell history before dispatch", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
+    setup = gateway_setup(upstream)
+    input = hosted_shell_history_fixture()
+
+    malformed_inputs = [
+      List.update_at(input, 0, &Map.put(&1, "unexpected", true)),
+      List.update_at(input, 1, fn item ->
+        Map.update!(item, "output", fn output ->
+          List.replace_at(output, 0, %{"stdout" => "", "stderr" => ""})
+        end)
+      end)
+    ]
+
+    Enum.each(malformed_inputs, fn malformed_input ->
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post(
+          "/v1/responses",
+          hosted_shell_payload(setup.model.exposed_model_id, malformed_input)
+        )
+
+      assert %{
+               "error" => %{
+                 "code" => "invalid_request",
+                 "param" => "input",
+                 "type" => "invalid_request_error"
+               }
+             } = json_response(response, 400)
+
+      assert_no_hosted_shell_lifecycle_stream!(response.resp_body)
+      assert FakeUpstream.count(upstream) == 0
+      assert Repo.aggregate(Request, :count) == 0
+      assert Repo.aggregate(Attempt, :count) == 0
+    end)
+  end
+
+  @tag :hosted_shell_history
+  test "live curl exercises hosted shell JSON, malformed, and SSE boundaries" do
+    input = hosted_shell_history_fixture()
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           hosted_shell_completed_response("resp_hosted_shell_curl_json"),
+           FakeUpstream.sse_stream(hosted_shell_sse_events())
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    {_server, port} = start_public_endpoint_with_server!()
+
+    {json_headers, json_body} =
+      curl_json_request!(
+        port,
+        setup.authorization,
+        hosted_shell_payload(setup.model.exposed_model_id, input),
+        "/v1/responses"
+      )
+
+    assert String.starts_with?(json_headers, "HTTP/1.1 200")
+
+    assert %{
+             "id" => "resp_hosted_shell_curl_json",
+             "object" => "response",
+             "status" => "completed"
+           } = Jason.decode!(json_body)
+
+    counts_before_malformed = durable_accounting_counts()
+
+    malformed_input = List.update_at(input, 0, &Map.put(&1, "unexpected", true))
+
+    {malformed_headers, malformed_body} =
+      curl_json_request!(
+        port,
+        setup.authorization,
+        hosted_shell_payload(setup.model.exposed_model_id, malformed_input),
+        "/v1/responses"
+      )
+
+    assert String.starts_with?(malformed_headers, "HTTP/1.1 400")
+
+    assert %{
+             "error" => %{
+               "code" => "invalid_request",
+               "param" => "input",
+               "type" => "invalid_request_error"
+             }
+           } = Jason.decode!(malformed_body)
+
+    assert_no_hosted_shell_lifecycle_stream!(malformed_body)
+    assert FakeUpstream.count(upstream) == 1
+    assert durable_accounting_counts() == counts_before_malformed
+
+    {stream_headers, stream_body} =
+      curl_hosted_shell_stream!(
+        port,
+        setup.authorization,
+        setup.model.exposed_model_id,
+        input
+      )
+
+    assert String.starts_with?(stream_headers, "HTTP/1.1 200")
+    assert String.downcase(stream_headers) =~ "content-type: text/event-stream"
+
+    events = public_sse_events(stream_body)
+
+    assert Enum.map(events, & &1["event"]) ==
+             Enum.map(hosted_shell_sse_events(), fn {type, _event} -> type end)
+
+    refute Enum.any?(events, &(&1["event"] == "response.created"))
+    assert FakeUpstream.count(upstream) == 2
+  end
+
   @tag :prompt_cache_product_characterization
   test "POST /v1/responses accepts prompt cache controls without a public marker", %{conn: conn} do
     upstream =
@@ -10048,6 +10294,269 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       call: "program-call-#{suffix}",
       caller: "program-caller-#{suffix}"
     }
+  end
+
+  defp hosted_shell_privacy_fixture! do
+    suffix =
+      8
+      |> :crypto.strong_rand_bytes()
+      |> Base.encode16(case: :lower)
+
+    temp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "codex-pooler-hosted-shell-#{System.unique_integer([:positive])}-#{suffix}"
+      )
+
+    marker_path = Path.join(temp_dir, "execution-marker")
+    File.mkdir!(temp_dir)
+    File.chmod!(temp_dir, 0o700)
+
+    sentinels = %{
+      command: "cmd_#{suffix}",
+      stdout: "out_#{suffix}",
+      stderr: "err_#{suffix}"
+    }
+
+    command = "printf #{sentinels.command} >/dev/null; : > #{marker_path}"
+
+    input =
+      hosted_shell_history_fixture(%{
+        command: command,
+        stdout: sentinels.stdout,
+        stderr: sentinels.stderr,
+        call_id: "call_#{suffix}"
+      })
+
+    %{
+      input: input,
+      marker_path: marker_path,
+      sentinels: sentinels,
+      temp_dir: temp_dir
+    }
+  end
+
+  defp hosted_shell_payload(model, input) do
+    %{
+      "model" => model,
+      "store" => false,
+      "input" => input
+    }
+  end
+
+  defp hosted_shell_history_fixture(overrides \\ %{}) do
+    call_id = Map.get(overrides, :call_id, "hosted-shell-call")
+    command = Map.get(overrides, :command, "printf synthetic-command")
+    stdout = Map.get(overrides, :stdout, "synthetic stdout")
+    stderr = Map.get(overrides, :stderr, "synthetic stderr")
+
+    [
+      %{
+        "type" => "shell_call",
+        "id" => "hosted-shell-call-item",
+        "call_id" => call_id,
+        "status" => "completed",
+        "caller" => %{"type" => "direct"},
+        "environment" => %{"type" => "local", "skills" => []},
+        "action" => %{
+          "commands" => [command],
+          "timeout_ms" => 1_000,
+          "max_output_length" => 4_096
+        }
+      },
+      %{
+        "type" => "shell_call_output",
+        "id" => "hosted-shell-output-item",
+        "call_id" => call_id,
+        "status" => "completed",
+        "caller" => %{"type" => "direct"},
+        "max_output_length" => 4_096,
+        "output" => [
+          %{
+            "stdout" => stdout,
+            "stderr" => stderr,
+            "outcome" => %{"type" => "exit", "exit_code" => 7}
+          }
+        ]
+      },
+      %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "input_text", "text" => "continue after hosted shell"}]
+      }
+    ]
+  end
+
+  defp hosted_shell_completed_response(response_id) do
+    FakeUpstream.sse_stream([
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{
+           "id" => response_id,
+           "object" => "response",
+           "status" => "completed",
+           "output" => [],
+           "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+         }
+       }}
+    ])
+  end
+
+  defp curl_hosted_shell_stream!(port, authorization, model, input) do
+    temp_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "codex-pooler-hosted-shell-curl-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir!(temp_dir)
+    File.chmod!(temp_dir, 0o700)
+    on_exit(fn -> File.rm_rf(temp_dir) end)
+
+    request_path = Path.join(temp_dir, "request.json")
+
+    File.write!(
+      request_path,
+      Jason.encode!(hosted_shell_payload(model, input) |> Map.put("stream", true))
+    )
+
+    File.chmod!(request_path, 0o600)
+
+    {output, exit_code} =
+      System.cmd(
+        "curl",
+        [
+          "-N",
+          "-i",
+          "--silent",
+          "--show-error",
+          "--max-time",
+          "10",
+          "-H",
+          "content-type: application/json",
+          "-H",
+          "authorization: #{authorization}",
+          "--data-binary",
+          "@#{request_path}",
+          "http://127.0.0.1:#{port}/v1/responses"
+        ],
+        stderr_to_stdout: true
+      )
+
+    unless exit_code == 0 do
+      flunk("hosted shell curl SSE request failed")
+    end
+
+    case String.split(output, "\r\n\r\n", parts: 2) do
+      [headers, body] -> {headers, body}
+      _parts -> flunk("hosted shell curl SSE response was malformed")
+    end
+  end
+
+  defp hosted_shell_sse_events do
+    [
+      {"response.shell_call_command.added",
+       %{
+         "type" => "response.shell_call_command.added",
+         "command" => "printf synthetic-command",
+         "command_index" => 0,
+         "output_index" => 2,
+         "sequence_number" => 50
+       }},
+      {"response.shell_call_command.delta",
+       %{
+         "type" => "response.shell_call_command.delta",
+         "command_index" => 0,
+         "delta" => " --synthetic-delta",
+         "obfuscation" => "synthetic-padding",
+         "output_index" => 2,
+         "sequence_number" => 1
+       }},
+      {"response.shell_call_command.done",
+       %{
+         "type" => "response.shell_call_command.done",
+         "command" => "printf synthetic-command --synthetic-delta",
+         "command_index" => 0,
+         "created_by" => "synthetic-response-actor",
+         "output_index" => 2,
+         "sequence_number" => 55
+       }},
+      {"response.shell_call_output_content.delta",
+       %{
+         "type" => "response.shell_call_output_content.delta",
+         "command_index" => 0,
+         "delta" => %{
+           "stdout" => "synthetic stdout delta",
+           "stderr" => "synthetic stderr delta"
+         },
+         "item_id" => "hosted-shell-output-item",
+         "output_index" => 2,
+         "sequence_number" => 54
+       }},
+      {"response.shell_call_output_content.done",
+       %{
+         "type" => "response.shell_call_output_content.done",
+         "command_index" => 0,
+         "item_id" => "hosted-shell-output-item",
+         "output" => [
+           %{
+             "stdout" => "synthetic stdout final",
+             "stderr" => "synthetic stderr final",
+             "outcome" => %{"type" => "exit", "exit_code" => 7},
+             "created_by" => "synthetic-output-actor"
+           }
+         ],
+         "output_index" => 2,
+         "sequence_number" => 60
+       }},
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "created_by" => "synthetic-completion-actor",
+         "response" => %{
+           "id" => "resp_hosted_shell_events",
+           "object" => "response",
+           "status" => "completed",
+           "output" => [],
+           "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+         },
+         "sequence_number" => 2
+       }}
+    ]
+  end
+
+  defp assert_hosted_shell_forwarded!(capture, expected_input) do
+    expected_input = hosted_shell_expected_upstream_input(expected_input)
+
+    unless capture.path == "/backend-api/codex/responses" and capture.json["stream"] == true and
+             capture.json["store"] == false and capture.json["input"] == expected_input do
+      flunk("hosted shell history changed before upstream dispatch")
+    end
+  end
+
+  defp hosted_shell_expected_upstream_input(input) do
+    Enum.map(input, fn
+      %{"type" => type} = item when type in ["shell_call", "shell_call_output"] ->
+        Map.delete(item, "id")
+
+      item ->
+        item
+    end)
+  end
+
+  defp assert_hosted_shell_sentinels_absent!(text, sentinels) do
+    if Enum.any?(Map.values(sentinels), &String.contains?(text, &1)) do
+      flunk("hosted shell history leaked into an observable metadata surface")
+    end
+  end
+
+  defp assert_no_hosted_shell_lifecycle_stream!(body) do
+    lifecycle_markers = ["event:", "response.created", "response.completed"]
+
+    if Enum.any?(lifecycle_markers, &String.contains?(body, &1)) do
+      flunk("malformed hosted shell history emitted a lifecycle stream")
+    end
   end
 
   defp programmatic_tool_payload(model, sentinels) do

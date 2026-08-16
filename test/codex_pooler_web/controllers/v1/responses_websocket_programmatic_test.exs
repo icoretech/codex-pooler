@@ -24,6 +24,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
   alias CodexPooler.Gateway.OpenAICompatibility.Responses, as: ResponsesCompat
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Transports.Admission
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
 
   alias CodexPooler.Gateway.Persistence.{
     BridgeOwnerLease,
@@ -2416,6 +2417,167 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
+  @tag :hosted_shell_history
+  test "GET /v1/responses websocket preserves hosted shell events after same-socket rejection" do
+    stream_id = "lane-hosted-shell-history"
+    malformed_stream_id = "lane-hosted-shell-invalid"
+    input = hosted_shell_history_input()
+    source_events = hosted_shell_response_events()
+
+    provider_frames =
+      ["{", Jason.encode!(["not", "an", "object"])] ++
+        Enum.map(source_events, &Jason.encode!/1)
+
+    upstream = start_upstream(FakeUpstream.websocket_text_frames(provider_frames))
+    setup = gateway_setup(upstream)
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "hosted-shell-history-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      post_upgrade_baseline = settled_post_upgrade_counts!(upstream)
+
+      malformed_input =
+        put_in(input, [Access.at(1), "output", Access.at(0)], %{
+          "stdout" => "synthetic partial output",
+          "outcome" => %{"type" => "exit", "exit_code" => 0}
+        })
+
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => malformed_input,
+          "stream_id" => malformed_stream_id
+        })
+
+      {conn, websocket, error_wire} =
+        public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{
+               "type" => "error",
+               "status" => 400,
+               "stream_id" => ^malformed_stream_id,
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_request",
+                 "param" => "input"
+               }
+             } = Jason.decode!(error_wire)
+
+      assert lifecycle_counts(upstream) == post_upgrade_baseline
+      assert FakeUpstream.count(upstream) == 0
+      assert Repo.aggregate(Request, :count) == 0
+      assert Repo.aggregate(Attempt, :count) == 0
+      refute_received {Events, %{reason: "request_finalized"}}
+
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => input,
+          "stream_id" => stream_id
+        })
+
+      {conn, websocket, frames} =
+        receive_websocket_until_terminal!(conn, websocket, ref, [])
+
+      hosted_shell_frames = Enum.take(frames, 5)
+      completion = List.last(frames)
+
+      assert length(frames) == 6
+
+      assert Enum.map(hosted_shell_frames, & &1["type"]) == [
+               "response.shell_call_command.added",
+               "response.shell_call_command.delta",
+               "response.shell_call_command.done",
+               "response.shell_call_output_content.delta",
+               "response.shell_call_output_content.done"
+             ]
+
+      assert completion["type"] == "response.completed"
+      assert Enum.all?(frames, &(&1["stream_id"] == stream_id))
+
+      sse_source =
+        Enum.map_join(source_events, fn event ->
+          "event: #{event["type"]}\ndata: #{Jason.encode!(event)}\n\n"
+        end)
+
+      {normalized_sse, _state} =
+        StreamProtocol.normalize_public_openai_responses_sse_data(
+          sse_source,
+          StreamProtocol.public_openai_responses_stream_state()
+        )
+
+      sse_frames = Enum.map(public_sse_events(normalized_sse), & &1["data"])
+
+      sse_hosted_shell_frames =
+        Enum.filter(sse_frames, &String.starts_with?(&1["type"], "response.shell_call"))
+
+      assert Enum.map(sse_hosted_shell_frames, & &1["type"]) ==
+               Enum.map(hosted_shell_frames, & &1["type"])
+
+      expected_semantics =
+        sse_hosted_shell_frames
+        |> Enum.map(&Map.drop(&1, ["sequence_number"]))
+
+      actual_semantics =
+        Enum.map(hosted_shell_frames, &Map.drop(&1, ["sequence_number", "stream_id"]))
+
+      assert actual_semantics == expected_semantics
+
+      assert Map.drop(completion, ["sequence_number", "stream_id"]) ==
+               sse_frames
+               |> Enum.find(&(&1["type"] == "response.completed"))
+               |> Map.drop(["sequence_number"])
+
+      assert get_in(Enum.at(hosted_shell_frames, 1), ["obfuscation"]) == "synthetic-padding"
+
+      assert get_in(Enum.at(hosted_shell_frames, 3), ["delta"]) == %{
+               "stdout" => "synthetic stdout delta",
+               "stderr" => "synthetic stderr delta"
+             }
+
+      assert get_in(Enum.at(hosted_shell_frames, 4), ["output"]) == [
+               %{
+                 "stdout" => "synthetic stdout",
+                 "stderr" => "synthetic stderr",
+                 "outcome" => %{"type" => "exit", "exit_code" => -7}
+               }
+             ]
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.method == "WEBSOCKET"
+      assert captured.path == "/backend-api/codex/responses"
+      assert captured.json["input"] == input
+      refute Map.has_key?(captured.json, "stream_id")
+
+      assert_receive {Events,
+                      %{
+                        reason: "request_finalized",
+                        payload: %{"status" => "succeeded"}
+                      }},
+                     @websocket_frame_timeout
+
+      assert_lifecycle_delta!(post_upgrade_baseline, lifecycle_counts(upstream), %{
+        upstream_requests: 1,
+        requests: 1,
+        attempts: 1,
+        ledger_entries: 3,
+        turns: 1,
+        reservations: 1,
+        settlements: 1,
+        idempotency_keys: 0
+      })
+
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   test "GET /v1/responses websocket rejects malformed replay citations without dispatch or leakage" do
     stream_id = "lane-invalid-citation"
     text_sentinel = "MALFORMED_ANNOTATION_TEXT_SENTINEL"
@@ -3150,6 +3312,110 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
          }
        }}
     ])
+  end
+
+  defp hosted_shell_history_input do
+    [
+      %{
+        "type" => "shell_call",
+        "id" => "shell_call_fixture",
+        "call_id" => "call_hosted_shell_fixture",
+        "caller" => %{"type" => "program", "caller_id" => "program_fixture"},
+        "status" => "completed",
+        "action" => %{
+          "commands" => ["synthetic command"],
+          "timeout_ms" => -1,
+          "max_output_length" => 2048
+        },
+        "environment" => %{
+          "type" => "local",
+          "skills" => [
+            %{
+              "name" => "fixture-skill",
+              "description" => "synthetic fixture skill",
+              "path" => "fixture/skill"
+            }
+          ]
+        }
+      },
+      %{
+        "type" => "shell_call_output",
+        "id" => "shell_output_fixture",
+        "call_id" => "call_hosted_shell_fixture",
+        "caller" => %{"type" => "direct"},
+        "status" => "completed",
+        "max_output_length" => -9,
+        "output" => [
+          %{
+            "stdout" => "synthetic stdout",
+            "stderr" => "synthetic stderr",
+            "outcome" => %{"type" => "exit", "exit_code" => -7}
+          }
+        ]
+      }
+    ]
+  end
+
+  defp hosted_shell_response_events do
+    [
+      %{
+        "type" => "response.shell_call_command.added",
+        "command" => "synthetic command",
+        "command_index" => 2,
+        "output_index" => 4,
+        "sequence_number" => 41
+      },
+      %{
+        "type" => "response.shell_call_command.delta",
+        "command_index" => 2,
+        "delta" => " --synthetic-delta",
+        "output_index" => 4,
+        "sequence_number" => 7,
+        "obfuscation" => "synthetic-padding"
+      },
+      %{
+        "type" => "response.shell_call_command.done",
+        "command" => "synthetic command --synthetic-delta",
+        "command_index" => 2,
+        "output_index" => 4,
+        "sequence_number" => 7
+      },
+      %{
+        "type" => "response.shell_call_output_content.delta",
+        "command_index" => 2,
+        "delta" => %{
+          "stdout" => "synthetic stdout delta",
+          "stderr" => "synthetic stderr delta"
+        },
+        "item_id" => "shell_output_fixture",
+        "output_index" => 4,
+        "sequence_number" => 7
+      },
+      %{
+        "type" => "response.shell_call_output_content.done",
+        "command_index" => 2,
+        "item_id" => "shell_output_fixture",
+        "output" => [
+          %{
+            "stdout" => "synthetic stdout",
+            "stderr" => "synthetic stderr",
+            "outcome" => %{"type" => "exit", "exit_code" => -7}
+          }
+        ],
+        "output_index" => 4,
+        "sequence_number" => 7
+      },
+      %{
+        "type" => "response.completed",
+        "response" => %{
+          "id" => "resp_hosted_shell_fixture",
+          "status" => "completed",
+          "output" => [],
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        },
+        "sequence_number" => 7
+      }
+    ]
   end
 
   defp malformed_programmatic_payloads(setup) do

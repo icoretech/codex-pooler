@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
 
   alias CodexPooler.Gateway.OpenAICompatibility.Error
   alias CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Audio
+  alias CodexPooler.Gateway.OpenAICompatibility.Responses.Input.HostedShell
   alias CodexPooler.Gateway.Payloads.ToolResultShape
 
   @metadata_passthrough_key "internal_chat_message_metadata_passthrough"
@@ -71,6 +72,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
 
   defp validate_input_item(%{"type" => "program_output"} = item, _payload),
     do: validate_program_output_replay_item(item)
+
+  defp validate_input_item(%{"type" => type} = item, _payload)
+       when type in ["shell_call", "shell_call_output"] do
+    case HostedShell.validate_item(item) do
+      {:ok, ^item} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   defp validate_input_item(%{"type" => "function_call"} = item, _payload),
     do: validate_function_call_replay_item(item)

@@ -4869,6 +4869,61 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
                }
       end)
     end
+
+    @tag :hosted_shell_history
+    test "Responses preserves unsupported shell and remote MCP request boundaries" do
+      cases = [
+        {%{
+           "model" => "gpt-fixture-text",
+           "input" => [%{"type" => "local_shell_call", "call_id" => "call_fixture"}]
+         }, "input item shape is not translatable", "input"},
+        {%{
+           "model" => "gpt-fixture-text",
+           "input" => "synthetic input",
+           "tools" => [%{"type" => "shell"}]
+         }, "tool shape is not translatable", "tools"},
+        {%{
+           "model" => "gpt-fixture-text",
+           "input" => [%{"type" => "mcp_call", "call_id" => "call_fixture"}]
+         }, "input item shape is not translatable", "input"}
+      ]
+
+      Enum.each(cases, fn {payload, message, param} ->
+        assert {:error, reason} = Responses.coerce(payload)
+
+        assert reason == %{
+                 status: 400,
+                 code: "invalid_request",
+                 message: message,
+                 param: param
+               }
+      end)
+    end
+
+    @tag :hosted_shell_history
+    test "Responses preserves hosted shell request history value-for-value" do
+      input = [
+        %{
+          "type" => "shell_call",
+          "call_id" => "call_fixture",
+          "action" => %{"commands" => ["synthetic command"]}
+        },
+        %{
+          "type" => "shell_call_output",
+          "call_id" => "call_fixture",
+          "output" => [
+            %{
+              "stdout" => "synthetic output",
+              "stderr" => "",
+              "outcome" => %{"type" => "exit", "exit_code" => 0}
+            }
+          ]
+        }
+      ]
+
+      assert {:ok, %{payload: %{"input" => ^input}}} =
+               Responses.coerce(%{"model" => "gpt-fixture-text", "input" => input})
+    end
   end
 
   @tag :responses_coercion

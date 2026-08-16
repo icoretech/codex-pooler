@@ -407,7 +407,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
       {[], state}
     else
       {block, state, emitted?} = emit_public_sse(type, decoded, state)
-      {block, if(emitted?, do: record_visible(state, type, decoded), else: state)}
+
+      state =
+        if emitted?,
+          do: state |> record_visible(type, decoded) |> record_hosted_shell_event(type),
+          else: state
+
+      {block, state}
     end
   end
 
@@ -921,6 +927,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponse
   defp record_visible(state, type, _decoded) when is_binary(type) do
     if visible_type?(type), do: put_summary(state, :visible_seen, true), else: state
   end
+
+  defp record_hosted_shell_event(state, "response.shell_call_" <> _suffix),
+    do: %{state | created?: true}
+
+  defp record_hosted_shell_event(state, _type), do: state
 
   defp record_terminal(state, type, decoded) do
     record_terminal(state, type, decoded, nil)

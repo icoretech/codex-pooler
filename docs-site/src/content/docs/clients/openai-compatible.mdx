@@ -192,6 +192,29 @@ Responses `function_call_output` replay accepts optional nullable, nonblank stri
 non-string values are rejected before dispatch. This applies to both `output` and
 legacy `result` items over HTTP and the narrow Responses websocket bridge.
 
+### Hosted shell history replay
+
+OpenAI Responses history may include completed `shell_call` and
+`shell_call_output` items from an earlier response. Codex Pooler accepts this
+closed-key replay subset, including direct or program callers, local or container
+environment metadata, `in_progress`, `completed`, or `incomplete` status, and
+empty command or output arrays where the shape permits them. It forwards accepted
+history for stateless replay and semantic tool-output continuations without
+requiring call/output pairing or a particular item order.
+
+This is history forwarding only. Codex Pooler does not execute shell commands or
+accept a top-level shell tool declaration. `local_shell_call` history and remote
+MCP tool definitions remain unsupported. It also does not implement SDK-local
+command-index accumulation or claim general hosted-tool parity.
+
+Responses SSE and the narrow Responses websocket preserve the five hosted-shell
+relay event types: command added, command delta, command done, output-content
+delta, and output-content done. Existing public sequence normalization and the
+websocket `stream_id` behavior are the only permitted relay adaptations.
+
+Commands and shell output remain transient request data. They are not persisted
+or rendered in request metadata, logs, or operator views.
+
 For a `previous_response_id` tool continuation, a native `reasoning` replay item
 may include `content` with `reasoning_text` parts. Codex Pooler preserves that
 accepted reasoning content for the upstream continuation. Stateless replay drops

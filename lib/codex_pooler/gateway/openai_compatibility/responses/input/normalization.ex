@@ -21,6 +21,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
     function_call_output
     input_file
     item_reference
+    shell_call
+    shell_call_output
   )
 
   @typep audio_normalization_result :: {:ok, map()} | {:error, Error.reason()}
@@ -249,6 +251,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
 
   defp normalize_input_item(%{"type" => "program"} = item), do: {:ok, item}
   defp normalize_input_item(%{"type" => "program_output"} = item), do: {:ok, item}
+
+  defp normalize_input_item(%{"type" => "shell_call"} = item), do: {:ok, item}
+  defp normalize_input_item(%{"type" => "shell_call_output"} = item), do: {:ok, item}
 
   defp normalize_input_item(%{"type" => "function_call", "status" => status} = item)
        when status in ["completed", "incomplete"],

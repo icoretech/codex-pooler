@@ -87,6 +87,81 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
       assert captured.json["store"] == false
     end
 
+    @tag :hosted_shell_history
+    test "v1 Responses forwards stateless hosted-shell history in order for collected responses",
+         %{conn: conn} do
+      upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "id" => "resp_v1_hosted_shell_stateless",
+            "object" => "response",
+            "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+          })
+        )
+
+      setup = gateway_setup(upstream)
+      input = hosted_shell_history_input()
+
+      response_conn =
+        conn
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "store" => true,
+          "input" => input
+        })
+
+      assert %{"id" => "resp_v1_hosted_shell_stateless"} = json_response(response_conn, 200)
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.json["input"] == input
+
+      assert Enum.map(captured.json["input"], & &1["type"]) == [
+               "shell_call",
+               "shell_call_output",
+               "message"
+             ]
+
+      assert captured.json["stream"] == true
+      assert captured.json["store"] == false
+    end
+
+    @tag :hosted_shell_history
+    test "v1 Responses rejects malformed hosted-shell history before dispatch", _context do
+      upstream =
+        start_upstream(
+          FakeUpstream.json_response(%{
+            "id" => "resp_v1_hosted_shell_should_not_dispatch",
+            "object" => "response",
+            "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+          })
+        )
+
+      setup = gateway_setup(upstream)
+
+      invalid_inputs = [
+        put_in(hosted_shell_history_input(), [Access.at(0), "action", "unknown"], true),
+        [
+          hosted_shell_output()
+          |> Map.put("output", [%{"stdout" => "", "stderr" => ""}])
+        ]
+      ]
+
+      Enum.each(invalid_inputs, fn input ->
+        rejected_conn =
+          build_conn()
+          |> auth(setup)
+          |> post("/v1/responses", %{
+            "model" => setup.model.exposed_model_id,
+            "input" => input
+          })
+
+        assert %{"error" => %{"code" => "invalid_request", "param" => "input"}} =
+                 json_response(rejected_conn, 400)
+
+        assert FakeUpstream.count(upstream) == 0
+      end)
+    end
+
     test "v1 Responses streaming forces upstream stream and store policy for stateless replay", %{
       conn: conn
     } do
@@ -190,6 +265,48 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
       assert Enum.map(captured.json["input"], & &1["type"]) == [
                "item_reference",
                "program_output"
+             ]
+    end
+
+    @tag :hosted_shell_history
+    test "v1 Responses forwards a referenced hosted-shell output continuation", %{conn: conn} do
+      upstream =
+        start_upstream(
+          FakeUpstream.require_json_field(
+            "previous_response_id",
+            %{
+              "id" => "resp_v1_hosted_shell_previous",
+              "object" => "response",
+              "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+            },
+            %{"error" => %{"code" => "missing_tool_context"}}
+          )
+        )
+
+      setup = gateway_setup(upstream)
+
+      input = [
+        %{"type" => "item_reference", "id" => "msg_hosted_shell_reference"},
+        hosted_shell_output()
+      ]
+
+      response_conn =
+        conn
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "previous_response_id" => "resp_v1_hosted_shell_previous",
+          "input" => input
+        })
+
+      assert %{"id" => "resp_v1_hosted_shell_previous"} = json_response(response_conn, 200)
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.json["previous_response_id"] == "resp_v1_hosted_shell_previous"
+      assert captured.json["input"] == input
+
+      assert Enum.map(captured.json["input"], & &1["type"]) == [
+               "item_reference",
+               "shell_call_output"
              ]
     end
 
@@ -1611,6 +1728,44 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
         "status" => "completed"
       }
     ]
+  end
+
+  defp hosted_shell_history_input do
+    [
+      %{
+        "type" => "shell_call",
+        "id" => "shell_call_history_item",
+        "call_id" => "call_hosted_shell_history",
+        "action" => %{"commands" => [], "timeout_ms" => 1, "max_output_length" => 16},
+        "caller" => %{"type" => "direct"},
+        "status" => "completed",
+        "environment" => %{"type" => "container_reference", "container_id" => ""}
+      },
+      hosted_shell_output(),
+      %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [%{"type" => "input_text", "text" => "synthetic hosted shell follow-up"}]
+      }
+    ]
+  end
+
+  defp hosted_shell_output do
+    %{
+      "type" => "shell_call_output",
+      "id" => "shell_call_output_history_item",
+      "call_id" => "call_hosted_shell_history",
+      "output" => [
+        %{
+          "stdout" => "synthetic hosted shell stdout",
+          "stderr" => "",
+          "outcome" => %{"type" => "exit", "exit_code" => 0}
+        }
+      ],
+      "caller" => %{"type" => "direct"},
+      "status" => "completed",
+      "max_output_length" => 16
+    }
   end
 
   defp stub_upload_put(file_id) do

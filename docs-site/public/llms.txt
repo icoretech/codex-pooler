@@ -64,6 +64,11 @@ Service-tier compatibility:
 - /v1 translates supported OpenAI request and response shapes while preserving any projected provider service_tier value in its literal provider vocabulary.
 - Direct /v1/responses accepts literal ultrafast only for HTTP JSON, HTTP SSE, and the Responses WebSocket. The selected provider must advertise ultrafast in service_tiers or additional_speed_tiers; /v1/chat/completions rejects it as invalid_request at service_tier.
 
+Hosted shell history replay:
+- /v1/responses and its narrow Responses WebSocket accept completed shell_call and shell_call_output history as closed-key replay data.
+- This forwards history and relays the five hosted-shell command/output event types; it does not execute commands, accept shell tool declarations, local-shell history, or remote MCP tool definitions.
+- Command and output content remain transient and metadata-only. This is not broad hosted-tool or OpenAI parity.
+
 Supported route families:
 - /backend-api: Codex backend compatibility route for authenticated Codex clients. Important paths include /backend-api/codex/models, /backend-api/codex/responses, /backend-api/codex/responses/compact, /backend-api/codex/v1/* aliases, /backend-api/files, /backend-api/transcribe, and usage routes such as /backend-api/wham/usage.
 - /v1: narrow OpenAI-compatible /v1 surface for selected SDK routes. Supported or translated examples include /v1/models, /v1/responses, GET /v1/responses for narrow Responses websocket compatibility, /v1/chat/completions, /v1/usage, /v1/files metadata and create routes, /v1/audio/transcriptions, /v1/images/generations, and /v1/images/edits.

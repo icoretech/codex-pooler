@@ -142,6 +142,134 @@ defmodule CodexPooler.CompatibilityMatrixTest do
              }
     end
 
+    @tag :hosted_shell_history
+    test "makes hosted shell history replay boundaries machine-readable" do
+      feature = CompatibilityMatrix.by_slug!(:responses_chat)
+      fixture = CompatibilityMatrix.fixture!(:responses_chat)
+      v1_feature = CompatibilityMatrix.by_slug!(:v1_supported_surface)
+
+      assert feature.hosted_shell_history_contract =~ "closed-key hosted-shell history replay"
+      assert feature.hosted_shell_history_contract =~ "without executing commands"
+      assert feature.hosted_shell_history_contract =~ "shell tool declarations"
+      assert feature.hosted_shell_history_contract =~ "local shell"
+      assert feature.hosted_shell_history_contract =~ "remote MCP"
+
+      assert fixture.hosted_shell_history == %{
+               accepted_items: ["shell_call", "shell_call_output"],
+               request_policy: %{
+                 closed_key_objects: [
+                   "shell_call",
+                   "shell_call.action",
+                   "shell_call.caller",
+                   "shell_call.environment",
+                   "shell_call.environment.skills[]",
+                   "shell_call_output",
+                   "shell_call_output.caller",
+                   "shell_call_output.output[]",
+                   "shell_call_output.output[].outcome"
+                 ],
+                 unknown_or_response_only_keys: "rejected",
+                 upstream_open_properties: "not_admitted"
+               },
+               input_items: %{
+                 shell_call: %{
+                   required: ["type", "call_id", "action"],
+                   optional_nullable: ["id", "caller", "status", "environment"],
+                   action: %{
+                     required: ["commands"],
+                     optional_nullable: ["timeout_ms", "max_output_length"],
+                     commands: "string_array_empty_allowed"
+                   },
+                   caller: %{
+                     accepted: ["null", "direct", "program"],
+                     direct_exact_keys: ["type"],
+                     program_required: ["type", "caller_id"]
+                   },
+                   environment: %{
+                     accepted: ["null", "local", "container_reference"],
+                     local_optional: ["skills"],
+                     local_skill_required: ["name", "description", "path"],
+                     container_required: ["type", "container_id"]
+                   }
+                 },
+                 shell_call_output: %{
+                   required: ["type", "call_id", "output"],
+                   optional_nullable: ["id", "caller", "status", "max_output_length"],
+                   output_chunk_required: ["stdout", "stderr", "outcome"],
+                   outcomes: %{
+                     timeout: ["type"],
+                     exit: ["type", "exit_code"]
+                   }
+                 }
+               },
+               codepoint_limits: %{
+                 call_id: %{minimum: 1, maximum: 64},
+                 program_caller_id: %{minimum: 1, maximum: 64},
+                 stdout: %{maximum: 10_485_760},
+                 stderr: %{maximum: 10_485_760},
+                 local_skills: %{maximum_items: 200}
+               },
+               status_values: ["in_progress", "completed", "incomplete", nil],
+               edge_semantics: %{
+                 empty_allowed: [
+                   "action.commands",
+                   "shell_call_output.output",
+                   "id",
+                   "container_id",
+                   "local_skill.name",
+                   "local_skill.description",
+                   "local_skill.path"
+                 ],
+                 signed_integer_fields: [
+                   "action.timeout_ms",
+                   "action.max_output_length",
+                   "shell_call_output.max_output_length",
+                   "shell_call_output.output[].outcome.exit_code"
+                 ]
+               },
+               continuation: %{
+                 stateless_full_history_replay: "accepted",
+                 previous_response_id_semantic_tool_output: "accepted",
+                 call_output_pairing: "not_enforced",
+                 item_order: "not_enforced"
+               },
+               relay: %{
+                 event_types: [
+                   "response.shell_call_command.added",
+                   "response.shell_call_command.delta",
+                   "response.shell_call_command.done",
+                   "response.shell_call_output_content.delta",
+                   "response.shell_call_output_content.done"
+                 ],
+                 normalization: %{
+                   sequence_number: "existing_public_responses_normalization_only",
+                   stream_id: "existing_public_responses_websocket_addition_only"
+                 }
+               },
+               privacy: %{
+                 mode: "metadata_only",
+                 command_persisted: false,
+                 output_persisted: false,
+                 command_logged: false,
+                 output_logged: false
+               },
+               exclusions: %{
+                 command_execution: false,
+                 shell_tool_declarations: false,
+                 local_shell_history: false,
+                 remote_mcp: false,
+                 command_index_accumulation: false,
+                 full_openai_hosted_tool_parity: false
+               }
+             }
+
+      assert v1_feature.contract =~ "hosted-shell history replay"
+      assert v1_feature.contract =~ "does not execute commands"
+      assert v1_feature.contract =~ "shell tool declarations"
+      assert v1_feature.contract =~ "local shell"
+      assert v1_feature.contract =~ "remote MCP"
+    end
+
     @tag :external_issues_229_231
     test "makes backend model catalog ETag derivation and surface capacity machine-readable" do
       feature = CompatibilityMatrix.by_slug!(:backend_models_etag)
