@@ -43,6 +43,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.AgentV2ContractFixture
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway, as: RuntimeGateway
+  alias CodexPooler.Gateway.OpenAICompatibility.Responses, as: ResponsesCompat
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
@@ -76,6 +78,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.CodexResponsesSocket
+  alias CodexPoolerWeb.GatewayControllerHelpers, as: GatewayHelpers
+  alias CodexPoolerWeb.PublicGatewayDispatch
   alias CodexPoolerWeb.WebsocketConnectionLogger
   alias Ecto.Adapters.SQL.Sandbox
 
@@ -144,6 +148,35 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
 
     defp state, do: Process.get(__MODULE__, %{nodes: []})
+  end
+
+  defmodule BridgeNodeClient do
+    @moduledoc false
+
+    @behaviour CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder.NodeClient
+
+    def child_spec(state) do
+      %{id: __MODULE__, start: {__MODULE__, :start_link, [state]}}
+    end
+
+    def start_link(state), do: Agent.start_link(fn -> state end, name: __MODULE__)
+
+    @impl true
+    def connected_app_nodes, do: Agent.get(__MODULE__, & &1.nodes)
+
+    @impl true
+    def app_node?(node), do: node in connected_app_nodes()
+
+    @impl true
+    def call_owner(node, module, function, args, _timeout) do
+      state = Agent.get(__MODULE__, & &1)
+      send(state.test_pid, {:bridge_owner_node_call, node, function, args})
+
+      case Map.get(state.calls, function, :success) do
+        :success -> apply(module, function, args)
+        :protocol_incompatible -> {:error, {:exception, :undef, [{module, function, args, []}]}}
+      end
+    end
   end
 
   setup do
@@ -859,10 +892,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert %{"type" => ^raw_event_type, "delta" => @sentinel} =
                Jason.decode!(partial_frame)
 
-      assert {:push, {:text, error_frame}, _state} = receive_socket_done(state)
+      assert {:push, {:text, error_frame}, failed_state} = receive_socket_done(state)
 
       assert %{"type" => "error", "error" => %{"code" => "upstream_request_failed"}} =
                Jason.decode!(error_frame)
+
+      assert {:ok, _failed_state} = receive_owner_socket_complete(failed_state)
+      refute_received {:websocket_owner_frame, _, _, _duplicate_terminal}
+      assert FakeUpstream.count(upstream) == 1
+      assert FakeUpstream.websocket_connection_count(upstream) == 1
+      assert FakeUpstream.http_request_count(upstream) == 0
 
       assert [request_log] = request_logs(setup.pool.id)
       assert request_log.status == "failed"
@@ -871,6 +910,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request_log.id))
       assert attempt.status == "failed"
+      assert_forwarding_cardinality!(request_log, state.codex_session.id, "failed")
 
       connection = attempt.response_metadata["upstream_websocket_connection"]
 
@@ -1277,6 +1317,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       assert settlement.attempt_id == attempt.id
       assert settlement.transport == "websocket"
+      assert_forwarding_cardinality!(request, state.codex_session.id, "succeeded")
+      refute Repo.exists?(from(d in BridgeDemotion, where: d.pool_id == ^setup.pool.id))
     after
       CodexResponsesSocket.terminate(:closed, remote_state)
     end
@@ -1356,6 +1398,188 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       if Process.alive?(task.pid), do: Task.shutdown(task, :brutal_kill)
       CodexResponsesSocket.terminate(:closed, remote_state)
     end
+  @tag :todo_9_native_observer_failure
+  test "owner-forwarded frame observer failure still delivers one terminal" do
+    marker = "synthetic-owner-observer-marker-#{System.unique_integer([:positive])}"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_owner_observer_failure",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    upstream_boundary = frame_observer_failure_upstream_boundary(self(), marker)
+
+    {:ok, state} =
+      owner_socket(auth, "ws-owner-observer-failure", "owner-observer-failure",
+        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
+      )
+
+    logs =
+      capture_log(fn ->
+        try do
+          payload = websocket_payload(setup, "synthetic observer failure delivery")
+
+          assert {:ok, state} =
+                   CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+
+          assert {:push, {:text, terminal}, state} = receive_owner_socket_push(state)
+
+          assert %{"id" => "resp_owner_observer_failure"} = Jason.decode!(terminal)
+          assert {:ok, _state} = receive_owner_socket_complete(state)
+        after
+          CodexResponsesSocket.terminate(:closed, state)
+        end
+      end)
+
+    assert_receive {:owner_frame_observer_failed, observer_pid}
+    assert is_pid(observer_pid)
+    refute_received {:owner_frame_observer_failed, _duplicate}
+    refute_received {:websocket_owner_frame, _, _, _duplicate_terminal}
+    assert logs =~ "upstream websocket frame observer failed operation=observe_frame"
+    refute logs =~ marker
+    refute logs =~ setup.authorization
+    assert FakeUpstream.count(upstream) == 1
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert FakeUpstream.http_request_count(upstream) == 0
+
+    assert [request] = request_logs(setup.pool.id)
+    assert request.status == "succeeded"
+    assert request.transport == "websocket"
+    assert_forwarding_cardinality!(request, state.codex_session.id, "succeeded")
+    refute Repo.exists?(from(d in BridgeDemotion, where: d.pool_id == ^setup.pool.id))
+  end
+
+  @tag :todo_9_public_remote_success
+  test "public responses bridge remote v1 success settles and delivers one terminal", %{
+    conn: conn
+  } do
+    response_id = "resp_owner_public_remote_#{System.unique_integer([:positive])}"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => response_id,
+               "status" => "completed",
+               "output" => [],
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 2, "total_tokens" => 6}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    remote_node = :"codex_pooler@public-owner-success.example"
+    session_header = "public-owner-success-#{System.unique_integer([:positive])}"
+    {_session, owner_pid} = start_remote_bridge_owner!(auth, session_header, remote_node)
+    start_bridge_node_client!([remote_node])
+
+    response =
+      dispatch_public_owner_stream(
+        conn,
+        setup,
+        session_header,
+        remote_node,
+        public_stream_payload(setup, "synthetic public remote success")
+      )
+
+    assert response.status == 200
+    assert [terminal] = public_stream_events(response.resp_body, "response.completed")
+    assert get_in(terminal, ["response", "id"]) == response_id
+    assert_bridge_v1_submission!(remote_node)
+    refute_received {:bridge_owner_node_call, ^remote_node, :remote_submit_request_v1, _args}
+    assert FakeUpstream.count(upstream) == 1
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert FakeUpstream.http_request_count(upstream) == 0
+
+    assert [request] = request_logs(setup.pool.id)
+    assert request.status == "succeeded"
+    assert request.transport == "http_sse"
+    assert_forwarding_cardinality!(request, nil, "succeeded")
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.transport == "websocket"
+    assert attempt.response_metadata["upstream_websocket_bridge"] == true
+    refute Repo.exists?(from(d in BridgeDemotion, where: d.pool_id == ^setup.pool.id))
+    assert Process.alive?(owner_pid)
+  end
+
+  @tag :todo_9_public_protocol_fallback
+  test "public responses bridge protocol incompatibility falls back before commit once", %{
+    conn: conn
+  } do
+    response_id = "resp_owner_public_fallback_#{System.unique_integer([:positive])}"
+    marker = "synthetic-public-protocol-marker-#{System.unique_integer([:positive])}"
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => response_id,
+               "status" => "completed",
+               "output" => [],
+               "usage" => %{"input_tokens" => 3, "output_tokens" => 1, "total_tokens" => 4}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    remote_node = :"codex_pooler@public-owner-old-release.example"
+    session_header = "public-owner-old-release-#{System.unique_integer([:positive])}"
+    {_session, owner_pid} = start_remote_bridge_owner!(auth, session_header, remote_node)
+
+    start_bridge_node_client!([remote_node], %{
+      remote_submit_request_v1: :protocol_incompatible
+    })
+
+    logs =
+      capture_log(fn ->
+        response =
+          dispatch_public_owner_stream(
+            conn,
+            setup,
+            session_header,
+            remote_node,
+            public_stream_payload(setup, marker)
+          )
+
+        assert response.status == 200
+        assert [terminal] = public_stream_events(response.resp_body, "response.completed")
+        assert get_in(terminal, ["response", "id"]) == response_id
+      end)
+
+    assert_bridge_v1_submission!(remote_node)
+    assert logs =~ "event=owner_protocol_incompatible"
+    refute logs =~ marker
+    refute logs =~ setup.authorization
+
+    assert FakeUpstream.count(upstream) == 1
+    assert FakeUpstream.websocket_connection_count(upstream) == 0
+    assert FakeUpstream.http_request_count(upstream) == 1
+    assert [request] = request_logs(setup.pool.id)
+    assert request.status == "succeeded"
+    assert request.transport == "http_sse"
+    assert_forwarding_cardinality!(request, nil, "succeeded")
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.transport == "http_sse"
+    refute attempt.response_metadata["upstream_websocket_bridge"]
+    refute Repo.exists?(from(d in BridgeDemotion, where: d.pool_id == ^setup.pool.id))
+    assert Process.alive?(owner_pid)
   end
 
   test "local and remote owners emit identical native metadata bytes for one turn snapshot" do
@@ -6276,10 +6500,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     old_lease = active_owner_lease(session.id)
 
     {:ok, owner_pid} = WebsocketOwnerSession.lookup(session.id)
+    owner_ref = Process.monitor(owner_pid)
     %{upstream_pid: upstream_pid} = :sys.get_state(owner_pid)
     upstream_ref = Process.monitor(upstream_pid)
     Process.exit(upstream_pid, :kill)
     assert_receive {:DOWN, ^upstream_ref, :process, ^upstream_pid, :killed}
+    assert_receive {:DOWN, ^owner_ref, :process, ^owner_pid, _owner_reason}
 
     {:ok, second_state} = owner_socket(auth, "ws-owner-stale-upstream-second", "stale-upstream")
 
@@ -6307,6 +6533,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       assert [request] = await_upstream_requests(upstream, 1)
       assert request.json["input"] |> List.first() |> Map.get("content") == "after stale upstream"
+      assert FakeUpstream.count(upstream) == 1
+
+      assert [request_log] = request_logs(setup.pool.id)
+      assert request_log.status == "succeeded"
+      assert_forwarding_cardinality!(request_log, session.id, "succeeded")
+      refute Repo.exists?(from(d in BridgeDemotion, where: d.pool_id == ^setup.pool.id))
     after
       CodexResponsesSocket.terminate(:closed, first_state)
       CodexResponsesSocket.terminate(:closed, second_state)
@@ -6986,6 +7218,127 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     }
     |> Map.merge(extra)
     |> Jason.encode!()
+  end
+
+  defp public_stream_payload(setup, input) do
+    %{"model" => setup.model.exposed_model_id, "input" => input, "stream" => true}
+  end
+
+  defp dispatch_public_owner_stream(conn, setup, session_header, remote_node, payload) do
+    conn =
+      conn
+      |> recycle()
+      |> auth(setup)
+      |> put_req_header("x-session-id", session_header)
+
+    request_opts =
+      conn
+      |> GatewayHelpers.request_opts()
+      |> Map.merge(%{
+        session_header: session_header,
+        session_header_source: "x-session-id",
+        upstream_endpoint: "/backend-api/codex/responses",
+        public_openai_responses_stream: true
+      })
+
+    {:ok, coerced} = ResponsesCompat.coerce(payload, request_opts)
+
+    result =
+      PublicGatewayDispatch.dispatch_coerced(conn, setup_auth!(setup), coerced,
+        gateway_executor: fn auth, endpoint, gateway_payload, request_options ->
+          request_options =
+            request_options
+            |> RequestOptions.put_continuity(owner_instance_id: Atom.to_string(remote_node))
+            |> RequestOptions.put_transport(
+              websocket_owner_forwarder_opts: [node_client: BridgeNodeClient]
+            )
+
+          RuntimeGateway.execute(auth, endpoint, gateway_payload, request_options)
+        end
+      )
+
+    CodexPoolerWeb.PublicGatewayResult.send(conn, result, &Function.identity/1)
+  end
+
+  defp setup_auth!(setup) do
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    auth
+  end
+
+  defp start_remote_bridge_owner!(auth, session_header, remote_node) do
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{
+        session_header: session_header,
+        session_header_source: "x-session-id",
+        owner_instance_id: Atom.to_string(remote_node)
+      })
+
+    {:ok, owner_pid} =
+      WebsocketOwnerSession.start_owner(
+        codex_session_id: session.id,
+        owner_lease_token: session.owner_lease_token,
+        owner_instance_id: session.owner_instance_id
+      )
+
+    {session, owner_pid}
+  end
+
+  defp start_bridge_node_client!(nodes, calls \\ %{}) do
+    start_supervised!({BridgeNodeClient, %{nodes: nodes, calls: calls, test_pid: self()}})
+  end
+
+  defp public_stream_events(body, event_type) do
+    body
+    |> String.split("\n\n", trim: true)
+    |> Enum.flat_map(fn block ->
+      with [_line, data] <- Regex.run(~r/^data: (.+)$/m, block),
+           {:ok, %{"type" => ^event_type} = decoded} <- Jason.decode(data) do
+        [decoded]
+      else
+        _other -> []
+      end
+    end)
+  end
+
+  defp assert_bridge_v1_submission!(remote_node) do
+    assert_receive {:bridge_owner_node_call, ^remote_node, :remote_submit_request_v1,
+                    [codex_session_id, downstream, %WebsocketOwnerRequest{version: 1} = request]}
+
+    assert is_binary(codex_session_id)
+    assert %{pid: pid, correlation_id: correlation_id, epoch: epoch} = downstream
+    assert is_pid(pid)
+    assert is_binary(correlation_id)
+    assert is_integer(epoch) and epoch > 0
+    assert :ok = WebsocketOwnerRequest.validate(request)
+    refute contains_function?(request)
+    request
+  end
+
+  defp assert_forwarding_cardinality!(request, codex_session_id, status) do
+    assert Repo.aggregate(from(r in Request, where: r.id == ^request.id), :count) == 1
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 1
+
+    assert Repo.aggregate(
+             from(a in Attempt, where: a.request_id == ^request.id and a.status == ^status),
+             :count
+           ) == 1
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+             ),
+             :count
+           ) == 1
+
+    turn_query = from(t in CodexTurn, where: t.request_id == ^request.id)
+
+    turn_query =
+      if codex_session_id,
+        do: from(t in turn_query, where: t.codex_session_id == ^codex_session_id),
+        else: turn_query
+
+    assert Repo.aggregate(turn_query, :count) == 1
+    assert Repo.aggregate(from(t in turn_query, where: t.status == ^status), :count) == 1
   end
 
   test "direct owner continuity chains three settled turns on one upstream connection" do
@@ -8361,6 +8714,33 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       close: fn upstream_pid -> Agent.stop(upstream_pid) end
     }
   end
+
+  defp frame_observer_failure_upstream_boundary(test_pid, marker) do
+    %{
+      start: fn -> UpstreamWebsocketSession.start_link([]) end,
+      send: fn upstream_pid, request, writer ->
+        original_observer = request.frame_observer
+
+        observer = fn frame, decoded ->
+          send(test_pid, {:owner_frame_observer_failed, self()})
+          invoke_frame_observer(original_observer, frame, decoded)
+          raise marker
+        end
+
+        request = %{request | writer: writer, frame_observer: observer}
+        UpstreamWebsocketSession.request(upstream_pid, request)
+      end,
+      close: &UpstreamWebsocketSession.close/1
+    }
+  end
+
+  defp invoke_frame_observer(observer, frame, decoded) when is_function(observer, 2),
+    do: observer.(frame, decoded)
+
+  defp invoke_frame_observer(observer, frame, _decoded) when is_function(observer, 1),
+    do: observer.(frame)
+
+  defp invoke_frame_observer(_observer, _frame, _decoded), do: :ok
 
   defp assert_blocking_owner_upstream_received!(release_ref) do
     receive do
