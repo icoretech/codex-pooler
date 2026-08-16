@@ -5,10 +5,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
   import CodexPooler.PoolerFixtures
   import ExUnit.CaptureLog
 
+  alias CodexPooler.Accounting
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
-  alias CodexPooler.Gateway.Persistence.CodexSession
+  alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, CodexTurn}
+  alias CodexPooler.Gateway.Runtime.Finalization.AttemptSettlement
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
@@ -37,7 +40,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     def call_owner(node, module, function, args, _timeout) do
       downstream = Enum.find(args, &(is_map(&1) and is_pid(Map.get(&1, :pid))))
       send(downstream.pid, {:cancellation_node_call, self(), node, function})
-      apply(module, function, args)
+      result = apply(module, function, args)
+      send(downstream.pid, {:cancellation_node_call_complete, self(), node, function, result})
+      result
     end
   end
 
@@ -50,7 +55,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
     on_exit(fn ->
       restore_observation_setting(previous_observation_setting)
-      cleanup_local_owner_sessions()
     end)
 
     {:ok, auth: auth}
@@ -64,7 +68,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     on_exit(fn -> :telemetry.detach(handler_id) end)
 
     for {mapper, request_options_fun, mapper_fun} <- mapper_cases() do
-      identity = active_upstream_identity_fixture()
+      %{identity: identity, assignment: assignment} =
+        active_upstream_assignment_fixture(auth.pool)
+
+      model =
+        model_fixture(auth.pool, %{
+          exposed_model_id: "protocol-#{mapper}-#{System.unique_integer([:positive])}"
+        })
+
       quota_handler_id = attach_quota_commit_barrier!(identity.id)
       on_exit(fn -> :telemetry.detach(quota_handler_id) end)
       reset_at = DateTime.utc_now() |> DateTime.add(900, :second) |> DateTime.truncate(:second)
@@ -75,9 +86,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
       release_ref = make_ref()
 
       upstream =
-        start_fake_upstream(FakeUpstream.websocket_text_frames([rate_limit, terminal]))
+        start_fake_upstream(FakeUpstream.websocket_text_frames([rate_limit, terminal, terminal]))
 
       %{session: session, lease_token: lease_token} = owner_session_fixture(auth, mapper)
+      accounting = accounting_turn_fixture(auth, session, assignment, model, mapper)
 
       downstream_sender =
         terminal_barrier_downstream_sender(mapper, expected_terminal, release_ref)
@@ -94,7 +106,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
                  downstream_target("corr-#{mapper}")
                )
 
-      reset_probe = bound_reset_probe()
+      reset_probe = bound_reset_probe(assignment, identity, model.exposed_model_id)
       parent = self()
 
       submitter =
@@ -114,7 +126,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
               end
             )
 
-          request = dispatch_request(upstream, identity, request_options)
+          request = dispatch_request(upstream, identity, request_options, accounting)
 
           websocket_request(request,
             notify: parent,
@@ -168,6 +180,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
       assert_receive {:websocket_owner_harness_node_call,
                       %{function: :remote_submit_request_v1, arity: 3}}
 
+      refute_received {:websocket_owner_harness_node_call,
+                       %{function: :remote_submit_request_v1, arity: 3}}
+
       expected_rate_limit_message =
         owner_data_message(mapper, stable_downstream, submitter.pid, expected_rate_limit)
 
@@ -184,12 +199,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
       assert_product_observations()
 
-      refute_received {:product_observation,
-                       %{direction: :provider_to_pooler, event_type: "response.completed"}}
-
       await_quota_commit!(quota_handler_id)
       :telemetry.detach(quota_handler_id)
       assert_quota_observation(identity, reset_at)
+      finalize_and_assert_successful_accounting!(accounting)
       assert %{active_turn: nil} = :sys.get_state(owner)
     end
   end
@@ -235,8 +248,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
     upstream =
       start_fake_upstream(
-        FakeUpstream.websocket_init_barrier(
-          FakeUpstream.websocket_text_frames([terminal_frame("resp_cancelled")]),
+        FakeUpstream.timeout_mid_stream(
+          "data: #{response_created_frame()}\n\n",
           notify: self(),
           release_ref: release_ref
         )
@@ -259,15 +272,26 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
     submitter = Task.async(fn -> websocket_request(request, notify: parent) end)
 
-    assert_receive {:fake_upstream_websocket_barrier, :before_init, barrier_pid, ^release_ref}
+    assert_receive {:fake_upstream_timeout_barrier, :mid_stream, websocket_pid, ^release_ref}
+
+    assert_receive {:websocket_owner_frame, "corr-cancel", 1, {:data, created_frame}}
+
+    assert Jason.decode!(created_frame)["type"] == "response.created"
+    assert FakeUpstream.count(upstream) == 1
     assert %{active_turn: %{task_pid: owner_task}} = :sys.get_state(owner)
     owner_task_ref = Process.monitor(owner_task)
+    websocket_ref = Process.monitor(websocket_pid)
 
     Task.shutdown(submitter, :brutal_kill)
 
     assert_receive {:cancellation_node_call, watcher_pid, @remote_node, :remote_cancel_downstream}
 
     refute watcher_pid == submitter.pid
+
+    assert_receive {:cancellation_node_call_complete, ^watcher_pid, @remote_node,
+                    :remote_cancel_downstream, :ok}
+
+    refute_received {:cancellation_node_call, _duplicate, @remote_node, :remote_cancel_downstream}
 
     assert_receive {:DOWN, ^owner_task_ref, :process, ^owner_task, :shutdown},
                    @detection_timeout_ms
@@ -277,13 +301,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
     assert safe_payload.code == "client_disconnected"
     assert_receive {:websocket_owner_frame, "corr-cancel", 1, :complete}
-    assert %{active_turn: nil, downstream: nil} = await_owner_detached(owner)
+    assert %{active_turn: nil, downstream: nil} = :sys.get_state(owner)
+    assert FakeUpstream.count(upstream) == 1
 
-    send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
+    assert_receive {:DOWN, ^websocket_ref, :process, ^websocket_pid, _reason},
+                   @detection_timeout_ms
 
-    assert_receive {:fake_upstream_websocket_initialized, ^barrier_pid, ^release_ref}
-    assert FakeUpstream.count(upstream) <= 1
-    assert :ok = FakeUpstream.stop(upstream)
     refute_received {:websocket_owner_frame, "corr-cancel", 1, _duplicate}
   end
 
@@ -347,6 +370,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     assert {:ok, recovered_owner} = WebsocketOwnerSession.lookup(session.id)
     assert recovered_owner != first_owner
 
+    assert_replaced_owner_lease!(session, lease_token)
+
     assert %{active_turn: nil, downstream: ^recovered_downstream} =
              :sys.get_state(recovered_owner)
 
@@ -357,7 +382,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
   end
 
   test "v1 bound reset probe prevents pre-visible owner recovery", %{auth: auth} do
-    identity = active_upstream_identity_fixture()
+    %{identity: identity, assignment: assignment} =
+      active_upstream_assignment_fixture(auth.pool)
+
+    model = model_fixture(auth.pool)
     recovery_upstream = start_fake_upstream(FakeUpstream.websocket_text_frames([]))
     release_ref = make_ref()
     parent = self()
@@ -387,7 +415,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
                downstream_target("corr-bound-probe")
              )
 
-    request_options = owner_request_options(session, lease_token, downstream, bound_reset_probe())
+    reset_probe = bound_reset_probe(assignment, identity, model.exposed_model_id)
+    request_options = owner_request_options(session, lease_token, downstream, reset_probe)
     request = dispatch_request(recovery_upstream, identity, request_options)
     submitter = Task.async(fn -> UpstreamDispatch.websocket_request(request) end)
 
@@ -404,6 +433,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
              Task.await(submitter, @detection_timeout_ms)
 
     assert FakeUpstream.count(recovery_upstream) == 0
+    assert_unchanged_owner_lease!(session, lease_token)
     refute_received {:websocket_owner_runtime_recovered, "corr-bound-probe", 1, _recovery}
     refute_received {:websocket_owner_frame, "corr-bound-probe", 1, _payload}
   end
@@ -412,9 +442,21 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     identity = active_upstream_identity_fixture()
     created = response_created_frame()
     visible = output_delta_frame()
-    upstream = start_fake_upstream(FakeUpstream.websocket_sse_then_close([created, visible]))
+    expected_created = StreamProtocol.normalize_public_openai_responses_json_message(created)
+    expected_visible = StreamProtocol.normalize_public_openai_responses_json_message(visible)
+
+    upstream =
+      start_fake_upstream(
+        FakeUpstream.websocket_sse_then_close([
+          Jason.decode!(created),
+          Jason.decode!(visible)
+        ])
+      )
+
     %{session: session, lease_token: lease_token} = owner_session_fixture(auth, :post_visible)
-    {:ok, owner} = start_owner(session)
+
+    {:ok, owner} =
+      start_owner(session, upstream: frame_observer_failure_upstream(self(), :raise))
 
     assert {:ok, stable_downstream} =
              WebsocketOwnerSession.attach_downstream(
@@ -457,12 +499,73 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
     assert_receive {:websocket_owner_frame, "corr-post-visible", 1, ^owner_turn_id, :complete}
 
+    assert_receive {:websocket_owner_frame, "corr-post-visible", 1, ^owner_turn_id,
+                    {:data, ^expected_created}}
+
+    assert_receive {:websocket_owner_frame, "corr-post-visible", 1, ^owner_turn_id,
+                    {:data, ^expected_visible}}
+
+    assert_receive {:owner_frame_observer_called, :raise, _owner_upstream_pid, "response.created"}
+
+    assert_receive {:owner_frame_observer_called, :raise, _owner_upstream_pid,
+                    "response.output_text.delta"}
+
+    refute_received {:owner_frame_observer_called, :raise, _owner_upstream_pid, _duplicate}
+
     assert {:error, failure} = Task.await(submitter, @detection_timeout_ms)
     assert failure.reason == :upstream_websocket_closed_before_terminal
     assert failure.transport_failure["upstream_committed"] == true
     assert FakeUpstream.count(upstream) == 1
     refute_received {:websocket_owner_frame, "corr-post-visible", 1, ^owner_turn_id, _duplicate}
     assert %{active_turn: nil} = :sys.get_state(owner)
+  end
+
+  test "v1 mapper and writer faults terminate the owner path", %{auth: auth} do
+    for callback_kind <- [:mapper, :writer] do
+      identity = active_upstream_identity_fixture()
+      terminal = terminal_frame("resp_mandatory_#{callback_kind}")
+      correlation_id = "corr-mandatory-#{callback_kind}"
+      upstream = start_fake_upstream(FakeUpstream.websocket_text_frames([terminal]))
+
+      %{session: session, lease_token: lease_token} =
+        owner_session_fixture(auth, callback_kind)
+
+      {:ok, owner} =
+        start_owner(session,
+          upstream: mandatory_callback_failure_upstream(self(), callback_kind)
+        )
+
+      owner_ref = Process.monitor(owner)
+
+      assert {:ok, downstream} =
+               WebsocketOwnerSession.attach_downstream(
+                 owner,
+                 downstream_target(correlation_id)
+               )
+
+      {result, _log} =
+        with_log(fn ->
+          upstream
+          |> dispatch_request(
+            identity,
+            owner_request_options(session, lease_token, downstream, nil)
+          )
+          |> websocket_request()
+        end)
+
+      assert {:error, %{reason: :owner_crashed, started: false}} = result
+      assert_receive {:mandatory_callback_invoked, ^callback_kind}
+      assert_receive {:DOWN, ^owner_ref, :process, ^owner, _reason}, @detection_timeout_ms
+      assert FakeUpstream.count(upstream) == 1
+      refute_received {:mandatory_callback_invoked, ^callback_kind}
+
+      assert_receive {:websocket_owner_frame, ^correlation_id, 1,
+                      {:error, :owner_crashed, safe_payload}}
+
+      assert safe_payload.code == "owner_crashed"
+      assert_receive {:websocket_owner_frame, ^correlation_id, 1, :complete}
+      refute_received {:websocket_owner_frame, ^correlation_id, 1, _duplicate}
+    end
   end
 
   test "submission observer raise throw and exit run once without changing owner delivery", %{
@@ -541,10 +644,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
                |> dispatch_request(identity, request_options)
                |> websocket_request()
 
-      assert_receive {:owner_frame_observer_called, ^kind, ^owner_upstream_pid}
+      assert_receive {:owner_frame_observer_called, ^kind, ^owner_upstream_pid,
+                      "response.completed"}
+
       assert_receive {:websocket_owner_frame, ^correlation_id, 1, {:data, ^terminal}}
       assert_receive {:websocket_owner_frame, ^correlation_id, 1, :complete}
-      refute_received {:owner_frame_observer_called, ^kind, _duplicate}
+      refute_received {:owner_frame_observer_called, ^kind, _owner_upstream_pid, _duplicate}
       refute_received {:websocket_owner_frame, ^correlation_id, 1, _duplicate}
       assert FakeUpstream.count(upstream) == 1
       assert Process.alive?(owner)
@@ -574,6 +679,125 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     %{pool: pool, api_key: api_key}
   end
 
+  defp accounting_turn_fixture(auth, session, assignment, model, mapper) do
+    correlation_id = "protocol-accounting-#{mapper}-#{System.unique_integer([:positive])}"
+
+    assert {:ok, reserved} =
+             Accounting.reserve(
+               auth,
+               model,
+               %{"model" => model.exposed_model_id, "input" => "synthetic protocol turn"},
+               %{
+                 endpoint: "/backend-api/codex/responses",
+                 transport: "websocket",
+                 correlation_id: correlation_id,
+                 request_metadata: %{"codex_session_id" => session.id}
+               }
+             )
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, assignment)
+    assert {:ok, turn} = Gateway.start_codex_turn(session, reserved.request)
+
+    %{request: reserved.request, attempt: attempt, turn: turn}
+  end
+
+  defp finalize_and_assert_successful_accounting!(accounting) do
+    assert {:ok, %{finalization_disposition: :inserted}} =
+             AttemptSettlement.finalize_success(
+               accounting.request,
+               accounting.attempt,
+               %{status: "usage_known", input_tokens: 1, output_tokens: 1, total_tokens: 2},
+               %{response_status_code: 200}
+             )
+
+    assert %Request{
+             status: "succeeded",
+             usage_status: "usage_known",
+             response_status_code: 200,
+             retry_count: 0,
+             last_error_code: nil
+           } = Repo.get!(Request, accounting.request.id)
+
+    assert %Attempt{
+             attempt_number: 1,
+             status: "succeeded",
+             usage_status: "usage_known",
+             upstream_status_code: 200,
+             retryable: false,
+             network_error_code: nil
+           } = Repo.get!(Attempt, accounting.attempt.id)
+
+    assert %CodexTurn{
+             status: "succeeded",
+             final_attempt_id: attempt_id,
+             error_code: nil
+           } = Repo.get!(CodexTurn, accounting.turn.id)
+
+    assert attempt_id == accounting.attempt.id
+
+    assert [reservation, release, settlement] =
+             Repo.all(
+               from entry in LedgerEntry,
+                 where: entry.request_id == ^accounting.request.id,
+                 order_by: [asc: entry.occurred_at, asc: entry.entry_kind]
+             )
+
+    assert reservation.entry_kind == "reservation"
+    assert reservation.attempt_id == nil
+    assert release.entry_kind == "release"
+    assert release.attempt_id == accounting.attempt.id
+    assert release.usage_status == "usage_known"
+    assert settlement.entry_kind == "settlement"
+    assert settlement.attempt_id == accounting.attempt.id
+    assert settlement.usage_status == "usage_known"
+    assert settlement.input_tokens == 1
+    assert settlement.output_tokens == 1
+    assert settlement.total_tokens == 2
+
+    assert Repo.aggregate(
+             from(attempt in Attempt, where: attempt.request_id == ^accounting.request.id),
+             :count
+           ) == 1
+
+    assert Repo.aggregate(
+             from(turn in CodexTurn, where: turn.request_id == ^accounting.request.id),
+             :count
+           ) == 1
+  end
+
+  defp assert_replaced_owner_lease!(session, previous_lease_token) do
+    assert %BridgeOwnerLease{
+             status: "released",
+             lease_token: ^previous_lease_token,
+             metadata: %{"release_reason" => "owner_unavailable_takeover"}
+           } = Repo.get_by!(BridgeOwnerLease, lease_token: previous_lease_token)
+
+    assert [%BridgeOwnerLease{} = active] =
+             Repo.all(
+               from lease in BridgeOwnerLease,
+                 where: lease.codex_session_id == ^session.id and lease.status == "active"
+             )
+
+    assert active.lease_token != previous_lease_token
+    assert active.metadata["source"] == "owner_unavailable_takeover"
+    assert Repo.get!(CodexSession, session.id).owner_lease_token == active.lease_token
+
+    assert Repo.aggregate(
+             from(lease in BridgeOwnerLease, where: lease.codex_session_id == ^session.id),
+             :count
+           ) == 2
+  end
+
+  defp assert_unchanged_owner_lease!(session, lease_token) do
+    assert [%BridgeOwnerLease{status: "active", lease_token: ^lease_token}] =
+             Repo.all(
+               from lease in BridgeOwnerLease,
+                 where: lease.codex_session_id == ^session.id
+             )
+
+    assert Repo.get!(CodexSession, session.id).owner_lease_token == lease_token
+  end
+
   defp owner_session_fixture(auth, suffix, owner_instance_id \\ Atom.to_string(@remote_node)) do
     assert {:ok, %CodexSession{} = session} =
              Gateway.start_codex_session(auth, %{
@@ -582,6 +806,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
              })
 
     session = Repo.get!(CodexSession, session.id)
+    on_exit(fn -> cleanup_owner_session(session.id) end)
     %{session: session, lease_token: session.owner_lease_token}
   end
 
@@ -606,12 +831,33 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
         original_observer = request.frame_observer
 
         observer = fn frame, decoded ->
-          send(parent, {:owner_frame_observer_called, kind, self()})
+          send(parent, {:owner_frame_observer_called, kind, self(), decoded["type"]})
           invoke_frame_observer(original_observer, frame, decoded)
           fail_frame_observer(kind)
         end
 
         request = %{request | writer: writer, frame_observer: observer}
+        UpstreamWebsocketSession.request(upstream_pid, request)
+      end,
+      close: &UpstreamWebsocketSession.close/1
+    }
+  end
+
+  defp mandatory_callback_failure_upstream(parent, callback_kind) do
+    %{
+      start: fn -> UpstreamWebsocketSession.start_link([]) end,
+      send: fn upstream_pid, request, owner_writer ->
+        failing_callback = fn _frame ->
+          send(parent, {:mandatory_callback_invoked, callback_kind})
+          raise "synthetic mandatory callback failure"
+        end
+
+        request =
+          case callback_kind do
+            :mapper -> %{request | writer: owner_writer, message_mapper: failing_callback}
+            :writer -> %{request | writer: failing_callback}
+          end
+
         UpstreamWebsocketSession.request(upstream_pid, request)
       end,
       close: &UpstreamWebsocketSession.close/1
@@ -669,15 +915,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     )
   end
 
-  defp dispatch_request(upstream, identity, request_options) do
+  defp dispatch_request(upstream, identity, request_options, accounting \\ nil) do
     %UpstreamDispatch.Request{
       url: FakeUpstream.url(upstream) <> "/backend-api/codex/responses",
       token: "synthetic-token",
       upstream_payload: Jason.encode!(%{"type" => "response.create", "model" => "example-model"}),
       identity: identity,
       routing_hint_authorized?: true,
-      accounting_request: nil,
-      accounting_attempt: nil,
+      accounting_request: accounting && accounting.request,
+      accounting_attempt: accounting && accounting.attempt,
       writer: fn _message -> :ok end,
       assignment_advertised?: false,
       request_options: request_options,
@@ -784,13 +1030,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     }
   end
 
-  defp bound_reset_probe do
+  defp bound_reset_probe(assignment, identity, effective_model) do
     assert {:ok, probe} =
              ResetProbe.bind(
                ResetProbe.new(),
-               Ecto.UUID.generate(),
-               Ecto.UUID.generate(),
-               "example-model",
+               assignment.id,
+               identity.id,
+               effective_model,
                "proxy_websocket"
              )
 
@@ -817,10 +1063,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
   defp assert_product_observations do
     assert_receive {:product_observation,
                     %{direction: :provider_to_pooler, event_type: "response.completed"}}
+
+    refute_received {:product_observation, %{event_type: "response.completed"}}
   end
 
   defp assert_quota_observation(identity, reset_at) do
-    assert window = find_quota_observation(identity)
+    assert [window] = quota_observations(identity)
 
     assert Decimal.equal?(window.used_percent, Decimal.new("42.0"))
     assert DateTime.compare(window.reset_at, reset_at) == :eq
@@ -885,28 +1133,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     end
   end
 
-  defp find_quota_observation(identity) do
+  defp quota_observations(identity) do
     identity
     |> QuotaWindows.list_quota_windows()
-    |> Enum.find(&(&1.source == "codex_rate_limit_event" and &1.window_kind == "primary"))
+    |> Enum.filter(&(&1.source == "codex_rate_limit_event" and &1.window_kind == "primary"))
   end
-
-  defp await_owner_detached(owner, attempts \\ 100)
-
-  defp await_owner_detached(owner, attempts) when attempts > 0 do
-    case :sys.get_state(owner) do
-      %{active_turn: nil, downstream: nil} = state ->
-        state
-
-      _state ->
-        marker = {:await_owner_detached, owner, attempts}
-        send(self(), marker)
-        assert_receive ^marker
-        await_owner_detached(owner, attempts - 1)
-    end
-  end
-
-  defp await_owner_detached(owner, 0), do: :sys.get_state(owner)
 
   defp start_fake_upstream(mode) do
     {:ok, upstream} = FakeUpstream.start_link(mode)
@@ -920,21 +1151,24 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
   defp restore_observation_setting(value),
     do: Application.put_env(:codex_pooler, :task14_product_observation_enabled, value)
 
-  defp cleanup_local_owner_sessions do
-    capture_log(fn ->
-      WebsocketOwnerSession.Registry
-      |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
-      |> Enum.each(fn codex_session_id ->
-        try do
-          with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
-            _result = GenServer.stop(owner_pid, :shutdown, 1_000)
-          end
-        catch
-          :exit, _reason -> :ok
-        end
-      end)
-    end)
+  defp cleanup_owner_session(codex_session_id) do
+    case Registry.lookup(WebsocketOwnerSession.Registry, codex_session_id) do
+      [] ->
+        :ok
 
-    :ok
+      [{owner_pid, _value}] ->
+        owner_ref = Process.monitor(owner_pid)
+        :ok = GenServer.stop(owner_pid, :normal, 1_000)
+
+        receive do
+          {:DOWN, ^owner_ref, :process, ^owner_pid, _reason} -> :ok
+        after
+          @detection_timeout_ms ->
+            raise "timed out cleaning up test-owned websocket owner session"
+        end
+
+      owners ->
+        raise "expected at most one test-owned websocket owner, got: #{length(owners)}"
+    end
   end
 end
