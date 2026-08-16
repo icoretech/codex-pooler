@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.TransportFailureReason
+  alias CodexPooler.Gateway.Transports.UpstreamDispatch
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ConnectionUpgrade
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request
@@ -20,6 +21,137 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
   # @timeouts. It has to stay above those scenario timeouts, or a loaded run
   # gives up on a request that was still allowed to be in flight.
   @detection_timeout_ms 5_000
+
+  test "characterization exposes the initial websocket lifecycle through OTP status" do
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    status = :sys.get_status(session)
+
+    assert Map.take(status_state(status), [:lifecycle_id, :generation]) ==
+             lifecycle_state(session)
+
+    assert status_logged_events(status) == []
+  end
+
+  test "OTP status and transient request inspection expose only safe projections" do
+    header_marker = private_marker(:header)
+    payload_marker = private_marker(:payload)
+    transport_marker = private_marker(:transport)
+    send_text_marker = private_marker(:send_text)
+
+    upstream = start_upstream(websocket_success("resp_ws_status_projection"))
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = %{
+      websocket_request(FakeUpstream.url(upstream))
+      | headers: [{"x-private-status", header_marker}],
+        payload: Jason.encode!(%{"input" => payload_marker})
+    }
+
+    assert {:ok, %{terminal: "response.completed"}} =
+             UpstreamWebsocketSession.request(session, request)
+
+    assert {:ok, :sent} =
+             UpstreamWebsocketSession.send_request_frame(session, send_text_marker)
+
+    send(session, {:private_transport_message, transport_marker})
+    _state_after_transport_message = :sys.get_state(session)
+
+    status = :sys.get_status(session)
+
+    assert status_state(status) == %{
+             lifecycle_id: lifecycle_state(session).lifecycle_id,
+             generation: 1,
+             connected?: true,
+             reconnect_pending?: false,
+             request_active?: false,
+             keepalive_pending?: true,
+             pong_pending?: false
+           }
+
+    assert status_logged_events(status) == []
+
+    assert inspect(request) ==
+             "#CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request<redacted>"
+
+    dispatch_request = %UpstreamDispatch.Request{
+      url: header_marker,
+      token: payload_marker,
+      upstream_payload: transport_marker,
+      original_payload: %{"private" => send_text_marker}
+    }
+
+    assert inspect(dispatch_request) ==
+             "#CodexPooler.Gateway.Transports.UpstreamDispatch.Request<redacted>"
+
+    formatted =
+      UpstreamWebsocketSession.format_status(%{
+        reason: RuntimeError.exception(payload_marker),
+        message: {:request, request},
+        state: :sys.get_state(session),
+        log: [{:in, {:private_transport_message, transport_marker}}]
+      })
+
+    assert formatted.reason == {:exception, RuntimeError}
+    assert formatted.message == :request
+    assert formatted.state == status_state(status)
+    assert formatted.log == []
+
+    assert %{message: :send_text} =
+             UpstreamWebsocketSession.format_status(%{message: {:send_text, send_text_marker}})
+
+    assert %{message: :transport_message} =
+             UpstreamWebsocketSession.format_status(%{
+               message: {:private_transport_message, transport_marker}
+             })
+
+    for marker <- [header_marker, payload_marker, transport_marker, send_text_marker] do
+      refute inspect(status) =~ marker
+      refute inspect(request) =~ marker
+      refute inspect(dispatch_request) =~ marker
+      refute inspect(formatted) =~ marker
+    end
+  end
+
+  test "OTP termination report redacts installed request state and crashing transport message" do
+    header_marker = private_marker(:crash_header)
+    payload_marker = private_marker(:crash_payload)
+    transport_marker = private_marker(:crash_transport)
+
+    upstream = start_upstream(websocket_success("resp_ws_crash_projection"))
+    {:ok, session} = GenServer.start(UpstreamWebsocketSession, :new)
+    monitor = Process.monitor(session)
+    :ok = :sys.log(session, true)
+
+    send(session, {:private_transport_message, transport_marker})
+    _state_after_transport_message = :sys.get_state(session)
+
+    request = %{
+      websocket_request(FakeUpstream.url(upstream))
+      | headers: [{"x-private-crash", header_marker}],
+        payload: Jason.encode!(%{"input" => payload_marker}),
+        writer: fn _text -> raise "synthetic writer crash" end
+    }
+
+    captured_log =
+      capture_log(fn ->
+        assert {:error, %{reason: :upstream_websocket_session_unavailable}} =
+                 UpstreamWebsocketSession.request(session, request)
+
+        assert_receive {:DOWN, ^monitor, :process, ^session, _reason}, @detection_timeout_ms
+      end)
+
+    assert captured_log =~ "GenServer"
+    assert captured_log =~ "terminating"
+    assert captured_log =~ "RuntimeError"
+    assert captured_log =~ "UpstreamWebsocketSession.handle_text_frame"
+
+    for marker <- [header_marker, payload_marker, transport_marker] do
+      refute captured_log =~ marker
+    end
+  end
 
   @tag :task_1_pin
   test "PIN-P02 exact legacy typeless binary id remains terminal without status or object" do
@@ -2650,6 +2782,34 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     session
     |> :sys.get_state()
     |> lifecycle_from_state()
+  end
+
+  defp status_state(
+         {:status, _pid, {:module, :gen_server}, [_pdict, _running, _parent, _debug, status]}
+       ) do
+    status
+    |> Keyword.get_values(:data)
+    |> Enum.flat_map(& &1)
+    |> Enum.find_value(fn
+      {~c"State", state} -> state
+      _entry -> nil
+    end)
+  end
+
+  defp status_logged_events(
+         {:status, _pid, {:module, :gen_server}, [_pdict, _running, _parent, _debug, status]}
+       ) do
+    status
+    |> Keyword.get_values(:data)
+    |> Enum.flat_map(& &1)
+    |> Enum.find_value(fn
+      {~c"Logged events", events} -> events
+      _entry -> nil
+    end)
+  end
+
+  defp private_marker(label) do
+    "private-#{label}-#{System.unique_integer([:positive, :monotonic])}"
   end
 
   defp lifecycle_from_state(state) do

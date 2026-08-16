@@ -49,3 +49,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
           forward_error_body?: boolean()
         }
 end
+
+defimpl Inspect,
+  for: CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request do
+  def inspect(_request, _opts) do
+    "#CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request<redacted>"
+  end
+end

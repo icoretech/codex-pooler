@@ -94,6 +94,12 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           }
   end
 
+  defimpl Inspect, for: Request do
+    def inspect(_request, _opts) do
+      "#CodexPooler.Gateway.Transports.UpstreamDispatch.Request<redacted>"
+    end
+  end
+
   defmodule RejectionDrain do
     @moduledoc false
 
