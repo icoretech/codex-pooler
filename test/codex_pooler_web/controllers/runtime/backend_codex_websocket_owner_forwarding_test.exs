@@ -46,6 +46,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.RequestCompression.TokenCounter
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Gateway.Runtime.Service
 
@@ -3629,6 +3630,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     setup = gateway_setup(upstream, supported_compression_model_opts())
     enable_request_compression!(setup.pool)
+
+    assert {:ok, _count, _metadata} =
+             TokenCounter.count(
+               @supported_compression_model,
+               "warm tokenizer ranks"
+             )
+
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     {:ok, first_state} =
