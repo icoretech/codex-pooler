@@ -389,7 +389,11 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
 
   defp normalize_assistant_replay_content_part(%{"type" => "output_text", "text" => text} = part)
        when is_binary(text) do
-    {:ok, Map.delete(part, "logprobs")}
+    case Map.fetch(part, "logprobs") do
+      {:ok, logprobs} when is_list(logprobs) -> {:ok, Map.delete(part, "logprobs")}
+      {:ok, _logprobs} -> {:ok, part}
+      :error -> {:ok, part}
+    end
   end
 
   defp normalize_assistant_replay_content_part(%{

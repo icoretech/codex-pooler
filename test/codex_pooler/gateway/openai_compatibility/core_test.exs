@@ -247,6 +247,35 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     refute Map.has_key?(hd(result.payload["input"])["content"] |> hd(), "logprobs")
   end
 
+  @tag :responses_coercion
+  test "Responses rejects malformed replay output-text logprobs" do
+    for logprobs <- [nil, "invalid", %{"unexpected" => true}, true, 1] do
+      assert {:error,
+              %{
+                status: 400,
+                code: "invalid_request",
+                message: "input item shape is not translatable",
+                param: "input"
+              }} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => [
+                   %{
+                     "type" => "message",
+                     "role" => "assistant",
+                     "content" => [
+                       %{
+                         "type" => "output_text",
+                         "text" => "synthetic assistant replay",
+                         "logprobs" => logprobs
+                       }
+                     ]
+                   }
+                 ]
+               })
+    end
+  end
+
   test "Responses rejects non-text system and developer content before instruction lifting" do
     for {role, part} <- [
           {"developer",
