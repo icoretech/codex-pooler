@@ -5,7 +5,7 @@ defmodule CodexPooler.Upstreams.CodexClientIdentity do
 
   @originator "codex_cli_rs"
   # renovate: datasource=github-releases depName=openai/codex extractVersion=^rust-v(?<version>.+)$
-  @default_client_version "0.147.0"
+  @default_client_version "0.148.0"
 
   @type header :: {String.t(), String.t()}
 
