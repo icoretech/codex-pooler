@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.6.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.5...codex-pooler-v0.6.6) (2026-08-18)
+
+
+### Features
+
+* **admin:** persist Pool filters in URL ([fd425e2](https://github.com/icoretech/codex-pooler/commit/fd425e26b7f3f15a41d9924226f4b0b909473f27))
+* **openai:** accept hosted shell response history ([6a38cc6](https://github.com/icoretech/codex-pooler/commit/6a38cc62ca47d7d0c11a273a438afa3ce60487ed))
+
+
+### Bug Fixes
+
+* **admin:** canonicalize filter URLs ([385e5c6](https://github.com/icoretech/codex-pooler/commit/385e5c673f2f2b15a9f3c79618734fa278623948))
+* **deps:** update dependency apexcharts to v6.9.0 ([#290](https://github.com/icoretech/codex-pooler/issues/290)) ([2b30c30](https://github.com/icoretech/codex-pooler/commit/2b30c309b0e356a3af91fcc5afad56c3c1d0e36b))
+* **deps:** update dependency astro to v7.2.2 ([e9b5ec1](https://github.com/icoretech/codex-pooler/commit/e9b5ec15b3af29a1ea7d5525307556eabe669b29))
+* **openai:** accept OMP output text replay metadata ([3fa054d](https://github.com/icoretech/codex-pooler/commit/3fa054ddddda234a9e5cd0d61a7c88a765296488))
+* **openai:** reject non-object strict schema roots ([5b0df22](https://github.com/icoretech/codex-pooler/commit/5b0df2271d7583f4c17eda1ee71440eaae2b9d0e))
+
 ## [0.6.5](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.4...codex-pooler-v0.6.5) (2026-08-15)
 
 
