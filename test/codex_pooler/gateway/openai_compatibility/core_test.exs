@@ -210,6 +210,43 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   @tag :responses_coercion
+  test "Responses drops replay output-text logprobs before backend normalization" do
+    annotations = []
+
+    assert {:ok, result} =
+             Responses.coerce(%{
+               "model" => "gpt-fixture-text",
+               "input" => [
+                 %{
+                   "type" => "message",
+                   "role" => "assistant",
+                   "phase" => "final_answer",
+                   "content" => [
+                     %{
+                       "type" => "output_text",
+                       "text" => "synthetic assistant replay",
+                       "annotations" => annotations,
+                       "logprobs" => []
+                     }
+                   ]
+                 }
+               ]
+             })
+
+    assert [
+             %{
+               "type" => "message",
+               "role" => "assistant",
+               "phase" => "final_answer",
+               "content" => [
+                 %{"type" => "output_text", "text" => _, "annotations" => ^annotations}
+               ]
+             }
+           ] = result.payload["input"]
+
+    refute Map.has_key?(hd(result.payload["input"])["content"] |> hd(), "logprobs")
+  end
+
   test "Responses rejects non-text system and developer content before instruction lifting" do
     for {role, part} <- [
           {"developer",

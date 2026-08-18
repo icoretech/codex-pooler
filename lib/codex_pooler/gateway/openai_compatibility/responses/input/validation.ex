@@ -274,17 +274,29 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
          %{"type" => "output_text", "text" => text, "annotations" => annotations} = part
        )
        when is_binary(text) do
-    with :ok <- validate_exact_item_keys(part, ["type", "text", "annotations"]) do
-      validate_url_citation_annotations(annotations)
+    with :ok <- validate_exact_item_keys(part, ["type", "text", "annotations", "logprobs"]),
+         :ok <- validate_url_citation_annotations(annotations) do
+      validate_optional_replay_logprobs(part)
     end
   end
 
   defp validate_assistant_replay_content_part(%{"type" => "output_text", "text" => text} = part)
-       when is_binary(text),
-       do: validate_exact_item_keys(part, ["type", "text"])
+       when is_binary(text) do
+    with :ok <- validate_exact_item_keys(part, ["type", "text", "logprobs"]) do
+      validate_optional_replay_logprobs(part)
+    end
+  end
 
   defp validate_assistant_replay_content_part(_part),
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp validate_optional_replay_logprobs(%{"logprobs" => logprobs}) when is_list(logprobs),
+    do: :ok
+
+  defp validate_optional_replay_logprobs(%{"logprobs" => _logprobs}),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp validate_optional_replay_logprobs(_part), do: :ok
 
   defp validate_url_citation_annotations(annotations) when is_list(annotations),
     do: validate_each(annotations, &validate_url_citation_annotation/1)

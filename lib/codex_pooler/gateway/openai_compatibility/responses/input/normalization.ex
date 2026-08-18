@@ -389,7 +389,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
 
   defp normalize_assistant_replay_content_part(%{"type" => "output_text", "text" => text} = part)
        when is_binary(text) do
-    {:ok, part}
+    {:ok, Map.delete(part, "logprobs")}
   end
 
   defp normalize_assistant_replay_content_part(%{
