@@ -26,7 +26,13 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                valid_trigger: "exactly_one_final_after_visible_input",
                malformed_trigger: %{status: 400, param: "input", upstream_dispatch: false},
                retained: ["final_compaction_trigger"],
-               strips: ["stream", "include", "store", "prompt_cache_options"],
+               strips: ["stream", "include", "prompt_cache_options"],
+               upstream_payload: %{
+                 mode: "buffered_responses_json",
+                 terminal_trigger: "retained",
+                 store: false,
+                 stream: "omitted"
+               },
                response_adaptation: %{
                  upstream: "buffered_responses_json",
                  downstream: %{
@@ -38,6 +44,44 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                public_compact_route_supported: false,
                hidden_replay: false
              }
+    end
+
+    test "pins the V2/native compaction split and provider-unsupported evidence" do
+      fixture = CompatibilityMatrix.fixture!(:responses_chat)
+      boundary = fixture.compaction_recovery_boundary
+
+      assert boundary.backend_compaction_trigger.upstream_payload == %{
+               mode: "buffered_responses_json",
+               terminal_trigger: "retained",
+               store: false,
+               stream: "omitted"
+             }
+
+      assert boundary.backend_compaction_trigger.direct_compact_preservation.upstream_payload ==
+               %{
+                 compaction_trigger: "omitted",
+                 store: "omitted",
+                 stream: "omitted"
+               }
+
+      assert boundary.native_fallback.provider_unsupported == %{
+               request: %{
+                 admitted: true,
+                 endpoint: "/backend-api/codex/responses/compact",
+                 last_error_code: "upstream_status",
+                 response_status_code: 404,
+                 status: "failed"
+               },
+               attempt: %{
+                 matching_request_id: true,
+                 status: "failed",
+                 upstream_status_code: 404
+               },
+               local_route_404: false
+             }
+
+      assert boundary.native_fallback.omp_terminal ==
+               "configured_local_fallback_from_pinned_configuration"
     end
 
     test "keeps the issue-75 policy exception narrow and generic redaction intact" do

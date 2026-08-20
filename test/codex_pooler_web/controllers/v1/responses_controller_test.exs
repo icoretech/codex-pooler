@@ -2982,9 +2982,10 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert captured.path == "/backend-api/codex/responses"
       refute Map.has_key?(captured.json, "stream")
       refute Map.has_key?(captured.json, "include")
-      refute Map.has_key?(captured.json, "store")
+      assert captured.json["store"] == false
       refute Map.has_key?(captured.json, "prompt_cache_options")
       assert captured.json["prompt_cache_key"] == "public-compaction-cache-#{stream?}"
+      assert Enum.count(captured.json["input"], &(&1 == %{"type" => "compaction_trigger"})) == 1
       assert List.last(captured.json["input"]) == %{"type" => "compaction_trigger"}
 
       assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -3067,6 +3068,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
     refute Map.has_key?(captured.json, "stream")
+    assert captured.json["store"] == false
+    assert Enum.count(captured.json["input"], &(&1 == %{"type" => "compaction_trigger"})) == 1
+    assert List.last(captured.json["input"]) == %{"type" => "compaction_trigger"}
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses/compact"

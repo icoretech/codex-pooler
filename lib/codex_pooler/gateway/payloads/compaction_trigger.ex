@@ -82,11 +82,20 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
     end
   end
 
-  @spec project_payload(payload()) :: payload()
-  def project_payload(payload) when is_map(payload) do
+  @spec project_native_payload(payload()) :: payload()
+  def project_native_payload(payload) when is_map(payload) do
     payload
     |> Map.take(@compact_payload_keys)
     |> maybe_put_prompt_cache_key(payload)
+    |> remove_compaction_triggers()
+  end
+
+  @spec project_responses_payload(payload()) :: payload()
+  def project_responses_payload(payload) when is_map(payload) do
+    payload
+    |> Map.take(["store" | @compact_payload_keys])
+    |> maybe_put_prompt_cache_key(payload)
+    |> Map.put("store", false)
   end
 
   @spec adapt_gateway_result(
@@ -237,8 +246,14 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   defp visible_text?(_value), do: false
 
   defp compact_payload(payload) do
-    project_payload(payload)
+    project_responses_payload(payload)
   end
+
+  defp remove_compaction_triggers(%{"input" => input} = payload) when is_list(input) do
+    Map.put(payload, "input", Enum.reject(input, &match?(%{"type" => "compaction_trigger"}, &1)))
+  end
+
+  defp remove_compaction_triggers(payload), do: payload
 
   defp maybe_put_prompt_cache_key(compact_payload, %{"prompt_cache_key" => value}) do
     Map.put(compact_payload, "prompt_cache_key", value)

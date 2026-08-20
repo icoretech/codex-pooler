@@ -4,6 +4,55 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
   alias CodexPooler.Gateway.OpenAICompatibility.Responses
   alias CodexPooler.Gateway.Payloads.CompactionTrigger
 
+  test "canonical Responses projection forces store false and retains one terminal trigger" do
+    payload = compact_projection_payload()
+
+    projected = CompactionTrigger.project_responses_payload(payload)
+
+    assert projected["store"] == false
+    refute Map.has_key?(projected, "stream")
+    assert List.last(projected["input"]) == %{"type" => "compaction_trigger"}
+
+    assert Enum.count(projected["input"], &match?(%{"type" => "compaction_trigger"}, &1)) == 1
+
+    assert MapSet.new(Map.keys(projected)) ==
+             MapSet.new(~w(
+               model
+               instructions
+               input
+               tools
+               parallel_tool_calls
+               reasoning
+               service_tier
+               prompt_cache_key
+               prompt_cache_options
+               text
+               store
+             ))
+  end
+
+  test "native compact projection omits store, stream, and compaction triggers" do
+    projected = CompactionTrigger.project_native_payload(compact_projection_payload())
+
+    refute Map.has_key?(projected, "store")
+    refute Map.has_key?(projected, "stream")
+    refute Enum.any?(projected["input"], &match?(%{"type" => "compaction_trigger"}, &1))
+
+    assert MapSet.new(Map.keys(projected)) ==
+             MapSet.new(~w(
+               model
+               instructions
+               input
+               tools
+               parallel_tool_calls
+               reasoning
+               service_tier
+               prompt_cache_key
+               prompt_cache_options
+               text
+             ))
+  end
+
   test "legacy SSE keeps first valid compact output and native replay metadata byte-identical" do
     first_invalid = %{
       "type" => "compaction",
@@ -148,6 +197,27 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
        headers: [{"content-type", "application/json"}],
        raw_body: Jason.encode!(body)
      }}
+  end
+
+  defp compact_projection_payload do
+    %{
+      "model" => "gpt-compact-projection",
+      "instructions" => "synthetic instruction",
+      "input" => [
+        %{"type" => "message", "role" => "user", "content" => []},
+        %{"type" => "compaction_trigger"}
+      ],
+      "tools" => [],
+      "parallel_tool_calls" => false,
+      "reasoning" => %{"effort" => "low"},
+      "service_tier" => "default",
+      "promptCacheKey" => "synthetic-cache-key",
+      "prompt_cache_options" => %{"mode" => "synthetic"},
+      "text" => %{"format" => %{"type" => "text"}},
+      "store" => true,
+      "stream" => true,
+      "unsupported" => "drop"
+    }
   end
 
   defp public_sources do

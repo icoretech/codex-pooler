@@ -1614,9 +1614,14 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert responses_chat.contract =~ "compact accounting"
 
       assert responses_chat.contract =~
-               "strip transient stream/include/store/prompt_cache_options fields"
+               "force store false, omit upstream stream, include, and prompt_cache_options fields"
 
       assert responses_chat.contract =~ "direct compact aliases preserve their canonical legacy"
+      assert responses_chat.contract =~ "while omitting store, stream, and the trigger"
+
+      assert responses_chat.contract =~
+               "native fallback provider unsupported requires an admitted failed"
+
       assert responses_chat.contract =~ "public /v1/responses/compact remains unsupported"
       assert responses_chat.contract =~ "preserves only schema-backed string replay identity"
       assert responses_chat.contract =~ "drops other compact-result fields"
@@ -1658,7 +1663,13 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  valid_trigger: "exactly_one_final_input_item",
                  malformed_trigger: %{status: 400, param: "input", upstream_dispatch: false},
                  retained: ["final_compaction_trigger"],
-                 strips: ["stream", "include", "store", "prompt_cache_options"],
+                 strips: ["stream", "include", "prompt_cache_options"],
+                 upstream_payload: %{
+                   mode: "buffered_responses_json",
+                   terminal_trigger: "retained",
+                   store: false,
+                   stream: "omitted"
+                 },
                  response_adaptation: %{
                    upstream: "buffered_responses_json",
                    downstream: "backend_responses_sse",
@@ -1692,7 +1703,12 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                      "/backend-api/codex/v1/responses/compact"
                    ],
                    upstream_endpoint: "/backend-api/codex/responses/compact",
-                   behavior: "legacy_compact_route_unchanged"
+                   behavior: "legacy_compact_route_unchanged",
+                   upstream_payload: %{
+                     compaction_trigger: "omitted",
+                     store: "omitted",
+                     stream: "omitted"
+                   }
                  }
                },
                public_v1_compaction_trigger: %{
@@ -1713,7 +1729,13 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  valid_trigger: "exactly_one_final_after_visible_input",
                  malformed_trigger: %{status: 400, param: "input", upstream_dispatch: false},
                  retained: ["final_compaction_trigger"],
-                 strips: ["stream", "include", "store", "prompt_cache_options"],
+                 strips: ["stream", "include", "prompt_cache_options"],
+                 upstream_payload: %{
+                   mode: "buffered_responses_json",
+                   terminal_trigger: "retained",
+                   store: false,
+                   stream: "omitted"
+                 },
                  response_adaptation: %{
                    upstream: "buffered_responses_json",
                    downstream: %{
@@ -1724,6 +1746,24 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  },
                  public_compact_route_supported: false,
                  hidden_replay: false
+               },
+               native_fallback: %{
+                 provider_unsupported: %{
+                   request: %{
+                     admitted: true,
+                     endpoint: "/backend-api/codex/responses/compact",
+                     last_error_code: "upstream_status",
+                     response_status_code: 404,
+                     status: "failed"
+                   },
+                   attempt: %{
+                     matching_request_id: true,
+                     status: "failed",
+                     upstream_status_code: 404
+                   },
+                   local_route_404: false
+                 },
+                 omp_terminal: "configured_local_fallback_from_pinned_configuration"
                },
                context_overflow: %{
                  recovery_owner: "client_or_upstream",

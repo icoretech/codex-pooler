@@ -55,6 +55,58 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     assert captured.json["input"] == [%{"type" => "message", "role" => "user", "content" => []}]
   end
 
+  test "native provider unsupported evidence requires an admitted upstream 404 attempt", %{
+    conn: conn
+  } do
+    upstream = start_upstream(FakeUpstream.json_response(%{"detail" => "Not Found"}, 404))
+    setup = gateway_setup(upstream, compact?: true)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses/compact", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => visible_input("synthetic provider capability probe")
+      })
+
+    assert %{"detail" => "Not Found"} = json_response(response, 404)
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses/compact"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert provider_unsupported_evidence?(request, attempt)
+
+    for local_error_code <- [
+          "api_key_missing",
+          "no_eligible_backend",
+          "model_not_allowed",
+          "model_not_found",
+          "not_found"
+        ] do
+      refute provider_unsupported_evidence?(
+               %{request | last_error_code: local_error_code},
+               attempt
+             )
+    end
+
+    refute provider_unsupported_evidence?(request, %{attempt | upstream_status_code: nil})
+    refute provider_unsupported_evidence?(request, %{attempt | upstream_status_code: 400})
+    refute provider_unsupported_evidence?(request, %{attempt | request_id: Ecto.UUID.generate()})
+
+    local_response =
+      conn
+      |> recycle()
+      |> auth(setup)
+      |> post("/backend-api/codex/responses/compact/local", %{})
+
+    assert local_response.status == 404
+    refute provider_unsupported_evidence?(nil, nil)
+    assert FakeUpstream.http_request_count(upstream) == 1
+    assert Repo.aggregate(Request, :count) == 1
+    assert Repo.aggregate(Attempt, :count) == 1
+  end
+
   @tag :manual_fake_upstream
   test "singleton compaction trigger bridges empty compact input and relays the provider rejection",
        %{conn: conn} do
@@ -99,8 +151,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     refute response.resp_body =~ "compaction_trigger must be the final input item"
 
     assert [captured] = FakeUpstream.requests(upstream)
+    assert FakeUpstream.http_request_count(upstream) == 1
     assert captured.path == "/backend-api/codex/responses"
     assert captured.json["input"] == [compaction_trigger()]
+    assert captured.json["store"] == false
     refute Map.has_key?(captured.json, "stream")
 
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
@@ -508,9 +562,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
             conversation
             client_metadata
             request_only
-          ) do
+      ) do
         refute Map.has_key?(captured.json, field)
       end
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.endpoint == "/backend-api/codex/responses/compact"
+      assert request.transport == "http_compact_json"
+      assert request.status == "succeeded"
+
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.status == "succeeded"
+      assert attempt.upstream_status_code == 200
     end
   end
 
@@ -651,7 +714,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
         "tools" => [omp_tool],
         "tool_choice" => "auto",
         "parallel_tool_calls" => true,
-        "store" => false,
+        "store" => true,
         "service_tier" => "priority",
         "promptCacheKey" => "compact-camel-cache-key",
         "text" => %{"format" => %{"type" => "text"}},
@@ -741,14 +804,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
                service_tier
                prompt_cache_key
                text
+               store
              ))
 
     assert Enum.map(captured.json["input"], & &1["type"]) == ["message", "compaction_trigger"]
     assert List.last(captured.json["input"]) == compaction_trigger()
+    assert captured.json["store"] == false
     refute Map.has_key?(captured.json, "previous_response_id")
     refute Map.has_key?(captured.json, "conversation")
     refute Map.has_key?(captured.json, "tool_choice")
-    refute Map.has_key?(captured.json, "store")
     refute Map.has_key?(captured.json, "stream")
     refute Map.has_key?(captured.json, "include")
     refute Map.has_key?(captured.json, "client_metadata")
@@ -1404,6 +1468,25 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
   end
 
   defp compaction_trigger, do: %{"type" => "compaction_trigger"}
+
+  defp provider_unsupported_evidence?(
+         %Request{
+           id: request_id,
+           endpoint: "/backend-api/codex/responses/compact",
+           status: "failed",
+           admitted_at: %DateTime{},
+           response_status_code: 404,
+           last_error_code: "upstream_status"
+         },
+         %Attempt{
+           request_id: request_id,
+           status: "failed",
+           upstream_status_code: 404
+         }
+       ),
+       do: true
+
+  defp provider_unsupported_evidence?(_request, _attempt), do: false
 
   defp compact_source_item(
          type,

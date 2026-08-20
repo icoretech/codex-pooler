@@ -288,7 +288,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       hosted_shell_history_contract:
         "closed-key hosted-shell history replay accepts only shell_call and shell_call_output input items without executing commands or enabling shell tool declarations, local shell, remote MCP, SDK command-index accumulation, or broad hosted-tool parity",
       contract:
-        "Responses and chat completions proxy JSON/SSE through the shared gateway accounting path; chat completions use messages when present and fall back to top-level input only when messages is absent or empty, with omitted fallback instructions defaulting to a blank string; /v1/responses and translated /v1/chat/completions accept client service_tier fast as canonical upstream priority while retaining existing invalid-tier rejection, preserve literal provider service_tier output, and include a Chat stream tier only on chunks emitted after observation without buffering or rewriting earlier chunks; translated Chat custom definitions and named choices use the official nested wrapper, flatten into the supported Responses subset, and restore completed or streamed custom calls without parsing free-form input as JSON; /v1/responses and translated /v1/chat/completions accept prompt_cache_options and supported content-part prompt_cache_breakpoint controls as public input, while account-backed egress omits both explicit controls and preserves prompt_cache_key; Pool affinity remains exclusively keyed by prompt_cache_key; request-shaped additional_tools input items are preserved as non-executable input, never merged into executable tools, and never used to satisfy tool_choice; OpenAI Responses remote MCP tool definitions are rejected before upstream dispatch in both top-level tools and nested additional_tools.tools locations; Responses namespace tool definitions are accepted only for non-empty namespace name/description values and exact flat function or executable custom namespace children; Responses truncation accepts auto and disabled locally but is not forwarded upstream; terminal compaction_trigger backend payloads on either backend Responses alias retain the final trigger, dispatch buffered JSON to /backend-api/codex/responses with compact accounting on /backend-api/codex/responses/compact, strip transient stream/include/store/prompt_cache_options fields, and adapt the compact result to backend Responses SSE; the response adaptation preserves only schema-backed string replay identity and drops other compact-result fields; direct compact aliases preserve their canonical legacy /backend-api/codex/responses/compact upstream route; malformed trigger placement is rejected before dispatch; public /v1/responses HTTP and Responses websocket turns accept exactly one final compaction_trigger after visible input, dispatch it through the same buffered compact bridge with compact accounting and ordinary backend Responses upstream routing, and adapt the result as public Responses JSON, SSE, or websocket events; public /v1/responses/compact remains unsupported and public /v1 Responses accepts encrypted compaction output replay items from prior remote compaction turns; backend regular HTTP Responses and compact routes forward approved metadata headers, including request-scoped x-codex-turn-state, x-codex-window-id, and x-codex-installation-id, and relay upstream x-codex-turn-state response headers downstream, while public /v1 and websocket request-header lanes do not; context-overflow recovery stays client/upstream-owned with no server-side hidden replay, no server-side memory tool injection, no client store=false-to-true override policy, and no stored prompt/frame reconstruction; Hermes assistant replay may include safe assistant status metadata; OpenClaw assistant replay drops thinking metadata and normalizes text before upstream dispatch; public /v1/responses and /v1/chat/completions accept exactly five lowercase input_audio labels (wav=>audio/wav, mp3=>audio/mpeg, m4a=>audio/mp4, webm=>audio/webm, ogg=>audio/ogg), apply a 52,428,800 decoded-byte maximum and a 69,905,068 non-whitespace encoded-byte precheck, canonicalize backend input_audio to an audio_url data URL after accepted ASCII whitespace normalization, reject malformed/empty/unsupported/oversized input as sanitized invalid_request without dispatch or accounting, honor configured request-envelope rejection before adapter checks, and keep audio metadata-only outside dispatch; safe OpenAI Responses fields, prompt-cache locality, SDK-control rejection, and backend-only control stripping stay scope-specific"
+        "Responses and chat completions proxy JSON/SSE through the shared gateway accounting path; chat completions use messages when present and fall back to top-level input only when messages is absent or empty, with omitted fallback instructions defaulting to a blank string; /v1/responses and translated /v1/chat/completions accept client service_tier fast as canonical upstream priority while retaining existing invalid-tier rejection, preserve literal provider service_tier output, and include a Chat stream tier only on chunks emitted after observation without buffering or rewriting earlier chunks; translated Chat custom definitions and named choices use the official nested wrapper, flatten into the supported Responses subset, and restore completed or streamed custom calls without parsing free-form input as JSON; /v1/responses and translated /v1/chat/completions accept prompt_cache_options and supported content-part prompt_cache_breakpoint controls as public input, while account-backed egress omits both explicit controls and preserves prompt_cache_key; Pool affinity remains exclusively keyed by prompt_cache_key; request-shaped additional_tools input items are preserved as non-executable input, never merged into executable tools, and never used to satisfy tool_choice; OpenAI Responses remote MCP tool definitions are rejected before upstream dispatch in both top-level tools and nested additional_tools.tools locations; Responses namespace tool definitions are accepted only for non-empty namespace name/description values and exact flat function or executable custom namespace children; Responses truncation accepts auto and disabled locally but is not forwarded upstream; terminal compaction_trigger backend payloads on either backend Responses alias retain the final trigger, dispatch buffered JSON to /backend-api/codex/responses with compact accounting on /backend-api/codex/responses/compact, force store false, omit upstream stream, include, and prompt_cache_options fields, and adapt the compact result to backend Responses SSE; the response adaptation preserves only schema-backed string replay identity and drops other compact-result fields; direct compact aliases preserve their canonical legacy /backend-api/codex/responses/compact upstream route while omitting store, stream, and the trigger; malformed trigger placement is rejected before dispatch; public /v1/responses HTTP and Responses websocket turns accept exactly one final compaction_trigger after visible input, dispatch it through the same buffered compact bridge with compact accounting and ordinary backend Responses upstream routing, and adapt the result as public Responses JSON, SSE, or websocket events; public /v1/responses/compact remains unsupported and public /v1 Responses accepts encrypted compaction output replay items from prior remote compaction turns; native fallback provider unsupported requires an admitted failed /backend-api/codex/responses/compact request with last_error_code upstream_status, response status 404, and a matching failed attempt with upstream status 404, while local route, auth, routing, or model failures are not capability evidence; backend regular HTTP Responses and compact routes forward approved metadata headers, including request-scoped x-codex-turn-state, x-codex-window-id, and x-codex-installation-id, and relay upstream x-codex-turn-state response headers downstream, while public /v1 and websocket request-header lanes do not; context-overflow recovery stays client/upstream-owned with no server-side hidden replay, no server-side memory tool injection, no client store=false-to-true override policy, and no stored prompt/frame reconstruction; Hermes assistant replay may include safe assistant status metadata; OpenClaw assistant replay drops thinking metadata and normalizes text before upstream dispatch; public /v1/responses and /v1/chat/completions accept exactly five lowercase input_audio labels (wav=>audio/wav, mp3=>audio/mpeg, m4a=>audio/mp4, webm=>audio/webm, ogg=>audio/ogg), apply a 52,428,800 decoded-byte maximum and a 69,905,068 non-whitespace encoded-byte precheck, canonicalize backend input_audio to an audio_url data URL after accepted ASCII whitespace normalization, reject malformed/empty/unsupported/oversized input as sanitized invalid_request without dispatch or accounting, honor configured request-envelope rejection before adapter checks, and keep audio metadata-only outside dispatch; safe OpenAI Responses fields, prompt-cache locality, SDK-control rejection, and backend-only control stripping stay scope-specific"
     },
     %{
       slug: :response_body_cap,
@@ -1252,7 +1252,13 @@ defmodule CodexPooler.CompatibilityMatrix do
           valid_trigger: "exactly_one_final_input_item",
           malformed_trigger: %{status: 400, param: "input", upstream_dispatch: false},
           retained: ["final_compaction_trigger"],
-          strips: ["stream", "include", "store", "prompt_cache_options"],
+          strips: ["stream", "include", "prompt_cache_options"],
+          upstream_payload: %{
+            mode: "buffered_responses_json",
+            terminal_trigger: "retained",
+            store: false,
+            stream: "omitted"
+          },
           response_adaptation: %{
             upstream: "buffered_responses_json",
             downstream: "backend_responses_sse",
@@ -1283,7 +1289,12 @@ defmodule CodexPooler.CompatibilityMatrix do
               "/backend-api/codex/v1/responses/compact"
             ],
             upstream_endpoint: "/backend-api/codex/responses/compact",
-            behavior: "legacy_compact_route_unchanged"
+            behavior: "legacy_compact_route_unchanged",
+            upstream_payload: %{
+              compaction_trigger: "omitted",
+              store: "omitted",
+              stream: "omitted"
+            }
           }
         },
         public_v1_compaction_trigger: %{
@@ -1304,7 +1315,13 @@ defmodule CodexPooler.CompatibilityMatrix do
           valid_trigger: "exactly_one_final_after_visible_input",
           malformed_trigger: %{status: 400, param: "input", upstream_dispatch: false},
           retained: ["final_compaction_trigger"],
-          strips: ["stream", "include", "store", "prompt_cache_options"],
+          strips: ["stream", "include", "prompt_cache_options"],
+          upstream_payload: %{
+            mode: "buffered_responses_json",
+            terminal_trigger: "retained",
+            store: false,
+            stream: "omitted"
+          },
           response_adaptation: %{
             upstream: "buffered_responses_json",
             downstream: %{
@@ -1315,6 +1332,24 @@ defmodule CodexPooler.CompatibilityMatrix do
           },
           public_compact_route_supported: false,
           hidden_replay: false
+        },
+        native_fallback: %{
+          provider_unsupported: %{
+            request: %{
+              admitted: true,
+              endpoint: "/backend-api/codex/responses/compact",
+              last_error_code: "upstream_status",
+              response_status_code: 404,
+              status: "failed"
+            },
+            attempt: %{
+              matching_request_id: true,
+              status: "failed",
+              upstream_status_code: 404
+            },
+            local_route_404: false
+          },
+          omp_terminal: "configured_local_fallback_from_pinned_configuration"
         },
         context_overflow: %{
           recovery_owner: "client_or_upstream",
