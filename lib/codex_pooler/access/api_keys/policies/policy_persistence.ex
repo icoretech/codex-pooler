@@ -36,21 +36,38 @@ defmodule CodexPooler.Access.APIKeys.PolicyPersistence do
     end)
   end
 
-  @spec update_api_key_policy(APIKey.t(), map(), [map()], DateTime.t()) :: update_policy_result()
-  def update_api_key_policy(api_key, update_attrs, policy_inputs, timestamp) do
-    Repo.transaction(fn ->
-      with {:ok, updated_api_key} <- Repo.update(APIKey.changeset(api_key, update_attrs)),
+  @spec update_api_key_policy_in_transaction(
+          APIKey.t(),
+          map(),
+          [map()],
+          DateTime.t(),
+          non_neg_integer()
+        ) :: update_policy_result()
+  def update_api_key_policy_in_transaction(
+        api_key,
+        update_attrs,
+        policy_inputs,
+        timestamp,
+        runtime_revocation_epoch
+      ) do
+    if Repo.in_transaction?() do
+      changeset =
+        api_key
+        |> APIKey.changeset(update_attrs)
+        |> Ecto.Changeset.put_change(:runtime_revocation_epoch, runtime_revocation_epoch)
+
+      with {:ok, updated_api_key} <- Repo.update(changeset),
            {_count, _rows} <-
              Repo.delete_all(
                from(binding in APIKeyPolicyBinding, where: binding.api_key_id == ^api_key.id)
              ),
            {:ok, bindings} <-
              insert_api_key_policy_bindings(Repo, policy_inputs, updated_api_key, timestamp) do
-        %{api_key: updated_api_key, policy_bindings: bindings}
-      else
-        {:error, reason} -> Repo.rollback(reason)
+        {:ok, %{api_key: updated_api_key, policy_bindings: bindings}}
       end
-    end)
+    else
+      raise ArgumentError, "API key policy update requires an active transaction"
+    end
   end
 
   @spec normalize_transaction_result(transaction_result(value)) :: {:ok, value} | {:error, term()}

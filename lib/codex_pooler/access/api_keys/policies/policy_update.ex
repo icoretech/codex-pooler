@@ -2,6 +2,7 @@ defmodule CodexPooler.Access.APIKeys.PolicyUpdate do
   @moduledoc false
 
   alias CodexPooler.Access.APIKey
+  alias CodexPooler.Access.DashboardSessions
   alias CodexPooler.Access.DashboardSessions.Lifecycle, as: DashboardSessionLifecycle
 
   alias CodexPooler.Access.APIKeys.{
@@ -10,7 +11,8 @@ defmodule CodexPooler.Access.APIKeys.PolicyUpdate do
     Notifications,
     Policy,
     PolicyPersistence,
-    Queries
+    Queries,
+    RuntimeAuthorization
   }
 
   alias CodexPooler.Accounts.Scope
@@ -44,34 +46,68 @@ defmodule CodexPooler.Access.APIKeys.PolicyUpdate do
     do: {:error, Errors.access_error(:invalid_request, "user scope is required")}
 
   defp update_current_api_key_with_policy(scope, api_key, attrs) do
-    with {:ok, target_pool_id} <- authorize_api_key_update(scope, api_key, attrs),
-         {:ok, policy_attrs, policy_inputs} <-
-           update_api_key_policy_attrs(scope, target_pool_id, attrs) do
-      update_attrs =
-        attrs
-        |> api_key_update_attrs(target_pool_id)
-        |> Map.merge(policy_attrs)
+    case update_api_key_with_policy_transaction(scope, api_key, attrs) do
+      {:ok, {updated, previous_api_key, invalidate_dashboard_sessions?, notification}} ->
+        maybe_broadcast_dashboard_invalidation(
+          updated.api_key,
+          invalidate_dashboard_sessions?
+        )
 
-      mutation = fn ->
-        api_key
-        |> PolicyPersistence.update_api_key_policy(update_attrs, policy_inputs, now())
-        |> PolicyPersistence.normalize_transaction_result()
+        {:ok, updated}
+        |> notify_api_key_update(previous_api_key, notification)
+        |> AuditLog.audit_api_key_change(scope, "api_key.update", fn result ->
+          result
+          |> AuditLog.api_key_update_audit_details(previous_api_key, attrs)
+          |> Map.merge(AuditLog.api_key_policy_audit_details(result))
+        end)
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp update_api_key_with_policy_transaction(scope, api_key, attrs) do
+    CodexPooler.Repo.transact(fn ->
+      target_status = requested_status(attrs, api_key.status)
+
+      with {:ok, transition} <-
+             RuntimeAuthorization.prepare_status_transition(api_key, target_status),
+           previous_api_key = transition.api_key,
+           {:ok, target_pool_id} <- authorize_api_key_update(scope, previous_api_key, attrs),
+           {:ok, policy_attrs, policy_inputs} <-
+             update_api_key_policy_attrs(scope, target_pool_id, attrs),
+           update_attrs =
+             attrs
+             |> api_key_update_attrs(target_pool_id)
+             |> Map.merge(policy_attrs),
+           {:ok, updated} <-
+             persist_policy_update(previous_api_key, update_attrs, policy_inputs, transition) do
+        {:ok,
+         {
+           updated,
+           previous_api_key,
+           dashboard_session_invalidation_required?(previous_api_key, update_attrs),
+           api_key_update_notification(attrs, transition)
+         }}
       end
+    end)
+  end
 
-      result =
-        if dashboard_session_invalidation_required?(api_key, update_attrs) do
-          DashboardSessionLifecycle.run(api_key, "api_key_updated", mutation)
-        else
-          mutation.()
-        end
+  defp persist_policy_update(api_key, update_attrs, policy_inputs, transition) do
+    mutation = fn ->
+      PolicyPersistence.update_api_key_policy_in_transaction(
+        api_key,
+        update_attrs,
+        policy_inputs,
+        now(),
+        transition.runtime_revocation_epoch
+      )
+    end
 
-      result
-      |> Notifications.notify_api_key_change("api_key_updated", api_key.pool_id)
-      |> AuditLog.audit_api_key_change(scope, "api_key.update", fn updated ->
-        updated
-        |> AuditLog.api_key_update_audit_details(api_key, attrs)
-        |> Map.merge(AuditLog.api_key_policy_audit_details(updated))
-      end)
+    if dashboard_session_invalidation_required?(api_key, update_attrs) do
+      DashboardSessionLifecycle.run_in_transaction(api_key, "api_key_updated", mutation)
+    else
+      mutation.()
     end
   end
 
@@ -141,6 +177,44 @@ defmodule CodexPooler.Access.APIKeys.PolicyUpdate do
       true -> acc
     end
   end
+
+  defp requested_status(attrs, fallback) do
+    Map.get(attrs, :status) || Map.get(attrs, "status") || fallback
+  end
+
+  defp maybe_broadcast_dashboard_invalidation(api_key, true) do
+    DashboardSessions.broadcast_invalidation(api_key, "api_key_updated")
+  end
+
+  defp maybe_broadcast_dashboard_invalidation(_api_key, false), do: :ok
+
+  defp notify_api_key_update(result, _previous_api_key, :effective_disabling_transition) do
+    Notifications.notify_api_key_runtime_transition(
+      result,
+      "api_key_updated",
+      api_key_from_result(result).pool_id
+    )
+  end
+
+  defp notify_api_key_update(result, _previous_api_key, :status_without_disable), do: result
+
+  defp notify_api_key_update(result, previous_api_key, :ordinary_update) do
+    Notifications.notify_api_key_change(result, "api_key_updated", previous_api_key.pool_id)
+  end
+
+  defp api_key_update_notification(attrs, transition) do
+    cond do
+      transition.effective_disabling_transition? -> :effective_disabling_transition
+      status_submitted?(attrs) -> :status_without_disable
+      true -> :ordinary_update
+    end
+  end
+
+  defp status_submitted?(attrs) do
+    Map.has_key?(attrs, :status) or Map.has_key?(attrs, "status")
+  end
+
+  defp api_key_from_result({:ok, %{api_key: %APIKey{} = api_key}}), do: api_key
 
   defp normalize_pool(%Pool{} = pool), do: pool
   defp normalize_pool(id) when is_binary(id), do: Pools.get_active_pool(id)

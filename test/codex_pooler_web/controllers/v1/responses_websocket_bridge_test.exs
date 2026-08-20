@@ -14,13 +14,18 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       auth: 2,
       gateway_setup: 1,
       gateway_setup: 2,
+      native_text_input: 1,
       pricing_config: 1,
       pricing_snapshot!: 2,
+      public_websocket_connect!: 4,
+      public_websocket_send_text!: 4,
+      start_public_endpoint_with_server!: 0,
       start_upstream: 1
     ]
 
   alias CodexPooler.Access
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestLogs}
+  alias CodexPooler.Accounts.{Scope, User}
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway, as: RuntimeGateway
   alias CodexPooler.Gateway.OpenAICompatibility.Responses, as: ResponsesCompat
@@ -36,6 +41,10 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPoolerWeb.CodexResponsesSocket
+
+  @api_key_revocation_close {:close, 1008, "api key is no longer active"}
+  @websocket_frame_timeout 5_000
+  @websocket_transport_barrier_payload "public-v1-api-key-barrier"
 
   setup do
     previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
@@ -388,6 +397,108 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert completed_id(response.resp_body) == "resp_parity"
     assert FakeUpstream.websocket_connection_count(upstream) == 1
     assert event_types(response.resp_body) == ["response.created", "response.completed"]
+  end
+
+  test "public websocket drains one admitted turn then drops queued work and closes without a synthetic error" do
+    release_ref = make_ref()
+
+    upstream =
+      start_upstream(
+        FakeUpstream.barrier_sse_stream(
+          [completed_event("resp_public_api_key_drain")],
+          barrier_after: 0,
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    scope = api_key_owner_scope(setup)
+    {server, port} = start_public_endpoint_with_server!()
+
+    {conn, websocket, ref} =
+      public_websocket_connect!(port, setup, "", "/v1/responses")
+
+    stream_id = "public-api-key-drain"
+
+    first_payload =
+      public_websocket_payload(setup, "admitted public turn", %{"stream_id" => stream_id})
+
+    queued_payload = public_websocket_payload(setup, "queued public turn")
+
+    try do
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, first_payload)
+      assert_receive {:fake_upstream_chunk_barrier, 0, upstream_pid, ^release_ref}, 1_000
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, queued_payload)
+      {conn, websocket} = public_websocket_transport_barrier!(conn, websocket, ref)
+      assert_public_websocket_queue_length!(server, 1)
+
+      assert {:ok, paused_key} = Access.pause_api_key(scope, setup.api_key)
+      assert paused_key.runtime_revocation_epoch == setup.api_key.runtime_revocation_epoch + 1
+
+      assert_public_websocket_queue_length!(server, 0)
+      send(upstream_pid, {:fake_upstream_release_chunk, release_ref})
+
+      {_conn, _websocket, frames} =
+        receive_public_websocket_frames_until_close!(conn, websocket, ref)
+
+      assert List.last(frames) == @api_key_revocation_close
+
+      public_frames =
+        for {:text, frame} <- frames,
+            decoded = Jason.decode!(frame),
+            decoded["type"] != "codex.response.metadata",
+            do: decoded
+
+      assert Enum.count(public_frames, &(&1["type"] == "response.completed")) == 1
+      assert Enum.all?(public_frames, &(&1["stream_id"] == stream_id))
+      refute Enum.any?(public_frames, &(&1["type"] in ["response.failed", "error"]))
+      assert FakeUpstream.count(upstream) == 1
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.status == "succeeded"
+      assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 1
+
+      assert Repo.aggregate(
+               from(entry in LedgerEntry,
+                 where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
+               ),
+               :count
+             ) == 1
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "an idle public websocket closes with 1008 only after its API key is paused" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
+    setup = gateway_setup(upstream)
+    scope = api_key_owner_scope(setup)
+    {_server, port} = start_public_endpoint_with_server!()
+    {conn, websocket, ref} = public_websocket_connect!(port, setup, "", "/v1/responses")
+
+    try do
+      assert {:ok, paused_key} = Access.pause_api_key(scope, setup.api_key)
+      assert paused_key.status == "paused"
+
+      {conn, websocket} =
+        public_websocket_send_text!(
+          conn,
+          websocket,
+          ref,
+          public_websocket_payload(setup, "post-pause public turn")
+        )
+
+      {_conn, _websocket, frames} =
+        receive_public_websocket_frames_until_close!(conn, websocket, ref)
+
+      assert frames == [@api_key_revocation_close]
+      assert FakeUpstream.count(upstream) == 0
+      assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 0
+    after
+      Mint.HTTP.close(conn)
+    end
   end
 
   test "owner-forwarded generic errors echo the accepted public stream id" do
@@ -2668,6 +2779,138 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       monitor when is_reference(monitor) -> Process.demonitor(monitor, [:flush])
       _missing -> :ok
     end
+  end
+
+  defp public_websocket_payload(setup, text, extra \\ %{}) do
+    Jason.encode!(
+      Map.merge(
+        %{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "input" => native_text_input(text),
+          "stream" => true,
+          "generate" => true
+        },
+        extra
+      )
+    )
+  end
+
+  defp api_key_owner_scope(setup) do
+    setup.api_key.created_by_user_id
+    |> then(&Repo.get!(User, &1))
+    |> Scope.for_user(["instance_owner"])
+  end
+
+  defp assert_public_websocket_queue_length!(server, expected_length) do
+    assert {:ok, [connection_pid]} = ThousandIsland.connection_pids(server)
+    {_socket, handler_state} = :sys.get_state(connection_pid)
+    websock_state = handler_state.connection.websock_state
+    assert :queue.len(websock_state.queued_response_payloads) == expected_length
+  end
+
+  defp public_websocket_transport_barrier!(conn, websocket, ref) do
+    {:ok, websocket, data} =
+      Mint.WebSocket.encode(websocket, {:ping, @websocket_transport_barrier_payload})
+
+    {:ok, conn} = Mint.WebSocket.stream_request_body(conn, ref, data)
+
+    await_public_websocket_transport_barrier!(
+      conn,
+      websocket,
+      ref,
+      System.monotonic_time(:millisecond) + @websocket_frame_timeout
+    )
+  end
+
+  defp await_public_websocket_transport_barrier!(conn, websocket, ref, deadline) do
+    timeout = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      message ->
+        case Mint.WebSocket.stream(conn, message) do
+          :unknown ->
+            await_public_websocket_transport_barrier!(conn, websocket, ref, deadline)
+
+          {:ok, conn, responses} ->
+            {websocket, pong?} =
+              Enum.reduce(responses, {websocket, false}, fn
+                {:data, ^ref, response_data}, {websocket, pong?} ->
+                  assert {:ok, websocket, frames} =
+                           Mint.WebSocket.decode(websocket, response_data)
+
+                  unexpected_frames =
+                    Enum.reject(frames, fn
+                      {:pong, @websocket_transport_barrier_payload} -> true
+                      {:text, frame} -> public_metadata_frame?(frame)
+                      _frame -> false
+                    end)
+
+                  assert unexpected_frames == []
+
+                  {websocket,
+                   pong? or
+                     Enum.any?(
+                       frames,
+                       &match?({:pong, @websocket_transport_barrier_payload}, &1)
+                     )}
+
+                _response, acc ->
+                  acc
+              end)
+
+            if pong? do
+              {conn, websocket}
+            else
+              await_public_websocket_transport_barrier!(conn, websocket, ref, deadline)
+            end
+
+          {:error, conn, reason, _responses} ->
+            Mint.HTTP.close(conn)
+            flunk("websocket transport barrier failed: #{inspect(reason)}")
+        end
+    after
+      timeout -> flunk("timed out waiting for websocket transport barrier")
+    end
+  end
+
+  defp receive_public_websocket_frames_until_close!(conn, websocket, ref, frames \\ []) do
+    receive do
+      message ->
+        case Mint.WebSocket.stream(conn, message) do
+          {:ok, conn, responses} ->
+            {websocket, frames, closed?} =
+              Enum.reduce(responses, {websocket, frames, false}, fn
+                {:data, ^ref, data}, {websocket, frames, closed?} ->
+                  assert {:ok, websocket, decoded} = Mint.WebSocket.decode(websocket, data)
+                  frames = frames ++ decoded
+                  closed? = closed? or Enum.any?(decoded, &match?({:close, _, _}, &1))
+                  {websocket, frames, closed?}
+
+                _response, acc ->
+                  acc
+              end)
+
+            if closed? do
+              {conn, websocket, frames}
+            else
+              receive_public_websocket_frames_until_close!(conn, websocket, ref, frames)
+            end
+
+          {:error, conn, reason, _responses} ->
+            Mint.HTTP.close(conn)
+            flunk("websocket frame receive failed: #{inspect(reason)}")
+
+          :unknown ->
+            receive_public_websocket_frames_until_close!(conn, websocket, ref, frames)
+        end
+    after
+      @websocket_frame_timeout -> flunk("timed out waiting for websocket close")
+    end
+  end
+
+  defp public_metadata_frame?(frame) when is_binary(frame) do
+    match?({:ok, %{"type" => "codex.response.metadata"}}, Jason.decode(frame))
   end
 
   defp assert_stream_finalization_event!(telemetry_events, expected_metadata) do

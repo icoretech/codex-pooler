@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.RuntimeContext do
 
   defstruct [
     :now,
+    :api_key_runtime_epoch,
     :interrupt_reason,
     :gateway_debug_payload,
     :payload_compression,
@@ -15,6 +16,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.RuntimeContext do
 
   @type t :: %__MODULE__{
           now: DateTime.t() | nil,
+          api_key_runtime_epoch: non_neg_integer() | nil,
           interrupt_reason: String.t() | nil,
           gateway_debug_payload: map() | nil,
           payload_compression: map() | nil,
@@ -28,6 +30,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.RuntimeContext do
 
     %__MODULE__{
       now: Map.get(opts, :now),
+      api_key_runtime_epoch:
+        Normalization.optional_non_negative_integer(Map.get(opts, :api_key_runtime_epoch)),
       interrupt_reason: Map.get(opts, :interrupt_reason) || Map.get(opts, :reason),
       gateway_debug_payload: Map.get(opts, :gateway_debug_payload),
       payload_compression:
@@ -41,6 +45,10 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.RuntimeContext do
   def update(%__MODULE__{} = runtime, updates) do
     updates
     |> Map.new()
+    |> Normalization.normalize_optional_update(
+      :api_key_runtime_epoch,
+      &Normalization.optional_non_negative_integer/1
+    )
     |> Normalization.normalize_optional_update(
       :payload_compression,
       &RequestCompressionMetadata.runtime_metadata/1

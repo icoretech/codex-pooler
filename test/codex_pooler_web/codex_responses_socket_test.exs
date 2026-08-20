@@ -1,6 +1,10 @@
 defmodule CodexPoolerWeb.CodexResponsesSocketTest do
-  use ExUnit.Case, async: false
+  use CodexPooler.DataCase, async: false
 
+  alias CodexPooler.Access
+  alias CodexPooler.Accounts.Scope
+  alias CodexPooler.Accounts.User
+  alias CodexPooler.Events
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.OperationalSettings.IPRules
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -9,12 +13,214 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Websocket.Adapter
   alias CodexPooler.InstanceSettings.{Cache, Settings}
+  alias CodexPooler.Pools.Membership
   alias CodexPoolerWeb.CodexResponsesSocket
+
+  import CodexPooler.PoolerFixtures, only: [active_api_key_fixture: 0]
 
   @applied_message_tag Cache
   @cache_key {Cache, :current}
   @cache_version 1
   @revocation_close {1008, "client IP is no longer allowed"}
+  @api_key_revocation_close {1008, "api key is no longer active"}
+
+  test "matching newer API-key event closes once without firewall telemetry or content leakage" do
+    api_key_id = Ecto.UUID.generate()
+    pool_id = Ecto.UUID.generate()
+    state = api_key_socket_state(api_key_id, pool_id, 4)
+    telemetry_id = attach_firewall_telemetry()
+    on_exit(fn -> :telemetry.detach(telemetry_id) end)
+
+    event = api_key_event(api_key_id, pool_id, "paused", 5)
+
+    assert {:stop, :normal, @api_key_revocation_close, closed_state} =
+             CodexResponsesSocket.handle_info({Events, event}, state)
+
+    assert closed_state.api_key_revoked?
+    assert closed_state.api_key_close_sent?
+    assert closed_state.api_key_disabling_epoch == 5
+    refute_receive {:firewall_denied, _, _}
+
+    assert {:ok, ^closed_state} = CodexResponsesSocket.handle_info({Events, event}, closed_state)
+
+    assert {:ok, ^closed_state} =
+             CodexResponsesSocket.handle_in(
+               {~s({"input":"credential-bearing queued content"}), [opcode: :text]},
+               closed_state
+             )
+
+    refute inspect(closed_state) =~ "credential-bearing queued content"
+    refute_receive {:firewall_denied, _, _}
+  end
+
+  test "pool-scoped PubSub delivers the disabling event to a socket process" do
+    api_key_id = Ecto.UUID.generate()
+    pool_id = Ecto.UUID.generate()
+    parent = self()
+    state = api_key_socket_state(api_key_id, pool_id, 0)
+
+    socket_pid =
+      spawn(fn ->
+        :ok = Events.subscribe_pool(pool_id, "pools")
+        send(parent, {:socket_subscribed, self()})
+
+        receive do
+          message ->
+            send(parent, {:socket_result, CodexResponsesSocket.handle_info(message, state)})
+        end
+      end)
+
+    monitor = Process.monitor(socket_pid)
+    assert_receive {:socket_subscribed, ^socket_pid}
+
+    assert {:ok, _event} =
+             Events.broadcast_pools(pool_id, "api_key_status_updated", %{
+               api_key_id: api_key_id,
+               pool_id: pool_id,
+               status: "paused",
+               runtime_revocation_epoch: 1
+             })
+
+    assert_receive {:socket_result,
+                    {:stop, :normal, @api_key_revocation_close,
+                     %{api_key_close_sent?: true, api_key_disabling_epoch: 1}}}
+
+    assert_receive {:DOWN, ^monitor, :process, ^socket_pid, :normal}
+  end
+
+  test "unrelated stale and non-disabling API-key events leave a fresh socket active" do
+    api_key_id = Ecto.UUID.generate()
+    pool_id = Ecto.UUID.generate()
+    state = api_key_socket_state(api_key_id, pool_id, 7)
+
+    events = [
+      api_key_event(Ecto.UUID.generate(), pool_id, "paused", 8),
+      api_key_event(api_key_id, Ecto.UUID.generate(), "paused", 8),
+      api_key_event(api_key_id, pool_id, "paused", 7),
+      api_key_event(api_key_id, pool_id, "active", 8)
+    ]
+
+    final_state =
+      Enum.reduce(events, state, fn event, current_state ->
+        assert {:ok, next_state} =
+                 CodexResponsesSocket.handle_info({Events, event}, current_state)
+
+        refute next_state.api_key_revoked?
+        refute next_state.api_key_close_sent?
+        next_state
+      end)
+
+    assert final_state.api_key_runtime_epoch == 7
+  end
+
+  test "epoch-less legacy pause re-reads durable authorization and ignores delayed post-resume event" do
+    setup = active_api_key_fixture()
+    scope = fixture_owner_scope()
+    state = api_key_socket_state(setup.api_key.id, setup.pool.id, 0)
+    legacy_event = api_key_event(setup.api_key.id, setup.pool.id, "paused", :legacy)
+
+    assert {:ok, paused_key} = Access.pause_api_key(scope, setup.api_key)
+    assert paused_key.runtime_revocation_epoch == 1
+
+    assert {:stop, :normal, @api_key_revocation_close, paused_state} =
+             CodexResponsesSocket.handle_info({Events, legacy_event}, state)
+
+    assert paused_state.api_key_disabling_epoch == 1
+
+    assert {:ok, resumed_key} = Access.resume_api_key(scope, paused_key)
+    assert resumed_key.status == "active"
+
+    fresh_state = api_key_socket_state(setup.api_key.id, setup.pool.id, 1)
+
+    assert {:ok, checked_state} =
+             CodexResponsesSocket.handle_info({Events, legacy_event}, fresh_state)
+
+    refute checked_state.api_key_revoked?
+    refute checked_state.api_key_close_sent?
+  end
+
+  test "missed event closes on the next frame without starting queued work" do
+    setup = active_api_key_fixture()
+    scope = fixture_owner_scope()
+    state = api_key_socket_state(setup.api_key.id, setup.pool.id, 0)
+    secret_payload = ~s({"input":"must-not-reach-upstream","token":"frame-secret"})
+
+    assert {:ok, paused_key} = Access.pause_api_key(scope, setup.api_key)
+
+    assert {:stop, :normal, @api_key_revocation_close, closed_state} =
+             CodexResponsesSocket.handle_in({secret_payload, [opcode: :text]}, state)
+
+    assert closed_state.api_key_disabling_epoch == paused_key.runtime_revocation_epoch
+    assert MapSet.size(closed_state.tasks) == 0
+    assert :queue.is_empty(closed_state.queued_response_payloads)
+    refute inspect(closed_state) =~ "must-not-reach-upstream"
+    refute inspect(closed_state) =~ "frame-secret"
+  end
+
+  test "revocation drops queued work while an admitted turn drains final bytes before close" do
+    api_key_id = Ecto.UUID.generate()
+    pool_id = Ecto.UUID.generate()
+    task_pid = self()
+
+    state =
+      api_key_socket_state(api_key_id, pool_id, 2, %{
+        tasks: MapSet.new([task_pid]),
+        queued_response_payloads: :queue.from_list(["queued-secret-content"])
+      })
+
+    event = api_key_event(api_key_id, pool_id, "revoked", 3)
+
+    assert {:ok, revoked_state} = CodexResponsesSocket.handle_info({Events, event}, state)
+    assert revoked_state.api_key_revoked?
+    refute revoked_state.api_key_close_sent?
+    assert :queue.is_empty(revoked_state.queued_response_payloads)
+
+    final_frame = ~s({"type":"response.done","response":{"id":"resp_final_safe"}})
+
+    assert {:push, {:text, ^final_frame}, draining_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_chunk, task_pid, final_frame},
+               revoked_state
+             )
+
+    assert {:stop, :normal, @api_key_revocation_close, closed_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_done, task_pid, :ok},
+               draining_state
+             )
+
+    assert closed_state.api_key_close_sent?
+    assert MapSet.size(closed_state.tasks) == 0
+    refute inspect(closed_state) =~ "queued-secret-content"
+  end
+
+  test "internal stale authorization result maps to close-only without a synthetic error frame" do
+    task_pid = self()
+
+    state =
+      api_key_socket_state(Ecto.UUID.generate(), Ecto.UUID.generate(), 9, %{
+        tasks: MapSet.new([task_pid])
+      })
+
+    result =
+      {:socket_response_result, :local_complete,
+       {:error,
+        %{
+          code: :api_key_runtime_epoch_stale,
+          message: "must remain internal",
+          disabling_epoch: 10
+        }}}
+
+    assert {:stop, :normal, @api_key_revocation_close, closed_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_done, task_pid, result},
+               state
+             )
+
+    assert closed_state.api_key_disabling_epoch == 10
+    assert closed_state.api_key_close_sent?
+    refute inspect(closed_state) =~ "must remain internal"
+  end
 
   test "native and public websocket overload terminals use the shared Codex error vocabulary" do
     for internal_reason <- ["bulkhead_rejected", "bulkhead_queue_timeout"] do
@@ -1750,6 +1956,74 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       end)
 
     assert_native_turn_logs(logs, 1, "websocket_request_failed")
+  end
+
+  defp api_key_socket_state(api_key_id, pool_id, captured_epoch, overrides \\ %{}) do
+    Map.merge(
+      %{
+        opts:
+          RequestOptions.for_websocket(%{})
+          |> RequestOptions.put_runtime_context(api_key_runtime_epoch: captured_epoch),
+        api_key_id: api_key_id,
+        api_key_pool_id: pool_id,
+        api_key_runtime_epoch: captured_epoch,
+        api_key_revoked?: false,
+        api_key_close_sent?: false,
+        firewall_revoked?: false,
+        firewall_close_sent?: false,
+        tasks: MapSet.new(),
+        task_monitors: %{},
+        queued_response_payloads: :queue.new(),
+        public_response_task_pid: nil,
+        public_response_stream_id: nil,
+        public_response_start_error_ref: nil,
+        public_responses_websocket_state: nil,
+        public_turn_task_done?: false,
+        public_turn_owner_complete?: false,
+        public_turn_aborted?: false,
+        public_turn_output_committed?: false,
+        native_turn_output_task_pids: MapSet.new(),
+        auth: %{pool: %{id: pool_id}, api_key: %{id: api_key_id}}
+      },
+      overrides
+    )
+  end
+
+  defp api_key_event(api_key_id, pool_id, status, epoch) do
+    payload = %{
+      "api_key_id" => api_key_id,
+      "pool_id" => pool_id,
+      "status" => status
+    }
+
+    payload =
+      if is_integer(epoch),
+        do: Map.put(payload, "runtime_revocation_epoch", epoch),
+        else: payload
+
+    %Events.Event{
+      version: 1,
+      id: Ecto.UUID.generate(),
+      pool_id: pool_id,
+      topics: ["pools"],
+      reason: "api_key_status_updated",
+      emitted_at: DateTime.utc_now(),
+      payload: payload
+    }
+  end
+
+  defp fixture_owner_scope do
+    owner =
+      Repo.one!(
+        from membership in Membership,
+          join: user in User,
+          on: user.id == membership.user_id,
+          where: membership.role == "instance_owner" and membership.status == "active",
+          select: user,
+          limit: 1
+      )
+
+    Scope.for_user(owner, ["instance_owner"])
   end
 
   defp public_turn_state(task_pid, overrides \\ %{}) when is_pid(task_pid) do

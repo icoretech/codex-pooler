@@ -14,7 +14,8 @@ defmodule CodexPooler.Access.APIKey do
   @type t :: %__MODULE__{
           dashboard_access: boolean(),
           enforced_reasoning_effort: reasoning_effort() | nil,
-          maximum_reasoning_effort: reasoning_effort() | nil
+          maximum_reasoning_effort: reasoning_effort() | nil,
+          runtime_revocation_epoch: non_neg_integer()
         }
   @type attrs :: map()
 
@@ -24,6 +25,7 @@ defmodule CodexPooler.Access.APIKey do
     field :key_prefix, :string
     field :key_hash, :binary
     field :status, :string
+    field :runtime_revocation_epoch, :integer, default: 0
     field :dashboard_access, :boolean, default: false
     field :expires_at, :utc_datetime_usec
     field :last_used_at, :utc_datetime_usec

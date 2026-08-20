@@ -145,6 +145,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   @spec execute(auth(), String.t(), payload(), opts()) ::
           {:ok, gateway_result()} | {:error, gateway_error()}
   def execute(auth, endpoint, payload, %RequestOptions{} = opts) when is_map(payload) do
+    opts = RequestOptions.capture_api_key_runtime_epoch(opts, auth)
+
     if image_generation_permission_denied?(auth, opts) do
       {:error,
        error(
@@ -721,6 +723,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          %RouteState{} = route_state,
          turn_claim
        ) do
+    maybe_test_runtime_authorization_barrier(:reserve, :before)
+
     Repo.transaction(fn ->
       with {:ok, reserved} <-
              reserve(auth, model, payload, endpoint, request_options, route_state, turn_claim),
@@ -762,6 +766,24 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       "duplicate Codex turn was already recorded for this session",
       "request_id"
     )
+  end
+
+  if Mix.env() == :test do
+    defp maybe_test_runtime_authorization_barrier(operation, phase) do
+      case Process.get({__MODULE__, :runtime_authorization_barrier}) do
+        {owner_pid, ref, {^operation, ^phase}} when is_pid(owner_pid) ->
+          send(owner_pid, {:runtime_authorization_barrier, ref, operation, phase, self()})
+
+          receive do
+            {:runtime_authorization_release, ^ref} -> :ok
+          end
+
+        _value ->
+          :ok
+      end
+    end
+  else
+    defp maybe_test_runtime_authorization_barrier(_operation, _phase), do: :ok
   end
 
   defp visible_model_context(

@@ -3,6 +3,8 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
 
   import Ecto.Query
 
+  alias CodexPooler.Access
+
   alias CodexPooler.Accounting.{
     Metadata,
     PricingResolution,
@@ -25,8 +27,13 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
         ) :: {:ok, map()} | {:error, Metadata.accounting_error()}
   def claim_websocket_turn(%{pool: pool, api_key: api_key}, %Model{} = model, opts) do
     timestamp = now(opts)
+    captured_epoch = runtime_revocation_epoch(api_key, opts)
+    maybe_test_runtime_authorization_barrier(:claim, :before)
 
     Repo.transaction(fn ->
+      api_key = authorize_runtime_turn!(api_key, captured_epoch)
+      maybe_test_runtime_authorization_barrier(:claim, :after)
+
       request =
         %Request{
           pool_id: pool.id,
@@ -70,8 +77,13 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
     correlation_id = attr(opts, :correlation_id) || Ecto.UUID.generate()
     pricing = PricingResolution.lookup(model, requested_model, payload, opts, timestamp)
     effective_model = ReservationPolicy.effective_model(model, requested_model, opts)
+    captured_epoch = runtime_revocation_epoch(api_key, opts)
 
     Repo.transaction(fn ->
+      api_key = authorize_runtime_turn!(api_key, captured_epoch)
+      auth = Map.put(auth, :api_key, api_key)
+      maybe_test_runtime_authorization_barrier(:reserve, :after)
+
       policy =
         ReservationPolicy.policy_for_update(
           api_key,
@@ -291,6 +303,38 @@ defmodule CodexPooler.Accounting.RequestLifecycle.Reservation do
   end
 
   defp requested_model(payload, opts), do: attr(opts, :requested_model) || attr(payload, :model)
+
+  defp authorize_runtime_turn!(api_key, captured_epoch) do
+    case Access.authorize_api_key_runtime_turn(api_key, captured_epoch) do
+      {:ok, %{api_key: authorized_api_key}} -> authorized_api_key
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp runtime_revocation_epoch(api_key, opts) do
+    case attr(opts, :runtime_revocation_epoch) do
+      epoch when is_integer(epoch) and epoch >= 0 -> epoch
+      _value -> api_key.runtime_revocation_epoch
+    end
+  end
+
+  if Mix.env() == :test do
+    defp maybe_test_runtime_authorization_barrier(operation, phase) do
+      case Process.get({__MODULE__, :runtime_authorization_barrier}) do
+        {owner_pid, ref, {^operation, ^phase}} when is_pid(owner_pid) ->
+          send(owner_pid, {:runtime_authorization_barrier, ref, operation, phase, self()})
+
+          receive do
+            {:runtime_authorization_release, ^ref} -> :ok
+          end
+
+        _value ->
+          :ok
+      end
+    end
+  else
+    defp maybe_test_runtime_authorization_barrier(_operation, _phase), do: :ok
+  end
 
   defp transport_from_payload(payload) do
     if attr(payload, :stream), do: "http_sse", else: "http_json"

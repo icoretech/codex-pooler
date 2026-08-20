@@ -3,6 +3,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   @behaviour WebSock
 
+  alias CodexPooler.Access
+  alias CodexPooler.Events
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
@@ -12,6 +14,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   alias CodexPooler.Gateway.Websocket.Adapter
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Cache, as: InstanceSettingsCache
+  alias CodexPooler.Repo
   alias CodexPoolerWeb.Plugs.RuntimeIngress.Firewall
   alias CodexPoolerWeb.WebsocketConnectionLogger
 
@@ -21,6 +24,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   @post_cleanup_owner_response_task_drain_ms 1_000
   @post_cleanup_response_task_drain_ms 5_000
   @firewall_close_detail {1008, "client IP is no longer allowed"}
+  @api_key_close_detail {1008, "api key is no longer active"}
+  @api_key_disabling_statuses ["paused", "revoked"]
 
   @impl WebSock
   def init(state) do
@@ -37,7 +42,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         |> put_socket_lifecycle_state()
         |> put_response_task_state()
         |> Adapter.put_runtime(runtime)
-        |> initialize_firewall_state()
+        |> initialize_revocation_state()
 
       {:ok, %{codex_session: session, upstream_websocket_session: upstream_websocket_session}} ->
         state
@@ -45,7 +50,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         |> put_response_task_state()
         |> Map.put(:codex_session, session)
         |> Map.put(:upstream_websocket_session, upstream_websocket_session)
-        |> initialize_firewall_state()
+        |> initialize_revocation_state()
 
       {:error, reason} ->
         init_error(reason, state, started_at)
@@ -53,16 +58,27 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   @impl WebSock
-  def handle_in({_payload, [opcode: opcode]}, %{firewall_revoked?: true} = state)
-      when opcode in [:text, :binary] do
-    {:ok, state}
+  def handle_in({_payload, [opcode: opcode]} = frame, state) when opcode in [:text, :binary] do
+    if socket_revoked?(state) do
+      {:ok, state}
+    else
+      handle_authorized_in(frame, state)
+    end
   end
 
-  def handle_in({payload, [opcode: :text]}, state) when is_binary(payload) do
+  defp handle_authorized_in({_payload, [opcode: opcode]} = frame, state)
+       when opcode in [:text, :binary] do
+    case refresh_api_key_authorization(state) do
+      {:authorized, state} -> handle_unrevoked_in(frame, state)
+      {:revoked, state} -> close_if_revoked_idle({:ok, state})
+    end
+  end
+
+  defp handle_unrevoked_in({payload, [opcode: :text]}, state) when is_binary(payload) do
     {:ok, start_or_queue_response_task(payload, state)}
   end
 
-  def handle_in({_payload, [opcode: :binary]}, state) do
+  defp handle_unrevoked_in({_payload, [opcode: :binary]}, state) do
     {:stop, :unsupported_binary_frame, {1003, "binary frames are not supported"}, state}
   end
 
@@ -73,6 +89,20 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       )
       when is_integer(applied_version) do
     handle_firewall_applied(applied_version, state)
+  end
+
+  def handle_info(
+        {Events, %Events.Event{pool_id: pool_id, topics: topics, payload: payload}},
+        state
+      )
+      when is_list(topics) and is_map(payload) do
+    if "pools" in topics and Map.get(state, :api_key_pool_id) == pool_id do
+      payload
+      |> handle_api_key_event(state)
+      |> close_if_revoked_idle()
+    else
+      {:ok, state}
+    end
   end
 
   # Chunks are attributed to their producing turn by pid. A chunk from a task the
@@ -125,17 +155,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   def handle_info({:codex_response_done, pid, result}, state) when is_pid(pid) do
-    result =
-      cond do
-        active_public_turn?(state, pid) ->
-          handle_public_response_done(pid, result, state)
-
-        Adapter.public_responses_stream?(state) and not tracked_response_task?(state, pid) ->
-          {:ok, state}
-
-        true ->
-          handle_non_public_response_done(pid, result, state)
-      end
+    result = handle_response_done(pid, result, state)
 
     close_if_revoked_idle(result)
   end
@@ -197,6 +217,56 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   def handle_info(_message, state), do: {:ok, state}
+
+  defp handle_response_done(pid, result, state) do
+    case api_key_revocation_disposition(result) do
+      {:revoked, disabling_epoch} ->
+        state =
+          state
+          |> remove_tracked_response_task(pid)
+          |> remove_native_turn_output(pid)
+          |> finish_revoked_public_turn(pid)
+          |> revoke_api_key(disabling_epoch)
+
+        {:ok, state}
+
+      :other ->
+        cond do
+          active_public_turn?(state, pid) ->
+            handle_public_response_done(pid, result, state)
+
+          Adapter.public_responses_stream?(state) and not tracked_response_task?(state, pid) ->
+            {:ok, state}
+
+          true ->
+            handle_non_public_response_done(pid, result, state)
+        end
+    end
+  end
+
+  defp finish_revoked_public_turn(state, pid) do
+    if active_public_turn?(state, pid), do: finish_public_turn(state), else: state
+  end
+
+  defp api_key_revocation_disposition({:socket_response_result, _source, result}),
+    do: api_key_revocation_disposition(result)
+
+  defp api_key_revocation_disposition({:response_task_result, result, _visible_output?}),
+    do: api_key_revocation_disposition(result)
+
+  defp api_key_revocation_disposition({:response_task_failure, result}),
+    do: api_key_revocation_disposition(result)
+
+  defp api_key_revocation_disposition({:error, %{code: code, disabling_epoch: disabling_epoch}})
+       when code in [
+              :api_key_paused,
+              :api_key_revoked,
+              :api_key_inactive,
+              :api_key_runtime_epoch_stale
+            ] and is_integer(disabling_epoch),
+       do: {:revoked, disabling_epoch}
+
+  defp api_key_revocation_disposition(_result), do: :other
 
   @impl WebSock
   def terminate(reason, state) do
@@ -292,6 +362,45 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> Map.put(:native_turn_output_task_pids, MapSet.new())
   end
 
+  defp initialize_revocation_state(state) do
+    with {:ok, state} <- initialize_api_key_revocation_state(state) do
+      initialize_firewall_state(state)
+    end
+  end
+
+  defp initialize_api_key_revocation_state(
+         %{auth: %{pool: %{id: pool_id}, api_key: %{id: api_key_id}}} = state
+       )
+       when is_binary(pool_id) and is_binary(api_key_id) do
+    case Events.subscribe_pool(pool_id, "pools") do
+      :ok ->
+        {:ok,
+         state
+         |> Map.put(:api_key_id, api_key_id)
+         |> Map.put(:api_key_pool_id, pool_id)
+         |> Map.put(:api_key_runtime_epoch, captured_api_key_epoch(state))
+         |> Map.put(:api_key_revoked?, false)
+         |> Map.put(:api_key_close_sent?, false)}
+
+      {:error, reason} ->
+        {:stop, reason, state}
+    end
+  end
+
+  defp initialize_api_key_revocation_state(state), do: {:stop, :api_key_identity_required, state}
+
+  defp captured_api_key_epoch(%{
+         opts: %{runtime: %{api_key_runtime_epoch: epoch}}
+       })
+       when is_integer(epoch) and epoch >= 0,
+       do: epoch
+
+  defp captured_api_key_epoch(%{auth: %{api_key: %{runtime_revocation_epoch: epoch}}})
+       when is_integer(epoch) and epoch >= 0,
+       do: epoch
+
+  defp captured_api_key_epoch(_state), do: 0
+
   defp initialize_firewall_state(state) do
     case InstanceSettingsCache.subscribe_applied() do
       :ok ->
@@ -349,6 +458,85 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> Map.put(:queued_response_payloads, :queue.new())
   end
 
+  defp handle_api_key_event(_payload, %{api_key_revoked?: true} = state), do: {:ok, state}
+
+  defp handle_api_key_event(
+         %{
+           "api_key_id" => api_key_id,
+           "status" => status,
+           "runtime_revocation_epoch" => event_epoch
+         },
+         %{api_key_id: api_key_id, api_key_runtime_epoch: captured_epoch} = state
+       )
+       when status in @api_key_disabling_statuses and is_integer(event_epoch) and
+              event_epoch > captured_epoch do
+    {:ok, revoke_api_key(state, event_epoch)}
+  end
+
+  defp handle_api_key_event(
+         %{"api_key_id" => api_key_id, "status" => status} = payload,
+         %{api_key_id: api_key_id} = state
+       )
+       when status in @api_key_disabling_statuses do
+    if Map.has_key?(payload, "runtime_revocation_epoch") do
+      {:ok, state}
+    else
+      case refresh_api_key_authorization(state) do
+        {:authorized, state} -> {:ok, state}
+        {:revoked, state} -> {:ok, state}
+      end
+    end
+  end
+
+  defp handle_api_key_event(_payload, state), do: {:ok, state}
+
+  defp refresh_api_key_authorization(%{api_key_revoked?: true} = state),
+    do: {:revoked, state}
+
+  defp refresh_api_key_authorization(
+         %{api_key_id: api_key_id, api_key_runtime_epoch: captured_epoch} = state
+       )
+       when is_binary(api_key_id) and is_integer(captured_epoch) and captured_epoch >= 0 do
+    case Repo.transact(fn ->
+           Access.authorize_api_key_runtime_turn(api_key_id, captured_epoch)
+         end) do
+      {:ok, {:ok, _authorization}} ->
+        {:authorized, state}
+
+      {:ok, {:error, %{code: code, disabling_epoch: epoch}}}
+      when code in [
+             :api_key_paused,
+             :api_key_revoked,
+             :api_key_inactive,
+             :api_key_runtime_epoch_stale
+           ] ->
+        {:revoked, revoke_api_key(state, epoch)}
+
+      {:error, %{code: code, disabling_epoch: epoch}}
+      when code in [
+             :api_key_paused,
+             :api_key_revoked,
+             :api_key_inactive,
+             :api_key_runtime_epoch_stale
+           ] ->
+        {:revoked, revoke_api_key(state, epoch)}
+
+      _unavailable_or_missing ->
+        {:authorized, state}
+    end
+  end
+
+  defp refresh_api_key_authorization(state), do: {:authorized, state}
+
+  defp revoke_api_key(%{api_key_revoked?: true} = state, _disabling_epoch), do: state
+
+  defp revoke_api_key(state, disabling_epoch) do
+    state
+    |> Map.put(:api_key_revoked?, true)
+    |> Map.put(:api_key_disabling_epoch, disabling_epoch)
+    |> Map.put(:queued_response_payloads, :queue.new())
+  end
+
   defp put_firewall_watermark(state, current_version) do
     previous_version = Map.get(state, :firewall_applied_version, 0)
     Map.put(state, :firewall_applied_version, max(previous_version, current_version))
@@ -356,7 +544,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp close_if_revoked_idle({:ok, state}) do
     if close_revoked_socket?(state) do
-      {:stop, :normal, @firewall_close_detail, mark_firewall_closed(state)}
+      {:stop, :normal, revocation_close_detail(state), mark_revocation_closed(state)}
     else
       {:ok, state}
     end
@@ -364,7 +552,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp close_if_revoked_idle({:push, messages, state}) do
     if close_revoked_socket?(state) do
-      {:stop, :normal, @firewall_close_detail, List.wrap(messages), mark_firewall_closed(state)}
+      {:stop, :normal, revocation_close_detail(state), List.wrap(messages),
+       mark_revocation_closed(state)}
     else
       {:push, messages, state}
     end
@@ -372,23 +561,50 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   defp close_if_revoked_idle({:stop, reason, close_detail, state}) do
     if close_revoked_socket?(state) do
-      {:stop, :normal, @firewall_close_detail, mark_firewall_closed(state)}
+      {:stop, :normal, revocation_close_detail(state), mark_revocation_closed(state)}
     else
       {:stop, reason, close_detail, state}
     end
   end
 
   defp close_revoked_socket?(state) do
-    Map.get(state, :firewall_revoked?, false) and
-      not Map.get(state, :firewall_close_sent?, false) and
+    socket_revoked?(state) and not revocation_close_sent?(state) and
       not revocation_drain_active?(state)
+  end
+
+  defp socket_revoked?(state) do
+    Map.get(state, :firewall_revoked?, false) or Map.get(state, :api_key_revoked?, false)
+  end
+
+  defp revocation_close_sent?(state) do
+    (Map.get(state, :firewall_revoked?, false) and
+       Map.get(state, :firewall_close_sent?, false)) or
+      (Map.get(state, :api_key_revoked?, false) and
+         Map.get(state, :api_key_close_sent?, false))
   end
 
   defp revocation_drain_active?(state) do
     active_response_task?(state) or public_turn_open?(state)
   end
 
-  defp mark_firewall_closed(state), do: Map.put(state, :firewall_close_sent?, true)
+  defp revocation_close_detail(%{firewall_revoked?: true}), do: @firewall_close_detail
+  defp revocation_close_detail(_state), do: @api_key_close_detail
+
+  defp mark_revocation_closed(state) do
+    state
+    |> maybe_mark_firewall_closed()
+    |> maybe_mark_api_key_closed()
+  end
+
+  defp maybe_mark_firewall_closed(%{firewall_revoked?: true} = state),
+    do: Map.put(state, :firewall_close_sent?, true)
+
+  defp maybe_mark_firewall_closed(state), do: state
+
+  defp maybe_mark_api_key_closed(%{api_key_revoked?: true} = state),
+    do: Map.put(state, :api_key_close_sent?, true)
+
+  defp maybe_mark_api_key_closed(state), do: state
 
   defp handle_owner_frame(message, state) do
     case Adapter.accept_downstream_message(message, state) do
@@ -745,12 +961,18 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp init_error(reason, state, started_at) do
-    log_init_failed_before_request_reservation(reason, state, started_at)
+    case api_key_revocation_disposition({:error, reason}) do
+      {:revoked, _disabling_epoch} ->
+        {:stop, :normal, @api_key_close_detail, state}
 
-    if Adapter.owner_error?(reason) do
-      {:stop, :normal, Adapter.close_detail(reason), state}
-    else
-      {:stop, reason, state}
+      :other ->
+        log_init_failed_before_request_reservation(reason, state, started_at)
+
+        if Adapter.owner_error?(reason) do
+          {:stop, :normal, Adapter.close_detail(reason), state}
+        else
+          {:stop, reason, state}
+        end
     end
   end
 

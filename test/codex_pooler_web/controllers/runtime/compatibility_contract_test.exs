@@ -39,6 +39,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     api_key_reasoning_availability
     reasoning_context
     unsupported_upstream_fields
+    api_key_websocket_revocation
     firewall
     pruned_runtime_helper_firewall
     decompression
@@ -85,6 +86,36 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       "batches",
       "response-output storage"
     ]
+  }
+  @api_key_websocket_revocation_contract %{
+    disabling_statuses: [:paused, :revoked],
+    new_authentication: :blocked,
+    prompt_delivery: %{
+      channel: :pool_scoped_post_commit_event,
+      role: :prompt_only,
+      authorization_authority: :durable_api_key_row
+    },
+    durable_fence: %{
+      authority: :locked_api_key_row,
+      captured_epoch: :must_match,
+      missed_relay: :reject_later_frame
+    },
+    close: %{
+      code: 1008,
+      reason: "api key is no longer active",
+      synthetic_error_frame: false
+    },
+    work: %{
+      pre_admitted: :drains_and_settles_once,
+      queued_and_later: :dropped
+    },
+    legacy_epochless_event: %{
+      fallback: :reread_durable_authorization,
+      delayed_after_resume: :ignored_when_active
+    },
+    resume: :fresh_connection_required,
+    rolling_release: :full_cluster_protection_after_all_app_replicas_updated,
+    firewall: :unchanged
   }
 
   setup do
@@ -209,6 +240,44 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
       assert exact_stream_id_contract?(contract)
       refute exact_stream_id_contract?(malformed_contract)
+    end
+
+    test "locks API-key websocket revocation separately from firewall revocation" do
+      feature = CompatibilityMatrix.by_slug!(:api_key_websocket_revocation)
+      fixture = CompatibilityMatrix.fixture!(:api_key_websocket_revocation)
+      firewall_fixture = CompatibilityMatrix.fixture!(:firewall)
+
+      assert feature.current == :durable_api_key_epoch_fence
+      assert feature.categories == [:auth, :error, :streaming, :ownership]
+      assert feature.future_routes == []
+
+      assert feature.routes == [
+               %{
+                 method: :get,
+                 path: "/backend-api/codex/responses",
+                 transport: :websocket
+               },
+               %{
+                 method: :get,
+                 path: "/backend-api/codex/v1/responses",
+                 transport: :websocket
+               },
+               %{method: :get, path: "/v1/responses", transport: :websocket}
+             ]
+
+      assert fixture == @api_key_websocket_revocation_contract
+
+      assert firewall_fixture.revoked_websocket == %{
+               close_code: 1008,
+               admitted_work: :finishes,
+               new_work: :refused,
+               reason: :websocket_revoked
+             }
+
+      malformed_fixture = put_in(fixture.prompt_delivery.role, :authorization_authority)
+
+      assert exact_api_key_websocket_revocation_contract?(fixture)
+      refute exact_api_key_websocket_revocation_contract?(malformed_fixture)
     end
 
     test "documents the pruned runtime helper firewall matrix" do
@@ -2593,6 +2662,9 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
   end
 
   defp exact_stream_id_contract?(contract), do: contract == @stream_id_contract
+
+  defp exact_api_key_websocket_revocation_contract?(contract),
+    do: contract == @api_key_websocket_revocation_contract
 
   describe "baseline route and gap contracts" do
     test "supported files contract requires API-key auth before JSON shape validation", %{

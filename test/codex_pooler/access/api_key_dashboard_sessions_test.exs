@@ -51,6 +51,7 @@ defmodule CodexPooler.Access.APIKeyDashboardSessionsTest do
       assert payload == %{
                "api_key_id" => api_key.id,
                "pool_id" => pool.id,
+               "runtime_revocation_epoch" => 1,
                "status" => paused_key.status
              }
     end

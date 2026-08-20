@@ -37,12 +37,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.Accounting.Attempt
   alias CodexPooler.Accounting.LedgerEntry
   alias CodexPooler.Accounting.Request
+  alias CodexPooler.Accounting.RequestLifecycle.Reservation
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.AgentV2ContractFixture
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
+  alias CodexPooler.Gateway.Runtime.Service
 
   alias CodexPooler.Gateway.Persistence.{
     BridgeDemotion,
@@ -72,6 +74,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias CodexPoolerWeb.CodexResponsesSocket
   alias CodexPoolerWeb.WebsocketConnectionLogger
+  alias Ecto.Adapters.SQL.Sandbox
 
   @sentinel "SECRET_SENTINEL_DO_NOT_STORE_123"
   @supported_compression_model "gpt-4o"
@@ -1257,6 +1260,82 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert settlement.attempt_id == attempt.id
       assert settlement.transport == "websocket"
     after
+      CodexResponsesSocket.terminate(:closed, remote_state)
+    end
+  end
+
+  test "a paused key stops a remote-owner-shaped turn at reservation without dispatch or recovery" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = owner_socket(auth, "ws-owner-api-key-fence", "owner-api-key-fence")
+    remote_node = :"codex_pooler@remote-owner-api-key-fence.example"
+
+    node_opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => :success}
+      )
+
+    remote_state = remote_owner_state(state, remote_node, node_opts)
+    opts = owner_response_options(remote_state, node_opts)
+    barrier_ref = make_ref()
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+
+        Process.put(
+          {Reservation, :runtime_authorization_barrier},
+          {parent, barrier_ref, {:reserve, :before}}
+        )
+
+        Process.put(
+          {Service, :runtime_authorization_barrier},
+          {parent, barrier_ref, {:reserve, :before}}
+        )
+
+        Gateway.run_websocket_response_for_socket(
+          auth,
+          websocket_payload(setup, "remote owner durable fence"),
+          opts,
+          fn _frame -> :ok end
+        )
+      end)
+
+    Sandbox.allow(Repo, self(), task.pid)
+
+    try do
+      assert remote_state.codex_session.owner_instance_id == Atom.to_string(remote_node)
+
+      assert_receive {:runtime_authorization_barrier, ^barrier_ref, :reserve, :before, task_pid},
+                     1_000
+
+      assert task_pid == task.pid
+      assert request_logs(setup.pool.id) == []
+
+      assert {:ok, paused_key} = Access.pause_api_key(model_serving_scope(), setup.api_key)
+      assert paused_key.status == "paused"
+      send(task.pid, {:runtime_authorization_release, barrier_ref})
+
+      assert {:socket_response_result, :local_complete,
+              {:error, %{code: :api_key_paused, disabling_epoch: disabling_epoch}}} =
+               Task.await(task, 15_000)
+
+      assert disabling_epoch == paused_key.runtime_revocation_epoch
+
+      assert [%Request{status: "rejected", last_error_code: "api_key_paused"}] =
+               request_logs(setup.pool.id)
+
+      assert Repo.aggregate(Attempt, :count) == 0
+      assert Repo.aggregate(LedgerEntry, :count) == 0
+      assert Repo.aggregate(CodexTurn, :count) == 0
+      assert FakeUpstream.count(upstream) == 0
+      refute_received {:websocket_owner_harness_node_call, _call}
+      refute_received {:websocket_owner_frame, _, _, _}
+      refute_received {:websocket_owner_frame, _, _, _, _}
+    after
+      if Process.alive?(task.pid), do: Task.shutdown(task, :brutal_kill)
       CodexResponsesSocket.terminate(:closed, remote_state)
     end
   end

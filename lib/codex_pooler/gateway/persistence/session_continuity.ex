@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
 
   require Logger
 
+  alias CodexPooler.Access
   alias CodexPooler.Accounting.{Attempt, Request}
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -48,13 +49,15 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     session_key = session_key(opts)
     owner = owner_instance_id(opts)
 
-    Repo.transaction(fn ->
-      session = upsert_session_for_start!(auth, opts, session_key, owner, now)
-      lease = OwnerLease.acquire!(session, auth, opts, owner, now)
-      Aliases.register!(session, auth, opts, now)
-      OwnerLease.persist_session!(session, lease, now)
-    end)
-    |> unwrap_transaction()
+    with :ok <- authorize_runtime_session(auth, opts) do
+      Repo.transaction(fn ->
+        session = upsert_session_for_start!(auth, opts, session_key, owner, now)
+        lease = OwnerLease.acquire!(session, auth, opts, owner, now)
+        Aliases.register!(session, auth, opts, now)
+        OwnerLease.persist_session!(session, lease, now)
+      end)
+      |> unwrap_transaction()
+    end
   end
 
   @spec previous_response_assignment_id(auth(), String.t(), DateTime.t()) ::
@@ -89,24 +92,28 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
     now = now()
     owner = owner_instance_id(opts)
 
-    Repo.transaction(fn ->
-      auth
-      |> previous_response_session_for_update(previous_response_id, now)
-      |> start_previous_response_session!(auth, opts, owner, now)
-    end)
-    |> unwrap_transaction()
+    with :ok <- authorize_runtime_session(auth, opts) do
+      Repo.transaction(fn ->
+        auth
+        |> previous_response_session_for_update(previous_response_id, now)
+        |> start_previous_response_session!(auth, opts, owner, now)
+      end)
+      |> unwrap_transaction()
+    end
   end
 
   defp start_codex_session_from_turn_state(auth, opts, turn_state) do
     now = now()
     owner = owner_instance_id(opts)
 
-    Repo.transaction(fn ->
-      auth.pool.id
-      |> Aliases.active_session_for_update(auth.api_key.id, "turn_state", turn_state, now)
-      |> start_previous_response_session!(auth, opts, owner, now)
-    end)
-    |> unwrap_transaction()
+    with :ok <- authorize_runtime_session(auth, opts) do
+      Repo.transaction(fn ->
+        auth.pool.id
+        |> Aliases.active_session_for_update(auth.api_key.id, "turn_state", turn_state, now)
+        |> start_previous_response_session!(auth, opts, owner, now)
+      end)
+      |> unwrap_transaction()
+    end
   end
 
   defp previous_response_session_for_update(auth, previous_response_id, now) do
@@ -117,6 +124,22 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
       previous_response_id,
       now
     )
+  end
+
+  defp authorize_runtime_session(auth, %RequestOptions{} = opts) do
+    captured_epoch =
+      opts.runtime.api_key_runtime_epoch || auth.api_key.runtime_revocation_epoch
+
+    Repo.transaction(fn ->
+      case Access.authorize_api_key_runtime_turn(auth.api_key, captured_epoch) do
+        {:ok, _authorization} -> :ok
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, :ok} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp start_previous_response_session!(%CodexSession{} = session, auth, opts, owner, now) do

@@ -71,6 +71,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :accepted_turn_state,
     :authenticated_owner_attach,
     :api_key_policy,
+    :api_key_runtime_epoch,
     :authorization_header,
     :client_ip,
     :codex_session,
@@ -332,6 +333,17 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   def put_runtime_context(%__MODULE__{} = options, updates) when is_list(updates) do
     %{options | runtime: RuntimeContext.update(options.runtime, updates)}
   end
+
+  @spec capture_api_key_runtime_epoch(t(), CodexPooler.Access.auth_context()) :: t()
+  def capture_api_key_runtime_epoch(
+        %__MODULE__{runtime: %{api_key_runtime_epoch: nil}} = options,
+        %{api_key: %{runtime_revocation_epoch: epoch}}
+      )
+      when is_integer(epoch) and epoch >= 0 do
+    put_runtime_context(options, api_key_runtime_epoch: epoch)
+  end
+
+  def capture_api_key_runtime_epoch(%__MODULE__{} = options, _auth), do: options
 
   @spec put_payload_context(t(), keyword()) :: t()
   def put_payload_context(%__MODULE__{} = options, updates) when is_list(updates) do

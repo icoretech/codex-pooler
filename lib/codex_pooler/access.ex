@@ -24,6 +24,29 @@ defmodule CodexPooler.Access do
   @type dashboard_principal :: DashboardSessions.Principal.t()
   @type dashboard_session_handoff :: DashboardSessions.handoff()
 
+  @spec capture_api_key_runtime_epoch(APIKey.t() | Ecto.UUID.t()) ::
+          {:ok, APIKeys.RuntimeAuthorization.epoch()}
+          | {:error, APIKeys.RuntimeAuthorization.disposition()}
+  defdelegate capture_api_key_runtime_epoch(api_key_or_id),
+    to: APIKeys,
+    as: :capture_runtime_authorization_epoch
+
+  @spec authorize_api_key_runtime_turn(
+          APIKey.t() | Ecto.UUID.t(),
+          APIKeys.RuntimeAuthorization.epoch()
+        ) ::
+          {:ok, APIKeys.RuntimeAuthorization.authorization()}
+          | {:error, APIKeys.RuntimeAuthorization.disposition()}
+  defdelegate authorize_api_key_runtime_turn(api_key_or_id, captured_epoch),
+    to: APIKeys,
+    as: :authorize_runtime_turn
+
+  @spec api_key_runtime_epoch_for_status_change(APIKey.t(), String.t()) ::
+          APIKeys.RuntimeAuthorization.epoch()
+  defdelegate api_key_runtime_epoch_for_status_change(api_key, target_status),
+    to: APIKeys,
+    as: :runtime_epoch_for_status_change
+
   @spec resolve_reasoning_effort(
           APIKey.t(),
           String.t() | nil,

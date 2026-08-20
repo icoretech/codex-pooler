@@ -54,7 +54,12 @@ defmodule CodexPooler.Gateway.Websocket do
 
   @spec start_codex_session(auth(), opts()) :: session_result()
   def start_codex_session(auth, opts \\ %{}) do
-    SessionContinuity.start_codex_session(auth, websocket_request_options(opts))
+    opts =
+      opts
+      |> websocket_request_options()
+      |> RequestOptions.capture_api_key_runtime_epoch(auth)
+
+    SessionContinuity.start_codex_session(auth, opts)
   end
 
   @spec prepare_websocket_session(auth(), opts()) :: {:ok, websocket_runtime()} | {:error, term()}

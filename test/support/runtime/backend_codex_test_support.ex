@@ -26,6 +26,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
   alias CodexPooler.Gateway.Persistence.{
     BridgeAffinity,
     BridgeDemotion,
+    CodexTurn,
     RoutingCircuitState
   }
 
@@ -423,6 +424,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexTestSupport do
       from(rollup in CodexPooler.Accounting.DailyRollup, where: rollup.pool_id == ^pool_id)
     )
 
+    Repo.delete_all(from(turn in CodexTurn, where: turn.request_id in ^request_ids))
     Repo.delete_all(from(attempt in Attempt, where: attempt.request_id in ^request_ids))
     Repo.delete_all(from(request in Request, where: request.pool_id == ^pool_id))
     Repo.delete_all(from(circuit in RoutingCircuitState, where: circuit.pool_id == ^pool_id))

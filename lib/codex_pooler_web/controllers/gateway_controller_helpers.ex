@@ -168,6 +168,7 @@ defmodule CodexPoolerWeb.GatewayControllerHelpers do
       conn
       |> request_opts()
       |> RequestOptions.for_websocket()
+      |> RequestOptions.capture_api_key_runtime_epoch(auth)
       |> maybe_put_websocket_openai_compatibility(opts)
       |> RequestOptions.put_continuity(
         accepted_turn_state: websocket_continuity_turn_state(opts, turn_state)

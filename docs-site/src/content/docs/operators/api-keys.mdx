@@ -281,6 +281,18 @@ The current actions are:
 
 Prefer pause for temporary containment, rotate for suspected exposure, revoke for permanent credential retirement, and delete only when the key and its related local history should be removed.
 
+## Responses WebSocket lifecycle
+
+For supported Responses WebSocket routes, pausing or revoking a Pool API key blocks new runtime authentication and prompts existing WebSocket connections to close with policy code `1008`. The cluster notification is prompt-only delivery, not the authorization authority.
+
+A durable fence checks the key's persisted status and revocation generation before later work is admitted. If a socket misses or receives a delayed cluster notification, its next frame is still rejected and the connection closes without starting that work.
+
+Only work admitted before the disabling change won the durable ordering may drain and finish once. Queued and later frames do not start after pause or revoke takes effect.
+
+Resuming a paused key makes it eligible for new authentication, but it does not reopen an existing socket that was closed or marked for closure. The client must establish a fresh WebSocket connection.
+
+During a rolling update, full cluster protection begins only after all application replicas run the release that contains this behavior. No new Helm value or runtime environment setting is required.
+
 ## Operational Checklist
 
 When client traffic is rejected or not behaving as expected, check API keys in this order:

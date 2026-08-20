@@ -2,21 +2,192 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import ExUnit.CaptureLog
+  import Ecto.Query
+  import CodexPooler.AccountsFixtures
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [gateway_setup: 1, start_upstream: 1]
 
   alias CodexPooler.Access
   alias CodexPooler.Accounting
-  alias CodexPooler.Accounting.Request
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
+  alias CodexPooler.Accounting.RequestLifecycle.Reservation
+  alias CodexPooler.Accounts.Scope
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
   alias CodexPooler.Gateway.Runtime.Dispatch.PreDispatch
   alias CodexPooler.Gateway.Runtime.Service
+  alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Repo
+  alias Ecto.Adapters.SQL.Sandbox
 
   @endpoint "/backend-api/codex/responses"
+
+  test "baseline explicit websocket claim reserves and settles one request once" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_baseline123456789"}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = websocket_payload(setup.model.exposed_model_id, "baseline accepted work")
+
+    assert {:ok, result} =
+             Service.execute(
+               auth,
+               @endpoint,
+               payload,
+               request_options(auth, payload, setup.model.exposed_model_id, "baseline-turn")
+             )
+
+    assert result.status == 200
+    request = Repo.one!(Request)
+    assert request.status == "succeeded"
+    assert Repo.aggregate(Request, :count) == 1
+    assert Repo.aggregate(Attempt, :count) == 1
+    assert Repo.aggregate(LedgerEntry, :count) == 3
+    request_id = request.id
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where: entry.request_id == ^request_id and entry.entry_kind == "settlement"
+             ),
+             :count
+           ) == 1
+
+    assert FakeUpstream.count(upstream) == 1
+  end
+
+  test "pause before websocket claim creates no runtime or accounting work" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    scope = instance_owner_scope()
+    payload = websocket_payload(setup.model.exposed_model_id, "pause before claim")
+    ref = make_ref()
+
+    task =
+      start_gateway_task(auth, setup.model, payload, upstream, ref, {:claim, :before})
+
+    assert_receive {:runtime_authorization_barrier, ^ref, :claim, :before, task_pid}
+    assert task_pid == task.pid
+    assert {:ok, paused_key} = Access.pause_api_key(scope, setup.api_key)
+    assert paused_key.runtime_revocation_epoch == 1
+    send(task.pid, {:runtime_authorization_release, ref})
+
+    assert {:error, %{code: :api_key_paused, disabling_epoch: 1}} = Task.await(task, 15_000)
+    assert_runtime_counts(%{requests: 0, attempts: 0, ledger: 0, turns: 0, sessions: 0})
+    assert FakeUpstream.count(upstream) == 0
+  end
+
+  test "captured epoch mismatch remains an internal zero-work disposition" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = websocket_payload(setup.model.exposed_model_id, "stale captured epoch")
+
+    opts =
+      auth
+      |> request_options(payload, setup.model.exposed_model_id, "stale-epoch-turn")
+      |> RequestOptions.put_runtime_context(api_key_runtime_epoch: 1)
+
+    assert {:error, %{code: :api_key_runtime_epoch_stale, disabling_epoch: 0} = error} =
+             Service.execute(auth, @endpoint, payload, opts)
+
+    refute Map.has_key?(error, :status)
+    refute Map.has_key?(error, :param)
+    assert_runtime_counts(%{requests: 0, attempts: 0, ledger: 0, turns: 0, sessions: 0})
+    assert FakeUpstream.count(upstream) == 0
+  end
+
+  test "websocket session creation rechecks the captured API key epoch" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    scope = instance_owner_scope()
+    payload = websocket_payload(setup.model.exposed_model_id, "session defense")
+
+    opts =
+      request_options(auth, payload, setup.model.exposed_model_id, "session-defense")
+      |> RequestOptions.put_continuity(session_key: "session-defense")
+      |> RequestOptions.capture_api_key_runtime_epoch(auth)
+
+    assert opts.runtime.api_key_runtime_epoch == 0
+    assert {:ok, paused_key} = Access.pause_api_key(scope, setup.api_key)
+    assert paused_key.runtime_revocation_epoch == 1
+
+    assert {:error, %{code: :api_key_paused, disabling_epoch: 1}} =
+             Websocket.start_codex_session(auth, opts)
+
+    assert Repo.aggregate(CodexSession, :count) == 0
+    assert FakeUpstream.count(upstream) == 0
+  end
+
+  test "pause after websocket claim terminalizes that claim without downstream work" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    scope = instance_owner_scope()
+    payload = websocket_payload(setup.model.exposed_model_id, "pause before reservation")
+    ref = make_ref()
+
+    task =
+      start_gateway_task(auth, setup.model, payload, upstream, ref, {:reserve, :before})
+
+    assert_receive {:runtime_authorization_barrier, ^ref, :reserve, :before, task_pid}
+    assert task_pid == task.pid
+    assert [%Request{status: "accepted"} = claim] = Repo.all(Request)
+    assert {:ok, paused_key} = Access.pause_api_key(scope, setup.api_key)
+    assert paused_key.runtime_revocation_epoch == 1
+    send(task.pid, {:runtime_authorization_release, ref})
+
+    assert {:error, %{code: :api_key_paused, disabling_epoch: 1}} = Task.await(task, 15_000)
+
+    assert %Request{
+             id: claim_id,
+             status: "rejected",
+             usage_status: "not_applicable",
+             last_error_code: "api_key_paused"
+           } = Repo.one!(Request)
+
+    assert claim_id == claim.id
+    assert_runtime_counts(%{requests: 1, attempts: 0, ledger: 0, turns: 0, sessions: 0})
+    assert FakeUpstream.count(upstream) == 0
+  end
+
+  test "a reservation that wins the API key lock completes once before pause" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_admitted123456789"}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    scope = instance_owner_scope()
+    payload = websocket_payload(setup.model.exposed_model_id, "pre-admitted work")
+    ref = make_ref()
+
+    task =
+      start_gateway_task(auth, setup.model, payload, upstream, ref, {:reserve, :after})
+
+    assert_receive {:runtime_authorization_barrier, ^ref, :reserve, :after, task_pid}
+    assert task_pid == task.pid
+
+    send(task.pid, {:runtime_authorization_release, ref})
+
+    assert {:ok, result} = Task.await(task, 15_000)
+    assert {:ok, paused_key} = Access.pause_api_key(scope, setup.api_key)
+    assert paused_key.runtime_revocation_epoch == 1
+    assert result.status == 200
+    request = Repo.one!(Request)
+    assert request.status == "succeeded"
+    assert_runtime_counts(%{requests: 1, attempts: 1, ledger: 3, turns: 0, sessions: 0})
+    request_id = request.id
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where: entry.request_id == ^request_id and entry.entry_kind == "settlement"
+             ),
+             :count
+           ) == 1
+
+    assert FakeUpstream.count(upstream) == 1
+  end
 
   test "session-routable execution rejects a claimed turn after a real transaction rollback" do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
@@ -152,13 +323,14 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
     refute log =~ "forged_field=value"
   end
 
-  defp request_options(auth, payload, model) do
+  defp request_options(auth, payload, model, request_id \\ "pre-attempt-rollback") do
     {:ok, policy} = Access.normalize_api_key_policy(auth.api_key)
 
     %{
-      request_id: "pre-attempt-rollback",
+      request_id: request_id,
       upstream_endpoint: @endpoint,
-      transport: "websocket"
+      transport: "websocket",
+      codex_turn_id: request_id
     }
     |> RequestOptions.build(@endpoint, payload)
     |> RequestOptions.put_routing(
@@ -166,5 +338,55 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
       effective_model: model,
       api_key_policy: policy
     )
+  end
+
+  defp websocket_payload(model, text) do
+    %{
+      "model" => model,
+      "input" => [
+        %{
+          "type" => "message",
+          "role" => "user",
+          "content" => [%{"type" => "input_text", "text" => text}]
+        }
+      ],
+      "stream" => false
+    }
+  end
+
+  defp start_gateway_task(auth, model, payload, _upstream, ref, phase) do
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        Sandbox.allow(Repo, parent, self())
+        Process.put({Reservation, :runtime_authorization_barrier}, {parent, ref, phase})
+        Process.put({Service, :runtime_authorization_barrier}, {parent, ref, phase})
+
+        Service.execute(
+          auth,
+          @endpoint,
+          payload,
+          request_options(auth, payload, model.exposed_model_id, "race-#{inspect(ref)}")
+        )
+      end)
+
+    Sandbox.allow(Repo, self(), task.pid)
+    task
+  end
+
+  defp instance_owner_scope do
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    Scope.for_user(owner, ["instance_owner"])
+  end
+
+  defp assert_runtime_counts(expected) do
+    assert %{
+             requests: Repo.aggregate(Request, :count),
+             attempts: Repo.aggregate(Attempt, :count),
+             ledger: Repo.aggregate(LedgerEntry, :count),
+             turns: Repo.aggregate(CodexTurn, :count),
+             sessions: Repo.aggregate(CodexSession, :count)
+           } == expected
   end
 end

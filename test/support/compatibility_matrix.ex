@@ -415,6 +415,29 @@ defmodule CodexPooler.CompatibilityMatrix do
         "OpenAI compatibility rejects known SDK request controls that cannot be translated locally and strips backend-only upstream-unsupported controls before dispatch"
     },
     %{
+      slug: :api_key_websocket_revocation,
+      status: :supported,
+      current: :durable_api_key_epoch_fence,
+      categories: [:auth, :error, :streaming, :ownership],
+      routes: [
+        %{
+          method: :get,
+          path: "/backend-api/codex/responses",
+          transport: :websocket
+        },
+        %{
+          method: :get,
+          path: "/backend-api/codex/v1/responses",
+          transport: :websocket
+        },
+        %{method: :get, path: "/v1/responses", transport: :websocket}
+      ],
+      future_routes: [],
+      fixture: :api_key_websocket_revocation,
+      contract:
+        "pausing or revoking a Pool API key blocks new authentication and uses a pool-scoped event only to prompt existing Responses websocket closure; the locked durable key row and captured revocation epoch remain authoritative when relay is missed or delayed, queued and later work is dropped, only pre-admitted work drains and settles once before the fixed 1008 close, legacy epochless events reread durable authorization, resume requires a fresh connection, and firewall revocation semantics remain unchanged"
+    },
+    %{
       slug: :firewall,
       status: :supported,
       current: :explicit_forwarded_client_policy,
@@ -1587,6 +1610,36 @@ defmodule CodexPooler.CompatibilityMatrix do
         "temperature" => 0.2,
         "top_p" => 0.9
       }
+    },
+    api_key_websocket_revocation: %{
+      disabling_statuses: [:paused, :revoked],
+      new_authentication: :blocked,
+      prompt_delivery: %{
+        channel: :pool_scoped_post_commit_event,
+        role: :prompt_only,
+        authorization_authority: :durable_api_key_row
+      },
+      durable_fence: %{
+        authority: :locked_api_key_row,
+        captured_epoch: :must_match,
+        missed_relay: :reject_later_frame
+      },
+      close: %{
+        code: 1008,
+        reason: "api key is no longer active",
+        synthetic_error_frame: false
+      },
+      work: %{
+        pre_admitted: :drains_and_settles_once,
+        queued_and_later: :dropped
+      },
+      legacy_epochless_event: %{
+        fallback: :reread_durable_authorization,
+        delayed_after_resume: :ignored_when_active
+      },
+      resume: :fresh_connection_required,
+      rolling_release: :full_cluster_protection_after_all_app_replicas_updated,
+      firewall: :unchanged
     },
     firewall: %{
       protected_route_families: [
