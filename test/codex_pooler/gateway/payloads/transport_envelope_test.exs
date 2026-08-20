@@ -70,6 +70,28 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
   end
 
   describe "headers/4" do
+    test "preserves header order, server account identity, and allowed forwarded metadata" do
+      headers =
+        TransportEnvelope.headers(
+          identity(),
+          " upstream-token ",
+          [{"accept", "application/json"}],
+          forwarded_headers: [
+            {"chatgpt-account-id", "acct_downstream"},
+            {"x-openai-client-user-agent", "downstream-openai-client"},
+            {"x-codex-turn-state", "safe-turn-state"}
+          ]
+        )
+
+      assert headers == [
+               {"authorization", "Bearer upstream-token"},
+               {"chatgpt-account-id", "acct_test"},
+               {"accept", "application/json"},
+               {"x-openai-client-user-agent", "downstream-openai-client"},
+               {"x-codex-turn-state", "safe-turn-state"}
+             ]
+    end
+
     test "synthesizes trusted identity and ignores downstream identity headers" do
       version = CodexClientIdentity.version()
 
@@ -100,6 +122,109 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
                {"accept", "application/json"},
                {"x-openai-client-user-agent", "downstream-openai-client"},
                {"x-codex-turn-state", "safe-turn-state"}
+             ]
+    end
+
+    test "appends one residency header from namespaced or root access-token claims" do
+      for claims <- [
+            %{
+              "https://api.openai.com/auth" => %{
+                "chatgpt_compute_residency" => "region-alpha"
+              }
+            },
+            %{"chatgpt_compute_residency" => "region-beta"}
+          ] do
+        headers =
+          TransportEnvelope.headers(
+            identity(),
+            access_token(claims),
+            [{"accept", "application/json"}],
+            forwarded_headers: [{"x-codex-turn-state", "safe-turn-state"}]
+          )
+
+        assert List.last(headers) ==
+                 {"x-openai-internal-codex-residency", claims_residency(claims)}
+
+        assert length(residency_headers(headers)) == 1
+      end
+    end
+
+    test "normalizes the selected token once for authorization and residency extraction" do
+      token = access_token(%{"chatgpt_compute_residency" => "region-trimmed"})
+
+      headers =
+        TransportEnvelope.headers(identity(), " \t#{token}\n", [],
+          forwarded_headers: [{"x-openai-unrelated", "preserved"}]
+        )
+
+      assert {"authorization", "Bearer #{token}"} in headers
+      assert {"x-openai-unrelated", "preserved"} in headers
+
+      assert List.last(headers) ==
+               {"x-openai-internal-codex-residency", "region-trimmed"}
+    end
+
+    test "omits residency for absent, invalid, and no-constraint access-token claims" do
+      tokens = [
+        access_token(%{}),
+        "invalid-access-token",
+        access_token(%{"chatgpt_compute_residency" => "no_constraint"}),
+        access_token(%{
+          "https://api.openai.com/auth" => %{
+            "chatgpt_compute_residency" => "invalid\r\nvalue"
+          }
+        })
+      ]
+
+      for token <- tokens do
+        headers = TransportEnvelope.headers(identity(), token, [])
+        assert residency_headers(headers) == []
+      end
+    end
+
+    test "drops mixed-case forwarded residency spoofing and preserves server-owned identity" do
+      token = access_token(%{"chatgpt_compute_residency" => "region-server"})
+
+      headers =
+        TransportEnvelope.headers(identity(), token, [{"accept", "application/json"}],
+          forwarded_headers: [
+            {"X-OpenAI-Internal-Codex-Residency", "region-client-one"},
+            {"x-OPENAI-internal-codex-residency", "region-client-two"},
+            {"chatgpt-account-id", "acct_downstream"},
+            {"x-openai-client-user-agent", "downstream-openai-client"}
+          ]
+        )
+
+      assert headers == [
+               {"authorization", "Bearer #{token}"},
+               {"chatgpt-account-id", "acct_test"},
+               {"accept", "application/json"},
+               {"x-openai-client-user-agent", "downstream-openai-client"},
+               {"x-openai-internal-codex-residency", "region-server"}
+             ]
+    end
+
+    test "derives each envelope independently from its selected access token" do
+      first_headers =
+        TransportEnvelope.headers(
+          identity(),
+          access_token(%{"chatgpt_compute_residency" => "region-first"}),
+          []
+        )
+
+      second_headers =
+        TransportEnvelope.headers(
+          identity(),
+          access_token(%{"chatgpt_compute_residency" => "region-second"}),
+          []
+        )
+
+      assert residency_headers(first_headers) == [
+               {"x-openai-internal-codex-residency", "region-first"}
+             ]
+
+      assert residency_headers(second_headers) == [
+               {"x-openai-internal-codex-residency", "region-second"}
              ]
     end
   end
@@ -352,6 +477,24 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelopeTest do
     value
     |> :binary.bin_to_list()
     |> Enum.all?(&(&1 < 128))
+  end
+
+  defp access_token(claims) do
+    header = Base.url_encode64(Jason.encode!(%{"alg" => "none"}), padding: false)
+    payload = Base.url_encode64(Jason.encode!(claims), padding: false)
+    "#{header}.#{payload}.signature"
+  end
+
+  defp claims_residency(%{"https://api.openai.com/auth" => auth_claims}) do
+    auth_claims["chatgpt_compute_residency"]
+  end
+
+  defp claims_residency(claims), do: claims["chatgpt_compute_residency"]
+
+  defp residency_headers(headers) do
+    Enum.filter(headers, fn {name, _value} ->
+      name == "x-openai-internal-codex-residency"
+    end)
   end
 
   defp forwarded_metadata_headers do

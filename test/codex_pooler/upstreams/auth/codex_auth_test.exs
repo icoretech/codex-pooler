@@ -409,6 +409,113 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
     end
   end
 
+  describe "token_info/1" do
+    test "returns the sanitized invalid-token error for malformed and non-object payloads" do
+      expected =
+        {:error, %{code: :codex_id_token_invalid, message: "Codex id token is invalid"}}
+
+      assert CodexAuth.token_info("malformed") == expected
+      assert CodexAuth.token_info(jwt("scalar")) == expected
+      assert CodexAuth.token_info(jwt([%{"email" => "person@example.test"}])) == expected
+    end
+  end
+
+  describe "compute_residency/1" do
+    test "prefers and trims the namespaced claim" do
+      token =
+        jwt(%{
+          "https://api.openai.com/auth" => %{
+            "chatgpt_compute_residency" => "  region-a\t"
+          },
+          "chatgpt_compute_residency" => "region-b"
+        })
+
+      assert CodexAuth.compute_residency(token) == "region-a"
+      assert CodexAuth.compute_residency(" \t#{token}\n") == "region-a"
+    end
+
+    test "falls back to the root claim only when the namespaced claim is missing or null" do
+      root_claims = %{"chatgpt_compute_residency" => "root-region"}
+
+      assert CodexAuth.compute_residency(jwt(root_claims)) == "root-region"
+
+      assert CodexAuth.compute_residency(
+               jwt(
+                 Map.put(root_claims, "https://api.openai.com/auth", %{
+                   "chatgpt_compute_residency" => nil
+                 })
+               )
+             ) == "root-region"
+    end
+
+    test "a present non-map namespace suppresses a valid root claim" do
+      for namespace <- ["", "no_constraint", 123, [], true] do
+        token =
+          jwt(%{
+            "https://api.openai.com/auth" => namespace,
+            "chatgpt_compute_residency" => "root-region"
+          })
+
+        assert CodexAuth.compute_residency(token) == nil
+      end
+    end
+
+    test "a present invalid namespaced claim suppresses a valid root claim" do
+      for invalid <- [
+            "",
+            " \t ",
+            "no_constraint",
+            123,
+            "line\nbreak",
+            "carriage\rreturn",
+            "nul\0byte",
+            "control\bbyte",
+            "unicode-π"
+          ] do
+        token =
+          jwt(%{
+            "https://api.openai.com/auth" => %{
+              "chatgpt_compute_residency" => invalid
+            },
+            "chatgpt_compute_residency" => "root-region"
+          })
+
+        assert CodexAuth.compute_residency(token) == nil
+      end
+    end
+
+    test "accepts the full Mint header-value character set without a fixed length limit" do
+      long_value = String.duplicate("visible-value ", 500)
+      value = "!~\tinterior space " <> long_value <> "z"
+
+      assert CodexAuth.compute_residency(
+               jwt(%{
+                 "https://api.openai.com/auth" => %{
+                   "chatgpt_compute_residency" => " \t#{value}\t "
+                 }
+               })
+             ) == value
+    end
+
+    test "rejects malformed and non-object JWT payloads" do
+      assert CodexAuth.compute_residency("malformed") == nil
+      assert CodexAuth.compute_residency("e30.invalid.signature") == nil
+      assert CodexAuth.compute_residency(jwt("scalar")) == nil
+      assert CodexAuth.compute_residency(jwt([%{"chatgpt_compute_residency" => "region"}])) == nil
+    end
+
+    test "ignores unrelated data residency claims" do
+      assert CodexAuth.compute_residency(
+               jwt(%{
+                 "https://api.openai.com/auth" => %{
+                   "chatgpt_data_residency" => "data-region"
+                 },
+                 "chatgpt_data_residency" => "root-data-region"
+               })
+             ) == nil
+    end
+  end
+
   defp assert_browser_auth_headers!(request, issuer \\ CodexAuth.issuer()) do
     headers = Map.new(request.headers)
     origin = String.trim_trailing(issuer, "/")
@@ -438,5 +545,9 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuthTest do
     on_exit(fn -> FakeOpenAIAuthProvider.stop(provider) end)
     Application.put_env(:codex_pooler, CodexAuth, issuer: FakeOpenAIAuthProvider.url(provider))
     provider
+  end
+
+  defp jwt(payload) do
+    "e30." <> Base.url_encode64(Jason.encode!(payload), padding: false) <> ".signature"
   end
 end

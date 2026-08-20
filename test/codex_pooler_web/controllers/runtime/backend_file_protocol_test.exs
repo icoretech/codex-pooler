@@ -1,12 +1,16 @@
 defmodule CodexPoolerWeb.Runtime.BackendFileProtocolTest do
   use CodexPoolerWeb.ConnCase, async: false
 
+  import Ecto.Query
   import CodexPooler.PoolerFixtures
-  import CodexPoolerWeb.Runtime.BackendCodexTestSupport, only: [start_upstream: 1]
+  import CodexPoolerWeb.Runtime.BackendCodexTestSupport, only: [auth: 2, start_upstream: 1]
 
+  alias CodexPooler.Accounting.Request
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Files
+  alias CodexPooler.Files.FileRecord
   alias CodexPooler.Gateway.Transports.FileBridge
+  alias CodexPooler.Repo
 
   setup do
     old_config = Application.get_env(:codex_pooler, Files, [])
@@ -200,6 +204,244 @@ defmodule CodexPoolerWeb.Runtime.BackendFileProtocolTest do
     assert second_finalize_request.path == "/backend-api/files/file_retry_protocol/uploaded"
   end
 
+  test "backend file create and finalize derive residency from valid selected credentials", %{
+    conn: conn
+  } do
+    cases = [
+      {"namespaced", residency_token(:namespaced, "file-region-namespaced"),
+       "file-region-namespaced"},
+      {"root", residency_token(:root, "file-region-root"), "file-region-root"}
+    ]
+
+    Enum.each(cases, fn {label, token, expected_residency} ->
+      setup = active_api_key_fixture()
+      file_id = "file_residency_#{label}_#{System.unique_integer([:positive])}"
+
+      upstream =
+        start_upstream(
+          FakeUpstream.file_protocol_success(
+            file_id: file_id,
+            file_name: "#{label}.txt",
+            mime_type: "text/plain"
+          )
+        )
+
+      assignment =
+        active_upstream_assignment_fixture(setup.pool, %{
+          chatgpt_account_id: "acct_file_residency_#{System.unique_integer([:positive])}",
+          metadata: %{"base_url" => FakeUpstream.url(upstream)},
+          access_token: token
+        })
+
+      create_conn =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header(
+          "x-openai-internal-codex-residency",
+          "caller-controlled-residency"
+        )
+        |> post(~p"/backend-api/files", %{
+          "file_name" => "#{label}.txt",
+          "file_size" => 12,
+          "use_case" => "codex"
+        })
+
+      assert %{"file_id" => ^file_id} = json_response(create_conn, 200)
+
+      finalize_conn =
+        build_conn()
+        |> auth(setup)
+        |> post(~p"/backend-api/files/#{file_id}/uploaded", %{})
+
+      assert %{"status" => "success"} = json_response(finalize_conn, 200)
+      assert [create_request, finalize_request] = FakeUpstream.requests(upstream)
+
+      for captured <- [create_request, finalize_request] do
+        assert header_values(captured.headers, "x-openai-internal-codex-residency") == [
+                 expected_residency
+               ]
+
+        assert header_values(captured.headers, "chatgpt-account-id") == [
+                 assignment.identity.chatgpt_account_id
+               ]
+      end
+
+      refute "caller-controlled-residency" in header_values(
+               create_request.headers,
+               "x-openai-internal-codex-residency"
+             )
+
+      persisted =
+        inspect(%{
+          file: Repo.get_by!(FileRecord, file_id: file_id),
+          requests: Repo.all(from request in Request, where: request.pool_id == ^setup.pool.id)
+        })
+
+      refute persisted =~ token
+      refute persisted =~ expected_residency
+      refute persisted =~ "caller-controlled-residency"
+    end)
+  end
+
+  test "backend file create and finalize omit residency for invalid selected credentials", %{
+    conn: conn
+  } do
+    cases = [
+      {"no-constraint", residency_token(:root, "no_constraint")},
+      {"malformed", "malformed-selected-credential"},
+      {"invalid-field-value", residency_token(:root, "invalid\r\nvalue")}
+    ]
+
+    Enum.each(cases, fn {label, token} ->
+      setup = active_api_key_fixture()
+      file_id = "file_no_residency_#{System.unique_integer([:positive])}"
+
+      upstream =
+        start_upstream(
+          FakeUpstream.file_protocol_success(
+            file_id: file_id,
+            file_name: "#{label}.txt",
+            mime_type: "text/plain"
+          )
+        )
+
+      active_upstream_assignment_fixture(setup.pool, %{
+        chatgpt_account_id: "acct_file_no_residency_#{System.unique_integer([:positive])}",
+        metadata: %{"base_url" => FakeUpstream.url(upstream)},
+        access_token: token
+      })
+
+      create_conn =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> put_req_header("content-type", "application/json")
+        |> put_req_header(
+          "x-openai-internal-codex-residency",
+          "caller-controlled-residency"
+        )
+        |> post(~p"/backend-api/files", %{
+          "file_name" => "#{label}.txt",
+          "file_size" => 12,
+          "use_case" => "codex"
+        })
+
+      assert %{"file_id" => ^file_id} = json_response(create_conn, 200)
+
+      finalize_conn =
+        build_conn()
+        |> auth(setup)
+        |> post(~p"/backend-api/files/#{file_id}/uploaded", %{})
+
+      assert %{"status" => "success"} = json_response(finalize_conn, 200)
+
+      assert [create_request, finalize_request] = FakeUpstream.requests(upstream)
+
+      for captured <- [create_request, finalize_request] do
+        assert header_values(captured.headers, "x-openai-internal-codex-residency") == []
+      end
+
+      persisted =
+        inspect(%{
+          file: Repo.get_by!(FileRecord, file_id: file_id),
+          requests: Repo.all(from request in Request, where: request.pool_id == ^setup.pool.id)
+        })
+
+      refute persisted =~ token
+      refute persisted =~ "caller-controlled-residency"
+    end)
+  end
+
+  test "file control-plane requests do not reuse residency from a prior selected credential", %{
+    conn: conn
+  } do
+    valid_setup = active_api_key_fixture()
+    valid_file_id = "file_stale_valid_#{System.unique_integer([:positive])}"
+
+    valid_upstream =
+      start_upstream(
+        FakeUpstream.file_protocol_success(
+          file_id: valid_file_id,
+          file_name: "valid.txt",
+          mime_type: "text/plain"
+        )
+      )
+
+    active_upstream_assignment_fixture(valid_setup.pool, %{
+      metadata: %{"base_url" => FakeUpstream.url(valid_upstream)},
+      access_token: residency_token(:root, "file-region-before-invalid")
+    })
+
+    valid_create =
+      conn
+      |> auth(valid_setup)
+      |> put_req_header("content-type", "application/json")
+      |> post(~p"/backend-api/files", %{
+        "file_name" => "valid.txt",
+        "file_size" => 12,
+        "use_case" => "codex"
+      })
+
+    assert %{"file_id" => ^valid_file_id} = json_response(valid_create, 200)
+
+    valid_finalize =
+      build_conn()
+      |> auth(valid_setup)
+      |> post(~p"/backend-api/files/#{valid_file_id}/uploaded", %{})
+
+    assert %{"status" => "success"} = json_response(valid_finalize, 200)
+    assert [valid_create_request, valid_finalize_request] = FakeUpstream.requests(valid_upstream)
+
+    for captured <- [valid_create_request, valid_finalize_request] do
+      assert length(header_values(captured.headers, "x-openai-internal-codex-residency")) == 1
+    end
+
+    invalid_setup = active_api_key_fixture()
+    invalid_file_id = "file_stale_invalid_#{System.unique_integer([:positive])}"
+
+    invalid_upstream =
+      start_upstream(
+        FakeUpstream.file_protocol_success(
+          file_id: invalid_file_id,
+          file_name: "invalid.txt",
+          mime_type: "text/plain"
+        )
+      )
+
+    active_upstream_assignment_fixture(invalid_setup.pool, %{
+      metadata: %{"base_url" => FakeUpstream.url(invalid_upstream)},
+      access_token: "malformed-selected-credential"
+    })
+
+    invalid_create =
+      build_conn()
+      |> auth(invalid_setup)
+      |> put_req_header("content-type", "application/json")
+      |> post(~p"/backend-api/files", %{
+        "file_name" => "invalid.txt",
+        "file_size" => 12,
+        "use_case" => "codex"
+      })
+
+    assert %{"file_id" => ^invalid_file_id} = json_response(invalid_create, 200)
+
+    invalid_finalize =
+      build_conn()
+      |> auth(invalid_setup)
+      |> post(~p"/backend-api/files/#{invalid_file_id}/uploaded", %{})
+
+    assert %{"status" => "success"} = json_response(invalid_finalize, 200)
+
+    assert [invalid_create_request, invalid_finalize_request] =
+             FakeUpstream.requests(invalid_upstream)
+
+    for captured <- [invalid_create_request, invalid_finalize_request] do
+      assert header_values(captured.headers, "x-openai-internal-codex-residency") == []
+    end
+  end
+
   defp header!(headers, name) do
     headers
     |> Enum.find_value(fn
@@ -210,5 +452,21 @@ defmodule CodexPoolerWeb.Runtime.BackendFileProtocolTest do
       nil -> flunk("missing header #{name}")
       value -> value
     end
+  end
+
+  defp residency_token(:namespaced, value) do
+    jwt(%{"https://api.openai.com/auth" => %{"chatgpt_compute_residency" => value}})
+  end
+
+  defp residency_token(:root, value), do: jwt(%{"chatgpt_compute_residency" => value})
+
+  defp jwt(claims) do
+    header = Base.url_encode64(Jason.encode!(%{"alg" => "none"}), padding: false)
+    payload = Base.url_encode64(Jason.encode!(claims), padding: false)
+    Enum.join([header, payload, "signature"], ".")
+  end
+
+  defp header_values(headers, expected_name) do
+    for {name, value} <- headers, String.downcase(name) == expected_name, do: value
   end
 end

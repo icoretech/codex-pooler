@@ -120,6 +120,60 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
       refute inspect(request.request_metadata) =~ transcript
     end
 
+    test "POST /backend-api/transcribe derives residency only from valid selected credentials", %{
+      conn: conn
+    } do
+      cases = [
+        {"namespaced", residency_token(:namespaced, "media-region-namespaced"),
+         "media-region-namespaced"},
+        {"root", residency_token(:root, "media-region-root"), "media-region-root"},
+        {"no-constraint", residency_token(:root, "no_constraint"), nil},
+        {"malformed", "malformed-selected-credential", nil},
+        {"invalid-field-value", residency_token(:root, "invalid\r\nvalue"), nil}
+      ]
+
+      Enum.each(cases, fn {label, token, expected_residency} ->
+        upstream = start_upstream(FakeUpstream.json_response(%{"text" => "ok"}))
+
+        setup =
+          gateway_setup(upstream,
+            exposed_model_id: Gateway.backend_transcription_model(),
+            model_metadata: %{"input_modalities" => ["audio"], "modes" => ["transcription"]},
+            upstream_token: token
+          )
+
+        upload = upload_fixture("#{label}.wav", "audio/wav", "synthetic audio bytes")
+
+        response =
+          conn
+          |> recycle()
+          |> put_req_header(
+            "x-openai-internal-codex-residency",
+            "caller-controlled-residency"
+          )
+          |> auth(setup)
+          |> post("/backend-api/transcribe", %{"file" => upload})
+
+        assert %{"text" => "ok"} = json_response(response, 200)
+        assert [captured] = FakeUpstream.requests(upstream)
+
+        residency_headers = header_values(captured.headers, "x-openai-internal-codex-residency")
+
+        if expected_residency do
+          assert residency_headers == [expected_residency]
+        else
+          assert residency_headers == []
+        end
+
+        refute "caller-controlled-residency" in residency_headers
+
+        assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+        persisted = inspect(request.request_metadata)
+        refute persisted =~ token
+        refute persisted =~ (expected_residency || "caller-controlled-residency")
+      end)
+    end
+
     test "POST /backend-api/transcribe accepts omitted model by using fixed backend semantics", %{
       conn: conn
     } do
@@ -292,7 +346,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
   defp gateway_setup(upstream, opts) do
     key = active_api_key_fixture()
     pool = key.pool
-    upstream_token = generated_secret("upstream")
+    upstream_token = Keyword.get(opts, :upstream_token, generated_secret("upstream"))
     upstream = gateway_upstream(pool, upstream, upstream_token)
     prime_routing_quota!(upstream.identity)
     model_metadata = Keyword.get(opts, :model_metadata, %{})
@@ -470,6 +524,22 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexMediaControllerTest do
 
   defp generated_secret(label),
     do: "fixture-secret-#{label}-#{System.unique_integer([:positive])}"
+
+  defp residency_token(:namespaced, value) do
+    jwt(%{"https://api.openai.com/auth" => %{"chatgpt_compute_residency" => value}})
+  end
+
+  defp residency_token(:root, value), do: jwt(%{"chatgpt_compute_residency" => value})
+
+  defp jwt(claims) do
+    header = Base.url_encode64(Jason.encode!(%{"alg" => "none"}), padding: false)
+    payload = Base.url_encode64(Jason.encode!(claims), padding: false)
+    Enum.join([header, payload, "signature"], ".")
+  end
+
+  defp header_values(headers, expected_name) do
+    for {name, value} <- headers, String.downcase(name) == expected_name, do: value
+  end
 
   defp seed_preferring_assignment(assignment_ids, desired_assignment_id) do
     Enum.find(1..500, fn index ->

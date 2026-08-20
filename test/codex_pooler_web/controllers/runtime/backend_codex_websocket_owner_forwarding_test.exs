@@ -38,8 +38,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.Accounting.LedgerEntry
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Accounting.RequestLifecycle.Reservation
+  alias CodexPooler.Accounting.RequestLogs
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.AgentV2ContractFixture
+  alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -219,6 +221,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       )
 
     setup = gateway_setup(upstream)
+    residency = "ws-owner-region-#{System.unique_integer([:positive])}"
+    access_token = synthetic_access_token(residency)
+
+    assert {:ok, _secret} =
+             Upstreams.store_encrypted_secret(setup.identity, %{
+               secret_kind: "access_token",
+               plaintext: access_token
+             })
+
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
     {:ok, state} =
@@ -258,6 +269,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert [first_request, second_request] = FakeUpstream.requests(upstream)
       assert first_request.websocket_connection_id == second_request.websocket_connection_id
       assert first_request.json["input"] == [handoff]
+
+      for captured <- [first_request, second_request] do
+        assert header_values(captured.headers, "x-openai-internal-codex-residency") == [
+                 residency
+               ]
+
+        assert header_values(captured.headers, "chatgpt-account-id") == [
+                 setup.identity.chatgpt_account_id
+               ]
+      end
 
       assert [first_request_log, second_request_log] =
                Repo.all(
@@ -325,6 +346,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       refute_raw_turn_state_session_key!(setup.pool.id, "stable-ws-owner-forwarding")
       assert session.owner_instance_id == Atom.to_string(node())
       assert {:ok, _owner_pid} = WebsocketOwnerSession.lookup(session.id)
+      assert_owner_websocket_values_not_persisted!(setup, [residency, access_token], "")
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
@@ -2377,6 +2399,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
   @tag :feature_websocket_terminal_auth_refresh
   test "owner-forwarded websocket handshake 401 refreshes through the same owner without demotion" do
+    initial_residency = "ws-owner-initial-region-#{System.unique_integer([:positive])}"
+    refreshed_residency = "ws-owner-refreshed-region-#{System.unique_integer([:positive])}"
+    initial_access_token = synthetic_access_token(initial_residency)
+    refreshed_access_token = synthetic_access_token(refreshed_residency)
+
     upstream =
       start_upstream(
         {:sequence,
@@ -2387,7 +2414,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
              headers: [{"x-openai-authorization-error", "invalid_api_key"}]
            ),
            FakeUpstream.json_response(
-             %{"access_token" => "owner-upstream-token-handshake-refreshed"},
+             %{"access_token" => refreshed_access_token},
              200
            ),
            FakeUpstream.json_response(%{
@@ -2402,11 +2429,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     assert {:ok, _secret} =
              Upstreams.store_encrypted_secret(setup.identity, %{
+               secret_kind: "access_token",
+               plaintext: initial_access_token
+             })
+
+    assert {:ok, _secret} =
+             Upstreams.store_encrypted_secret(setup.identity, %{
                secret_kind: "refresh_token",
                plaintext: "refresh-token-owner-ws-handshake-do-not-leak"
              })
 
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    telemetry_handler_id = attach_stream_outcome_telemetry!()
+    on_exit(fn -> :telemetry.detach(telemetry_handler_id) end)
 
     {:ok, state} =
       owner_socket(auth, "ws-owner-auth-handshake-refresh", "owner-auth-handshake-refresh")
@@ -2414,15 +2449,22 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     try do
       assert {:ok, owner_pid} = WebsocketOwnerSession.lookup(state.codex_session.id)
 
-      assert {:ok, state} =
-               CodexResponsesSocket.handle_in(
-                 {websocket_payload(setup, "owner handshake auth refresh"), [opcode: :text]},
-                 state
-               )
+      {{:ok, state}, logs} =
+        with_info_log(fn ->
+          CodexResponsesSocket.handle_in(
+            {websocket_payload(setup, "owner handshake auth refresh"), [opcode: :text]},
+            state
+          )
+        end)
 
       assert {:push, {:text, frame}, state} = receive_owner_socket_push(state)
       assert %{"id" => "resp_owner_auth_handshake_retry_success"} = Jason.decode!(frame)
       assert {:ok, _state} = receive_socket_done(state)
+      assert_receive {:stream_outcome, telemetry_metadata}
+      refute inspect(telemetry_metadata) =~ initial_residency
+      refute inspect(telemetry_metadata) =~ refreshed_residency
+      refute inspect(telemetry_metadata) =~ initial_access_token
+      refute inspect(telemetry_metadata) =~ refreshed_access_token
       assert {:ok, ^owner_pid} = WebsocketOwnerSession.lookup(state.codex_session.id)
 
       assert [refresh_request, retried_request] = await_upstream_requests(upstream, 2)
@@ -2431,7 +2473,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert retried_request.path == "/backend-api/codex/responses"
 
       assert Map.new(retried_request.headers)["authorization"] ==
-               "Bearer owner-upstream-token-handshake-refreshed"
+               "Bearer #{refreshed_access_token}"
+
+      assert header_values(retried_request.headers, "x-openai-internal-codex-residency") == [
+               refreshed_residency
+             ]
+
+      refute initial_residency in header_values(
+               retried_request.headers,
+               "x-openai-internal-codex-residency"
+             )
+
+      assert header_values(retried_request.headers, "chatgpt-account-id") == [
+               setup.identity.chatgpt_account_id
+             ]
 
       assert FakeUpstream.websocket_connection_count(upstream) == 1
       assert [request] = request_logs(setup.pool.id)
@@ -2463,8 +2518,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       refute metadata_text =~ setup.authorization
       refute metadata_text =~ "refresh-token-owner-ws-handshake-do-not-leak"
-      refute metadata_text =~ "owner-upstream-token-handshake-refreshed"
+      refute metadata_text =~ initial_residency
+      refute metadata_text =~ refreshed_residency
+      refute metadata_text =~ initial_access_token
+      refute metadata_text =~ refreshed_access_token
       refute metadata_text =~ "Bearer "
+
+      assert_owner_websocket_values_not_persisted!(
+        setup,
+        [initial_residency, refreshed_residency, initial_access_token, refreshed_access_token],
+        logs
+      )
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
@@ -7711,6 +7775,23 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
+  defp attach_stream_outcome_telemetry! do
+    handler_id = "owner-residency-stream-outcome-#{System.unique_integer([:positive])}"
+    parent = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :stream, :outcome],
+        fn _event, _measurements, metadata, _config ->
+          send(parent, {:stream_outcome, metadata})
+        end,
+        nil
+      )
+
+    handler_id
+  end
+
   defp assert_websocket_lifecycle_line!(logs, message, required_keys, optional_keys) do
     lifecycle_lines =
       logs
@@ -7941,6 +8022,45 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
   defp assert_no_leak_in_persistence!(pool_id) do
     assert_no_leak!("persistence rows", persistence_excerpt(pool_id))
+  end
+
+  defp synthetic_access_token(residency) do
+    header = Base.url_encode64(Jason.encode!(%{"alg" => "none"}), padding: false)
+
+    payload =
+      Base.url_encode64(
+        Jason.encode!(%{
+          "https://api.openai.com/auth" => %{
+            "chatgpt_compute_residency" => residency
+          }
+        }),
+        padding: false
+      )
+
+    "#{header}.#{payload}.signature"
+  end
+
+  defp header_values(headers, target_name) do
+    for {name, value} <- headers, String.downcase(name) == target_name, do: value
+  end
+
+  defp assert_owner_websocket_values_not_persisted!(setup, forbidden_values, logs) do
+    requests = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    request_ids = Enum.map(requests, & &1.id)
+    attempts = Repo.all(from(a in Attempt, where: a.request_id in ^request_ids))
+    sessions = Repo.all(from(s in CodexSession, where: s.pool_id == ^setup.pool.id))
+    session_ids = Enum.map(sessions, & &1.id)
+    turns = Repo.all(from(t in CodexTurn, where: t.codex_session_id in ^session_ids))
+    audit_events = Repo.all(from(e in AuditEvent))
+    request_logs = RequestLogs.list(setup.pool.id, limit: 10)
+
+    durable_text =
+      inspect({requests, attempts, sessions, turns, audit_events, request_logs.items})
+
+    for value <- forbidden_values do
+      refute durable_text =~ value
+      refute logs =~ value
+    end
   end
 
   defp refute_raw_turn_state_session_key!(pool_id, turn_state) do

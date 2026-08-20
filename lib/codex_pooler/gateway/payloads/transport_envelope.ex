@@ -5,8 +5,11 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
 
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.TimeoutConfig
+  alias CodexPooler.Upstreams.Auth.CodexAuth
   alias CodexPooler.Upstreams.CodexClientIdentity
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
+
+  @codex_residency_header "x-openai-internal-codex-residency"
 
   @type timeout_settings :: %{
           required(:connect_timeout_ms) => non_neg_integer(),
@@ -39,13 +42,16 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
           {String.t(), String.t()}
         ]
   def headers(identity, token, headers, opts \\ []) do
+    token = String.trim(token)
+
     [
-      {"authorization", "Bearer #{String.trim(token)}"}
+      {"authorization", "Bearer #{token}"}
     ]
     |> Kernel.++(codex_identity_headers(opts))
     |> Kernel.++(codex_account_headers(identity))
     |> Kernel.++(headers)
     |> Kernel.++(safe_forwarded_headers(Keyword.get(opts, :forwarded_headers, [])))
+    |> Kernel.++(codex_residency_headers(token))
   end
 
   defp codex_identity_headers(opts) do
@@ -85,8 +91,17 @@ defmodule CodexPooler.Gateway.Payloads.TransportEnvelope do
       _other ->
         []
     end)
-    |> Enum.reject(fn {name, _value} -> name in ["authorization", "accept", "content-type"] end)
+    |> Enum.reject(fn {name, _value} ->
+      name in ["authorization", "accept", "content-type", @codex_residency_header]
+    end)
   end
 
   defp safe_forwarded_headers(_headers), do: []
+
+  defp codex_residency_headers(token) do
+    case CodexAuth.compute_residency(token) do
+      residency when is_binary(residency) -> [{@codex_residency_header, residency}]
+      nil -> []
+    end
+  end
 end

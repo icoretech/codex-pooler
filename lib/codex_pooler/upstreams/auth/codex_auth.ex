@@ -131,29 +131,39 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
 
   @spec token_info(term()) :: token_info_response()
   def token_info(id_token) when is_binary(id_token) do
-    with [_header, payload, _signature] <- String.split(id_token, "."),
-         {:ok, json} <- Base.url_decode64(payload, padding: false),
-         {:ok, claims} <- Jason.decode(json) do
-      auth_claims = claims["https://api.openai.com/auth"] || %{}
+    case decode_jwt_payload(id_token) do
+      {:ok, claims} ->
+        auth_claims = claims["https://api.openai.com/auth"] || %{}
 
-      {:ok,
-       %{
-         email: claims["email"],
-         chatgpt_account_id: auth_claims["chatgpt_account_id"],
-         chatgpt_user_id: auth_claims["chatgpt_user_id"],
-         workspace_id: claim_from_auth_or_top_level(claims, workspace_id_claim_keys()),
-         workspace_label: claim_from_auth_or_top_level(claims, workspace_label_claim_keys()),
-         seat_type: claim_from_auth_or_top_level(claims, seat_type_claim_keys()),
-         plan_family: normalize_plan(auth_claims["chatgpt_plan_type"]),
-         plan_label: auth_claims["chatgpt_plan_type"]
-       }}
-    else
-      _invalid -> {:error, %{code: :codex_id_token_invalid, message: "Codex id token is invalid"}}
+        {:ok,
+         %{
+           email: claims["email"],
+           chatgpt_account_id: auth_claims["chatgpt_account_id"],
+           chatgpt_user_id: auth_claims["chatgpt_user_id"],
+           workspace_id: claim_from_auth_or_top_level(claims, workspace_id_claim_keys()),
+           workspace_label: claim_from_auth_or_top_level(claims, workspace_label_claim_keys()),
+           seat_type: claim_from_auth_or_top_level(claims, seat_type_claim_keys()),
+           plan_family: normalize_plan(auth_claims["chatgpt_plan_type"]),
+           plan_label: auth_claims["chatgpt_plan_type"]
+         }}
+
+      _invalid ->
+        {:error, %{code: :codex_id_token_invalid, message: "Codex id token is invalid"}}
     end
   end
 
   def token_info(_id_token),
     do: {:error, %{code: :codex_id_token_invalid, message: "Codex id token is invalid"}}
+
+  @spec compute_residency(term()) :: String.t() | nil
+  def compute_residency(access_token) when is_binary(access_token) do
+    case access_token |> String.trim() |> decode_jwt_payload() do
+      {:ok, %{} = claims} -> compute_residency_from_claims(claims)
+      _invalid -> nil
+    end
+  end
+
+  def compute_residency(_access_token), do: nil
 
   @spec client_id() :: String.t()
   def client_id, do: @client_id
@@ -186,6 +196,56 @@ defmodule CodexPooler.Upstreams.Auth.CodexAuth do
   end
 
   defp blank_string?(value), do: !is_binary(value) or String.trim(value) == ""
+
+  defp decode_jwt_payload(token) do
+    with [_header, payload, _signature] <- String.split(token, "."),
+         {:ok, json} <- Base.url_decode64(payload, padding: false),
+         {:ok, %{} = claims} <- Jason.decode(json) do
+      {:ok, claims}
+    else
+      _invalid -> :error
+    end
+  end
+
+  defp compute_residency_from_claims(claims) do
+    root_value = Map.get(claims, "chatgpt_compute_residency")
+
+    case Map.fetch(claims, "https://api.openai.com/auth") do
+      :error ->
+        valid_residency(root_value)
+
+      {:ok, nil} ->
+        valid_residency(root_value)
+
+      {:ok, %{} = auth_claims} ->
+        case Map.fetch(auth_claims, "chatgpt_compute_residency") do
+          :error -> valid_residency(root_value)
+          {:ok, nil} -> valid_residency(root_value)
+          {:ok, value} -> valid_residency(value)
+        end
+
+      {:ok, _invalid_namespace} ->
+        nil
+    end
+  end
+
+  defp valid_residency(value) when is_binary(value) do
+    if mint_header_value?(value) do
+      case String.trim(value) do
+        "" -> nil
+        "no_constraint" -> nil
+        trimmed -> trimmed
+      end
+    end
+  end
+
+  defp valid_residency(_value), do: nil
+
+  defp mint_header_value?(value) do
+    value
+    |> :binary.bin_to_list()
+    |> Enum.all?(fn byte -> byte == ?\t or byte in 0x20..0x7E end)
+  end
 
   defp auth_error(code, message, status),
     do: {:error, %{code: code, message: message, status: status}}

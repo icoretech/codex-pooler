@@ -860,6 +860,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   test "regular runtime headers use only the effective serving-mode snapshot for Lite markers" do
     identity = upstream_identity()
     payload = %{"model" => "example-model"}
+    residency = "synthetic-runtime-residency"
+    token = synthetic_access_jwt(residency)
 
     for endpoint <- [
           "/backend-api/codex/responses",
@@ -870,7 +872,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       lite_headers =
         UpstreamDispatch.regular_runtime_headers(
           identity,
-          "redacted",
+          token,
           lite_options,
           [{"X-OpenAI-Internal-Codex-Responses-Lite", "false"}]
         )
@@ -878,17 +880,26 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       assert [{"x-openai-internal-codex-responses-lite", "true"}] =
                header_entries(lite_headers, "x-openai-internal-codex-responses-lite")
 
+      assert [{"x-openai-internal-codex-residency", ^residency}] =
+               header_entries(lite_headers, "x-openai-internal-codex-residency")
+
+      assert [{"chatgpt-account-id", "acct_owner_submit_timeout"}] =
+               header_entries(lite_headers, "chatgpt-account-id")
+
       full_options = RequestOptions.build(serving_mode_opts("full"), endpoint, payload)
 
       full_headers =
         UpstreamDispatch.regular_runtime_headers(
           identity,
-          "redacted",
+          token,
           full_options,
           [{"x-openai-internal-codex-responses-lite", "true"}]
         )
 
       assert header_entries(full_headers, "x-openai-internal-codex-responses-lite") == []
+
+      assert [{"x-openai-internal-codex-residency", ^residency}] =
+               header_entries(full_headers, "x-openai-internal-codex-residency")
     end
   end
 
@@ -1398,6 +1409,20 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
   defp upstream_identity do
     %UpstreamIdentity{chatgpt_account_id: "acct_owner_submit_timeout"}
+  end
+
+  defp synthetic_access_jwt(residency) do
+    header = Base.url_encode64(Jason.encode!(%{"alg" => "none"}), padding: false)
+
+    payload =
+      Base.url_encode64(
+        Jason.encode!(%{
+          "https://api.openai.com/auth" => %{"chatgpt_compute_residency" => residency}
+        }),
+        padding: false
+      )
+
+    header <> "." <> payload <> ".synthetic-signature"
   end
 
   defp assert_policy_not_classified(body) do

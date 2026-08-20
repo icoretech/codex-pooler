@@ -63,6 +63,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   alias CodexPooler.Pools
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.CodexClientIdentity
   alias CodexPooler.Upstreams.Lifecycle.IdentityLifecycle
@@ -4772,6 +4773,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert %{"id" => "resp_backend"} = json_response(conn, 200)
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
+
     refute Map.has_key?(captured.json, "max_output_tokens")
     refute Map.has_key?(captured.json, "prompt_cache_retention")
     refute Map.has_key?(captured.json, "safety_identifier")
@@ -4781,6 +4783,116 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert request.endpoint == "/backend-api/codex/responses"
     assert request.transport == "http_json"
     assert request.status == "succeeded"
+  end
+
+  test "backend Responses JSON and SSE derive current credential residency without persisting it",
+       %{conn: conn} do
+    previous_observation =
+      Application.get_env(:codex_pooler, :task10_egress_observation_enabled, false)
+
+    handler_id = {__MODULE__, :residency, System.unique_integer([:positive])}
+    parent = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :upstream, :egress_observation],
+        fn _event, _measurements, metadata, _config ->
+          send(parent, {handler_id, metadata})
+        end,
+        nil
+      )
+
+    Application.put_env(:codex_pooler, :task10_egress_observation_enabled, true)
+
+    on_exit(fn ->
+      Application.put_env(
+        :codex_pooler,
+        :task10_egress_observation_enabled,
+        previous_observation
+      )
+
+      :telemetry.detach(handler_id)
+    end)
+
+    cases = [
+      {:json, "synthetic-json-residency", false},
+      {:sse, "synthetic-sse-residency", true},
+      {:json, "no_constraint", false}
+    ]
+
+    for {response_kind, residency, stream?} <- cases do
+      upstream = start_upstream(residency_upstream(response_kind))
+      setup = gateway_setup(upstream)
+      token = synthetic_access_jwt(residency)
+
+      assert {:ok, _secret} =
+               Upstreams.store_encrypted_secret(setup.identity, %{
+                 secret_kind: "access_token",
+                 plaintext: token
+               })
+
+      {response, log} =
+        with_log(fn ->
+          conn
+          |> recycle()
+          |> put_req_header(
+            "x-openai-internal-codex-residency",
+            "caller-residency-must-not-win"
+          )
+          |> auth(setup)
+          |> post("/backend-api/codex/responses", %{
+            "model" => setup.model.exposed_model_id,
+            "input" => native_text_input("synthetic residency boundary input"),
+            "stream" => stream?
+          })
+        end)
+
+      assert response.status == 200
+      assert [captured] = FakeUpstream.requests(upstream)
+
+      assert [{"chatgpt-account-id", account_id}] =
+               header_entries(captured.headers, "chatgpt-account-id")
+
+      assert account_id == setup.identity.chatgpt_account_id
+
+      residency_headers =
+        header_entries(captured.headers, "x-openai-internal-codex-residency")
+
+      if residency == "no_constraint" do
+        assert residency_headers == []
+      else
+        assert [{"x-openai-internal-codex-residency", ^residency}] = residency_headers
+      end
+
+      assert_receive {^handler_id, telemetry_metadata}
+      assert telemetry_metadata.transport == :http
+
+      assert "x-openai-internal-codex-residency" in telemetry_metadata.header_names ==
+               (residency != "no_constraint")
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.status == "succeeded"
+      assert request.transport == if(stream?, do: "http_sse", else: "http_json")
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.status == "succeeded"
+
+      persistence_text =
+        inspect({
+          request.request_metadata,
+          attempt.response_metadata,
+          Repo.all(from(e in AuditEvent, where: e.pool_id == ^setup.pool.id)),
+          RequestLogs.list(setup.pool.id, limit: 10).items,
+          telemetry_metadata
+        })
+
+      refute persistence_text =~ token
+      refute persistence_text =~ residency
+      refute persistence_text =~ "caller-residency-must-not-win"
+      refute log =~ token
+      refute log =~ residency
+      refute log =~ "caller-residency-must-not-win"
+    end
   end
 
   test "POST /backend-api/codex/responses uses session-id for local continuity without forwarding it",
@@ -13641,6 +13753,48 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     after
       :telemetry.detach(handler_id)
     end
+  end
+
+  defp header_entries(headers, name) do
+    Enum.filter(headers, fn {header_name, _value} ->
+      String.downcase(header_name) == name
+    end)
+  end
+
+  defp residency_upstream(:json) do
+    FakeUpstream.json_response(%{
+      "id" => "resp_residency_json",
+      "object" => "response",
+      "usage" => %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}
+    })
+  end
+
+  defp residency_upstream(:sse) do
+    FakeUpstream.sse_stream([
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{
+           "id" => "resp_residency_sse",
+           "status" => "completed",
+           "usage" => %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}
+         }
+       }}
+    ])
+  end
+
+  defp synthetic_access_jwt(residency) do
+    header = Base.url_encode64(Jason.encode!(%{"alg" => "none"}), padding: false)
+
+    payload =
+      Base.url_encode64(
+        Jason.encode!(%{
+          "https://api.openai.com/auth" => %{"chatgpt_compute_residency" => residency}
+        }),
+        padding: false
+      )
+
+    header <> "." <> payload <> ".synthetic-signature"
   end
 
   defp drain_repo_sources(handler_id, sources) do
