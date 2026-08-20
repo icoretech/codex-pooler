@@ -42,8 +42,8 @@ For a deployed instance, add `~/.config/kilo/kilo.jsonc`:
             "output": ["text"]
           },
           "limit": {
-            "context": 258400,
-            "input": 258400,
+            "context": 828400,
+            "input": 828400,
             "output": 64000
           }
         },
@@ -58,8 +58,8 @@ For a deployed instance, add `~/.config/kilo/kilo.jsonc`:
             "output": ["text"]
           },
           "limit": {
-            "context": 258400,
-            "input": 258400,
+            "context": 828400,
+            "input": 828400,
             "output": 64000
           }
         },
@@ -74,8 +74,8 @@ For a deployed instance, add `~/.config/kilo/kilo.jsonc`:
             "output": ["text"]
           },
           "limit": {
-            "context": 258400,
-            "input": 258400,
+            "context": 828400,
+            "input": 828400,
             "output": 64000
           }
         }
@@ -83,7 +83,7 @@ For a deployed instance, add `~/.config/kilo/kilo.jsonc`:
     }
   },
   "compaction": {
-    "reserved": 12920,
+    "reserved": 41420,
     "threshold_percent": 95
   }
 }
@@ -93,7 +93,7 @@ For local setup, change `baseURL` to `http://localhost:4000/v1`.
 
 `{env:CODEX_POOLER_API_KEY}` keeps the Pool API key outside the config file. Define only model ids your assigned Pool can serve. If you add Kilo permissions, use the object form such as `"permission": {"bash": "allow"}`; do not set `"permission": "ask"`, which is not a valid Kilo config shape.
 
-Kilo uses OpenCode-style `limit.{context,input,output}` fields but includes reasoning tokens in overflow accounting and supports `compaction.threshold_percent` for preflight compaction. `limit.input: 258400`, `compaction.reserved: 12920`, and `threshold_percent: 95` make both safety checks meet at 245480 tokens, 95% of the effective window. `limit.input` is the local pre-compaction boundary, not a simultaneous input-plus-output envelope. When available, `/v1/models.context_length` is the authoritative effective value for `limit.context`.
+Kilo uses OpenCode-style `limit.{context,input,output}` fields but includes reasoning tokens in overflow accounting and supports `compaction.threshold_percent` for preflight compaction. OpenAI's GPT-5.6 catalog defaults to 272000 tokens and permits a native 872000-token opt-in; Codex Pooler exposes the 95% effective `/v1` window, `floor(872000 × 0.95) = 828400`. Use that endpoint value, not the raw ceiling. `limit.input: 828400`, `compaction.reserved: 41420`, and `threshold_percent: 95` make both safety checks meet at 786980 tokens. `limit.input` is the local pre-compaction boundary, not a simultaneous input-plus-output envelope. When available, `/v1/models.context_length` is the authoritative effective value for `limit.context`.
 
 For GPT-5 OpenAI-compatible models, Kilo suppresses the outgoing max-token request field to avoid incompatible `max_tokens`, so `limit.output` is still important for local context math and UI even when it is not forwarded.
 

@@ -31,7 +31,7 @@ Store the Pool API key outside the config and read it through environment expans
   "small_model": "openai/gpt-5.6-luna",
   "compaction": {
     "auto": true,
-    "reserved": 7080
+    "reserved": 41420
   },
   "provider": {
     "openai": {
@@ -63,8 +63,8 @@ Store the Pool API key outside the config and read it through environment expans
             "output": ["text"]
           },
           "limit": {
-            "context": 258400,
-            "input": 252560,
+            "context": 828400,
+            "input": 828400,
             "output": 64000
           }
         },
@@ -89,8 +89,8 @@ Store the Pool API key outside the config and read it through environment expans
             "output": ["text"]
           },
           "limit": {
-            "context": 258400,
-            "input": 252560,
+            "context": 828400,
+            "input": 828400,
             "output": 64000
           }
         },
@@ -115,8 +115,8 @@ Store the Pool API key outside the config and read it through environment expans
             "output": ["text"]
           },
           "limit": {
-            "context": 258400,
-            "input": 252560,
+            "context": 828400,
+            "input": 828400,
             "output": 64000
           }
         }
@@ -133,7 +133,7 @@ OpenCode uses `small_model` for background helpers such as automatic session tit
 Request-time OpenAI options belong under each model's `options` block. Keep only connection settings such as `baseURL` and `apiKey` in provider-level `options`. Use `serviceTier: "priority"` for priority processing. `fast` is an accepted equivalent request spelling, but `priority` is the canonical spelling for new configuration. Enable it only when your Pool and upstream offer it and you intentionally accept the potentially higher cost; leave it commented to use the default tier. This `/v1` route translates the request shape, while any projected provider `service_tier` response value keeps the provider's literal vocabulary.
 Do not add `store`: Codex Pooler sets `store: false` on its upstream streaming request.
 
-OpenCode subtracts its compaction reserve from `limit.input` before declaring the session full. These examples set `limit.input` to `252560` and reserve `7080`, so OpenCode starts compaction at `245480` tokens: 95% of the effective 258400-token Pooler window. `limit.input` is the local pre-compaction boundary, not a simultaneous input-plus-output envelope. OpenCode caps request output at 32k by default; set `OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=64000` only when you want OpenCode to request the full 64k cap. When available, `/v1/models.context_length` is the authoritative effective value for `limit.context`.
+OpenCode subtracts its compaction reserve from `limit.input` before declaring the session full. OpenAI's GPT-5.6 catalog defaults to 272000 tokens and permits a native 872000-token opt-in; Codex Pooler advertises the 95% effective `/v1` window, `floor(872000 × 0.95) = 828400`. These examples use that endpoint value, not the raw ceiling. With `limit.input: 828400` and `reserved: 41420`, OpenCode starts compaction at 786980 tokens, 95% of the effective window. `limit.input` is the local pre-compaction boundary, not a simultaneous input-plus-output envelope. OpenCode caps request output at 32k by default; set `OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=64000` only when you want OpenCode to request the full 64k cap. When available, `/v1/models.context_length` is the authoritative effective value for `limit.context`.
 
 ## Oh My OpenAgent (OMO) routing
 

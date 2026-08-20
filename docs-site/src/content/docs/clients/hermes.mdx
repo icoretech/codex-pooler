@@ -40,7 +40,7 @@ model:
   provider: openai-api
   base_url: https://codex-pooler.example.com/v1
   api_mode: codex_responses
-  context_length: 258400
+  context_length: 828400
   supports_vision: true
 
 agent:
@@ -86,9 +86,7 @@ the environment of the long-running Hermes process or gateway service first.
 It may not have loaded `OPENAI_BASE_URL`, so the OpenAI SDK image client may be
 using OpenAI's default endpoint instead of Codex Pooler.
 
-Current Codex Pooler releases also expose an SDK-readable `context_length` value on `/v1/models`, derived from the effective Codex `context_window` metadata; it is authoritative when available, so Hermes' automatic probes can resolve the Pooler window. For the GPT-5.6 examples here, use the Codex raw 272000 window and the 258400 effective advertised value. Keep `context_length: 258400` in Hermes config as an explicit override when Hermes cannot read `/v1/models` first.
-
-`compression.threshold: 0.95` starts Hermes compression at 245480 tokens, 95% of the advertised 258400-token window. Hermes context compression uses its own auxiliary request timeout. Keep `auxiliary.compression.timeout: 900` so large retained contexts can finish instead of cycling through the older 120-second compression budget. This is independent from the optional MCP server `timeout`.
+Current Codex Pooler releases expose an SDK-readable `context_length` on `/v1/models`, derived from effective Codex `context_window` metadata. OpenAI's GPT-5.6 catalog defaults to 272000 tokens and permits a native 872000-token opt-in; Pooler advertises `floor(872000 × 0.95) = 828400` to `/v1` clients. Keep `context_length: 828400` as the explicit fallback when Hermes cannot read `/v1/models` first; do not configure the raw ceiling. `compression.threshold: 0.95` starts Hermes compression at 786980 tokens. Hermes context compression uses its own auxiliary request timeout. Keep `auxiliary.compression.timeout: 900` so large retained contexts can finish instead of cycling through the older 120-second compression budget. This is independent from the optional MCP server `timeout` and from an application output cap.
 
 Remote HTTP MCP servers require Hermes' `mcp` extra. If `hermes mcp test codex_pooler` reports `mcp.client.streamable_http is not available`, install MCP support into the Hermes environment, following the [Hermes MCP Integration docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp), and rerun the test.
 
@@ -118,7 +116,7 @@ model:
   default: gpt-5.6-terra
   provider: openai-codex
   base_url: https://codex-pooler.example.com/v1
-  context_length: 258400
+  context_length: 828400
   supports_vision: true
 
 agent:

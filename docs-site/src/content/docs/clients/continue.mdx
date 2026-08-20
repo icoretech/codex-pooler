@@ -32,7 +32,7 @@ models:
     model: gpt-5.6-terra
     apiBase: https://codex-pooler.example.com/v1
     apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
-    contextLength: 258400
+    contextLength: 828400
     defaultCompletionOptions:
       maxTokens: 128000
     roles:
@@ -57,7 +57,7 @@ mcpServers:
 
 For local setup, change `apiBase` to `http://localhost:4000/v1`. If you keep the optional operator MCP add-on locally, change the MCP `url` to `http://localhost:4000/mcp`.
 
-Continue uses `contextLength` for request pruning and `defaultCompletionOptions.maxTokens` for the completion budget. It prunes request messages before sending instead of doing Codex-style local compaction, so keep the context length at Codex Pooler's exposed model window. When available, `/v1/models.context_length` is the authoritative effective value for `contextLength`; the 128000-token completion cap leaves 130400 tokens for input.
+Continue uses `contextLength` for request pruning and `defaultCompletionOptions.maxTokens` for the completion budget. OpenAI's GPT-5.6 catalog defaults to 272000 tokens and permits a native 872000-token opt-in; Codex Pooler advertises its 95% effective `/v1` window, `floor(872000 × 0.95) = 828400`. Use that endpoint value, not the raw ceiling. Continue then leaves 699400 tokens for input after its 128000-token completion cap and fixed 1000-token counting buffer. When available, `/v1/models.context_length` is the authoritative effective value for `contextLength`.
 
 Check the headless CLI path after saving the config:
 

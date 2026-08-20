@@ -33,20 +33,20 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
     assert model["effective_context_window_percent"] == 95
   end
 
-  test "projects GPT-5.6 raw context into the effective Codex metadata" do
+  test "projects GPT-5.6 long-context metadata into the effective Codex catalog" do
     result =
       CodexCatalog.build(
         [model("gpt-5.6-context", gpt56_context_metadata())],
         unrestricted_policy(),
-        %{},
+        %{"gpt-5.6-context" => ["long_context"]},
         %{}
       )
 
     [model] = result.body["models"]
 
-    assert model["context_window"] == 258_400
-    assert model["max_context_window"] == 272_000
-    assert model["auto_compact_token_limit"] == 232_560
+    assert model["context_window"] == 828_400
+    assert model["max_context_window"] == 872_000
+    assert model["auto_compact_token_limit"] == 745_560
     assert model["effective_context_window_percent"] == 95
   end
 
@@ -840,7 +840,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
   defp gpt56_context_metadata do
     %{
       "context_window" => 272_000,
-      "max_context_window" => 272_000,
+      "max_context_window" => 872_000,
       "effective_context_window_percent" => 95,
       "auto_compact_token_limit" => nil
     }

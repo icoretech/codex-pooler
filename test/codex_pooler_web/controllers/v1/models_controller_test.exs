@@ -9,6 +9,8 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
       auth: 2,
       gateway_setup: 1,
       gateway_setup: 2,
+      pricing_config: 1,
+      pricing_snapshot!: 2,
       start_upstream: 1
     ]
 
@@ -224,6 +226,32 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
     refute Map.has_key?(model, "max_context_window")
     refute Map.has_key?(model, "auto_compact_token_limit")
     refute Map.has_key?(model, "comp_hash")
+  end
+
+  test "GET /v1/models exposes the long-context effective window", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+
+    setup =
+      gateway_setup(upstream,
+        model_metadata: %{
+          "upstream_model" => %{
+            "context_window" => 272_000,
+            "max_context_window" => 872_000,
+            "effective_context_window_percent" => 95,
+            "auto_compact_token_limit" => nil
+          }
+        }
+      )
+
+    pricing_snapshot!(setup.model, %{config: pricing_config(%{"price_bucket" => "long_context"})})
+
+    conn = conn |> auth(setup) |> get("/v1/models")
+
+    assert %{"object" => "list", "data" => [model]} = json_response(conn, 200)
+    assert model["context_length"] == 828_400
+    refute Map.has_key?(model, "max_context_window")
+    refute Map.has_key?(model, "auto_compact_token_limit")
+    assert FakeUpstream.count(upstream) == 0
   end
 
   test "GET /v1/models agrees with the backend Codex effective context projection", %{

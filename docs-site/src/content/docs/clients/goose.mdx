@@ -24,14 +24,14 @@ GOOSE_PROVIDER: openai
 GOOSE_MODEL: gpt-5.6-terra
 OPENAI_HOST: https://codex-pooler.example.com
 OPENAI_BASE_PATH: v1/chat/completions
-GOOSE_CONTEXT_LIMIT: 258400
+GOOSE_CONTEXT_LIMIT: 828400
 GOOSE_MAX_TOKENS: 128000
 GOOSE_AUTO_COMPACT_THRESHOLD: 0.95
 ```
 
 For local setup, change `OPENAI_HOST` to `http://localhost:4000`.
 
-Goose reads `GOOSE_CONTEXT_LIMIT` and `GOOSE_MAX_TOKENS` into its model config. Its auto-compaction threshold is a ratio of the context limit, not an output reserve, so `0.95` starts compaction at 245480 tokens, 95% of Codex Pooler's 258400-token `gpt-5.6-terra` window. When available, `/v1/models.context_length` is the authoritative effective value for `GOOSE_CONTEXT_LIMIT`.
+Goose reads `GOOSE_CONTEXT_LIMIT` and `GOOSE_MAX_TOKENS` into its model config. OpenAI's GPT-5.6 catalog defaults to 272000 tokens and permits a native 872000-token opt-in; Codex Pooler advertises the 95% effective `/v1` window, `floor(872000 × 0.95) = 828400`. Use that endpoint value, not the raw ceiling. Goose's auto-compaction threshold is a ratio of the context limit, not an output reserve, so `0.95` starts compaction at 786980 tokens. When available, `/v1/models.context_length` is the authoritative effective value for `GOOSE_CONTEXT_LIMIT`.
 
 Check the headless CLI path with tool access enabled:
 

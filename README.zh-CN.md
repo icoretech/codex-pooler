@@ -156,7 +156,7 @@ websocket 路由，不是 OpenAI Realtime SDK 兼容性。
   "small_model": "openai/gpt-5.6-luna",
   "compaction": {
     "auto": true,
-    "reserved": 7080
+    "reserved": 41420
   },
   "provider": {
     "openai": {
@@ -188,8 +188,8 @@ websocket 路由，不是 OpenAI Realtime SDK 兼容性。
             "output": ["text"]
           },
           "limit": {
-            "context": 258400,
-            "input": 252560,
+            "context": 828400,
+            "input": 828400,
             "output": 64000
           }
         },
@@ -214,8 +214,8 @@ websocket 路由，不是 OpenAI Realtime SDK 兼容性。
             "output": ["text"]
           },
           "limit": {
-            "context": 258400,
-            "input": 252560,
+            "context": 828400,
+            "input": 828400,
             "output": 64000
           }
         },
@@ -240,8 +240,8 @@ websocket 路由，不是 OpenAI Realtime SDK 兼容性。
             "output": ["text"]
           },
           "limit": {
-            "context": 258400,
-            "input": 252560,
+            "context": 828400,
+            "input": 828400,
             "output": 64000
           }
         }
@@ -278,12 +278,14 @@ priority processing。仅当 Pool 和上游都支持该能力，并且你愿意�
 才启用它；保持注释则使用默认层级。
 无需添加 `store`：Codex Pooler 会在上游流式请求中设置 `store: false`。
 
-OpenCode 会先从 `limit.input` 减去自己的压缩预留，再判断对话是否已满。
-这些示例将 `limit.input` 设为 `252560`、压缩预留设为 `7080`，因此 OpenCode 会在
-`245480` tokens 时开始压缩，也就是有效 258400-token Pooler 窗口的 95%。
-`limit.input` 是本地预压缩边界，不是输入和输出同时可用的总预算。OpenCode 的请求层
-默认把输出限制在 32k；只有当你希望 OpenCode 请求完整 64k 上限时，才设置
-`OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=64000`。
+OpenCode 会先从 `limit.input` 减去自己的压缩预留，再判断对话是否已满。OpenAI 的
+GPT-5.6 目录默认是 272000 tokens，并允许原生 opt-in 到 872000 tokens；Codex
+Pooler 在 `/v1` 上公布 95% 的有效窗口，即
+`floor(872000 × 0.95) = 828400`。这些示例使用 endpoint 公布值而不是原始上限。
+`limit.input: 828400` 和 `reserved: 41420` 会让 OpenCode 在 786980 tokens、即有效
+窗口的 95% 时开始压缩。`limit.input` 是本地预压缩边界，不是输入和输出同时可用的
+总预算。OpenCode 的请求层默认把输出限制在 32k；只有当你希望 OpenCode 请求完整
+64k 上限时，才设置 `OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=64000`。
 
 #### Oh My OpenAgent (OMO)
 
@@ -362,7 +364,11 @@ requires_openai_auth = true
 
 当 Codex Pooler 提供当前模型元数据时，Codex CLI 和 Codex Desktop 会从这些元数据
 派生有效上下文窗口和自动压缩边界。保持上下文大小自动配置，让客户端跟随目录变化，
-避免本地覆盖过期。
+避免本地覆盖过期。对于 GPT-5.6，上游目录默认是 272000 tokens，原生 opt-in 上限是
+872000；Pooler 已公布 95% 的有效 long-context 结果（`context_window: 828400`、
+`max_context_window: 872000`、`auto_compact_token_limit: 745560`）。直接原生 Codex
+配置可以使用 `model_context_window = 872000` opt-in 到原始上限，但这不是 `/v1` 客户端
+应使用的值，并且必须配合合适的本地 compaction policy。
 
 可选的仅运营者 MCP 元数据附加能力。普通 Codex 运行时使用时请省略：
 
@@ -474,7 +480,7 @@ Codex Pooler，并使用当前 OpenClaw 运行时 id。
           },
         ],
       },
-      compaction: { reserveTokens: 20000 },
+      compaction: { reserveTokens: 128000 },
     },
   },
   models: {
@@ -492,8 +498,8 @@ Codex Pooler，并使用当前 OpenClaw 运行时 id。
             name: "GPT-5.6 Luna via Codex Pooler",
             reasoning: true,
             input: ["text", "image"],
-            contextWindow: 272000,
-            contextTokens: 258400,
+            contextWindow: 828400,
+            contextTokens: 828400,
             maxTokens: 128000,
           },
           {
@@ -501,8 +507,8 @@ Codex Pooler，并使用当前 OpenClaw 运行时 id。
             name: "GPT-5.6 Terra via Codex Pooler",
             reasoning: true,
             input: ["text", "image"],
-            contextWindow: 272000,
-            contextTokens: 258400,
+            contextWindow: 828400,
+            contextTokens: 828400,
             maxTokens: 128000,
           },
           {
@@ -510,8 +516,8 @@ Codex Pooler，并使用当前 OpenClaw 运行时 id。
             name: "GPT-5.6 Sol via Codex Pooler",
             reasoning: true,
             input: ["text", "image"],
-            contextWindow: 272000,
-            contextTokens: 258400,
+            contextWindow: 828400,
+            contextTokens: 828400,
             maxTokens: 128000,
           },
         ],
@@ -537,12 +543,13 @@ Codex Pooler，并使用当前 OpenClaw 运行时 id。
 `https://codex-pooler.example.com/v1`；如果保留可选的运营者 MCP 附加项，把它的
 `url` 改为 `https://codex-pooler.example.com/mcp`。
 
-OpenClaw 把 `contextWindow` 作为 provider/native 窗口，把 `contextTokens`
-作为有效运行时预算。由 Codex 提供的 GPT-5.6 示例使用 Codex 原始 272k 窗口、258400
-有效预算和 128k 输出预算。OpenClaw 强制最小 20000-token 压缩预留，因此这是当前
-支持的最晚触发点：本地压缩会在 238400 tokens、约有效窗口的 92.26% 时开始。
-用 `gpt-5.6-luna` 跑后台路由，`gpt-5.6-terra` 作为主模型，只在重推理会话中切到
-`gpt-5.6-sol`。
+OpenClaw 把 `contextWindow` 作为配置的 provider metadata，把 `contextTokens` 作为
+有效运行时预算。OpenAI 的 GPT-5.6 目录默认是 272000 tokens，并允许原生 opt-in 到
+872000 tokens；这个 `/v1` provider 对两个字段都使用 Codex Pooler 公布的有效值
+`floor(872000 × 0.95) = 828400`，不要在这里配置原始 872000 上限。
+128000-token compaction reserve 会明确保留输出预算，并在 700400 tokens 时开始本地
+压缩。用 `gpt-5.6-luna` 跑后台路由，`gpt-5.6-terra` 作为主模型，只在重推理会话中
+切到 `gpt-5.6-sol`。
 
 如果你更希望把 Codex Pooler 与 OpenClaw 内置 OpenAI provider 行为分开，可以
 改用自定义 provider id，例如 `codex-pooler/gpt-5.6-terra`。这会遵循 OpenClaw 的
@@ -576,7 +583,7 @@ model:
   provider: openai-api
   base_url: http://localhost:4000/v1
   api_mode: codex_responses
-  context_length: 258400
+  context_length: 828400
   supports_vision: true
 
 agent:
@@ -604,16 +611,16 @@ mcp_servers:
     connect_timeout: 15
 ```
 
-当前 Codex Pooler release 也会在 `/v1/models` 上暴露 SDK 可读取的
-`context_length`，该值来自有效 Codex `context_window` 元数据，所以 Hermes 的
-自动探测可以解析 Pooler 窗口。这里的 GPT-5.6 示例使用 Codex 原始 272000 窗口和
-258400 有效公布值。当 Hermes 无法先读取 `/v1/models` 时，把
-`context_length: 258400` 保留在配置中作为显式覆盖。
-
-`compression.threshold: 0.95` 会在 245480 tokens、也就是公布的 258400-token
-窗口的 95% 时开始 Hermes 压缩。Hermes 上下文压缩使用自己的辅助请求超时。
-保持 `auxiliary.compression.timeout: 900`，这样较大的保留上下文可以完成，而不会
-反复触发旧的 120 秒压缩预算。这与可选 MCP server `timeout` 无关。
+当前 Codex Pooler release 会在 `/v1/models` 上暴露 SDK 可读取的 `context_length`，
+该值来自有效 Codex `context_window` metadata，所以 Hermes 的自动探测可以解析
+Pooler 窗口。OpenAI 的 GPT-5.6 目录默认是 272000 tokens，并允许原生 opt-in 到
+872000 tokens；Pooler 对 `/v1` 客户端公布
+`floor(872000 × 0.95) = 828400`。当 Hermes 无法先读取 `/v1/models` 时，把
+`context_length: 828400` 保留为显式 fallback；不要配置原始上限。
+`compression.threshold: 0.95` 会在 786980 tokens 时开始 Hermes 压缩。Hermes 上下文
+压缩使用自己的辅助请求超时。保持 `auxiliary.compression.timeout: 900`，这样较大的
+保留上下文可以完成，而不会反复触发旧的 120 秒压缩预算。这与可选 MCP server
+`timeout` 和应用输出上限无关。
 
 远程 HTTP MCP servers 需要 Hermes 的 `mcp` extra。如果
 `hermes mcp test codex_pooler` 报告 `mcp.client.streamable_http is not available`，
@@ -644,7 +651,7 @@ model:
   default: gpt-5.6-terra
   provider: openai-codex
   base_url: http://localhost:4000/v1
-  context_length: 258400
+  context_length: 828400
   supports_vision: true
 
 agent:
@@ -728,7 +735,7 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
             "xhigh": "xhigh"
           },
           "input": ["text", "image"],
-          "contextWindow": 258400,
+          "contextWindow": 828400,
           "maxTokens": 128000
         },
         {
@@ -739,7 +746,7 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
             "xhigh": "xhigh"
           },
           "input": ["text", "image"],
-          "contextWindow": 258400,
+          "contextWindow": 828400,
           "maxTokens": 128000
         },
         {
@@ -750,7 +757,7 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
             "xhigh": "xhigh"
           },
           "input": ["text", "image"],
-          "contextWindow": 258400,
+          "contextWindow": 828400,
           "maxTokens": 128000
         }
       ]
@@ -767,12 +774,13 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 暴露 `xhigh`。没有它，Pi 会把 `xhigh` 视为自定义模型不支持的选项，并把
 `--thinking xhigh` 或 `defaultThinkingLevel: "xhigh"` 降到 `high`。
 
-Pi 接受自定义模型的 `contextWindow` 和 `maxTokens`；它没有 `contextTokens`
-字段。为 GPT-5.6 自定义条目使用 258.4k 上下文窗口和 128k 输出预算，让
-Pi 的本地上下文计算与 Codex Pooler 公布的模型 metadata 对齐。Pi 会在用量超过
-`contextWindow - reserveTokens` 时压缩，因此 `reserveTokens: 12920` 会在
-245480 tokens、也就是 258400-token 窗口的 95% 时开始压缩。Pi 也会把这份预留用于
-生成摘要，所以这个配置有意优先保留原始上下文。
+Pi 接受自定义模型的 `contextWindow` 和 `maxTokens`；它没有 `contextTokens` 字段。
+OpenAI 的 GPT-5.6 目录默认是 272000 tokens，并允许原生 opt-in 到 872000 tokens，
+而 Codex Pooler 公布的有效 `/v1` 窗口是
+`floor(872000 × 0.95) = 828400`。使用 endpoint 值而不是原始上限。Pi 会在用量超过
+`contextWindow - reserveTokens` 时压缩；128000-token reserve 会保留显式输出预算，
+并在 700400 tokens 时开始压缩。可用时，`/v1/models.context_length` 是这个单字段
+`contextWindow` 的权威有效值。
 
 可选地在 `~/.pi/agent/settings.json` 中把 Codex Pooler 设为默认 Pi 模型：
 
@@ -787,7 +795,7 @@ Pi 的本地上下文计算与 Codex Pooler 公布的模型 metadata 对齐。Pi
     "codex-pooler/gpt-5.6-sol"
   ],
   "compaction": {
-    "reserveTokens": 12920
+    "reserveTokens": 128000
   }
 }
 ```
@@ -844,7 +852,7 @@ providers:
           - image
         compat:
           streamIdleTimeoutMs: 300000
-        contextWindow: 258400
+        contextWindow: 828400
         maxTokens: 128000
       - id: gpt-5.6-luna
         name: GPT-5.6 Luna via Codex Pooler
@@ -854,7 +862,7 @@ providers:
           - image
         compat:
           streamIdleTimeoutMs: 300000
-        contextWindow: 258400
+        contextWindow: 828400
         maxTokens: 128000
       - id: gpt-5.6-sol
         name: GPT-5.6 Sol via Codex Pooler
@@ -864,7 +872,7 @@ providers:
           - image
         compat:
           streamIdleTimeoutMs: 300000
-        contextWindow: 258400
+        contextWindow: 828400
         maxTokens: 128000
 ```
 
@@ -899,11 +907,12 @@ compact accounting 和缓冲，而下游规范化 Responses SSE 保持不变。�
 映射或每个模型的默认级别时，才需要显式 `thinking` 块。
 
 OMP 在 `models.yml` 中接受 `contextWindow` 和 `maxTokens`；它不接受
-`contextTokens`。这些示例让 GPT-5.6 分层模型都使用 258.4k 上下文窗口和 128k
-输出预算：`gpt-5.6-luna` 负责轻量角色，`gpt-5.6-terra` 负责日常 agent 工作，
-`gpt-5.6-sol` 留给 slow、plan 和 designer 升级路径。
-`compaction.thresholdPercent: 95` 会在 245480 tokens 时开始自动压缩。
-`reserveTokens: 128000` 继续与配置的输出预算对齐；百分比字段独立定义触发点。
+`contextTokens`。OpenAI 的 GPT-5.6 目录默认是 272000 tokens，并允许原生 opt-in
+到 872000 tokens，但 Codex Pooler 会提升 long-context GPT-5.6 metadata 并公布 95%
+的有效窗口：`floor(872000 × 0.95) = 828400`。这些 `/v1` 示例因此使用
+`contextWindow: 828400`，而不是原始 872000 上限，并保持独立的 128000-token 输出
+预算。`compaction.thresholdPercent: 95` 会在 786980 tokens 时开始自动压缩；
+`reserveTokens: 128000` 配置 prompt-fit/recovery reserve，不会替代这个百分比触发器。
 
 对于大量使用工具的长 OMP 会话，保持 mid-turn compaction 开启并把 handoff
 材料持久化到磁盘。这些设置可以降低上下文溢出风险，但无法修复 OMP 客户端跳过
@@ -1000,8 +1009,8 @@ npm install -g @kilocode/cli@latest
             "output": ["text"]
           },
           "limit": {
-            "context": 258400,
-            "input": 258400,
+            "context": 828400,
+            "input": 828400,
             "output": 64000
           }
         },
@@ -1016,8 +1025,8 @@ npm install -g @kilocode/cli@latest
             "output": ["text"]
           },
           "limit": {
-            "context": 258400,
-            "input": 258400,
+            "context": 828400,
+            "input": 828400,
             "output": 64000
           }
         },
@@ -1032,8 +1041,8 @@ npm install -g @kilocode/cli@latest
             "output": ["text"]
           },
           "limit": {
-            "context": 258400,
-            "input": 258400,
+            "context": 828400,
+            "input": 828400,
             "output": 64000
           }
         }
@@ -1041,20 +1050,21 @@ npm install -g @kilocode/cli@latest
     }
   },
   "compaction": {
-    "reserved": 12920,
+    "reserved": 41420,
     "threshold_percent": 95
   }
 }
 ```
 
 Kilo 使用 OpenCode 风格的 `limit.{context,input,output}` 字段，但它会把推理
-tokens 纳入溢出计算，并使用 `compaction.threshold_percent` 进行预检压缩。
-`limit.input: 258400`、`compaction.reserved: 12920` 和
-`threshold_percent: 95` 会让两项安全检查都在 245480 tokens、也就是有效窗口的
-95% 时触发。`limit.input` 是本地预压缩边界，不是输入和输出同时可用的总预算。
-对 GPT-5 OpenAI 兼容模型，Kilo 会抑制发出的 max-token 请求字段，以避免不兼容的
-`max_tokens`，因此即使 `limit.output` 不会被转发，它仍对本地上下文计算和 UI
-很重要。
+tokens 纳入溢出计算，并使用 `compaction.threshold_percent` 进行预检压缩。OpenAI 的
+GPT-5.6 目录默认是 272000 tokens，并允许原生 opt-in 到 872000 tokens；Codex Pooler
+暴露 95% 的有效 `/v1` 窗口，`floor(872000 × 0.95) = 828400`。使用 endpoint 值而
+不是原始上限。`limit.input: 828400`、`compaction.reserved: 41420` 和
+`threshold_percent: 95` 会让两项安全检查都在 786980 tokens 时触发。`limit.input`
+是本地预压缩边界，不是输入和输出同时可用的总预算。对 GPT-5 OpenAI 兼容模型，Kilo
+会抑制发出的 max-token 请求字段，以避免不兼容的 `max_tokens`，因此即使
+`limit.output` 不会被转发，它仍对本地上下文计算和 UI 很重要。
 
 只定义你分配到的 Pool 能服务的模型 id。对于已部署实例，把 `baseURL` 改为
 `https://codex-pooler.example.com/v1`。如果添加 Kilo 权限，请使用 Kilo 的对象
@@ -1176,8 +1186,8 @@ Aider 版本不识别 `gpt-5.6-terra`，请用 Aider 独立的模型 metadata JS
 // .aider.model.metadata.json
 {
   "openai/gpt-5.6-luna": {
-    "max_tokens": 258400,
-    "max_input_tokens": 130400,
+    "max_tokens": 828400,
+    "max_input_tokens": 700400,
     "max_output_tokens": 128000,
     "litellm_provider": "openai",
     "mode": "chat",
@@ -1186,8 +1196,8 @@ Aider 版本不识别 `gpt-5.6-terra`，请用 Aider 独立的模型 metadata JS
     "supports_reasoning": true
   },
   "openai/gpt-5.6-terra": {
-    "max_tokens": 258400,
-    "max_input_tokens": 130400,
+    "max_tokens": 828400,
+    "max_input_tokens": 700400,
     "max_output_tokens": 128000,
     "litellm_provider": "openai",
     "mode": "chat",
@@ -1196,8 +1206,8 @@ Aider 版本不识别 `gpt-5.6-terra`，请用 Aider 独立的模型 metadata JS
     "supports_reasoning": true
   },
   "openai/gpt-5.6-sol": {
-    "max_tokens": 258400,
-    "max_input_tokens": 130400,
+    "max_tokens": 828400,
+    "max_input_tokens": 700400,
     "max_output_tokens": 128000,
     "litellm_provider": "openai",
     "mode": "chat",
@@ -1207,6 +1217,12 @@ Aider 版本不识别 `gpt-5.6-terra`，请用 Aider 独立的模型 metadata JS
   }
 }
 ```
+
+当 Pool 的 `/v1/models` 条目提供 `context_length` 时，使用这个 endpoint 的有效值作为
+权威 `max_tokens` 值。对于 long-context GPT-5.6，OpenAI 目录默认是 272000 tokens
+并允许原生 opt-in 到 872000 tokens，而 Pooler 公布
+`floor(872000 × 0.95) = 828400`；显式的 700400 输入和 128000 输出限制相加就是
+这个公布窗口。
 
 不要把 Pool API 密钥放进 YAML 文件。请在 shell 中 export，或放进 Aider 可加载的
 已被 git 忽略的 `.env` 文件：
@@ -1260,7 +1276,7 @@ models:
     model: gpt-5.6-terra
     apiBase: http://localhost:4000/v1
     apiKey: "${{ secrets.CODEX_POOLER_API_KEY }}"
-    contextLength: 258400
+    contextLength: 828400
     defaultCompletionOptions:
       maxTokens: 128000
     roles:
@@ -1288,8 +1304,11 @@ mcpServers:
 `https://codex-pooler.example.com/mcp`。
 
 Continue 使用 `contextLength` 做请求裁剪，并使用
-`defaultCompletionOptions.maxTokens` 作为 completion 预算。它会裁剪，而不是在本地
-总结/压缩，因此应把上下文长度保持为 Codex Pooler 的 258.4k `gpt-5.6-terra` 窗口，而不是使用过期或通用 provider 元数据。
+`defaultCompletionOptions.maxTokens` 作为 completion 预算。OpenAI 的 GPT-5.6 目录
+默认是 272000 tokens，并允许原生 opt-in 到 872000 tokens；Codex Pooler 公布 95% 的
+有效 `/v1` 窗口，`floor(872000 × 0.95) = 828400`。使用 endpoint 值而不是原始上限。
+在 128000-token completion cap 和固定 1000-token counting buffer 后，Continue 留下
+699400 tokens 作为输入。
 
 保存配置后检查无头 CLI 路径：
 
@@ -1320,11 +1339,12 @@ cline auth \
   --modelid gpt-5.6-terra
 ```
 
-Cline 的模型元数据名是 `contextWindow`、`maxInputTokens` 和 `maxTokens`。如果你
-在 Cline 设置中手动添加 Codex Pooler 模型条目，请使用
-`contextWindow: 258400`、`maxInputTokens: 258400` 和 `maxTokens: 128000`。
-Cline 会把固定的 90% 压缩比例应用于有效最大输入，因此会在 232560 tokens 时开始
-压缩。`maxTokens` 仍是独立的响应上限，不会移动本地压缩边界。
+Cline 的模型元数据名是 `contextWindow`、`maxInputTokens` 和 `maxTokens`。OpenAI 的
+GPT-5.6 目录默认是 272000 tokens，并允许原生 opt-in 到 872000 tokens；Codex Pooler
+公布 95% 的有效 `/v1` 窗口，`floor(872000 × 0.95) = 828400`。手动添加 Pooler 模型
+条目时，请使用 `contextWindow: 828400`、`maxInputTokens: 700400` 和
+`maxTokens: 128000`，而不是原始上限。Cline 会把固定的 90% 压缩比例应用于显式输入
+限制，因此会在 630360 tokens 时开始压缩。`maxTokens` 仍是独立的响应上限。
 
 保存认证后检查无头 CLI 路径：
 
@@ -1384,14 +1404,16 @@ GOOSE_PROVIDER: openai
 GOOSE_MODEL: gpt-5.6-terra
 OPENAI_HOST: http://localhost:4000
 OPENAI_BASE_PATH: v1/chat/completions
-GOOSE_CONTEXT_LIMIT: 258400
+GOOSE_CONTEXT_LIMIT: 828400
 GOOSE_MAX_TOKENS: 128000
 GOOSE_AUTO_COMPACT_THRESHOLD: 0.95
 ```
 
-Goose 会把 `GOOSE_CONTEXT_LIMIT` 和 `GOOSE_MAX_TOKENS` 读入模型配置。它的自动
-压缩阈值是上下文限制的比例，不是输出预留，因此 `0.95` 会在 245480 tokens、
-也就是 Codex Pooler 258400-token `gpt-5.6-terra` 窗口的 95% 时开始压缩。
+Goose 会把 `GOOSE_CONTEXT_LIMIT` 和 `GOOSE_MAX_TOKENS` 读入模型配置。OpenAI 的
+GPT-5.6 目录默认是 272000 tokens，并允许原生 opt-in 到 872000 tokens；Codex Pooler
+公布 95% 的有效 `/v1` 窗口，`floor(872000 × 0.95) = 828400`。使用 endpoint 值而不
+是原始上限。它的自动压缩阈值是上下文限制的比例，不是输出预留，因此 `0.95` 会在
+786980 tokens 时开始压缩。
 
 开启工具访问后检查无头 CLI 路径：
 
