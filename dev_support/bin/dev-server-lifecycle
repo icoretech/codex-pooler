@@ -47,6 +47,12 @@ process_cwd() {
   lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1
 }
 
+canonical_checkout_path() {
+  local checkout_path="$1"
+  [ -d "$checkout_path" ] || return 1
+  (cd "$checkout_path" && pwd -P)
+}
+
 receipt_value() {
   local path="$1" key="$2"
   awk -F '\t' -v expected="$key" '$1 == expected { count += 1; value = substr($0, length($1) + 2) } END { if (count == 1) print value; else exit 1 }' "$path"
@@ -128,6 +134,42 @@ adopt_legacy_receipt() {
 # validate_owned_process path.
 stale_owned_pid=""
 
+receipt_checkout_matches() {
+  local recorded_cwd="$1" canonical_recorded_cwd
+  [ "$recorded_cwd" = "$server_cwd" ] && return 0
+
+  canonical_recorded_cwd="$(canonical_checkout_path "$recorded_cwd")" || return 1
+  [ "$canonical_recorded_cwd" = "$server_cwd" ]
+}
+
+describe_ownership_receipt() {
+  local recorded_state recorded_pid recorded_cwd recorded_port alive="no" listener="no"
+  recorded_state="$(receipt_value "$receipt_path" state)" || recorded_state="unreadable"
+  recorded_pid="$(receipt_value "$receipt_path" pid)" || recorded_pid="unreadable"
+  recorded_cwd="$(receipt_value "$receipt_path" cwd)" || recorded_cwd="unreadable"
+  recorded_port="$(receipt_value "$receipt_path" port)" || recorded_port="unreadable"
+
+  if [[ "$recorded_pid" =~ ^[1-9][0-9]*$ ]] && process_alive "$recorded_pid"; then
+    alive="yes"
+    if pid_listens "$recorded_pid"; then listener="yes"; fi
+  fi
+
+  printf 'dev-server: ownership receipt=%s\n' "$receipt_path" >&2
+  printf 'dev-server: recorded state=%s pid=%s alive=%s listener=%s port=%s\n' \
+    "$recorded_state" "$recorded_pid" "$alive" "$listener" "$recorded_port" >&2
+  printf 'dev-server: recorded checkout=%s\n' "$recorded_cwd" >&2
+  printf 'dev-server: current checkout=%s requested port=%s\n' "$server_cwd" "$port" >&2
+  printf 'dev-server: no process was stopped and no lifecycle state was changed\n' >&2
+}
+
+fail_foreign_ownership_receipt() {
+  describe_ownership_receipt
+  printf 'dev-server: next: run make dev-status from the recorded checkout to inspect its state\n' >&2
+  printf 'dev-server: next: run make dev-stop there only when it confirms the server is owned\n' >&2
+  printf 'dev-server: next: to run independently, choose both an unused PORT and DEV_SERVER_STATE_DIR\n' >&2
+  fail "refusing ownership receipt for another checkout"
+}
+
 owned_process_gone() {
   local recorded_pid recorded_start
   recorded_pid="$(receipt_value "$receipt_path" pid)" || return 1
@@ -148,7 +190,7 @@ stale_owned_receipt() {
   recorded_cwd="$(receipt_value "$receipt_path" cwd)" || return 1
   recorded_port="$(receipt_value "$receipt_path" port)" || return 1
   [ "$recorded_state" = "running" ] || return 1
-  [ "$recorded_cwd" = "$server_cwd" ] || return 1
+  receipt_checkout_matches "$recorded_cwd" || return 1
   [ "$recorded_port" = "$port" ] || return 1
   owned_process_gone
 }
@@ -171,7 +213,7 @@ validate_owned_process() {
   [ "$recorded_state" = "running" ] || fail "refusing ownership receipt that is not running"
   [[ "$recorded_pid" =~ ^[1-9][0-9]*$ ]] || fail "refusing invalid owned pid"
   [ "$recorded_port" = "$port" ] || fail "refusing ownership receipt for another port"
-  [ "$recorded_cwd" = "$server_cwd" ] || fail "refusing ownership receipt for another checkout"
+  receipt_checkout_matches "$recorded_cwd" || fail_foreign_ownership_receipt
   process_alive "$recorded_pid" || fail "refusing stale owned pid"
 
   [ "$(process_start "$recorded_pid")" = "$recorded_start" ] ||
@@ -185,6 +227,22 @@ validate_owned_process() {
   pid_listens "$recorded_pid" || fail "refusing owned pid that does not own the configured listener"
 
   owned_pid="$recorded_pid"
+}
+
+describe_start_failure() {
+  local pid="$1" alive="no" listener="no" health="failed"
+
+  if process_alive "$pid"; then
+    alive="yes"
+    if pid_listens "$pid"; then listener="yes"; fi
+    if curl -fsS "$health_url" >/dev/null 2>&1; then health="ok"; fi
+  fi
+
+  printf 'dev-server: startup diagnostics: pid=%s alive=%s listener=%s health=%s\n' \
+    "$pid" "$alive" "$listener" "$health" >&2
+  printf 'dev-server: health url=%s\n' "$health_url" >&2
+  printf 'dev-server: server log=%s\n' "$log_path" >&2
+  printf 'dev-server: next: inspect the log, correct the reported boot failure, then rerun make dev\n' >&2
 }
 
 start_server() {
@@ -212,7 +270,7 @@ start_server() {
 
   [ -z "$(listener_pids)" ] || fail "refusing occupied port ${port}; no process was stopped"
 
-  local run_id receipt_path pid attempt current_start current_command current_cwd
+  local run_id receipt_path pid current_start current_command current_cwd
   run_id="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
   [[ "$run_id" =~ ^[0-9a-f]{24}$ ]] || fail "could not generate run id"
   receipt_path="${state_dir}/${run_id}.receipt"
@@ -229,7 +287,7 @@ start_server() {
   pid="$(cat "${receipt_path}.pid")"
   rm -f -- "${receipt_path}.pid"
 
-  for attempt in $(seq 1 "$start_attempts"); do
+  for _attempt in $(seq 1 "$start_attempts"); do
     if process_alive "$pid" && pid_listens "$pid" && curl -fsS "$health_url" >/dev/null 2>&1; then
       current_start="$(process_start "$pid")"
       current_command="$(process_command "$pid")"
@@ -244,6 +302,7 @@ start_server() {
     sleep "$poll_seconds"
   done
 
+  describe_start_failure "$pid"
   if process_alive "$pid"; then kill -TERM "$pid" >/dev/null 2>&1 || true; fi
   for _attempt in $(seq 1 "$term_attempts"); do
     process_alive "$pid" || break
@@ -251,7 +310,7 @@ start_server() {
   done
   if process_alive "$pid"; then kill -KILL "$pid" >/dev/null 2>&1 || true; fi
   rm -f -- "$receipt_path" "$active_path"
-  fail "server start did not validate ownership, listener, and health; owned process was cleaned"
+  fail "server did not become ready; owned process was cleaned"
 }
 
 stop_server() {

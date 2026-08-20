@@ -215,14 +215,84 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
     refute File.exists?(Path.join(fixture.state_dir, "active"))
   end
 
-  test "start still refuses a stale receipt recorded by another checkout" do
+  test "start recovers a stale receipt written through a symlinked path to this checkout" do
+    fixture = mix_server_fixture!()
+    login_home = temp_dir!("symlinked-receipt-login-home")
+    checkout_alias = Path.join(temp_dir!("checkout-alias"), "codex-pooler")
+    File.write!(Path.join(login_home, ".bash_profile"), "PATH=/usr/bin:/bin\nexport PATH\n")
+    File.ln_s!(File.cwd!(), checkout_alias)
+
+    %{receipt_path: receipt_path} =
+      write_stale_receipt!(fixture, pid: 999_999, cwd: checkout_alias)
+
+    {output, code} =
+      lifecycle("start", fixture, [
+        {"HOME", login_home},
+        {"PATH", "#{fixture.bin_dir}:#{System.fetch_env!("PATH")}"}
+      ])
+
+    assert code == 0, "lifecycle start failed: #{output}"
+    assert output =~ "cleared stale ownership receipt"
+    assert output =~ "owned dev server started"
+    refute File.exists?(receipt_path)
+
+    assert {stop_output, 0} =
+             lifecycle("stop", fixture, [
+               {"PATH", "#{fixture.bin_dir}:#{System.fetch_env!("PATH")}"}
+             ])
+
+    assert stop_output =~ "owned dev server stopped"
+  end
+
+  test "start explains a stale receipt recorded by another checkout without changing it" do
     fixture = server_fixture!(start?: false, cwd: File.cwd!())
-    write_stale_receipt!(fixture, pid: 999_999, cwd: temp_dir!("foreign-checkout"))
+    foreign_checkout = temp_dir!("foreign-checkout")
+
+    %{receipt_path: receipt_path} =
+      write_stale_receipt!(fixture, pid: 999_999, cwd: foreign_checkout)
 
     assert {output, code} = lifecycle("start", fixture)
     assert code != 0
     assert output =~ "another checkout"
+    assert output =~ "ownership receipt=#{receipt_path}"
+    assert output =~ "recorded state=running pid=999999 alive=no listener=no port=#{fixture.port}"
+    assert output =~ "recorded checkout=#{foreign_checkout}"
+    assert output =~ "current checkout=#{File.cwd!()} requested port=#{fixture.port}"
+    assert output =~ "no process was stopped and no lifecycle state was changed"
+    assert output =~ "run make dev-status from the recorded checkout"
     assert File.exists?(Path.join(fixture.state_dir, "active"))
+    assert File.exists?(receipt_path)
+  end
+
+  test "stop explains a stale receipt recorded by another checkout without changing it" do
+    fixture = server_fixture!(start?: false, cwd: File.cwd!())
+    foreign_checkout = temp_dir!("foreign-checkout")
+
+    %{receipt_path: receipt_path} =
+      write_stale_receipt!(fixture, pid: 999_999, cwd: foreign_checkout)
+
+    assert {output, code} = lifecycle("stop", fixture)
+    assert code != 0
+    assert output =~ "another checkout"
+    assert output =~ "ownership receipt=#{receipt_path}"
+    assert output =~ "recorded checkout=#{foreign_checkout}"
+    assert output =~ "no process was stopped and no lifecycle state was changed"
+    assert File.exists?(Path.join(fixture.state_dir, "active"))
+    assert File.exists?(receipt_path)
+  end
+
+  test "start reports listener and health diagnostics when a new server never becomes ready" do
+    fixture = server_fixture!(start?: false, healthy?: false, cwd: File.cwd!())
+
+    assert {output, code} = lifecycle("start", fixture, [{"DEV_SERVER_START_ATTEMPTS", "2"}])
+    assert code != 0
+    assert output =~ "startup diagnostics: pid="
+    assert output =~ "alive=yes listener=yes health=failed"
+    assert output =~ "health url=http://127.0.0.1:#{fixture.port}/healthz"
+    assert output =~ "server log=#{fixture.log_path}"
+    assert output =~ "inspect the log, correct the reported boot failure, then rerun make dev"
+    assert output =~ "server did not become ready; owned process was cleaned"
+    refute File.exists?(Path.join(fixture.state_dir, "active"))
   end
 
   test "start records ownership and stop terminates only the revalidated owned listener" do
