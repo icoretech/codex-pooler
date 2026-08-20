@@ -567,13 +567,19 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
   end
 
   test "a persisted nil grant prevents an immediate second detail request" do
+    expires_at =
+      DateTime.utc_now()
+      |> DateTime.add(2, :day)
+      |> DateTime.truncate(:microsecond)
+      |> DateTime.to_iso8601()
+
     {:ok, fake} =
       FakeUpstream.start_link(
         {:path_json,
          %{
            "/backend-api/wham/usage" => {200, usage_payload(2)},
            "/backend-api/wham/rate-limit-reset-credits" =>
-             {200, ambiguous_reset_credits_payload()}
+             {200, ambiguous_reset_credits_payload(expires_at)}
          }}
       )
 
@@ -1982,18 +1988,18 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
     }
   end
 
-  defp ambiguous_reset_credits_payload do
+  defp ambiguous_reset_credits_payload(expires_at) do
     %{
       "available_count" => 2,
       "credits" => [
         %{
           "status" => "available",
-          "expires_at" => "2026-08-20T00:40:11.968726Z",
+          "expires_at" => expires_at,
           "granted_at" => "2026-07-20T00:00:00Z"
         },
         %{
           "status" => "available",
-          "expires_at" => "2026-08-20T00:40:11.968726Z"
+          "expires_at" => expires_at
         }
       ]
     }
