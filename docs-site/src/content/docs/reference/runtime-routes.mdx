@@ -760,7 +760,9 @@ behavior, and native backend raw Responses GET or POST does not synthesize a
 terminal. Once hidden bridge traffic has committed the handoff, the request is
 not replayed over HTTP.
 
-During a mixed-release transition, native websocket attachment keeps its two-argument compatibility path against a previous-release owner. The bridge's option-carrying three-argument attachment is unavailable there and fails closed to HTTP before commit. Previous-release owners also retain the legacy five-minute post-detach window and omit connection lifecycle metadata; new or recovered owners use the current 30-minute default.
+Owner submission uses a versioned, data-only request. The owner node builds callbacks from current local state, so payloads and authorization data don't cross that boundary as callbacks. If a remote owner doesn't understand the current protocol, Codex Pooler detects the mismatch before upstream submission and applies its existing behavior automatically: native work returns its normal safe owner error, while an eligible bridge falls back to HTTP before visible output. Operators need no migration, manual procedure, or deployment-specific action.
+
+Crash and status diagnostics stay safe at the same boundary. Formatted status exposes only bounded lifecycle and boolean state, and transient request inspection is opaque, so payload and authorization data aren't disclosed through status or crash reporting.
 
 ## Websocket Guardrails
 
