@@ -4,7 +4,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   require Logger
 
   alias CodexPooler.Gateway.OperationalSettings
-  alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
   alias CodexPooler.Gateway.Payloads.RequestOptions.{ResetProbe, TimeoutConfig}
   alias CodexPooler.Gateway.Payloads.TransportEnvelope
   alias CodexPooler.Gateway.Persistence.CodexSession
@@ -354,7 +354,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           [
             {"content-type", "application/json"},
             {"accept",
-             if(RouteClass.streaming?(payload),
+             if(streaming_request?(payload, opts),
                do: "text/event-stream",
                else: "application/json"
              )}
@@ -375,7 +375,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       |> Keyword.merge(TransportEnvelope.req_timeout_options(timeouts))
 
     request_options =
-      if RouteClass.streaming?(payload) do
+      if streaming_request?(payload, opts) do
         Keyword.put(request_options, :into, :self)
       else
         Keyword.put(
@@ -1316,4 +1316,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
   defp configured_timeouts(%RequestOptions{} = request_options),
     do: request_options.timeout_config
+
+  defp streaming_request?(payload, %RequestOptions{} = request_options) do
+    RouteClass.streaming?(payload) or CompactionTrigger.streaming_result?(request_options)
+  end
 end

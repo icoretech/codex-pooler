@@ -101,13 +101,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     if Metadata.response_body_limit_exceeded?(response) do
       finalize_response_body_limit_exceeded(response, context)
     else
-      %{reserved: reserved, assignment: assignment, payload: payload} = context
+      %{
+        reserved: reserved,
+        assignment: assignment,
+        payload: payload,
+        request_options: request_options
+      } =
+        context
 
       body = Metadata.response_body(response)
       SideEffects.maybe_enqueue_gateway_reconciliation(reserved.request.pool_id, assignment)
 
       cond do
-        RouteClass.streaming?(payload) ->
+        RouteClass.streaming?(payload) or CompactionTrigger.streaming_result?(request_options) ->
           normalize_stream_result(callbacks.stream_result.(response, context))
 
         Metadata.json_content?(response) and not StreamProtocol.valid_json?(body) ->

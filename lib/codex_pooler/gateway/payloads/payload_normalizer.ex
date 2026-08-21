@@ -456,9 +456,14 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   defp maybe_project_compact_payload(
          payload,
          "/backend-api/codex/responses/compact",
-         %RequestOptions{payload_context: %{compaction_trigger_bridge?: true}}
+         %RequestOptions{
+           payload_context: %{
+             compaction_trigger_bridge?: true,
+             compaction_result_transport: result_transport
+           }
+         }
        ) do
-    CompactionTrigger.project_responses_payload(payload)
+    CompactionTrigger.project_responses_payload(payload, result_transport)
   end
 
   defp maybe_project_compact_payload(
@@ -466,10 +471,13 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
          _endpoint,
          %RequestOptions{
            transport: %{upstream_endpoint: "/backend-api/codex/responses/compact"},
-           payload_context: %{compaction_trigger_bridge?: true}
+           payload_context: %{
+             compaction_trigger_bridge?: true,
+             compaction_result_transport: result_transport
+           }
          }
        ) do
-    CompactionTrigger.project_responses_payload(payload)
+    CompactionTrigger.project_responses_payload(payload, result_transport)
   end
 
   defp maybe_project_compact_payload(

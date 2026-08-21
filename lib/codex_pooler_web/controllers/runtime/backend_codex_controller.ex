@@ -164,14 +164,28 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
         )
 
       {:ok, compact_payload} ->
-        proxy_compaction_trigger_bridge(conn, local_endpoint, auth, compact_payload, opts)
+        proxy_compaction_trigger_bridge(
+          conn,
+          local_endpoint,
+          auth,
+          compact_payload,
+          opts,
+          CompactionTrigger.v2_streaming?(payload)
+        )
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp proxy_compaction_trigger_bridge(conn, local_endpoint, auth, compact_payload, opts) do
+  defp proxy_compaction_trigger_bridge(
+         conn,
+         local_endpoint,
+         auth,
+         compact_payload,
+         opts,
+         v2_streaming?
+       ) do
     compact_endpoint = "/backend-api/codex/responses/compact"
 
     conn
@@ -182,7 +196,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
       compact_endpoint,
       compact_payload,
       admission_endpoint: local_endpoint,
-      request_opts: Map.put(opts, :compaction_trigger_bridge?, true)
+      request_opts:
+        opts
+        |> Map.put(:compaction_trigger_bridge?, true)
+        |> Map.put(:compaction_result_transport, if(v2_streaming?, do: :sse, else: :buffered))
     )
     |> CompactionTrigger.adapt_gateway_result()
   end

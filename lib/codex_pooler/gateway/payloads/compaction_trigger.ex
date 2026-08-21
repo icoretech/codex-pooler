@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
 
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.OpenAICompatibility.Error
+  alias CodexPooler.Gateway.Payloads.RequestOptions
 
   @public_response_endpoint "/v1/responses"
 
@@ -33,6 +34,19 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
 
   @type payload :: %{optional(String.t()) => term()}
   @type bridge_decision :: :passthrough | {:ok, payload()} | {:error, Contracts.gateway_error()}
+
+  @spec v2_streaming?(payload()) :: boolean()
+  def v2_streaming?(%{"client_metadata" => %{} = metadata}) do
+    with turn_metadata when is_binary(turn_metadata) <- metadata["x-codex-turn-metadata"],
+         {:ok, %{"compaction" => %{"implementation" => "responses_compaction_v2"}}} <-
+           Jason.decode(turn_metadata) do
+      true
+    else
+      _other -> false
+    end
+  end
+
+  def v2_streaming?(%{}), do: false
   @type result_mode :: :sse | :public_sse | :response | :websocket
 
   @spec prepare_bridge(String.t(), payload()) :: bridge_decision()
@@ -90,13 +104,28 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
     |> remove_compaction_triggers()
   end
 
-  @spec project_responses_payload(payload()) :: payload()
-  def project_responses_payload(payload) when is_map(payload) do
+  @spec project_responses_payload(payload(), :buffered | :sse) :: payload()
+  def project_responses_payload(payload, result_transport \\ :buffered)
+
+  def project_responses_payload(payload, result_transport)
+      when is_map(payload) and result_transport in [:buffered, :sse] do
     payload
     |> Map.take(["store" | @compact_payload_keys])
     |> maybe_put_prompt_cache_key(payload)
     |> Map.put("store", false)
+    |> maybe_put_stream(result_transport)
   end
+
+  @spec streaming_result?(RequestOptions.t()) :: boolean()
+  def streaming_result?(%RequestOptions{
+        payload_context: %{
+          compaction_trigger_bridge?: true,
+          compaction_result_transport: :sse
+        }
+      }),
+      do: true
+
+  def streaming_result?(%RequestOptions{}), do: false
 
   @spec adapt_gateway_result(
           {:ok, Contracts.gateway_result()}
@@ -245,9 +274,7 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   defp visible_text?(value) when is_binary(value), do: String.trim(value) != ""
   defp visible_text?(_value), do: false
 
-  defp compact_payload(payload) do
-    project_responses_payload(payload)
-  end
+  defp compact_payload(payload), do: project_responses_payload(payload)
 
   defp remove_compaction_triggers(%{"input" => input} = payload) when is_list(input) do
     Map.put(payload, "input", Enum.reject(input, &match?(%{"type" => "compaction_trigger"}, &1)))
@@ -264,6 +291,9 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   end
 
   defp maybe_put_prompt_cache_key(compact_payload, _payload), do: compact_payload
+
+  defp maybe_put_stream(payload, :sse), do: Map.put(payload, "stream", true)
+  defp maybe_put_stream(payload, :buffered), do: Map.delete(payload, "stream")
 
   defp decode_result(%{raw_body: body}) when is_binary(body) do
     case Jason.decode(body) do

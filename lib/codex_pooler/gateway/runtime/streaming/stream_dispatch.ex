@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   """
 
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Payloads.CompactionTrigger
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Routing.ModelMetadata
@@ -11,6 +12,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.RateLimitObserver
+  alias CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector
   alias CodexPooler.Gateway.Runtime.Streaming.DownstreamStream
   alias CodexPooler.Gateway.Runtime.Streaming.OpenAIStreamCollector
   alias CodexPooler.Gateway.Runtime.Streaming.StreamAttempt
@@ -41,6 +43,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.StreamDispatch do
     finalization_callbacks = Map.fetch!(callbacks, :finalization_callbacks)
 
     cond do
+      CompactionTrigger.streaming_result?(context.request_options) ->
+        CompactionResultCollector.collect(response, context, finalization_callbacks)
+
       OpenAIStreamCollector.collect_image?(context.request_options) ->
         OpenAIStreamCollector.collect_image(response, context, finalization_callbacks)
 

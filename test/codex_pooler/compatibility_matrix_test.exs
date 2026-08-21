@@ -51,10 +51,10 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       boundary = fixture.compaction_recovery_boundary
 
       assert boundary.backend_compaction_trigger.upstream_payload == %{
-               mode: "buffered_responses_json",
+               mode: "omp_v2_sse_or_buffered_responses_json",
                terminal_trigger: "retained",
                store: false,
-               stream: "omitted"
+               stream: "omp_v2_preserved_otherwise_omitted"
              }
 
       assert boundary.backend_compaction_trigger.direct_compact_preservation.upstream_payload ==

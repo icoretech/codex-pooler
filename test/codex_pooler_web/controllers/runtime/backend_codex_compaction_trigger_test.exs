@@ -189,6 +189,72 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
              provider_error_message
   end
 
+  test "OMP V2 compaction preserves upstream SSE and yields replayable compact output", %{
+    conn: conn
+  } do
+    compact_item = %{
+      "type" => "compaction",
+      "encrypted_content" => "synthetic-streamed-compaction",
+      "internal_chat_message_metadata_passthrough" => %{"turn_id" => "provider-only"}
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.output_item.done",
+           %{"type" => "response.output_item.done", "item" => compact_item}},
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_streamed_compaction",
+               "status" => "completed",
+               "output" => [compact_item]
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => visible_input("synthetic stream-preserved compact") ++ [compaction_trigger()],
+        "stream" => true,
+        "client_metadata" => %{
+          "x-codex-turn-metadata" =>
+            Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
+        }
+      })
+
+    assert response.status == 200
+    assert [done_event, completed_event] = backend_sse_events(response(response, 200))
+
+    assert done_event["data"]["item"] == Map.take(compact_item, ["type", "encrypted_content"])
+
+    refute response(response, 200) =~ "provider-only"
+
+    assert completed_event["data"]["response"]["output"] == [
+             Map.take(compact_item, ["type", "encrypted_content"])
+           ]
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["stream"] == true
+    assert captured.json["store"] == false
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses/compact"
+    assert request.transport == "http_compact_json"
+    assert request.status == "succeeded"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+  end
+
   @tag :compaction_v2_http_qa
   test "live curl bridges a terminal trigger through canonical Responses and relays compact SSE" do
     prompt_text = "synthetic compaction v2 curl input"

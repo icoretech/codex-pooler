@@ -5,14 +5,16 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.PayloadContext do
             forced_transcription_model: nil,
             native_image_request?: false,
             image_generation_permission_required?: false,
-            compaction_trigger_bridge?: false
+            compaction_trigger_bridge?: false,
+            compaction_result_transport: :buffered
 
   @type t :: %__MODULE__{
           media_upload: map() | nil,
           forced_transcription_model: String.t() | nil,
           native_image_request?: boolean(),
           image_generation_permission_required?: boolean(),
-          compaction_trigger_bridge?: boolean()
+          compaction_trigger_bridge?: boolean(),
+          compaction_result_transport: :buffered | :sse
         }
 
   @spec build(map() | keyword()) :: t()
@@ -25,7 +27,12 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.PayloadContext do
       native_image_request?: Map.get(opts, :native_image_request?) === true,
       image_generation_permission_required?:
         Map.get(opts, :image_generation_permission_required?) === true,
-      compaction_trigger_bridge?: Map.get(opts, :compaction_trigger_bridge?) === true
+      compaction_trigger_bridge?: Map.get(opts, :compaction_trigger_bridge?) === true,
+      compaction_result_transport: compaction_result_transport(opts)
     }
+  end
+
+  defp compaction_result_transport(opts) do
+    if Map.get(opts, :compaction_result_transport) === :sse, do: :sse, else: :buffered
   end
 end

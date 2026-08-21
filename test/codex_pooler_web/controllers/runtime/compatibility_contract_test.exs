@@ -1760,23 +1760,21 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  valid_trigger: "exactly_one_final_input_item",
                  malformed_trigger: %{status: 400, param: "input", upstream_dispatch: false},
                  retained: ["final_compaction_trigger"],
-                 strips: ["stream", "include", "prompt_cache_options"],
+                 strips: ["include", "prompt_cache_options"],
                  upstream_payload: %{
-                   mode: "buffered_responses_json",
+                   mode: "omp_v2_sse_or_buffered_responses_json",
                    terminal_trigger: "retained",
                    store: false,
-                   stream: "omitted"
+                   stream: "omp_v2_preserved_otherwise_omitted"
                  },
                  response_adaptation: %{
-                   upstream: "buffered_responses_json",
+                   upstream: "omp_v2_sse_or_buffered_responses_json",
                    downstream: "backend_responses_sse",
                    output_events: ["response.output_item.done", "response.completed", "[DONE]"]
                  },
                  output_item: %{
                    "type" => "compaction",
-                   "encrypted_content" => "encrypted_content",
-                   "id" => "compaction_item_id",
-                   "internal_chat_message_metadata_passthrough" => %{"turn_id" => "turn_id"}
+                   "encrypted_content" => "encrypted_content"
                  },
                  accepted_result_shapes: [
                    %{location: "output", type: "compaction"},
@@ -1785,10 +1783,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  ],
                  output_item_policy: %{
                    required: ["type", "encrypted_content"],
-                   optional_string: [
-                     "id",
-                     "internal_chat_message_metadata_passthrough.turn_id"
-                   ],
+                   optional_string: ["id"],
                    unknown_fields: "dropped",
                    terminal_events_share_identical_item: true
                  },
