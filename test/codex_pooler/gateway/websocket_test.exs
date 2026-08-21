@@ -196,8 +196,8 @@ defmodule CodexPooler.Gateway.WebsocketTest do
     assert_receive {:websocket_owner_harness_node_call,
                     %{
                       node: ^remote_node,
-                      function: :remote_submit_request,
-                      arity: 4,
+                      function: :remote_submit_request_v1,
+                      arity: 3,
                       mode: {:return, :ok}
                     }}
 

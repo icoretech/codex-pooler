@@ -5,6 +5,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.{ResetProbe, TimeoutConfig}
   alias CodexPooler.Gateway.Payloads.TransportEnvelope
   alias CodexPooler.Gateway.Persistence.CodexSession
   alias CodexPooler.Gateway.Persistence.SessionContinuity, as: PersistenceSessionContinuity
@@ -18,6 +19,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks
   alias CodexPooler.RouteClass
   alias CodexPooler.Upstreams.CloudflareCookies
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -52,6 +55,21 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           {:ok, CodexSession.t(), String.t(), map(), keyword()}
           | :local
           | {:error, WebsocketOwnerContract.owner_error()}
+  @type websocket_request_data :: %{
+          required(:url) => String.t(),
+          required(:headers) => [header()],
+          required(:payload) => binary(),
+          required(:timeouts) => TimeoutConfig.t(),
+          required(:mapper) => WebsocketOwnerRequest.mapper(),
+          required(:identity) => UpstreamIdentity.t(),
+          required(:observation) => WebsocketOwnerRequest.observation(),
+          required(:reset_probe) => ResetProbe.t() | nil,
+          required(:native_codex_response_control) =>
+            CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot.t() | nil,
+          required(:assignment_advertised?) => boolean(),
+          required(:connection_bound_continuation?) => boolean(),
+          required(:forward_error_body?) => boolean()
+        }
 
   defmodule Request do
     @moduledoc false
@@ -92,6 +110,12 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
             native_codex_response_control: TurnSnapshot.t() | nil,
             request_options: RequestOptions.t()
           }
+  end
+
+  defimpl Inspect, for: Request do
+    def inspect(_request, _opts) do
+      "#CodexPooler.Gateway.Transports.UpstreamDispatch.Request<redacted>"
+    end
   end
 
   defmodule RejectionDrain do
@@ -404,40 +428,40 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     emit_egress_observation(:websocket, headers, request_options, payload_body)
 
     timeouts = request_options.timeout_config
-    message_mapper = websocket_message_mapper(request_options)
-
     observation = task14_observation_context(request, attempt, request_options)
 
-    upstream_request = %UpstreamWebsocketSession.Request{
+    request_data = %{
       url: url,
       headers: headers,
       payload: payload_body,
       timeouts: timeouts,
-      writer: task14_observing_writer(writer, observation),
-      message_mapper: message_mapper,
-      frame_observer: websocket_frame_observer(identity, observation),
-      submission_observer: request_options.transport.websocket_owner_submission_observer,
+      mapper: websocket_message_mapper(request_options),
+      identity: identity,
+      observation: observation,
       reset_probe: request_options.routing.reset_probe,
       native_codex_response_control: native_codex_response_control,
-      assignment_advertised?: assignment_advertised?,
+      assignment_advertised?: assignment_advertised? == true,
       connection_bound_continuation?: connection_bound_continuation?(request_options),
       forward_error_body?: false
     }
 
     case owner_transport(request_options) do
       {:ok, session, owner_lease_token, downstream, forwarder_opts} ->
-        WebsocketOwnerForwarder.submit_request(
+        request_data
+        |> owner_websocket_request(request_options)
+        |> submit_owner_websocket_request(
           session,
           owner_lease_token,
           downstream,
-          upstream_request,
-          owner_request_forwarder_opts(forwarder_opts, request_options)
+          owner_request_forwarder_opts(forwarder_opts, request_options),
+          request_options
         )
-        |> observe_owner_request_submission(request_options)
         |> owner_request_result(identity, request, request_options)
 
       :local ->
-        direct_websocket_request(request_options, upstream_request, identity, request)
+        request_data
+        |> direct_websocket_request_data(writer, request_options)
+        |> direct_websocket_request(request_options, identity, request)
 
       {:error, reason} ->
         owner_request_result({:error, reason}, identity, request, request_options)
@@ -492,7 +516,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp websocket_message_mapper(%RequestOptions{
          openai_compatibility: %{public_openai_responses_stream: true}
        }),
-       do: &StreamProtocol.normalize_public_openai_responses_json_message/1
+       do: :public_openai_responses
 
   defp websocket_message_mapper(%RequestOptions{
          openai_compatibility: %{
@@ -500,10 +524,9 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
            public_openai_responses_stream: false
          }
        }),
-       do: &StreamProtocol.canonicalize_native_codex_responses_json_message/1
+       do: :native_codex_responses
 
-  defp websocket_message_mapper(%RequestOptions{}),
-    do: &StreamProtocol.canonicalize_codex_responses_json_message/1
+  defp websocket_message_mapper(%RequestOptions{}), do: :codex_responses
 
   defp connection_bound_continuation?(%RequestOptions{
          continuity: %{upstream_previous_response_id?: true},
@@ -531,7 +554,88 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     )
   end
 
-  defp direct_websocket_request(request_options, upstream_request, identity, request) do
+  @spec direct_websocket_request_data(
+          websocket_request_data(),
+          UpstreamWebsocketSession.Request.writer(),
+          RequestOptions.t()
+        ) :: UpstreamWebsocketSession.Request.t()
+  defp direct_websocket_request_data(request_data, writer, request_options) do
+    {:ok, message_mapper} = WebsocketRequestCallbacks.mapper(request_data.mapper)
+
+    struct!(
+      UpstreamWebsocketSession.Request,
+      request_data
+      |> Map.drop([:mapper, :identity, :observation])
+      |> Map.merge(%{
+        writer: WebsocketRequestCallbacks.observing_writer(writer, request_data.observation),
+        message_mapper: message_mapper,
+        frame_observer:
+          WebsocketRequestCallbacks.frame_observer(
+            request_data.identity,
+            request_data.observation
+          ),
+        submission_observer: request_options.transport.websocket_owner_submission_observer
+      })
+    )
+  end
+
+  @spec owner_websocket_request(websocket_request_data(), RequestOptions.t()) ::
+          {:ok, WebsocketOwnerRequest.t()} | {:error, WebsocketOwnerRequest.validation_error()}
+  defp owner_websocket_request(request_data, request_options) do
+    case request_data.identity.id do
+      upstream_identity_id when is_binary(upstream_identity_id) ->
+        WebsocketOwnerRequest.new(%{
+          version: 1,
+          url: request_data.url,
+          headers: request_data.headers,
+          payload: request_data.payload,
+          timeouts: request_data.timeouts,
+          mapper: request_data.mapper,
+          upstream_identity_id: upstream_identity_id,
+          observation: request_data.observation,
+          reset_probe: request_data.reset_probe,
+          native_codex_response_control: request_data.native_codex_response_control,
+          assignment_advertised?: request_data.assignment_advertised?,
+          connection_bound_continuation?: request_data.connection_bound_continuation?,
+          forward_error_body?: request_data.forward_error_body?,
+          submission_notification?:
+            is_function(request_options.transport.websocket_owner_submission_observer, 0)
+        })
+
+      _invalid_identity ->
+        {:error, {:invalid_field, :upstream_identity_id}}
+    end
+  end
+
+  defp submit_owner_websocket_request(
+         {:ok, owner_request},
+         session,
+         owner_lease_token,
+         downstream,
+         forwarder_opts,
+         request_options
+       ) do
+    WebsocketOwnerForwarder.submit_request(
+      session,
+      owner_lease_token,
+      downstream,
+      owner_request,
+      forwarder_opts
+    )
+    |> observe_owner_request_submission(request_options)
+  end
+
+  defp submit_owner_websocket_request(
+         {:error, _validation_error},
+         _session,
+         _owner_lease_token,
+         _downstream,
+         _forwarder_opts,
+         _request_options
+       ),
+       do: {:error, :owner_unavailable}
+
+  defp direct_websocket_request(upstream_request, request_options, identity, request) do
     case request_options.transport.upstream_websocket_session do
       pid when is_pid(pid) ->
         result = UpstreamWebsocketSession.request(pid, upstream_request)
@@ -939,41 +1043,11 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     result
   end
 
-  defp websocket_frame_observer(identity, observation) do
-    fn
-      _frame, %{} = decoded ->
-        RateLimitObserver.record_complete_event(identity, decoded)
-        emit_task14_product_observation(observation, :provider_to_pooler, decoded)
-
-      frame, _decoded ->
-        RateLimitObserver.record_complete_events(identity, frame)
-    end
-  end
-
-  defp task14_observing_writer(nil, _observation), do: nil
-
-  defp task14_observing_writer(writer, observation) when is_function(writer, 2) do
-    fn text, terminal_discriminator ->
-      result = writer.(text, terminal_discriminator)
-      emit_task14_downstream_observation(observation, text)
-      result
-    end
-  end
-
-  defp task14_observing_writer(writer, observation) when is_function(writer, 1) do
-    fn text ->
-      result = writer.(text)
-      emit_task14_downstream_observation(observation, text)
-      result
-    end
-  end
-
   defp task14_observation_context(request, attempt, %RequestOptions{} = request_options) do
     %{
       request_id: task14_request_id(request, request_options),
       client_request_id: request_options.request_metadata.client_request_id,
       attempt_id: if(is_map(attempt), do: Map.get(attempt, :id)),
-      route: "backend_websocket",
       mode: RequestOptions.model_serving_mode(request_options)
     }
   end
@@ -982,55 +1056,6 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
 
   defp task14_request_id(_request, %RequestOptions{} = request_options),
     do: request_options.request_metadata.request_id
-
-  defp emit_task14_downstream_observation(observation, text) when is_binary(text) do
-    case Jason.decode(text) do
-      {:ok, %{} = decoded} ->
-        emit_task14_product_observation(observation, :pooler_to_codex, decoded)
-
-      _not_json ->
-        :ok
-    end
-  end
-
-  defp emit_task14_product_observation(observation, direction, decoded) do
-    if Application.get_env(:codex_pooler, :task14_product_observation_enabled, false) do
-      case Map.get(decoded, "type") do
-        event_type when event_type in ["response.output_text.delta", "response.completed"] ->
-          metadata =
-            observation
-            |> Map.put(:direction, direction)
-            |> Map.put(:event_type, event_type)
-            |> Map.put(:response_fingerprint, task14_response_fingerprint(decoded))
-
-          :telemetry.execute(
-            [:codex_pooler, :gateway, :task14, :product_stage],
-            %{count: 1},
-            metadata
-          )
-
-        _other ->
-          :ok
-      end
-    end
-  end
-
-  defp task14_response_fingerprint(decoded) do
-    response_id =
-      case decoded do
-        %{"response" => %{"id" => id}} when is_binary(id) -> id
-        %{"response_id" => id} when is_binary(id) -> id
-        %{"id" => id} when is_binary(id) -> id
-        _other -> nil
-      end
-
-    if is_binary(response_id) do
-      :sha256
-      |> :crypto.hash(response_id)
-      |> Base.encode16(case: :lower)
-      |> binary_part(0, 12)
-    end
-  end
 
   defp websocket_headers(identity, token, routing_hint) do
     upstream_headers(

@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStreamTest do
   use ExUnit.Case, async: true
 
+  @moduletag capture_log: true
+
   import ExUnit.CaptureLog
 
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream

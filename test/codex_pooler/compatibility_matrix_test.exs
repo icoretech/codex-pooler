@@ -840,6 +840,26 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert feature.current == :owner_websocket_cache_bridge
       assert feature.routes == [%{method: :post, path: "/v1/responses"}]
 
+      assert feature.owner_protocol == %{
+               submission: "versioned_data_only",
+               callback_construction: "owner_node_only",
+               incompatible_remote_owner: "reject_before_owner_lookup_or_upstream_submission",
+               native_result: "existing_owner_unavailable_error",
+               previsible_bridge_result: "existing_http_fallback"
+             }
+
+      assert feature.observability == %{
+               format_status: "bounded_lifecycle_and_boolean_projection",
+               opaque_transient_inspection: true,
+               payload_disclosure: false,
+               authorization_disclosure: false
+             }
+
+      assert feature.contract =~ "websocket owner submission is versioned and data-only"
+      assert feature.contract =~ "callbacks are built only on the owner node"
+      assert feature.contract =~ "fails before owner lookup or upstream submission"
+      assert feature.contract =~ "format_status/1 and opaque transient inspection"
+
       assert fixture.owner_retention == %{
                setting: "websocket_owner_idle_timeout_ms",
                default_ms: 1_800_000,
@@ -873,7 +893,23 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                native_attach_arity: 2,
                bridge_attach_arity: 3,
                old_owner_native_attach: "compatible_without_connection_metadata",
-               old_owner_bridge_attach: "fail_closed_http_fallback"
+               old_owner_bridge_attach: "fail_closed_http_fallback",
+               owner_submission: %{
+                 protocol: "versioned_data_only",
+                 callback_construction: "owner_node_only",
+                 incompatible_remote_owner: "reject_before_owner_lookup_or_upstream_submission",
+                 native_result: "existing_owner_unavailable_error",
+                 previsible_bridge_result: "existing_http_fallback"
+               },
+               operator_action: "none"
+             }
+
+      assert fixture.crash_hygiene == %{
+               submit_task: "catch_all_scrubbed_atom_reasons",
+               payload_in_crash_logs: false,
+               authorization_in_crash_logs: false,
+               format_status: "bounded_lifecycle_and_boolean_projection",
+               opaque_transient_inspection: true
              }
     end
   end

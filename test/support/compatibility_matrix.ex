@@ -602,8 +602,21 @@ defmodule CodexPooler.CompatibilityMatrix do
       routes: [%{method: :post, path: "/v1/responses"}],
       future_routes: [],
       fixture: :upstream_websocket_bridge,
+      owner_protocol: %{
+        submission: "versioned_data_only",
+        callback_construction: "owner_node_only",
+        incompatible_remote_owner: "reject_before_owner_lookup_or_upstream_submission",
+        native_result: "existing_owner_unavailable_error",
+        previsible_bridge_result: "existing_http_fallback"
+      },
+      observability: %{
+        format_status: "bounded_lifecycle_and_boolean_projection",
+        opaque_transient_inspection: true,
+        payload_disclosure: false,
+        authorization_disclosure: false
+      },
       contract:
-        "the upstream websocket bridge applies only to public /v1/responses streaming turns with websocket owner forwarding enabled, no attached websocket writer, and a continuity session that is unpinned or pinned to the selected assignment; the downstream contract stays HTTP SSE while the turn dispatches over the session's owner websocket as a cache-locality heuristic, never a cache guarantee; the bridge commits on the first client-rendered content event, on any unknown event fail-closed, on any structurally valid terminal, or at its bounded pre-content buffer caps and commit deadline, buffering lifecycle envelopes, item and part adds, and internal codex.* events until then; a pre-content peer-initiated websocket death — a close without terminal, a TCP cut, or a peer Close frame — falls back to plain HTTP dispatch on the same candidate and attempt with a single settlement, while pre-content locally-declared receive or pong timeouts fail once without HTTP fallback; a private owner barrier delays settlement of a terminal-bearing result until its terminal frame is delivered, and a committed terminal-delivery timeout fails once without HTTP fallback or automatic replay; timeout diagnostics move through one atomic one-shot metadata handoff and remain health-neutral; invalidation preserves the owner lifecycle, so the next explicit turn reconnects at generation plus one and a later healthy turn reuses that generation; persisted leases provide two-node owner forwarding, fencing, transfer, and takeover; after visible output an upstream death finalizes the request as failed instead of synthesizing an empty success; websocket_owner_idle_timeout_ms controls post-detach owner retention with a 1_800_000 ms default and 60_000..3_600_000 ms bounds, is captured node-locally by each new or recovered owner, and does not change existing owners; the attempt-only upstream_websocket_connection namespace contains exactly lifecycle_id, generation, reused, and reconnected; the attempt records transport websocket plus upstream_websocket_bridge and upstream_transport metadata while the request keeps the downstream http_sse transport, and payload_compression metadata describes the websocket envelope actually sent; the submit task surfaces owner failures as scrubbed atom reasons without copying payload or authorization into crash logs; option-carrying bridge attaches fail closed to HTTP fallback against owner nodes still running the previous release while option-less native attaches keep the two-argument remote shape and previous-release owners retain legacy five-minute behavior without connection metadata"
+        "the upstream websocket bridge applies only to public /v1/responses streaming turns with websocket owner forwarding enabled, no attached websocket writer, and a continuity session that is unpinned or pinned to the selected assignment; the downstream contract stays HTTP SSE while the turn dispatches over the session's owner websocket as a cache-locality heuristic, never a cache guarantee; the bridge commits on the first client-rendered content event, on any unknown event fail-closed, on any structurally valid terminal, or at its bounded pre-content buffer caps and commit deadline, buffering lifecycle envelopes, item and part adds, and internal codex.* events until then; a pre-content peer-initiated websocket death — a close without terminal, a TCP cut, or a peer Close frame — falls back to plain HTTP dispatch on the same candidate and attempt with a single settlement, while pre-content locally-declared receive or pong timeouts fail once without HTTP fallback; a private owner barrier delays settlement of a terminal-bearing result until its terminal frame is delivered, and a committed terminal-delivery timeout fails once without HTTP fallback or automatic replay; timeout diagnostics move through one atomic one-shot metadata handoff and remain health-neutral; invalidation preserves the owner lifecycle, so the next explicit turn reconnects at generation plus one and a later healthy turn reuses that generation; persisted leases provide two-node owner forwarding, fencing, transfer, and takeover; after visible output an upstream death finalizes the request as failed instead of synthesizing an empty success; websocket owner submission is versioned and data-only, and callbacks are built only on the owner node; incompatible remote legacy protocol submission fails before owner lookup or upstream submission through the existing native error or pre-visible bridge HTTP fallback behavior; format_status/1 and opaque transient inspection protect crash and status observability from payload and authorization disclosure; websocket_owner_idle_timeout_ms controls post-detach owner retention with a 1_800_000 ms default and 60_000..3_600_000 ms bounds, is captured node-locally by each new or recovered owner, and does not change existing owners; the attempt-only upstream_websocket_connection namespace contains exactly lifecycle_id, generation, reused, and reconnected; the attempt records transport websocket plus upstream_websocket_bridge and upstream_transport metadata while the request keeps the downstream http_sse transport, and payload_compression metadata describes the websocket envelope actually sent; the submit task surfaces owner failures as scrubbed atom reasons without copying payload or authorization into crash logs; option-carrying bridge attaches fail closed to HTTP fallback against owner nodes still running the previous release while option-less native attaches keep the two-argument remote shape and previous-release owners retain legacy five-minute behavior without connection metadata"
     },
     %{
       slug: :image_generation_permission,
@@ -2750,13 +2763,23 @@ defmodule CodexPooler.CompatibilityMatrix do
       crash_hygiene: %{
         submit_task: "catch_all_scrubbed_atom_reasons",
         payload_in_crash_logs: false,
-        authorization_in_crash_logs: false
+        authorization_in_crash_logs: false,
+        format_status: "bounded_lifecycle_and_boolean_projection",
+        opaque_transient_inspection: true
       },
       rolling_deploy: %{
         native_attach_arity: 2,
         bridge_attach_arity: 3,
         old_owner_native_attach: "compatible_without_connection_metadata",
-        old_owner_bridge_attach: "fail_closed_http_fallback"
+        old_owner_bridge_attach: "fail_closed_http_fallback",
+        owner_submission: %{
+          protocol: "versioned_data_only",
+          callback_construction: "owner_node_only",
+          incompatible_remote_owner: "reject_before_owner_lookup_or_upstream_submission",
+          native_result: "existing_owner_unavailable_error",
+          previsible_bridge_result: "existing_http_fallback"
+        },
+        operator_action: "none"
       }
     },
     misalignment_policy_violation: %{

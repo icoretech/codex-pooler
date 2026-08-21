@@ -414,12 +414,11 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
   end
 
   # Emulates an owner node still running the previous release: it exports
-  # remote_attach_downstream/2 but not /3, so the option-carrying bridge
-  # attach raises the same {:exception, :undef, _} error :erpc.call surfaces
-  # for a missing remote function, while every other forward works unchanged.
+  # remote_attach_downstream/2 but not /3 and has no versioned request entrypoint.
   defp dispatch_call_mode(:old_release, _node, module, function, args) do
-    if function == :remote_attach_downstream and length(args) == 3 do
-      :erlang.error({:exception, :undef, [{module, function, args, []}]})
+    if (function == :remote_attach_downstream and length(args) == 3) or
+         (function == :remote_submit_request_v1 and length(args) == 3) do
+      {:error, {:exception, :undef, [{module, function, args, []}]}}
     else
       apply(module, function, args)
     end
@@ -487,18 +486,37 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
 
     send(notify, {
       :websocket_owner_harness_node_call,
-      %{
-        node: node,
-        module: module,
-        function: function,
-        arity: length(args),
-        timeout: timeout,
-        mode: mode
-      }
+      Map.merge(
+        %{
+          node: node,
+          module: module,
+          function: function,
+          arity: length(args),
+          timeout: timeout,
+          mode: mode
+        },
+        request_call_metadata(function, args)
+      )
     })
   end
 
+  defp request_call_metadata(
+         :remote_submit_request_v1,
+         [codex_session_id, downstream, _request]
+       ) do
+    %{codex_session_id: codex_session_id, downstream: downstream}
+  end
+
+  defp request_call_metadata(_function, _args), do: %{}
+
   defp send_request_observation(:remote_submit_request, [_session_id, _downstream, request, _opts]) do
+    case __MODULE__ |> Process.get(%{}) |> Map.get(:capture_request_to) do
+      pid when is_pid(pid) -> send(pid, {:websocket_owner_harness_request, request})
+      _not_configured -> :ok
+    end
+  end
+
+  defp send_request_observation(:remote_submit_request_v1, [_session_id, _downstream, request]) do
     case __MODULE__ |> Process.get(%{}) |> Map.get(:capture_request_to) do
       pid when is_pid(pid) -> send(pid, {:websocket_owner_harness_request, request})
       _not_configured -> :ok

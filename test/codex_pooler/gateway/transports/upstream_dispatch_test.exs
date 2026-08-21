@@ -15,9 +15,11 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.RejectionBody
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
   alias CodexPooler.Gateway.Transports.UpstreamDispatch.RejectionDrain
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
   alias CodexPooler.Gateway.Websocket, as: Gateway
@@ -28,6 +30,27 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
   @receive_timeout_ms 25
   @websocket_idle_timeout_ms 1_000
+
+  defmodule OwnerEnvelopeNodeClient do
+    @moduledoc false
+
+    def connected_app_nodes, do: Process.get({__MODULE__, :nodes}, [])
+
+    def call_owner(node, module, function, args, timeout) do
+      send(self(), {:owner_envelope_call, node, module, function, args, timeout})
+      Process.get({__MODULE__, :result}, {:error, :timeout})
+    end
+
+    def configure(nodes, result) do
+      Process.put({__MODULE__, :nodes}, nodes)
+      Process.put({__MODULE__, :result}, result)
+    end
+
+    def reset do
+      Process.delete({__MODULE__, :nodes})
+      Process.delete({__MODULE__, :result})
+    end
+  end
 
   setup do
     previous_settings = Application.get_env(:codex_pooler, OperationalSettings)
@@ -45,9 +68,154 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     on_exit(fn ->
       restore_operational_settings(previous_settings)
       cleanup_local_owner_sessions()
+      OwnerEnvelopeNodeClient.reset()
     end)
 
     {:ok, auth: auth}
+  end
+
+  test "direct websocket dispatch preserves mapper bytes and local callback behavior" do
+    completed =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_direct_mapper_characterization"}
+      })
+
+    cases = [
+      {:native, websocket_request_options(), direct_mapper_output(:native, completed)},
+      {:translated,
+       websocket_request_options()
+       |> RequestOptions.put_openai_compatibility(
+         source_endpoint: "/v1/responses",
+         public_openai_responses_stream: false
+       ), direct_mapper_output(:codex, completed)},
+      {:public,
+       websocket_request_options()
+       |> RequestOptions.put_openai_compatibility(public_openai_responses_stream: true),
+       direct_mapper_output(:public, completed)}
+    ]
+
+    for {case_name, request_options, expected_output} <- cases do
+      {:ok, upstream} =
+        FakeUpstream.start_link({:sequence, [FakeUpstream.websocket_text_frames([completed])]})
+
+      on_exit(fn -> FakeUpstream.stop(upstream) end)
+      parent = self()
+
+      request = %{
+        websocket_dispatch_request(upstream, request_options)
+        | writer: fn output -> send(parent, {:direct_mapper_output, output}) end
+      }
+
+      assert {:ok, %{body: body}} = UpstreamDispatch.websocket_request(request)
+
+      assert body === "data: #{expected_output}\n\n",
+             "#{case_name} mapper changed retained websocket response bytes"
+
+      assert_receive {:direct_mapper_output, ^expected_output},
+                     100,
+                     "#{case_name} mapper changed direct writer bytes"
+    end
+  end
+
+  test "remote owner dispatch sends only a validated v1 envelope and keeps submission observer local",
+       %{auth: auth} do
+    remote_node = :"codex_pooler@data-only-owner.example"
+
+    %{session: session, lease_token: lease_token} =
+      owner_session_fixture(auth, Atom.to_string(remote_node))
+
+    OwnerEnvelopeNodeClient.configure(
+      [remote_node],
+      {:websocket_owner_submission_accepted, {:error, :owner_drained}}
+    )
+
+    observer = fn -> send(self(), :proxy_local_submission_observed) end
+
+    request_options =
+      session
+      |> websocket_owner_request_options(
+        lease_token,
+        %{pid: self(), epoch: 1, correlation_id: "corr-data-only-owner"},
+        node_client: OwnerEnvelopeNodeClient,
+        app_node_names: [Atom.to_string(remote_node)]
+      )
+      |> RequestOptions.put_transport(websocket_owner_submission_observer: observer)
+
+    identity = active_upstream_identity_fixture()
+    payload = Jason.encode!(%{"type" => "response.create", "model" => "example-model"})
+
+    request = %UpstreamDispatch.Request{
+      url: "https://upstream.example.test/backend-api/codex/responses",
+      token: "redacted",
+      upstream_payload: payload,
+      identity: identity,
+      accounting_request: nil,
+      accounting_attempt: nil,
+      writer: fn _message -> :ok end,
+      assignment_advertised?: true,
+      native_codex_response_control: %TurnSnapshot{models_etag: ~s(W/"owner-etag")},
+      request_options: request_options
+    }
+
+    assert {:error, %{reason: :owner_drained}} = UpstreamDispatch.websocket_request(request)
+    assert_received :proxy_local_submission_observed
+
+    assert_received {:owner_envelope_call, ^remote_node, _module, :remote_submit_request_v1,
+                     [session_id, downstream, %WebsocketOwnerRequest{} = envelope], _timeout}
+
+    assert session_id == session.id
+    assert downstream.correlation_id == "corr-data-only-owner"
+    assert envelope.version == 1
+    assert envelope.payload === payload
+    assert envelope.url === request.url
+    assert envelope.upstream_identity_id == identity.id
+    assert envelope.native_codex_response_control === request.native_codex_response_control
+    assert envelope.assignment_advertised?
+    assert envelope.submission_notification?
+    assert WebsocketOwnerRequest.validate(envelope) == :ok
+    refute contains_function?(envelope)
+    assert is_function(observer, 0)
+  end
+
+  test "invalid owner request data fails before remote submission" do
+    remote_node = :"codex_pooler@invalid-owner-envelope.example"
+
+    OwnerEnvelopeNodeClient.configure(
+      [remote_node],
+      {:websocket_owner_submission_accepted, :ok}
+    )
+
+    session = %CodexSession{
+      id: Ecto.UUID.generate(),
+      owner_instance_id: Atom.to_string(remote_node),
+      owner_lease_token: "owner-lease"
+    }
+
+    request_options =
+      websocket_owner_request_options(
+        session,
+        "owner-lease",
+        %{pid: self(), epoch: 1, correlation_id: "corr-invalid-owner-envelope"},
+        node_client: OwnerEnvelopeNodeClient,
+        app_node_names: [Atom.to_string(remote_node)]
+      )
+
+    request = %UpstreamDispatch.Request{
+      url: "https://upstream.example.test/backend-api/codex/responses",
+      token: "redacted",
+      upstream_payload: "{}",
+      identity: %UpstreamIdentity{},
+      accounting_request: nil,
+      accounting_attempt: nil,
+      writer: fn _message -> :ok end,
+      request_options: request_options
+    }
+
+    assert {:error, %{reason: :owner_unavailable, started: false}} =
+             UpstreamDispatch.websocket_request(request)
+
+    refute_received {:owner_envelope_call, _node, _module, _function, _args, _timeout}
   end
 
   @tag :websocket_owner_submit_timeout
@@ -84,8 +252,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     assert_receive {:websocket_owner_harness_node_call,
                     %{
                       node: ^remote_node,
-                      function: :remote_submit_request,
-                      arity: 4,
+                      function: :remote_submit_request_v1,
+                      arity: 3,
                       timeout: observed_timeout_ms
                     }}
 
@@ -125,8 +293,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     assert_receive {:websocket_owner_harness_node_call,
                     %{
                       node: ^remote_node,
-                      function: :remote_submit_request,
-                      arity: 4,
+                      function: :remote_submit_request_v1,
+                      arity: 3,
                       timeout: 25
                     }}
   end
@@ -166,7 +334,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
              UpstreamDispatch.websocket_request(request)
 
     assert_receive {:websocket_owner_harness_request,
-                    %UpstreamWebsocketSession.Request{
+                    %WebsocketOwnerRequest{
                       native_codex_response_control: ^snapshot
                     }}
 
@@ -174,7 +342,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
              UpstreamDispatch.websocket_request(request)
 
     assert_receive {:websocket_owner_harness_request,
-                    %UpstreamWebsocketSession.Request{
+                    %WebsocketOwnerRequest{
                       native_codex_response_control: ^snapshot
                     }}
 
@@ -1096,7 +1264,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
            ) == alias_ids_before
 
     assert_receive {:websocket_owner_harness_node_call,
-                    %{node: ^remote_node, function: :remote_submit_request, arity: 4}}
+                    %{node: ^remote_node, function: :remote_submit_request_v1, arity: 3}}
   end
 
   test "accepted remote owner errors notify the socket before returning the error", %{auth: auth} do
@@ -1167,7 +1335,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     assert_receive {:accepted_owner_error_sequence, ^result}
 
     assert_receive {:websocket_owner_harness_node_call,
-                    %{node: ^remote_node, function: :remote_submit_request, arity: 4}}
+                    %{node: ^remote_node, function: :remote_submit_request_v1, arity: 3}}
   end
 
   test "malformed owner replies settle as owner_crashed and register no alias", %{auth: auth} do
@@ -1251,7 +1419,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       refute logs =~ "resp_owner_no_terminal"
 
       assert_receive {:websocket_owner_harness_node_call,
-                      %{node: ^remote_node, function: :remote_submit_request, arity: 4}}
+                      %{node: ^remote_node, function: :remote_submit_request_v1, arity: 3}}
     end
 
     assert Repo.all(
@@ -1408,7 +1576,10 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   end
 
   defp upstream_identity do
-    %UpstreamIdentity{chatgpt_account_id: "acct_owner_submit_timeout"}
+    %UpstreamIdentity{
+      id: Ecto.UUID.generate(),
+      chatgpt_account_id: "acct_owner_submit_timeout"
+    }
   end
 
   defp synthetic_access_jwt(residency) do
@@ -1456,5 +1627,41 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     end)
 
     :ok
+  end
+
+  defp contains_function?(value) when is_function(value), do: true
+
+  defp contains_function?(%_{} = struct) do
+    struct |> Map.from_struct() |> contains_function?()
+  end
+
+  defp contains_function?(value) when is_map(value) do
+    Enum.any?(value, fn {key, nested} -> contains_function?(key) or contains_function?(nested) end)
+  end
+
+  defp contains_function?(value) when is_list(value), do: Enum.any?(value, &contains_function?/1)
+
+  defp contains_function?(value) when is_tuple(value) do
+    value |> Tuple.to_list() |> Enum.any?(&contains_function?/1)
+  end
+
+  defp contains_function?(_value), do: false
+
+  defp direct_mapper_output(mapper, raw) do
+    decoded = Jason.decode!(raw)
+
+    {output, _mapped} =
+      case mapper do
+        :native ->
+          StreamProtocol.canonicalize_native_codex_responses_json_message(raw, decoded)
+
+        :codex ->
+          StreamProtocol.canonicalize_codex_responses_json_message(raw, decoded)
+
+        :public ->
+          StreamProtocol.normalize_public_openai_responses_json_message(raw, decoded)
+      end
+
+    output
   end
 end

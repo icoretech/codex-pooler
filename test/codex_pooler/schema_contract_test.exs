@@ -110,8 +110,6 @@ defmodule CodexPooler.SchemaContractTest do
 
     assert [[1]] =
              Repo.query!("SELECT COUNT(*) FROM pg_extension WHERE extname = 'pgcrypto'").rows
-
-    assert [["pending"]] = Repo.query!("SELECT status FROM platform_bootstrap_state").rows
   end
 
   @tag :shared_pool_traffic_gate

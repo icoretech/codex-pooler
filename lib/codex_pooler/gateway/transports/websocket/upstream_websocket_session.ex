@@ -3,6 +3,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   use GenServer
 
+  require Logger
+
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
@@ -121,7 +123,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   @impl GenServer
-  def init(:new), do: {:ok, new_connection_lifecycle_state()}
+  def init(:new) do
+    Process.flag(:sensitive, true)
+    {:ok, new_connection_lifecycle_state()}
+  end
+
+  @impl GenServer
+  def format_status(status) do
+    Map.new(status, fn
+      {:reason, reason} -> {:reason, status_reason_class(reason)}
+      {:message, message} -> {:message, status_message_class(message)}
+      {:state, state} -> {:state, status_state(state)}
+      {:log, _log} -> {:log, []}
+    end)
+  end
 
   @doc false
   @spec connection_lifecycle_state(connection_lifecycle_state()) :: connection_lifecycle_state()
@@ -981,6 +996,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         {:halt, {:failure, state, receive_state, reason}}
 
       :error ->
+        receive_state = maybe_mark_downstream_output_started(receive_state, raw_decoded)
         observe_frame(receive_state, raw_text, raw_decoded)
         receive_state = maybe_write_native_metadata(state, receive_state)
 
@@ -991,8 +1007,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           )
 
         write_frame(receive_state.writer, text, terminal_discriminator)
-
-        receive_state = maybe_mark_downstream_output_started(receive_state, raw_decoded)
 
         case terminal_discriminator.terminal do
           nil -> {:cont, {:continue, state, receive_state}}
@@ -1235,17 +1249,32 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp receive_body(%ReceiveState{body: body}), do: websocket_body(body)
 
-  defp observe_frame(%ReceiveState{frame_observer: observer}, text, decoded)
-       when is_function(observer, 2) do
-    observer.(text, decoded)
+  defp observe_frame(%ReceiveState{frame_observer: observer}, text, decoded) do
+    case observer_arity(observer) do
+      2 -> observe_frame_observer(fn -> observer.(text, decoded) end)
+      1 -> observe_frame_observer(fn -> observer.(text) end)
+      nil -> :ok
+    end
   end
 
-  defp observe_frame(%ReceiveState{frame_observer: observer}, text, _decoded)
-       when is_function(observer, 1) do
-    observer.(text)
+  defp observer_arity(observer) when is_function(observer, 2), do: 2
+  defp observer_arity(observer) when is_function(observer, 1), do: 1
+  defp observer_arity(_observer), do: nil
+
+  defp observe_frame_observer(observer) do
+    observer.()
+  rescue
+    exception -> report_frame_observer_failure(:error, exception.__struct__)
+  catch
+    kind, _reason when kind in [:throw, :exit] -> report_frame_observer_failure(kind, nil)
   end
 
-  defp observe_frame(%ReceiveState{}, _text, _decoded), do: :ok
+  defp report_frame_observer_failure(failure_kind, exception_class) do
+    Logger.warning(
+      "upstream websocket frame observer failed operation=observe_frame " <>
+        "failure_kind=#{failure_kind} exception_class=#{exception_class || "none"}"
+    )
+  end
 
   defp maybe_write_native_metadata(
          state,
@@ -1448,5 +1477,34 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     else
       lifecycle
     end
+  end
+
+  defp status_reason_class(%module{}) when is_atom(module), do: {:exception, module}
+  defp status_reason_class(reason) when is_atom(reason), do: {:reason, reason}
+  defp status_reason_class({reason, _detail}) when is_atom(reason), do: {:reason, reason}
+  defp status_reason_class(_reason), do: :unknown
+
+  defp status_message_class({:request, %Request{}}), do: :request
+  defp status_message_class({:send_text, _payload}), do: :send_text
+  defp status_message_class(:invalidate_connection), do: :invalidate_connection
+
+  defp status_message_class({:upstream_websocket_keepalive, _token}),
+    do: :keepalive
+
+  defp status_message_class({:upstream_websocket_pong_deadline, _token}),
+    do: :pong_deadline
+
+  defp status_message_class(_message), do: :transport_message
+
+  defp status_state(state) do
+    lifecycle = connection_lifecycle_state(state)
+
+    Map.merge(lifecycle, %{
+      connected?: Map.has_key?(state, :conn),
+      reconnect_pending?: Map.get(state, :reconnect_pending?, false) == true,
+      request_active?: Map.has_key?(state, :current_request_diagnostics),
+      keepalive_pending?: Map.has_key?(state, :keepalive_ref),
+      pong_pending?: Map.has_key?(state, :keepalive_pong_ref)
+    })
   end
 end

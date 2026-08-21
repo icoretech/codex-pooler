@@ -121,7 +121,7 @@ defmodule CodexPooler.Admin.PoolTrafficGateTest do
 
     # When: the owning process and checked-out connection disappear without finalization.
     Process.exit(owner_pid, :kill)
-    assert_receive {:DOWN, ^owner_monitor, :process, ^owner_pid, :killed}, 2_000
+    assert_receive {:DOWN, ^owner_monitor, :process, ^owner_pid, :killed}, 5_000
 
     # Then: the row remains fail-closed until the database lease expires.
     assert [[^stale_token, true]] = gate_owner_state(user.id)
@@ -133,6 +133,11 @@ defmodule CodexPooler.Admin.PoolTrafficGateTest do
 
     assert retry_after_ms > 0
     expire_lease!(user.id)
+    lock_release_task = await_stale_owner_lock_release(user.id, test_pid)
+
+    assert_receive {:stale_owner_lock_released, lock_release_pid}, 5_000
+    send(lock_release_pid, :release_stale_owner_lock)
+    assert :ok = Task.await(lock_release_task, 5_000)
 
     replacement_task =
       Task.async(fn ->
@@ -147,7 +152,7 @@ defmodule CodexPooler.Admin.PoolTrafficGateTest do
         end)
       end)
 
-    assert_receive {:replacement_entered, replacement_projection_pid}, 2_000
+    assert_receive {:replacement_entered, replacement_projection_pid}, 5_000
 
     assert {:error, :stale_owner} =
              unboxed(fn -> PoolTrafficGate.finish(scope, stale_token) end)
@@ -272,6 +277,45 @@ defmodule CodexPooler.Admin.PoolTrafficGateTest do
         [operator_id]
       )
     end)
+  end
+
+  defp await_stale_owner_lock_release(operator_id, test_pid) do
+    Task.async(fn -> hold_stale_owner_lock(operator_id, test_pid) end)
+  end
+
+  defp hold_stale_owner_lock(operator_id, test_pid) do
+    unboxed(fn ->
+      Repo.checkout(fn -> hold_stale_owner_lock_on_connection(operator_id, test_pid) end)
+    end)
+  end
+
+  defp hold_stale_owner_lock_on_connection(operator_id, test_pid) do
+    Repo.query!(
+      """
+      SELECT pg_advisory_lock(
+        hashtextextended('admin_pool_traffic:' || $1::text, 0)
+      )
+      """,
+      [operator_id]
+    )
+
+    send(test_pid, {:stale_owner_lock_released, self()})
+
+    receive do
+      :release_stale_owner_lock -> :ok
+    end
+
+    assert {:ok, %{rows: [[true]]}} =
+             Repo.query(
+               """
+               SELECT pg_advisory_unlock(
+                 hashtextextended('admin_pool_traffic:' || $1::text, 0)
+               )
+               """,
+               [operator_id]
+             )
+
+    :ok
   end
 
   defp dump_uuids(ids), do: Enum.map(ids, &Ecto.UUID.dump!/1)

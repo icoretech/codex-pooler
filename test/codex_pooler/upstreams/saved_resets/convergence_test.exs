@@ -56,6 +56,12 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
     identity
   end
 
+  test "missing identities converge without raising" do
+    identity = %UpstreamIdentity{id: Ecto.UUID.generate()}
+
+    assert {:ok, :unchanged} = Convergence.converge(identity)
+  end
+
   defp upsert_account_window!(identity, used_percent) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     upsert_source_window!(identity, used_percent, source: "codex_usage_api", observed_at: now)
