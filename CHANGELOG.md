@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.6.7](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.6...codex-pooler-v0.6.7) (2026-08-21)
+
+
+### Features
+
+* **openai:** support named standalone function outputs ([a04210e](https://github.com/icoretech/codex-pooler/commit/a04210ea723b2bcdf229ae45670578b765a9674f))
+* **websocket:** add data-only owner request envelope ([4012684](https://github.com/icoretech/codex-pooler/commit/4012684500a9dc8182ff4b423aed6b098de8c290))
+
+
+### Bug Fixes
+
+* **deps:** update dependency apexcharts to v6.10.0 ([#294](https://github.com/icoretech/codex-pooler/issues/294)) ([c2ade1c](https://github.com/icoretech/codex-pooler/commit/c2ade1c90158d8d72894325423d8923031b881c7))
+* **deps:** update dependency astro to v7.2.3 ([#296](https://github.com/icoretech/codex-pooler/issues/296)) ([81134ec](https://github.com/icoretech/codex-pooler/commit/81134ec5b74166a3bf157c083ae0d8c6ed8dfc7c))
+* **deps:** update dependency daisyui to v5.7.18 ([#293](https://github.com/icoretech/codex-pooler/issues/293)) ([d4c6b4a](https://github.com/icoretech/codex-pooler/commit/d4c6b4a11dad556036e56d3d94408e184bec2ff4))
+* **dev:** recover symlinked lifecycle receipts ([a2c5d63](https://github.com/icoretech/codex-pooler/commit/a2c5d63128d4bb02027e6532a6e18cbd1900dc6c))
+* **gateway:** preserve OMP V2 compaction streaming ([5dd8505](https://github.com/icoretech/codex-pooler/commit/5dd8505f0d6780cbbcbe78c9ab714135076e513c))
+* **gateway:** preserve store for V2 compaction bridge ([56a36df](https://github.com/icoretech/codex-pooler/commit/56a36dfa0bd8ebada3db8862b020d92767d68aaa))
+* **gateway:** propagate Codex OAuth compute residency ([2b0c2d4](https://github.com/icoretech/codex-pooler/commit/2b0c2d461f299a3109b433f25afe4e7a799caeb8))
+* **openai:** validate OMP replay metadata types ([f6143bc](https://github.com/icoretech/codex-pooler/commit/f6143bc83bde76a671564cd91566b79d01bb9945))
+* **openai:** validate Responses allowed tool choices ([490c072](https://github.com/icoretech/codex-pooler/commit/490c0720b436c0d217a6813c9f6f387ed061600e))
+* **runtime:** revoke websocket sessions after API key disablement ([ed76bbc](https://github.com/icoretech/codex-pooler/commit/ed76bbc43da6d779ed78fc3bf25519280cd1d1e9))
+* **test:** stabilize websocket owner regressions ([ed5b305](https://github.com/icoretech/codex-pooler/commit/ed5b3051379f0a245396c82b4716d1345bba76d4))
+* **websocket:** contain optional frame observer failures ([7c401f0](https://github.com/icoretech/codex-pooler/commit/7c401f0c97497428c32ea2bfe03660fb67296ca0))
+* **websocket:** redact upstream session crash status ([538d7af](https://github.com/icoretech/codex-pooler/commit/538d7afb8e9a476e5c957a046af11408768a3d97))
+* **websocket:** retire owners when upstream sessions exit ([ed57455](https://github.com/icoretech/codex-pooler/commit/ed574557e77c6fe26ab8c1f6b0e2e9ef03654248))
+* **websocket:** retire settled owners after child exit ([bf1a139](https://github.com/icoretech/codex-pooler/commit/bf1a1393970c9becb98a0aa56ae2bfd800bd94c8))
+* **websocket:** scope reset probe owner recovery ([29a61a2](https://github.com/icoretech/codex-pooler/commit/29a61a2001d869e8986a82423b886f45996afd1b))
+* **websocket:** tolerate stale owner retirement race ([b728300](https://github.com/icoretech/codex-pooler/commit/b728300d5433e9d54bb8ac47467f9b3081b24c96))
+* **websocket:** validate owner request snapshots ([2a6f908](https://github.com/icoretech/codex-pooler/commit/2a6f90856b891c578ada6e4526377082239bd0be))
+* **websocket:** version remote owner request submission ([8eff88e](https://github.com/icoretech/codex-pooler/commit/8eff88e6322c9db4768762732f9b8a24295f2946))
+
 ## [0.6.6](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.5...codex-pooler-v0.6.6) (2026-08-18)
 
 
