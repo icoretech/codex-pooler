@@ -91,12 +91,20 @@ defmodule CodexPooler.Upstreams.SavedResets.Convergence do
   end
 
   defp converge_locked(id, now, source) do
-    identity = lock_identity!(id)
-    redemption = (identity.metadata || %{})["saved_reset_redemption"]
+    case lock_identity(id) do
+      nil ->
+        {:unchanged, nil}
 
-    case target_transition(identity, redemption, now) do
-      nil -> {:unchanged, nil}
-      {target, windows} -> apply_transition!(identity, redemption, target, windows, now, source)
+      identity ->
+        redemption = (identity.metadata || %{})["saved_reset_redemption"]
+
+        case target_transition(identity, redemption, now) do
+          nil ->
+            {:unchanged, nil}
+
+          {target, windows} ->
+            apply_transition!(identity, redemption, target, windows, now, source)
+        end
     end
   end
 
@@ -192,8 +200,8 @@ defmodule CodexPooler.Upstreams.SavedResets.Convergence do
 
   defp consumed_at(_redemption), do: nil
 
-  defp lock_identity!(id) do
-    Repo.one!(
+  defp lock_identity(id) do
+    Repo.one(
       from identity in UpstreamIdentity,
         where: identity.id == ^id,
         lock: "FOR UPDATE"

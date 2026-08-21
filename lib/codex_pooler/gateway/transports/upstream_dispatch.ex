@@ -582,26 +582,28 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   @spec owner_websocket_request(websocket_request_data(), RequestOptions.t()) ::
           {:ok, WebsocketOwnerRequest.t()} | {:error, WebsocketOwnerRequest.validation_error()}
   defp owner_websocket_request(request_data, request_options) do
-    with upstream_identity_id when is_binary(upstream_identity_id) <- request_data.identity.id do
-      WebsocketOwnerRequest.new(%{
-        version: 1,
-        url: request_data.url,
-        headers: request_data.headers,
-        payload: request_data.payload,
-        timeouts: request_data.timeouts,
-        mapper: request_data.mapper,
-        upstream_identity_id: upstream_identity_id,
-        observation: request_data.observation,
-        reset_probe: request_data.reset_probe,
-        native_codex_response_control: request_data.native_codex_response_control,
-        assignment_advertised?: request_data.assignment_advertised?,
-        connection_bound_continuation?: request_data.connection_bound_continuation?,
-        forward_error_body?: request_data.forward_error_body?,
-        submission_notification?:
-          is_function(request_options.transport.websocket_owner_submission_observer, 0)
-      })
-    else
-      _invalid_identity -> {:error, {:invalid_field, :upstream_identity_id}}
+    case request_data.identity.id do
+      upstream_identity_id when is_binary(upstream_identity_id) ->
+        WebsocketOwnerRequest.new(%{
+          version: 1,
+          url: request_data.url,
+          headers: request_data.headers,
+          payload: request_data.payload,
+          timeouts: request_data.timeouts,
+          mapper: request_data.mapper,
+          upstream_identity_id: upstream_identity_id,
+          observation: request_data.observation,
+          reset_probe: request_data.reset_probe,
+          native_codex_response_control: request_data.native_codex_response_control,
+          assignment_advertised?: request_data.assignment_advertised?,
+          connection_bound_continuation?: request_data.connection_bound_continuation?,
+          forward_error_body?: request_data.forward_error_body?,
+          submission_notification?:
+            is_function(request_options.transport.websocket_owner_submission_observer, 0)
+        })
+
+      _invalid_identity ->
+        {:error, {:invalid_field, :upstream_identity_id}}
     end
   end
 

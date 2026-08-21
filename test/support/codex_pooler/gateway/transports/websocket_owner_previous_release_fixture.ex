@@ -4,6 +4,11 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseFixture do
   @source_commit "a589116bb733fb53c58520637ea70382c68e6bd3"
   @source_path "lib/codex_pooler/gateway/transports/websocket/websocket_owner_forwarder.ex"
   @forwarder CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
+  alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
+
   @external_network_calls [
     {Req, :request, 1},
     {Req, :request, 2},
@@ -39,7 +44,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseFixture do
 
   @spec load_pre_v1_bridge_forwarder(node()) :: {:module, module()}
   def load_pre_v1_bridge_forwarder(node) when is_atom(node) do
-    session = CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
+    session = WebsocketOwnerSession
 
     forms = [
       {:attribute, 1, :module, @forwarder},
@@ -201,7 +206,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseFixture do
       |> then(&{:error, &1})
   end
 
-  @spec legacy_request(pid()) :: struct()
+  @spec legacy_request(pid()) :: UpstreamWebsocketSession.Request.t()
   def legacy_request(notify) when is_pid(notify) do
     marker = fn label -> send(notify, {:previous_release_callback_invoked, label}) end
 
@@ -225,9 +230,9 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseFixture do
     }
   end
 
-  @spec historical_request(pid()) :: struct()
+  @spec historical_request(pid()) :: UpstreamWebsocketSession.Request.t()
   def historical_request(notify) when is_pid(notify) do
-    %CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request{
+    %UpstreamWebsocketSession.Request{
       url: "https://upstream.example.test/backend-api/codex/responses",
       headers: [],
       payload: "fixture-payload",
@@ -247,7 +252,8 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseFixture do
   end
 
   @doc false
-  @spec track_historical_request_visibility(struct()) :: {struct(), reference()}
+  @spec track_historical_request_visibility(UpstreamWebsocketSession.Request.t()) ::
+          {UpstreamWebsocketSession.Request.t(), :atomics.atomics_ref()}
   def track_historical_request_visibility(request) do
     visibility = :atomics.new(1, [])
     observer = request.frame_observer
@@ -259,10 +265,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseFixture do
         true -> :ok
       end
 
-      unless CodexPooler.Gateway.Transports.Streaming.StreamProtocol.internal_control_event?(
-               decoded
-             ),
-             do: :atomics.put(visibility, 1, 1)
+      unless StreamProtocol.internal_control_event?(decoded), do: :atomics.put(visibility, 1, 1)
     end
 
     {%{request | frame_observer: tracked_observer}, visibility}
@@ -336,12 +339,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseFixture do
         send(notify, {:mixed_release_upstream_send, node()})
 
         Enum.each(terminal_messages, fn terminal ->
-          discriminator =
-            CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator.classify(
-              terminal
-            )
-
-          writer.(terminal, discriminator)
+          writer.(terminal, TerminalDiscriminator.classify(terminal))
         end)
 
         send(notify, {:mixed_release_request_materialized, :synthetic})
@@ -367,7 +365,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseFixture do
       interrupt_codex_session: fn _session_id, _opts -> :ok end
     }
 
-    CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.start_owner(
+    WebsocketOwnerSession.start_owner(
       codex_session_id: session.id,
       owner_lease_token: session.owner_lease_token,
       owner_instance_id: session.owner_instance_id,
@@ -411,29 +409,27 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseFixture do
 
   @spec run_forced_failure_cleanup_probe(atom()) :: {:error, ExUnit.AssertionError.t()}
   def run_forced_failure_cleanup_probe(peer_name) when is_atom(peer_name) do
+    {:ok, peer_pid, peer_node} =
+      :peer.start_link(%{
+        name: peer_name,
+        args: [~c"-kernel", ~c"prevent_overlapping_partitions", ~c"false"]
+      })
+
+    Process.unlink(peer_pid)
+
     try do
-      {:ok, peer_pid, peer_node} =
-        :peer.start_link(%{
-          name: peer_name,
-          args: [~c"-kernel", ~c"prevent_overlapping_partitions", ~c"false"]
-        })
-
-      Process.unlink(peer_pid)
-
-      try do
-        :ok = :erpc.call(peer_node, :code, :add_paths, [:code.get_path()])
-        {:ok, _tracer} = :erpc.call(peer_node, __MODULE__, :start_external_network_guard, [])
-        raise ExUnit.AssertionError, message: "forced peer cleanup probe"
-      after
-        if Process.alive?(peer_pid), do: :peer.stop(peer_pid)
-      end
-    rescue
-      error in ExUnit.AssertionError -> {:error, error}
+      :ok = :erpc.call(peer_node, :code, :add_paths, [:code.get_path()])
+      {:ok, _tracer} = :erpc.call(peer_node, __MODULE__, :start_external_network_guard, [])
+      raise ExUnit.AssertionError, message: "forced peer cleanup probe"
+    catch
+      :error, %ExUnit.AssertionError{} = error -> {:error, error}
+    after
+      if Process.alive?(peer_pid), do: :peer.stop(peer_pid)
     end
   end
 
   defp compile_forwarder do
-    session = CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
+    session = WebsocketOwnerSession
     fixture = __MODULE__
 
     # Behavioral transcription of source commit @source_commit at @source_path:
@@ -639,6 +635,16 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseFixture do
     load_compiled_forms(node, module, forms, ~c"identity_lookup_sentinel")
   end
 
+  @dialyzer {:nowarn_function,
+             [
+               load_pre_v1_bridge_forwarder: 1,
+               load_synthetic_identity_lookup: 2,
+               compile_forwarder: 0,
+               compile_forms: 1,
+               load_owner_lookup_sentinel: 1,
+               load_identity_lookup_sentinel: 1,
+               load_compiled_forms: 4
+             ]}
   defp load_compiled_forms(node, module, forms, filename) do
     {:ok, ^module, beam} = compile_forms(forms)
     :erpc.call(node, :code, :purge, [module])

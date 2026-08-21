@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   use CodexPooler.DataCase, async: false
 
+  @moduletag capture_log: true
+
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
   import ExUnit.CaptureLog

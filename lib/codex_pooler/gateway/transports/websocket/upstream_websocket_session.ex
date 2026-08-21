@@ -1249,29 +1249,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp receive_body(%ReceiveState{body: body}), do: websocket_body(body)
 
-  defp observe_frame(%ReceiveState{frame_observer: observer}, text, decoded)
-       when is_function(observer, 2) do
-    try do
-      observer.(text, decoded)
-    rescue
-      exception -> report_frame_observer_failure(:error, exception.__struct__)
-    catch
-      kind, _reason when kind in [:throw, :exit] -> report_frame_observer_failure(kind, nil)
+  defp observe_frame(%ReceiveState{frame_observer: observer}, text, decoded) do
+    case observer_arity(observer) do
+      2 -> observe_frame_observer(fn -> observer.(text, decoded) end)
+      1 -> observe_frame_observer(fn -> observer.(text) end)
+      nil -> :ok
     end
   end
 
-  defp observe_frame(%ReceiveState{frame_observer: observer}, text, _decoded)
-       when is_function(observer, 1) do
-    try do
-      observer.(text)
-    rescue
-      exception -> report_frame_observer_failure(:error, exception.__struct__)
-    catch
-      kind, _reason when kind in [:throw, :exit] -> report_frame_observer_failure(kind, nil)
-    end
-  end
+  defp observer_arity(observer) when is_function(observer, 2), do: 2
+  defp observer_arity(observer) when is_function(observer, 1), do: 1
+  defp observer_arity(_observer), do: nil
 
-  defp observe_frame(%ReceiveState{}, _text, _decoded), do: :ok
+  defp observe_frame_observer(observer) do
+    observer.()
+  rescue
+    exception -> report_frame_observer_failure(:error, exception.__struct__)
+  catch
+    kind, _reason when kind in [:throw, :exit] -> report_frame_observer_failure(kind, nil)
+  end
 
   defp report_frame_observer_failure(failure_kind, exception_class) do
     Logger.warning(

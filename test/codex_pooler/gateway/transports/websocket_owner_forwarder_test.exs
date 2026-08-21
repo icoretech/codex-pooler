@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest do
   use CodexPooler.DataCase, async: false
 
+  @moduletag capture_log: true
+
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
   import ExUnit.CaptureLog
@@ -1427,7 +1429,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     assert_receive {:DOWN, ^remote_turn_monitor, :process, ^remote_turn_task, :shutdown},
                    @peer_detection_timeout_ms
 
-    assert %{active_turn: nil, downstream: nil} = :sys.get_state(owner_pid)
+    await_owner_cancellation!(owner_pid)
   end
 
   @tag :continuation_generation_boundary
@@ -2533,6 +2535,31 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
       end
     else
       flunk("EPMD did not become ready: #{inspect(error)}")
+    end
+  end
+
+  defp await_owner_cancellation!(owner_pid, attempts \\ 100)
+
+  defp await_owner_cancellation!(owner_pid, attempts) when attempts > 0 do
+    case :sys.get_state(owner_pid) do
+      %{active_turn: nil, downstream: nil} ->
+        :ok
+
+      _state ->
+        yield_once({:await_owner_cancellation, owner_pid, attempts})
+        await_owner_cancellation!(owner_pid, attempts - 1)
+    end
+  end
+
+  defp await_owner_cancellation!(owner_pid, 0) do
+    assert %{active_turn: nil, downstream: nil} = :sys.get_state(owner_pid)
+  end
+
+  defp yield_once(message) do
+    send(self(), message)
+
+    receive do
+      ^message -> :ok
     end
   end
 

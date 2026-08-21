@@ -27,6 +27,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
   use CodexPoolerWeb.ConnCase, async: false
 
+  @moduletag capture_log: true
+
   import Ecto.Query
   import ExUnit.CaptureLog
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport
@@ -38,8 +40,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.Accounting.LedgerEntry
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Accounting.RequestLifecycle.Reservation
-  alias CodexPooler.Accounting.RequestLogs
-  alias CodexPooler.Accounting.RequestLogFact
+  alias CodexPooler.Accounting.{RequestLogFact, RequestLogs}
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.AgentV2ContractFixture
   alias CodexPooler.Audit.AuditEvent
@@ -1370,6 +1371,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       if Process.alive?(task.pid), do: Task.shutdown(task, :brutal_kill)
       CodexResponsesSocket.terminate(:closed, remote_state)
     end
+  end
+
   @tag :todo_9_native_observer_failure
   test "owner-forwarded frame observer failure still delivers one terminal" do
     marker = "synthetic-owner-observer-marker-#{System.unique_integer([:positive])}"

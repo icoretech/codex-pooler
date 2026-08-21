@@ -15,10 +15,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks
   alias CodexPooler.Repo
 
   @restore_downstream_keys [:correlation_id, :epoch, :pid]

@@ -70,8 +70,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest do
           {:unknown_fields, [atom() | String.t()]} | {:invalid_field, atom()}
 
   @spec new(map()) :: {:ok, t()} | {:error, validation_error()}
-  def new(attrs) when is_map(attrs) and not is_struct(attrs) do
-    with :ok <- reject_unknown_fields(attrs),
+  def new(attrs) when is_map(attrs) do
+    with false <- is_struct(attrs),
+         :ok <- reject_unknown_fields(attrs),
          :ok <- require_fields(attrs) do
       request = struct!(__MODULE__, attrs)
 
@@ -79,6 +80,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest do
         :ok -> {:ok, request}
         {:error, reason} -> {:error, reason}
       end
+    else
+      true -> {:error, {:invalid_field, :envelope}}
+      {:error, _reason} = error -> error
     end
   end
 
@@ -87,34 +91,31 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest do
   @spec validate(term()) :: :ok | {:error, validation_error()}
   def validate(%__MODULE__{} = request) do
     with :ok <- reject_unknown_fields(Map.delete(request, :__struct__)) do
-      validators = [
-        version: &(&1 == @version),
-        url: &valid_url?/1,
-        headers: &valid_headers?/1,
-        payload: &is_binary/1,
-        timeouts: &valid_timeouts?/1,
-        mapper: &(&1 in @mappers),
-        upstream_identity_id: &valid_uuid?/1,
-        observation: &valid_observation?/1,
-        reset_probe: &valid_reset_probe?/1,
-        native_codex_response_control: &valid_native_control?/1,
-        assignment_advertised?: &is_boolean/1,
-        connection_bound_continuation?: &is_boolean/1,
-        forward_error_body?: &is_boolean/1,
-        submission_notification?: &is_boolean/1
-      ]
-
-      Enum.reduce_while(validators, :ok, fn {field, validator}, :ok ->
-        if validator.(Map.fetch!(request, field)) do
-          {:cont, :ok}
-        else
-          {:halt, {:error, {:invalid_field, field}}}
-        end
-      end)
+      @fields
+      |> Enum.find(fn field -> not valid_field?(field, Map.fetch!(request, field)) end)
+      |> invalid_field_result()
     end
   end
 
   def validate(_request), do: {:error, {:invalid_field, :envelope}}
+
+  defp invalid_field_result(nil), do: :ok
+  defp invalid_field_result(field), do: {:error, {:invalid_field, field}}
+
+  defp valid_field?(:version, value), do: value == @version
+  defp valid_field?(:url, value), do: valid_url?(value)
+  defp valid_field?(:headers, value), do: valid_headers?(value)
+  defp valid_field?(:payload, value), do: is_binary(value)
+  defp valid_field?(:timeouts, value), do: valid_timeouts?(value)
+  defp valid_field?(:mapper, value), do: value in @mappers
+  defp valid_field?(:upstream_identity_id, value), do: valid_uuid?(value)
+  defp valid_field?(:observation, value), do: valid_observation?(value)
+  defp valid_field?(:reset_probe, value), do: valid_reset_probe?(value)
+  defp valid_field?(:native_codex_response_control, value), do: valid_native_control?(value)
+  defp valid_field?(:assignment_advertised?, value), do: is_boolean(value)
+  defp valid_field?(:connection_bound_continuation?, value), do: is_boolean(value)
+  defp valid_field?(:forward_error_body?, value), do: is_boolean(value)
+  defp valid_field?(:submission_notification?, value), do: is_boolean(value)
 
   defp reject_unknown_fields(attrs) do
     unknown =
@@ -146,7 +147,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest do
   defp valid_url?(_url), do: false
 
   defp valid_headers?(headers) when is_list(headers) and length(headers) <= @max_headers do
-    proper_list?(headers) and Enum.all?(headers, &valid_header?/1)
+    Enum.all?(headers, &valid_header?/1)
   end
 
   defp valid_headers?(_headers), do: false
@@ -166,10 +167,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest do
     |> :binary.bin_to_list()
     |> Enum.any?(&((&1 < 32 and &1 != 9) or &1 == 127))
   end
-
-  defp proper_list?([]), do: true
-  defp proper_list?([_head | tail]), do: proper_list?(tail)
-  defp proper_list?(_tail), do: false
 
   defp valid_timeouts?(%TimeoutConfig{} = timeouts) do
     exact_struct_fields?(timeouts, @timeout_fields) and

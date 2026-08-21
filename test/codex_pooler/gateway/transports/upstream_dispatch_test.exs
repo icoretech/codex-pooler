@@ -15,6 +15,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.RejectionBody
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
   alias CodexPooler.Gateway.Transports.UpstreamDispatch.RejectionDrain
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
@@ -1652,22 +1653,13 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     {output, _mapped} =
       case mapper do
         :native ->
-          CodexPooler.Gateway.Transports.Streaming.StreamProtocol.canonicalize_native_codex_responses_json_message(
-            raw,
-            decoded
-          )
+          StreamProtocol.canonicalize_native_codex_responses_json_message(raw, decoded)
 
         :codex ->
-          CodexPooler.Gateway.Transports.Streaming.StreamProtocol.canonicalize_codex_responses_json_message(
-            raw,
-            decoded
-          )
+          StreamProtocol.canonicalize_codex_responses_json_message(raw, decoded)
 
         :public ->
-          CodexPooler.Gateway.Transports.Streaming.StreamProtocol.normalize_public_openai_responses_json_message(
-            raw,
-            decoded
-          )
+          StreamProtocol.normalize_public_openai_responses_json_message(raw, decoded)
       end
 
     output

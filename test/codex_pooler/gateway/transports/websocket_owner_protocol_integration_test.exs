@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegrationTest do
   use CodexPooler.DataCase, async: false
 
+  @moduletag capture_log: true
+
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
   import ExUnit.CaptureLog
@@ -11,15 +13,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, CodexTurn}
+  alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Routing.{BridgeRing, RoutePlanInput}
   alias CodexPooler.Gateway.Runtime.Dispatch.{PreparedContext, SelectedCandidateContext}
   alias CodexPooler.Gateway.Runtime.Dispatch.WebsocketAttempt
+  alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.UpstreamDispatch
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
-  alias CodexPooler.Gateway.Transports.UpstreamDispatch
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
@@ -1280,9 +1284,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
   defp callback_failure_persistence_boundary(parent, release_ref) do
     %{
-      renew_owner_token: &CodexPooler.Gateway.Persistence.SessionContinuity.renew_owner_token/3,
-      release_owner_lease:
-        &CodexPooler.Gateway.Persistence.SessionContinuity.release_owner_lease/4,
+      renew_owner_token: &SessionContinuity.renew_owner_token/3,
+      release_owner_lease: &SessionContinuity.release_owner_lease/4,
       interrupt_codex_session: fn session_id, request_options ->
         send(parent, {:callback_failure_interruption_ready, self(), release_ref})
 
@@ -1292,11 +1295,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
           @detection_timeout_ms -> raise "timed out waiting to release owner interruption"
         end
 
-        result =
-          CodexPooler.Gateway.Runtime.Finalization.Interruption.interrupt_codex_session(
-            session_id,
-            request_options
-          )
+        result = Interruption.interrupt_codex_session(session_id, request_options)
 
         send(parent, {:callback_failure_interruption_complete, release_ref})
         result
@@ -1640,30 +1639,57 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
                handler_id,
                [:codex_pooler, :repo, :query],
                fn _event, _measurements, metadata, _config ->
-                 if metadata[:repo] == Repo do
-                   query = metadata[:query] || ""
-                   params = metadata[:params] || []
-
-                   send(parent, {handler_id, self(), metadata[:source], query, params})
-
-                   if metadata[:source] == "account_quota_windows" and
-                        String.starts_with?(String.upcase(String.trim_leading(query)), "INSERT") and
-                        Enum.any?(params, &(&1 in [identity_id, dumped_identity_id])) do
-                     send(parent, {handler_id, :quota_write_ready, self()})
-
-                     receive do
-                       {^handler_id, :release_quota_write} -> :ok
-                     after
-                       5_000 -> raise "timed out waiting to release quota persistence"
-                     end
-                   end
-                 end
+                 maybe_hold_quota_write(
+                   metadata,
+                   handler_id,
+                   parent,
+                   identity_id,
+                   dumped_identity_id
+                 )
                end,
                nil
              )
 
     handler_id
   end
+
+  defp maybe_hold_quota_write(metadata, handler_id, parent, identity_id, dumped_identity_id) do
+    if metadata[:repo] == Repo do
+      send(
+        parent,
+        {handler_id, self(), metadata[:source], metadata[:query] || "", metadata[:params] || []}
+      )
+
+      maybe_pause_quota_write(metadata, handler_id, parent, identity_id, dumped_identity_id)
+    end
+  end
+
+  defp maybe_pause_quota_write(metadata, handler_id, parent, identity_id, dumped_identity_id) do
+    if quota_window_insert?(metadata, identity_id, dumped_identity_id) do
+      send(parent, {handler_id, :quota_write_ready, self()})
+
+      receive do
+        {^handler_id, :release_quota_write} -> :ok
+      after
+        5_000 -> raise "timed out waiting to release quota persistence"
+      end
+    end
+  end
+
+  defp quota_window_insert?(metadata, identity_id, dumped_identity_id) do
+    metadata[:source] == "account_quota_windows" and insert_query?(metadata[:query]) and
+      identity_parameter?(metadata[:params], identity_id, dumped_identity_id)
+  end
+
+  defp insert_query?(query) when is_binary(query),
+    do: String.starts_with?(String.upcase(String.trim_leading(query)), "INSERT")
+
+  defp insert_query?(_query), do: false
+
+  defp identity_parameter?(params, identity_id, dumped_identity_id) when is_list(params),
+    do: Enum.any?(params, &(&1 in [identity_id, dumped_identity_id]))
+
+  defp identity_parameter?(_params, _identity_id, _dumped_identity_id), do: false
 
   defp await_quota_commit!(handler_id) do
     assert_receive {^handler_id, :quota_write_ready, task_pid}

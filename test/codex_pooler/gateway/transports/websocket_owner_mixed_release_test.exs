@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Transports.WebsocketOwnerMixedReleaseTest do
   use CodexPooler.DataCase, async: false
 
+  @moduletag capture_log: true
+
   import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
 

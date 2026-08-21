@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest do
   use ExUnit.Case, async: false
 
+  @moduletag capture_log: true
+
   alias CodexPooler.AgentV2ContractFixture
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
