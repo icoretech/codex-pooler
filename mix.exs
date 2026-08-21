@@ -57,7 +57,7 @@ defmodule CodexPooler.MixProject do
   defp deps do
     [
       {:argon2_elixir, "== 4.1.3"},
-      {:phoenix, "== 1.8.11"},
+      {:phoenix, "== 1.8.12"},
       {:phoenix_ecto, "== 4.7.0"},
       {:ecto_sql, "== 3.14.0"},
       {:postgrex, "== 0.22.4"},
@@ -76,7 +76,7 @@ defmodule CodexPooler.MixProject do
        app: false,
        compile: false,
        depth: 1},
-      {:swoosh, "== 1.27.0"},
+      {:swoosh, "== 1.27.1"},
       {:gen_smtp, "== 1.3.0"},
       {:req, "== 0.7.3"},
       {:finch, "== 0.23.0"},
@@ -95,7 +95,7 @@ defmodule CodexPooler.MixProject do
       {:dns_cluster, "== 0.2.0"},
       {:websock, "== 0.5.3"},
       {:websock_adapter, "== 0.6.0"},
-      {:bandit, "== 1.12.4"}
+      {:bandit, "== 1.12.5"}
     ]
   end
 
