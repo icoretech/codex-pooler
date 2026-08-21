@@ -1,7 +1,7 @@
 defmodule CodexPooler.Gateway.Payloads.ToolResultShape do
   @moduledoc false
 
-  @type item :: %{type: String.t(), call_id: String.t()}
+  @type item :: %{type: String.t(), call_id: String.t() | nil}
 
   @spec items(term()) :: [item()]
   def items(input), do: input |> collect_items([]) |> Enum.reverse()
@@ -15,10 +15,20 @@ defmodule CodexPooler.Gateway.Payloads.ToolResultShape do
 
   @spec tool_result?(term()) :: boolean()
   def tool_result?(%{} = item) do
-    is_binary(call_id(item)) and tool_result_type?(Map.get(item, "type"), item)
+    paired_tool_result?(item) or standalone_function_output?(item)
   end
 
   def tool_result?(_item), do: false
+
+  defp paired_tool_result?(item),
+    do: is_binary(call_id(item)) and tool_result_type?(Map.get(item, "type"), item)
+
+  defp standalone_function_output?(item) do
+    is_nil(Map.get(item, "call_id")) and
+      Map.get(item, "type") == "function_call_output" and
+      is_binary(clean_string(Map.get(item, "name"))) and
+      Map.has_key?(item, "output")
+  end
 
   defp tool_result_type?(type, item) when is_binary(type) do
     normalized = type |> String.trim() |> String.downcase()

@@ -497,6 +497,13 @@ defmodule CodexPooler.CompatibilityMatrixTest do
   end
 
   describe "Responses tool compatibility contract" do
+    test "closes paired and named standalone function output shapes" do
+      function_output =
+        CompatibilityMatrix.fixture!(:responses_chat).programmatic_tool_calling.input_items.function_call_output
+
+      assert function_output == function_call_output_contract()
+    end
+
     test "separates executable custom tools from replay and translates Chat" do
       feature = CompatibilityMatrix.by_slug!(:responses_executable_custom_tools)
       fixture = CompatibilityMatrix.fixture!(:responses_executable_custom_tools)
@@ -1019,5 +1026,35 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       {:get, "/backend-api/codex/agent-identities/jwks"},
       {:get, "/backend-api/wham/agent-identities/jwks"}
     ]
+  end
+
+  defp function_call_output_contract do
+    %{
+      paired: %{
+        call_id: "required_nonblank_string",
+        output: "required",
+        name: ["omitted", "null", "nonblank_string"],
+        namespace: ["omitted", "null", "nonblank_string"],
+        legacy_result: "accepted"
+      },
+      standalone: %{
+        call_id: ["omitted", "null"],
+        name: "required_nonblank_string",
+        namespace: ["omitted", "null", "nonblank_string"],
+        output: "required",
+        legacy_result: "rejected"
+      },
+      classifier_debug_privacy: %{
+        classifier: "exact_named_function_call_output_only",
+        collected_call_id: "nil_without_synthetic_identifier",
+        debug_summary: "metadata_only",
+        raw_output_name_anchor_or_request_body: "not_stored"
+      },
+      caller: %{
+        types: ["direct", "program"],
+        program_requires: ["caller_id"],
+        direct_forbids: ["caller_id"]
+      }
+    }
   end
 end

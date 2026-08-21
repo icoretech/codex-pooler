@@ -1419,6 +1419,34 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert programmatic.input_items.program_output.exact_keys == true
       assert programmatic.input_items.program_output.statuses == ["completed", "incomplete"]
 
+      assert programmatic.input_items.function_call_output == %{
+               paired: %{
+                 call_id: "required_nonblank_string",
+                 output: "required",
+                 name: ["omitted", "null", "nonblank_string"],
+                 namespace: ["omitted", "null", "nonblank_string"],
+                 legacy_result: "accepted"
+               },
+               standalone: %{
+                 call_id: ["omitted", "null"],
+                 name: "required_nonblank_string",
+                 namespace: ["omitted", "null", "nonblank_string"],
+                 output: "required",
+                 legacy_result: "rejected"
+               },
+               classifier_debug_privacy: %{
+                 classifier: "exact_named_function_call_output_only",
+                 collected_call_id: "nil_without_synthetic_identifier",
+                 debug_summary: "metadata_only",
+                 raw_output_name_anchor_or_request_body: "not_stored"
+               },
+               caller: %{
+                 types: ["direct", "program"],
+                 program_requires: ["caller_id"],
+                 direct_forbids: ["caller_id"]
+               }
+             }
+
       for caller <- [
             programmatic.input_items.function_call.caller,
             programmatic.input_items.function_call_output.caller

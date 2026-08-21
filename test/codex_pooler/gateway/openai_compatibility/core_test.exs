@@ -1937,6 +1937,74 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       end
     end
 
+    test "paired function call outputs preserve nullable identity metadata and legacy result" do
+      for result_key <- ["output", "result"] do
+        item = %{
+          "type" => "function_call_output",
+          "id" => "fco_fixture_paired_contract",
+          "call_id" => "call_fixture_paired_contract",
+          "name" => nil,
+          "namespace" => nil,
+          "caller" => %{"type" => "direct"},
+          "metadata" => %{"fixture" => true},
+          result_key => nil
+        }
+
+        assert {:ok, %{payload: %{"input" => [^item]}}} =
+                 Responses.coerce(%{"model" => "gpt-fixture-text", "input" => [item]})
+      end
+    end
+
+    test "named standalone function call outputs require a valid identity and explicit output" do
+      for call_id <- [:omitted, nil], namespace <- [:omitted, nil, "browser.search"] do
+        item = %{
+          "type" => "function_call_output",
+          "name" => "lookup_fixture",
+          "output" => nil
+        }
+
+        item = if call_id == :omitted, do: item, else: Map.put(item, "call_id", call_id)
+        item = if namespace == :omitted, do: item, else: Map.put(item, "namespace", namespace)
+
+        assert {:ok, %{payload: %{"input" => [^item]}}} =
+                 Responses.coerce(%{"model" => "gpt-fixture-text", "input" => [item]})
+      end
+
+      valid_item = %{
+        "type" => "function_call_output",
+        "name" => "lookup_fixture",
+        "output" => "synthetic output"
+      }
+
+      invalid_items = [
+        Map.put(valid_item, "call_id", " "),
+        Map.put(valid_item, "call_id", 123),
+        Map.delete(valid_item, "name"),
+        Map.put(valid_item, "name", " "),
+        Map.put(valid_item, "name", 123),
+        Map.put(valid_item, "namespace", " "),
+        Map.put(valid_item, "namespace", 123),
+        Map.delete(valid_item, "output"),
+        valid_item |> Map.delete("output") |> Map.put("result", "legacy")
+      ]
+
+      Enum.each(invalid_items, fn item ->
+        assert {:error, %{status: 400, code: "invalid_request", param: "input"}} =
+                 Responses.coerce(%{"model" => "gpt-fixture-text", "input" => [item]})
+      end)
+    end
+
+    test "named standalone function output remains opaque to top-level media validation" do
+      item = %{
+        "type" => "function_call_output",
+        "name" => "capture_fixture",
+        "output" => [%{"type" => "input_image", "image_url" => "sediment://file_fixture"}]
+      }
+
+      assert {:ok, %{payload: %{"input" => [^item]}}} =
+               Responses.coerce(%{"model" => "gpt-fixture-text", "input" => [item]})
+    end
+
     test "function call replay baseline accepts and preserves supported items" do
       input = [
         %{

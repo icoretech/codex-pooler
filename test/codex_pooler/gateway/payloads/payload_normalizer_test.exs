@@ -1195,7 +1195,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
         {:blank_websocket, "  ", :websocket, ordinary_input(), true, false},
         {:non_binary_websocket, 42, :websocket, ordinary_input(), true, false},
         {:stripped_http, "response-fixture", :http, ordinary_input(), false, false},
-        {:retained_semantic_http, "response-fixture", :http, tool_result_input(), true, true}
+        {:retained_semantic_http, "response-fixture", :http, tool_result_input(), true, true},
+        {:retained_standalone_http, "response-fixture", :http, standalone_tool_result_input(),
+         true, true}
       ]
 
       for {label, previous_response_id, transport, input, final_id_present?, expected_marker} <-
@@ -3010,6 +3012,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
 
   defp tool_result_input,
     do: [%{"type" => "function_call_output", "call_id" => "call-fixture", "output" => "ok"}]
+
+  defp standalone_tool_result_input,
+    do: [%{"type" => "function_call_output", "name" => "lookup-fixture", "output" => "ok"}]
 
   defp non_strict_tool_schema_payload do
     %{

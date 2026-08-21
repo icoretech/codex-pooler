@@ -209,6 +209,20 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
                  ]
                })
              )
+
+      assert WebsocketCodec.continuity_ordered_payload?(
+               Jason.encode!(%{
+                 "type" => "response.create",
+                 "previous_response_id" => "resp_previous",
+                 "input" => [
+                   %{
+                     "type" => "function_call_output",
+                     "name" => "lookup_fixture",
+                     "output" => nil
+                   }
+                 ]
+               })
+             )
     end
 
     test "does not order ordinary continuations, warmups, or malformed frames" do

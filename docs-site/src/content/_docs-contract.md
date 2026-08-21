@@ -99,11 +99,15 @@ owner-forwarded websocket output restore a missing or null `custom_tool_call`
 An explicit provider namespace is preserved; flat, unknown, and non-unique names
 remain unchanged rather than guessed.
 
-Responses `function_call_output` replay accepts optional nullable, nonblank string
-`name` and `namespace` metadata over direct HTTP and the narrow Responses
-websocket surface. Omitted or `null` values are accepted; blank or non-string
-values are rejected before dispatch. The legacy `result` branch follows the same
-metadata contract.
+Responses `function_call_output` replay has two closed forms over direct HTTP and
+the narrow Responses websocket surface. A paired item requires a nonblank
+`call_id`; its existing `output` form and paired-only legacy `result` form are
+unchanged. A named standalone item requires a nonblank `name` and an `output`
+field, permits `call_id` only when omitted or `null`, and permits `namespace`
+only when omitted, `null`, or a nonblank string. Blank or non-string values and
+standalone `result` reject before dispatch. Classification and debug summaries
+remain metadata-only; this narrow replay contract does not add general API
+parity or prove provider-live acceptance.
 
 Assistant replay `output_text` may carry only exact `url_citation` annotations:
 the map keys are `type`, `start_index`, `end_index`, `url`, and `title`, with

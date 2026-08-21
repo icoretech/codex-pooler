@@ -187,10 +187,14 @@ program code, results, schemas, or identifiers. A request accepted by the
 gateway can still be rejected when its selected upstream model or account lacks
 the required capability.
 
-Responses `function_call_output` replay accepts optional nullable, nonblank string
-`name` and `namespace` metadata. Omitted or `null` values are accepted; blank or
-non-string values are rejected before dispatch. This applies to both `output` and
-legacy `result` items over HTTP and the narrow Responses websocket bridge.
+Responses `function_call_output` replay has two closed forms over HTTP and the
+narrow Responses websocket bridge. A paired item requires a nonblank `call_id`;
+its existing `output` form and paired-only legacy `result` form are unchanged. A
+named standalone item requires a nonblank `name` and an `output` field, permits
+`call_id` only when omitted or `null`, and permits `namespace` only when omitted,
+`null`, or a nonblank string. Blank or non-string values and standalone `result`
+reject before dispatch. Classification and debug summaries remain metadata-only.
+This does not expand general Responses parity or prove provider-live acceptance.
 
 ### Hosted shell history replay
 

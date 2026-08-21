@@ -103,13 +103,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
        when is_binary(file_data),
        do: :ok
 
-  defp validate_input_item(
-         %{"type" => "function_call_output", "call_id" => call_id} = item,
-         _payload
-       )
-       when is_binary(call_id) and call_id != "" do
-    validate_function_call_output_item(item)
-  end
+  defp validate_input_item(%{"type" => "function_call_output"} = item, _payload),
+    do: validate_function_call_output_item(item)
 
   defp validate_input_item(%{"type" => "custom_tool_call_output"} = item, _payload),
     do: validate_custom_tool_call_output_item(item)
@@ -607,6 +602,15 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
   defp validate_function_call_output_item(item) do
+    case Map.fetch(item, "call_id") do
+      {:ok, call_id} when is_binary(call_id) -> validate_paired_function_call_output_item(item)
+      {:ok, nil} -> validate_standalone_function_call_output_item(item)
+      :error -> validate_standalone_function_call_output_item(item)
+      {:ok, _call_id} -> invalid_input_item()
+    end
+  end
+
+  defp validate_paired_function_call_output_item(item) do
     cond do
       Map.has_key?(item, "output") ->
         with :ok <-
@@ -653,6 +657,32 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
 
       true ->
         {:error, Error.invalid_request("function_call_output requires output", "input")}
+    end
+  end
+
+  defp validate_standalone_function_call_output_item(item) do
+    with :ok <-
+           validate_exact_item_keys(item, [
+             "type",
+             "call_id",
+             "output",
+             "id",
+             "name",
+             "namespace",
+             "caller",
+             "metadata",
+             @metadata_passthrough_key
+           ]),
+         true <- Map.has_key?(item, "output"),
+         :ok <- validate_nonblank(Map.get(item, "name")),
+         :ok <- validate_nullable_optional_namespace(item),
+         :ok <- validate_optional_item_metadata(item),
+         :ok <- validate_optional_id(item),
+         :ok <- validate_optional_caller(item) do
+      validate_function_call_output(Map.get(item, "output"))
+    else
+      false -> {:error, Error.invalid_request("function_call_output requires output", "input")}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -783,6 +813,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Validation do
   end
 
   defp validate_nonblank(_value),
+    do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
+
+  defp invalid_input_item,
     do: {:error, Error.invalid_request("input item shape is not translatable", "input")}
 
   defp validate_exact_item_keys(item, allowed_keys) do

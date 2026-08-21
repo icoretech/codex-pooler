@@ -435,6 +435,79 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
+  @tag :tool_result_previous_response
+  test "GET /v1/responses websocket forwards a named standalone continuation with its anchor" do
+    anchor = "resp_v1_websocket_standalone_anchor"
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           completed_websocket_response(anchor),
+           completed_websocket_response("resp_v1_websocket_standalone_continuation")
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "standalone-continuation-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic anchor request"
+        })
+
+      {conn, websocket, first_frames} =
+        receive_websocket_until_terminal!(conn, websocket, ref, [])
+
+      assert [%{"type" => "response.completed", "response" => %{"id" => ^anchor}}] =
+               first_frames
+
+      input = [
+        %{"type" => "item_reference", "id" => "msg_websocket_standalone_reference"},
+        %{
+          "type" => "function_call_output",
+          "name" => "lookup_fixture",
+          "output" => %{"ok" => true}
+        }
+      ]
+
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "previous_response_id" => anchor,
+          "input" => input
+        })
+
+      {conn, websocket, second_frames} =
+        receive_websocket_until_terminal!(conn, websocket, ref, [])
+
+      assert [
+               %{
+                 "type" => "response.completed",
+                 "response" => %{"id" => "resp_v1_websocket_standalone_continuation"}
+               }
+             ] = second_frames
+
+      assert [_first_request, second_request] = FakeUpstream.requests(upstream)
+      assert second_request.method == "WEBSOCKET"
+      assert second_request.path == "/backend-api/codex/responses"
+      assert second_request.json["type"] == "response.create"
+      assert second_request.json["previous_response_id"] == anchor
+      assert second_request.json["input"] == input
+
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
   test "GET /v1/responses websocket keeps the socket reusable after a misalignment policy terminal" do
     provider_wording = "Provider policy wording must not persist."
 

@@ -391,6 +391,68 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
     end
 
     @tag :tool_result_previous_response
+    test "v1 Responses forwards a named standalone function-output continuation unchanged", %{
+      conn: conn
+    } do
+      upstream =
+        start_upstream(
+          FakeUpstream.require_json_field(
+            "previous_response_id",
+            %{
+              "id" => "resp_v1_standalone_function_output",
+              "object" => "response",
+              "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+            },
+            %{"error" => %{"code" => "missing_tool_context"}}
+          )
+        )
+
+      setup = gateway_setup(upstream)
+
+      previous_response_id = "STANDALONE_ANCHOR_SENTINEL"
+
+      input = [
+        %{"type" => "item_reference", "id" => "msg_standalone_function_output"},
+        %{
+          "type" => "function_call_output",
+          "name" => "STANDALONE_NAME_SENTINEL",
+          "namespace" => "fixture.namespace",
+          "output" => "STANDALONE_OUTPUT_SENTINEL",
+          "metadata" => %{"source_call_id" => "STANDALONE_CALL_ID_SENTINEL"}
+        }
+      ]
+
+      response_conn =
+        conn
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "previous_response_id" => previous_response_id,
+          "input" => input
+        })
+
+      assert %{"id" => "resp_v1_standalone_function_output"} =
+               json_response(response_conn, 200)
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.json["previous_response_id"] == previous_response_id
+      assert captured.json["input"] == input
+
+      metadata = persisted_gateway_metadata(setup.pool.id)
+
+      for sentinel <- [
+            "STANDALONE_OUTPUT_SENTINEL",
+            "STANDALONE_NAME_SENTINEL",
+            "STANDALONE_CALL_ID_SENTINEL",
+            "STANDALONE_ANCHOR_SENTINEL"
+          ] do
+        refute metadata =~ sentinel
+      end
+
+      refute metadata =~ "raw_request"
+    end
+
+    @tag :tool_result_previous_response
     test "v1 Responses preserves explicit null Vercel tool-output continuation", %{conn: conn} do
       upstream =
         start_upstream(
@@ -1402,79 +1464,118 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
 
       setup = gateway_setup(upstream)
 
-      invalid_payloads = [
-        {%{
-           "previous_response_id" => "resp_v1_stale_ordinary",
-           "input" => "synthetic ordinary continuation"
-         }, "previous_response_id"},
-        {%{
-           "previous_response_id" => "resp_v1_stale_item_reference",
-           "input" => [
-             %{"type" => "item_reference", "id" => "msg_existing_stale"},
-             %{"role" => "user", "content" => "synthetic ordinary continuation"}
-           ]
-         }, "input"},
-        {%{
-           "previous_response_id" => "resp_v1_broad_reference",
-           "input" => [
-             %{"type" => "item_reference", "id" => "msg_existing_extra", "output" => "bad"},
-             %{"type" => "function_call_output", "call_id" => "call_invalid", "output" => "bad"}
-           ]
-         }, "input"},
-        {%{
-           "input" => [
-             %{"type" => "item_reference", "id" => "msg_existing_missing_previous"},
-             %{
-               "type" => "function_call_output",
-               "call_id" => "call_missing_previous",
-               "output" => "bad"
-             }
-           ]
-         }, "input"},
-        {%{
-           "previous_response_id" => 123,
-           "input" => [
-             %{"type" => "function_call_output", "call_id" => "call_invalid", "output" => "bad"}
-           ]
-         }, "previous_response_id"},
-        {%{
-           "previous_response_id" => "",
-           "input" => [
-             %{
-               "type" => "function_call_output",
-               "call_id" => "call_blank_previous",
-               "output" => "bad"
-             }
-           ]
-         }, "previous_response_id"},
-        {%{
-           "input" => [
-             %{
-               "type" => "program_output",
-               "id" => "program_output_missing_result",
-               "call_id" => "call_program_output_invalid",
-               "status" => "completed"
-             }
-           ]
-         }, "input"},
-        {%{
-           "input" => [
-             %{
-               "type" => "program_output",
-               "id" => "program_output_wrong_status",
-               "call_id" => "call_program_output_wrong_status",
-               "result" => "",
-               "status" => "unknown"
-             }
-           ]
-         }, "input"},
-        {%{
-           "previous_response_id" => "resp_v1_misleading_non_result",
-           "input" => [
-             %{"type" => "message", "call_id" => "call_misleading_non_result"}
-           ]
-         }, "input"}
+      invalid_standalone_function_outputs = [
+        %{
+          "type" => "function_call_output",
+          "call_id" => " ",
+          "name" => "lookup_fixture",
+          "output" => "bad"
+        },
+        %{
+          "type" => "function_call_output",
+          "call_id" => 123,
+          "name" => "lookup_fixture",
+          "output" => "bad"
+        },
+        %{"type" => "function_call_output", "output" => "bad"},
+        %{"type" => "function_call_output", "name" => " ", "output" => "bad"},
+        %{"type" => "function_call_output", "name" => 123, "output" => "bad"},
+        %{
+          "type" => "function_call_output",
+          "name" => "lookup_fixture",
+          "namespace" => " ",
+          "output" => "bad"
+        },
+        %{
+          "type" => "function_call_output",
+          "name" => "lookup_fixture",
+          "namespace" => 123,
+          "output" => "bad"
+        },
+        %{"type" => "function_call_output", "name" => "lookup_fixture"},
+        %{"type" => "function_call_output", "name" => "lookup_fixture", "result" => "bad"}
       ]
+
+      invalid_payloads =
+        [
+          {%{
+             "previous_response_id" => "resp_v1_stale_ordinary",
+             "input" => "synthetic ordinary continuation"
+           }, "previous_response_id"},
+          {%{
+             "previous_response_id" => "resp_v1_stale_item_reference",
+             "input" => [
+               %{"type" => "item_reference", "id" => "msg_existing_stale"},
+               %{"role" => "user", "content" => "synthetic ordinary continuation"}
+             ]
+           }, "input"},
+          {%{
+             "previous_response_id" => "resp_v1_broad_reference",
+             "input" => [
+               %{"type" => "item_reference", "id" => "msg_existing_extra", "output" => "bad"},
+               %{"type" => "function_call_output", "call_id" => "call_invalid", "output" => "bad"}
+             ]
+           }, "input"},
+          {%{
+             "input" => [
+               %{"type" => "item_reference", "id" => "msg_existing_missing_previous"},
+               %{
+                 "type" => "function_call_output",
+                 "call_id" => "call_missing_previous",
+                 "output" => "bad"
+               }
+             ]
+           }, "input"},
+          {%{
+             "previous_response_id" => 123,
+             "input" => [
+               %{"type" => "function_call_output", "call_id" => "call_invalid", "output" => "bad"}
+             ]
+           }, "previous_response_id"},
+          {%{
+             "previous_response_id" => "",
+             "input" => [
+               %{
+                 "type" => "function_call_output",
+                 "call_id" => "call_blank_previous",
+                 "output" => "bad"
+               }
+             ]
+           }, "previous_response_id"},
+          {%{
+             "input" => [
+               %{
+                 "type" => "program_output",
+                 "id" => "program_output_missing_result",
+                 "call_id" => "call_program_output_invalid",
+                 "status" => "completed"
+               }
+             ]
+           }, "input"},
+          {%{
+             "input" => [
+               %{
+                 "type" => "program_output",
+                 "id" => "program_output_wrong_status",
+                 "call_id" => "call_program_output_wrong_status",
+                 "result" => "",
+                 "status" => "unknown"
+               }
+             ]
+           }, "input"},
+          {%{
+             "previous_response_id" => "resp_v1_misleading_non_result",
+             "input" => [
+               %{"type" => "message", "call_id" => "call_misleading_non_result"}
+             ]
+           }, "input"}
+        ] ++
+          Enum.map(invalid_standalone_function_outputs, fn item ->
+            {%{
+               "previous_response_id" => "resp_v1_invalid_standalone",
+               "input" => [item]
+             }, "input"}
+          end)
 
       Enum.each(invalid_payloads, fn {payload, expected_param} ->
         rejected_conn =
@@ -1486,6 +1587,17 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
                  json_response(rejected_conn, 400)
 
         assert FakeUpstream.count(upstream) == 0
+        assert Repo.aggregate(Attempt, :count) == 0
+
+        assert Repo.aggregate(
+                 from(entry in LedgerEntry, where: entry.entry_kind == "reservation"),
+                 :count
+               ) == 0
+
+        assert Repo.aggregate(
+                 from(entry in LedgerEntry, where: entry.entry_kind == "settlement"),
+                 :count
+               ) == 0
       end)
 
       metadata = persisted_gateway_metadata(setup.pool.id)
