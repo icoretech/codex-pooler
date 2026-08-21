@@ -5,7 +5,7 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
 
   @fixture Path.expand("../../fixtures/pricing/openai/2026-07-28.json", __DIR__)
   @target Path.expand("../../../priv/pricing/openai/pricing.json", __DIR__)
-  @target_sha256 "108c8820c12ca3190f2fc73c5108a80623ea7c9c70018dddba21200631eb857e"
+  @target_sha256 "95ca074784cbeef14a1713852fb2b6c560bdf8853371c2900b6b08fd6a1ddd69"
 
   @skipped_pricing_type_paths [
     "models.gpt-4o-mini-transcribe.pricing_type",
@@ -59,16 +59,16 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
            ]
   end
 
-  test "classifies the reviewed August 10 target with exact artifact and warning coverage" do
+  test "classifies the reviewed August 21 target with exact artifact and warning coverage" do
     raw = File.read!(@target)
     payload = Jason.decode!(raw)
     result = OpenAIPricingPreflight.validate_file(@target)
 
-    assert byte_size(raw) == 64_012
+    assert byte_size(raw) == 63_493
     assert Base.encode16(:crypto.hash(:sha256, raw), case: :lower) == @target_sha256
-    assert payload["generated_at"] == "2026-08-10T18:34:37.635217Z"
-    assert payload["models_count"] == 80
-    assert map_size(payload["models"]) == 80
+    assert payload["generated_at"] == "2026-08-21T21:41:01.660811Z"
+    assert payload["models_count"] == 79
+    assert map_size(payload["models"]) == 79
     assert payload["tools_count"] == 4
     assert map_size(payload["tools"]) == 4
 
@@ -77,15 +77,15 @@ defmodule CodexPooler.Catalog.OpenAIPricingPreflightTest do
     assert length(result.warnings) == 82
 
     assert result.summary == %{
-             importable_rows: 184,
-             priced_rows: 168,
+             importable_rows: 183,
+             priced_rows: 167,
              unavailable_rows: 16,
              skipped_models: 10,
              skipped_price_buckets: 72
            }
 
     assert result.coverage.imported_price_buckets == %{
-             "default" => 112,
+             "default" => 111,
              "long_context" => 36,
              "short_context" => 36
            }

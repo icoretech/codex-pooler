@@ -521,7 +521,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         headers =
           Metadata.response_headers(response, RouteClass.streaming?(payload), request_options)
 
-        result = failure_result(status, headers, body, request_options, opts)
+        result = failure_result(status, headers, body, request_options, payload, error_code, opts)
 
         {:ok, result}
 
@@ -530,7 +530,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     end
   end
 
-  defp failure_result(status, headers, body, request_options, opts) do
+  defp failure_result(status, headers, body, request_options, payload, error_code, opts) do
+    marker = public_input_file_upstream_404?(status, request_options, payload)
+
     case {Keyword.get(opts, :failure_projection, :mode_scoped),
           Metadata.explicit_full_ordinary_responses?(request_options)} do
       {{:misalignment_policy_violation, summary}, _explicit_full?} ->
@@ -547,12 +549,51 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         %{status: status, headers: headers, body: @canonical_full_failure_body}
 
       {:mode_scoped, true} ->
-        %{status: status, headers: headers, body: @canonical_full_failure_body}
+        %{
+          status: status,
+          headers: headers,
+          body: @canonical_full_failure_body,
+          public_input_file_upstream_404?: marker
+        }
 
       {_projection, _explicit_full?} ->
-        %{status: status, headers: headers, raw_body: body}
+        %{
+          status: status,
+          headers: headers,
+          raw_body: body,
+          public_stream_startup_error_code: stream_startup_error_code(error_code, request_options),
+          public_input_file_upstream_404?: marker
+        }
     end
   end
+
+  defp public_input_file_upstream_404?(404, %RequestOptions{} = request_options, payload)
+       when is_map(payload) do
+    request_options.openai_compatibility.source_endpoint == "/v1/responses" and
+      RequestOptions.OpenAICompatibility.translated_responses_surface?(
+        request_options.openai_compatibility
+      ) and contains_input_file?(payload)
+  end
+
+  defp public_input_file_upstream_404?(_status, _request_options, _payload), do: false
+
+  defp contains_input_file?(%{"type" => "input_file"}), do: true
+
+  defp contains_input_file?(%{} = value),
+    do: Enum.any?(value, fn {_key, item} -> contains_input_file?(item) end)
+
+  defp contains_input_file?(values) when is_list(values),
+    do: Enum.any?(values, &contains_input_file?/1)
+
+  defp contains_input_file?(_value), do: false
+
+  defp stream_startup_error_code(error_code, %RequestOptions{
+         transport: %{transport: "http_sse"},
+         openai_compatibility: %{public_openai_responses_stream: true}
+       }),
+    do: error_code
+
+  defp stream_startup_error_code(_error_code, %RequestOptions{}), do: nil
 
   defp finalize_response_body_limit_exceeded(response, %SelectedCandidateContext{} = context) do
     %{reserved: reserved, attempt: attempt, request_options: request_options} = context

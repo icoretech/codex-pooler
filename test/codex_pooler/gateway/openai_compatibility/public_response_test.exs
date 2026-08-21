@@ -65,6 +65,83 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponseTest do
     end
   end
 
+  describe "upstream input-file capability boundary" do
+    test "exposes only a trusted typed 404 classification" do
+      upstream_error = %{
+        "code" => "provider_not_found",
+        "message" => "private upstream input-file limitation",
+        "param" => "input[0].content[1].file_id",
+        "request_body" => "private request body",
+        "type" => "api_error"
+      }
+
+      opts = [status: 404, input_file_upstream_404?: true]
+
+      assert PublicResponse.terminal_error_status(upstream_error, opts) == 404
+
+      assert PublicResponse.normalize_error(upstream_error, opts) == %{
+               "code" => "upstream_status",
+               "message" => "upstream request failed",
+               "type" => "invalid_request_error",
+               "upstream_status" => 404
+             }
+
+      body = Jason.encode!(%{"error" => upstream_error})
+
+      assert PublicResponse.normalize_raw_body(404, body, &Function.identity/1,
+               input_file_upstream_404?: true
+             ) ==
+               {:ok,
+                %{
+                  "error" => %{
+                    "code" => "upstream_status",
+                    "message" => "upstream request failed",
+                    "type" => "invalid_request_error",
+                    "upstream_status" => 404
+                  }
+                }}
+
+      encoded = Jason.encode!(PublicResponse.normalize_error(upstream_error, opts))
+      refute encoded =~ "private upstream input-file limitation"
+      refute encoded =~ "input[0].content[1].file_id"
+      refute encoded =~ "private request body"
+    end
+
+    test "keeps non-capability upstream rejections redacted" do
+      upstream_error = %{
+        "code" => "provider_not_found",
+        "message" => "private upstream detail",
+        "param" => "input[0].content[1].file_id",
+        "type" => "invalid_request_error"
+      }
+
+      assert PublicResponse.terminal_error_status(upstream_error, status: 404) == 502
+
+      assert PublicResponse.normalize_error(upstream_error, status: 404) == %{
+               "code" => "provider_not_found",
+               "message" => "upstream request failed",
+               "type" => "server_error"
+             }
+    end
+
+    test "does not classify upstream_status without the observed upstream type" do
+      upstream_error = %{
+        "code" => "upstream_status",
+        "message" => "private upstream detail",
+        "param" => "input[0].content[1].file_id",
+        "type" => "api_error"
+      }
+
+      assert PublicResponse.terminal_error_status(upstream_error, status: 404) == 502
+
+      assert PublicResponse.normalize_error(upstream_error, status: 404) == %{
+               "code" => "upstream_status",
+               "message" => "upstream request failed",
+               "type" => "server_error"
+             }
+    end
+  end
+
   describe "misalignment policy violation" do
     test "projects direct HTTP error bodies through the same narrow shape" do
       body =

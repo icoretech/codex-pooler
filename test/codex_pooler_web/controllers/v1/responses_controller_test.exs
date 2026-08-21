@@ -9698,6 +9698,103 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     assert request.status == "failed"
   end
 
+  @tag :input_file_upstream_404
+  test "POST /v1/responses projects input-file upstream 404 without provider detail", %{
+    conn: conn
+  } do
+    provider_detail = "provider 404 leaked https://provider.internal.example/files?key=sk-secret"
+
+    upstream =
+      start_upstream(
+        {:json_error, 404,
+         %{
+           "error" => %{
+             "code" => "provider_not_found",
+             "message" => provider_detail,
+             "param" => "input[0].content[0].file_id",
+             "type" => "api_error"
+           }
+         }}
+      )
+
+    setup = gateway_setup(upstream)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{
+                "type" => "input_file",
+                "filename" => "synthetic.pdf",
+                "file_data" => "data:application/pdf;base64,c3ludGhldGljIGZpbGU="
+              }
+            ]
+          }
+        ]
+      })
+
+    assert %{"error" => error} = json_response(response, 404)
+
+    assert error == %{
+             "code" => "upstream_status",
+             "message" => "upstream request failed",
+             "type" => "invalid_request_error",
+             "upstream_status" => 404
+           }
+
+    refute response.resp_body =~ "synthetic.pdf"
+
+    refute response.resp_body =~ provider_detail
+    refute response.resp_body =~ "provider.internal.example"
+    refute response.resp_body =~ "sk-secret"
+    refute response.resp_body =~ "provider_not_found"
+    assert FakeUpstream.count(upstream) == 1
+  end
+
+  @tag :input_file_upstream_404
+  test "POST /v1/responses keeps unrelated upstream 404 redacted", %{conn: conn} do
+    provider_detail =
+      "provider 404 leaked https://provider.internal.example/responses?key=sk-secret"
+
+    upstream =
+      start_upstream(
+        {:json_error, 404,
+         %{
+           "error" => %{
+             "code" => "provider_not_found",
+             "message" => provider_detail,
+             "param" => "input",
+             "type" => "api_error"
+           }
+         }}
+      )
+
+    setup = gateway_setup(upstream)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic ordinary response"
+      })
+
+    assert %{"error" => error} = json_response(response, 502)
+    assert error["message"] == "upstream request failed"
+    assert error["type"] == "server_error"
+    assert error["code"] == "upstream_status"
+    refute Map.has_key?(error, "param")
+    refute response.resp_body =~ provider_detail
+    refute response.resp_body =~ "provider.internal.example"
+    refute response.resp_body =~ "sk-secret"
+    assert FakeUpstream.count(upstream) == 1
+  end
+
   test "POST /v1/responses rejects unsupported logprobs before dispatch", %{conn: conn} do
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
     setup = gateway_setup(upstream)

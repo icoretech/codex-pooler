@@ -5,8 +5,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
 
   @type success_normalizer :: (map() -> map())
   @type error_status :: integer() | String.t() | nil
+  @type terminal_error_status :: 400 | 404 | 502
   @type error_origin :: :local_validation
-  @type error_opts :: [status: error_status(), origin: error_origin()]
+  @type error_opts :: [
+          status: error_status(),
+          origin: error_origin(),
+          input_file_upstream_404?: boolean(),
+          source_code: String.t() | nil
+        ]
 
   @public_recovery_error_tokens ~w(pinned_continuation_reauth_required pinned_continuation_unavailable)
   @server_error_tokens ~w(internal_error server_error upstream_error server_is_overloaded)
@@ -21,26 +27,27 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
     |> Kernel.++([{"content-type", "text/event-stream"}])
   end
 
-  @spec normalize_raw_body(pos_integer(), term(), success_normalizer()) ::
+  @spec normalize_raw_body(pos_integer(), term(), success_normalizer(), error_opts()) ::
           {:ok, map()} | :passthrough
-  def normalize_raw_body(status, body, normalize_success) when is_binary(body) do
+  def normalize_raw_body(status, body, normalize_success, opts \\ [])
+  def normalize_raw_body(status, body, normalize_success, opts) when is_binary(body) do
     case Jason.decode(body) do
       {:ok, decoded} when is_map(decoded) and status < 400 ->
         {:ok, normalize_success.(decoded)}
 
       {:ok, %{"error" => %{} = error}} when status >= 400 ->
-        {:ok, %{"error" => normalize_error(error, status: status)}}
+        {:ok, %{"error" => normalize_error(error, Keyword.put(opts, :status, status))}}
 
       {:ok, decoded} when is_map(decoded) and status >= 400 ->
-        {:ok, normalize_error_body(status)}
+        {:ok, normalize_error_body(status, opts)}
 
       _error ->
-        if status >= 400, do: {:ok, normalize_error_body(status)}, else: :passthrough
+        if status >= 400, do: {:ok, normalize_error_body(status, opts)}, else: :passthrough
     end
   end
 
-  def normalize_raw_body(status, _body, _normalize_success) do
-    if status >= 400, do: {:ok, normalize_error_body(status)}, else: :passthrough
+  def normalize_raw_body(status, _body, _normalize_success, opts) do
+    if status >= 400, do: {:ok, normalize_error_body(status, opts)}, else: :passthrough
   end
 
   @spec normalize_error(term(), error_opts()) :: map()
@@ -50,20 +57,25 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
     status = error_status(error, opts)
 
     cond do
+      input_file_capability_error?(status, opts) -> input_file_capability_error()
       misalignment_policy_violation?(error) -> misalignment_policy_violation_error(error)
       overload_error?(error) -> overload_error()
       local_validation_error?(error, status, opts) -> explicit_error(error, status)
-      true -> redacted_error(error)
+      true -> redacted_error(error, opts)
     end
   end
 
   def normalize_error(_error, opts), do: normalize_error(%{}, opts)
 
-  @spec terminal_error_status(term(), error_opts()) :: 400 | 502
+  @spec terminal_error_status(term(), error_opts()) :: terminal_error_status()
   def terminal_error_status(error, opts \\ []) do
     status = error_status(error, opts)
 
-    if local_validation_error?(error, status, opts), do: 400, else: 502
+    cond do
+      input_file_capability_error?(status, opts) -> 404
+      local_validation_error?(error, status, opts) -> 400
+      true -> 502
+    end
   end
 
   @spec redacted_gateway_error?(term()) :: boolean()
@@ -75,6 +87,20 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   end
 
   def redacted_gateway_error?(_error), do: false
+
+  defp input_file_capability_error?(404, opts),
+    do: Keyword.get(opts, :input_file_upstream_404?) === true
+
+  defp input_file_capability_error?(_status, _opts), do: false
+
+  defp input_file_capability_error do
+    %{
+      "message" => "upstream request failed",
+      "type" => "invalid_request_error",
+      "code" => "upstream_status",
+      "upstream_status" => 404
+    }
+  end
 
   defp misalignment_policy_violation_error(error) do
     %{
@@ -98,11 +124,11 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
     |> Map.new()
   end
 
-  defp redacted_error(error) do
+  defp redacted_error(error, opts) do
     %{
       "message" => "upstream request failed",
       "type" => "server_error",
-      "code" => safe_error_code(error) || "upstream_error"
+      "code" => safe_source_code(opts) || safe_error_code(error) || "upstream_error"
     }
   end
 
@@ -115,17 +141,14 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
     }
   end
 
-  defp normalize_error_body(status) do
-    %{
-      "error" => status_error(status)
-    }
-  end
+  defp normalize_error_body(status, opts), do: %{"error" => status_error(status, opts)}
 
-  defp status_error(status) when status in 500..599, do: normalize_error(%{}, status: status)
+  defp status_error(status, opts) when status in 500..599,
+    do: normalize_error(%{}, Keyword.put(opts, :status, status))
 
-  defp status_error(status) do
+  defp status_error(status, opts) do
     error = %{"message" => "upstream returned #{status}", "code" => "upstream_status"}
-    normalize_error(error, status: status)
+    normalize_error(error, Keyword.put(opts, :status, status))
   end
 
   defp server_class_error?(error, status) do
@@ -202,6 +225,16 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.PublicResponse do
   defp safe_error_code(error) do
     error
     |> field("code")
+    |> clean_string()
+    |> case do
+      nil -> nil
+      code -> if safe_error_token?(code), do: code
+    end
+  end
+
+  defp safe_source_code(opts) do
+    opts
+    |> Keyword.get(:source_code)
     |> clean_string()
     |> case do
       nil -> nil

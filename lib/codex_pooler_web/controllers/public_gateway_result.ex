@@ -20,16 +20,39 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
     })
   end
 
-  def send(conn, {:ok, %{raw_body: body, status: status} = result}, success_normalizer) do
-    case PublicResponse.normalize_raw_body(status, body, success_normalizer) do
+  def send(
+        conn,
+        {:ok, %{raw_body: body, status: status} = result},
+        success_normalizer
+      ) do
+    case PublicResponse.normalize_raw_body(
+           status,
+           body,
+           success_normalizer,
+           input_file_upstream_404?: Map.get(result, :public_input_file_upstream_404?) === true,
+           source_code: Map.get(result, :public_stream_startup_error_code)
+         ) do
       {:ok, normalized} ->
         conn
-        |> put_status(status)
+        |> put_status(public_error_status(status, result))
         |> json(normalized)
 
       :passthrough ->
         GatewayHelpers.send_gateway_result(conn, result)
     end
+  end
+
+  def send(
+        conn,
+        {:ok, %{body: _body, status: status, public_input_file_upstream_404?: true}},
+        _success_normalizer
+      ) do
+    conn
+    |> put_status(404)
+    |> json(%{
+      "error" =>
+        PublicResponse.normalize_error(%{}, status: status, input_file_upstream_404?: true)
+    })
   end
 
   def send(conn, {:ok, %{body: _body} = result}, _success_normalizer),
@@ -47,4 +70,9 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
 
   def send(conn, {:error, reason}, _success_normalizer),
     do: GatewayHelpers.send_error(conn, reason)
+
+  defp public_error_status(_status, %{public_input_file_upstream_404?: true}), do: 404
+  defp public_error_status(404, _result), do: 502
+  defp public_error_status(status, _result), do: status
+
 end

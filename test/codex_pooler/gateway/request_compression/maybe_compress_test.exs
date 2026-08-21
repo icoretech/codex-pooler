@@ -367,6 +367,8 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
       assert {^body, compressed_options} =
                RequestCompression.maybe_compress(body, context, request_options)
 
+      assert first_output(body) == original_output
+
       assert %{
                "status" => "skipped",
                "reason" => "protected_tool_outputs",
