@@ -4513,6 +4513,329 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
       assert result.payload["tool_choice"] == %{"type" => "image_generation"}
     end
 
+    @tag :responses_allowed_tools
+    test "existing valid typed Responses tool choices remain unchanged" do
+      cases = [
+        {%{
+           "type" => "function",
+           "name" => "lookup_fixture",
+           "parameters" => %{"type" => "object", "properties" => %{}}
+         }, %{"type" => "function", "name" => "lookup_fixture"}},
+        {%{"type" => "custom", "name" => "custom_fixture"},
+         %{"type" => "custom", "name" => "custom_fixture"}},
+        {%{"type" => "programmatic_tool_calling"}, %{"type" => "programmatic_tool_calling"}},
+        {%{"type" => "image_generation"}, %{"type" => "image_generation"}}
+      ]
+
+      Enum.each(cases, fn {tool, choice} ->
+        assert {:ok, result} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => "synthetic input",
+                   "tools" => [tool],
+                   "tool_choice" => choice
+                 })
+
+        assert result.payload["tool_choice"] == choice
+      end)
+    end
+
+    @tag :responses_allowed_tools
+    test "Responses preserves declaration-backed allowed tools in caller order with duplicates" do
+      tools = [
+        flat_function_tool("lookup_fixture", non_strict_tool_schema(), false)
+        |> Map.put("defer_loading", false),
+        %{"type" => "custom", "name" => "custom_fixture"},
+        %{"type" => "programmatic_tool_calling"},
+        %{"type" => "web_search_preview"},
+        %{"type" => "web_search"},
+        %{"type" => "web_search"},
+        %{"type" => "image_generation"}
+      ]
+
+      allowed_tools = [
+        %{"type" => "custom", "name" => "custom_fixture"},
+        %{"type" => "web_search"},
+        %{"type" => "function", "name" => "lookup_fixture"},
+        %{"type" => "programmatic_tool_calling"},
+        %{"type" => "image_generation"},
+        %{"type" => "web_search_preview"},
+        %{"type" => "function", "name" => "lookup_fixture"},
+        %{"type" => "web_search"}
+      ]
+
+      for mode <- ["auto", "required"] do
+        choice = %{"type" => "allowed_tools", "mode" => mode, "tools" => allowed_tools}
+
+        assert {:ok, result} =
+                 Responses.coerce(%{
+                   "model" => "gpt-fixture-text",
+                   "input" => "synthetic input",
+                   "tools" => tools,
+                   "tool_choice" => choice
+                 })
+
+        assert result.payload["tool_choice"] === choice
+
+        assert get_in(result.payload, ["tools", Access.at(0), "parameters"]) ==
+                 lowered_tool_schema()
+      end
+    end
+
+    @tag :responses_allowed_tools
+    test "Responses rejects malformed or undeclared allowed tools as one tool choice error" do
+      direct_function = flat_function_tool("lookup_fixture", %{}, nil)
+      direct_custom = %{"type" => "custom", "name" => "custom_fixture"}
+
+      namespace = %{
+        "type" => "namespace",
+        "name" => "fixture_namespace",
+        "description" => "Synthetic namespace tools",
+        "tools" => [
+          flat_function_tool("nested_function_fixture", %{}, nil),
+          %{"type" => "custom", "name" => "nested_custom_fixture"}
+        ]
+      }
+
+      base_tools = [
+        direct_function,
+        direct_custom,
+        namespace,
+        %{"type" => "programmatic_tool_calling"},
+        %{"type" => "web_search_preview"},
+        %{"type" => "web_search"},
+        %{"type" => "image_generation"}
+      ]
+
+      valid_entry = %{"type" => "function", "name" => "lookup_fixture"}
+
+      invalid_cases = [
+        {"missing envelope type", %{"mode" => "auto", "tools" => [valid_entry]}, base_tools, nil},
+        {"wrong envelope type", %{"type" => "other", "mode" => "auto", "tools" => [valid_entry]},
+         base_tools, nil},
+        {"missing mode", %{"type" => "allowed_tools", "tools" => [valid_entry]}, base_tools, nil},
+        {"missing tools", %{"type" => "allowed_tools", "mode" => "auto"}, base_tools, nil},
+        {"extra root key",
+         %{
+           "type" => "allowed_tools",
+           "mode" => "auto",
+           "tools" => [valid_entry],
+           "extra" => true
+         }, base_tools, nil},
+        {"unsupported mode",
+         %{"type" => "allowed_tools", "mode" => "none", "tools" => [valid_entry]}, base_tools,
+         nil},
+        {"empty tools", %{"type" => "allowed_tools", "mode" => "auto", "tools" => []}, base_tools,
+         nil},
+        {"non-list tools", %{"type" => "allowed_tools", "mode" => "auto", "tools" => %{}},
+         base_tools, nil},
+        {"non-map entry",
+         %{"type" => "allowed_tools", "mode" => "auto", "tools" => ["lookup_fixture"]},
+         base_tools, nil},
+        {"entry missing type",
+         %{
+           "type" => "allowed_tools",
+           "mode" => "auto",
+           "tools" => [%{"name" => "lookup_fixture"}]
+         }, base_tools, nil},
+        {"entry missing name",
+         %{"type" => "allowed_tools", "mode" => "auto", "tools" => [%{"type" => "function"}]},
+         base_tools, nil},
+        {"entry blank name",
+         %{
+           "type" => "allowed_tools",
+           "mode" => "auto",
+           "tools" => [%{"type" => "custom", "name" => "   "}]
+         }, base_tools, nil},
+        {"entry non-string name",
+         %{
+           "type" => "allowed_tools",
+           "mode" => "auto",
+           "tools" => [%{"type" => "function", "name" => true}]
+         }, base_tools, nil},
+        {"nested function entry",
+         %{
+           "type" => "allowed_tools",
+           "mode" => "auto",
+           "tools" => [%{"type" => "function", "function" => %{"name" => "lookup_fixture"}}]
+         }, base_tools, nil},
+        {"entry extra key",
+         %{
+           "type" => "allowed_tools",
+           "mode" => "auto",
+           "tools" => [%{"type" => "function", "name" => "lookup_fixture", "extra" => true}]
+         }, base_tools, nil},
+        {"unknown function",
+         %{
+           "type" => "allowed_tools",
+           "mode" => "auto",
+           "tools" => [%{"type" => "function", "name" => "missing_fixture"}]
+         }, base_tools, nil},
+        {"cross-kind name",
+         %{
+           "type" => "allowed_tools",
+           "mode" => "auto",
+           "tools" => [%{"type" => "custom", "name" => "lookup_fixture"}]
+         }, base_tools, nil},
+        {"deferred function",
+         %{"type" => "allowed_tools", "mode" => "auto", "tools" => [valid_entry]},
+         [Map.put(direct_function, "defer_loading", true)], nil},
+        {"deferred custom",
+         %{
+           "type" => "allowed_tools",
+           "mode" => "auto",
+           "tools" => [%{"type" => "custom", "name" => "custom_fixture"}]
+         }, [Map.put(direct_custom, "defer_loading", true)], nil},
+        {"namespace function child",
+         %{
+           "type" => "allowed_tools",
+           "mode" => "auto",
+           "tools" => [%{"type" => "function", "name" => "nested_function_fixture"}]
+         }, [namespace], nil},
+        {"namespace custom child",
+         %{
+           "type" => "allowed_tools",
+           "mode" => "auto",
+           "tools" => [%{"type" => "custom", "name" => "nested_custom_fixture"}]
+         }, [namespace], nil},
+        {"additional tools reference",
+         %{
+           "type" => "allowed_tools",
+           "mode" => "auto",
+           "tools" => [%{"type" => "function", "name" => "additional_fixture"}]
+         }, [],
+         [
+           %{
+             "type" => "additional_tools",
+             "role" => "developer",
+             "tools" => [flat_function_tool("additional_fixture", %{}, nil)]
+           }
+         ]},
+        {"undeclared built-in",
+         %{
+           "type" => "allowed_tools",
+           "mode" => "auto",
+           "tools" => [%{"type" => "image_generation"}]
+         }, [direct_function], nil},
+        {"built-in extra key",
+         %{
+           "type" => "allowed_tools",
+           "mode" => "auto",
+           "tools" => [%{"type" => "web_search", "name" => "web"}]
+         }, base_tools, nil},
+        {"namespace member",
+         %{
+           "type" => "allowed_tools",
+           "mode" => "auto",
+           "tools" => [%{"type" => "namespace"}]
+         }, base_tools, nil},
+        {"tool search member",
+         %{
+           "type" => "allowed_tools",
+           "mode" => "auto",
+           "tools" => [%{"type" => "tool_search"}]
+         }, base_tools, nil},
+        {"MCP member",
+         %{
+           "type" => "allowed_tools",
+           "mode" => "auto",
+           "tools" => [%{"type" => "mcp", "server_label" => "fixture-mcp"}]
+         }, base_tools, nil}
+      ]
+
+      invalid_cases =
+        invalid_cases ++
+          Enum.map(
+            ~w(code_interpreter file_search computer apply_patch shell local_shell),
+            fn type ->
+              {"unsupported built-in #{type}",
+               %{"type" => "allowed_tools", "mode" => "auto", "tools" => [%{"type" => type}]},
+               base_tools, nil}
+            end
+          )
+
+      Enum.each(invalid_cases, fn {_label, choice, tools, input} ->
+        payload = %{
+          "model" => "gpt-fixture-text",
+          "input" => input || "synthetic input",
+          "tools" => tools,
+          "tool_choice" => choice
+        }
+
+        assert {:error, reason} = Responses.coerce(payload)
+
+        assert reason == %{
+                 status: 400,
+                 code: "invalid_request",
+                 message: "tool_choice shape is not translatable",
+                 param: "tool_choice"
+               }
+      end)
+    end
+
+    @tag :responses_allowed_tools
+    test "top-level MCP declaration retains the tools validation error" do
+      assert {:error, reason} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => "synthetic input",
+                 "tools" => [%{"type" => "mcp"}],
+                 "tool_choice" => %{
+                   "type" => "allowed_tools",
+                   "mode" => "auto",
+                   "tools" => [%{"type" => "mcp", "server_label" => "fixture-mcp"}]
+                 }
+               })
+
+      assert reason == %{
+               status: 400,
+               code: "invalid_request",
+               message: "remote MCP tools are not supported",
+               param: "tools"
+             }
+    end
+
+    @tag :chat_allowed_tools_rejection
+    test "Chat rejects Responses-only allowed tools while retaining direct Responses support" do
+      function = flat_function_tool("lookup_fixture", %{}, nil)
+
+      choice = %{
+        "type" => "allowed_tools",
+        "mode" => "required",
+        "tools" => [%{"type" => "function", "name" => "lookup_fixture"}]
+      }
+
+      assert {:error, reason} =
+               Chat.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "messages" => [%{"role" => "user", "content" => "synthetic input"}],
+                 "tools" => [
+                   %{
+                     "type" => "function",
+                     "function" => Map.drop(function, ["type"])
+                   }
+                 ],
+                 "tool_choice" => choice
+               })
+
+      assert reason == %{
+               status: 400,
+               code: "invalid_request",
+               message: "tool_choice shape is not translatable",
+               param: "tool_choice"
+             }
+
+      assert {:ok, result} =
+               Responses.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "input" => "synthetic input",
+                 "tools" => [function],
+                 "tool_choice" => choice
+               })
+
+      assert result.payload["tool_choice"] === choice
+    end
+
     test "tool_choice rejects missing, blank, malformed, and unknown named function choices" do
       base_payload = %{
         "model" => "gpt-fixture-text",

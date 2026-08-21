@@ -497,6 +497,21 @@ defmodule CodexPooler.CompatibilityMatrixTest do
   end
 
   describe "Responses tool compatibility contract" do
+    @tag :responses_allowed_tools
+    test "keeps allowed-tools independent from executable custom and chat choices" do
+      feature = CompatibilityMatrix.by_slug!(:responses_allowed_tools)
+      fixture = CompatibilityMatrix.fixture!(:responses_allowed_tools)
+
+      assert feature.status == :supported
+      assert feature.current == :declaration_backed_full_mode_choice
+      assert feature.categories == [:route, :auth, :error, :streaming, :ownership]
+      assert feature.future_routes == []
+      assert feature.fixture == :responses_allowed_tools
+      assert feature.routes == responses_allowed_tools_routes()
+      assert feature.contract == responses_allowed_tools_summary()
+      assert fixture == responses_allowed_tools_contract()
+    end
+
     test "closes paired and named standalone function output shapes" do
       function_output =
         CompatibilityMatrix.fixture!(:responses_chat).programmatic_tool_calling.input_items.function_call_output
@@ -1055,6 +1070,122 @@ defmodule CodexPooler.CompatibilityMatrixTest do
         program_requires: ["caller_id"],
         direct_forbids: ["caller_id"]
       }
+    }
+  end
+
+  defp responses_allowed_tools_routes do
+    [
+      %{method: :post, path: "/v1/responses"},
+      %{method: :get, path: "/v1/responses", transport: "websocket"}
+    ]
+  end
+
+  defp responses_allowed_tools_summary do
+    "direct public Responses HTTP and websocket response.create accept an exact type=allowed_tools choice only in Full mode, with mode auto or required and a nonempty ordered tools list; named function and custom entries must resolve to undeferred direct top-level same-kind declarations, while type-only programmatic_tool_calling, web_search_preview, web_search, and image_generation entries require a declared top-level tool of the same type; order and duplicates are forwarded unchanged after only the existing tool-definition schema lowering; malformed or undeclared Full choices fail before admission or accounting, valid Lite choices create one rejected Request without Attempts or Ledger rows, top-level MCP declarations retain the tools error while MCP allow-list members use the tool_choice error, and Chat, native backend Responses, namespaces, additional_tools, deferred tools, aliases, unsupported entries, Realtime, and broad OpenAI tool parity remain excluded"
+  end
+
+  defp responses_allowed_tools_contract do
+    %{
+      scope: "direct_public_responses_only",
+      transports: ["http", "websocket_response_create"],
+      root: %{
+        exact_keys: ["type", "mode", "tools"],
+        type: "allowed_tools",
+        modes: ["auto", "required"],
+        tools: "nonempty_list"
+      },
+      entries: %{
+        direct_named: %{
+          types: ["function", "custom"],
+          exact_keys: ["type", "name"],
+          name: "nonblank_string",
+          declaration_scope: "direct_top_level_tools_only",
+          resolution: "same_kind_and_exact_name",
+          defer_loading: ["absent", false]
+        },
+        built_in: %{
+          types: [
+            "programmatic_tool_calling",
+            "web_search_preview",
+            "web_search",
+            "image_generation"
+          ],
+          exact_keys: ["type"],
+          declaration_scope: "top_level_tools_only",
+          resolution: "at_least_one_same_type_declaration",
+          multiple_same_type_declarations: "accepted"
+        }
+      },
+      preservation: %{
+        entry_order: "caller_order_unchanged",
+        duplicate_entries: "preserved",
+        full_mode_forwarding: "structurally_identical_tool_choice"
+      },
+      definition_normalization: %{
+        existing_non_strict_function_schema_lowering: "unchanged",
+        additional_tool_definition_rewrite: false,
+        tool_choice_rewrite: false
+      },
+      errors: %{
+        full_malformed_or_undeclared: %{
+          status: 400,
+          code: "invalid_request",
+          message: "tool_choice shape is not translatable",
+          param: "tool_choice"
+        },
+        lite_valid: %{
+          status: 400,
+          code: "unsupported_parameter",
+          message: "Unsupported parameter: tool_choice",
+          param: "tool_choice"
+        },
+        mcp_split: %{
+          top_level_declaration: %{
+            status: 400,
+            code: "invalid_request",
+            message: "remote MCP tools are not supported",
+            param: "tools"
+          },
+          allowed_tools_member: %{
+            status: 400,
+            code: "invalid_request",
+            message: "tool_choice shape is not translatable",
+            param: "tool_choice"
+          }
+        }
+      },
+      lifecycle: %{
+        full_malformed: %{
+          phase: "pre_admission",
+          request_rows: 0,
+          attempt_rows: 0,
+          ledger_rows: 0,
+          upstream_dispatch: false
+        },
+        lite_valid: %{
+          phase: "post_admission_mode_rejection",
+          request_status: "rejected",
+          request_rows: 1,
+          attempt_rows: 0,
+          ledger_rows: 0,
+          upstream_dispatch: false
+        }
+      },
+      exclusions: [
+        "chat_completions",
+        "native_backend_responses",
+        "namespace_children",
+        "input_additional_tools",
+        "deferred_direct_function_or_custom",
+        "unknown_or_cross_kind_names",
+        "extra_root_or_entry_keys",
+        "entry_aliases",
+        "unsupported_or_mcp_entry_types",
+        "realtime",
+        "broad_openai_tool_parity"
+      ],
+      provider_availability: "selected_model_and_account_dependent",
+      privacy: "schema_shape_only"
     }
   end
 end

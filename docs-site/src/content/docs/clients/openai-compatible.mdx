@@ -432,6 +432,27 @@ Ordinary OpenAI Responses incomplete terminals are preserved. If an upstream ret
 
 Accepted `POST /v1/responses` tool definitions are narrow. OpenAI Responses remote MCP tool definitions are rejected before dispatch.
 
+### Declaration-backed allowed tools
+
+In Full serving mode, direct `POST /v1/responses` and narrow Responses websocket
+`response.create` accept an `allowed_tools` choice only when every member is
+backed by a direct top-level declaration. Named `function` and `custom` members
+must match the declared kind and name. The only type-only built-ins are
+`programmatic_tool_calling`, `web_search_preview`, `web_search`, and
+`image_generation`, each declared at the top level. Caller order and repeated
+members are preserved.
+
+This is a narrow declaration-backed contract, not broad OpenAI tool parity. It
+doesn't cover Chat, backend Responses, namespaces, additional tools, deferred
+tools, aliases, Realtime, or remote MCP. Invalid or undeclared Full choices fail
+before dispatch. Lite rejects any map-shaped `allowed_tools` choice with the
+existing `unsupported_parameter` error on `tool_choice`.
+
+Remote MCP remains unsupported in Responses. A top-level MCP declaration is a
+`tools` error, while an MCP member inside `allowed_tools` is a `tool_choice`
+error. The separate `/mcp` endpoint is operator metadata access, not a Responses
+remote MCP bridge.
+
 ### Web search domain filters
 
 `web_search.filters` accepts only `allowed_domains` and `blocked_domains`. Each

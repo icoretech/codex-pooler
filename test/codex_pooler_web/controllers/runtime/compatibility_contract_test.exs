@@ -52,6 +52,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     request_compression
     upstream_websocket_bridge
     image_generation_permission
+    responses_allowed_tools
     responses_executable_custom_tools
     backend_agent_v2_handoffs
     multi_agent_product_certification
@@ -63,6 +64,8 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
   @url_citation_fixture_id "vercel-ai.responses.url_citation_replay.v1"
   @stream_id_fixture_id "openai.responses.websocket_stream_id.v1"
+  @responses_allowed_tools_fixture_id "vercel-ai-sdk-openai.responses.allowed_tools.v1"
+  @responses_allowed_tools_fixture_file "vercel-ai-sdk-openai-responses-allowed-tools.json"
   @url_citation_keys ["type", "start_index", "end_index", "url", "title"]
   @stream_id_contract %{
     scope: "GET /v1/responses websocket response.create only",
@@ -132,6 +135,78 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
   end
 
   describe "compatibility matrix" do
+    @tag :responses_allowed_tools
+    test "loads registered Vercel allowed-tools provenance with narrow public Responses scope" do
+      assert @responses_allowed_tools_fixture_file in sdk_shape_manifest_fixture_files!()
+
+      fixture = sdk_shape_fixture!(@responses_allowed_tools_fixture_id)
+      row = sdk_shape_row!(@responses_allowed_tools_fixture_id)
+
+      assert fixture["scenario_id"] == @responses_allowed_tools_fixture_id
+      assert fixture["sdk_package"] == "@ai-sdk/openai"
+      assert fixture["sdk_version"] == "4.0.43"
+
+      assert fixture["version_provenance"] =~
+               "a062795bbe22ecc96a38d114bf8b8ea4af070914"
+
+      assert fixture["endpoint"] == "/v1/responses"
+      assert fixture["http_method"] == "POST or WEBSOCKET response.create"
+      assert fixture["expected_decision"]["status"] == "accept"
+
+      assert fixture["structural_summary"] == %{
+               "payload_kind" => "responses_allowed_tools",
+               "tool_choice_root" => "type=allowed_tools",
+               "allowed_modes" => ["auto", "required"],
+               "direct_named_entry_forms" => ["function:name", "custom:name"],
+               "type_only_builtin_entry_forms" => [
+                 "programmatic_tool_calling",
+                 "web_search_preview",
+                 "web_search",
+                 "image_generation"
+               ],
+               "entry_order_preserved" => true,
+               "duplicate_entries_preserved" => true,
+               "declaration_scope" => "already_declared_top_level_tools_only",
+               "excluded_entry_forms" => [
+                 "mcp",
+                 "namespace",
+                 "deferred",
+                 "tool_search",
+                 "unknown"
+               ],
+               "raw_payload_stored" => false,
+               "placeholder_values_only" => true,
+               "notes" => [
+                 "This is public Responses HTTP and narrow public Responses WebSocket response.create provenance, not Realtime or broad OpenAI tool compatibility.",
+                 "The accepted vocabulary is deliberately narrower than the Vercel client inventory and excludes MCP, namespace, deferred, tool-search, and unknown entries."
+               ]
+             }
+
+      assert fixture["redaction_status"] == %{
+               "metadata_only" => true,
+               "contains_real_prompt" => false,
+               "contains_credentials" => false,
+               "contains_headers" => false,
+               "contains_real_hostname" => false,
+               "contains_provider_frames" => false,
+               "contains_account_data" => false,
+               "contains_raw_payload_body" => false,
+               "contains_media_or_file_bytes" => false
+             }
+
+      assert row == %{
+               source: "Vercel AI SDK OpenAI provider `@ai-sdk/openai`",
+               version: "`4.0.43`, commit `a062795bbe22ecc96a38d114bf8b8ea4af070914`",
+               endpoint:
+                 "`POST /v1/responses` and `GET /v1/responses` websocket `response.create`",
+               decision: "accept",
+               observed_shape:
+                 "`tool_choice` is `type=allowed_tools` with mode `auto` or `required`; direct function/custom entries are named, while supported built-ins are type-only `programmatic_tool_calling`, `web_search_preview`, `web_search`, or `image_generation`; order and duplicates remain significant",
+               notes:
+                 "Vercel client provenance only. Pooler accepts this deliberately narrow, declaration-backed vocabulary on public Responses HTTP and the narrow public WebSocket `response.create` surface. MCP, namespace, deferred, tool-search, and unknown entries remain excluded. This does not claim broad OpenAI compatibility, Realtime compatibility, or availability of any declared tool on every model or account"
+             }
+    end
+
     test "lists every in-scope Codex compatibility feature with sanitized fixtures" do
       assert CompatibilityMatrix.feature_slugs() == @expected_features
 
@@ -1013,6 +1088,21 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       refute fixture.runtime_config_added
       refute fixture.dashboards_changed
       refute fixture.helm_changed
+    end
+
+    @tag :responses_allowed_tools
+    test "locks allowed-tools as a distinct public Responses compatibility contract" do
+      feature = CompatibilityMatrix.by_slug!(:responses_allowed_tools)
+      fixture = CompatibilityMatrix.fixture!(:responses_allowed_tools)
+
+      assert feature.status == :supported
+      assert feature.current == :declaration_backed_full_mode_choice
+      assert feature.categories == [:route, :auth, :error, :streaming, :ownership]
+      assert feature.future_routes == []
+      assert feature.fixture == :responses_allowed_tools
+      assert feature.routes == responses_allowed_tools_routes()
+      assert feature.contract == responses_allowed_tools_summary()
+      assert fixture == responses_allowed_tools_contract()
     end
 
     test "documents executable custom tools separately from custom replay" do
@@ -2684,10 +2774,136 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     end
   end
 
+  defp sdk_shape_manifest_fixture_files! do
+    manifest_path =
+      Path.expand("../../../fixtures/openai_compatibility/sdk_shapes/manifest.json", __DIR__)
+
+    manifest_path
+    |> File.read!()
+    |> Jason.decode!()
+    |> Map.fetch!("fixture_files")
+  end
+
   defp exact_stream_id_contract?(contract), do: contract == @stream_id_contract
 
   defp exact_api_key_websocket_revocation_contract?(contract),
     do: contract == @api_key_websocket_revocation_contract
+
+  defp responses_allowed_tools_routes do
+    [
+      %{method: :post, path: "/v1/responses"},
+      %{method: :get, path: "/v1/responses", transport: "websocket"}
+    ]
+  end
+
+  defp responses_allowed_tools_summary do
+    "direct public Responses HTTP and websocket response.create accept an exact type=allowed_tools choice only in Full mode, with mode auto or required and a nonempty ordered tools list; named function and custom entries must resolve to undeferred direct top-level same-kind declarations, while type-only programmatic_tool_calling, web_search_preview, web_search, and image_generation entries require a declared top-level tool of the same type; order and duplicates are forwarded unchanged after only the existing tool-definition schema lowering; malformed or undeclared Full choices fail before admission or accounting, valid Lite choices create one rejected Request without Attempts or Ledger rows, top-level MCP declarations retain the tools error while MCP allow-list members use the tool_choice error, and Chat, native backend Responses, namespaces, additional_tools, deferred tools, aliases, unsupported entries, Realtime, and broad OpenAI tool parity remain excluded"
+  end
+
+  defp responses_allowed_tools_contract do
+    %{
+      scope: "direct_public_responses_only",
+      transports: ["http", "websocket_response_create"],
+      root: %{
+        exact_keys: ["type", "mode", "tools"],
+        type: "allowed_tools",
+        modes: ["auto", "required"],
+        tools: "nonempty_list"
+      },
+      entries: %{
+        direct_named: %{
+          types: ["function", "custom"],
+          exact_keys: ["type", "name"],
+          name: "nonblank_string",
+          declaration_scope: "direct_top_level_tools_only",
+          resolution: "same_kind_and_exact_name",
+          defer_loading: ["absent", false]
+        },
+        built_in: %{
+          types: [
+            "programmatic_tool_calling",
+            "web_search_preview",
+            "web_search",
+            "image_generation"
+          ],
+          exact_keys: ["type"],
+          declaration_scope: "top_level_tools_only",
+          resolution: "at_least_one_same_type_declaration",
+          multiple_same_type_declarations: "accepted"
+        }
+      },
+      preservation: %{
+        entry_order: "caller_order_unchanged",
+        duplicate_entries: "preserved",
+        full_mode_forwarding: "structurally_identical_tool_choice"
+      },
+      definition_normalization: %{
+        existing_non_strict_function_schema_lowering: "unchanged",
+        additional_tool_definition_rewrite: false,
+        tool_choice_rewrite: false
+      },
+      errors: %{
+        full_malformed_or_undeclared: %{
+          status: 400,
+          code: "invalid_request",
+          message: "tool_choice shape is not translatable",
+          param: "tool_choice"
+        },
+        lite_valid: %{
+          status: 400,
+          code: "unsupported_parameter",
+          message: "Unsupported parameter: tool_choice",
+          param: "tool_choice"
+        },
+        mcp_split: %{
+          top_level_declaration: %{
+            status: 400,
+            code: "invalid_request",
+            message: "remote MCP tools are not supported",
+            param: "tools"
+          },
+          allowed_tools_member: %{
+            status: 400,
+            code: "invalid_request",
+            message: "tool_choice shape is not translatable",
+            param: "tool_choice"
+          }
+        }
+      },
+      lifecycle: %{
+        full_malformed: %{
+          phase: "pre_admission",
+          request_rows: 0,
+          attempt_rows: 0,
+          ledger_rows: 0,
+          upstream_dispatch: false
+        },
+        lite_valid: %{
+          phase: "post_admission_mode_rejection",
+          request_status: "rejected",
+          request_rows: 1,
+          attempt_rows: 0,
+          ledger_rows: 0,
+          upstream_dispatch: false
+        }
+      },
+      exclusions: [
+        "chat_completions",
+        "native_backend_responses",
+        "namespace_children",
+        "input_additional_tools",
+        "deferred_direct_function_or_custom",
+        "unknown_or_cross_kind_names",
+        "extra_root_or_entry_keys",
+        "entry_aliases",
+        "unsupported_or_mcp_entry_types",
+        "realtime",
+        "broad_openai_tool_parity"
+      ],
+      provider_availability: "selected_model_and_account_dependent",
+      privacy: "schema_shape_only"
+    }
+  end
 
   describe "baseline route and gap contracts" do
     test "supported files contract requires API-key auth before JSON shape validation", %{

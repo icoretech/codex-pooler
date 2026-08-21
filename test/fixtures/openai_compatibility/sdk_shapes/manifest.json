@@ -89,6 +89,7 @@
     "vercel-ai-responses-tool-continuation.json",
     "vercel-ai-sdk-openai-flat-tool.json",
     "vercel-ai-sdk-openai-detailed-reasoning-summary.json",
-    "vercel-ai-sdk-openai-programmatic-tool-calling.json"
+    "vercel-ai-sdk-openai-programmatic-tool-calling.json",
+    "vercel-ai-sdk-openai-responses-allowed-tools.json"
   ]
 }

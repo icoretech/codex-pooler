@@ -18,6 +18,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   @reasoning_summaries ~w(auto concise detailed)
   @service_tiers ~w(auto default flex priority scale ultrafast)
   @truncation_modes ~w(auto disabled)
+  @allowed_tools_builtin_types ~w(programmatic_tool_calling web_search_preview web_search image_generation)
   @locally_unsupported_fields ~w(background context_management conversation max_tool_calls prompt top_logprobs user)
 
   @endpoint "/backend-api/codex/responses"
@@ -45,7 +46,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
          :ok <- StrictSchema.validate_public_type_vocabulary(payload),
          :ok <- StrictSchema.validate_public_root_contract(payload),
          {:ok, payload} <- maybe_repair_direct_responses_function_tools(payload, surface),
-         :ok <- validate_tool_choice(payload),
+         :ok <- validate_tool_choice(payload, surface),
          :ok <- validate_max_output_tokens(payload),
          :ok <- validate_reasoning(payload),
          :ok <- validate_moderation(payload),
@@ -821,46 +822,70 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
     end
   end
 
-  defp validate_tool_choice(%{"tool_choice" => choice})
+  defp validate_tool_choice(%{"tool_choice" => choice}, _surface)
        when choice in ["auto", "none", "required"],
        do: :ok
 
-  defp validate_tool_choice(%{"tool_choice" => %{"type" => "function", "name" => name}} = payload)
+  defp validate_tool_choice(%{"tool_choice" => %{"type" => "allowed_tools"}}, :chat),
+    do: invalid_tool_choice_shape()
+
+  defp validate_tool_choice(
+         %{"tool_choice" => %{"type" => "allowed_tools"} = choice} = payload,
+         :responses
+       ) do
+    if valid_allowed_tools_choice?(choice, payload),
+      do: :ok,
+      else: invalid_tool_choice_shape()
+  end
+
+  defp validate_tool_choice(
+         %{"tool_choice" => %{"type" => "function", "name" => name}} = payload,
+         _surface
+       )
        when is_binary(name) do
     with :ok <- validate_exact_tool_choice_keys(Map.get(payload, "tool_choice"), ["type", "name"]) do
       validate_named_tool_choice(payload, "function", name)
     end
   end
 
-  defp validate_tool_choice(%{"tool_choice" => %{"type" => "custom", "name" => name}} = payload)
+  defp validate_tool_choice(
+         %{"tool_choice" => %{"type" => "custom", "name" => name}} = payload,
+         _surface
+       )
        when is_binary(name) do
     with :ok <- validate_exact_tool_choice_keys(Map.get(payload, "tool_choice"), ["type", "name"]) do
       validate_named_tool_choice(payload, "custom", name)
     end
   end
 
-  defp validate_tool_choice(%{"tool_choice" => %{"type" => "image_generation"} = choice}),
-    do: validate_exact_tool_choice_keys(choice, ["type"])
-
-  defp validate_tool_choice(%{
-         "tool_choice" => %{"type" => "programmatic_tool_calling"} = choice
-       }),
+  defp validate_tool_choice(
+         %{"tool_choice" => %{"type" => "image_generation"} = choice},
+         _surface
+       ),
        do: validate_exact_tool_choice_keys(choice, ["type"])
 
-  defp validate_tool_choice(%{"tool_choice" => %{"type" => "function"}}),
+  defp validate_tool_choice(
+         %{
+           "tool_choice" => %{"type" => "programmatic_tool_calling"} = choice
+         },
+         _surface
+       ),
+       do: validate_exact_tool_choice_keys(choice, ["type"])
+
+  defp validate_tool_choice(%{"tool_choice" => %{"type" => "function"}}, _surface),
     do:
       {:error,
        Error.invalid_request("tool_choice function requires a non-empty name", "tool_choice")}
 
-  defp validate_tool_choice(%{"tool_choice" => %{"type" => "custom"}}),
+  defp validate_tool_choice(%{"tool_choice" => %{"type" => "custom"}}, _surface),
     do:
       {:error,
        Error.invalid_request("tool_choice custom requires a non-empty name", "tool_choice")}
 
-  defp validate_tool_choice(%{"tool_choice" => _choice}),
-    do: {:error, Error.invalid_request("tool_choice shape is not translatable", "tool_choice")}
+  defp validate_tool_choice(%{"tool_choice" => _choice}, _surface),
+    do: invalid_tool_choice_shape()
 
-  defp validate_tool_choice(_payload), do: :ok
+  defp validate_tool_choice(_payload, _surface), do: :ok
 
   defp validate_exact_tool_choice_keys(choice, allowed_keys) do
     case choice |> Map.keys() |> Enum.reject(&(&1 in allowed_keys)) do
@@ -870,6 +895,42 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
       [_key | _rest] ->
         {:error, Error.invalid_request("tool_choice shape is not translatable", "tool_choice")}
     end
+  end
+
+  defp valid_allowed_tools_choice?(choice, payload) do
+    case choice do
+      %{"mode" => mode, "tools" => allowed_tools}
+      when mode in ["auto", "required"] and is_list(allowed_tools) and allowed_tools != [] ->
+        Map.keys(choice) |> MapSet.new() == MapSet.new(["type", "mode", "tools"]) and
+          Enum.all?(allowed_tools, &allowed_tool_declared?(&1, payload))
+
+      _choice ->
+        false
+    end
+  end
+
+  defp allowed_tool_declared?(%{"type" => type, "name" => name} = allowed_tool, payload)
+       when type in ["function", "custom"] and is_binary(name) do
+    map_size(allowed_tool) == 2 and String.trim(name) != "" and
+      Enum.any?(Map.get(payload, "tools", []), fn
+        %{"type" => ^type, "name" => ^name} = declared_tool ->
+          Map.get(declared_tool, "defer_loading", false) == false
+
+        _declared_tool ->
+          false
+      end)
+  end
+
+  defp allowed_tool_declared?(%{"type" => type} = allowed_tool, payload)
+       when type in @allowed_tools_builtin_types do
+    map_size(allowed_tool) == 1 and
+      Enum.any?(Map.get(payload, "tools", []), &match?(%{"type" => ^type}, &1))
+  end
+
+  defp allowed_tool_declared?(_allowed_tool, _payload), do: false
+
+  defp invalid_tool_choice_shape do
+    {:error, Error.invalid_request("tool_choice shape is not translatable", "tool_choice")}
   end
 
   defp validate_named_tool_choice(payload, type, name) do

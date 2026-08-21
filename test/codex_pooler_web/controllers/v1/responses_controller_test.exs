@@ -3464,6 +3464,213 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              lowered_tool_schema()
   end
 
+  @tag :responses_allowed_tools
+  test "POST /v1/responses Full forwards allowed tools in caller order with duplicates", %{
+    conn: conn
+  } do
+    upstream = start_upstream(issue_241_completed_response("resp_v1_allowed_tools"))
+    setup = gateway_setup(upstream)
+    put_public_model_serving_mode!(setup, "full")
+
+    function_tool = %{
+      "type" => "function",
+      "name" => "lookup_allowed_fixture",
+      "strict" => false,
+      "defer_loading" => false,
+      "parameters" => non_strict_tool_schema()
+    }
+
+    custom_tool = %{
+      "type" => "custom",
+      "name" => "custom_allowed_fixture",
+      "format" => %{
+        "type" => "grammar",
+        "definition" => ~s(start: "allowed"),
+        "syntax" => "lark"
+      }
+    }
+
+    tools = [
+      function_tool,
+      custom_tool,
+      %{"type" => "programmatic_tool_calling"},
+      %{"type" => "web_search_preview"},
+      %{"type" => "web_search"},
+      %{"type" => "image_generation"}
+    ]
+
+    allowed_tools = [
+      %{"type" => "custom", "name" => custom_tool["name"]},
+      %{"type" => "web_search"},
+      %{"type" => "function", "name" => function_tool["name"]},
+      %{"type" => "programmatic_tool_calling"},
+      %{"type" => "image_generation"},
+      %{"type" => "web_search_preview"},
+      %{"type" => "function", "name" => function_tool["name"]},
+      %{"type" => "web_search"}
+    ]
+
+    tool_choice = %{"type" => "allowed_tools", "mode" => "required", "tools" => allowed_tools}
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic allowed tools request",
+        "tools" => tools,
+        "tool_choice" => tool_choice
+      })
+
+    assert %{"id" => "resp_v1_allowed_tools", "object" => "response"} =
+             json_response(response, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.method == "POST"
+    assert captured.path == "/backend-api/codex/responses"
+    assert captured.json["tool_choice"] === tool_choice
+
+    assert [forwarded_function, forwarded_custom | forwarded_builtins] = captured.json["tools"]
+
+    assert forwarded_function ==
+             function_tool
+             |> Map.put("parameters", lowered_tool_schema())
+
+    assert forwarded_custom == custom_tool
+    assert forwarded_builtins == Enum.drop(tools, 2)
+    assert_issue_241_success_lifecycle!(setup)
+  end
+
+  @tag :responses_allowed_tools
+  test "POST /v1/responses rejects malformed Full allowed tools before admission", %{conn: conn} do
+    upstream = start_upstream(issue_241_completed_response("must_not_dispatch_allowed_tools"))
+    setup = gateway_setup(upstream)
+    put_public_model_serving_mode!(setup, "full")
+
+    function_tool = %{
+      "type" => "function",
+      "name" => "lookup_allowed_fixture",
+      "parameters" => %{"type" => "object", "properties" => %{}}
+    }
+
+    valid_tools = [function_tool, %{"type" => "web_search"}]
+    function_member = %{"type" => "function", "name" => function_tool["name"]}
+
+    invalid_cases = [
+      {"missing mode", valid_tools, %{"type" => "allowed_tools", "tools" => [function_member]},
+       %{
+         "code" => "invalid_request",
+         "message" => "tool_choice shape is not translatable",
+         "param" => "tool_choice"
+       }},
+      {"undeclared function", valid_tools,
+       %{
+         "type" => "allowed_tools",
+         "mode" => "auto",
+         "tools" => [%{"type" => "function", "name" => "missing_allowed_fixture"}]
+       },
+       %{
+         "code" => "invalid_request",
+         "message" => "tool_choice shape is not translatable",
+         "param" => "tool_choice"
+       }},
+      {"MCP member", valid_tools,
+       %{
+         "type" => "allowed_tools",
+         "mode" => "auto",
+         "tools" => [%{"type" => "mcp", "server_label" => "fixture-mcp"}]
+       },
+       %{
+         "code" => "invalid_request",
+         "message" => "tool_choice shape is not translatable",
+         "param" => "tool_choice"
+       }},
+      {"MCP declaration", [%{"type" => "mcp"}],
+       %{
+         "type" => "allowed_tools",
+         "mode" => "auto",
+         "tools" => [%{"type" => "mcp", "server_label" => "fixture-mcp"}]
+       },
+       %{
+         "code" => "invalid_request",
+         "message" => "remote MCP tools are not supported",
+         "param" => "tools"
+       }}
+    ]
+
+    for {label, tools, tool_choice, expected_error} <- invalid_cases do
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/v1/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => "synthetic invalid allowed tools request",
+          "tools" => tools,
+          "tool_choice" => tool_choice
+        })
+
+      assert %{"error" => error} = json_response(response, 400), label
+      assert Map.take(error, ["code", "message", "param"]) == expected_error, label
+      assert error["type"] == "invalid_request_error", label
+      assert FakeUpstream.count(upstream) == 0, label
+      assert Repo.aggregate(Request, :count) == 0, label
+      assert Repo.aggregate(Attempt, :count) == 0, label
+      assert Repo.aggregate(LedgerEntry, :count) == 0, label
+    end
+  end
+
+  @tag :responses_allowed_tools
+  test "POST /v1/responses rejects valid Lite allowed tools inside gateway accounting", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(issue_241_completed_response("must_not_dispatch_lite_allowed_tools"))
+
+    setup = gateway_setup(upstream)
+    put_public_model_serving_mode!(setup, "lite")
+
+    function_tool = %{
+      "type" => "function",
+      "name" => "lookup_lite_allowed_fixture",
+      "parameters" => %{"type" => "object", "properties" => %{}}
+    }
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic Lite allowed tools request",
+        "tools" => [function_tool],
+        "tool_choice" => %{
+          "type" => "allowed_tools",
+          "mode" => "auto",
+          "tools" => [%{"type" => "function", "name" => function_tool["name"]}]
+        }
+      })
+
+    assert %{
+             "error" => %{
+               "code" => "unsupported_parameter",
+               "message" => "Unsupported parameter: tool_choice",
+               "param" => "tool_choice"
+             }
+           } = json_response(response, 400)
+
+    assert FakeUpstream.count(upstream) == 0
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "rejected"
+    assert request.last_error_code == "unsupported_parameter"
+    assert request.request_metadata["gateway_denial"]["param"] == "tool_choice"
+    assert Repo.aggregate(from(a in Attempt, where: a.request_id == ^request.id), :count) == 0
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry, where: entry.request_id == ^request.id),
+             :count
+           ) == 0
+  end
+
   @tag :issue_241
   test "POST /v1/responses forwards an official custom tool and its exact named choice", %{
     conn: conn

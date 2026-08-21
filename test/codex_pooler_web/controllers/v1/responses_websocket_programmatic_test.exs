@@ -747,6 +747,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
+  @tag :responses_allowed_tools
   test "GET /v1/responses websocket characterizes function-only namespace choices" do
     upstream = start_upstream(completed_websocket_response("resp_ws_function_namespace"))
     setup = gateway_setup(upstream)
@@ -794,6 +795,198 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       assert captured.json["tool_choice"] == tool_choice
 
       assert_successful_websocket_lifecycle!(setup)
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  @tag :responses_allowed_tools
+  test "GET /v1/responses websocket forwards allowed tools in exact caller order" do
+    upstream = start_upstream(completed_websocket_response("resp_ws_allowed_tools"))
+    setup = gateway_setup(upstream)
+    put_public_model_serving_mode!(setup, "full")
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    tools = allowed_tools_declarations()
+    allowed_tools = allowed_tools_selection()
+
+    tool_choice = %{"type" => "allowed_tools", "mode" => "required", "tools" => allowed_tools}
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "allowed-tools-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic allowed tools websocket request",
+          "tools" => tools,
+          "tool_choice" => tool_choice
+        })
+
+      {conn, websocket, frames} = receive_websocket_until_terminal!(conn, websocket, ref, [])
+      assert Enum.map(frames, & &1["type"]) == ["response.completed"]
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.method == "WEBSOCKET"
+      assert captured.path == "/backend-api/codex/responses"
+      assert captured.json["tool_choice"] === tool_choice
+      assert captured.json["tool_choice"]["tools"] === allowed_tools
+
+      assert [forwarded_function, forwarded_custom | forwarded_builtins] =
+               captured.json["tools"]
+
+      assert forwarded_function ==
+               allowed_tools_declarations()
+               |> List.first()
+               |> Map.put("parameters", allowed_tools_lowered_schema())
+
+      assert forwarded_custom == Enum.at(allowed_tools_declarations(), 1)
+      assert forwarded_builtins == Enum.drop(allowed_tools_declarations(), 2)
+
+      assert_successful_websocket_lifecycle!(setup)
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  @tag :responses_allowed_tools
+  test "GET /v1/responses websocket rejects malformed allowed tools before accounting" do
+    upstream = start_upstream(completed_websocket_response("must_not_dispatch_allowed_tools"))
+    setup = gateway_setup(upstream)
+    put_public_model_serving_mode!(setup, "full")
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "malformed-allowed-tools-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      post_upgrade_baseline = settled_post_upgrade_counts!(upstream)
+
+      malformed_choice = %{
+        "type" => "allowed_tools",
+        "mode" => "required",
+        "tools" => [%{"type" => "function", "name" => "undeclared_fixture"}]
+      }
+
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic malformed allowed tools websocket request",
+          "tools" => allowed_tools_declarations(),
+          "tool_choice" => malformed_choice
+        })
+
+      {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert Jason.decode!(frame) == %{
+               "type" => "error",
+               "status" => 400,
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_request",
+                 "message" => "tool_choice shape is not translatable",
+                 "param" => "tool_choice"
+               }
+             }
+
+      assert lifecycle_counts(upstream) == post_upgrade_baseline
+      refute_received {Events, %{reason: "request_finalized"}}
+      {conn, websocket}
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  @tag :responses_allowed_tools
+  test "GET /v1/responses websocket rejects valid allowed tools in Lite after request creation" do
+    upstream =
+      start_upstream(completed_websocket_response("must_not_dispatch_lite_allowed_tools"))
+
+    setup = gateway_setup(upstream)
+    put_public_model_serving_mode!(setup, "lite")
+    assert :ok = Events.subscribe_pool(setup.pool)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "lite-allowed-tools-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      post_upgrade_baseline = settled_post_upgrade_counts!(upstream)
+      allowed_tools = allowed_tools_selection()
+
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "input" => "synthetic Lite allowed tools websocket request",
+          "tools" => allowed_tools_declarations(),
+          "tool_choice" => %{
+            "type" => "allowed_tools",
+            "mode" => "required",
+            "tools" => allowed_tools
+          }
+        })
+
+      {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{
+               "type" => "error",
+               "status" => 400,
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "unsupported_parameter",
+                 "message" => "Unsupported parameter: tool_choice",
+                 "param" => "tool_choice"
+               }
+             } = Jason.decode!(frame)
+
+      assert FakeUpstream.count(upstream) == 0
+
+      assert [request] =
+               Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
+
+      assert request.transport == "websocket"
+      assert request.status == "rejected"
+      assert request.last_error_code == "unsupported_parameter"
+      assert request.request_metadata["gateway_denial"]["param"] == "tool_choice"
+
+      assert Repo.aggregate(
+               from(attempt in Attempt, where: attempt.request_id == ^request.id),
+               :count
+             ) == 0
+
+      assert Repo.aggregate(
+               from(entry in LedgerEntry, where: entry.request_id == ^request.id),
+               :count
+             ) == 0
+
+      assert_lifecycle_delta!(post_upgrade_baseline, lifecycle_counts(upstream), %{
+        upstream_requests: 0,
+        requests: 1,
+        attempts: 0,
+        ledger_entries: 0,
+        turns: 0,
+        reservations: 0,
+        settlements: 0,
+        idempotency_keys: 0,
+        sessions: 0,
+        owner_leases: 0,
+        session_aliases: 0
+      })
+
       {conn, websocket}
     after
       Mint.HTTP.close(conn)
@@ -3680,6 +3873,68 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       [pid] when is_pid(pid) -> pid
       pids -> flunk("expected one upstream websocket process, got #{length(pids)}")
     end
+  end
+
+  defp allowed_tools_declarations do
+    [
+      %{
+        "type" => "function",
+        "name" => "lookup_allowed_fixture",
+        "strict" => false,
+        "parameters" => allowed_tools_non_strict_schema(),
+        "defer_loading" => false
+      },
+      %{
+        "type" => "custom",
+        "name" => "custom_allowed_fixture",
+        "format" => %{
+          "type" => "grammar",
+          "definition" => ~s(start: "allowed"),
+          "syntax" => "lark"
+        }
+      },
+      %{"type" => "programmatic_tool_calling"},
+      %{"type" => "web_search_preview"},
+      %{"type" => "web_search"},
+      %{"type" => "image_generation"}
+    ]
+  end
+
+  defp allowed_tools_selection do
+    [
+      %{"type" => "custom", "name" => "custom_allowed_fixture"},
+      %{"type" => "web_search"},
+      %{"type" => "function", "name" => "lookup_allowed_fixture"},
+      %{"type" => "programmatic_tool_calling"},
+      %{"type" => "image_generation"},
+      %{"type" => "web_search_preview"},
+      %{"type" => "function", "name" => "lookup_allowed_fixture"},
+      %{"type" => "web_search"}
+    ]
+  end
+
+  defp allowed_tools_non_strict_schema do
+    %{
+      "$schema" => "http://json-schema.org/draft-07/schema#",
+      "properties" => %{
+        "mode" => %{"const" => "fast", "title" => "drop me"},
+        "tags" => %{"items" => %{"const" => "tag"}}
+      },
+      "required" => ["mode"],
+      "additionalProperties" => %{"const" => "extra"}
+    }
+  end
+
+  defp allowed_tools_lowered_schema do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "mode" => %{"enum" => ["fast"]},
+        "tags" => %{"type" => "array", "items" => %{"enum" => ["tag"]}}
+      },
+      "required" => ["mode"],
+      "additionalProperties" => %{"enum" => ["extra"]}
+    }
   end
 
   defp repairable_nested_parameters do

@@ -2328,6 +2328,39 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert captured.json["parallel_tool_calls"] == false
   end
 
+  @tag :chat_allowed_tools_rejection
+  test "POST /v1/chat/completions rejects Responses-only allowed tools before dispatch", %{
+    conn: conn
+  } do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    payload =
+      chat_payload(setup)
+      |> Map.put("tools", [function_tool()])
+      |> Map.put("tool_choice", %{
+        "type" => "allowed_tools",
+        "mode" => "required",
+        "tools" => [%{"type" => "function", "name" => "lookup_fixture"}]
+      })
+
+    response = conn |> auth(setup) |> post("/v1/chat/completions", payload)
+
+    assert %{
+             "error" => %{
+               "type" => "invalid_request_error",
+               "code" => "invalid_request",
+               "message" => "tool_choice shape is not translatable",
+               "param" => "tool_choice"
+             }
+           } = json_response(response, 400)
+
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(Request, :count) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
+    assert Repo.aggregate(LedgerEntry, :count) == 0
+  end
+
   test "POST /v1/chat/completions rejects malformed tools and tool_choice before dispatch", %{
     conn: conn
   } do
