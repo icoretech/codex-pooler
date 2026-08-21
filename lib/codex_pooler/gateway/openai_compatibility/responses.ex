@@ -38,6 +38,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
          :ok <- validate_prompt_cache_options(payload),
          {:ok, payload} <- Input.normalize_recoverable_opencode_replay_call_ids(payload),
          {:ok, payload} <- Input.normalize_list_input(payload),
+         payload = normalize_optional_function_tool_booleans(payload),
          payload = ToolSchemaLowering.lower_non_strict_function_tools(payload),
          has_tool_result? = ToolResultShape.any?(Map.get(payload, "input")),
          :ok <- Input.validate_input(payload, has_tool_result?),
@@ -209,6 +210,23 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses do
   end
 
   defp restore_custom_tool_call_namespace(value, _namespaces), do: value
+
+  defp normalize_optional_function_tool_booleans(%{"tools" => tools} = payload)
+       when is_list(tools) do
+    Map.put(payload, "tools", Enum.map(tools, &normalize_optional_function_tool_booleans/1))
+  end
+
+  defp normalize_optional_function_tool_booleans(%{"type" => "function", "strict" => nil} = tool),
+    do: Map.delete(tool, "strict")
+
+  defp normalize_optional_function_tool_booleans(
+         %{"type" => "namespace", "tools" => tools} = tool
+       )
+       when is_list(tools) do
+    Map.put(tool, "tools", Enum.map(tools, &normalize_optional_function_tool_booleans/1))
+  end
+
+  defp normalize_optional_function_tool_booleans(value), do: value
 
   defp validate_prompt_cache_options(%{"prompt_cache_options" => options})
        when is_map(options) do

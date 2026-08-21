@@ -3639,6 +3639,34 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
   end
 
   @tag :responses_coercion
+  test "Responses accepts a null optional strict function-tool flag as omitted" do
+    payload = %{
+      "model" => "gpt-fixture-text",
+      "input" => "synthetic input",
+      "tools" => [
+        %{
+          "type" => "function",
+          "name" => "continue_style_fixture",
+          "description" => "Synthetic flat function tool",
+          "parameters" => %{"type" => "object", "properties" => %{}},
+          "strict" => nil
+        }
+      ]
+    }
+
+    assert {:ok, result} = Responses.coerce(payload)
+
+    assert result.payload["tools"] == [
+             %{
+               "type" => "function",
+               "name" => "continue_style_fixture",
+               "description" => "Synthetic flat function tool",
+               "parameters" => %{"type" => "object", "properties" => %{}}
+             }
+           ]
+  end
+
+  @tag :responses_coercion
   test "Responses lowers non-strict function tool schemas before validation" do
     payload = %{
       "model" => "gpt-fixture-text",

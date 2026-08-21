@@ -3464,6 +3464,52 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
              lowered_tool_schema()
   end
 
+  test "POST /v1/responses forwards a Continue-style null strict function tool as omitted", %{
+    conn: conn
+  } do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_v1_continue_null_strict",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 2, "output_tokens" => 3, "total_tokens" => 5}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => "synthetic Continue tool request",
+        "tools" => [
+          %{
+            "type" => "function",
+            "name" => "continue_style_fixture",
+            "description" => "Synthetic flat function tool",
+            "parameters" => %{"type" => "object", "properties" => %{}},
+            "strict" => nil
+          }
+        ]
+      })
+
+    assert %{"id" => "resp_v1_continue_null_strict", "object" => "response"} =
+             json_response(conn, 200)
+
+    assert [captured] = FakeUpstream.requests(upstream)
+
+    assert captured.json["tools"] == [
+             %{
+               "type" => "function",
+               "name" => "continue_style_fixture",
+               "description" => "Synthetic flat function tool",
+               "parameters" => %{"type" => "object", "properties" => %{}}
+             }
+           ]
+  end
+
   @tag :responses_allowed_tools
   test "POST /v1/responses Full forwards allowed tools in caller order with duplicates", %{
     conn: conn
