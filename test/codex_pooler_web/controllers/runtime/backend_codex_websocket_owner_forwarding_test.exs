@@ -1533,6 +1533,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     setup = gateway_setup(upstream)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
     remote_node = start_bridge_peer!(:current, setup.identity)
+    refute CodexPooler.Gateway.OperationalStatus.draining?()
+    refute :erpc.call(remote_node, CodexPooler.Gateway.OperationalStatus, :draining?, [])
     session_header = "native-proxy-predispatch-#{System.unique_integer([:positive])}"
     {_session, owner_pid} = start_remote_bridge_owner!(auth, session_header, remote_node)
 

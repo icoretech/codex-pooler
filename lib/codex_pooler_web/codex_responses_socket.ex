@@ -175,9 +175,18 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     close_if_revoked_idle({:ok, state})
   end
 
+  def handle_info(
+        {:websocket_response_activity_cancelled, pid, token, ack_pid, :owner_drained},
+        state
+      )
+      when is_pid(pid) and is_reference(token) and is_pid(ack_pid) do
+    handle_cancelled_response_activity(state, pid, token, ack_pid)
+    |> close_if_revoked_idle()
+  end
+
   def handle_info({:websocket_response_activity_cancelled, pid, token, :owner_drained}, state)
       when is_pid(pid) and is_reference(token) do
-    handle_cancelled_response_activity(state, pid, token)
+    handle_cancelled_response_activity(state, pid, token, pid)
     |> close_if_revoked_idle()
   end
 
@@ -387,6 +396,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> Map.put(:native_turn_output_task_pids, MapSet.new())
     |> Map.put(:response_task_activities, %{})
     |> Map.put(:response_task_delivery_scheduled, MapSet.new())
+    |> Map.put(:response_task_delivery_recipients, %{})
     |> Map.put(:native_owner_terminal_delivered?, false)
   end
 
@@ -1249,7 +1259,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp complete_response_task_delivery(state, pid, token) do
     case Map.get(Map.get(state, :response_task_activities, %{}), pid) do
       ^token ->
-        :ok = ResponseTask.acknowledge_delivery(pid, token)
+        ack_pid = Map.get(Map.get(state, :response_task_delivery_recipients, %{}), pid, pid)
+        :ok = ResponseTask.acknowledge_delivery(ack_pid, token)
 
         state
         |> Map.update(:response_task_activities, %{}, &Map.delete(&1, pid))
@@ -1258,6 +1269,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
           MapSet.new(),
           &MapSet.delete(&1, token)
         )
+        |> Map.update(:response_task_delivery_recipients, %{}, &Map.delete(&1, pid))
         |> do_remove_tracked_response_task(pid)
         |> remove_native_turn_output(pid)
         |> Map.put(:native_owner_terminal_delivered?, false)
@@ -1283,10 +1295,18 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     :ok
   end
 
-  defp handle_cancelled_response_activity(state, pid, token) do
+  defp handle_cancelled_response_activity(state, pid, token, ack_pid) do
     case Map.get(Map.get(state, :response_task_activities, %{}), pid) do
       ^token ->
         {:ok, payload} = WebsocketOwnerContract.safe_error_payload(:owner_drained, nil)
+
+        state =
+          Map.update(
+            state,
+            :response_task_delivery_recipients,
+            %{pid => ack_pid},
+            &Map.put(&1, pid, ack_pid)
+          )
 
         if Adapter.public_responses_stream?(state) do
           state =

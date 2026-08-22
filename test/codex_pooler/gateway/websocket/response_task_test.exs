@@ -106,9 +106,19 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTaskTest do
 
     assert_receive :proxy_upstream_started
     assert {_epoch, [%{token: token, pid: ^pid}]} = ActivityRegistry.begin_drain(name: registry)
+    monitor = Process.monitor(pid)
     assert :ok = ActivityRegistry.cancel(token, :owner_drained, name: registry)
     assert_receive {:proxy_cancelled, ^pid, :owner_drained}
+    assert_receive {:websocket_response_activity, ^pid, ^token}
+
+    assert_receive {:websocket_response_activity_cancelled, ^pid, ^token, ack_pid, :owner_drained}
+
+    assert :ok = ResponseTask.acknowledge_delivery(ack_pid, token)
+    assert_receive {:codex_response_done, ^pid, {:error, :owner_drained}}
+    assert_receive {:DOWN, ^monitor, :process, ^pid, :killed}
+    assert {:finished, :aborted} = ActivityRegistry.status(token, name: registry)
     refute_received {:proxy_cancelled, ^pid, :owner_drained}
+    refute_received {:codex_response_done, ^pid, {:error, :owner_drained}}
   end
 
   test "untracked local-owner work is not double-counted", %{registry: registry} do

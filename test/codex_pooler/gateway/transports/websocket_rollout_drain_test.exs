@@ -280,9 +280,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
   test "budget-only policy derives a consistent default deadline margin" do
     drain_name = :"rollout-drain-budget-only-#{System.unique_integer([:positive])}"
 
-    {RolloutDrain, name: drain_name, owner_post_deadline_call_budget_ms: 100}
-    |> Supervisor.child_spec(id: {RolloutDrain, drain_name})
-    |> start_supervised!()
+    start_isolated_rollout_drain!(drain_name, owner_post_deadline_call_budget_ms: 100)
 
     assert %{
              owner_post_deadline_call_budget_ms: 100,
@@ -293,10 +291,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
   test "explicit deadline margin overrides the budget-derived default" do
     drain_name = :"rollout-drain-explicit-margin-#{System.unique_integer([:positive])}"
 
-    {RolloutDrain,
-     name: drain_name, owner_post_deadline_call_budget_ms: 100, deadline_margin_ms: 20}
-    |> Supervisor.child_spec(id: {RolloutDrain, drain_name})
-    |> start_supervised!()
+    start_isolated_rollout_drain!(drain_name,
+      owner_post_deadline_call_budget_ms: 100,
+      deadline_margin_ms: 20
+    )
 
     assert %{
              owner_post_deadline_call_budget_ms: 100,
@@ -310,9 +308,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     for invalid_budget <- [0, "100"] do
       drain_name = :"rollout-drain-invalid-budget-#{System.unique_integer([:positive])}"
 
-      {RolloutDrain, name: drain_name, owner_post_deadline_call_budget_ms: invalid_budget}
-      |> Supervisor.child_spec(id: {RolloutDrain, drain_name})
-      |> start_supervised!()
+      start_isolated_rollout_drain!(drain_name,
+        owner_post_deadline_call_budget_ms: invalid_budget
+      )
 
       assert %{
                owner_post_deadline_call_budget_ms: ^default_budget_ms,
@@ -526,9 +524,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
       end)
 
     assert_receive {:rollout_drain_deadline_wait, deadline, 10}
+    response_task_monitor = Process.monitor(response_task)
     assert :ok = VirtualDeadline.advance(deadline, 10)
     assert_receive {:proxy_turn_cancelled, ^response_task, :owner_drained}
+    assert_receive {:websocket_response_activity, ^response_task, activity_token}
+
+    assert_receive {:websocket_response_activity_cancelled, ^response_task, ^activity_token,
+                    ack_pid, :owner_drained}
+
+    assert :ok = ResponseTask.acknowledge_delivery(ack_pid, activity_token)
+    assert_receive {:codex_response_done, ^response_task, {:error, :owner_drained}}
+    assert_receive {:DOWN, ^response_task_monitor, :process, ^response_task, :killed}
     refute_received {:proxy_turn_cancelled, ^response_task, :owner_drained}
+    refute_received {:codex_response_done, ^response_task, {:error, :owner_drained}}
 
     assert %{
              proxy_turns_seen: 1,
@@ -820,9 +828,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
       cancel_wait: fn _wait_ref, _wait_token -> :ok end
     }
 
-    {RolloutDrain, name: drain_name, deadline: deadline}
-    |> Supervisor.child_spec(id: {RolloutDrain, drain_name})
-    |> start_supervised!()
+    start_isolated_rollout_drain!(drain_name, deadline: deadline)
 
     owner_key = owner_key()
     _owner = start_supervised!({WaitingOwner, key: owner_key, parent: self()})
@@ -879,5 +885,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
         :erlang.yield()
         await_restarted_coordinator(name, old_pid)
     end
+  end
+
+  defp start_isolated_rollout_drain!(drain_name, opts) do
+    activity_registry = :"#{drain_name}-activity"
+    start_supervised!({ActivityRegistry, name: activity_registry})
+
+    {RolloutDrain, [name: drain_name, activity_registry: activity_registry] ++ opts}
+    |> Supervisor.child_spec(id: {RolloutDrain, drain_name})
+    |> start_supervised!()
   end
 end
