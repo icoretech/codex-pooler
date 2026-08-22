@@ -116,7 +116,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks do
   end
 
   defp emit_product_observation(observation, direction, decoded) do
-    if Application.get_env(:codex_pooler, :task14_product_observation_enabled, false) do
+    if Application.get_env(:codex_pooler, :multi_agent_round_product_observation_enabled, false) do
       case Map.get(decoded, "type") do
         event_type when event_type in ["response.output_text.delta", "response.completed"] ->
           metadata =
@@ -127,7 +127,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks do
             |> Map.put(:response_fingerprint, response_fingerprint(decoded))
 
           :telemetry.execute(
-            [:codex_pooler, :gateway, :task14, :product_stage],
+            [:codex_pooler, :gateway, :multi_agent_round, :product_stage],
             %{count: 1},
             metadata
           )

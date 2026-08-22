@@ -1,6 +1,6 @@
-defmodule CodexPooler.Dev.Task14ProductObserver do
+defmodule CodexPooler.Dev.MultiAgentRoundProductObserver do
   @moduledoc """
-  Bounded metadata-only Task 14 product-stage observer for local development.
+  Bounded metadata-only multi-agent round product-stage observer for local development.
 
   The observer is disabled until explicitly armed. It retains only clear,
   bounded technical correlators, fixed route/mode/status values, event counts,
@@ -10,11 +10,11 @@ defmodule CodexPooler.Dev.Task14ProductObserver do
 
   @store __MODULE__.Store
   @stats __MODULE__.Stats
-  @handler_id "codex-pooler-task14-product-observer"
-  @event [:codex_pooler, :gateway, :task14, :product_stage]
-  @flag :task14_product_observation_enabled
-  # One entry per gateway request, not per lane or per thread. A real Task 14
-  # round is multi-turn: the 2026-08-12 round produced 14 requests across its
+  @handler_id "codex-pooler-multi-agent-round-product-observer"
+  @event [:codex_pooler, :gateway, :multi_agent_round, :product_stage]
+  @flag :multi_agent_round_product_observation_enabled
+  # One entry per gateway request, not per lane or per thread. A real
+  # multi-agent round is multi-turn: a recent round produced 14 requests across its
   # two Pooler lanes (root threads 7 and 3, child threads 2 each), so a window
   # of 8 dropped the whole second lane. 64 keeps ~4x that headroom and still
   # serves well under the consumer's 64 KiB capture-document limit.

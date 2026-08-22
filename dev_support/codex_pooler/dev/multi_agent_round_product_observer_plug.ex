@@ -1,15 +1,15 @@
-defmodule CodexPooler.Dev.Task14ProductObserver.Plug do
+defmodule CodexPooler.Dev.MultiAgentRoundProductObserver.Plug do
   @moduledoc """
-  Loopback-only lifecycle and capture surface for the Task 14 observer.
+  Loopback-only lifecycle and capture surface for the multi-agent round observer.
   """
 
   @behaviour Plug
 
   import Plug.Conn
 
-  alias CodexPooler.Dev.Task14ProductObserver
+  alias CodexPooler.Dev.MultiAgentRoundProductObserver
 
-  @identity_header_name "x-task14-product-observer"
+  @identity_header_name "x-multi-agent-round-product-observer"
   @identity_header_value "pooler-product-stage-v1"
 
   @impl true
@@ -17,21 +17,21 @@ defmodule CodexPooler.Dev.Task14ProductObserver.Plug do
 
   @impl true
   def call(%Plug.Conn{method: "GET", path_info: []} = conn, _opts) do
-    json(conn, 200, Task14ProductObserver.captures())
+    json(conn, 200, MultiAgentRoundProductObserver.captures())
   end
 
   def call(%Plug.Conn{method: "GET", path_info: ["status"]} = conn, _opts) do
-    json(conn, 200, Task14ProductObserver.status())
+    json(conn, 200, MultiAgentRoundProductObserver.status())
   end
 
   def call(%Plug.Conn{method: "POST", path_info: ["reset"]} = conn, _opts) do
-    :ok = Task14ProductObserver.arm()
+    :ok = MultiAgentRoundProductObserver.arm()
     json(conn, 200, %{"status" => "reset"})
   end
 
   def call(%Plug.Conn{method: "POST", path_info: ["disarm"]} = conn, _opts) do
-    :ok = Task14ProductObserver.disarm()
-    json(conn, 200, Map.put(Task14ProductObserver.status(), "status", "disarmed"))
+    :ok = MultiAgentRoundProductObserver.disarm()
+    json(conn, 200, Map.put(MultiAgentRoundProductObserver.status(), "status", "disarmed"))
   end
 
   def call(conn, _opts), do: json(conn, 404, %{"error" => "not_found"})

@@ -1,20 +1,20 @@
-defmodule CodexPooler.Dev.Task14ProductObserverTest do
+defmodule CodexPooler.Dev.MultiAgentRoundProductObserverTest do
   use ExUnit.Case, async: false
 
   import Plug.Test
 
-  alias CodexPooler.Dev.Task14ProductObserver
-  alias CodexPooler.Dev.Task14ProductObserver.Plug, as: ObserverPlug
+  alias CodexPooler.Dev.MultiAgentRoundProductObserver
+  alias CodexPooler.Dev.MultiAgentRoundProductObserver.Plug, as: ObserverPlug
 
-  @event [:codex_pooler, :gateway, :task14, :product_stage]
+  @event [:codex_pooler, :gateway, :multi_agent_round, :product_stage]
 
   setup do
-    on_exit(fn -> Task14ProductObserver.disarm() end)
+    on_exit(fn -> MultiAgentRoundProductObserver.disarm() end)
     :ok
   end
 
   test "correlates bounded upstream and delivered facts without retaining raw content" do
-    :ok = Task14ProductObserver.arm()
+    :ok = MultiAgentRoundProductObserver.arm()
 
     emit(:provider_to_pooler, "response.output_text.delta")
     emit(:pooler_to_codex, "response.output_text.delta")
@@ -38,29 +38,34 @@ defmodule CodexPooler.Dev.Task14ProductObserverTest do
                  }
                ]
              }
-           } = Task14ProductObserver.captures()
+           } = MultiAgentRoundProductObserver.captures()
 
     served = conn(:get, "/") |> ObserverPlug.call([])
     assert served.status == 200
+
+    assert Plug.Conn.get_resp_header(served, "x-multi-agent-round-product-observer") == [
+             "pooler-product-stage-v1"
+           ]
+
     refute served.resp_body =~ "forbidden prompt"
     refute served.resp_body =~ "secret-token"
   end
 
   test "keeps terminal directions scoped to their response fingerprints" do
-    :ok = Task14ProductObserver.arm()
+    :ok = MultiAgentRoundProductObserver.arm()
     emit(:provider_to_pooler, "response.completed", response_fingerprint: "a1b2c3d4e5f6")
     emit(:pooler_to_codex, "response.completed", response_fingerprint: "f6e5d4c3b2a1")
 
-    assert %{"request-1" => entry} = Task14ProductObserver.captures()
+    assert %{"request-1" => entry} = MultiAgentRoundProductObserver.captures()
 
     assert entry["responses"] == [
              %{"providerStatus" => "completed", "responseFingerprint" => "a1b2c3d4e5f6"},
              %{"downstreamStatus" => "delivered", "responseFingerprint" => "f6e5d4c3b2a1"}
            ]
 
-    :ok = Task14ProductObserver.arm()
+    :ok = MultiAgentRoundProductObserver.arm()
     emit(:provider_to_pooler, "response.completed", response_fingerprint: "a1b2c3d4e5f6")
-    assert %{"request-1" => unmatched} = Task14ProductObserver.captures()
+    assert %{"request-1" => unmatched} = MultiAgentRoundProductObserver.captures()
 
     assert unmatched["responses"] == [
              %{"providerStatus" => "completed", "responseFingerprint" => "a1b2c3d4e5f6"}
@@ -68,7 +73,7 @@ defmodule CodexPooler.Dev.Task14ProductObserverTest do
   end
 
   test "poisons a terminal fingerprint joined across different attempts" do
-    :ok = Task14ProductObserver.arm()
+    :ok = MultiAgentRoundProductObserver.arm()
     emit(:provider_to_pooler, "response.completed", response_fingerprint: "a1b2c3d4e5f6")
 
     emit(:pooler_to_codex, "response.completed",
@@ -76,7 +81,7 @@ defmodule CodexPooler.Dev.Task14ProductObserverTest do
       response_fingerprint: "a1b2c3d4e5f6"
     )
 
-    assert %{"request-1" => crossed} = Task14ProductObserver.captures()
+    assert %{"request-1" => crossed} = MultiAgentRoundProductObserver.captures()
     assert crossed["attemptId"] == nil
 
     assert crossed["responses"] == [
@@ -89,14 +94,14 @@ defmodule CodexPooler.Dev.Task14ProductObserverTest do
   end
 
   test "retains every terminal response of one gateway request" do
-    :ok = Task14ProductObserver.arm()
+    :ok = MultiAgentRoundProductObserver.arm()
 
     for response_fingerprint <- ["a1b2c3d4e5f6", "f6e5d4c3b2a1"] do
       emit(:provider_to_pooler, "response.completed", response_fingerprint: response_fingerprint)
       emit(:pooler_to_codex, "response.completed", response_fingerprint: response_fingerprint)
     end
 
-    assert %{"request-1" => entry} = Task14ProductObserver.captures()
+    assert %{"request-1" => entry} = MultiAgentRoundProductObserver.captures()
 
     assert entry["responses"] == [
              %{
@@ -113,7 +118,7 @@ defmodule CodexPooler.Dev.Task14ProductObserverTest do
   end
 
   test "records Pooler-generated request identity when the client sent no x-request-id" do
-    :ok = Task14ProductObserver.arm()
+    :ok = MultiAgentRoundProductObserver.arm()
 
     emit(:provider_to_pooler, "response.completed",
       client_request_id: nil,
@@ -126,11 +131,11 @@ defmodule CodexPooler.Dev.Task14ProductObserverTest do
                "requestId" => "request-1",
                "attemptId" => "attempt-1"
              }
-           } = Task14ProductObserver.captures()
+           } = MultiAgentRoundProductObserver.captures()
   end
 
   test "reports bounded accepted and rejected observation counts after disarm" do
-    :ok = Task14ProductObserver.arm()
+    :ok = MultiAgentRoundProductObserver.arm()
 
     emit(:provider_to_pooler, "response.completed", response_fingerprint: "a1b2c3d4e5f6")
 
@@ -149,9 +154,9 @@ defmodule CodexPooler.Dev.Task14ProductObserverTest do
              "eventReceipts" => 2,
              "acceptedObservations" => 1,
              "rejectedObservations" => 1
-           } = Task14ProductObserver.status()
+           } = MultiAgentRoundProductObserver.status()
 
-    :ok = Task14ProductObserver.disarm()
+    :ok = MultiAgentRoundProductObserver.disarm()
 
     assert %{
              "armed" => false,
@@ -159,11 +164,11 @@ defmodule CodexPooler.Dev.Task14ProductObserverTest do
              "eventReceipts" => 2,
              "acceptedObservations" => 1,
              "rejectedObservations" => 1
-           } = Task14ProductObserver.status()
+           } = MultiAgentRoundProductObserver.status()
   end
 
   test "retains every request of a real multi-turn round and still bounds the window" do
-    :ok = Task14ProductObserver.arm()
+    :ok = MultiAgentRoundProductObserver.arm()
 
     # The shape of the 2026-08-12 round: two Pooler lanes, each a root thread
     # and a child thread, every thread taking several turns.
@@ -176,7 +181,7 @@ defmodule CodexPooler.Dev.Task14ProductObserverTest do
       )
     end
 
-    captures = Task14ProductObserver.captures()
+    captures = MultiAgentRoundProductObserver.captures()
     assert map_size(captures) == 14
     assert Enum.all?(round_requests, &Map.has_key?(captures, &1))
 
@@ -187,7 +192,7 @@ defmodule CodexPooler.Dev.Task14ProductObserverTest do
       )
     end
 
-    bounded = Task14ProductObserver.captures()
+    bounded = MultiAgentRoundProductObserver.captures()
     assert map_size(bounded) == 64
     # The window drops arrivals it cannot hold; it never evicts what it already
     # correlated, so a consumer sees a truthful prefix instead of a shuffled one.
@@ -202,7 +207,7 @@ defmodule CodexPooler.Dev.Task14ProductObserverTest do
              %{"providerStatus" => "completed", "responseFingerprint" => "a1b2c3d4e5f6"}
            ]
 
-    assert Task14ProductObserver.captures()["round-request-1"]["responses"] == [
+    assert MultiAgentRoundProductObserver.captures()["round-request-1"]["responses"] == [
              %{
                "downstreamStatus" => "delivered",
                "providerStatus" => "completed",
@@ -212,15 +217,15 @@ defmodule CodexPooler.Dev.Task14ProductObserverTest do
   end
 
   test "is disabled by default and disarm clears the store" do
-    refute Task14ProductObserver.armed?()
+    refute MultiAgentRoundProductObserver.armed?()
     emit(:provider_to_pooler, "response.output_text.delta")
-    assert Task14ProductObserver.captures() == %{}
+    assert MultiAgentRoundProductObserver.captures() == %{}
 
-    :ok = Task14ProductObserver.arm()
+    :ok = MultiAgentRoundProductObserver.arm()
     emit(:provider_to_pooler, "response.output_text.delta")
-    assert map_size(Task14ProductObserver.captures()) == 1
-    :ok = Task14ProductObserver.disarm()
-    assert Task14ProductObserver.captures() == %{}
+    assert map_size(MultiAgentRoundProductObserver.captures()) == 1
+    :ok = MultiAgentRoundProductObserver.disarm()
+    assert MultiAgentRoundProductObserver.captures() == %{}
   end
 
   defp emit(direction, event_type, opts \\ []) do

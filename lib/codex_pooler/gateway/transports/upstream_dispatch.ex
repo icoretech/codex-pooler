@@ -428,7 +428,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     emit_egress_observation(:websocket, headers, request_options, payload_body)
 
     timeouts = request_options.timeout_config
-    observation = task14_observation_context(request, attempt, request_options)
+    observation = multi_agent_round_observation_context(request, attempt, request_options)
 
     request_data = %{
       url: url,
@@ -1043,18 +1043,22 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     result
   end
 
-  defp task14_observation_context(request, attempt, %RequestOptions{} = request_options) do
+  defp multi_agent_round_observation_context(
+         request,
+         attempt,
+         %RequestOptions{} = request_options
+       ) do
     %{
-      request_id: task14_request_id(request, request_options),
+      request_id: multi_agent_round_request_id(request, request_options),
       client_request_id: request_options.request_metadata.client_request_id,
       attempt_id: if(is_map(attempt), do: Map.get(attempt, :id)),
       mode: RequestOptions.model_serving_mode(request_options)
     }
   end
 
-  defp task14_request_id(%{id: id}, _request_options) when is_binary(id), do: id
+  defp multi_agent_round_request_id(%{id: id}, _request_options) when is_binary(id), do: id
 
-  defp task14_request_id(_request, %RequestOptions{} = request_options),
+  defp multi_agent_round_request_id(_request, %RequestOptions{} = request_options),
     do: request_options.request_metadata.request_id
 
   defp websocket_headers(identity, token, routing_hint) do

@@ -57,7 +57,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     auth = auth_fixture()
 
     previous_observation_setting =
-      Application.get_env(:codex_pooler, :task14_product_observation_enabled)
+      Application.get_env(:codex_pooler, :multi_agent_round_product_observation_enabled)
 
     on_exit(fn ->
       restore_observation_setting(previous_observation_setting)
@@ -69,7 +69,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
   test "v1 mapper matrix preserves owner-local observations and exactly-once delivery", %{
     auth: auth
   } do
-    Application.put_env(:codex_pooler, :task14_product_observation_enabled, true)
+    Application.put_env(:codex_pooler, :multi_agent_round_product_observation_enabled, true)
     handler_id = attach_product_observer!()
     on_exit(fn -> :telemetry.detach(handler_id) end)
 
@@ -1607,7 +1607,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     :ok =
       :telemetry.attach(
         handler_id,
-        [:codex_pooler, :gateway, :task14, :product_stage],
+        [:codex_pooler, :gateway, :multi_agent_round, :product_stage],
         fn _event, _measurements, metadata, _config ->
           send(parent, {:product_observation, metadata})
         end,
@@ -1730,10 +1730,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
   end
 
   defp restore_observation_setting(nil),
-    do: Application.delete_env(:codex_pooler, :task14_product_observation_enabled)
+    do: Application.delete_env(:codex_pooler, :multi_agent_round_product_observation_enabled)
 
   defp restore_observation_setting(value),
-    do: Application.put_env(:codex_pooler, :task14_product_observation_enabled, value)
+    do: Application.put_env(:codex_pooler, :multi_agent_round_product_observation_enabled, value)
 
   defp cleanup_owner_session(codex_session_id) do
     case Registry.lookup(WebsocketOwnerSession.Registry, codex_session_id) do

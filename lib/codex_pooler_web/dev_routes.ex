@@ -17,10 +17,12 @@ defmodule CodexPoolerWeb.DevRoutes do
         end
 
         # Loopback JSON surface, deliberately outside the browser pipeline:
-        # the Task 10 observer is armed via POST and must not require CSRF.
+        # Development observers are armed via POST and must not require CSRF.
         scope "/dev" do
           forward "/task10/egress-capture", CodexPooler.Dev.Task10EgressObserver.Plug
-          forward "/task14/product-capture", CodexPooler.Dev.Task14ProductObserver.Plug
+
+          forward "/multi-agent-round/product-capture",
+                  CodexPooler.Dev.MultiAgentRoundProductObserver.Plug
         end
       end
     end

@@ -100,7 +100,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRequestCallbacksTest do
              ]
   end
 
-  test "owner-local writer and frame observer preserve Task14 observation semantics" do
+  test "owner-local writer and frame observer preserve multi-agent round observation semantics" do
     identity = active_upstream_identity_fixture()
     handler_id = "websocket-request-callbacks-#{System.unique_integer([:positive])}"
     parent = self()
@@ -108,15 +108,15 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRequestCallbacksTest do
     :ok =
       :telemetry.attach(
         handler_id,
-        [:codex_pooler, :gateway, :task14, :product_stage],
+        [:codex_pooler, :gateway, :multi_agent_round, :product_stage],
         fn _event, _measurements, metadata, _config -> send(parent, {:observation, metadata}) end,
         nil
       )
 
-    Application.put_env(:codex_pooler, :task14_product_observation_enabled, true)
+    Application.put_env(:codex_pooler, :multi_agent_round_product_observation_enabled, true)
 
     on_exit(fn ->
-      Application.put_env(:codex_pooler, :task14_product_observation_enabled, false)
+      Application.put_env(:codex_pooler, :multi_agent_round_product_observation_enabled, false)
       :telemetry.detach(handler_id)
     end)
 

@@ -607,7 +607,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     refute_receive {:egress_observation, _silent}, 100
   end
 
-  test "Task 14 product observation emits bounded websocket stage metadata only" do
+  test "multi-agent round product observation emits bounded websocket stage metadata only" do
     {:ok, websocket_upstream} =
       FakeUpstream.start_link(
         {:sequence,
@@ -619,30 +619,30 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
              }),
              Jason.encode!(%{
                "type" => "response.completed",
-               "response" => %{"id" => "task14-product-observer"}
+               "response" => %{"id" => "multi-agent-round-product-observer"}
              })
            ])
          ]}
       )
 
     on_exit(fn -> FakeUpstream.stop(websocket_upstream) end)
-    handler_id = "task14-product-observation-test"
+    handler_id = "multi-agent-round-product-observation-test"
     parent = self()
 
     :ok =
       :telemetry.attach(
         handler_id,
-        [:codex_pooler, :gateway, :task14, :product_stage],
+        [:codex_pooler, :gateway, :multi_agent_round, :product_stage],
         fn _event, _measurements, metadata, _config ->
-          send(parent, {:task14_product_observation, metadata})
+          send(parent, {:multi_agent_round_product_observation, metadata})
         end,
         nil
       )
 
-    Application.put_env(:codex_pooler, :task14_product_observation_enabled, true)
+    Application.put_env(:codex_pooler, :multi_agent_round_product_observation_enabled, true)
 
     on_exit(fn ->
-      Application.put_env(:codex_pooler, :task14_product_observation_enabled, false)
+      Application.put_env(:codex_pooler, :multi_agent_round_product_observation_enabled, false)
       :telemetry.detach(handler_id)
     end)
 
@@ -666,7 +666,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     request = %{request | accounting_attempt: %Attempt{id: "attempt-1"}}
     assert {:ok, _response} = UpstreamDispatch.websocket_request(request)
 
-    observations = collect_task14_observations([])
+    observations = collect_multi_agent_round_observations([])
     assert length(observations) == 4
 
     assert Enum.frequencies_by(observations, &{&1.direction, &1.event_type}) == %{
@@ -1498,10 +1498,10 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     RequestOptions.for_websocket(opts, %{"model" => "example-model"})
   end
 
-  defp collect_task14_observations(observations) do
+  defp collect_multi_agent_round_observations(observations) do
     receive do
-      {:task14_product_observation, observation} ->
-        collect_task14_observations([observation | observations])
+      {:multi_agent_round_product_observation, observation} ->
+        collect_multi_agent_round_observations([observation | observations])
     after
       0 -> Enum.reverse(observations)
     end
