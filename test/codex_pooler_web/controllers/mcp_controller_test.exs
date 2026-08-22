@@ -634,10 +634,11 @@ defmodule CodexPoolerWeb.McpControllerTest do
       user: user
     } do
       raw_token = enabled_mcp_token!(user)
+      operator_name = "Wire Operator #{System.unique_integer([:positive])}"
 
       %{user: operator} =
         operator_fixture(user, %{
-          "display_name" => "Wire Operator",
+          "display_name" => operator_name,
           "email" => Redaction.forbidden_sentinel!(:disallowed_email)
         })
 
@@ -648,7 +649,7 @@ defmodule CodexPoolerWeb.McpControllerTest do
 
       response =
         call_tool(conn, raw_token, "wire-list-operators", "codex_pooler_list_operators", %{
-          "query" => "Wire Operator",
+          "query" => operator_name,
           "limit" => 10
         })
 
@@ -656,15 +657,15 @@ defmodule CodexPoolerWeb.McpControllerTest do
         assert_successful_tool_response(response, "wire-list-operators")
 
       assert text =~ "1 operator metadata records returned; total 1"
-      assert text =~ "name=Wire Operator"
-      assert text =~ "email=ta***@example.com"
+      assert text =~ "name=#{operator_name}"
+      assert text =~ "email=re***@example.com"
       assert text =~ "mcp=enabled"
       assert text =~ "keys=1"
 
       assert [presented] = structured["operators"]
       assert presented["id"] == operator.id
-      assert presented["display_name"] == "Wire Operator"
-      assert presented["email"] == "ta***@example.com"
+      assert presented["display_name"] == operator_name
+      assert presented["email"] == "re***@example.com"
       assert presented["mcp_enabled"] == true
       assert presented["mcp_key_count"] == 1
 
