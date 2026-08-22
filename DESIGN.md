@@ -1795,10 +1795,11 @@ live is always one click away and never something the operator has to arrange.
   fed only by the safe presentation projection in
   [`model_info.ex`](lib/codex_pooler/catalog/model_info.ex).
 - **Purpose:** explain an unfamiliar catalog entry without increasing every
-  model row's height. The primary content is the short upstream description;
-  exceptional catalog facts such as a hidden alias or lack of public API
-  support appear in a quiet footer band. Raw provider metadata never reaches
-  the component.
+  model row's height. The primary content is the short upstream description and
+  a compact context block with source-default, source-maximum, and usable-share
+  values. Exceptional catalog facts such as a hidden alias or lack of public
+  API support appear in a quiet footer band. Raw provider metadata never
+  reaches the component.
 - **Trigger variants:** catalog and policy forms use a neutral 24px info-icon
   button immediately after the model name. Dense usage leaderboards make the
   model label itself the trigger, with a subtle underline affordance instead
@@ -1812,21 +1813,34 @@ live is always one click away and never something the operator has to arrange.
   dialog for Escape, restores focus to the invoker, and provides deterministic
   outside-click dismissal inside modal top layers. Do not make the information
   hover-only and do not add a page-specific positioning hook.
-- **Panel:** `w-72 max-w-[calc(100vw-2rem)] rounded-box border
-  border-base-300 bg-base-100 shadow-2xl`; compact uppercase eyebrow, model
-  label, and `text-xs leading-5` description. The optional facts footer uses
-  `border-t border-base-300 bg-base-200/35` and text plus icon, never color
-  alone.
+- **Panel:** `w-80 max-w-[calc(100vw-2rem)] rounded-box border
+  border-base-300 bg-base-100 shadow-2xl`; the original compact monospace
+  `Model info` eyebrow stays in primary color and the exact model id is the bold
+  subtitle above the `text-xs leading-5` description. Context stays inside the body as
+  one plain-language definition row without a divider: a fixed token limit, a
+  default plus maximum, or a bounded value marked `varies by upstream`.
+  Context values use the normal UI font with tabular numerals, not monospace,
+  and do not expose internal usable-percentage terminology. The optional facts
+  footer uses `bg-base-200/35` without a dividing rule and pairs text with an
+  icon, never color alone; it may include the source-reported minimum Codex version
+  and the catalog row's last successful observation as relative time, with the
+  absolute UTC timestamp retained in the row title.
 - **Metadata drift:** one shared description is shown when all reporting
   upstreams that provide one agree. Conflicting descriptions are stated as a
-  conflict rather than choosing an arbitrary source. Hidden/API facts are
-  shown only when their aggregate state is known; mixed reports are named as
-  mixed.
+  conflict rather than choosing an arbitrary source. Context profiles retain
+  distinct source values and render bounded ranges when sources disagree;
+  missing percentages use Codex's 95% default. Minimum client versions retain
+  distinct values and say when they vary by upstream. Catalog freshness uses
+  model `last_seen_at`; a preserved source does not inherit a newer observation
+  timestamp from another assignment. Hidden/API facts are shown only when their
+  aggregate state is known; mixed reports are named as mixed.
 - **Accessibility and selectors:** the invoker owns `aria-controls` and
   `aria-describedby`; the panel is focusable and carries `role="tooltip"`.
   Preserve stable `data-role="model-info-popover"`, `model-info-trigger`,
-  `model-info-content`, and `model-info-description` hooks for LiveView tests
-  and browser QA. Focus-visible uses the standard primary outline.
+  `model-info-content`, `model-info-title`, `model-info-model-id`,
+  `model-info-description`, and `model-info-context` hooks
+  for LiveView tests and browser QA. Focus-visible uses the standard primary
+  outline.
 
 ### Operator card
 

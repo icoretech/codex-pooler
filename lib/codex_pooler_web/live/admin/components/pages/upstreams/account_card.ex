@@ -253,7 +253,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard do
                     id={
                       "upstream-account-#{@account.identity.id}-token-model-#{row.dom_id}-model-info"
                     }
-                    model_label={row.label}
+                    model_id={row.label}
                     info={row.model_info}
                     trigger={:label}
                     class="w-full min-w-0"

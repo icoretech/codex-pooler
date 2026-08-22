@@ -743,6 +743,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
               "description" => "Synthetic busy model.",
               "visibility" => "hide",
               "supported_in_api" => false,
+              "context_window" => 272_000,
+              "max_context_window" => 872_000,
+              "effective_context_window_percent" => 95,
               "supports_responses" => true,
               "provider" => %{"private" => provider_sentinel}
             }
@@ -884,6 +887,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
              "##{card_id}-token-model-gpt-example-busy-model-info-content [data-role='model-info-facts']",
              "Hidden upstream alias"
            )
+
+    assert has_element?(
+             view,
+             "##{card_id}-token-model-gpt-example-busy-model-info-content [data-role='model-info-context']",
+             "272k default · up to 872k"
+           )
+
+    refute render(view) =~ "Usable share"
 
     refute has_element?(
              view,

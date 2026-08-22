@@ -88,7 +88,7 @@ For local setup, change `baseUrl` to `http://localhost:4000/v1`.
 
 Current Pi source still requires `thinkingLevelMap.xhigh` for Pi to expose `xhigh` for this custom model. Without it, Pi clamps `--thinking xhigh` and `defaultThinkingLevel: "xhigh"` down to `high`.
 
-Pi accepts `contextWindow` and `maxTokens` for custom models; it has no `contextTokens` field. OpenAI's GPT-5.6 catalog defaults to 272000 tokens and permits a native 872000-token opt-in, while Codex Pooler advertises the effective `/v1` window as `floor(872000 × 0.95) = 828400`. Use that endpoint value, not the raw ceiling. Pi compacts when usage exceeds `contextWindow - reserveTokens`; the 128000-token reserve leaves an explicit output budget and starts compaction at 700400 tokens. When available, `/v1/models.context_length` is the authoritative effective value for its one-field `contextWindow`.
+Pi accepts `contextWindow` and `maxTokens` for custom models; it has no `contextTokens` field. The `828400` values above are long-profile examples for models whose selected Pool catalog source reports an 872000-token raw ceiling. Provider accounts can temporarily report different ceilings for the same model; a selected 272000-token profile exposes `258400` instead. Use each model's `/v1/models.context_length` as the authoritative `contextWindow`, not the raw ceiling. For the long-profile example, Pi compacts when usage exceeds `contextWindow - reserveTokens`; the 128000-token reserve leaves an explicit output budget and starts compaction at 700400 tokens.
 
 ## Default model
 

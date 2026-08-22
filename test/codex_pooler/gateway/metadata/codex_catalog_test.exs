@@ -23,17 +23,17 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
     assert first.etag == second.etag
   end
 
-  test "keeps the existing effective context projection contract" do
+  test "keeps native Codex context raw so the client applies the effective percentage once" do
     result = CodexCatalog.build([context_model()], unrestricted_policy(), %{})
     [model] = result.body["models"]
 
-    assert model["context_window"] == 258_400
+    assert model["context_window"] == 272_000
     assert model["max_context_window"] == 272_000
-    assert model["auto_compact_token_limit"] == 232_560
+    assert is_nil(model["auto_compact_token_limit"])
     assert model["effective_context_window_percent"] == 95
   end
 
-  test "projects GPT-5.6 long-context metadata into the effective Codex catalog" do
+  test "projects GPT-5.6 long-context metadata into the raw native Codex catalog" do
     result =
       CodexCatalog.build(
         [model("gpt-5.6-context", gpt56_context_metadata())],
@@ -44,9 +44,9 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
 
     [model] = result.body["models"]
 
-    assert model["context_window"] == 828_400
+    assert model["context_window"] == 872_000
     assert model["max_context_window"] == 872_000
-    assert model["auto_compact_token_limit"] == 745_560
+    assert model["auto_compact_token_limit"] == 784_800
     assert model["effective_context_window_percent"] == 95
   end
 
@@ -279,7 +279,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
     assert restricted.body["models"] == Enum.drop(unrestricted.body["models"], 1)
   end
 
-  test "selects the canonical partition containing the oldest routable assignment anchor" do
+  test "anchors the selected largest partition on its oldest assignment" do
     model = model("gpt-partition", %{"source_assignment_models" => %{}})
     shared = pristine_source("gpt-partition")
     divergent = Map.put(shared, "future_schema_field", %{"variant" => "divergent"})
@@ -374,7 +374,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
       }
     end
 
-    test "keeps the oldest partition when it still has a routable member", context do
+    test "keeps the largest cohort when routable membership is tied", context do
       assert [partition] =
                CodexCatalog.select_canonical_sources([context.model], context.candidates,
                  routable_assignment_ids_by_model_id: fn ->
@@ -387,7 +387,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
       refute partition.routable_selection?
     end
 
-    test "moves to the next-oldest partition when the oldest has none", context do
+    test "moves to the only cohort with routable capacity", context do
       assert [partition] =
                CodexCatalog.select_canonical_sources([context.model], context.candidates,
                  routable_assignment_ids_by_model_id: fn ->
@@ -401,7 +401,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
       assert partition.source["context_window"] == 111_111
     end
 
-    test "keeps the oldest partition when nothing is routable anywhere", context do
+    test "keeps the largest cohort when nothing is routable anywhere", context do
       assert [partition] =
                CodexCatalog.select_canonical_sources([context.model], context.candidates,
                  routable_assignment_ids_by_model_id: fn ->
@@ -413,7 +413,7 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
       refute partition.routable_selection?
     end
 
-    test "selects by age alone when no routability resolver is supplied", context do
+    test "selects the largest cohort when no routability resolver is supplied", context do
       assert [partition] =
                CodexCatalog.select_canonical_sources([context.model], context.candidates)
 
@@ -438,6 +438,41 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
       assert partition.assignment_ids ==
                Enum.sort([context.anchor_id, context.sibling_id, context.alternate_id])
     end
+  end
+
+  test "selects a newer routable majority instead of pinning an older singleton" do
+    {old_id, new_first_id, new_second_id} = assignment_ids()
+    source = pristine_source("gpt-rollout")
+    updated = Map.put(source, "max_context_window", 872_000)
+    timestamp = ~U[2026-08-17 08:00:00.000000Z]
+
+    model =
+      "gpt-rollout"
+      |> model(%{"source_assignment_models" => %{}})
+      |> put_source_models(%{
+        old_id => source,
+        new_first_id => updated,
+        new_second_id => updated
+      })
+
+    candidates = %{
+      model.id => [
+        candidate(old_id, timestamp),
+        candidate(new_first_id, DateTime.add(timestamp, 60, :second)),
+        candidate(new_second_id, DateTime.add(timestamp, 120, :second))
+      ]
+    }
+
+    assert [partition] =
+             CodexCatalog.select_canonical_sources([model], candidates,
+               routable_assignment_ids_by_model_id: fn ->
+                 %{model.id => MapSet.new([old_id, new_first_id, new_second_id])}
+               end
+             )
+
+    assert partition.assignment_ids == Enum.sort([new_first_id, new_second_id])
+    assert partition.source["max_context_window"] == 872_000
+    refute partition.routable_selection?
   end
 
   test "catalog resolver selects per-model partitions from one lazy map" do

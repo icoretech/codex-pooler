@@ -561,7 +561,8 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
           status: status,
           headers: headers,
           raw_body: body,
-          public_stream_startup_error_code: stream_startup_error_code(error_code, request_options),
+          public_stream_startup_error_code:
+            stream_startup_error_code(error_code, request_options),
           public_input_file_upstream_404?: marker
         }
     end
@@ -591,7 +592,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
          transport: %{transport: "http_sse"},
          openai_compatibility: %{public_openai_responses_stream: true}
        }),
-    do: error_code
+       do: error_code
 
   defp stream_startup_error_code(_error_code, %RequestOptions{}), do: nil
 

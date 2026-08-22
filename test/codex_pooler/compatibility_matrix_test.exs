@@ -328,7 +328,7 @@ defmodule CodexPooler.CompatibilityMatrixTest do
 
       assert fixture == %{
                header: "etag",
-               digest_input: "policy_visible_effective_catalog_body",
+               digest_input: "policy_visible_native_catalog_body",
                digest: "sha256_deterministic_canonical_json",
                format: "weak_cp_models_v1",
                aliases_share_exact_body_and_token: true,
@@ -353,13 +353,25 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                input: "quota_evidence_only"
              }
 
+      assert feature.canonical_partition.selection_rank == [
+               "quota_routable_member_count_desc",
+               "partition_member_count_desc",
+               "anchor_created_at_asc",
+               "anchor_assignment_id_asc"
+             ]
+
+      assert feature.canonical_partition.selection == "largest_quota_routable_partition"
+
+      assert feature.canonical_partition.selection_fallback ==
+               "largest_partition_when_none_routable"
+
       assert feature.canonical_partition.pinned_continuation == %{
                valid_canonical_hard_pin: "may_cross_partition",
                malformed_or_retired_source: "unavailable"
              }
 
       assert feature.contract =~
-               "same policy-visible effective catalog body and deterministic weak ETag"
+               "same policy-visible native catalog body and deterministic weak ETag"
 
       assert feature.contract =~
                "backend Codex catalog-driven new turns use the selected partition"

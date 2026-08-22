@@ -526,7 +526,10 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLivePolicyTest do
           assignment.id => %{
             "description" => "Synthetic refresh-visible model.",
             "visibility" => "hide",
-            "supported_in_api" => false
+            "supported_in_api" => false,
+            "context_window" => 272_000,
+            "max_context_window" => 872_000,
+            "effective_context_window_percent" => 95
           }
         }
       }
@@ -556,6 +559,14 @@ defmodule CodexPoolerWeb.Admin.ApiKeysLivePolicyTest do
              "#api-key-model-option-gpt-refresh-visible-model-info-content [data-role='model-info-facts']",
              "Not exposed by the public API"
            )
+
+    assert has_element?(
+             view,
+             "#api-key-model-option-gpt-refresh-visible-model-info-content [data-role='model-info-context']",
+             "272k default · up to 872k"
+           )
+
+    refute render(view) =~ "Usable share"
 
     assert render(view) =~ "preserved after refresh"
 

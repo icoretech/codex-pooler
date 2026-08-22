@@ -601,16 +601,29 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
         context_window_overrides
       )
       when is_map(metadata) and is_map(context_window_overrides) do
-    case Map.get(context_window_overrides, model.exposed_model_id) do
-      context_window when is_integer(context_window) and context_window > 0 ->
-        put_context_window(metadata, context_window)
+    metadata =
+      case Map.get(context_window_overrides, model.exposed_model_id) do
+        context_window when is_integer(context_window) and context_window > 0 ->
+          put_context_window(metadata, context_window)
 
-      _value ->
-        metadata
-        |> maybe_apply_pricing_context_window(model, pricing_buckets)
-        |> apply_effective_context_window()
+        _value ->
+          maybe_apply_pricing_context_window(metadata, model, pricing_buckets)
+      end
+
+    put_default_effective_context_window_percent(metadata)
+  end
+
+  @spec effective_context_window(metadata()) :: pos_integer() | nil
+  def effective_context_window(metadata) when is_map(metadata) do
+    context_window = metadata["context_window"]
+    percent = int_metadata(metadata, "effective_context_window_percent", 95)
+
+    if is_integer(context_window) and context_window > 0 and percent in 1..100 do
+      max(1, div(context_window * percent, 100))
     end
   end
+
+  def effective_context_window(_metadata), do: nil
 
   @spec metadata_map(metadata(), String.t()) :: metadata()
   def metadata_map(%{} = metadata, key) do
@@ -703,26 +716,19 @@ defmodule CodexPooler.Gateway.Routing.ModelMetadata do
     end)
   end
 
-  defp apply_effective_context_window(metadata) do
-    context_window = metadata["context_window"]
-    percent = int_metadata(metadata, "effective_context_window_percent", 95)
+  defp put_default_effective_context_window_percent(metadata) do
+    case {metadata["context_window"], metadata["effective_context_window_percent"]} do
+      {context_window, percent}
+      when is_integer(context_window) and context_window > 0 and
+             is_integer(percent) and percent in 1..100 ->
+        metadata
 
-    if is_integer(context_window) and context_window > 0 and percent in 1..99 do
-      effective_context_window = max(1, div(context_window * percent, 100))
-      auto_compact_limit = div(effective_context_window * 9, 10)
+      {context_window, _missing_or_invalid}
+      when is_integer(context_window) and context_window > 0 ->
+        Map.put(metadata, "effective_context_window_percent", 95)
 
-      metadata
-      |> Map.put("context_window", effective_context_window)
-      |> Map.update("max_context_window", context_window, fn
-        value when is_integer(value) and value > 0 -> max(value, context_window)
-        _value -> context_window
-      end)
-      |> Map.update("auto_compact_token_limit", auto_compact_limit, fn
-        value when is_integer(value) and value > 0 -> min(value, auto_compact_limit)
-        _value -> auto_compact_limit
-      end)
-    else
-      metadata
+      {_missing_context_window, _percent} ->
+        metadata
     end
   end
 

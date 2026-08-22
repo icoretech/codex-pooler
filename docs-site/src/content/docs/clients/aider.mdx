@@ -59,7 +59,7 @@ Aider's `.aider.conf.yml` route settings do not carry context or output limits. 
 }
 ```
 
-When the Pool's `/v1/models` entry provides `context_length`, use that endpoint's effective value as the authoritative `max_tokens` value. For long-context GPT-5.6, OpenAI's catalog defaults to 272000 tokens and permits a native 872000-token opt-in, while Pooler advertises `floor(872000 × 0.95) = 828400`; the explicit 700400 input and 128000 output limits add up to that advertised window.
+When the Pool's `/v1/models` entry provides `context_length`, use that per-model effective value as the authoritative `max_tokens` value. The `828400` values above are long-profile examples for models whose selected Pool catalog source reports an 872000-token raw ceiling; the explicit 700400 input and 128000 output limits add up to that window. Provider accounts can temporarily report different ceilings for the same model, and a selected 272000-token profile exposes `258400`, so replace all three related limits together when the endpoint reports a different value.
 
 Keep the Pool API key out of the YAML file. Export it in the shell, or put it in a gitignored `.env` file that Aider can load:
 

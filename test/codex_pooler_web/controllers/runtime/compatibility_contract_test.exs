@@ -767,7 +767,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       envelope = CompatibilityMatrix.by_slug!(:backend_responses_envelope)
       error_param = CompatibilityMatrix.by_slug!(:upstream_error_param)
 
-      assert models_etag.contract =~ "policy-visible effective catalog body"
+      assert models_etag.contract =~ "policy-visible native catalog body"
       assert models_etag.contract =~ "eventual"
 
       assert models_etag.canonical_partition.new_turn_capacity == %{
@@ -787,6 +787,11 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                classification: "independent_per_model",
                input: "quota_evidence_only"
              }
+
+      assert models_etag.canonical_partition.selection == "largest_quota_routable_partition"
+
+      assert models_etag.canonical_partition.selection_fallback ==
+               "largest_partition_when_none_routable"
 
       assert models_etag.canonical_partition.pinned_continuation == %{
                valid_canonical_hard_pin: "may_cross_partition",

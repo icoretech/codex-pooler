@@ -135,11 +135,18 @@ defmodule CodexPooler.Gateway.Metadata do
   def serve_openai_models(auth, %RequestOptions{} = request_options) do
     request_options = request_options(request_options, "/v1/models", %{})
 
-    with {:ok, visibility} <- policy_visible_models(auth, "/v1/models", request_options),
-         :ok <- record_metadata_request(auth, "/v1/models", request_options, visibility) do
-      pricing_buckets = Catalog.pricing_buckets_by_identifier(visibility.visible_models)
+    with {:ok, snapshot} <- codex_catalog_snapshot(auth, "/v1/models", request_options),
+         :ok <- record_metadata_request(auth, "/v1/models", request_options, snapshot) do
+      canonical_models = Map.get(snapshot.body, "models", [])
+      canonical_models_by_slug = Map.new(canonical_models, &{&1["slug"], &1})
 
-      models = Enum.map(visibility.visible_models, &openai_model_payload(&1, pricing_buckets))
+      models =
+        Enum.flat_map(snapshot.visible_models, fn model ->
+          case Map.fetch(canonical_models_by_slug, model.exposed_model_id) do
+            {:ok, metadata} -> [openai_model_payload(model, metadata)]
+            :error -> []
+          end
+        end)
 
       {:ok,
        %{
@@ -180,21 +187,6 @@ defmodule CodexPooler.Gateway.Metadata do
     })
   end
 
-  defp policy_visible_models(auth, endpoint, %RequestOptions{} = request_options) do
-    with {:ok, policy} <- normalize_policy_or_log(auth, endpoint, request_options) do
-      hydration = CandidateEligibility.hydrate_model_visibility(auth.pool)
-
-      visible_models =
-        CandidateEligibility.policy_visible_models(hydration.visible_models, policy)
-
-      {:ok,
-       %{
-         visible_models: visible_models,
-         source_identity: CandidateEligibility.model_source_identity(hydration, visible_models)
-       }}
-    end
-  end
-
   @spec normalize_policy_or_log(auth(), String.t(), opts()) :: policy_result()
   defp normalize_policy_or_log(auth, endpoint, %RequestOptions{} = request_options) do
     case Access.normalize_api_key_policy(auth.api_key) do
@@ -217,12 +209,7 @@ defmodule CodexPooler.Gateway.Metadata do
     }
   end
 
-  defp openai_model_payload(%Model{} = model, pricing_buckets) do
-    metadata =
-      model
-      |> ModelMetadata.metadata()
-      |> ModelMetadata.apply_context_window_policy(model, pricing_buckets)
-
+  defp openai_model_payload(%Model{} = model, metadata) when is_map(metadata) do
     %{
       "id" => model.exposed_model_id,
       "object" => "model",
@@ -235,15 +222,15 @@ defmodule CodexPooler.Gateway.Metadata do
       "supports_tools" => model.supports_tools,
       "supports_reasoning" => model.supports_reasoning
     }
-    |> maybe_put_context_length(metadata)
+    |> maybe_put_context_length(ModelMetadata.effective_context_window(metadata))
   end
 
-  defp maybe_put_context_length(payload, %{"context_window" => context_length})
+  defp maybe_put_context_length(payload, context_length)
        when is_integer(context_length) and context_length > 0 do
     Map.put(payload, "context_length", context_length)
   end
 
-  defp maybe_put_context_length(payload, _metadata), do: payload
+  defp maybe_put_context_length(payload, _context_length), do: payload
 
   defp openai_model_created_at(%Model{} = model) do
     model.first_seen_at

@@ -186,7 +186,7 @@ defmodule CodexPoolerWeb.Admin.PoolModelServingComponents do
                 <AdminComponents.model_info_popover
                   :if={ModelInfo.present?(row.model_info)}
                   id={"#{row.dom_id}-model-info"}
-                  model_label={row.display_name}
+                  model_id={row.exposed_model_id}
                   info={row.model_info}
                 />
                 <span

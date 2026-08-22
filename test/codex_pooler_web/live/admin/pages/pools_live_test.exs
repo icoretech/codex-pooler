@@ -3112,6 +3112,9 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
               "description" => "Synthetic work routing alias.",
               "visibility" => "hide",
               "supported_in_api" => false,
+              "context_window" => 272_000,
+              "max_context_window" => 872_000,
+              "effective_context_window_percent" => 95,
               "use_responses_lite" => true
             }
           },
@@ -3231,6 +3234,14 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
              "##{auto_row_id}-model-info-content [data-role='model-info-facts']",
              "Not exposed by the public API"
            )
+
+    assert has_element?(
+             view,
+             "##{auto_row_id}-model-info-content [data-role='model-info-context']",
+             "272k default · up to 872k"
+           )
+
+    refute render(view) =~ "Usable share"
 
     assert has_element?(
              view,

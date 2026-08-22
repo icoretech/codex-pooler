@@ -213,7 +213,7 @@ defmodule CodexPoolerWeb.Admin.ApiKeyWizardComponents do
               <AdminComponents.model_info_popover
                 :if={ModelInfo.present?(option.model_info)}
                 id={"api-key-model-option-#{dom_token(option.identifier)}-model-info"}
-                model_label={option.display_name || option.identifier}
+                model_id={option.identifier}
                 info={option.model_info}
                 placement={:end}
                 class="mr-2 shrink-0"

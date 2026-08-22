@@ -359,6 +359,7 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
         exposed_model_id: exposed_model_id,
         display_name: model.display_name || exposed_model_id,
         metadata: model.metadata || %{},
+        catalog_updated_at: model.last_seen_at,
         routable_source_ids: routable_source_ids,
         configured_mode: configured_mode(Map.get(overrides_by_id, exposed_model_id)),
         available?: true,
@@ -377,6 +378,7 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
       exposed_model_id: override.exposed_model_id,
       display_name: override.exposed_model_id,
       metadata: %{},
+      catalog_updated_at: nil,
       routable_source_ids: [],
       configured_mode: override.mode,
       available?: false,
@@ -451,7 +453,10 @@ defmodule CodexPoolerWeb.Admin.PoolForm do
       effective_badge: row.effective_badge,
       available?: row.available?,
       warning: row.warning,
-      model_info: ModelInfo.from_metadata(row.metadata, row.routable_source_ids),
+      model_info:
+        row.metadata
+        |> ModelInfo.from_metadata(row.routable_source_ids)
+        |> ModelInfo.with_catalog_updated_at(row.catalog_updated_at),
       dom_id: dom_id,
       identifier_name: "pool_model_serving[rows][#{index}][exposed_model_id]",
       mode_name: "pool_model_serving[rows][#{index}][mode]",

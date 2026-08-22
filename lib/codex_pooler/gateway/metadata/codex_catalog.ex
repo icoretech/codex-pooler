@@ -266,9 +266,10 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
     CandidateEligibility.policy_visible_models(routable_models, normalized_policy)
   end
 
-  # Anchor selection is quota-aware: the oldest partition still holding at least
-  # one routable member wins, so an anchor partition whose accounts have all
-  # exhausted their quota no longer strands every healthy account behind it.
+  # Partition selection is quota-aware: the cohort with the most routable members
+  # wins, then total membership, then the oldest anchor. This lets a catalog
+  # rollout converge once the new source shape becomes the routable majority
+  # instead of letting one old assignment pin the model indefinitely.
   #
   # Resolving routability costs a quota read, so it is deferred until a model
   # actually has more than one partition. A pool whose accounts all advertise
@@ -327,17 +328,11 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
 
   defp valid_source_slug?(_source, %Model{}), do: false
 
-  # `partitions` is ordered oldest anchor first, so the head is exactly the
-  # partition the age-only rule selects. Routability moves the selection to the
-  # next-oldest partition that can still serve a turn; when nothing is routable
-  # the oldest partition is kept, so an all-exhausted pool keeps its current
-  # deterministic error shape.
-  #
   # Selection drives BOTH the routing cap and the advertised
   # `/backend-api/codex/models` body, which is what keeps the catalog a client
   # was told about and the account that serves its turn the same partition. The
   # documented consequence is that the catalog body and its ETag can change when
-  # the anchor partition flips — a legitimate revision, not churn for its own
+  # the preferred cohort changes — a legitimate revision, not churn for its own
   # sake. The contract is recorded under the `:backend_models_etag` entry in
   # `CodexPooler.CompatibilityMatrix`.
   defp select_anchored_partition(pairs, %Model{} = model, routable_assignment_ids) do
@@ -347,8 +342,8 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
       |> Map.values()
       |> Enum.sort_by(&partition_anchor_key/1)
 
-    [oldest_partition | _rest] = partitions
-    members = select_routable_partition(partitions, routable_assignment_ids)
+    baseline_members = select_partition(partitions, nil)
+    members = select_partition(partitions, routable_assignment_ids)
     anchor = partition_anchor(members)
 
     %{
@@ -356,17 +351,24 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalog do
       digest: anchor.digest,
       model: model,
       partition_count: length(partitions),
-      routable_selection?: members != oldest_partition,
+      routable_selection?: members != baseline_members,
       source: anchor.source
     }
   end
 
-  defp select_routable_partition([oldest_partition | _rest], nil), do: oldest_partition
+  defp select_partition(partitions, routable_assignment_ids) do
+    Enum.min_by(partitions, &partition_selection_key(&1, routable_assignment_ids))
+  end
 
-  defp select_routable_partition([oldest_partition | _rest] = partitions, routable) do
-    Enum.find(partitions, oldest_partition, fn members ->
-      Enum.any?(members, &MapSet.member?(routable, &1.assignment_id))
-    end)
+  defp partition_selection_key(members, nil) do
+    {-length(members), partition_anchor_key(members)}
+  end
+
+  defp partition_selection_key(members, %MapSet{} = routable_assignment_ids) do
+    routable_count =
+      Enum.count(members, &MapSet.member?(routable_assignment_ids, &1.assignment_id))
+
+    {-routable_count, -length(members), partition_anchor_key(members)}
   end
 
   defp partition_anchor(members), do: Enum.min_by(members, &partition_pair_key/1)

@@ -1556,7 +1556,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
           "Concurrent probe attempts allowed while testing a half-open circuit.",
           "Successful probes required before closing a previously opened circuit.",
           "Each class has a separate per-node concurrency and queue budget.",
-          "Model-specific context window sizes used when upstream metadata is missing or needs correction."
+          "Model-specific raw native context windows used when upstream metadata is missing or needs correction. Codex applies the advertised effective percentage once; /v1/models publishes the flattened value."
         ] do
       assert gateway_html =~ hint
     end

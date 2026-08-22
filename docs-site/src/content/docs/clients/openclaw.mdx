@@ -85,7 +85,7 @@ OpenClaw's OpenAI provider should point `baseUrl` at Codex Pooler's `/v1` surfac
 
 Define only model ids your assigned Pool can serve. If you run Codex Pooler locally, set `baseUrl` to `http://localhost:4000/v1`.
 
-OpenClaw separates the configured `contextWindow` from the effective runtime `contextTokens` budget. OpenAI's GPT-5.6 catalog defaults to 272000 tokens and permits a native 872000-token opt-in; this `/v1` provider receives Codex Pooler's effective advertised value, `floor(872000 × 0.95) = 828400`, for both fields. Do not configure the raw 872000 ceiling here. The 128000-token compaction reserve keeps output accounting explicit and starts local compaction at 700400 tokens. Use `gpt-5.6-luna` for background routing, keep `gpt-5.6-terra` as the primary model, and switch a session to `gpt-5.6-sol` only for heavy reasoning. When available, `/v1/models.context_length` is authoritative for `contextTokens`.
+OpenClaw separates the configured `contextWindow` from the effective runtime `contextTokens` budget. The `828400` values above are long-profile examples for models whose selected Pool catalog source reports an 872000-token raw ceiling. Provider accounts can temporarily report different ceilings for the same model; a selected 272000-token profile exposes `258400` instead. Use each model's `/v1/models.context_length` for both fields and do not configure the raw ceiling. For the long-profile example, the 128000-token compaction reserve keeps output accounting explicit and starts local compaction at 700400 tokens. Use `gpt-5.6-luna` for background routing, keep `gpt-5.6-terra` as the primary model, and switch a session to `gpt-5.6-sol` only for heavy reasoning.
 
 ## Operator MCP server
 

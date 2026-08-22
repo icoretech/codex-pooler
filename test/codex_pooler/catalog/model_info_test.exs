@@ -9,7 +9,10 @@ defmodule CodexPooler.Catalog.ModelInfoTest do
         "assignment-a" => %{
           "description" => "Synthetic work routing alias.",
           "visibility" => "hide",
-          "supported_in_api" => false
+          "supported_in_api" => false,
+          "context_window" => 272_000,
+          "max_context_window" => 872_000,
+          "effective_context_window_percent" => 95
         },
         "assignment-b" => %{
           "description" => "Different source description.",
@@ -23,7 +26,16 @@ defmodule CodexPooler.Catalog.ModelInfoTest do
              description: "Synthetic work routing alias.",
              description_state: :available,
              visibility: :hidden,
-             api_support: :unsupported
+             api_support: :unsupported,
+             context_profiles: [
+               %{
+                 raw_window: 272_000,
+                 usable_window: 258_400,
+                 raw_max_window: 872_000,
+                 usable_max_window: 828_400,
+                 effective_percent: 95
+               }
+             ]
            }
   end
 
@@ -96,5 +108,56 @@ defmodule CodexPooler.Catalog.ModelInfoTest do
 
     refute ModelInfo.present?(ModelInfo.empty())
     assert ModelInfo.present?(hidden)
+  end
+
+  test "keeps distinct context profiles when upstream source windows differ" do
+    info =
+      ModelInfo.from_sources([
+        %{"context_window" => 272_000, "max_context_window" => 272_000},
+        %{
+          "context_window" => 272_000,
+          "max_context_window" => 872_000,
+          "effective_context_window_percent" => 90
+        }
+      ])
+
+    assert info.context_profiles == [
+             %{
+               raw_window: 272_000,
+               usable_window: 258_400,
+               raw_max_window: 272_000,
+               usable_max_window: 258_400,
+               effective_percent: 95
+             },
+             %{
+               raw_window: 272_000,
+               usable_window: 244_800,
+               raw_max_window: 872_000,
+               usable_max_window: 784_800,
+               effective_percent: 90
+             }
+           ]
+
+    assert ModelInfo.present?(info)
+  end
+
+  test "keeps minimum client versions and the latest real catalog observation" do
+    older =
+      ModelInfo.from_sources([
+        %{"minimal_client_version" => "0.144.0"}
+      ])
+      |> ModelInfo.with_catalog_updated_at(~U[2026-08-22 00:30:00Z])
+
+    newer =
+      ModelInfo.from_sources([
+        %{"minimal_client_version" => "0.142.2"}
+      ])
+      |> ModelInfo.with_catalog_updated_at(~U[2026-08-22 01:00:00Z])
+
+    info = ModelInfo.merge([older, newer])
+
+    assert info.minimal_client_versions == ["0.142.2", "0.144.0"]
+    assert info.catalog_updated_at == ~U[2026-08-22 01:00:00Z]
+    assert ModelInfo.present?(info)
   end
 end

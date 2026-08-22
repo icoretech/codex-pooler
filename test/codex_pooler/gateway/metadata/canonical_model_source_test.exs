@@ -33,6 +33,7 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSourceTest do
         "context_window" => 256_000,
         "max_context_window" => 256_000,
         "auto_compact_token_limit" => 230_400,
+        "effective_context_window_percent" => 95,
         "use_responses_lite" => true
       })
 
@@ -95,10 +96,10 @@ defmodule CodexPooler.Gateway.Metadata.CanonicalModelSourceTest do
     ]
 
     assert Map.take(lite, context_fields) == %{
-             "context_window" => 270_000,
+             "context_window" => 300_000,
              "max_context_window" => 300_000,
              "effective_context_window_percent" => 90,
-             "auto_compact_token_limit" => 243_000
+             "auto_compact_token_limit" => 270_000
            }
 
     assert Map.take(full, context_fields) == Map.take(lite, context_fields)

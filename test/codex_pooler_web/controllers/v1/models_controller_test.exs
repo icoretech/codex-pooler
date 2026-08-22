@@ -9,6 +9,7 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
       auth: 2,
       gateway_setup: 1,
       gateway_setup: 2,
+      prime_routing_quota!: 1,
       pricing_config: 1,
       pricing_snapshot!: 2,
       start_upstream: 1
@@ -111,7 +112,15 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
         exposed_model_id: "gpt-visible-allowed",
         upstream_model_id: "provider-gpt-visible-allowed",
         display_name: "Visible Allowed",
-        metadata: %{"source_assignment_ids" => [allowed_assignment.id]}
+        metadata: %{
+          "source_assignment_ids" => [allowed_assignment.id],
+          "source_assignment_models" => %{
+            allowed_assignment.id => %{
+              "slug" => "gpt-visible-allowed",
+              "input_modalities" => ["text"]
+            }
+          }
+        }
       })
 
     %{assignment: hidden_assignment} =
@@ -254,7 +263,71 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
     assert FakeUpstream.count(upstream) == 0
   end
 
-  test "GET /v1/models agrees with the backend Codex effective context projection", %{
+  test "GET /v1/models uses the same canonical context source as native Codex", %{conn: conn} do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+
+    setup =
+      gateway_setup(upstream,
+        exposed_model_id: "gpt-5.6-sol",
+        model_metadata: %{
+          "upstream_model" => %{
+            "context_window" => 272_000,
+            "max_context_window" => 272_000,
+            "auto_compact_token_limit" => nil
+          }
+        }
+      )
+
+    %{assignment: long_assignment_a, identity: long_identity_a} =
+      active_upstream_assignment_fixture(setup.pool, %{account_label: "Long context A"})
+
+    %{assignment: long_assignment_b, identity: long_identity_b} =
+      active_upstream_assignment_fixture(setup.pool, %{account_label: "Long context B"})
+
+    prime_routing_quota!(long_identity_a)
+    prime_routing_quota!(long_identity_b)
+
+    short_source = setup.model.metadata["source_assignment_models"][setup.assignment.id]
+
+    long_source =
+      short_source
+      |> Map.put("max_context_window", 872_000)
+
+    setup.model
+    |> Ecto.Changeset.change(%{
+      source_assignment_count: 3,
+      metadata:
+        setup.model.metadata
+        |> Map.put("upstream_model", short_source)
+        |> Map.put("source_assignment_ids", [
+          setup.assignment.id,
+          long_assignment_a.id,
+          long_assignment_b.id
+        ])
+        |> Map.put("source_assignment_models", %{
+          setup.assignment.id => short_source,
+          long_assignment_a.id => long_source,
+          long_assignment_b.id => long_source
+        })
+    })
+    |> Repo.update!()
+
+    pricing_snapshot!(setup.model, %{config: pricing_config(%{"price_bucket" => "long_context"})})
+
+    backend_conn = conn |> auth(setup) |> get("/backend-api/codex/models")
+    public_conn = conn |> recycle() |> auth(setup) |> get("/v1/models")
+
+    assert %{"models" => [backend_model]} = json_response(backend_conn, 200)
+    assert %{"object" => "list", "data" => [public_model]} = json_response(public_conn, 200)
+
+    assert backend_model["slug"] == "gpt-5.6-sol"
+    assert backend_model["context_window"] == 872_000
+    assert backend_model["effective_context_window_percent"] == 95
+    assert public_model["context_length"] == 828_400
+    assert FakeUpstream.count(upstream) == 0
+  end
+
+  test "GET /v1/models flattens the native Codex context percentage exactly once", %{
     conn: conn
   } do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
@@ -277,12 +350,19 @@ defmodule CodexPoolerWeb.V1.ModelsControllerTest do
     assert %{"models" => [backend_model]} = json_response(backend_conn, 200)
     assert %{"object" => "list", "data" => [public_model]} = json_response(public_conn, 200)
 
-    assert backend_model["context_window"] == 258_400
+    assert backend_model["context_window"] == 272_000
     assert backend_model["max_context_window"] == 272_000
-    assert backend_model["auto_compact_token_limit"] == 232_560
+    assert is_nil(backend_model["auto_compact_token_limit"])
     assert backend_model["effective_context_window_percent"] == 95
-    assert public_model["context_length"] == backend_model["context_window"]
     assert public_model["context_length"] == 258_400
+
+    assert public_model["context_length"] ==
+             div(
+               backend_model["context_window"] *
+                 backend_model["effective_context_window_percent"],
+               100
+             )
+
     assert FakeUpstream.count(upstream) == 0
   end
 

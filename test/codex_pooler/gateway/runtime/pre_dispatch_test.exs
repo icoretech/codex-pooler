@@ -1609,7 +1609,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
   @tag :external_issues_229_231
   @tag :partition_quota_starvation
-  test "behavioral source drift anchors the backend turn on the oldest routable partition" do
+  test "behavioral source drift anchors the backend turn on the largest routable partition" do
     starved = starved_anchor_partition_pool!(:behavioral)
     {:ok, auth} = Access.authenticate_authorization_header(starved.setup.authorization)
 
@@ -1632,8 +1632,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert context.valid_canonical_assignment_ids ==
              Enum.sort(starved.exhausted_assignment_ids ++ starved.healthy_assignment_ids)
 
-    # The partitions stay apart because the drift is behavioral, but the
-    # selected anchor moves to the oldest partition that can still serve.
+    # The partitions stay apart because the drift is behavioral, while the
+    # larger routable cohort becomes the selected partition.
     assert context.selected_partition_assignment_ids ==
              Enum.sort(starved.healthy_assignment_ids)
 
@@ -1644,7 +1644,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
              "partition_count" => 2,
              "selected_count" => 6,
              "filtered_count" => 2,
-             "routable_selection" => true
+             "routable_selection" => false
            } = prepared.request_options.routing.canonical_partition
   end
 
@@ -1743,7 +1743,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
              "partition_count" => 2,
              "selected_count" => 6,
              "filtered_count" => 2,
-             "routable_selection" => true,
+             "routable_selection" => false,
              "digest_prefix" => digest_prefix
            } = request.request_metadata["canonical_partition"]
 
@@ -1779,17 +1779,17 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     exclusions = request.request_metadata["candidate_exclusions"]
 
-    # Nothing is routable anywhere, so the oldest partition is kept and the
+    # Nothing is routable anywhere, so the largest partition is kept and the
     # denial still names only its seats.
     assert Enum.sort(Enum.map(exclusions, & &1["pool_upstream_assignment_id"])) ==
-             Enum.sort(starved.exhausted_assignment_ids)
+             Enum.sort(starved.healthy_assignment_ids)
 
-    # The request log now says the other six seats existed and were held back
+    # The request log now says the other two seats existed and were held back
     # by partition filtering, which is what makes this self-diagnosable.
     assert %{
              "partition_count" => 2,
-             "selected_count" => 2,
-             "filtered_count" => 6,
+             "selected_count" => 6,
+             "filtered_count" => 2,
              "routable_selection" => false,
              "digest_prefix" => digest_prefix
            } = request.request_metadata["canonical_partition"]
@@ -2549,9 +2549,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
   end
 
   # Reproduces the customer pool: eight assignments whose per-assignment source
-  # payloads differ, where the oldest assignment (the age-only partition anchor)
-  # sits in the weekly-exhausted group and every quota-healthy seat carries the
-  # divergent payload.
+  # payloads differ, where the oldest assignment sits in the smaller
+  # weekly-exhausted cohort and every quota-healthy seat carries the divergent
+  # majority payload.
   #
   #   :cosmetic                 - drift on presentation hints only
   #   :behavioral               - drift on the context window

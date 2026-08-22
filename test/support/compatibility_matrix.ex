@@ -84,8 +84,14 @@ defmodule CodexPooler.CompatibilityMatrix do
           non_collapsing_values: ["unknown", "missing", "malformed"]
         },
         anchor_order: ["created_at", "assignment_id"],
-        selection: "oldest_partition_with_quota_routable_member",
-        selection_fallback: "oldest_partition_when_none_routable",
+        selection_rank: [
+          "quota_routable_member_count_desc",
+          "partition_member_count_desc",
+          "anchor_created_at_asc",
+          "anchor_assignment_id_asc"
+        ],
+        selection: "largest_quota_routable_partition",
+        selection_fallback: "largest_partition_when_none_routable",
         quota_routing: %{
           snapshot: "one_shared_candidate_identity_snapshot",
           classification: "independent_per_model",
@@ -111,7 +117,7 @@ defmodule CodexPooler.CompatibilityMatrix do
         }
       },
       contract:
-        "backend model aliases return the same policy-visible effective catalog body and deterministic weak ETag from the canonical pristine-source partition selected as the oldest partition, by minimum created_at plus assignment id, that still holds a quota-routable member, falling back to the oldest partition when none is routable, so the catalog body and ETag can change when the anchor partition flips; shell_type values default, local, shell_command, and unified_exec are equivalent for partitioning, disabled is separate, and unknown, missing, or malformed values do not silently collapse, while the selected anchor's raw shell_type remains served; quota routing reads one shared candidate-identity snapshot and classifies it independently per model; API-key policy decides admission and projection only after canonical selection and never chooses or rewrites the partition; backend Codex catalog-driven new turns use the selected partition, while translated OpenAI Responses capacity includes all valid canonical assignments after concrete request compatibility; valid canonical hard pins may continue on their pinned partition; selected-partition exhaustion and malformed-source hard pins fail before accounting or upstream work; cache coherence across processes or replicas is eventual after a successful Responses token is observed"
+        "backend model aliases return the same policy-visible native catalog body and deterministic weak ETag from the canonical pristine-source partition selected by quota-routable member count, total member count, then the oldest created_at plus assignment id anchor, falling back to the largest partition when none is routable, so the catalog body and ETag can change when the preferred cohort changes; shell_type values default, local, shell_command, and unified_exec are equivalent for partitioning, disabled is separate, and unknown, missing, or malformed values do not silently collapse, while the selected anchor's raw shell_type remains served; quota routing reads one shared candidate-identity snapshot and classifies it independently per model; API-key policy decides admission and projection only after canonical selection and never chooses or rewrites the partition; backend Codex catalog-driven new turns use the selected partition, while translated OpenAI Responses capacity includes all valid canonical assignments after concrete request compatibility; valid canonical hard pins may continue on their pinned partition; selected-partition exhaustion and malformed-source hard pins fail before accounting or upstream work; cache coherence across processes or replicas is eventual after a successful Responses token is observed"
     },
     %{
       slug: :backend_responses_etag,
@@ -798,7 +804,7 @@ defmodule CodexPooler.CompatibilityMatrix do
     },
     backend_models_etag: %{
       header: "etag",
-      digest_input: "policy_visible_effective_catalog_body",
+      digest_input: "policy_visible_native_catalog_body",
       digest: "sha256_deterministic_canonical_json",
       format: "weak_cp_models_v1",
       aliases_share_exact_body_and_token: true,

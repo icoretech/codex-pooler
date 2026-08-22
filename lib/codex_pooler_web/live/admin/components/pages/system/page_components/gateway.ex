@@ -64,7 +64,7 @@ defmodule CodexPoolerWeb.Admin.SystemPageComponents.Gateway do
                       @settings.gateway.model_context_window_overrides
                     )
                   }
-                  hint="Model-specific context window sizes used when upstream metadata is missing or needs correction."
+                  hint="Model-specific raw native context windows used when upstream metadata is missing or needs correction. Codex applies the advertised effective percentage once; /v1/models publishes the flattened value."
                 />
               </div>
             </FormControls.settings_group>

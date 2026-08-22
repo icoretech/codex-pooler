@@ -225,7 +225,7 @@ This section exists because the mode is easy to over-attribute. Lite and Full ch
   <tbody>
     <tr>
       <td>Context window</td>
-      <td>None. A model advertises the same context window in Lite and in Full. Codex Pooler derives the advertised window from the operator context-window override, the model's pricing bucket, and the model's effective context-window percentage — the serving mode is not an input, and the Lite boolean is applied after that policy has already run</td>
+      <td>None. A model advertises the same context window in Lite and in Full. On native Codex routes, Codex Pooler derives the raw advertised window from the operator context-window override and the model's pricing bucket, while preserving the effective context-window percentage for Codex to apply once. On <code>/v1/models</code>, Pooler flattens that percentage into <code>context_length</code>. Serving mode is not an input, and the Lite boolean is applied after context policy has already run</td>
     </tr>
     <tr>
       <td>Token budgets and auto-compaction limits</td>

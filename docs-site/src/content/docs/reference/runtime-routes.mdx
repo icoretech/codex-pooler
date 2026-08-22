@@ -111,7 +111,7 @@ These endpoints keep Codex backend semantics and do not translate through the pu
       <td>Model metadata served from Pool/catalog state</td>
       <td>No Codex request translation</td>
       <td>Supported</td>
-      <td>Lists models visible to the authenticated Pool, including backend Codex metadata such as context windows and optional <code>comp_hash</code>.</td>
+      <td>Lists models visible to the authenticated Pool, including backend Codex metadata such as the selected raw <code>context_window</code>, <code>effective_context_window_percent</code>, automatic compaction limit, and optional <code>comp_hash</code>. Provider accounts can temporarily report different catalog ceilings for the same model; Pooler selects one canonical source cohort for the Pool. Codex applies the percentage once, while the separate <code>/v1/models</code> surface publishes the same selected window as a flattened <code>context_length</code>.</td>
     </tr>
     <tr>
       <td><code>POST /backend-api/codex/responses</code></td>

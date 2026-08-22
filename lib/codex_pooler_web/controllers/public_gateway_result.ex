@@ -74,5 +74,4 @@ defmodule CodexPoolerWeb.PublicGatewayResult do
   defp public_error_status(_status, %{public_input_file_upstream_404?: true}), do: 404
   defp public_error_status(404, _result), do: 502
   defp public_error_status(status, _result), do: status
-
 end

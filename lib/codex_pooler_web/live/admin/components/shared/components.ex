@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Admin.Components do
   use CodexPoolerWeb, :html
 
   alias CodexPoolerWeb.Admin.Components.Shell
+  alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.Formatting, as: RelativeTime
 
   def admin_shell(assigns), do: Shell.admin_shell(assigns)
 
@@ -695,7 +696,7 @@ defmodule CodexPoolerWeb.Admin.Components do
       "dropdown-content z-20 ml-2 grid w-72 gap-1 rounded-box border border-base-300 bg-base-100 p-3 text-left text-xs font-normal leading-5 text-base-content/70 shadow-xl"
 
   attr :id, :string, required: true
-  attr :model_label, :string, required: true
+  attr :model_id, :string, required: true
   attr :info, :map, required: true
   attr :trigger, :atom, default: :icon, values: [:icon, :label]
   attr :placement, :atom, default: :start, values: [:start, :end]
@@ -707,6 +708,7 @@ defmodule CodexPoolerWeb.Admin.Components do
       assigns
       |> assign(:anchor_name, model_info_anchor_name(assigns.id))
       |> assign(:description, model_info_description(assigns.info))
+      |> assign(:context_rows, model_info_context_rows(assigns.info))
       |> assign(:facts, model_info_facts(assigns.info))
       |> assign(:content_class, model_info_content_class(assigns.placement))
 
@@ -725,14 +727,14 @@ defmodule CodexPoolerWeb.Admin.Components do
           "btn btn-ghost btn-xs btn-circle size-6 min-h-6 shrink-0 text-base-content/45 transition-colors hover:bg-base-200 hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
           @trigger_class
         ]}
-        aria-label={"About #{@model_label}"}
+        aria-label={"About #{@model_id}"}
         aria-controls={"#{@id}-content"}
         aria-describedby={"#{@id}-content"}
         popovertarget={"#{@id}-content"}
         style={"anchor-name: #{@anchor_name};"}
       >
         <.icon name="hero-information-circle" class="size-4" />
-        <span class="sr-only">About {@model_label}</span>
+        <span class="sr-only">About {@model_id}</span>
       </button>
 
       <button
@@ -744,14 +746,14 @@ defmodule CodexPoolerWeb.Admin.Components do
           "min-w-0 truncate rounded-sm text-left text-[11px] font-semibold leading-4 text-base-content underline decoration-dotted decoration-base-content/35 underline-offset-2 transition-colors hover:text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
           @trigger_class
         ]}
-        title={@model_label}
-        aria-label={"About #{@model_label}"}
+        title={@model_id}
+        aria-label={"About #{@model_id}"}
         aria-controls={"#{@id}-content"}
         aria-describedby={"#{@id}-content"}
         popovertarget={"#{@id}-content"}
         style={"anchor-name: #{@anchor_name};"}
       >
-        {@model_label}
+        {@model_id}
       </button>
 
       <div
@@ -764,15 +766,17 @@ defmodule CodexPoolerWeb.Admin.Components do
         style={"position-anchor: #{@anchor_name};"}
       >
         <div class="grid gap-1 p-3">
-          <%!-- The eyebrow every other admin popover and dropdown already
-          prints — the topbar menus, the api-key panels, the token burn card
-          this one opens from. It was the only one rendering a quieter grey
-          heading of its own. --%>
-          <p class="font-mono text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-primary">
+          <p
+            data-role="model-info-title"
+            class="font-mono text-[0.62rem] font-semibold uppercase leading-4 tracking-[0.18em] text-primary"
+          >
             Model info
           </p>
-          <p class="break-words text-xs font-semibold leading-5 text-base-content">
-            {@model_label}
+          <p
+            data-role="model-info-model-id"
+            class="break-words text-xs font-semibold leading-5 text-base-content"
+          >
+            {@model_id}
           </p>
           <p
             data-role="model-info-description"
@@ -780,19 +784,37 @@ defmodule CodexPoolerWeb.Admin.Components do
           >
             {@description}
           </p>
+          <div
+            :if={@context_rows != []}
+            data-role="model-info-context"
+            class="mt-1"
+          >
+            <dl class="grid gap-1 text-[11px] leading-4">
+              <div
+                :for={{label, value} <- @context_rows}
+                class="grid grid-cols-[auto_minmax(0,1fr)] gap-2"
+              >
+                <dt class="text-base-content/50">{label}</dt>
+                <dd class="min-w-0 text-right font-medium tabular-nums text-base-content/75">
+                  {value}
+                </dd>
+              </div>
+            </dl>
+          </div>
         </div>
 
         <div
           :if={@facts != []}
           data-role="model-info-facts"
-          class="grid gap-1.5 border-t border-base-300 bg-base-200/35 px-3 py-2"
+          class="grid gap-1.5 bg-base-200/35 px-3 py-2"
         >
           <p
-            :for={{icon, fact} <- @facts}
+            :for={fact <- @facts}
             class="flex min-w-0 items-start gap-1.5 text-[11px] leading-4 text-base-content/65"
+            title={fact.title}
           >
-            <.icon name={icon} class="mt-px size-3.5 shrink-0" />
-            <span>{fact}</span>
+            <.icon name={fact.icon} class="mt-px size-3.5 shrink-0" />
+            <span>{fact.text}</span>
           </p>
         </div>
       </div>
@@ -814,6 +836,69 @@ defmodule CodexPoolerWeb.Admin.Components do
 
   defp model_info_description(_info),
     do: "No description was reported by the current upstreams."
+
+  defp model_info_context_rows(%{context_profiles: profiles}) when is_list(profiles) do
+    profiles
+    |> Enum.flat_map(&context_profile_bounds/1)
+    |> Enum.uniq()
+    |> Enum.sort()
+    |> context_summary_row()
+  end
+
+  defp model_info_context_rows(_info), do: []
+
+  defp context_profile_bounds(%{raw_window: default, raw_max_window: maximum})
+       when is_integer(default) and default > 0 and is_integer(maximum) and maximum > 0 do
+    [{default, maximum}]
+  end
+
+  defp context_profile_bounds(_profile), do: []
+
+  defp context_summary_row([]), do: []
+
+  defp context_summary_row([{window, window}]),
+    do: [{"Context", "#{format_token_count(window)} tokens"}]
+
+  defp context_summary_row([{default, maximum}]),
+    do: [
+      {"Context", "#{format_token_count(default)} default · up to #{format_token_count(maximum)}"}
+    ]
+
+  defp context_summary_row(profiles) do
+    defaults = Enum.map(profiles, &elem(&1, 0))
+    maximums = Enum.map(profiles, &elem(&1, 1))
+
+    default = format_token_range(defaults)
+    maximum = maximums |> Enum.max() |> format_token_count()
+
+    [{"Context", "#{default} default · up to #{maximum} · varies by upstream"}]
+  end
+
+  defp format_token_range(values) do
+    values = values |> Enum.uniq() |> Enum.sort()
+
+    case values do
+      [value] -> format_token_count(value)
+      values -> "#{format_token_count(hd(values))}-#{format_token_count(List.last(values))}"
+    end
+  end
+
+  defp format_token_count(value) when value >= 1_000_000,
+    do: format_scaled_token_count(value, 1_000_000, 2, "m")
+
+  defp format_token_count(value) when value >= 1_000,
+    do: format_scaled_token_count(value, 1_000, 1, "k")
+
+  defp format_token_count(value), do: Integer.to_string(value)
+
+  defp format_scaled_token_count(value, divisor, decimals, suffix) do
+    value
+    |> Kernel./(divisor)
+    |> :erlang.float_to_binary(decimals: decimals)
+    |> String.trim_trailing("0")
+    |> String.trim_trailing(".")
+    |> Kernel.<>(suffix)
+  end
 
   # The icon follows the state, not the field: a barred eye where the answer is
   # settled and closed, opposing arrows where it depends on which upstream the
@@ -843,18 +928,56 @@ defmodule CodexPoolerWeb.Admin.Components do
       :mixed,
       {"hero-arrows-right-left", "API support differs across upstreams"}
     )
+    |> append_minimal_client_version_fact(Map.get(info, :minimal_client_versions, []))
+    |> append_catalog_updated_at_fact(Map.get(info, :catalog_updated_at))
   end
 
-  defp append_model_info_fact(facts, value, value, fact), do: facts ++ [fact]
+  defp append_model_info_fact(facts, value, value, {icon, text}),
+    do: facts ++ [%{icon: icon, text: text, title: nil}]
+
   defp append_model_info_fact(facts, _value, _expected, _fact), do: facts
+
+  defp append_minimal_client_version_fact(facts, []), do: facts
+
+  defp append_minimal_client_version_fact(facts, [version]),
+    do: facts ++ [%{icon: "hero-command-line", text: "Min Codex #{version}", title: nil}]
+
+  defp append_minimal_client_version_fact(facts, versions) do
+    first = hd(versions)
+    last = List.last(versions)
+
+    facts ++
+      [
+        %{
+          icon: "hero-command-line",
+          text: "Min Codex #{first}-#{last} · varies by upstream",
+          title: nil
+        }
+      ]
+  end
+
+  defp append_catalog_updated_at_fact(facts, %DateTime{} = updated_at) do
+    absolute_timestamp = Calendar.strftime(updated_at, "%Y-%m-%d %H:%M UTC")
+
+    facts ++
+      [
+        %{
+          icon: "hero-clock",
+          text: "Catalog checked #{RelativeTime.relative_time_label(updated_at)}",
+          title: "Catalog checked #{absolute_timestamp}"
+        }
+      ]
+  end
+
+  defp append_catalog_updated_at_fact(facts, _updated_at), do: facts
 
   defp model_info_content_class(:end),
     do:
-      "dropdown dropdown-end dropdown-bottom w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-box border border-base-300 bg-base-100 p-0 text-left text-base-content shadow-2xl"
+      "dropdown dropdown-end dropdown-bottom w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-box border border-base-300 bg-base-100 p-0 text-left text-base-content shadow-2xl"
 
   defp model_info_content_class(_placement),
     do:
-      "dropdown dropdown-start dropdown-bottom w-72 max-w-[calc(100vw-2rem)] overflow-hidden rounded-box border border-base-300 bg-base-100 p-0 text-left text-base-content shadow-2xl"
+      "dropdown dropdown-start dropdown-bottom w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-box border border-base-300 bg-base-100 p-0 text-left text-base-content shadow-2xl"
 
   attr :id, :string, required: true
   attr :icon, :string, default: "hero-information-circle"
