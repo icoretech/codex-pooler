@@ -29,8 +29,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   @start_first_direction "session_lease_start_first"
   @renewal_first_direction "session_lease_renewal_first"
 
-  describe "Task 7 baseline characterization" do
-    @tag :task7_pin
+  describe "session continuity baseline characterization" do
+    @tag :session_continuity_pin
     test "missing renewal preserves owner-unavailable nil semantics and rolls back" do
       session_count = Repo.aggregate(CodexSession, :count)
       lease_count = Repo.aggregate(BridgeOwnerLease, :count)
@@ -46,7 +46,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
       assert Repo.aggregate(BridgeOwnerLease, :count) == lease_count
     end
 
-    @tag :task7_pin
+    @tag :session_continuity_pin
     test "missing continuity registration preserves raise semantics and rolls back" do
       missing_session = %CodexSession{id: Ecto.UUID.generate()}
       alias_count = Repo.aggregate(BridgeSessionAlias, :count)
@@ -65,7 +65,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
       assert Repo.aggregate(BridgeOwnerLease, :count) == lease_count
     end
 
-    @tag :task7_pin
+    @tag :session_continuity_pin
     test "owner release remains a transactional lease-only operation" do
       %{session: session, token: token} = owner_session_fixture()
       session_before = Repo.get!(CodexSession, session.id)
@@ -94,7 +94,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
       assert Repo.get!(CodexSession, session.id) == session_before
     end
 
-    @tag :task7_pin
+    @tag :session_continuity_pin
     test "turn sequence allocation is part of the insert statement" do
       %{auth: auth, session: session} = owner_session_fixture()
       request = request_fixture(auth, %{status: "in_progress", completed_at: nil})
@@ -121,7 +121,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
              end)
     end
 
-    @tag :task7_pin
+    @tag :session_continuity_pin
     @tag timeout: 120_000
     test "turn allocation loads returned columns in a fresh runtime" do
       fixture = unboxed_fresh_runtime_turn_fixture()
@@ -185,8 +185,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
     test "alias resolution uses one priority-ordered row lock" do
       auth = auth_fixture()
-      high_priority_alias = "task-6-high-#{System.unique_integer([:positive, :monotonic])}"
-      low_priority_alias = "task-6-low-#{System.unique_integer([:positive, :monotonic])}"
+      high_priority_alias = "high-priority-#{System.unique_integer([:positive, :monotonic])}"
+      low_priority_alias = "low-priority-#{System.unique_integer([:positive, :monotonic])}"
 
       assert {:ok, %CodexSession{} = high_priority_session} =
                Gateway.start_codex_session(
@@ -273,7 +273,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
              ) >= 5
     end
 
-    @tag :task7_order_contract
+    @tag :session_continuity_order_contract
     test "replacement and continuity registration lock session before owner lease" do
       %{session: replacement_session} = owner_session_fixture()
 
@@ -305,9 +305,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
     end
   end
 
-  describe "Task 7 session and owner-lease contention" do
-    @tag :task7_contention
-    @tag :task7_red
+  describe "session continuity session and owner-lease contention" do
+    @tag :session_continuity_contention
+    @tag :session_continuity_red
     test "session_lease_start_first blocks renewal on session before lease" do
       records =
         run_direction(@start_first_direction, fn fixture ->
@@ -332,7 +332,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
       report_direction(@start_first_direction, records)
     end
 
-    @tag :task7_contention
+    @tag :session_continuity_contention
     test "session_lease_renewal_first blocks start on session before lease" do
       records =
         run_direction(@renewal_first_direction, fn fixture ->
@@ -358,8 +358,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
     end
   end
 
-  describe "Task 7 expired-session frozen boundary" do
-    @tag :task7_frozen
+  describe "session continuity expired-session frozen boundary" do
+    @tag :session_continuity_frozen
     test "close_for_key freezes the old id while a replacement blocks on the partial unique index" do
       fixture = unboxed_expired_replacement_fixture()
 
@@ -376,9 +376,9 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
       end
     end
 
-    @tag :task7_start_boundary
+    @tag :session_continuity_start_boundary
     test "real start flow invokes the frozen boundary before inserting the replacement" do
-      fixture = unboxed_expired_session_fixture("task7-start-boundary")
+      fixture = unboxed_expired_session_fixture("session_continuity-start-boundary")
 
       try do
         {result, events} =
@@ -454,10 +454,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
       assert MapSet.size(MapSet.new([observer_backend_pid, a_backend_pid, b_backend_pid])) == 3
 
-      send(task_a.pid, {:task7_run_frozen, ref})
+      send(task_a.pid, {:session_continuity_run_frozen, ref})
       {events, close_event} = await_frozen_close_barrier!(ref, [])
 
-      send(task_b.pid, {:task7_run, ref})
+      send(task_b.pid, {:session_continuity_run, ref})
 
       observation =
         observe_blocked_session_operation!(
@@ -468,12 +468,12 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
           "UPDATE"
         )
 
-      send(task_a.pid, {:task7_release_frozen, ref})
+      send(task_a.pid, {:session_continuity_release_frozen, ref})
 
       assert {:ok, {:ok, {1, nil}}} = Task.await(task_a, 10_000)
       assert {:ok, %CodexSession{status: "interrupted"}} = Task.await(task_b, 10_000)
 
-      send(observer.pid, {:task7_stop_observer, ref})
+      send(observer.pid, {:session_continuity_stop_observer, ref})
       assert :ok = Task.await(observer, 5_000)
 
       events = drain_frozen_events(ref, events)
@@ -512,10 +512,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
         final_field_names: ["status", "owner_lease_expires_at", "closed_at", "updated_at"]
       }
     after
-      send(task_a.pid, {:task7_release_frozen, ref})
-      send(task_b.pid, {:task7_release, ref, :b, :session})
-      send(task_b.pid, {:task7_release, ref, :b, :lease})
-      send(observer.pid, {:task7_stop_observer, ref})
+      send(task_a.pid, {:session_continuity_release_frozen, ref})
+      send(task_b.pid, {:session_continuity_release, ref, :b, :session})
+      send(task_b.pid, {:session_continuity_release, ref, :b, :lease})
+      send(observer.pid, {:session_continuity_stop_observer, ref})
       shutdown_task(task_a)
       shutdown_task(task_b)
       shutdown_task(observer)
@@ -527,11 +527,11 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
       Sandbox.unboxed_run(Repo, fn ->
         backend_pid = backend_pid!()
         Process.put(@frozen_context, %{parent: parent, ref: ref})
-        send(parent, {:task7_frozen_ready, ref, self(), backend_pid})
+        send(parent, {:session_continuity_frozen_ready, ref, self(), backend_pid})
 
         try do
           receive do
-            {:task7_run_frozen, ^ref} -> safely_run(operation)
+            {:session_continuity_run_frozen, ^ref} -> safely_run(operation)
           after
             10_000 -> {:error, :frozen_operation_start_timeout}
           end
@@ -579,7 +579,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
       sequence = Process.get(@frozen_sequence, 0) + 1
       Process.put(@frozen_sequence, sequence)
       event = contention_event(metadata, sequence)
-      send(parent, {:task7_frozen_query, ref, event})
+      send(parent, {:session_continuity_frozen_query, ref, event})
 
       maybe_pause_frozen_close(event, context, parent, ref)
     end
@@ -589,39 +589,40 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
     if event.source == "codex_sessions" and event.operation == "UPDATE" and
          not Process.get(@frozen_paused, false) do
       Process.put(@frozen_paused, true)
-      send(parent, {:task7_frozen_close_barrier, ref, event})
+      send(parent, {:session_continuity_frozen_close_barrier, ref, event})
 
       receive do
-        {:task7_release_frozen, ^ref} -> :ok
+        {:session_continuity_release_frozen, ^ref} -> :ok
       after
-        10_000 -> raise "Task 7 frozen close barrier was not released"
+        10_000 -> raise "session continuity frozen close barrier was not released"
       end
     end
   end
 
   defp await_frozen_close_barrier!(ref, events) do
     receive do
-      {:task7_frozen_query, ^ref, event} ->
+      {:session_continuity_frozen_query, ^ref, event} ->
         await_frozen_close_barrier!(ref, events ++ [event])
 
-      {:task7_frozen_close_barrier, ^ref, event} ->
+      {:session_continuity_frozen_close_barrier, ^ref, event} ->
         {events, event}
     after
-      10_000 -> flunk("Task 7 frozen session close barrier was not observed")
+      10_000 -> flunk("session continuity frozen session close barrier was not observed")
     end
   end
 
   defp await_frozen_ready!(ref) do
     receive do
-      {:task7_frozen_ready, ^ref, pid, backend_pid} -> {pid, backend_pid}
+      {:session_continuity_frozen_ready, ^ref, pid, backend_pid} -> {pid, backend_pid}
     after
-      5_000 -> flunk("Task 7 frozen boundary connection did not become ready")
+      5_000 -> flunk("session continuity frozen boundary connection did not become ready")
     end
   end
 
   defp drain_frozen_events(ref, events) do
     receive do
-      {:task7_frozen_query, ^ref, event} -> drain_frozen_events(ref, events ++ [event])
+      {:session_continuity_frozen_query, ^ref, event} ->
+        drain_frozen_events(ref, events ++ [event])
     after
       0 -> events
     end
@@ -638,14 +639,15 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
     send(
       observer.pid,
-      {:task7_observe_block, ref, request_ref, waiter_pid, blocker_pid, expected_operation}
+      {:session_continuity_observe_block, ref, request_ref, waiter_pid, blocker_pid,
+       expected_operation}
     )
 
     receive do
-      {:task7_block_observed, ^ref, ^request_ref, {:error, reason}} ->
+      {:session_continuity_block_observed, ^ref, ^request_ref, {:error, reason}} ->
         flunk("PostgreSQL observer failed before positive lock evidence: #{inspect(reason)}")
 
-      {:task7_block_observed, ^ref, ^request_ref, observation} ->
+      {:session_continuity_block_observed, ^ref, ^request_ref, observation} ->
         assert observation.wait_event_type == "Lock"
         assert observation.state == "active"
         observation
@@ -748,10 +750,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
       assert MapSet.size(MapSet.new([observer_backend_pid, a_backend_pid, b_backend_pid])) == 3
 
-      send(task_a.pid, {:task7_run, ref})
+      send(task_a.pid, {:session_continuity_run, ref})
       {_session_event, traces} = await_barrier!(ref, :a, :session, empty_traces())
 
-      send(task_b.pid, {:task7_run, ref})
+      send(task_b.pid, {:session_continuity_run, ref})
 
       {first_block, traces} =
         observe_blocked_before_lease!(
@@ -763,7 +765,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
           traces
         )
 
-      send(task_a.pid, {:task7_release, ref, :a, :session})
+      send(task_a.pid, {:session_continuity_release, ref, :a, :session})
       {_lease_event, traces} = await_barrier!(ref, :a, :lease, traces)
 
       {second_block, traces} =
@@ -776,12 +778,12 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
           traces
         )
 
-      send(task_a.pid, {:task7_release, ref, :a, :lease})
+      send(task_a.pid, {:session_continuity_release, ref, :a, :lease})
 
       assert {:ok, {:ok, %CodexSession{}}} = Task.await(task_a, 10_000)
       assert {:ok, {:ok, %CodexSession{}}} = Task.await(task_b, 10_000)
 
-      send(observer.pid, {:task7_stop_observer, ref})
+      send(observer.pid, {:session_continuity_stop_observer, ref})
       assert :ok = Task.await(observer, 5_000)
 
       traces = drain_contention_events(ref, traces)
@@ -803,11 +805,11 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
         final: final
       }
     after
-      send(task_a.pid, {:task7_release, ref, :a, :session})
-      send(task_a.pid, {:task7_release, ref, :a, :lease})
-      send(task_b.pid, {:task7_release, ref, :b, :session})
-      send(task_b.pid, {:task7_release, ref, :b, :lease})
-      send(observer.pid, {:task7_stop_observer, ref})
+      send(task_a.pid, {:session_continuity_release, ref, :a, :session})
+      send(task_a.pid, {:session_continuity_release, ref, :a, :lease})
+      send(task_b.pid, {:session_continuity_release, ref, :b, :session})
+      send(task_b.pid, {:session_continuity_release, ref, :b, :lease})
+      send(observer.pid, {:session_continuity_stop_observer, ref})
       shutdown_task(task_a)
       shutdown_task(task_b)
       shutdown_task(observer)
@@ -841,7 +843,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
           sequence = Process.get(@contention_sequence, 0) + 1
           Process.put(@contention_sequence, sequence)
           event = contention_event(metadata, sequence)
-          send(parent, {:task7_query, ref, role, event})
+          send(parent, {:session_continuity_query, ref, role, event})
           maybe_pause_contention(context, event)
         end
 
@@ -880,14 +882,18 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
     unless Process.get(pause_key, false) do
       Process.put(pause_key, true)
-      send(context.parent, {:task7_barrier, context.ref, context.role, family, event})
+
+      send(
+        context.parent,
+        {:session_continuity_barrier, context.ref, context.role, family, event}
+      )
 
       receive do
-        {:task7_release, ref, role, ^family}
+        {:session_continuity_release, ref, role, ^family}
         when ref == context.ref and role == context.role ->
           :ok
       after
-        10_000 -> raise "Task 7 #{family} barrier was not released"
+        10_000 -> raise "session continuity #{family} barrier was not released"
       end
     end
   end
@@ -906,11 +912,11 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
           pause?: pause?
         })
 
-        send(parent, {:task7_operation_ready, ref, role, self(), backend_pid})
+        send(parent, {:session_continuity_operation_ready, ref, role, self(), backend_pid})
 
         try do
           receive do
-            {:task7_run, ^ref} -> safely_run(operation)
+            {:session_continuity_run, ^ref} -> safely_run(operation)
           after
             10_000 -> {:error, :operation_start_timeout}
           end
@@ -936,7 +942,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
     Task.async(fn ->
       Sandbox.unboxed_run(Repo, fn ->
         backend_pid = backend_pid!()
-        send(parent, {:task7_observer_ready, ref, self(), backend_pid})
+        send(parent, {:session_continuity_observer_ready, ref, self(), backend_pid})
         observer_loop(parent, ref)
       end)
     end)
@@ -944,12 +950,13 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
   defp observer_loop(parent, ref) do
     receive do
-      {:task7_observe_block, ^ref, request_ref, waiter_pid, blocker_pid, expected_operation} ->
+      {:session_continuity_observe_block, ^ref, request_ref, waiter_pid, blocker_pid,
+       expected_operation} ->
         observation = observe_session_block(waiter_pid, blocker_pid, expected_operation)
-        send(parent, {:task7_block_observed, ref, request_ref, observation})
+        send(parent, {:session_continuity_block_observed, ref, request_ref, observation})
         observer_loop(parent, ref)
 
-      {:task7_stop_observer, ^ref} ->
+      {:session_continuity_stop_observer, ^ref} ->
         :ok
     after
       15_000 -> {:error, :observer_timeout}
@@ -1014,7 +1021,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
     send(
       observer.pid,
-      {:task7_observe_block, ref, request_ref, waiter_pid, blocker_pid, "SELECT"}
+      {:session_continuity_observe_block, ref, request_ref, waiter_pid, blocker_pid, "SELECT"}
     )
 
     await_blocked_before_lease!(ref, role, request_ref, traces)
@@ -1022,7 +1029,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
   defp await_blocked_before_lease!(ref, role, request_ref, traces) do
     receive do
-      {:task7_query, ^ref, ^role, event} ->
+      {:session_continuity_query, ^ref, ^role, event} ->
         traces = append_trace(traces, role, event)
 
         if event.source == "bridge_owner_leases" do
@@ -1033,7 +1040,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
         await_blocked_before_lease!(ref, role, request_ref, traces)
 
-      {:task7_query, ^ref, other_role, event} when other_role in [:a, :b] ->
+      {:session_continuity_query, ^ref, other_role, event} when other_role in [:a, :b] ->
         await_blocked_before_lease!(
           ref,
           role,
@@ -1041,10 +1048,10 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
           append_trace(traces, other_role, event)
         )
 
-      {:task7_block_observed, ^ref, ^request_ref, {:error, reason}} ->
+      {:session_continuity_block_observed, ^ref, ^request_ref, {:error, reason}} ->
         flunk("PostgreSQL observer failed before positive lock evidence: #{inspect(reason)}")
 
-      {:task7_block_observed, ^ref, ^request_ref, observation} ->
+      {:session_continuity_block_observed, ^ref, ^request_ref, observation} ->
         assert observation.wait_event_type == "Lock"
         assert observation.state == "active"
         {observation, traces}
@@ -1055,39 +1062,39 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
   defp await_barrier!(ref, role, family, traces) do
     receive do
-      {:task7_query, ^ref, query_role, event} when query_role in [:a, :b] ->
+      {:session_continuity_query, ^ref, query_role, event} when query_role in [:a, :b] ->
         if query_role == :b and family == :lease and event.source == "bridge_owner_leases" do
           flunk("blocked operation reached bridge_owner_leases before session release")
         end
 
         await_barrier!(ref, role, family, append_trace(traces, query_role, event))
 
-      {:task7_barrier, ^ref, ^role, ^family, event} ->
+      {:session_continuity_barrier, ^ref, ^role, ^family, event} ->
         {event, traces}
     after
-      10_000 -> flunk("Task 7 #{role} #{family} barrier was not observed")
+      10_000 -> flunk("session continuity #{role} #{family} barrier was not observed")
     end
   end
 
   defp await_observer_ready!(ref) do
     receive do
-      {:task7_observer_ready, ^ref, pid, backend_pid} -> {pid, backend_pid}
+      {:session_continuity_observer_ready, ^ref, pid, backend_pid} -> {pid, backend_pid}
     after
-      5_000 -> flunk("Task 7 observer connection did not become ready")
+      5_000 -> flunk("session continuity observer connection did not become ready")
     end
   end
 
   defp await_operation_ready!(ref, role) do
     receive do
-      {:task7_operation_ready, ^ref, ^role, pid, backend_pid} -> {pid, backend_pid}
+      {:session_continuity_operation_ready, ^ref, ^role, pid, backend_pid} -> {pid, backend_pid}
     after
-      5_000 -> flunk("Task 7 #{role} connection did not become ready")
+      5_000 -> flunk("session continuity #{role} connection did not become ready")
     end
   end
 
   defp drain_contention_events(ref, traces) do
     receive do
-      {:task7_query, ^ref, role, event} when role in [:a, :b] ->
+      {:session_continuity_query, ^ref, role, event} when role in [:a, :b] ->
         drain_contention_events(ref, append_trace(traces, role, event))
     after
       0 -> traces
@@ -1194,7 +1201,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   end
 
   defp report_direction(direction_id, records) do
-    if path = System.get_env("TASK7_MANUAL_QA_PATH") do
+    if path = System.get_env("SESSION_CONTINUITY_MANUAL_QA_PATH") do
       record = %{
         kind: "session_lease_direction",
         direction_id: direction_id,
@@ -1374,13 +1381,13 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   end
 
   defp report_frozen_schedule(record) do
-    if path = System.get_env("TASK7_MANUAL_QA_PATH") do
+    if path = System.get_env("SESSION_CONTINUITY_MANUAL_QA_PATH") do
       File.write!(path, Jason.encode!(record) <> "\n", [:append])
     end
   end
 
   defp report_start_boundary(events, frozen_session_id) do
-    if path = System.get_env("TASK7_MANUAL_QA_PATH") do
+    if path = System.get_env("SESSION_CONTINUITY_MANUAL_QA_PATH") do
       record = %{
         kind: "expired_sessions_start_boundary",
         boundary_signature: boundary_signature(events),
@@ -1394,7 +1401,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   end
 
   defp unboxed_expired_replacement_fixture do
-    fixture = unboxed_expired_session_fixture("task7-frozen")
+    fixture = unboxed_expired_session_fixture("session_continuity-frozen")
 
     Sandbox.unboxed_run(Repo, fn ->
       replacement =
@@ -1474,7 +1481,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
       auth = auth_fixture()
 
       session_key =
-        "task7-#{direction_id}-#{iteration}-#{System.unique_integer([:positive, :monotonic])}"
+        "session_continuity-#{direction_id}-#{iteration}-#{System.unique_integer([:positive, :monotonic])}"
 
       assert {:ok, %CodexSession{} = session} =
                Gateway.start_codex_session(auth, %{
@@ -1501,7 +1508,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
       assert {:ok, %CodexSession{} = session} =
                Gateway.start_codex_session(auth, %{
                  accepted_turn_state:
-                   "task-7-fresh-runtime-#{System.unique_integer([:positive, :monotonic])}",
+                   "session-continuity-fresh-runtime-#{System.unique_integer([:positive, :monotonic])}",
                  owner_instance_id: "node-a"
                })
 
@@ -1527,7 +1534,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
     assert {:ok, %CodexSession{} = session} =
              Gateway.start_codex_session(auth, %{
                accepted_turn_state:
-                 "task-7-pin-#{System.unique_integer([:positive, :monotonic])}",
+                 "session-continuity-pin-#{System.unique_integer([:positive, :monotonic])}",
                owner_instance_id: "node-a"
              })
 

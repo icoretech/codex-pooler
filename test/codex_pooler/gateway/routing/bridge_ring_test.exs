@@ -285,15 +285,15 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
 
       session_options =
         RequestOptions.for_websocket(%{
-          accepted_turn_state: "task13-existing-session",
-          owner_instance_id: "task13-node-a"
+          accepted_turn_state: "ring-selection-existing-session",
+          owner_instance_id: "ring-selection-node-a"
         })
 
       assert {:ok, %CodexSession{}} =
                SessionContinuity.start_codex_session(setup.auth, session_options)
 
       continuity_before = continuity_persistence_state(setup.auth)
-      prompt_cache_key = "task13-cache-#{System.unique_integer([:positive, :monotonic])}"
+      prompt_cache_key = "ring-selection-cache-#{System.unique_integer([:positive, :monotonic])}"
       encrypted_content = Base.encode64(:crypto.strong_rand_bytes(32))
       encrypted_content_fingerprint = sha256_fingerprint(encrypted_content)
       prompt_cache_key_fingerprint = sha256_fingerprint(prompt_cache_key)
@@ -312,7 +312,10 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
 
       request_options =
         Enum.map(
-          [{"task13-node-b", "task13-request-b"}, {"task13-node-c", "task13-request-c"}],
+          [
+            {"ring-selection-node-b", "ring-selection-request-b"},
+            {"ring-selection-node-c", "ring-selection-request-c"}
+          ],
           fn {
                owner_instance_id,
                request_id
@@ -868,7 +871,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
         request_fixture(setup.auth, %{
           model_id: setup.model.id,
           requested_model: setup.model.exposed_model_id,
-          correlation_id: "todo5-reported-percent-exhaustion"
+          correlation_id: "quota-reported-percent-exhaustion"
         })
 
       route_plan_input = RoutePlanInput.from_reserved(%{request: request})
@@ -883,7 +886,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
 
       sweep_results =
         Enum.map(1..500, fn index ->
-          sweep_seed = "todo5-quota-first-sweep-#{index}"
+          sweep_seed = "quota-first-sweep-#{index}"
 
           live =
             quota_first_plan(setup, prepared_candidates, route_plan_input, sweep_seed)
@@ -924,7 +927,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
         request_fixture(setup.auth, %{
           model_id: setup.model.id,
           requested_model: setup.model.exposed_model_id,
-          correlation_id: "todo5-quota-first-exhaustion-controls"
+          correlation_id: "quota-first-exhaustion-controls"
         })
 
       route_plan_input = RoutePlanInput.from_reserved(%{request: request})
@@ -1485,7 +1488,7 @@ defmodule CodexPooler.Gateway.Routing.BridgeRingTest do
   defp quota_eligible_candidates(setup, candidates, route_state \\ nil) do
     request_options =
       RequestOptions.build(
-        %{request_id: "todo5-quota-preparation"},
+        %{request_id: "quota-preparation"},
         "/backend-api/codex/responses",
         %{}
       )

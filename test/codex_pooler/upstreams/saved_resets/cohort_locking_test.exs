@@ -9,7 +9,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CohortLockingTest do
   alias CodexPooler.Upstreams.SavedResetRedemption
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
-  @tag :todo6_cross_issue
+  @tag :saved_reset_cohort_locking
   test "normalizes a gateway cohort into one ordered identity lock query" do
     {:ok, fake} = codex_reset_fake()
     on_exit(fn -> FakeUpstream.stop(fake) end)
@@ -56,7 +56,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CohortLockingTest do
     end
   end
 
-  @tag :todo6_cross_issue
+  @tag :saved_reset_cohort_locking
   test "rejects an incomplete normalized cohort before provider I/O" do
     {:ok, fake} = codex_reset_fake()
     on_exit(fn -> FakeUpstream.stop(fake) end)
@@ -77,7 +77,7 @@ defmodule CodexPooler.Upstreams.SavedResets.CohortLockingTest do
     assert [] = FakeUpstream.requests(fake)
   end
 
-  @tag :todo6_cross_issue
+  @tag :saved_reset_cohort_locking
   test "blocks a gateway auto claim when a locked cohort sibling has an active consume fence" do
     {:ok, fake} = codex_reset_fake()
     on_exit(fn -> FakeUpstream.stop(fake) end)

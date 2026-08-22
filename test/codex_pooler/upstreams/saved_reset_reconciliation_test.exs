@@ -125,8 +125,8 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
     assert snapshot.reset_lifecycle.label == "Reset confirmed by quota"
   end
 
-  @tag :todo1_scheduler_boundary
-  @tag :todo3_scheduler_boundary
+  @tag :scheduler_boundary
+  @tag :scheduler_boundary
   test "scheduled reconciliation accepts a pending weekly restart and confirms the reset before returning" do
     window_seconds = 10_080 * 60
     call_started_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -242,7 +242,7 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
     refute Enum.any?(requests, &String.contains?(&1.path, "rate-limit-reset-credits"))
   end
 
-  @tag :todo3_scheduler_boundary
+  @tag :scheduler_boundary
   test "scheduled reconciliation leaves a consumed lifecycle pending when usage has no account descriptor" do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     consumed_at = DateTime.add(now, -1, :minute)
@@ -311,17 +311,17 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
     assert FakeUpstream.requests(fake) == []
   end
 
-  @tag :todo3_scheduler_boundary
+  @tag :scheduler_boundary
   test "scheduled reconciliation keeps an unconfirmed weekly restart candidate pending" do
     assert_pending_candidate_control(:valid)
   end
 
-  @tag :todo3_scheduler_boundary
+  @tag :scheduler_boundary
   test "scheduled reconciliation restarts a malformed weekly candidate without converging" do
     assert_pending_candidate_control(:malformed)
   end
 
-  @tag :todo3_scheduler_boundary
+  @tag :scheduler_boundary
   test "scheduled reconciliation reblocks an accepted exhausted account cycle before returning" do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     consumed_at = DateTime.add(now, -1, :minute)
@@ -377,17 +377,17 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
              get_in(persisted.metadata, ["saved_resets", "observed_at"])
   end
 
-  @tag :todo3_scheduler_boundary
+  @tag :scheduler_boundary
   test "scheduled reconciliation fences a credential superseded after assignment loading" do
     assert_scheduler_superseded_control(:credential)
   end
 
-  @tag :todo3_scheduler_boundary
+  @tag :scheduler_boundary
   test "scheduled reconciliation fences an assignment superseded after assignment loading" do
     assert_scheduler_superseded_control(:assignment)
   end
 
-  @tag :todo3_scheduler_boundary
+  @tag :scheduler_boundary
   test "scheduled reconciliation preserves a concurrent newer lifecycle generation" do
     {pool, identity, assignment} = committed_scheduler_fixture()
     original = pending_redemption(DateTime.add(DateTime.utc_now(), -1, :minute))
@@ -395,7 +395,7 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
 
     parent = self()
     release_ref = make_ref()
-    handler_id = {__MODULE__, :todo3_post_persistence_commit, release_ref}
+    handler_id = {__MODULE__, :post_persistence_commit, release_ref}
 
     :ok =
       :telemetry.attach(
@@ -1497,7 +1497,7 @@ defmodule CodexPooler.Upstreams.SavedResetReconciliationTest do
 
     parent = self()
     release_ref = make_ref()
-    handler_id = {__MODULE__, :todo3_assignment_load, kind, release_ref}
+    handler_id = {__MODULE__, :assignment_load, kind, release_ref}
 
     :ok =
       :telemetry.attach(

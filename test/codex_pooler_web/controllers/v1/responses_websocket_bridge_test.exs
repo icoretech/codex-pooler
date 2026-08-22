@@ -1162,7 +1162,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   test "HTTP SSE over an upstream websocket settles usage before a retained large tail", %{
     conn: conn
   } do
-    sentinel = "task-6-known-tail-#{System.unique_integer([:positive])}"
+    sentinel = "known-tail-#{System.unique_integer([:positive])}"
     completed_frame = oversized_completed_frame("resp_bridge_usage_known", sentinel, true)
     completed_event = WebsocketBridgeStream.sse_block(IO.iodata_to_binary(completed_frame))
 
@@ -1329,7 +1329,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   test "HTTP SSE over an upstream websocket keeps omitted large-tail usage unknown", %{
     conn: conn
   } do
-    sentinel = "task-6-omitted-tail-#{System.unique_integer([:positive])}"
+    sentinel = "omitted-tail-#{System.unique_integer([:positive])}"
     completed_frame = oversized_completed_frame("resp_bridge_usage_missing", sentinel, false)
     completed_event = WebsocketBridgeStream.sse_block(IO.iodata_to_binary(completed_frame))
 
@@ -2006,7 +2006,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert_precontent_fallback_success(response, upstream, setup, "resp_complete_fallback")
   end
 
-  @tag :task_9b_codex_buffering
+  @tag :codex_buffering
   test "buffers codex rate limits until websocket commit and preserves compact accounting", %{
     conn: conn
   } do

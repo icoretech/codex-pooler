@@ -50,7 +50,7 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
     assert {:ok, _operator_settings} = MCP.set_operator_mcp_enabled(owner, true)
 
     assert {:ok, %{raw_token: raw_token}} =
-             MCP.create_operator_token(owner, %{label: "Task 1 quota DTO"})
+             MCP.create_operator_token(owner, %{label: "Quota metadata DTO"})
 
     assert {:ok, auth} = MCP.authenticate_token(raw_token)
     scope = Scope.for_user(auth.operator, Accounts.roles_for_user(auth.operator))
@@ -108,7 +108,7 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
     assert %{items: [account], count: 1, limit: 50, offset: 0} = ReadModel.list_accounts(scope)
 
     assert account.id == identity.id
-    assert account.label == "TA***@example.com"
+    assert account.label == "RE***@example.com"
     assert account.stored_account_id == "acct-quota-fresh"
     assert String.starts_with?(account.workspace_ref, "ws:")
     assert account.workspace_label == "Quota alpha"
@@ -830,7 +830,7 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
     assert structured["status"] == "ok"
     account = structured["item"]
     assert account["id"] == identity.id
-    assert account["label"] == "TA***@example.com"
+    assert account["label"] == "RE***@example.com"
     assert account["stored_account_id"] == "acct-quota-redaction"
     assert account["status"] == "active"
     assert account["plan_family"] == "team"
@@ -852,7 +852,7 @@ defmodule CodexPooler.MCP.QuotaMetadataTest do
     assert window["source_precision"] == "observed"
 
     assert text =~
-             "account TA***@example.com status active account acct-quota-redaction plan team"
+             "account RE***@example.com status active account acct-quota-redaction plan team"
 
     assert text =~ "account_primary: 42/100 remaining, 58.0% used"
     assert text =~ "fresh, routing usable"

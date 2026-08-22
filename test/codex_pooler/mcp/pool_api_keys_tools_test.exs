@@ -36,7 +36,7 @@ defmodule CodexPooler.MCP.PoolApiKeysToolsTest do
     assert {:ok, _operator_settings} = MCP.set_operator_mcp_enabled(owner, true)
 
     assert {:ok, %{raw_token: raw_token}} =
-             MCP.create_operator_token(owner, %{label: "Task 7 MCP"})
+             MCP.create_operator_token(owner, %{label: "MCP operator"})
 
     assert {:ok, auth} = MCP.authenticate_token(raw_token)
 
@@ -51,7 +51,7 @@ defmodule CodexPooler.MCP.PoolApiKeysToolsTest do
     assert {:ok, %{api_key: api_key, raw_key: raw_key}} =
              Access.create_api_key(Scope.for_user(owner), pool, %{
                display_name: Redaction.forbidden_sentinel!(:disallowed_email),
-               allowed_model_identifiers: ["gpt-task-7"],
+               allowed_model_identifiers: ["gpt-mcp-test"],
                enforced_reasoning_effort: "minimal",
                metadata: %{
                  "labels" => ["safe"],
@@ -70,7 +70,7 @@ defmodule CodexPooler.MCP.PoolApiKeysToolsTest do
     assert result["isError"] == false
     assert [%{"type" => "text", "text" => text}] = result["content"]
     assert text =~ "1 Pool API key metadata records returned"
-    assert text =~ "name=TA***@example.com"
+    assert text =~ "name=RE***@example.com"
     assert text =~ "status=active"
     assert text =~ "prefix=#{api_key.key_prefix}"
     assert text =~ "pool=#{pool.slug}"
@@ -87,9 +87,9 @@ defmodule CodexPooler.MCP.PoolApiKeysToolsTest do
     assert [presented] = result["structuredContent"]["items"]
     assert presented["id"] == api_key.id
     assert presented["pool_slug"] == pool.slug
-    assert presented["display_name"] == "TA***@example.com"
+    assert presented["display_name"] == "RE***@example.com"
     assert presented["key_prefix"] == api_key.key_prefix
-    assert presented["allowed_model_identifiers"] == ["gpt-task-7"]
+    assert presented["allowed_model_identifiers"] == ["gpt-mcp-test"]
     assert presented["enforced_reasoning_effort"] == "minimal"
     assert presented["reasoning_policy_mode"] == "always_use"
     refute Map.has_key?(presented, "maximum_reasoning_effort")

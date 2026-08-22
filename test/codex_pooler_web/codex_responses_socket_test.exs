@@ -274,7 +274,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert allowed_state.firewall_applied_version == allowed.lock_version
   end
 
-  @tag :task_2_red
+  @tag :socket_request_regression
   test "stale and duplicate applied metadata re-evaluate only the current allowed snapshot" do
     snapshot = Cache.snapshot_for_test()
     on_exit(fn -> Cache.restore_for_test(snapshot) end)
@@ -294,7 +294,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     end
   end
 
-  @tag :task_2_red
+  @tag :socket_request_regression
   test "lower applied version revokes a higher-watermark socket from the current snapshot" do
     snapshot = Cache.snapshot_for_test()
     on_exit(fn -> Cache.restore_for_test(snapshot) end)
@@ -528,7 +528,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
              )
   end
 
-  @tag :task_1_pin
+  @tag :socket_lifecycle_pin
   test "PIN-P03 backend GET websocket preserves done and legacy JSON frame bytes" do
     task_pid = self()
 
@@ -588,7 +588,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert visible_state.native_turn_output_task_pids == MapSet.new([task_pid])
   end
 
-  @tag :task_1_red
+  @tag :socket_lifecycle_regression
   test "RED-R02 public GET wraps exact legacy success as response.completed" do
     task_pid = self()
     legacy_response = %{"id" => "resp_red_public_legacy", "custom" => %{"kept" => true}}
@@ -815,7 +815,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert_native_turn_logs(logs, 1, "owner_unavailable")
   end
 
-  @tag :task_1_red
+  @tag :socket_lifecycle_regression
   test "RED-R03 public GET isolates active task identity and sequence state by turn" do
     first_task_pid = self()
 
@@ -861,7 +861,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert Jason.decode!(second_payload)["sequence_number"] == 0
   end
 
-  @tag :task_1_red
+  @tag :socket_lifecycle_regression
   test "RED-R04 owner task done waits for matching owner complete before queued turn starts" do
     task_pid = self()
 
@@ -1038,7 +1038,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     end
   end
 
-  @tag :task_1_fix_red
+  @tag :socket_lifecycle_regression
   test "public owner barrier starts queued turn two and rejects stale turn one traffic" do
     correlation_id = "corr-public-queued"
     epoch = 5
@@ -2167,7 +2167,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert ActivityRegistry.activities(name: harness.activity_registry) == []
   end
 
-  @tag :task_1_fix_red
+  @tag :socket_lifecycle_regression
   test "owner drain schedules stay aborted through final owner down" do
     for order <- [:task_done_first, :owner_complete_first] do
       task_pid = owner_turn_pid()

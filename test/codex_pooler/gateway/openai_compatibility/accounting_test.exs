@@ -17,16 +17,16 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityAccountingTest do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Repo
 
-  @raw_prompt_sentinel "TASK5_OPENAI_RAW_PROMPT_SENTINEL"
-  @raw_multipart_sentinel "TASK5_MULTIPART_BODY_SENTINEL"
-  @raw_file_sentinel "TASK5_FILE_BYTES_SENTINEL"
-  @raw_audio_sentinel "TASK5_AUDIO_BYTES_SENTINEL"
-  @raw_image_sentinel "TASK5_IMAGE_BYTES_SENTINEL"
-  @raw_bearer_sentinel "Bearer TASK5_BEARER_TOKEN_SENTINEL"
-  @raw_upload_url_sentinel "https://upload.example.invalid/TASK5_UPLOAD_URL_SENTINEL"
-  @raw_websocket_sentinel "TASK5_WEBSOCKET_FRAME_SENTINEL"
-  @raw_idempotency_sentinel "TASK5_RAW_IDEMPOTENCY_KEY_SENTINEL"
-  @raw_secret_sentinel "TASK5_SECRET_SENTINEL"
+  @raw_prompt_sentinel "REDACTION_OPENAI_RAW_PROMPT_SENTINEL"
+  @raw_multipart_sentinel "REDACTION_MULTIPART_BODY_SENTINEL"
+  @raw_file_sentinel "REDACTION_FILE_BYTES_SENTINEL"
+  @raw_audio_sentinel "REDACTION_AUDIO_BYTES_SENTINEL"
+  @raw_image_sentinel "REDACTION_IMAGE_BYTES_SENTINEL"
+  @raw_bearer_sentinel "Bearer REDACTION_BEARER_TOKEN_SENTINEL"
+  @raw_upload_url_sentinel "https://upload.example.invalid/REDACTION_UPLOAD_URL_SENTINEL"
+  @raw_websocket_sentinel "REDACTION_WEBSOCKET_FRAME_SENTINEL"
+  @raw_idempotency_sentinel "REDACTION_RAW_IDEMPOTENCY_KEY_SENTINEL"
+  @raw_secret_sentinel "REDACTION_SECRET_SENTINEL"
 
   @tag :success_once
   test "Responses adapter gateway success records one request attempt and settlement", %{
@@ -36,7 +36,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityAccountingTest do
       upstream =
         start_upstream(
           FakeUpstream.json_response(%{
-            "id" => "resp_task5_success",
+            "id" => "resp_accounting_success",
             "object" => "response",
             "usage" => %{"input_tokens" => 5, "output_tokens" => 7, "total_tokens" => 12}
           })
@@ -47,9 +47,9 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityAccountingTest do
 
       assert {:ok, result} =
                Responses.coerce(success_payload(setup),
-                 request_id: "task5-success-once",
+                 request_id: "request-accounting-success-once",
                  idempotency_key: @raw_idempotency_sentinel,
-                 user_agent: "openai-task5-harness/1.0",
+                 user_agent: "openai-accounting-harness/1.0",
                  routing_attempt_metadata: sensitive_attempt_metadata()
                )
 
@@ -57,7 +57,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityAccountingTest do
                Gateway.execute(auth, result.endpoint, result.payload, result.request_options)
 
       assert response.status == 200
-      assert %{"id" => "resp_task5_success"} = Jason.decode!(response.raw_body)
+      assert %{"id" => "resp_accounting_success"} = Jason.decode!(response.raw_body)
       assert FakeUpstream.count(upstream) == 1
 
       assert_exactly_once_accounting!(setup.pool.id,
@@ -136,8 +136,8 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityAccountingTest do
 
     assert {:ok, result} =
              Responses.coerce(success_payload(setup),
-               request_id: "task5-upstream-failure-once",
-               user_agent: "openai-task5-harness/1.0",
+               request_id: "request-accounting-upstream-failure-once",
+               user_agent: "openai-accounting-harness/1.0",
                routing_attempt_metadata: sensitive_attempt_metadata()
              )
 

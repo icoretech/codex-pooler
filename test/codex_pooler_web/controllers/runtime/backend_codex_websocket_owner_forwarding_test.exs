@@ -205,7 +205,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end)
   end
 
-  @tag :todo_8_owner_forwarding_catalog_token
+  @tag :owner_forwarding_catalog_token
   test "owner-forwarding-enabled Mint upgrades keep one catalog token across backend aliases",
        %{conn: conn} do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
@@ -1440,7 +1440,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
-  @tag :todo_9_native_observer_failure
+  @tag :native_observer_failure
   test "owner-forwarded frame observer failure still delivers one terminal" do
     marker = "synthetic-owner-observer-marker-#{System.unique_integer([:positive])}"
     input_marker = "synthetic-owner-observer-input-#{System.unique_integer([:positive])}"
@@ -1499,7 +1499,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     refute Repo.exists?(from(d in BridgeDemotion, where: d.pool_id == ^setup.pool.id))
   end
 
-  @tag :todo_9_public_remote_success
+  @tag :public_remote_success
   test "public responses bridge remote v1 success settles and delivers one terminal", %{
     conn: conn
   } do
@@ -1712,7 +1712,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
-  @tag :todo_9_public_protocol_fallback
+  @tag :public_protocol_fallback
   test "public responses bridge protocol incompatibility falls back before commit once", %{
     conn: conn
   } do
@@ -2300,7 +2300,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
-  @tag :todo_16_owner_crash_recovery
+  @tag :owner_crash_recovery
   test "replacement owner preserves the active proxy epoch after pre-visible owner death" do
     release_ref = make_ref()
 
@@ -2547,7 +2547,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
-  @tag :todo_16_owner_crash_recovery
+  @tag :owner_crash_recovery
   test "remote owner process death after visible output remains terminal" do
     release_ref = make_ref()
     upstream_boundary = visible_blocking_owner_upstream_boundary(self(), release_ref)
@@ -6319,7 +6319,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert FakeUpstream.count(upstream) == 0
   end
 
-  @tag :task_5_timeout
+  @tag :owner_forward_timeout
   test "remote owner attach timeout preserves owner_forward_timeout" do
     remote_node = :"codex_pooler@attach-timeout-owner.example"
     remote_node_string = Atom.to_string(remote_node)
@@ -6352,7 +6352,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert FakeUpstream.count(upstream) == 0
   end
 
-  @tag :task_5_timeout
+  @tag :owner_forward_timeout
   test "owner socket init timeout closes normally while preserving owner error detail" do
     remote_node = :"codex_pooler@init-timeout-owner.example"
     remote_node_string = Atom.to_string(remote_node)
@@ -6415,7 +6415,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert FakeUpstream.count(upstream) == 0
   end
 
-  @tag :task_5_nodedown
+  @tag :owner_forward_nodedown
   test "remote owner attach nodedown takes over lease without leaking erpc details" do
     remote_node = :"codex_pooler@attach-nodedown-owner.example"
     remote_node_string = Atom.to_string(remote_node)

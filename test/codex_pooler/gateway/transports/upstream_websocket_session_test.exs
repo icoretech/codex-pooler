@@ -155,7 +155,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     end
   end
 
-  @tag :task_1_pin
+  @tag :websocket_owner_pin
   test "PIN-P02 exact legacy typeless binary id remains terminal without status or object" do
     frame = ~s({"id":"resp_pin_legacy_typeless"})
     upstream = start_upstream(FakeUpstream.websocket_text_frames([frame]))
@@ -196,7 +196,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     refute body =~ "synthetic terminal detail"
   end
 
-  @tag :task_1_red
+  @tag :websocket_owner_regression
   test "RED-R01 response.done followed by clean close completes before close classification" do
     frame =
       Jason.encode!(%{
@@ -702,10 +702,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
 
   test "native websocket preserves a structural child text delta byte-for-byte" do
     child_delta =
-      ~s({"type":"response.output_text.delta","output_index":1,"content_index":0,"sequence_number":7,"delta":"task15-sanitized-child-delta"})
+      ~s({"type":"response.output_text.delta","output_index":1,"content_index":0,"sequence_number":7,"delta":"sanitized-child-delta"})
 
     terminal =
-      ~s({"type":"response.completed","response":{"id":"resp_task15_child_delta","status":"completed"}})
+      ~s({"type":"response.completed","response":{"id":"resp_sanitized_child_delta","status":"completed"}})
 
     upstream = start_upstream(FakeUpstream.websocket_text_frames([child_delta, terminal]))
     {:ok, session} = UpstreamWebsocketSession.start_link([])

@@ -328,7 +328,7 @@ defmodule CodexPoolerWeb.Operations.MetricsControllerTest do
     end
   end
 
-  @tag :todo5_runtime
+  @tag :rate_limit_runtime
   test "exports web-node saved-reset convergence metrics with bounded labels only", %{conn: conn} do
     event = [:codex_pooler, :saved_reset, :convergence]
     unsafe_id = Ecto.UUID.generate()

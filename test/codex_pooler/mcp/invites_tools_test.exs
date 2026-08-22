@@ -32,7 +32,7 @@ defmodule CodexPooler.MCP.InvitesToolsTest do
     assert {:ok, auth} = MCP.authenticate_token(raw_token)
 
     scope = Scope.for_user(owner, Accounts.roles_for_user(owner))
-    pool = pool_fixture(%{created_by_user_id: owner.id, name: "Task 8 Pool"})
+    pool = pool_fixture(%{created_by_user_id: owner.id, name: "Invite test pool"})
 
     %{auth: auth, owner: owner, pool: pool, scope: scope}
   end
@@ -57,7 +57,7 @@ defmodule CodexPooler.MCP.InvitesToolsTest do
                upstream_identity_id: identity.id,
                pool_upstream_assignment_id: assignment.id,
                onboarding_method: "invite",
-               accepted_by_email: "accepted-task8@example.com",
+               accepted_by_email: "accepted-invite@example.com",
                accepted_at: DateTime.utc_now() |> DateTime.truncate(:microsecond),
                details: %{}
              })
@@ -66,14 +66,14 @@ defmodule CodexPooler.MCP.InvitesToolsTest do
     assert {:ok, result} =
              ToolDispatch.call(
                "codex_pooler_list_invites",
-               %{"email" => "TASK5_DISALLOWED", "limit" => 10},
+               %{"email" => "REDACTION_DISALLOWED", "limit" => 10},
                %{auth: auth}
              )
 
     assert result["isError"] == false
     assert [%{"type" => "text", "text" => text}] = result["content"]
     assert text =~ "1 invite metadata records returned; total 1"
-    assert text =~ "- status=active recipient=ta***@example.com"
+    assert text =~ "- status=active recipient=re***@example.com"
     assert text =~ "pool=#{pool.slug}"
     assert text =~ "sent=unknown"
     assert text =~ "accepted="
@@ -84,12 +84,12 @@ defmodule CodexPooler.MCP.InvitesToolsTest do
     assert presented["pool_id"] == pool.id
     assert presented["pool_name"] == pool.name
     assert presented["pool_slug"] == pool.slug
-    assert presented["invited_email"] == "ta***@example.com"
+    assert presented["invited_email"] == "re***@example.com"
     assert presented["accepted_by_email"] == "ac***@example.com"
     assert presented["status"] == "active"
 
     refute inspect(result) =~ invite.invited_email
-    refute inspect(result) =~ "accepted-task8@example.com"
+    refute inspect(result) =~ "accepted-invite@example.com"
     refute inspect(result) =~ invite_token
     refute inspect(result) =~ Base.encode16(invite.token_hash)
     refute inspect(result) =~ "token_hash"

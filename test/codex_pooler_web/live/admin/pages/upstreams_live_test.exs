@@ -6684,7 +6684,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   end
 
   @tag :relative_countdown_contract
-  @tag :todo4_operator_confirmation
+  @tag :saved_reset_confirmation
   test "saved reset meter renders only the bounded post-consume confirmation contract" do
     saved_resets = %{
       available_count: 0,
@@ -6700,7 +6700,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     awaiting_html =
       render_component(&SavedResetMeter.saved_reset_meter/1,
-        id: "todo4-awaiting-meter",
+        id: "saved-reset-awaiting-meter",
         saved_resets: saved_resets,
         saved_reset_policy: %{enabled?: true},
         saved_reset_confirmation: %{
@@ -6716,7 +6716,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     confirmation =
       LazyHTML.query(
         awaiting_document,
-        "#todo4-awaiting-meter-confirmation[data-role='upstream-saved-reset-confirmation']"
+        "#saved-reset-awaiting-meter-confirmation[data-role='upstream-saved-reset-confirmation']"
       )
 
     assert Enum.count(confirmation) == 1
@@ -6728,7 +6728,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert LazyHTML.query(
              awaiting_document,
-             "#todo4-awaiting-meter-confirmation[aria-label='#{confirmation_title}']"
+             "#saved-reset-awaiting-meter-confirmation[aria-label='#{confirmation_title}']"
            )
            |> Enum.count() == 1
 
@@ -6768,7 +6768,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert LazyHTML.query(
              awaiting_document,
-             "#todo4-awaiting-meter-bar[aria-valuenow='0']"
+             "#saved-reset-awaiting-meter-bar[aria-valuenow='0']"
            )
            |> Enum.count() == 1
 
@@ -6776,7 +6776,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       segment =
         LazyHTML.query(
           awaiting_document,
-          "#todo4-awaiting-meter-segment-#{index}"
+          "#saved-reset-awaiting-meter-segment-#{index}"
         )
 
       assert LazyHTML.attribute(segment, "class") |> List.first() =~ "bg-base-300/70"
@@ -6789,7 +6789,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     confirmed_html =
       render_component(&SavedResetMeter.saved_reset_meter/1,
-        id: "todo4-confirmed-meter",
+        id: "saved-reset-confirmed-meter",
         saved_resets: saved_resets,
         saved_reset_policy: %{enabled?: false},
         saved_reset_confirmation: %{
@@ -6802,7 +6802,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     confirmed_document = LazyHTML.from_fragment(confirmed_html)
 
-    assert LazyHTML.query(confirmed_document, "#todo4-confirmed-meter-bar[aria-valuenow='0']")
+    assert LazyHTML.query(
+             confirmed_document,
+             "#saved-reset-confirmed-meter-bar[aria-valuenow='0']"
+           )
            |> Enum.count() == 1
 
     refute LazyHTML.query(
@@ -6822,7 +6825,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       for {state, label} <- state_labels, into: %{} do
         html =
           render_component(&SavedResetMeter.saved_reset_meter/1,
-            id: "todo4-#{state}-meter",
+            id: "saved-reset-#{state}-meter",
             saved_resets: saved_resets,
             saved_reset_policy: %{enabled?: false},
             saved_reset_confirmation: %{
@@ -6841,13 +6844,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     refute rendered_states.confirmation_expired =~ "Not applied"
   end
 
-  @tag :todo4_operator_confirmation
+  @tag :saved_reset_confirmation
   test "saved reset confirmation fails closed for malformed projection input" do
-    sentinel = "todo4-raw-confirmation-sentinel"
+    sentinel = "saved-reset-raw-confirmation-sentinel"
 
     html =
       render_component(&SavedResetMeter.saved_reset_meter/1,
-        id: "todo4-malformed-meter",
+        id: "saved-reset-malformed-meter",
         saved_resets: %{
           available_count: 1,
           label: "1 saved reset",
@@ -6867,7 +6870,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     assert LazyHTML.query(
              document,
-             "#todo4-malformed-meter-confirmation[data-confirmation-state='unavailable']"
+             "#saved-reset-malformed-meter-confirmation[data-confirmation-state='unavailable']"
            )
            |> LazyHTML.text() =~ "Confirmation details unavailable"
 

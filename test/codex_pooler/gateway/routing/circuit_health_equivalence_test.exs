@@ -83,7 +83,7 @@ defmodule CodexPooler.Gateway.Routing.CircuitHealthEquivalenceTest do
     end
   end
 
-  @tag :todo6_cross_issue
+  @tag :route_filtering_regression
   test "saved reset recovery fence locks and classifies a usable transient sibling without changing circuit accounting" do
     pool = pool_fixture()
     model = model_fixture(pool)

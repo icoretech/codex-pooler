@@ -2560,7 +2560,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert logs =~ "operation=interrupt_codex_session"
     assert logs =~ "reason_class=RuntimeError"
     assert logs =~ "owner_exit_reason=owner_drained"
-    assert logs =~ "recovery_hint=task_7_owner_exit_recovery"
+    assert logs =~ "recovery_hint=owner_exit_recovery"
     refute logs =~ owner_lease_token
     refute logs =~ context.owner_lease_token
     refute logs =~ @sentinel

@@ -25,7 +25,7 @@ Every fixture entry must include:
 - `structural_summary`
 - `redaction_status`
 
-`scenario_id` values are stable and become the join key for the Task 2 matrix. Do not rename a scenario id after Task 2 starts unless the matrix row changes in the same review.
+`scenario_id` values are stable and become the join key for the compatibility matrix. Do not rename a scenario id after the compatibility matrix starts unless the matrix row changes in the same review.
 
 ## Redaction Rules
 
@@ -53,4 +53,4 @@ Examples must use generic placeholders only. Do not use real organization names,
 
 ## Expected Decision Placeholder Policy
 
-Task 1 does not decide compatibility behavior. Set `expected_decision.status` to `pending_task_2_matrix` for every fixture. Task 2 owns `MATRIX.md` and will replace placeholders with one of `accept`, `translate`, `reject`, or `passthrough` plus row ownership.
+fixture capture does not decide compatibility behavior. Set `expected_decision.status` to `pending_compatibility_matrix` for every fixture. compatibility matrix owns `MATRIX.md` and will replace placeholders with one of `accept`, `translate`, `reject`, or `passthrough` plus row ownership.

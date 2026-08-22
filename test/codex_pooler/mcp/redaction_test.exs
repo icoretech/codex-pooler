@@ -19,7 +19,7 @@ defmodule CodexPooler.MCP.RedactionTest do
 
   @safe_text "1 request for Sample Pool, operator op***@example.com, route /backend-api/codex/responses"
 
-  test "forbidden sentinel catalog covers every Task 5 category with synthetic values" do
+  test "forbidden sentinel catalog covers every redaction category with synthetic values" do
     categories = Redaction.forbidden_categories()
 
     for category <- [
@@ -64,7 +64,7 @@ defmodule CodexPooler.MCP.RedactionTest do
       assert category in categories
       sentinel = Redaction.forbidden_sentinel!(category)
       assert is_binary(sentinel)
-      assert sentinel =~ ~r/TASK[57]_/
+      assert sentinel =~ ~r/(?:REDACTION|RAW_TOOL)_/
     end
   end
 

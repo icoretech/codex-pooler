@@ -24,7 +24,7 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanContract do
 
     case Enum.find(checks, fn {_name, passed?} -> not passed? end) do
       nil -> checks
-      {name, false} -> raise ArgumentError, "Todo 9 query-plan contract failed: #{name}"
+      {name, false} -> raise ArgumentError, "Observatory query-plan contract failed: #{name}"
     end
   end
 

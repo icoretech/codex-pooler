@@ -154,37 +154,37 @@ defmodule CodexPooler.MCP.ToolDispatchTest do
     auth: auth,
     user: user
   } do
-    pool = pool_fixture(%{name: "Task 6 Pool", slug: "task-6-pool"})
+    pool = pool_fixture(%{name: "MCP dispatch pool", slug: "mcp-dispatch-pool"})
 
     %{api_key: api_key, raw_key: raw_key} =
-      active_api_key_fixture(pool, %{display_name: "Task 6 API key"})
+      active_api_key_fixture(pool, %{display_name: "MCP dispatch API key"})
 
     %{assignment: assignment, identity: upstream_identity} =
-      active_upstream_assignment_fixture(pool, %{account_label: "Task 6 upstream"})
+      active_upstream_assignment_fixture(pool, %{account_label: "MCP dispatch upstream"})
 
     %{user: operator} =
       operator_fixture(auth.operator, %{
-        "display_name" => "Task 6 Operator",
-        "email" => "task-6-operator@example.com"
+        "display_name" => "MCP dispatch operator",
+        "email" => "mcp-dispatch-operator@example.com"
       })
 
     scope = Scope.for_user(user, Accounts.roles_for_user(user))
 
     assert {:ok, %{invite: invite}} =
-             Access.create_invite(scope, pool, %{invited_email: "task-6-invite@example.com"})
+             Access.create_invite(scope, pool, %{invited_email: "mcp-dispatch-invite@example.com"})
 
     request =
       request_fixture(%{pool: pool, api_key: api_key}, %{
-        requested_model: "gpt-task-6",
+        requested_model: "gpt-mcp-dispatch",
         endpoint: "/backend-api/codex/responses",
         transport: "http_sse",
         status: "succeeded",
         usage_status: "usage_known",
-        correlation_id: "task-6-request",
+        correlation_id: "mcp-dispatch-request",
         response_status_code: 202,
         retry_count: 2,
         upstream_account_label: upstream_identity.account_label,
-        upstream_account_email: "upstream.task6@example.com"
+        upstream_account_email: "upstream.mcp-dispatch@example.com"
       })
 
     _attempt = attempt_fixture(request, assignment, %{latency_ms: 321})
@@ -210,7 +210,7 @@ defmodule CodexPooler.MCP.ToolDispatchTest do
         target_type: "user",
         target_id: user.id,
         outcome: "success",
-        correlation_id: "task-6-audit-correlation",
+        correlation_id: "mcp-dispatch-audit-correlation",
         details: %{"status" => "changed"}
       }
       |> Repo.insert!()
@@ -219,17 +219,23 @@ defmodule CodexPooler.MCP.ToolDispatchTest do
       {
         "codex_pooler_list_pools",
         %{"query" => pool.slug, "limit" => 10},
-        ["name=Task 6 Pool", "slug=#{pool.slug}", "status=active", "upstreams=1", "api_keys=1"]
+        [
+          "name=MCP dispatch pool",
+          "slug=#{pool.slug}",
+          "status=active",
+          "upstreams=1",
+          "api_keys=1"
+        ]
       },
       {
         "codex_pooler_get_pool",
         %{"selector" => pool.slug},
-        ["id=#{pool.id}", "name=Task 6 Pool", "slug=#{pool.slug}", "status=active"]
+        ["id=#{pool.id}", "name=MCP dispatch pool", "slug=#{pool.slug}", "status=active"]
       },
       {
         "codex_pooler_list_upstreams",
         %{"pool_selector" => pool.slug, "limit" => 10},
-        ["label=Task 6 upstream", "status=active", "account=", "assignments="]
+        ["label=MCP dispatch upstream", "status=active", "account=", "assignments="]
       },
       {
         "codex_pooler_get_upstream",
@@ -240,7 +246,7 @@ defmodule CodexPooler.MCP.ToolDispatchTest do
         "codex_pooler_list_pool_api_keys",
         %{"pool_selector" => pool.slug, "limit" => 10},
         [
-          "name=Task 6 API key",
+          "name=MCP dispatch API key",
           "status=active",
           "prefix=#{api_key.key_prefix}",
           "pool=#{pool.slug}"
@@ -251,7 +257,7 @@ defmodule CodexPooler.MCP.ToolDispatchTest do
         %{"selector" => api_key.key_prefix},
         [
           "id=#{api_key.id}",
-          "name=Task 6 API key",
+          "name=MCP dispatch API key",
           "status=active",
           "prefix=#{api_key.key_prefix}"
         ]
@@ -260,7 +266,7 @@ defmodule CodexPooler.MCP.ToolDispatchTest do
         "codex_pooler_list_upstream_quotas",
         %{"pool_id" => pool.id, "limit" => 10},
         [
-          "account Task 6 upstream",
+          "account MCP dispatch upstream",
           "status active",
           "account_primary",
           "42/100 remaining",
@@ -272,40 +278,51 @@ defmodule CodexPooler.MCP.ToolDispatchTest do
         %{"selector" => upstream_identity.id},
         [
           "1 upstream quota metadata record returned",
-          "account Task 6 upstream",
+          "account MCP dispatch upstream",
           "account_primary",
           "42/100 remaining"
         ]
       },
       {
         "codex_pooler_list_operators",
-        %{"query" => "Task 6 Operator", "limit" => 10},
-        ["name=Task 6 Operator", "status=active", "email=ta***@example.com", "mcp="]
+        %{"query" => "MCP dispatch operator", "limit" => 10},
+        ["name=MCP dispatch operator", "status=active", "email=mc***@example.com", "mcp="]
       },
       {
         "codex_pooler_get_operator",
         %{"selector" => operator.id},
-        ["name=Task 6 Operator", "status=active", "email=ta***@example.com", "mcp="]
+        ["name=MCP dispatch operator", "status=active", "email=mc***@example.com", "mcp="]
       },
       {
         "codex_pooler_list_invites",
-        %{"email" => "task-6-invite@example.com", "limit" => 10},
-        ["status=active", "recipient=ta***@example.com", "pool=#{pool.slug}"]
+        %{"email" => "mcp-dispatch-invite@example.com", "limit" => 10},
+        ["status=active", "recipient=mc***@example.com", "pool=#{pool.slug}"]
       },
       {
         "codex_pooler_get_invite",
         %{"selector" => invite.id},
-        ["status=active", "recipient=ta***@example.com", "pool=#{pool.slug}"]
+        ["status=active", "recipient=mc***@example.com", "pool=#{pool.slug}"]
       },
       {
         "codex_pooler_list_request_logs",
-        %{"pool_id" => pool.id, "status" => "succeeded", "model" => "gpt-task-6", "limit" => 10},
-        ["pool=task-6-pool", "status=succeeded", "model=gpt-task-6", "retries=2"]
+        %{
+          "pool_id" => pool.id,
+          "status" => "succeeded",
+          "model" => "gpt-mcp-dispatch",
+          "limit" => 10
+        },
+        ["pool=mcp-dispatch-pool", "status=succeeded", "model=gpt-mcp-dispatch", "retries=2"]
       },
       {
         "codex_pooler_get_request_log",
         %{"id" => request.id},
-        ["pool=task-6-pool", "status=succeeded", "model=gpt-task-6", "retries=2", "response=202"]
+        [
+          "pool=mcp-dispatch-pool",
+          "status=succeeded",
+          "model=gpt-mcp-dispatch",
+          "retries=2",
+          "response=202"
+        ]
       },
       {
         "codex_pooler_list_audit_logs",
@@ -315,7 +332,7 @@ defmodule CodexPooler.MCP.ToolDispatchTest do
           "outcome=success",
           "actor=user",
           "target=user",
-          "pool=task-6-pool"
+          "pool=mcp-dispatch-pool"
         ]
       },
       {
@@ -326,7 +343,7 @@ defmodule CodexPooler.MCP.ToolDispatchTest do
           "outcome=success",
           "actor=user",
           "target=user",
-          "pool=task-6-pool"
+          "pool=mcp-dispatch-pool"
         ]
       }
     ]

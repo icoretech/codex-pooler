@@ -87,7 +87,7 @@ defmodule CodexPooler.Accounting.UpstreamReferenceLockingTest do
   for schedule <- @schedules do
     schedule_id = schedule.id
 
-    @tag task8_schedule: schedule_id
+    @tag upstream_membership_schedule: schedule_id
     test "#{schedule_id} serializes accounting and credential fencing for 10 iterations" do
       summaries =
         Enum.map(1..@schedule_iterations, fn iteration ->
@@ -102,7 +102,7 @@ defmodule CodexPooler.Accounting.UpstreamReferenceLockingTest do
     end
   end
 
-  @tag :task8_membership_lock
+  @tag :upstream_membership_lock
   test "assignment membership update waits behind accounting validation until A01 commits" do
     fixture = committed_membership_fixture!()
     cleanup_key = {__MODULE__, make_ref(), :membership_cleanup}
@@ -425,7 +425,7 @@ defmodule CodexPooler.Accounting.UpstreamReferenceLockingTest do
       fixture.attempt,
       %{
         status: "usage_known",
-        source: "task8_concurrency",
+        source: "upstream_membership_concurrency",
         recorded_at: fixture.final_at,
         input_tokens: 2,
         output_tokens: 1,
@@ -451,7 +451,9 @@ defmodule CodexPooler.Accounting.UpstreamReferenceLockingTest do
 
   defp attach_query_handler!(barrier, schedule, accounting_pid, fencing_pid) do
     parent = self()
-    handler_id = "task8-accounting-#{schedule.id}-#{System.unique_integer([:positive])}"
+
+    handler_id =
+      "upstream-membership-accounting-#{schedule.id}-#{System.unique_integer([:positive])}"
 
     :ok =
       :telemetry.attach(
@@ -475,7 +477,7 @@ defmodule CodexPooler.Accounting.UpstreamReferenceLockingTest do
 
   defp attach_membership_handler!(barrier, accounting_pid) do
     parent = self()
-    handler_id = "task8-membership-#{System.unique_integer([:positive])}"
+    handler_id = "upstream-membership-#{System.unique_integer([:positive])}"
 
     :ok =
       :telemetry.attach(
@@ -891,13 +893,13 @@ defmodule CodexPooler.Accounting.UpstreamReferenceLockingTest do
 
       setup =
         accounting_setup(%{
-          account_label: "Task 8 accounting #{unique}"
+          account_label: "Upstream membership accounting #{unique}"
         })
 
       reserved =
         reserve!(
           setup,
-          "task8-accounting-#{path}-#{iteration}-#{unique}"
+          "upstream-membership-accounting-#{path}-#{iteration}-#{unique}"
         )
 
       timestamp = DateTime.utc_now() |> DateTime.truncate(:microsecond)
@@ -925,8 +927,8 @@ defmodule CodexPooler.Accounting.UpstreamReferenceLockingTest do
           assert {:ok, failed} =
                    Accounting.finalize_failure(reserved.request, attempt, %{
                      now: timestamp,
-                     last_error_code: "task8_prior_unknown",
-                     usage: %{status: "usage_unknown", source: "task8_prior"}
+                     last_error_code: "upstream_membership_prior_unknown",
+                     usage: %{status: "usage_unknown", source: "upstream_membership_prior"}
                    })
 
           fixture
@@ -943,15 +945,15 @@ defmodule CodexPooler.Accounting.UpstreamReferenceLockingTest do
 
       setup =
         accounting_setup(%{
-          account_label: "Task 8 membership #{unique}"
+          account_label: "Upstream membership #{unique}"
         })
 
-      reserved = reserve!(setup, "task8-membership-#{unique}")
+      reserved = reserve!(setup, "upstream-membership-#{unique}")
 
       alternate_identity =
         upstream_identity_fixture(%{
-          account_label: "Task 8 alternate #{unique}",
-          chatgpt_account_id: "task8_alternate_#{unique}"
+          account_label: "Upstream membership alternate #{unique}",
+          chatgpt_account_id: "upstream_membership_alternate_#{unique}"
         })
 
       setup
@@ -1051,7 +1053,7 @@ defmodule CodexPooler.Accounting.UpstreamReferenceLockingTest do
   defp dependent_insert_label(:ledger_insert), do: "ledger_entries:INSERT"
 
   defp record_evidence(record) do
-    if path = System.get_env("TASK8_ACCOUNTING_EVIDENCE_PATH") do
+    if path = System.get_env("UPSTREAM_MEMBERSHIP_ACCOUNTING_EVIDENCE_PATH") do
       File.mkdir_p!(Path.dirname(path))
 
       File.open!(path, [:append, :binary], fn io ->

@@ -29,7 +29,7 @@ defmodule CodexPooler.Accounting.ObservatoryQueryPlanReceipt do
   end
 
   def write_if_requested!(receipt) do
-    case System.get_env("TODO9_QUERY_PLAN_RECEIPT") do
+    case System.get_env("OBSERVATORY_QUERY_PLAN_RECEIPT") do
       path when is_binary(path) and path != "" ->
         File.mkdir_p!(Path.dirname(path))
         File.write!(path, [Jason.encode_to_iodata!(receipt, pretty: true), "\n"])

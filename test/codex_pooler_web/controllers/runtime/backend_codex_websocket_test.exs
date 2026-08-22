@@ -6985,7 +6985,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     refute metadata_text =~ "upstream-token"
   end
 
-  @tag :task_6_websocket_resume
+  @tag :websocket_resume
   test "websocket reconnect resumes the same durable alias and owner lease before expiry" do
     upstream =
       start_upstream(
@@ -7070,7 +7070,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
              1
   end
 
-  @tag :task_6_http_websocket_continuity
+  @tag :http_websocket_continuity
   test "HTTP response id continuity resumes the same durable session for websocket", %{conn: conn} do
     upstream =
       start_upstream(
@@ -7406,7 +7406,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
              )
   end
 
-  @tag :task_6_same_connection_distinct_turns
+  @tag :same_connection_distinct_turns
   test "distinct websocket messages sharing connection request id both dispatch and account" do
     upstream =
       start_upstream(
@@ -7459,7 +7459,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
            ) == 2
   end
 
-  @tag :task_6_duplicate_turn
+  @tag :duplicate_turn
   test "duplicate explicit websocket turn id does not double account attempts or usage" do
     upstream =
       start_upstream(
@@ -7583,7 +7583,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
            ) == 1
   end
 
-  @tag :task_6_duplicate_turn
+  @tag :duplicate_turn
   test "concurrent duplicate explicit websocket turn id is atomically rejected" do
     upstream =
       start_upstream(
@@ -7655,7 +7655,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
            ) == 1
   end
 
-  @tag :task_6_demoted_owner
+  @tag :demoted_owner
   test "demoted backend does not receive the next websocket turn" do
     demoted_upstream =
       start_upstream(
@@ -9839,7 +9839,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert request.retry_count == 0
   end
 
-  @tag :task_8_websocket_failure
+  @tag :websocket_failure
   test "websocket terminal upstream failure demotes and circuit fails assignment" do
     upstream =
       start_upstream(

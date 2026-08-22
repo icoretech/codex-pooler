@@ -25,7 +25,7 @@ source_sha="$(docker buildx imagetools inspect "$immutable_ref" --format '{{json
 [[ "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { printf 'trusted immutable image digest unavailable\n' >&2; exit 1; }
 
 if [[ -z "$receipt" ]]; then
-  receipt="$root_dir/.omo/evidence/task-11-local-${mode}.tsv"
+  receipt="$root_dir/.omo/evidence/quota-convergence-local-${mode}.tsv"
 fi
 
 mkdir -p "$(dirname "$receipt")"

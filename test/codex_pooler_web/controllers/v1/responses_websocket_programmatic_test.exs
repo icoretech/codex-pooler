@@ -322,7 +322,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       public_v1_websocket_connect!(
         port,
         setup,
-        "task-6-programmatic-#{System.unique_integer([:positive])}"
+        "programmatic-#{System.unique_integer([:positive])}"
       )
 
     try do
@@ -1587,7 +1587,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       public_v1_websocket_connect!(
         port,
         setup,
-        "task-6-malformed-#{System.unique_integer([:positive])}"
+        "malformed-programmatic-#{System.unique_integer([:positive])}"
       )
 
     try do
@@ -3599,7 +3599,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
           "name" => "lookup_fixture",
           "parameters" => %{"type" => "object", "properties" => %{}},
           "allowed_callers" => ["direct", "programmatic"],
-          "output_schema" => %{"$id" => "TASK6_SCHEMA_SENTINEL", "type" => "object"}
+          "output_schema" => %{"$id" => "PROGRAMMATIC_SCHEMA_SENTINEL", "type" => "object"}
         }
       ],
       "tool_choice" => %{"type" => "programmatic_tool_calling"}
@@ -3610,31 +3610,31 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     [
       %{
         "type" => "program",
-        "id" => "TASK6_PROGRAM_ID_SENTINEL",
-        "call_id" => "TASK6_PROGRAM_CALL_ID_SENTINEL",
-        "code" => "TASK6_CODE_SENTINEL",
-        "fingerprint" => "TASK6_FINGERPRINT_SENTINEL"
+        "id" => "PROGRAMMATIC_PROGRAM_ID_SENTINEL",
+        "call_id" => "PROGRAMMATIC_PROGRAM_CALL_ID_SENTINEL",
+        "code" => "PROGRAMMATIC_CODE_SENTINEL",
+        "fingerprint" => "PROGRAMMATIC_FINGERPRINT_SENTINEL"
       },
       %{
         "type" => "function_call",
-        "id" => "TASK6_FUNCTION_ID_SENTINEL",
-        "call_id" => "TASK6_FUNCTION_CALL_ID_SENTINEL",
+        "id" => "PROGRAMMATIC_FUNCTION_ID_SENTINEL",
+        "call_id" => "PROGRAMMATIC_FUNCTION_CALL_ID_SENTINEL",
         "name" => "lookup_fixture",
         "arguments" => "{}",
-        "caller" => %{"type" => "program", "caller_id" => "TASK6_CALLER_ID_SENTINEL"}
+        "caller" => %{"type" => "program", "caller_id" => "PROGRAMMATIC_CALLER_ID_SENTINEL"}
       },
       %{
         "type" => "function_call_output",
-        "id" => "TASK6_FUNCTION_OUTPUT_ID_SENTINEL",
-        "call_id" => "TASK6_FUNCTION_CALL_ID_SENTINEL",
-        "output" => "TASK6_FRAME_SENTINEL",
+        "id" => "PROGRAMMATIC_FUNCTION_OUTPUT_ID_SENTINEL",
+        "call_id" => "PROGRAMMATIC_FUNCTION_CALL_ID_SENTINEL",
+        "output" => "PROGRAMMATIC_FRAME_SENTINEL",
         "caller" => %{"type" => "direct"}
       },
       %{
         "type" => "program_output",
-        "id" => "TASK6_PROGRAM_OUTPUT_ID_SENTINEL",
-        "call_id" => "TASK6_PROGRAM_CALL_ID_SENTINEL",
-        "result" => "TASK6_RESULT_SENTINEL",
+        "id" => "PROGRAMMATIC_PROGRAM_OUTPUT_ID_SENTINEL",
+        "call_id" => "PROGRAMMATIC_PROGRAM_CALL_ID_SENTINEL",
+        "result" => "PROGRAMMATIC_RESULT_SENTINEL",
         "status" => "completed"
       }
     ]
@@ -3657,7 +3657,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
        %{
          "type" => "response.completed",
          "response" => %{
-           "id" => "TASK6_RESPONSE_ID_SENTINEL",
+           "id" => "PROGRAMMATIC_RESPONSE_ID_SENTINEL",
            "status" => "completed",
            "output" => programmatic_input_items(),
            "usage" => %{"input_tokens" => 4, "output_tokens" => 4, "total_tokens" => 8}
@@ -3778,26 +3778,26 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       put_in(base, ["input", Access.at(3), "status"], "invalid-status"),
       put_in(base, ["tools", Access.at(0)], %{
         "type" => "programmatic_tool_calling",
-        "extra" => "TASK6_MALFORMED_TOOL_SENTINEL"
+        "extra" => "PROGRAMMATIC_MALFORMED_TOOL_SENTINEL"
       })
     ]
   end
 
   defp programmatic_sentinels do
     ~w(
-      TASK6_CODE_SENTINEL
-      TASK6_RESULT_SENTINEL
-      TASK6_FINGERPRINT_SENTINEL
-      TASK6_SCHEMA_SENTINEL
-      TASK6_PROGRAM_ID_SENTINEL
-      TASK6_PROGRAM_CALL_ID_SENTINEL
-      TASK6_FUNCTION_ID_SENTINEL
-      TASK6_FUNCTION_CALL_ID_SENTINEL
-      TASK6_FUNCTION_OUTPUT_ID_SENTINEL
-      TASK6_PROGRAM_OUTPUT_ID_SENTINEL
-      TASK6_CALLER_ID_SENTINEL
-      TASK6_FRAME_SENTINEL
-      TASK6_RESPONSE_ID_SENTINEL
+      PROGRAMMATIC_CODE_SENTINEL
+      PROGRAMMATIC_RESULT_SENTINEL
+      PROGRAMMATIC_FINGERPRINT_SENTINEL
+      PROGRAMMATIC_SCHEMA_SENTINEL
+      PROGRAMMATIC_PROGRAM_ID_SENTINEL
+      PROGRAMMATIC_PROGRAM_CALL_ID_SENTINEL
+      PROGRAMMATIC_FUNCTION_ID_SENTINEL
+      PROGRAMMATIC_FUNCTION_CALL_ID_SENTINEL
+      PROGRAMMATIC_FUNCTION_OUTPUT_ID_SENTINEL
+      PROGRAMMATIC_PROGRAM_OUTPUT_ID_SENTINEL
+      PROGRAMMATIC_CALLER_ID_SENTINEL
+      PROGRAMMATIC_FRAME_SENTINEL
+      PROGRAMMATIC_RESPONSE_ID_SENTINEL
     )
   end
 

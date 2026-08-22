@@ -217,7 +217,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     refute_received {:websocket_owner_harness_upstream_started, _upstream_pid}
   end
 
-  @tag :task_1_red
+  @tag :owner_forwarding_regression
   test "RED-R05 owner-unavailable response option recovery preserves per-call owner turn id", %{
     auth: auth
   } do
@@ -282,7 +282,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     end
   end
 
-  @tag :task_1_red
+  @tag :owner_forwarding_regression
   test "RED-R06 direct recovery keeps per-call owner turn id out of stable restore state", %{
     auth: auth
   } do

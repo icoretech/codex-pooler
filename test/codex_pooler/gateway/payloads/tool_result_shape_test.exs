@@ -197,17 +197,17 @@ defmodule CodexPooler.Gateway.Payloads.ToolResultShapeTest do
 
   defp structured_tool_result_output do
     %{
-      "command" => "TASK7_RAW_TOOL_COMMAND_SENTINEL run private command",
+      "command" => "RAW_TOOL_COMMAND_SENTINEL run private command",
       "files" => [
         %{
           "path" => "sample-output.txt",
-          "content" => "TASK7_RAW_TOOL_OUTPUT_SENTINEL\n" <> String.duplicate("line\n", 200)
+          "content" => "RAW_TOOL_OUTPUT_SENTINEL\n" <> String.duplicate("line\n", 200)
         }
       ],
       "nested" => %{
         "list" => [
-          %{"stdout_preview" => String.duplicate("TASK7_LONG_NESTED_VALUE_", 40)},
-          %{"secret_like" => "TASK7_SECRET_LIKE_TOOL_SENTINEL"}
+          %{"stdout_preview" => String.duplicate("RAW_TOOL_LONG_NESTED_VALUE_", 40)},
+          %{"secret_like" => "RAW_TOOL_SECRET_LIKE_SENTINEL"}
         ]
       }
     }
@@ -215,10 +215,10 @@ defmodule CodexPooler.Gateway.Payloads.ToolResultShapeTest do
 
   defp structured_tool_result_sentinels do
     [
-      "TASK7_RAW_TOOL_COMMAND_SENTINEL",
-      "TASK7_RAW_TOOL_OUTPUT_SENTINEL",
-      "TASK7_LONG_NESTED_VALUE_",
-      "TASK7_SECRET_LIKE_TOOL_SENTINEL"
+      "RAW_TOOL_COMMAND_SENTINEL",
+      "RAW_TOOL_OUTPUT_SENTINEL",
+      "RAW_TOOL_LONG_NESTED_VALUE_",
+      "RAW_TOOL_SECRET_LIKE_SENTINEL"
     ]
   end
 

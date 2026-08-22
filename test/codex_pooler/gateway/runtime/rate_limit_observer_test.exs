@@ -219,7 +219,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
   end
 
   describe "saved reset convergence from runtime evidence" do
-    @tag :todo5_runtime
+    @tag :rate_limit_runtime
     test "threads each runtime evidence source into committed convergence telemetry" do
       scenarios = [
         {"runtime_headers",
@@ -669,7 +669,7 @@ defmodule CodexPooler.Gateway.Runtime.RateLimitObserverTest do
 
   defp attach_convergence_handler! do
     test_pid = self()
-    handler_id = {__MODULE__, :todo5_convergence, System.unique_integer([:positive])}
+    handler_id = {__MODULE__, :rate_limit_convergence, System.unique_integer([:positive])}
     event = [:codex_pooler, :saved_reset, :convergence]
 
     :ok =

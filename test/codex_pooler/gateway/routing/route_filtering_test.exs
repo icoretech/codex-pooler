@@ -348,7 +348,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       assert [%{reasons: [%{"code" => "saved_reset_probe_pending"}]}] = exclusions
     end
 
-    @tag :todo6_cross_issue
+    @tag :route_filtering_regression
     test "usage accounting does not override recovering circuit and pending reset routing facts" do
       %{pool: pool, api_key: api_key} = active_api_key_fixture()
 
@@ -370,7 +370,10 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
         })
 
       upsert_primary_quota!(identity, Decimal.new("15"))
-      filter_input = filter_input(pool, api_key, assignment, identity, "todo6-independent-facts")
+
+      filter_input =
+        filter_input(pool, api_key, assignment, identity, "route-filtering-independent-facts")
+
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
       circuit =
@@ -382,7 +385,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
           model_identifier: filter_input.model.exposed_model_id,
           route_class: filter_input.route_class,
           status: "open",
-          reason_code: "todo6_recovering",
+          reason_code: "route-filtering-recovering",
           failure_count: 3,
           success_count: 0,
           opened_at: DateTime.add(now, -30, :second),
@@ -1402,7 +1405,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
     end
 
     @tag :saved_reset_expiry_ownership
-    @tag :todo6_cross_issue
+    @tag :route_filtering_regression
     test "threshold redemption waits for a circuit-excluded usable sibling recovery" do
       {:ok, upstream} =
         FakeUpstream.start_link(
@@ -1487,7 +1490,7 @@ defmodule CodexPooler.Gateway.Routing.RouteFilteringTest do
       end
     end
 
-    @tag :todo6_cross_issue
+    @tag :route_filtering_regression
     test "blocked exhaustion waits when a circuit-excluded sibling has usable quota" do
       {:ok, upstream} =
         FakeUpstream.start_link(

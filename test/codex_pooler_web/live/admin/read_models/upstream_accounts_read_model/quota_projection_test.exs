@@ -12,7 +12,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
 
   @snapshot_at ~U[2026-07-25 12:00:00Z]
 
-  @tag :todo4_projection
+  @tag :quota_projection
   test "keeps a valid post-consume candidate visible when the effective fold selects another source" do
     consumed_at = DateTime.add(@snapshot_at, -5, :minute)
 
@@ -58,7 +58,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
            }
   end
 
-  @tag :todo4_projection
+  @tag :quota_projection
   test "uses fixed additional-account blocker precedence independent of input order" do
     consumed_at = DateTime.add(@snapshot_at, -5, :minute)
 
@@ -108,7 +108,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
     end
   end
 
-  @tag :todo4_projection
+  @tag :quota_projection
   test "fails closed for malformed, unknown-version, and future candidate evidence" do
     consumed_at = DateTime.add(@snapshot_at, -5, :minute)
     raw_sentinel = "future-projection-version-private-value"
@@ -156,7 +156,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
     end
   end
 
-  @tag :todo4_projection
+  @tag :quota_projection
   test "keeps model-scoped exhaustion outside both account evidence dimensions" do
     consumed_at = DateTime.add(@snapshot_at, -5, :minute)
 
@@ -191,7 +191,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
     assert projection.additional_account_blocker_state == :none
   end
 
-  @tag :todo4_projection
+  @tag :quota_projection
   test "emits only the four bounded confirmation states and omits unknown phases" do
     expected = %{
       "consuming" => :awaiting_confirmation,

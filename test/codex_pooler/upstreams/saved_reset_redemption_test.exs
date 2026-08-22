@@ -2100,7 +2100,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert Repo.reload!(identity).metadata["saved_reset_redemption"] == before_redemption
     end
 
-    @tag :todo5_metadata
+    @tag :redemption_metadata
     test "a new attempt generation does not inherit prior convergence metadata" do
       {:ok, fake} =
         FakeUpstream.start_link(
@@ -5238,7 +5238,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       end
     end
 
-    @tag :todo6_multinode
+    @tag :multi_node_convergence
     test "two runtime observers and reconciliation converge one accepted lifecycle across replicas" do
       {:ok, fake} = FakeUpstream.start_link({:path_json, %{}})
       on_exit(fn -> FakeUpstream.stop(fake) end)
@@ -5249,8 +5249,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       parent = self()
       barrier = make_ref()
       convergence_event = [:codex_pooler, :saved_reset, :convergence]
-      convergence_handler = {__MODULE__, :todo6_convergence, barrier}
-      repo_handler = {__MODULE__, :todo6_repo, barrier}
+      convergence_handler = {__MODULE__, :multi_node_convergence, barrier}
+      repo_handler = {__MODULE__, :multi_node_repo, barrier}
 
       :ok =
         :telemetry.attach(
@@ -5267,7 +5267,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           repo_handler,
           [:codex_pooler, :repo, :query],
           fn _event, _measurements, metadata, _config ->
-            role = Process.get({__MODULE__, barrier, :todo6_role})
+            role = Process.get({__MODULE__, barrier, :multi_node_role})
             query = metadata[:query] || ""
 
             if metadata[:source] == "routing_circuit_states" and
@@ -5280,18 +5280,30 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         )
 
       actors = [
-        start_todo6_convergence_actor(parent, barrier, :headers, fixture, fn stale_identity ->
-          RateLimitObserver.record_headers(stale_identity, %Req.Response{
-            headers: account_weekly_headers("4")
-          })
-        end),
-        start_todo6_convergence_actor(parent, barrier, :websocket, fixture, fn stale_identity ->
-          RateLimitObserver.record_websocket_frame_headers(
-            stale_identity,
-            Map.new(account_weekly_headers("4"))
-          )
-        end),
-        start_todo6_convergence_actor(parent, barrier, :reconciliation, fixture, fn _stale ->
+        start_multi_node_convergence_actor(
+          parent,
+          barrier,
+          :headers,
+          fixture,
+          fn stale_identity ->
+            RateLimitObserver.record_headers(stale_identity, %Req.Response{
+              headers: account_weekly_headers("4")
+            })
+          end
+        ),
+        start_multi_node_convergence_actor(
+          parent,
+          barrier,
+          :websocket,
+          fixture,
+          fn stale_identity ->
+            RateLimitObserver.record_websocket_frame_headers(
+              stale_identity,
+              Map.new(account_weekly_headers("4"))
+            )
+          end
+        ),
+        start_multi_node_convergence_actor(parent, barrier, :reconciliation, fixture, fn _stale ->
           PoolReconciliation.reconcile_pool_account(fixture.pool_id, fixture.assignment_id,
             quota_windows: [fixture.canonical_window]
           )
@@ -5379,13 +5391,13 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       end
     end
 
-    @tag :todo6_multinode
-    @tag :todo1_race_b
-    @tag :todo5_metadata
-    @tag :todo5_runtime
+    @tag :multi_node_convergence
+    @tag :concurrent_redemption
+    @tag :redemption_metadata
+    @tag :redemption_runtime
     test "usable quota committed while the reset finalizer is pending wins in that finalizer" do
       event = [:codex_pooler, :saved_reset, :convergence]
-      handler_id = {__MODULE__, :todo5_finalizer, self()}
+      handler_id = {__MODULE__, :redemption_finalizer, self()}
       test_pid = self()
 
       :ok =
@@ -5436,8 +5448,8 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
              ]
     end
 
-    @tag :todo6_multinode
-    @tag :todo1_race_b_exhausted
+    @tag :multi_node_convergence
+    @tag :concurrent_redemption_exhausted
     test "exhausted quota committed while the reset finalizer is pending stays guarded until later convergence" do
       evidence = run_post_consume_finalizer_race!("100")
 
@@ -5469,7 +5481,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert provider_consume_count(evidence.fake) == 1
     end
 
-    @tag :todo2_side_b_gateway_auto
+    @tag :direct_refilter_gateway_auto
     test "gateway auto directly refilters when the locked finalizer confirms committed quota" do
       evidence =
         run_post_consume_finalizer_race!("4",
@@ -5481,7 +5493,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
       assert evidence.persisted_phase == "confirmed_by_quota"
       assert evidence.probe_claim_calls == 0
 
-      assert_receive {:todo2_side_b_direct_refilter, identity_id}
+      assert_receive {:direct_refilter_side_b, identity_id}
       assert identity_id == evidence.fixture.identity_id
 
       assert {:error, %{code: "quota_exhausted"}} = evidence.result.routing_result
@@ -8042,18 +8054,18 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
              end)
   end
 
-  defp start_todo6_convergence_actor(parent, barrier, role, fixture, fun) do
+  defp start_multi_node_convergence_actor(parent, barrier, role, fixture, fun) do
     task =
       Task.async(fn ->
         Sandbox.unboxed_run(Repo, fn ->
-          Process.put({__MODULE__, barrier, :todo6_role}, role)
+          Process.put({__MODULE__, barrier, :multi_node_role}, role)
           backend_pid = backend_pid!()
           send(parent, {barrier, :ready, role, self(), backend_pid})
 
           receive do
             {^barrier, :start, ^role} -> :ok
           after
-            5_000 -> raise "timed out waiting to start Todo 6 convergence actor"
+            5_000 -> raise "timed out waiting to start multi-node convergence actor"
           end
 
           send(parent, {barrier, :started, role})
@@ -8061,7 +8073,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
           try do
             {role, fun.(fixture.stale_identity)}
           after
-            Process.delete({__MODULE__, barrier, :todo6_role})
+            Process.delete({__MODULE__, barrier, :multi_node_role})
           end
         end)
       end)
@@ -9460,7 +9472,7 @@ defmodule CodexPooler.Upstreams.SavedResetRedemptionTest do
         routing_result =
           RouteFiltering.filter_candidates_with_route_state(filter_input, route_state,
             saved_reset_refilter_clock: fn ->
-              send(parent, {:todo2_side_b_direct_refilter, fixture.identity_id})
+              send(parent, {:direct_refilter_side_b, fixture.identity_id})
 
               fixture.identity_id
               |> QuotaWindows.list_evidence()

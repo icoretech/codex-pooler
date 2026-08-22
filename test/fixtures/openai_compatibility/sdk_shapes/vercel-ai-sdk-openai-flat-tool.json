@@ -13,7 +13,7 @@
   "content_part_types": ["input_text"],
   "tool_shape_keys": ["type", "name", "description", "parameters"],
   "expected_decision": {
-    "status": "pending_task_2_matrix",
+    "status": "pending_compatibility_matrix",
     "allowed_values": ["accept", "translate", "reject", "passthrough"]
   },
   "owner_placeholder": "matrix_owner_pending",

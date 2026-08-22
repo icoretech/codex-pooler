@@ -56,7 +56,7 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
   @responses_endpoint "/backend-api/codex/responses"
   @lite_http_header "x-openai-internal-codex-responses-lite"
   @lite_websocket_metadata_key "ws_request_header_x_openai_internal_codex_responses_lite"
-  @websocket_probe_metadata_key "todo9_probe"
+  @websocket_probe_metadata_key "exact_assignment_probe"
   @pooler_port 4000
   @request_budget 3
   @traffic_deadline_ms 45_000
@@ -261,7 +261,7 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
   defp proof_run(owner_id, opts) do
     run_id = generate_run_id()
     run_dir = Path.join(@runtime_root, run_id)
-    identity_label = "todo9-exact-assignment-#{run_id}"
+    identity_label = "exact-assignment-#{run_id}"
     port_check = Keyword.get(opts, :port_check, &require_port_free/1)
 
     with :ok <- validate_execution_options(opts),
@@ -335,7 +335,7 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
          {:ok, journal, _override} <- provision_serving_override(scope, journal, run_dir, pool),
          :ok <- maybe_inject_failure(journal, opts),
          :ok <- verify_routeability_preconditions(model, assignment, identity),
-         correlator = "todo9-exact-" <> random_suffix(),
+         correlator = "exact-assignment-" <> random_suffix(),
          {:ok, http_proof} <- routed_http_control(raw_key, correlator),
          {:ok, websocket_proof} <- routed_websocket_control(raw_key, correlator),
          {:ok, journal, rows} <-
@@ -396,7 +396,7 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
            %Pool{}
            |> Pool.changeset(%{
              slug: slug,
-             name: "Todo 9 exact-assignment Full proof",
+             name: "Exact-assignment Full proof",
              status: "active",
              created_by_user_id: scope.user.id,
              created_at: DateTime.utc_now(),
@@ -415,7 +415,7 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
       chatgpt_account_id: identity_label,
       account_label: identity_label,
       plan_label: "Pro",
-      token: "todo9-dummy-token-" <> random_suffix(),
+      token: "exact-assignment-dummy-token-" <> random_suffix(),
       access_token_expires_at: DateTime.add(DateTime.utc_now(), 2 * 60 * 60, :second),
       identity_metadata: %{"base_url" => fake_url}
     }
@@ -445,7 +445,7 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
   end
 
   defp provision_api_key(scope, journal, run_dir, pool) do
-    display_name = "todo9-proof-#{journal["run_id"]}"
+    display_name = "exact-assignment-proof-#{journal["run_id"]}"
 
     with {:ok, journal} <-
            intent(journal, run_dir, "api_key", "create", %{
@@ -569,7 +569,7 @@ defmodule CodexPooler.Dev.ExactAssignmentFullProof do
 
     attrs = %{
       model_identifier: model.upstream_model_id,
-      price_version: "todo9-loopback-" <> journal["run_id"],
+      price_version: "exact-assignment-loopback-" <> journal["run_id"],
       currency_code: "USD",
       billing_unit: "token",
       input_token_micros: Decimal.new(0),

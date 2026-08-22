@@ -195,7 +195,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
     end
   end
 
-  @tag :task_1_pin
+  @tag :websocket_owner_pin
   test "PIN-P04 backend POST SSE preserves decoded done and legacy JSON bytes across LF and CRLF" do
     fixtures = [
       {"response.done",

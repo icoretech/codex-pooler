@@ -27,7 +27,7 @@ defmodule CodexPooler.MCP.UpstreamsToolsTest do
     assert {:ok, _operator_settings} = MCP.set_operator_mcp_enabled(owner, true)
 
     assert {:ok, %{raw_token: raw_token}} =
-             MCP.create_operator_token(owner, %{label: "Task 7 MCP"})
+             MCP.create_operator_token(owner, %{label: "MCP operator"})
 
     assert {:ok, auth} = MCP.authenticate_token(raw_token)
 
@@ -59,9 +59,9 @@ defmodule CodexPooler.MCP.UpstreamsToolsTest do
     assert result["isError"] == false
     assert [%{"type" => "text", "text" => text}] = result["content"]
     assert text =~ "1 upstream metadata records returned"
-    assert text =~ "label=TA***@example.com"
+    assert text =~ "label=RE***@example.com"
     assert text =~ "status=active"
-    assert text =~ "account=ta***@example.com"
+    assert text =~ "account=re***@example.com"
     assert text =~ "plan=unknown"
     assert text =~ "assignments=1 active of 1 Pool assignments"
 
@@ -74,8 +74,8 @@ defmodule CodexPooler.MCP.UpstreamsToolsTest do
 
     assert [presented] = result["structuredContent"]["items"]
     assert presented["id"] == identity.id
-    assert presented["account_label"] == "TA***@example.com"
-    assert presented["account_email"] == "ta***@example.com"
+    assert presented["account_label"] == "RE***@example.com"
+    assert presented["account_email"] == "re***@example.com"
     assert presented["assignment_summary"]["count"] == 1
     assert presented["metadata"]["summary"] == "metadata keys omitted"
 
@@ -91,10 +91,10 @@ defmodule CodexPooler.MCP.UpstreamsToolsTest do
     pool = pool_fixture()
 
     %{identity: identity} =
-      active_upstream_assignment_fixture(pool, %{chatgpt_account_id: "acct-task7"})
+      active_upstream_assignment_fixture(pool, %{chatgpt_account_id: "acct-mcp-test"})
 
     assert {:ok, result} =
-             ToolDispatch.call("codex_pooler_get_upstream", %{"selector" => "acct-task7"}, %{
+             ToolDispatch.call("codex_pooler_get_upstream", %{"selector" => "acct-mcp-test"}, %{
                auth: auth
              })
 
@@ -103,7 +103,7 @@ defmodule CodexPooler.MCP.UpstreamsToolsTest do
     assert text =~ "1 upstream metadata record returned"
     assert text =~ "id=#{identity.id}"
     assert text =~ "status=active"
-    assert text =~ "account=acct-task7"
+    assert text =~ "account=acct-mcp-test"
     assert text =~ "plan=unknown"
     assert text =~ "assignments=1 active of 1 Pool assignments"
     assert result["structuredContent"]["status"] == "ok"
@@ -123,7 +123,7 @@ defmodule CodexPooler.MCP.UpstreamsToolsTest do
 
   test "stored account id selector returns workspace candidates when ambiguous", %{auth: auth} do
     pool = pool_fixture()
-    account_id = "acct-task7-shared-#{System.unique_integer([:positive])}"
+    account_id = "acct-mcp-test-shared-#{System.unique_integer([:positive])}"
     first_workspace_id = "workspace-mcp-alpha-#{System.unique_integer([:positive])}"
     second_workspace_id = "workspace-mcp-beta-#{System.unique_integer([:positive])}"
 

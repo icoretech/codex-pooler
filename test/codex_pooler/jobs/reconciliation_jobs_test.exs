@@ -5135,7 +5135,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
     end
 
     @tag :scheduled_expiry_zero_traffic
-    @tag :todo5_runtime
+    @tag :reconciliation_runtime
     test "scheduled pending redemption converges from later reconciliation without a request probe" do
       %{pool: pool, assignment: assignment, identity: identity, upstream: upstream} =
         scheduled_expiry_reconciliation_fixture()
@@ -5189,7 +5189,7 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
       Repo.delete_all(Oban.Job)
 
       convergence_event = [:codex_pooler, :saved_reset, :convergence]
-      convergence_handler = {__MODULE__, :todo5_reconciliation, self()}
+      convergence_handler = {__MODULE__, :reconciliation_convergence, self()}
       test_pid = self()
 
       :ok =
@@ -5315,9 +5315,9 @@ defmodule CodexPooler.Jobs.ReconciliationJobsTest do
       assert scheduled_consume_count(upstream) == 1
       assert scheduled_saved_reset_redemption_jobs() == []
 
-      if System.get_env("TASK5_MANUAL_QA") == "1" do
+      if System.get_env("RECONCILIATION_MANUAL_QA") == "1" do
         IO.puts(
-          "TASK5_ZERO_TRAFFIC pending_phase=#{pending["phase"]} " <>
+          "RECONCILIATION_ZERO_TRAFFIC pending_phase=#{pending["phase"]} " <>
             "probe_present=#{Map.has_key?(pending, "probe")} " <>
             "accounting_count=#{Repo.aggregate(Request, :count)} " <>
             "converged_phase=#{converged["phase"]} " <>

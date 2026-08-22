@@ -2353,7 +2353,7 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
         request_metadata: %{
           "codex_session_id" => "session-http-sse-persisted-transport-failure",
           "codex_session_key" => "session-key-http-sse-persisted-transport-failure",
-          "request_body" => "todo6 raw prompt sentinel should stay hidden"
+          "request_body" => "privacy raw prompt sentinel should stay hidden"
         }
       })
       |> Ecto.Changeset.change(last_error_code: "upstream_stream_error")
@@ -2369,13 +2369,13 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     |> Ecto.Changeset.change(%{
       latency_ms: 765,
       network_error_code: "stream_parse_error",
-      error_message: "todo6 raw attempt body sentinel must stay hidden",
+      error_message: "privacy raw attempt body sentinel must stay hidden",
       response_metadata: %{
         "error_kind" => "stream_interrupted",
         "content_type" => "text/event-stream",
         "status_code" => 200,
-        "raw_body" => "todo6 raw response body sentinel should stay hidden",
-        "raw_headers" => %{"authorization" => "Bearer sk-todo6-header-sentinel"},
+        "raw_body" => "privacy raw response body sentinel should stay hidden",
+        "raw_headers" => %{"authorization" => "Bearer sk-privacy-header-sentinel"},
         "transport_failure" => %{
           "exception" => "Finch.TransportError",
           "reason_class" => "upstream_stream_interrupted",
@@ -2384,8 +2384,8 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
           "pre_visible_output" => false,
           "terminal_seen" => false,
           "text_frame_count" => 2,
-          "raw_message" => "todo6 raw transport sentinel should stay hidden",
-          "headers" => %{"authorization" => "Bearer sk-todo6-transport-sentinel"}
+          "raw_message" => "privacy raw transport sentinel should stay hidden",
+          "headers" => %{"authorization" => "Bearer sk-privacy-transport-sentinel"}
         }
       }
     })
@@ -2410,12 +2410,12 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
 
     refute debug =~ "session-http-sse-persisted-transport-failure"
     refute debug =~ "session-key-http-sse-persisted-transport-failure"
-    refute debug =~ "todo6 raw prompt sentinel"
-    refute debug =~ "todo6 raw attempt body sentinel"
-    refute debug =~ "todo6 raw response body sentinel"
-    refute debug =~ "todo6 raw transport sentinel"
-    refute debug =~ "Bearer sk-todo6-header-sentinel"
-    refute debug =~ "Bearer sk-todo6-transport-sentinel"
+    refute debug =~ "privacy raw prompt sentinel"
+    refute debug =~ "privacy raw attempt body sentinel"
+    refute debug =~ "privacy raw response body sentinel"
+    refute debug =~ "privacy raw transport sentinel"
+    refute debug =~ "Bearer sk-privacy-header-sentinel"
+    refute debug =~ "Bearer sk-privacy-transport-sentinel"
   end
 
   test "request log debug projection classifies supported stream interruption families" do

@@ -502,14 +502,14 @@ defmodule CodexPooler.Accounting.LockingContractTest do
   end
 
   describe "real PostgreSQL assignment membership contention" do
-    @tag :task3_membership_lock
+    @tag :membership_lock
     test "assignment FOR SHARE blocks membership mutation until A01 inserts and commits" do
       fixture = committed_membership_fixture!()
       on_exit(fn -> cleanup_committed_membership_fixture!(fixture) end)
 
       parent = self()
       barrier = make_ref()
-      handler_id = "task3-membership-lock-#{System.unique_integer([:positive])}"
+      handler_id = "membership-lock-#{System.unique_integer([:positive])}"
 
       attempt_task =
         Task.async(fn ->
@@ -776,7 +776,7 @@ defmodule CodexPooler.Accounting.LockingContractTest do
   end
 
   defp record_lock_evidence(id, caller, relation, primary_key, query) do
-    if path = System.get_env("TASK3_LOCK_EVIDENCE_PATH") do
+    if path = System.get_env("MEMBERSHIP_LOCK_EVIDENCE_PATH") do
       append_evidence(path, %{
         id: id,
         caller: caller,
@@ -790,13 +790,13 @@ defmodule CodexPooler.Accounting.LockingContractTest do
   end
 
   defp record_accounting_path(id, caller, result) do
-    if path = System.get_env("TASK3_REFERENCE_EVIDENCE_PATH") do
+    if path = System.get_env("MEMBERSHIP_LOCK_REFERENCE_EVIDENCE_PATH") do
       append_evidence(path, %{id: id, caller: caller, result: result})
     end
   end
 
   defp record_reference_sequence(sequence, id, caller, insert_kind) do
-    if path = System.get_env("TASK3_REFERENCE_EVIDENCE_PATH") do
+    if path = System.get_env("MEMBERSHIP_LOCK_REFERENCE_EVIDENCE_PATH") do
       append_evidence(path, %{
         id: id,
         caller: caller,
@@ -816,7 +816,7 @@ defmodule CodexPooler.Accounting.LockingContractTest do
   end
 
   defp record_membership_evidence(blocker_pid, waiter_pid, observation, attempt) do
-    if path = System.get_env("TASK3_MANUAL_QA_EVIDENCE_PATH") do
+    if path = System.get_env("MEMBERSHIP_LOCK_MANUAL_QA_EVIDENCE_PATH") do
       append_evidence(path, %{
         id: "A01-membership-update",
         result: "blocked_until_attempt_commit",
@@ -868,7 +868,7 @@ defmodule CodexPooler.Accounting.LockingContractTest do
         %{pools: pool_count, identities: identity_count, pricing_snapshots: pricing_count}
       end)
 
-    if path = System.get_env("TASK3_CLEANUP_EVIDENCE_PATH") do
+    if path = System.get_env("MEMBERSHIP_LOCK_CLEANUP_EVIDENCE_PATH") do
       append_evidence(path, %{
         id: "A01-membership-update-cleanup",
         result: "exact_fixture_cleanup",

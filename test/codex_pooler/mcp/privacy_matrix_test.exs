@@ -161,7 +161,7 @@ defmodule CodexPooler.MCP.PrivacyMatrixTest do
         query: "token=raw-query-secret",
         user_agent: "Codex CLI/1.2.3 extra-details",
         client_ip: "203.0.113.42",
-        correlation_id: "corr-task5-safe",
+        correlation_id: "corr-privacy-safe",
         upstream_account_email: "upstream.account@example.com",
         raw_headers: %{"authorization" => "Bearer raw-header-token"},
         request_body: %{"input" => "raw prompt"},
@@ -174,7 +174,7 @@ defmodule CodexPooler.MCP.PrivacyMatrixTest do
     assert projected.path == "/backend-api/codex/responses"
     assert projected.user_agent == "Codex CLI/1.2.3"
     assert projected.client_ip == "203.0.113.xxx"
-    assert projected.correlation_id == "corr-task5-safe"
+    assert projected.correlation_id == "corr-privacy-safe"
     assert projected.upstream_account_email == "up***@example.com"
     refute Map.has_key?(projected, :query)
     refute inspect(projected) =~ "raw-query-secret"

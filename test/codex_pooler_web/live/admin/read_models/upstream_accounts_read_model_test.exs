@@ -649,7 +649,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
     assert_sentinels_absent(projection, [hidden_model, hidden_route, hidden_reason])
   end
 
-  @tag :todo4_projection
+  @tag :quota_projection
   test "restricted account projection loads one raw quota view, folds once, and excludes hidden Pools",
        %{scope: owner_scope} do
     visible_pool = pool_fixture(%{name: "Projection-visible Pool"})

@@ -2689,7 +2689,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     _ = await_pool_traffic(view)
   end
 
-  @tag :task_15_acceptance
+  @tag :full_mode_acceptance
   test "issue 180 routes an Edit Pool mode save through the authenticated gateway", %{
     conn: conn,
     scope: scope
@@ -2697,27 +2697,29 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     upstream =
       start_upstream(
         FakeUpstream.json_response(%{
-          "id" => "resp_task_15_red",
+          "id" => "resp_full_mode_acceptance",
           "object" => "response",
           "status" => "completed",
           "output" => []
         })
       )
 
-    {:ok, pool} = Pools.create_pool(scope, %{slug: "task-15-red", name: "Task 15 Red"})
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "full-mode-acceptance", name: "Full-mode acceptance"})
+
     setup = active_api_key_fixture(pool, %{scope: scope})
     upstream_ref = gateway_upstream(pool, upstream, "synthetic-upstream-token", [])
     prime_routing_quota!(upstream_ref.identity)
 
     model =
       model_fixture(pool, %{
-        exposed_model_id: "gpt-task-15-red",
-        upstream_model_id: "provider-gpt-task-15-red",
+        exposed_model_id: "gpt-full-mode-acceptance",
+        upstream_model_id: "provider-gpt-full-mode-acceptance",
         metadata: %{
           "source_assignment_ids" => [upstream_ref.assignment.id],
           "source_assignment_models" => %{
             upstream_ref.assignment.id => %{
-              "slug" => "gpt-task-15-red",
+              "slug" => "gpt-full-mode-acceptance",
               "use_responses_lite" => false
             }
           }
@@ -2760,7 +2762,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     catalog_response = build_conn() |> auth(setup) |> get("/backend-api/codex/models")
 
-    assert %{"models" => [%{"slug" => "gpt-task-15-red", "use_responses_lite" => true}]} =
+    assert %{"models" => [%{"slug" => "gpt-full-mode-acceptance", "use_responses_lite" => true}]} =
              json_response(catalog_response, 200)
 
     response =
@@ -2772,13 +2774,13 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         "input" => [
           %{
             "role" => "user",
-            "content" => [%{"type" => "input_text", "text" => "synthetic task 15 red input"}]
+            "content" => [%{"type" => "input_text", "text" => "synthetic Full-mode red input"}]
           }
         ],
         "parallel_tool_calls" => true
       })
 
-    assert %{"id" => "resp_task_15_red"} = json_response(response, 200)
+    assert %{"id" => "resp_full_mode_acceptance"} = json_response(response, 200)
     assert [%{json: payload, headers: headers}] = FakeUpstream.requests(upstream)
     assert payload["model"] == model.upstream_model_id
     assert payload["parallel_tool_calls"] == false
@@ -2825,7 +2827,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     full_catalog_response = build_conn() |> auth(setup) |> get("/backend-api/codex/models")
 
-    assert %{"models" => [%{"slug" => "gpt-task-15-red", "use_responses_lite" => false}]} =
+    assert %{"models" => [%{"slug" => "gpt-full-mode-acceptance", "use_responses_lite" => false}]} =
              json_response(full_catalog_response, 200)
 
     full_payloads = [
@@ -2835,7 +2837,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
           %{
             "role" => "user",
             "content" => [
-              %{"type" => "input_text", "text" => "synthetic task 15 full absent input"}
+              %{"type" => "input_text", "text" => "synthetic Full-mode full absent input"}
             ]
           }
         ]
@@ -2846,7 +2848,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
           %{
             "role" => "user",
             "content" => [
-              %{"type" => "input_text", "text" => "synthetic task 15 full true input"}
+              %{"type" => "input_text", "text" => "synthetic Full-mode full true input"}
             ]
           }
         ],
@@ -2858,7 +2860,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
           %{
             "role" => "user",
             "content" => [
-              %{"type" => "input_text", "text" => "synthetic task 15 full false input"}
+              %{"type" => "input_text", "text" => "synthetic Full-mode full false input"}
             ]
           }
         ],
@@ -2873,7 +2875,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
         |> auth(setup)
         |> post("/backend-api/codex/responses", payload)
 
-      assert %{"id" => "resp_task_15_red"} = json_response(response, 200)
+      assert %{"id" => "resp_full_mode_acceptance"} = json_response(response, 200)
     end)
 
     assert [lite_capture, full_absent, full_true, full_false] = FakeUpstream.requests(upstream)
@@ -2914,7 +2916,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
       assert Map.take(attempt.response_metadata["routing"], Map.keys(expected)) == expected
     end
 
-    raw_provider_failure = "raw-task-15-provider-response-sentinel"
+    raw_provider_failure = "raw-full-mode-provider-response-sentinel"
 
     FakeUpstream.set_mode(
       upstream,
@@ -2937,7 +2939,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
           %{
             "role" => "user",
             "content" => [
-              %{"type" => "input_text", "text" => "synthetic task 15 invalid full input"}
+              %{"type" => "input_text", "text" => "synthetic Full-mode invalid full input"}
             ]
           }
         ]
@@ -2974,7 +2976,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
     FakeUpstream.set_mode(
       upstream,
       FakeUpstream.json_response(%{
-        "id" => "resp_task_15_after_full_failure",
+        "id" => "resp_after_full_mode_failure",
         "object" => "response",
         "status" => "completed",
         "output" => []
@@ -2990,13 +2992,13 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
           %{
             "role" => "user",
             "content" => [
-              %{"type" => "input_text", "text" => "synthetic task 15 retained full input"}
+              %{"type" => "input_text", "text" => "synthetic Full-mode retained full input"}
             ]
           }
         ]
       })
 
-    assert %{"id" => "resp_task_15_after_full_failure"} =
+    assert %{"id" => "resp_after_full_mode_failure"} =
              json_response(retained_response, 200)
 
     retained_capture = List.last(FakeUpstream.requests(upstream))
@@ -3009,7 +3011,7 @@ defmodule CodexPoolerWeb.Admin.PoolsLiveTest do
 
     retained_catalog = build_conn() |> auth(setup) |> get("/backend-api/codex/models")
 
-    assert %{"models" => [%{"slug" => "gpt-task-15-red", "use_responses_lite" => false}]} =
+    assert %{"models" => [%{"slug" => "gpt-full-mode-acceptance", "use_responses_lite" => false}]} =
              json_response(retained_catalog, 200)
   end
 

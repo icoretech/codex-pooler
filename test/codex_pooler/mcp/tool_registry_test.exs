@@ -29,7 +29,7 @@ defmodule CodexPooler.MCP.ToolRegistryTest do
     "codex_pooler_get_audit_log"
   ]
 
-  test "default registry has required Task 6 tool names with complete metadata" do
+  test "default registry has required tool names with complete metadata" do
     tools = ToolRegistry.all_tools()
 
     assert Enum.map(tools, & &1.name) == [
@@ -91,7 +91,7 @@ defmodule CodexPooler.MCP.ToolRegistryTest do
            }
   end
 
-  test "default registry predeclares deterministic Task 6-9 family modules" do
+  test "default registry predeclares deterministic deterministic tool family modules" do
     assert ToolRegistry.family_modules() == [
              Foundation,
              PoolMetadata,
@@ -111,7 +111,7 @@ defmodule CodexPooler.MCP.ToolRegistryTest do
     refute Enum.member?(@row_text_tool_names, "codex_pooler_get_mcp_service_status")
   end
 
-  test "Task 8 operator family and Task 9 log family are valid catalog inputs" do
+  test "operator and log tool families are valid catalog inputs" do
     assert Enum.map(OperatorMetadata.tools(), & &1.name) == [
              "codex_pooler_list_operators",
              "codex_pooler_get_operator",
@@ -209,7 +209,7 @@ defmodule CodexPooler.MCP.ToolRegistryTest do
     for name <- ["codex_pooler_list_pool_api_keys", "codex_pooler_get_pool_api_key"] do
       tool = Enum.find(tools, &(&1.name == name))
       assert tool.description =~ "Pool API keys, not MCP tokens"
-      refute tool.description =~ "not implemented until Task 7"
+      refute tool.description =~ "not implemented"
 
       assert tool.handler ==
                {CodexPooler.MCP.Tools.PoolMetadata.ApiKeys, handler_for_pool_api_key_tool(name)}
@@ -229,7 +229,7 @@ defmodule CodexPooler.MCP.ToolRegistryTest do
     end
   end
 
-  test "operator and invite tools are implemented by the Task 8 family" do
+  test "operator and invite tools are implemented by the operator tool family" do
     tools = ToolRegistry.all_tools()
 
     expected_handlers = %{

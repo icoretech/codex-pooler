@@ -41,11 +41,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     :ok
   end
 
-  @tag :todo4_operator_confirmation
+  @tag :saved_reset_confirmation
   test "saved reset confirmation remains separate from unavailable usage" do
     html =
       render_component(&SavedResetMeter.saved_reset_meter/1,
-        id: "todo4-usage-separation-meter",
+        id: "saved-reset-usage-separation-meter",
         saved_resets: %{
           available_count: 0,
           label: "0 saved resets",
@@ -84,15 +84,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     refute html =~ "Usage unavailable"
   end
 
-  @tag :todo6_cross_issue
+  @tag :cockpit_consistency
   test "usage availability circuit recovery and reset confirmation stay independent", %{
     conn: conn,
     scope: scope
   } do
     {:ok, pool} =
       Pools.create_pool(scope, %{
-        slug: "todo6-cross-issue-#{System.unique_integer([:positive])}",
-        name: "Todo6 cross-issue"
+        slug: "cockpit-consistency-#{System.unique_integer([:positive])}",
+        name: "Cockpit consistency"
       })
 
     %{api_key: api_key} = active_api_key_fixture(pool)
@@ -101,7 +101,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     %{identity: identity, assignment: assignment} =
       upstream_assignment_fixture(pool, %{
-        account_label: "Todo6 cross-issue account",
+        account_label: "Cockpit consistency account",
         assignment_metadata: %{"quota_priming" => %{"status" => "known"}},
         identity_metadata: %{
           "saved_resets" => %{
@@ -117,7 +117,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
         }
       })
 
-    model_identifier = "gpt-todo6-cross-issue"
+    model_identifier = "gpt-cockpit-consistency"
     advertise_assignment_model!(pool, assignment, model_identifier)
 
     insert_circuit_state!(pool, assignment, model_identifier, "proxy_http",
@@ -164,7 +164,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     windows
     |> Enum.find(&(&1.source == "codex_usage_api"))
     |> Ecto.Changeset.change(%{
-      metadata: todo6_candidate_metadata(DateTime.add(now, -30, :second), now)
+      metadata: cockpit_candidate_metadata(DateTime.add(now, -30, :second), now)
     })
     |> Repo.update!()
 
@@ -2112,7 +2112,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   end
 
   @tag :saved_reset_cockpit
-  @tag :todo4_operator_confirmation
+  @tag :saved_reset_confirmation
   test "renders the bounded redemption confirmation on the meter", %{
     conn: conn,
     scope: scope
@@ -5555,7 +5555,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     })
   end
 
-  defp todo6_candidate_metadata(observed_at, snapshot_at) do
+  defp cockpit_candidate_metadata(observed_at, snapshot_at) do
     %{
       "__quota_confirmed_candidate_v1" => %{
         "version" => 1,

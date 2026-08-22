@@ -120,7 +120,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
 
   defp redemption(identity), do: Repo.reload!(identity).metadata["saved_reset_redemption"]
 
-  @tag :todo5_metadata
+  @tag :saved_reset_metadata
   test "persists bounded source outcome and accepted canonical timing at convergence" do
     decision_at = ~U[2026-08-08 10:10:00Z]
     consumed_at = DateTime.add(decision_at, -60, :second)
@@ -159,7 +159,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
            }
   end
 
-  @tag :todo5_metadata
+  @tag :saved_reset_metadata
   test "leaves canonical timing absent for pre-consume future and malformed markers" do
     decision_at = ~U[2026-08-08 10:10:00Z]
     consumed_at = DateTime.add(decision_at, -60, :second)
@@ -187,7 +187,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
     end
   end
 
-  @tag :todo5_metadata
+  @tag :saved_reset_metadata
   test "candidate clearing preserves the canonical confirmation marker" do
     marker = %{"version" => 1, "confirmed_at" => "synthetic-bounded-marker"}
 
@@ -200,7 +200,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
     assert EvidenceStore.clear_candidate(metadata)["__quota_cycle_confirmation_v1"] == marker
   end
 
-  @tag :todo5_metadata
+  @tag :saved_reset_metadata
   test "unknown persisted source outcome and timing versions read fail closed" do
     assert ConfirmationMetadata.read(%{
              "convergence_source" => "unbounded-source",
@@ -216,7 +216,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
            }
   end
 
-  @tag :todo5_metadata
+  @tag :saved_reset_metadata
   test "repeated convergence after settlement performs no steady-state write" do
     decision_at = ~U[2026-08-08 10:10:00Z]
     consumed_at = DateTime.add(decision_at, -60, :second)
@@ -240,7 +240,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
     assert DateTime.compare(unchanged.updated_at, settled.updated_at) == :eq
   end
 
-  @tag :todo5_runtime
+  @tag :saved_reset_runtime
   test "emits only after a committed transition and stays silent for rollback and unchanged" do
     event = [:codex_pooler, :saved_reset, :convergence]
     handler_id = attach_convergence_handler!(event)
@@ -275,7 +275,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
     assert redemption(rolled_back)["phase"] == "consumed_pending_probe"
   end
 
-  @tag :todo5_runtime
+  @tag :saved_reset_runtime
   test "accepts all bounded sources and normalizes malformed source outcome and timing" do
     event = [:codex_pooler, :saved_reset, :convergence]
     handler_id = attach_convergence_handler!(event)
@@ -309,7 +309,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
     refute_received {^handler_id, %{applied_to_lifecycle_ms: _value}, _metadata}
   end
 
-  @tag :todo5_runtime
+  @tag :saved_reset_runtime
   test "emits canonical latency measurements and accepts zero-length intervals" do
     event = [:codex_pooler, :saved_reset, :convergence]
     handler_id = attach_convergence_handler!(event)
@@ -364,7 +364,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
 
   defp attach_convergence_handler!(event) do
     test_pid = self()
-    handler_id = {__MODULE__, :todo5_convergence, System.unique_integer([:positive])}
+    handler_id = {__MODULE__, :saved_reset_convergence, System.unique_integer([:positive])}
 
     :ok =
       :telemetry.attach(

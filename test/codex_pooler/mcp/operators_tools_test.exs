@@ -35,7 +35,7 @@ defmodule CodexPooler.MCP.OperatorsToolsTest do
   } do
     %{user: operator} =
       operator_fixture(auth.operator, %{
-        "display_name" => "Task 8 Operator",
+        "display_name" => "Operator fixture",
         "email" => Redaction.forbidden_sentinel!(:disallowed_email)
       })
 
@@ -47,14 +47,14 @@ defmodule CodexPooler.MCP.OperatorsToolsTest do
     assert {:ok, result} =
              ToolDispatch.call(
                "codex_pooler_list_operators",
-               %{"query" => "Task 8", "limit" => 10},
+               %{"query" => "Operator", "limit" => 10},
                %{auth: auth}
              )
 
     assert result["isError"] == false
     assert [%{"type" => "text", "text" => text}] = result["content"]
     assert text =~ "1 operator metadata records returned; total 1"
-    assert text =~ "- name=Task 8 Operator status=active email=ta***@example.com"
+    assert text =~ "- name=Operator fixture status=active email=re***@example.com"
     assert text =~ "mcp=enabled"
     assert text =~ "keys=1"
     assert text =~ "password_change_required=true"
@@ -62,8 +62,8 @@ defmodule CodexPooler.MCP.OperatorsToolsTest do
 
     assert [presented] = result["structuredContent"]["operators"]
     assert presented["id"] == operator.id
-    assert presented["display_name"] == "Task 8 Operator"
-    assert presented["email"] == "ta***@example.com"
+    assert presented["display_name"] == "Operator fixture"
+    assert presented["email"] == "re***@example.com"
     assert presented["mcp_enabled"] == true
     assert presented["mcp_key_count"] == 1
     assert presented["password_change_required"] == true

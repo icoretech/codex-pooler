@@ -363,7 +363,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
              })
   end
 
-  describe "Task 2 Responses additional_tools input item compatibility" do
+  describe "Responses additional_tools input item compatibility" do
     @tag :responses_coercion
     test "Responses preserves request-shaped additional_tools input items without executable tool merging" do
       additional_tool =
@@ -1687,7 +1687,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
              })
   end
 
-  describe "Task 4 Responses continuation and input-reference validation" do
+  describe "Responses continuation and input-reference validation" do
     @describetag :tool_result_previous_response
     @tag :custom_tool_replay
     test "custom tool replay preserves namespace and internal metadata" do
@@ -4207,7 +4207,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     end
   end
 
-  describe "Task 5 Responses and Chat tool shape compatibility" do
+  describe "Responses and Chat tool shape compatibility" do
     test "documents the tool shape divergence between Responses and Chat" do
       divergence = [
         %{
@@ -5105,7 +5105,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     end
   end
 
-  describe "Task 9 advanced Responses built-in tool classification" do
+  describe "advanced Responses built-in tool classification" do
     test "Responses retains web search access flag validation" do
       accepted_tools = [
         %{"type" => "web_search", "external_web_access" => false},
@@ -6335,7 +6335,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     assert chat_result.payload["tools"] == translated_chat_tools(chat_payload["tools"])
   end
 
-  describe "Task 6 structured outputs, reasoning, and service tier compatibility" do
+  describe "structured outputs, reasoning, and service tier compatibility" do
     test "Responses accepts strict text.format json_schema refs and rejects remote refs" do
       accepted_payloads = [
         %{
@@ -6733,7 +6733,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
     end
   end
 
-  describe "Task 7 multimodal media compatibility" do
+  describe "multimodal media compatibility" do
     test "Responses accepts supported image URLs and inline PDF file data" do
       image_data_url = "data:image/png;base64," <> Base.encode64("png fixture")
       file_data_url = "data:application/pdf;base64," <> Base.encode64("pdf fixture")
@@ -7847,18 +7847,18 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
 
   defp structured_tool_result_output do
     %{
-      "command" => "TASK7_RAW_TOOL_COMMAND_SENTINEL run private command",
+      "command" => "RAW_TOOL_COMMAND_SENTINEL run private command",
       "exit_code" => 0,
       "files" => [
         %{
           "path" => "sample-output.txt",
-          "content" => "TASK7_RAW_TOOL_OUTPUT_SENTINEL\n" <> String.duplicate("line\n", 200)
+          "content" => "RAW_TOOL_OUTPUT_SENTINEL\n" <> String.duplicate("line\n", 200)
         }
       ],
       "nested" => %{
         "list" => [
-          %{"stdout_preview" => String.duplicate("TASK7_LONG_NESTED_VALUE_", 40)},
-          %{"secret_like" => "TASK7_SECRET_LIKE_TOOL_SENTINEL"}
+          %{"stdout_preview" => String.duplicate("RAW_TOOL_LONG_NESTED_VALUE_", 40)},
+          %{"secret_like" => "RAW_TOOL_SECRET_LIKE_SENTINEL"}
         ],
         "ok" => true
       }

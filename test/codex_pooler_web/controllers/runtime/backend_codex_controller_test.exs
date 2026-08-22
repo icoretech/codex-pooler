@@ -844,7 +844,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              expected_mode_metadata
   end
 
-  @tag :task_15_sanitization
+  @tag :sensitive_metadata_sanitization
   test "Full upstream 5xx failures expose one server-owned error and safe diagnostics", %{
     conn: conn
   } do
@@ -915,7 +915,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert canonical_response?
   end
 
-  @tag :task_15_sanitization
+  @tag :sensitive_metadata_sanitization
   test "Full malformed upstream failures return a stable public server error", %{conn: conn} do
     sentinels = full_failure_sentinels()
     upstream = start_upstream(FakeUpstream.malformed_json(sentinels.body, 500))
@@ -949,7 +949,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert canonical_response?
   end
 
-  @tag :task_15_sanitization
+  @tag :sensitive_metadata_sanitization
   test "Full upstream 4xx failures are final without fallback or mode downgrade", %{conn: conn} do
     sentinels = full_failure_sentinels()
 
@@ -1044,7 +1044,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert canonical_response?
   end
 
-  @tag :task_15_sanitization
+  @tag :sensitive_metadata_sanitization
   test "Full upstream 429 failures retain the rate-limit classification", %{conn: conn} do
     sentinels = full_failure_sentinels()
     upstream = start_upstream(FakeUpstream.json_response(full_failure_payload(sentinels), 429))
@@ -1127,7 +1127,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert Repo.aggregate(RoutingCircuitState, :count) == 0
   end
 
-  @tag :task_15_sanitization
+  @tag :sensitive_metadata_sanitization
   test "stream retry relays a fallback Full failure body instead of dropping it" do
     sentinels = full_failure_sentinels()
     first_mode = first_event_terminal_sse("response.failed", "upstream_request_timeout")
@@ -1166,7 +1166,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert FakeUpstream.count(rejecting_upstream) == 1
   end
 
-  @tag :task_15_sanitization
+  @tag :sensitive_metadata_sanitization
   test "Auto preserves ordinary upstream failure status and body byte for byte", %{conn: conn} do
     upstream_body = legacy_compatibility_failure_body()
     upstream = start_upstream(FakeUpstream.json_response(upstream_body, 422))
@@ -1199,7 +1199,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              ])
   end
 
-  @tag :task_15_sanitization
+  @tag :sensitive_metadata_sanitization
   test "Auto preserves the final canonical model-miss response body byte for byte", %{conn: conn} do
     upstream_body = %{
       "error" => %{
@@ -1242,7 +1242,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              ])
   end
 
-  @tag :task_15_sanitization
+  @tag :sensitive_metadata_sanitization
   test "explicit Full preserves the established final model-miss response body", %{conn: conn} do
     upstream_body = %{
       "error" => %{
@@ -1278,7 +1278,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert attempt.network_error_code == "full_upstream_rejection"
   end
 
-  @tag :task_15_sanitization
+  @tag :sensitive_metadata_sanitization
   test "Lite preserves ordinary upstream failure status and body byte for byte", %{conn: conn} do
     upstream_body = legacy_compatibility_failure_body()
     upstream = start_upstream(FakeUpstream.json_response(upstream_body, 422))
@@ -1311,7 +1311,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              ])
   end
 
-  @tag :task_15_sanitization
+  @tag :sensitive_metadata_sanitization
   test "explicit Full leaves compact failure status and body byte for byte", %{conn: conn} do
     upstream_body = legacy_compatibility_failure_body()
     upstream = start_upstream(FakeUpstream.json_response(upstream_body, 422))
@@ -3318,7 +3318,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       )
 
     setup = gateway_setup(upstream)
-    metadata = lineage_metadata_fixture("forked-thread-task4-canonical")
+    metadata = lineage_metadata_fixture("forked-thread-lineage-canonical")
 
     conn =
       conn
@@ -3809,7 +3809,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       )
 
     setup = gateway_setup(upstream)
-    metadata = lineage_metadata_fixture("forked-thread-task4-alias")
+    metadata = lineage_metadata_fixture("forked-thread-lineage-alias")
 
     conn =
       conn
@@ -3857,7 +3857,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       )
 
     setup = gateway_setup(upstream)
-    metadata = lineage_metadata_fixture("forked-thread-task4-chat")
+    metadata = lineage_metadata_fixture("forked-thread-lineage-chat")
 
     conn =
       conn
@@ -3887,7 +3887,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
   test "POST /backend-api/codex/responses keeps lineage metadata out of upstream error surfaces",
        %{conn: conn} do
-    metadata = lineage_metadata_fixture("forked-thread-task4-error")
+    metadata = lineage_metadata_fixture("forked-thread-lineage-error")
 
     upstream =
       start_upstream(
@@ -8648,7 +8648,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_safe_runtime_routing_metadata!(request, [attempt], setup)
   end
 
-  @tag :task_5_sse_strategy_reliability
+  @tag :sse_strategy_reliability
   test "SSE bridge_ring first-event retry stays within the strategy shortlist" do
     retryable_upstream =
       start_upstream(first_event_terminal_sse("response.failed", "upstream_request_timeout"))
@@ -8775,7 +8775,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_safe_runtime_routing_metadata!(request, [first_attempt, second_attempt], setup)
   end
 
-  @tag :task_5_sse_strategy_reliability
+  @tag :sse_strategy_reliability
   test "SSE deterministic_rotation visible interruption demotes without hidden fallback" do
     release_ref = make_ref()
 
@@ -8977,7 +8977,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert attempt.error_message == "upstream stream idle timeout"
   end
 
-  @tag :task_4_first_event_stream_retry
+  @tag :first_event_stream_retry
   test "SSE first-event upstream_request_timeout retries and second attempt succeeds" do
     {setup, failing_upstream, success_upstream} =
       stream_retry_setup(
@@ -9035,7 +9035,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     end
   end
 
-  @tag :task_4_first_event_stream_retry
+  @tag :first_event_stream_retry
   test "SSE first-event stream_incomplete retries and second attempt succeeds" do
     {setup, failing_upstream, success_upstream} =
       stream_retry_setup(first_event_terminal_sse("response.incomplete", "stream_incomplete"))
@@ -9047,7 +9047,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_stream_retry_success!(setup, "stream_incomplete")
   end
 
-  @tag :task_4_first_event_stream_retry
+  @tag :first_event_stream_retry
   test "SSE first-event server_error retries and second attempt succeeds" do
     {setup, failing_upstream, success_upstream} =
       stream_retry_setup(first_event_terminal_sse("response.failed", "server_error"))
@@ -9059,7 +9059,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_stream_retry_success!(setup, "server_error")
   end
 
-  @tag :task_4_first_event_stream_retry
+  @tag :first_event_stream_retry
   test "SSE first-event retry clears failed-candidate usage before usage-free success" do
     success_without_usage =
       FakeUpstream.sse_stream([
@@ -9117,7 +9117,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
              {4, 0, 4}
   end
 
-  @tag :task_4_first_event_stream_retry
+  @tag :first_event_stream_retry
   test "SSE first-event overloaded_error retries and second attempt succeeds" do
     {setup, failing_upstream, success_upstream} =
       stream_retry_setup(first_event_terminal_sse("response.failed", "overloaded_error"))
@@ -9129,7 +9129,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_stream_retry_success!(setup, "overloaded_error")
   end
 
-  @tag :task_4_first_event_stream_retry
+  @tag :first_event_stream_retry
   test "SSE first-event server_is_overloaded retries and second attempt succeeds" do
     {setup, failing_upstream, success_upstream} =
       stream_retry_setup(first_event_terminal_sse("response.failed", "server_is_overloaded"))
@@ -9142,7 +9142,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   for family <- [:structured, :provenance_backed] do
-    @tag :task_4_assignment_model_sse
+    @tag :assignment_model_sse
     @tag assignment_model_miss_family: family
     test "SSE first-event #{family} assignment model miss retries without relaying the failure",
          %{conn: conn} do
@@ -9223,7 +9223,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     end
   end
 
-  @tag :task_4_assignment_model_sse
+  @tag :assignment_model_sse
   test "SSE keepalive before assignment model miss preserves the failover window" do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
 
@@ -9290,7 +9290,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_stream_retry_success!(setup, "upstream_model_unavailable")
   end
 
-  @tag :task_4_assignment_model_sse
+  @tag :assignment_model_sse
   test "SSE visible delta closes provenance-backed assignment model retry window" do
     first_mode =
       FakeUpstream.sse_stream(
@@ -9318,7 +9318,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_stream_terminal_failure!(setup, "invalid_request_error")
   end
 
-  @tag :task_4_assignment_model_sse
+  @tag :assignment_model_sse
   test "SSE assignment model misses exhaust planned candidates without retrying the final attempt" do
     {setup, first_upstream, second_upstream} =
       stream_retry_setup(
@@ -9345,7 +9345,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert request.last_error_code == "upstream_model_unavailable"
   end
 
-  @tag :task_4_assignment_model_sse
+  @tag :assignment_model_sse
   test "SSE hard-pinned assignment model miss preserves the terminal event without fallback", %{
     conn: conn
   } do
@@ -9400,7 +9400,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute attempt.retryable
   end
 
-  @tag :task_4_first_event_stream_retry
+  @tag :first_event_stream_retry
   test "SSE visible output followed by transient failure does not retry" do
     first_upstream =
       FakeUpstream.sse_stream(
@@ -9421,7 +9421,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_stream_terminal_failure!(setup, "upstream_request_timeout")
   end
 
-  @tag :task_4_first_event_stream_retry
+  @tag :first_event_stream_retry
   test "SSE first-and-only usage-limit terminal failure stays failed without retry" do
     first_upstream =
       FakeUpstream.sse_stream(
@@ -10192,7 +10192,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert Repo.all(from(c in RoutingCircuitState)) == []
   end
 
-  @tag :task_4_first_event_stream_retry
+  @tag :first_event_stream_retry
   test "SSE tool output followed by transient failure does not retry" do
     first_upstream =
       FakeUpstream.sse_stream(
@@ -10339,7 +10339,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert stream_conn.resp_body =~ "data: [DONE]\n\n"
   end
 
-  @tag :task_4_first_event_stream_retry
+  @tag :first_event_stream_retry
   test "SSE keepalive before retryable first event preserves current stream state" do
     previous_env = Application.get_env(:codex_pooler, OperationalSettings)
 
@@ -10391,7 +10391,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_stream_retry_success!(setup, "upstream_request_timeout")
   end
 
-  @tag :task_4_first_event_stream_retry
+  @tag :first_event_stream_retry
   test "SSE first-event transient failures exhaust planned retries with safe metadata" do
     first_mode = first_event_terminal_sse("response.failed", "upstream_request_timeout")
     second_mode = first_event_terminal_sse("response.failed", "server_error")
@@ -10416,7 +10416,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert_safe_stream_metadata!(request, [first_attempt, second_attempt])
   end
 
-  @tag :task_4_first_event_stream_retry
+  @tag :first_event_stream_retry
   test "SSE first-event retry propagates fallback dispatch errors" do
     first_mode = first_event_terminal_sse("response.failed", "upstream_request_timeout")
     {setup, first_upstream, fallback_upstream} = stream_retry_setup(first_mode)
@@ -11918,7 +11918,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       )
 
     setup = gateway_setup(upstream, compact?: true)
-    metadata = lineage_metadata_fixture("forked-thread-task5-compact-canonical")
+    metadata = lineage_metadata_fixture("forked-thread-compact-compact-canonical")
 
     conn =
       conn
@@ -12001,7 +12001,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       )
 
     setup = gateway_setup(upstream, compact?: true)
-    metadata = lineage_metadata_fixture("forked-thread-task5-compact-alias")
+    metadata = lineage_metadata_fixture("forked-thread-compact-compact-alias")
 
     conn =
       conn
@@ -13610,13 +13610,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   end
 
   defp lineage_metadata_fixture(forked_thread_id) do
-    request_kind = "task3-lineage-request-#{forked_thread_id}"
+    request_kind = "compaction-lineage-request-#{forked_thread_id}"
     window_id = "window-#{forked_thread_id}"
     installation_id = "installation-#{forked_thread_id}"
     compaction_source_window_id = "compaction-source-#{forked_thread_id}"
     compaction_target_window_id = "compaction-target-#{forked_thread_id}"
-    compaction_strategy = "task3-synthetic-summary"
-    compaction_trigger = "task3-manual-fixture"
+    compaction_strategy = "compaction-synthetic-summary"
+    compaction_trigger = "compaction-manual-fixture"
 
     %{
       turn_metadata:
@@ -13831,7 +13831,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       {"cookie", "lineage-client-cookie=secret"},
       {"idempotency-key", "lineage-client-idempotency-secret"},
       {"user-agent", "lineage-client-user-agent"},
-      {"x-request-id", "task4-lineage-request-correlation"},
+      {"x-request-id", "lineage-request-correlation"},
       {"x-codex-turn-metadata", metadata.turn_metadata},
       {"x-codex-window-id", metadata.window_id},
       {"x-codex-parent-thread-id", metadata.parent_thread_id},
@@ -13939,7 +13939,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute inspect(captured.headers) =~ "lineage-client-cookie=secret"
     refute inspect(captured.headers) =~ "lineage-client-idempotency-secret"
     refute inspect(captured.headers) =~ "lineage-client-accept"
-    refute inspect(captured.headers) =~ "task4-lineage-request-correlation"
+    refute inspect(captured.headers) =~ "lineage-request-correlation"
     refute inspect(captured.headers) =~ "lineage-spoofed-lite"
     refute inspect(captured.headers) =~ "lineage-unapproved-codex"
     refute inspect(captured.headers) =~ "lineage-unapproved-openai"

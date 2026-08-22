@@ -100,7 +100,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Logger 
         "operation=#{operation} " <>
         "reason_class=#{safe_log_value(Metadata.safe_reason(reason))} " <>
         "owner_exit_reason=#{owner_exit_reason} " <>
-        "recovery_hint=task_7_owner_exit_recovery"
+        "recovery_hint=owner_exit_recovery"
     )
 
     :ok

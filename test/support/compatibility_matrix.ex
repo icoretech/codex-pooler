@@ -2032,7 +2032,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       live_text_disposition: %{
         pooler_delivery: "present",
         first_failing_stage: "codex_app_server_boundary",
-        task15_regression: "byte_exact_native_websocket_writer_pass_through",
+        native_writer_regression: "byte_exact_native_websocket_writer_pass_through",
         production_transport_change: "none"
       },
       done_claim_stages: [

@@ -14,7 +14,7 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
     {"null", nil}
   ]
 
-  @tag :task_1_pin
+  @tag :public_terminal_pin
   test "PIN-P01 response.completed remains a completed terminal" do
     frame =
       Jason.encode!(%{
@@ -433,7 +433,7 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
     assert state.sequence.terminal_latched?
   end
 
-  @tag :task_1_fix_red
+  @tag :public_terminal_regression
   test "every present non-empty event and data type mismatch is rejected" do
     nonterminal = "response.output_text.delta"
 
@@ -517,7 +517,7 @@ defmodule CodexPooler.Gateway.Transports.PublicResponsesTerminalTest do
     assert state.terminal_kind == :incomplete
   end
 
-  @tag :task_1_fix_red
+  @tag :public_terminal_regression
   test "public POST and GET latch completed then done and duplicate failed only once" do
     cases = [
       {completed("resp_completed_first"), done("resp_done_second"), "response.completed"},
