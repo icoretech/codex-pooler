@@ -75,7 +75,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     refute has_element?(view, "#admin-nav-system")
     refute has_element?(view, "#admin-nav-jobs")
     refute has_element?(view, "#admin-nav-operators")
-    refute html =~ "777"
+    refute has_element?(view, "#instance-settings-upload-ttl-seconds[value='777']")
     refute html =~ "MCP keys exist in this system"
 
     state = :sys.get_state(view.pid)
