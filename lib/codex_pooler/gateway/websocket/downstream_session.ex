@@ -148,10 +148,10 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
 
   def accept_downstream_message(
         {:websocket_owner_frame, _correlation_id, _epoch, owner_turn_id, _payload} = message,
-        %{websocket_owner_downstream: downstream, tasks: tasks}
+        %{websocket_owner_downstream: downstream, tasks: tasks} = state
       )
       when is_pid(owner_turn_id) and is_map(downstream) do
-    if MapSet.member?(tasks, owner_turn_id) do
+    if MapSet.member?(tasks, owner_turn_id) or reconnect_owner_turn?(state, owner_turn_id) do
       WebsocketOwnerContract.accept_downstream_message(
         message,
         Map.get(downstream, :epoch),
@@ -173,6 +173,11 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
   end
 
   def accept_downstream_message(_message, _state), do: :drop
+
+  defp reconnect_owner_turn?(state, owner_turn_id) do
+    Map.get(state, :websocket_owner_active_turn_reconnect?, false) and
+      Map.get(state, :websocket_owner_reconnect_turn_pid) == owner_turn_id
+  end
 
   @spec accept_recovered_runtime(term(), socket_state()) :: {:ok, socket_state()} | :drop
   def accept_recovered_runtime(

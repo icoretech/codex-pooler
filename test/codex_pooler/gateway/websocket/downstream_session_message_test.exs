@@ -40,6 +40,24 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSessionMessageTest do
            ) == :drop
   end
 
+  test "accepts only the bound carried task for an active reconnect" do
+    owner_turn_id = self()
+    stale_task = task_pid()
+
+    state =
+      state_with_tasks([])
+      |> Map.put(:websocket_owner_active_turn_reconnect?, true)
+      |> Map.put(:websocket_owner_reconnect_turn_pid, owner_turn_id)
+
+    assert DownstreamSession.accept_downstream_message(frame(owner_turn_id, :complete), state) ==
+             {:ok, :complete}
+
+    assert DownstreamSession.accept_downstream_message(frame(stale_task, :complete), state) ==
+             :drop
+
+    stop_task(stale_task)
+  end
+
   defp state_with_tasks(tasks) do
     %{
       tasks: MapSet.new(tasks),

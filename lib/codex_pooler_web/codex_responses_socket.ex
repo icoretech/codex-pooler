@@ -646,12 +646,31 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp maybe_mark_api_key_closed(state), do: state
 
   defp handle_owner_frame(message, state) do
+    state = bind_reconnect_owner_turn(message, state)
+
     case Adapter.accept_downstream_message(message, state) do
       {:ok, payload} -> handle_accepted_owner_payload(payload, state)
       :drop -> {:ok, state}
       {:error, _reason} -> {:ok, state}
     end
   end
+
+  defp bind_reconnect_owner_turn(
+         {:websocket_owner_frame, correlation_id, epoch, owner_turn_id, _payload},
+         %{
+           websocket_owner_active_turn_reconnect?: true,
+           websocket_owner_downstream: %{correlation_id: correlation_id, epoch: epoch}
+         } = state
+       )
+       when is_pid(owner_turn_id) do
+    case Map.get(state, :websocket_owner_reconnect_turn_pid) do
+      nil -> Map.put(state, :websocket_owner_reconnect_turn_pid, owner_turn_id)
+      ^owner_turn_id -> state
+      _stale_owner_turn_id -> state
+    end
+  end
+
+  defp bind_reconnect_owner_turn(_message, state), do: state
 
   defp handle_accepted_owner_payload(payload, state) do
     if public_owner_turn_open?(state) do
