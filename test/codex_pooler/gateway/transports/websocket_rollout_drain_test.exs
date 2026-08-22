@@ -154,6 +154,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
            } = Task.await(repeated_task, @await_timeout_ms)
   end
 
+  test "isolated harness joins its unlinked drain worker before supervised teardown" do
+    harness = start_rollout_drain_harness(self())
+
+    assert %{result: :ok, owners_seen: 0} =
+             RolloutDrain.start_drain(
+               [name: harness.name, timeout_ms: 25] ++
+                 deadline_options(harness.deadline)
+             )
+
+    assert :ok = await_rollout_drain_harness(harness)
+    assert %{active_drain: nil} = :sys.get_state(harness.name)
+    assert ActivityRegistry.draining?(name: harness.activity_registry)
+  end
+
   test "release-callable shutdown drain is idempotent through configured app server",
        %{drain_name: drain_name} do
     configure_rollout_drain_server(drain_name)

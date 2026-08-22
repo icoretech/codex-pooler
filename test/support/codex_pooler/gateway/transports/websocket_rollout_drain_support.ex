@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
   # boundary before its drain call returns. Keep the injected budget small
   # while leaving that boundary inside the coordinator's finish margin.
   @owner_post_deadline_call_budget_ms 1_000
+  @worker_join_timeout_ms 5_000
 
   @type owner_context :: %{
           required(:codex_session_id) => String.t(),
@@ -470,16 +471,115 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
     deadline = start_virtual_deadline(parent, opts)
     drain_name = :"rollout-drain-harness-#{System.unique_integer([:positive])}"
     activity_registry = :"rollout-drain-activity-#{System.unique_integer([:positive])}"
+    worker_tracker = start_worker_tracker()
     ExUnit.Callbacks.start_supervised!({ActivityRegistry, name: activity_registry})
 
     start_opts =
-      [name: drain_name, activity_registry: activity_registry] ++ deadline_options(deadline)
+      [name: drain_name, activity_registry: activity_registry] ++
+        tracked_deadline_options(deadline, worker_tracker)
 
     {RolloutDrain, start_opts}
     |> Supervisor.child_spec(id: {RolloutDrain, drain_name})
     |> ExUnit.Callbacks.start_supervised!()
 
-    %{activity_registry: activity_registry, deadline: deadline, name: drain_name}
+    ExUnit.Callbacks.on_exit(fn ->
+      case await_drain_workers(drain_name, worker_tracker) do
+        :ok -> :ok
+        {:error, reason} -> raise "rollout drain harness teardown failed: #{inspect(reason)}"
+      end
+    end)
+
+    %{
+      activity_registry: activity_registry,
+      deadline: deadline,
+      name: drain_name,
+      worker_tracker: worker_tracker
+    }
+  end
+
+  @spec await_rollout_drain_harness(%{name: GenServer.server(), worker_tracker: pid()}) ::
+          :ok | {:error, term()}
+  def await_rollout_drain_harness(%{name: drain_name, worker_tracker: worker_tracker}) do
+    await_drain_workers(drain_name, worker_tracker)
+  end
+
+  defp start_worker_tracker do
+    child_spec =
+      Supervisor.child_spec(
+        {Agent, fn -> MapSet.new() end},
+        id: {:rollout_drain_worker_tracker, System.unique_integer([:positive])}
+      )
+
+    ExUnit.Callbacks.start_supervised!(child_spec)
+  end
+
+  defp tracked_deadline_options(deadline, worker_tracker) do
+    options = deadline_options(deadline)
+    policy = Keyword.fetch!(options, :deadline)
+
+    tracked_policy = %{
+      policy
+      | now_ms: fn ->
+          Agent.update(worker_tracker, &MapSet.put(&1, self()))
+          policy.now_ms.()
+        end
+    }
+
+    Keyword.put(options, :deadline, tracked_policy)
+  end
+
+  defp await_drain_workers(drain_name, worker_tracker) do
+    deadline_ms = System.monotonic_time(:millisecond) + @worker_join_timeout_ms
+    await_drain_workers_until(drain_name, worker_tracker, deadline_ms)
+  end
+
+  defp await_drain_workers_until(drain_name, worker_tracker, deadline_ms) do
+    active_drain? = active_drain?(drain_name)
+    workers = tracked_workers(worker_tracker)
+    live_workers = Enum.filter(workers, &Process.alive?/1)
+
+    cond do
+      not active_drain? and live_workers == [] ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline_ms ->
+        {:error, %{active_drain?: active_drain?, live_workers: length(live_workers)}}
+
+      live_workers != [] ->
+        monitors = Map.new(live_workers, &{Process.monitor(&1), &1})
+        wait_for_drain_worker(monitors, drain_name, worker_tracker, deadline_ms)
+
+      true ->
+        receive do
+        after
+          1 -> await_drain_workers_until(drain_name, worker_tracker, deadline_ms)
+        end
+    end
+  end
+
+  defp wait_for_drain_worker(monitors, drain_name, worker_tracker, deadline_ms) do
+    timeout_ms = max(deadline_ms - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {:DOWN, monitor, :process, _pid, _reason} when is_map_key(monitors, monitor) ->
+        Enum.each(Map.keys(monitors), &Process.demonitor(&1, [:flush]))
+        await_drain_workers_until(drain_name, worker_tracker, deadline_ms)
+    after
+      timeout_ms ->
+        {:error, %{active_drain?: active_drain?(drain_name), live_workers: map_size(monitors)}}
+    end
+  end
+
+  defp active_drain?(drain_name) do
+    match?(%{active_drain: %{}}, :sys.get_state(drain_name))
+  catch
+    :exit, _reason -> false
+  end
+
+  defp tracked_workers(worker_tracker) do
+    Agent.get(worker_tracker, &MapSet.to_list/1)
+  catch
+    :exit, _reason -> []
   end
 
   @spec restore_env(String.t(), String.t() | nil) :: :ok
