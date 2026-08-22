@@ -7847,7 +7847,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       extra = owner_continuation_extra(request_id, previous_response_id)
       payload = websocket_payload(setup, "owner three turn #{route} #{turn}", extra)
 
-      assert :ok = run_owner_continuity_turn(route, auth, state, payload)
+      state = run_owner_continuity_turn(route, auth, state, payload)
       assert {:push, {:text, frame}, state} = receive_owner_socket_push(state)
       assert owner_response_id(frame) == response_id
       assert {:ok, state} = receive_owner_continuity_complete(route, state)
@@ -7912,22 +7912,29 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
   defp run_owner_continuity_turn(:direct, _auth, state, payload) do
     case CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state) do
-      {:ok, _state} -> :ok
+      {:ok, state} -> state
     end
   end
 
   defp run_owner_continuity_turn(:proxy, auth, state, payload) do
-    Gateway.run_websocket_response(
-      auth,
-      payload,
-      owner_response_options(state, owner_node_opts(state, :proxy)),
-      fn _data -> :ok end
-    )
+    assert :ok =
+             Gateway.run_websocket_response(
+               auth,
+               payload,
+               owner_response_options(state, owner_node_opts(state, :proxy)),
+               fn _data -> :ok end
+             )
+
+    Map.update(state, :tasks, MapSet.new([self()]), &MapSet.put(&1, self()))
   end
 
   defp receive_owner_continuity_complete(:direct, state), do: receive_socket_done(state)
 
-  defp receive_owner_continuity_complete(:proxy, state), do: receive_owner_socket_complete(state)
+  defp receive_owner_continuity_complete(:proxy, state) do
+    case receive_owner_socket_complete(state) do
+      {:ok, state} -> {:ok, Map.update!(state, :tasks, &MapSet.delete(&1, self()))}
+    end
+  end
 
   defp assert_owner_continuation_generation_boundary(route) do
     previous_response_id = "resp_owner_generation_anchor_#{route}"
@@ -8557,6 +8564,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       {:websocket_owner_frame, _correlation_id, _epoch, _payload} = message ->
         handle_owner_socket_push_message(message, state)
+
+      {:websocket_owner_output_commit_probe, _, _, _, _, _, _} = message ->
+        handle_owner_socket_push_message(message, state)
+
+      {:websocket_response_activity, _, _} = message ->
+        handle_owner_socket_push_message(message, state)
+
+      {:codex_response_done, _, _} = message ->
+        handle_owner_socket_push_message(message, state)
+
+      {:websocket_response_delivery_complete, _, _} = message ->
+        handle_owner_socket_push_message(message, state)
     after
       1_000 -> flunk("expected owner websocket response frame")
     end
@@ -8583,6 +8602,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       {:websocket_owner_frame, _correlation_id, _epoch, _payload} = message ->
         handle_owner_socket_raw_push_message(message, state)
+
+      {:websocket_owner_output_commit_probe, _, _, _, _, _, _} = message ->
+        handle_owner_socket_raw_push_message(message, state)
+
+      {:websocket_response_activity, _, _} = message ->
+        handle_owner_socket_raw_push_message(message, state)
+
+      {:codex_response_done, _, _} = message ->
+        handle_owner_socket_raw_push_message(message, state)
+
+      {:websocket_response_delivery_complete, _, _} = message ->
+        handle_owner_socket_raw_push_message(message, state)
     after
       1_000 -> flunk("expected owner websocket response frame")
     end
@@ -8601,6 +8632,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         handle_owner_socket_complete_message(message, state)
 
       {:websocket_owner_frame, _correlation_id, _epoch, _payload} = message ->
+        handle_owner_socket_complete_message(message, state)
+
+      {:websocket_owner_output_commit_probe, _, _, _, _, _, _} = message ->
+        handle_owner_socket_complete_message(message, state)
+
+      {:websocket_response_activity, _, _} = message ->
+        handle_owner_socket_complete_message(message, state)
+
+      {:codex_response_done, _, _} = message ->
+        handle_owner_socket_complete_message(message, state)
+
+      {:websocket_response_delivery_complete, _, _} = message ->
         handle_owner_socket_complete_message(message, state)
     after
       1_000 -> flunk("expected owner websocket completion frame")
