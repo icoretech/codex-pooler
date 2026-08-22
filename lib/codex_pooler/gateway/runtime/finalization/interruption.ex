@@ -41,12 +41,33 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
 
   def interrupt_codex_turn(session_id, %RequestOptions{} = opts) when is_binary(session_id) do
     case request_id(opts) do
-      nil -> {:ok, %{interrupted_turn_count: 0}}
-      request_id -> interrupt_session_turn(session_id, request_id, opts, interrupt_reason(opts))
+      nil ->
+        {:ok, %{interrupted_turn_count: 0}}
+
+      request_id ->
+        interrupt_session_turn(
+          session_id,
+          {:request_id, request_id},
+          opts,
+          interrupt_reason(opts)
+        )
     end
   end
 
   def interrupt_codex_turn(_session_id, _opts), do: {:ok, %{interrupted_turn_count: 0}}
+
+  @spec interrupt_detached_codex_turn(session_ref(), opts()) ::
+          {:ok, term()} | {:error, term()}
+  def interrupt_detached_codex_turn(%CodexSession{id: id}, opts),
+    do: interrupt_detached_codex_turn(id, opts)
+
+  def interrupt_detached_codex_turn(session_id, %RequestOptions{} = opts)
+      when is_binary(session_id) do
+    interrupt_session_turn(session_id, :latest, opts, interrupt_reason(opts))
+  end
+
+  def interrupt_detached_codex_turn(_session_id, _opts),
+    do: {:ok, %{interrupted_turn_count: 0}}
 
   @spec recover_owner_lifecycle_leftovers(session_ref(), atom() | String.t(), opts()) ::
           {:ok, term()} | {:error, term()}
@@ -133,7 +154,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     end
   end
 
-  defp interrupt_session_turn(session_id, request_id, %RequestOptions{} = opts, reason) do
+  defp interrupt_session_turn(session_id, turn_selector, %RequestOptions{} = opts, reason) do
     caller_owned_transaction? = Repo.in_transaction?()
     now = now()
     reconnect_window = reconnect_window_seconds(opts)
@@ -141,8 +162,6 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     lease_expires_at = if reconnect_window > 0, do: DateTime.add(now, reconnect_window, :second)
 
     interruption_context = %{
-      session_id: session_id,
-      request_id: request_id,
       opts: opts,
       reason: reason,
       now: now,
@@ -152,20 +171,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     }
 
     Repo.transaction(fn ->
-      session_id
-      |> codex_session_for_update()
-      |> interrupt_session_turn_for_request(interruption_context)
+      session = codex_session_for_update(session_id)
+      turn = turn_for_selector(session_id, turn_selector)
+      interrupt_selected_session_turn(session, Map.put(interruption_context, :turn, turn))
     end)
     |> finalize_transaction(caller_owned_transaction?)
   end
 
-  defp interrupt_session_turn_for_request(nil, _interruption_context),
+  defp interrupt_selected_session_turn(nil, _interruption_context),
     do: interruption_result(0, [])
 
-  defp interrupt_session_turn_for_request(%CodexSession{} = session, interruption_context) do
+  defp interrupt_selected_session_turn(%CodexSession{} = session, interruption_context) do
     %{
-      session_id: session_id,
-      request_id: request_id,
+      turn: turn,
       opts: opts,
       reason: reason,
       now: now,
@@ -174,47 +192,60 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
       caller_owned_transaction?: caller_owned_transaction?
     } = interruption_context
 
-    {interrupted_count, interrupted_outcomes} =
-      interrupt_turn_for_request(
-        session_id,
-        request_id,
-        opts,
-        reason,
-        now,
-        caller_owned_transaction?
-      )
+    case preserve_succeeded_turn(turn, now) do
+      :preserved ->
+        interruption_result(0, [])
 
-    session
-    |> Ecto.Changeset.change(%{
-      status: next_status,
-      disconnected_at: now,
-      closed_at: if(next_status == @session_closed, do: now, else: nil),
-      owner_lease_expires_at: lease_expires_at,
-      last_heartbeat_at: now,
-      updated_at: now
-    })
-    |> Repo.update!()
+      :continue ->
+        {interrupted_count, interrupted_outcomes} =
+          interrupt_selected_turn(turn, opts, reason, now, caller_owned_transaction?)
 
-    interruption_result(interrupted_count, interrupted_outcomes)
+        session
+        |> Ecto.Changeset.change(%{
+          status: next_status,
+          disconnected_at: now,
+          closed_at: if(next_status == @session_closed, do: now, else: nil),
+          owner_lease_expires_at: lease_expires_at,
+          last_heartbeat_at: now,
+          updated_at: now
+        })
+        |> Repo.update!()
+
+        interruption_result(interrupted_count, interrupted_outcomes)
+    end
   end
 
-  defp interrupt_turn_for_request(
-         session_id,
-         request_id,
+  defp preserve_succeeded_turn(turn, now) do
+    case turn do
+      %CodexTurn{} = turn ->
+        request = request_for_update(turn.request_id)
+        attempt = latest_attempt_for_update(turn.request_id)
+
+        if request_completed_successfully?(request, attempt) do
+          complete_interrupted_turn!(turn, attempt, @turn_succeeded, nil, now)
+          :preserved
+        else
+          :continue
+        end
+
+      nil ->
+        :continue
+    end
+  end
+
+  defp interrupt_selected_turn(
+         %CodexTurn{status: @turn_in_progress} = turn,
          opts,
          reason,
          now,
          caller_owned_transaction?
        ) do
-    case in_progress_turn_for_request(session_id, request_id) do
-      %CodexTurn{} = turn ->
-        marker = interrupt_turn!(turn, opts, reason, now, caller_owned_transaction?)
-        {1, if(marker, do: [marker], else: [])}
-
-      nil ->
-        {0, []}
-    end
+    marker = interrupt_turn!(turn, opts, reason, now, caller_owned_transaction?)
+    {1, if(marker, do: [marker], else: [])}
   end
+
+  defp interrupt_selected_turn(_turn, _opts, _reason, _now, _caller_owned_transaction?),
+    do: {0, []}
 
   defp interrupt_turn!(%CodexTurn{} = turn, opts, reason, now, caller_owned_transaction?) do
     request = request_for_update(turn.request_id)
@@ -333,16 +364,30 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Interruption do
     )
   end
 
-  defp in_progress_turn_for_request(session_id, request_id) do
+  defp turn_for_selector(session_id, {:request_id, request_id}) do
     Repo.one(
       from turn in CodexTurn,
         join: request in Request,
         on: request.id == turn.request_id,
-        where:
-          turn.codex_session_id == ^session_id and turn.status == ^@turn_in_progress and
-            request.correlation_id == ^request_id,
+        where: turn.codex_session_id == ^session_id and request.correlation_id == ^request_id,
         order_by: [desc: turn.started_at],
-        limit: 1
+        limit: 1,
+        lock: "FOR UPDATE"
+    )
+  end
+
+  defp turn_for_selector(session_id, :latest) do
+    Repo.one(
+      from turn in CodexTurn,
+        where:
+          turn.codex_session_id == ^session_id and
+            fragment(
+              "COALESCE((SELECT a.transport FROM attempts AS a WHERE a.request_id = ? ORDER BY a.attempt_number DESC LIMIT 1), 'websocket') = 'websocket'",
+              turn.request_id
+            ),
+        order_by: [desc: turn.started_at],
+        limit: 1,
+        lock: "FOR UPDATE"
     )
   end
 

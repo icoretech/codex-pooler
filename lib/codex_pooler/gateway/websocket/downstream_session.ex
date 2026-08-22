@@ -375,7 +375,7 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
   defp interrupt_downstream_turn(:ok, state) do
     state
     |> Map.get(:codex_session)
-    |> Websocket.interrupt_codex_turn(downstream_interrupt_opts(state))
+    |> Websocket.interrupt_detached_codex_turn(downstream_interrupt_opts(state))
     |> log_interrupt_failure(state)
   end
 

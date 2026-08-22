@@ -1240,7 +1240,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
-  test "owner-forwarded remote node-client success records websocket connection metadata" do
+  test "successful remote owner detach preserves the active session lease and accounting" do
     upstream =
       start_upstream(
         FakeUpstream.json_response(%{
@@ -1253,6 +1253,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     setup = gateway_setup(upstream)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
     {:ok, state} = owner_socket(auth, "ws-owner-remote-success", "owner-remote-success")
+    owner_lease = active_owner_lease(state.codex_session.id)
+    {:ok, owner_pid} = WebsocketOwnerSession.lookup(state.codex_session.id)
     remote_node = :"codex_pooler@remote-owner-success.example"
 
     remote_state = %{
@@ -1330,8 +1332,34 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert settlement.transport == "websocket"
       assert_forwarding_cardinality!(request, state.codex_session.id, "succeeded")
       refute Repo.exists?(from(d in BridgeDemotion, where: d.pool_id == ^setup.pool.id))
+      assert :ok = CodexResponsesSocket.terminate(:closed, remote_state)
+      assert Repo.get!(CodexSession, state.codex_session.id).status == "active"
+      assert Repo.get!(BridgeOwnerLease, owner_lease.id).status == "active"
+      assert active_owner_lease(state.codex_session.id).lease_token == owner_lease.lease_token
+      assert Repo.get!(Request, request.id).status == "succeeded"
+      assert Repo.get!(Attempt, attempt.id).status == "succeeded"
+
+      assert Repo.get_by!(CodexTurn, request_id: request.id).status == "succeeded"
+      assert Process.alive?(owner_pid)
+      assert WebsocketOwnerSession.lookup(state.codex_session.id) == {:ok, owner_pid}
+
+      assert {:ok, reuse_state} =
+               owner_socket(
+                 auth,
+                 "ws-owner-remote-success-reuse",
+                 "owner-remote-success"
+               )
+
+      assert reuse_state.codex_session.id == state.codex_session.id
+      assert reuse_state.websocket_owner_lease_token == owner_lease.lease_token
+      assert :ok = CodexResponsesSocket.terminate(:closed, reuse_state)
+      assert Repo.get!(CodexSession, state.codex_session.id).status == "active"
+      assert Repo.get!(BridgeOwnerLease, owner_lease.id).status == "active"
     after
-      CodexResponsesSocket.terminate(:closed, remote_state)
+      CodexResponsesSocket.terminate(
+        :closed,
+        Map.delete(remote_state, :websocket_owner_downstream)
+      )
     end
   end
 
