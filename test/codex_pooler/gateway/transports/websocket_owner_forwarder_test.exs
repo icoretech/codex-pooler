@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   import CodexPooler.PoolerFixtures
   import ExUnit.CaptureLog
 
+  alias CodexPooler.Accounting.Request
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -1223,6 +1224,67 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     Code.ensure_loaded!(WebsocketOwnerForwarder)
     assert function_exported?(WebsocketOwnerForwarder, :remote_attach_downstream, 2)
     assert function_exported?(WebsocketOwnerForwarder, :remote_attach_downstream, 3)
+  end
+
+  test "connected remote node cannot synchronously drain a healthy local owner", %{auth: auth} do
+    remote_node = start_current_peer!("remote_owner_drain")
+
+    %{session: session} =
+      owner_session_fixture(auth, Atom.to_string(node()), "remote-drain-rejection")
+
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+    assert {:ok, owner_pid} = start_owner(session, upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, upstream_pid}
+    downstream = attach_downstream(session.id, "corr-remote-drain-rejection")
+    owner_ref = Process.monitor(owner_pid)
+
+    lease =
+      Repo.one!(
+        from lease in BridgeOwnerLease,
+          where: lease.codex_session_id == ^session.id and lease.status == "active"
+      )
+
+    assert {:error, :owner_unavailable} =
+             :erpc.call(
+               remote_node,
+               WebsocketOwnerSession,
+               :drain_owner,
+               [owner_pid],
+               @peer_detection_timeout_ms
+             )
+
+    refute_received {:DOWN, ^owner_ref, :process, ^owner_pid, _reason}
+    assert Process.alive?(owner_pid)
+    assert Process.alive?(upstream_pid)
+    assert WebsocketOwnerSession.lookup(session.id) == {:ok, owner_pid}
+
+    assert {:ok, %{draining?: false, active_turn?: false}} =
+             WebsocketOwnerSession.owner_status(owner_pid)
+
+    assert Repo.get!(CodexSession, session.id).status == "active"
+    assert Repo.get!(BridgeOwnerLease, lease.id).status == "active"
+    assert Repo.get!(CodexSession, session.id).owner_lease_token == lease.lease_token
+
+    assert :ok = WebsocketOwnerSession.submit_frame(owner_pid, downstream, @frame)
+    assert WebsocketOwnerNodeHarness.fake_upstream_frames(upstream_pid) == [@frame]
+
+    assert Repo.aggregate(
+             from(request in Request, where: request.pool_id == ^auth.pool.id),
+             :count
+           ) == 0
+
+    assert :ok =
+             :erpc.call(
+               remote_node,
+               WebsocketOwnerSession,
+               :begin_drain,
+               [owner_pid],
+               @peer_detection_timeout_ms
+             )
+
+    assert {:ok, %{draining?: true}} = WebsocketOwnerSession.owner_status(owner_pid)
+    assert :ok = WebsocketOwnerSession.drain_owner(owner_pid)
+    assert_receive {:DOWN, ^owner_ref, :process, ^owner_pid, :normal}
   end
 
   @tag :continuation_generation_boundary

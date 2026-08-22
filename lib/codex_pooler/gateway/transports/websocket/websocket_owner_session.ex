@@ -338,16 +338,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       }}, state}
   end
 
-  def handle_call(:drain, _from, state) do
-    state =
-      if DownstreamState.active_turn?(state) do
-        finish_active_turn(state, {:error, :owner_drained})
-      else
-        _result = send_owner_error(state, state.downstream, :owner_drained)
-        state
-      end
+  def handle_call(:drain, {caller_pid, _tag}, state) do
+    if node(caller_pid) == node(self()) do
+      state =
+        if DownstreamState.active_turn?(state) do
+          finish_active_turn(state, {:error, :owner_drained})
+        else
+          _result = send_owner_error(state, state.downstream, :owner_drained)
+          state
+        end
 
-    {:stop, :normal, :ok, %{state | draining?: true, owner_exit_cause: :drain_cut}}
+      {:stop, :normal, :ok, %{state | draining?: true, owner_exit_cause: :drain_cut}}
+    else
+      {:reply, {:error, :owner_unavailable}, state}
+    end
   end
 
   def handle_call(
