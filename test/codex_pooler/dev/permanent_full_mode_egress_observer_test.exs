@@ -105,9 +105,11 @@ defmodule CodexPooler.Dev.PermanentFullModeEgressObserverTest do
       |> ObserverPlug.call([])
 
     assert reset.status == 200
+
     assert Plug.Conn.get_resp_header(reset, "x-permanent-full-mode-egress-observer") == [
              "pooler-egress-v1"
            ]
+
     assert Jason.decode!(reset.resp_body) == %{"status" => "reset"}
 
     :telemetry.execute(@event, %{count: 1}, %{
@@ -122,9 +124,11 @@ defmodule CodexPooler.Dev.PermanentFullModeEgressObserverTest do
       |> ObserverPlug.call([])
 
     assert served.status == 200
+
     assert Plug.Conn.get_resp_header(served, "x-permanent-full-mode-egress-observer") == [
              "pooler-egress-v1"
            ]
+
     body = Jason.decode!(served.resp_body)
     assert body["plug-correlator"]["httpHeaderNames"] == ["authorization"]
     # A poisoned entry omits the websocket keys entirely: downstream validation

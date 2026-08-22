@@ -565,7 +565,10 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       routing_hint_authorized?: true,
       request_options:
         RequestOptions.build(
-          %{receive_timeout_ms: 1_000, client_request_id: "permanent-full-mode-egress-correlator"},
+          %{
+            receive_timeout_ms: 1_000,
+            client_request_id: "permanent-full-mode-egress-correlator"
+          },
           "/backend-api/codex/responses",
           upstream_payload
         )
