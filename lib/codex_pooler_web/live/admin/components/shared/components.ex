@@ -806,7 +806,7 @@ defmodule CodexPoolerWeb.Admin.Components do
         <div
           :if={@facts != []}
           data-role="model-info-facts"
-          class="grid gap-1.5 bg-base-200/35 px-3 py-2"
+          class="grid gap-1.5 border-t border-base-300 bg-base-200/35 px-3 py-2"
         >
           <p
             :for={fact <- @facts}

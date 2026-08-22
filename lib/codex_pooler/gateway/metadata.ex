@@ -137,24 +137,27 @@ defmodule CodexPooler.Gateway.Metadata do
 
     with {:ok, snapshot} <- codex_catalog_snapshot(auth, "/v1/models", request_options),
          :ok <- record_metadata_request(auth, "/v1/models", request_options, snapshot) do
-      canonical_models = Map.get(snapshot.body, "models", [])
-      canonical_models_by_slug = Map.new(canonical_models, &{&1["slug"], &1})
-
-      models =
-        Enum.flat_map(snapshot.visible_models, fn model ->
-          case Map.fetch(canonical_models_by_slug, model.exposed_model_id) do
-            {:ok, metadata} -> [openai_model_payload(model, metadata)]
-            :error -> []
-          end
-        end)
-
       {:ok,
        %{
          status: 200,
          headers: json_headers(),
-         body: %{"object" => "list", "data" => models}
+         body: %{"object" => "list", "data" => openai_models(snapshot)}
        }}
     end
+  end
+
+  defp openai_models(snapshot) do
+    canonical_models_by_slug =
+      snapshot.body
+      |> Map.get("models", [])
+      |> Map.new(&{&1["slug"], &1})
+
+    Enum.flat_map(snapshot.visible_models, fn model ->
+      case Map.fetch(canonical_models_by_slug, model.exposed_model_id) do
+        {:ok, metadata} -> [openai_model_payload(model, metadata)]
+        :error -> []
+      end
+    end)
   end
 
   defp record_metadata_request(

@@ -1796,10 +1796,9 @@ live is always one click away and never something the operator has to arrange.
   [`model_info.ex`](lib/codex_pooler/catalog/model_info.ex).
 - **Purpose:** explain an unfamiliar catalog entry without increasing every
   model row's height. The primary content is the short upstream description and
-  a compact context block with source-default, source-maximum, and usable-share
-  values. Exceptional catalog facts such as a hidden alias or lack of public
-  API support appear in a quiet footer band. Raw provider metadata never
-  reaches the component.
+  one compact context summary. Exceptional catalog facts such as a hidden alias
+  or lack of public API support appear in a quiet footer band. Raw provider
+  metadata never reaches the component.
 - **Trigger variants:** catalog and policy forms use a neutral 24px info-icon
   button immediately after the model name. Dense usage leaderboards make the
   model label itself the trigger, with a subtle underline affordance instead
@@ -1821,10 +1820,10 @@ live is always one click away and never something the operator has to arrange.
   default plus maximum, or a bounded value marked `varies by upstream`.
   Context values use the normal UI font with tabular numerals, not monospace,
   and do not expose internal usable-percentage terminology. The optional facts
-  footer uses `bg-base-200/35` without a dividing rule and pairs text with an
-  icon, never color alone; it may include the source-reported minimum Codex version
-  and the catalog row's last successful observation as relative time, with the
-  absolute UTC timestamp retained in the row title.
+  footer uses `border-t border-base-300 bg-base-200/35` and pairs text with an
+  icon, never color alone; it may include the source-reported minimum Codex
+  version and the catalog row's last successful observation as relative time,
+  with the absolute UTC timestamp retained in the row title.
 - **Metadata drift:** one shared description is shown when all reporting
   upstreams that provide one agree. Conflicting descriptions are stated as a
   conflict rather than choosing an arbitrary source. Context profiles retain

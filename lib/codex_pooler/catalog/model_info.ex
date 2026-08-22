@@ -195,21 +195,22 @@ defmodule CodexPooler.Catalog.ModelInfo do
   end
 
   defp context_profile(source) do
-    with context_window when is_integer(context_window) and context_window > 0 <-
-           Map.get(source, "context_window") do
-      max_context_window = positive_integer(source["max_context_window"]) || context_window
-      max_context_window = max(context_window, max_context_window)
-      effective_percent = effective_context_percent(source)
+    case Map.get(source, "context_window") do
+      context_window when is_integer(context_window) and context_window > 0 ->
+        max_context_window = positive_integer(source["max_context_window"]) || context_window
+        max_context_window = max(context_window, max_context_window)
+        effective_percent = effective_context_percent(source)
 
-      %{
-        raw_window: context_window,
-        usable_window: effective_window(context_window, effective_percent),
-        raw_max_window: max_context_window,
-        usable_max_window: effective_window(max_context_window, effective_percent),
-        effective_percent: effective_percent
-      }
-    else
-      _missing_or_invalid -> nil
+        %{
+          raw_window: context_window,
+          usable_window: effective_window(context_window, effective_percent),
+          raw_max_window: max_context_window,
+          usable_max_window: effective_window(max_context_window, effective_percent),
+          effective_percent: effective_percent
+        }
+
+      _missing_or_invalid ->
+        nil
     end
   end
 

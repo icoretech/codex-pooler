@@ -38,7 +38,12 @@ defmodule CodexPoolerWeb.Admin.ModelInfoPopoverTest do
 
     assert LazyHTML.query(context, "dd.font-mono") |> Enum.empty?()
     assert LazyHTML.query(context, ".border-t") |> Enum.empty?()
-    assert LazyHTML.query(fragment, "[data-role='model-info-facts'].border-t") |> Enum.empty?()
+
+    assert LazyHTML.query(
+             fragment,
+             "[data-role='model-info-facts'].border-t.border-base-300"
+           ) != []
+
     refute html =~ "Usable share"
     refute html =~ "Source default"
     refute html =~ "Source maximum"

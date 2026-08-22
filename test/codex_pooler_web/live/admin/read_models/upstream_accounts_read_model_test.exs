@@ -468,14 +468,15 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
     %{assignment: observed_assignment} = upstream_assignment_fixture(observed_pool)
     %{assignment: preserved_assignment} = upstream_assignment_fixture(preserved_pool)
 
-    model_fixture(observed_pool, %{
-      exposed_model_id: "gpt-example-observed",
-      metadata: %{
-        "source_assignment_models" => %{
-          observed_assignment.id => %{"supports_responses" => true}
+    observed_model =
+      model_fixture(observed_pool, %{
+        exposed_model_id: "gpt-example-observed",
+        metadata: %{
+          "source_assignment_models" => %{
+            observed_assignment.id => %{"supports_responses" => true}
+          }
         }
-      }
-    })
+      })
 
     model_fixture(preserved_pool, %{
       exposed_model_id: "gpt-example-preserved",
@@ -516,7 +517,8 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModelTest do
                    description: nil,
                    description_state: :missing,
                    visibility: :unknown,
-                   api_support: :unknown
+                   api_support: :unknown,
+                   catalog_updated_at: observed_model.last_seen_at
                  },
                  provenance: :observed
                }

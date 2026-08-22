@@ -22,33 +22,34 @@ defmodule CodexPooler.CatalogTest do
       %{assignment: hidden} = upstream_assignment_fixture(hidden_pool)
       sentinel = "provider-private-value-#{System.unique_integer([:positive])}"
 
-      model_fixture(pool, %{
-        exposed_model_id: "gpt-example-alpha",
-        metadata: %{
-          "source_assignment_models" => %{
-            first.id => %{
-              "description" => "Synthetic assignment model.",
-              "visibility" => "hide",
-              "supported_in_api" => false,
-              "supports_responses" => true,
-              "supports_streaming" => false,
-              "supports_tools" => sentinel,
-              "capabilities" => %{"reasoning" => true},
-              "provider" => %{"private" => sentinel}
+      observed_model =
+        model_fixture(pool, %{
+          exposed_model_id: "gpt-example-alpha",
+          metadata: %{
+            "source_assignment_models" => %{
+              first.id => %{
+                "description" => "Synthetic assignment model.",
+                "visibility" => "hide",
+                "supported_in_api" => false,
+                "supports_responses" => true,
+                "supports_streaming" => false,
+                "supports_tools" => sentinel,
+                "capabilities" => %{"reasoning" => true},
+                "provider" => %{"private" => sentinel}
+              },
+              second.id => %{
+                "capabilities" => %{
+                  "responses" => false,
+                  "streaming" => true,
+                  "tools" => true,
+                  "reasoning" => false
+                }
+              },
+              hidden.id => %{"supports_responses" => true}
             },
-            second.id => %{
-              "capabilities" => %{
-                "responses" => false,
-                "streaming" => true,
-                "tools" => true,
-                "reasoning" => false
-              }
-            },
-            hidden.id => %{"supports_responses" => true}
-          },
-          "source_assignment_missing_sync_run_ids" => %{second.id => Ecto.UUID.generate()}
-        }
-      })
+            "source_assignment_missing_sync_run_ids" => %{second.id => Ecto.UUID.generate()}
+          }
+        })
 
       model_fixture(pool, %{
         exposed_model_id: "gpt-example-stale",
@@ -96,7 +97,8 @@ defmodule CodexPooler.CatalogTest do
               description: "Synthetic assignment model.",
               description_state: :available,
               visibility: :hidden,
-              api_support: :unsupported
+              api_support: :unsupported,
+              catalog_updated_at: observed_model.last_seen_at
             },
             provenance: :observed
           },
