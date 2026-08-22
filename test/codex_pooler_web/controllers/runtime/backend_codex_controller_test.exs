@@ -9005,7 +9005,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute Jason.encode!(failed_attempt.response_metadata) =~ "raw-message-sentinel"
   end
 
-  @tag :task_10_upstream_error_param
+  @tag :invalid_upstream_error_param
   test "SSE first-event invalid error parameters are omitted without fallback" do
     for invalid_param <- ["https://example.com/private", String.duplicate("a", 257)] do
       {setup, _failing_upstream, _success_upstream} =

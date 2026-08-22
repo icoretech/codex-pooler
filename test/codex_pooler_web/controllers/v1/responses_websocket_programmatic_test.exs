@@ -1628,7 +1628,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       public_v1_websocket_connect!(
         port,
         setup,
-        "task-14-reserved-metadata-#{System.unique_integer([:positive])}"
+        "reserved-tool-metadata-#{System.unique_integer([:positive])}"
       )
 
     try do
@@ -1645,10 +1645,10 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
             "input" => [
               %{
                 "type" => "function_call_output",
-                "call_id" => "call_task_14_reserved_metadata",
-                "output" => "synthetic task 14 output",
+                "call_id" => "call_reserved_tool_metadata",
+                "output" => "synthetic reserved tool metadata output",
                 "internal_chat_message_metadata_passthrough" => %{
-                  "executed_tool_calls" => "TASK14_RESERVED_METADATA_SENTINEL"
+                  "executed_tool_calls" => "RESERVED_TOOL_METADATA_SENTINEL"
                 }
               }
             ],
@@ -1670,9 +1670,9 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       persistence_text = inspect(RequestLogs.list(setup.pool))
 
       refute error_frame =~ "internal_chat_message_metadata_passthrough"
-      refute error_frame =~ "TASK14_RESERVED_METADATA_SENTINEL"
+      refute error_frame =~ "RESERVED_TOOL_METADATA_SENTINEL"
       refute persistence_text =~ "internal_chat_message_metadata_passthrough"
-      refute persistence_text =~ "TASK14_RESERVED_METADATA_SENTINEL"
+      refute persistence_text =~ "RESERVED_TOOL_METADATA_SENTINEL"
 
       {conn, websocket}
     after
