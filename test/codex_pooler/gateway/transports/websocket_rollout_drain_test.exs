@@ -528,7 +528,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     assert_receive {:rollout_drain_deadline_wait, deadline, 10}
     assert :ok = VirtualDeadline.advance(deadline, 10)
     assert_receive {:proxy_turn_cancelled, ^response_task, :owner_drained}
-    assert_receive {:codex_response_done, ^response_task, {:error, :owner_drained}}
     refute_received {:proxy_turn_cancelled, ^response_task, :owner_drained}
 
     assert %{

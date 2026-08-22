@@ -49,30 +49,52 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
 
   defp run_admitted(parent, token, registry, run_callback, cancel_callback) do
     coordinator = self()
-    worker_ref = make_ref()
+    watcher = start_cancellation_watcher(parent, coordinator, token, cancel_callback)
+    :ok = ActivityRegistry.set_cancel_recipient(token, watcher, name: registry)
 
-    {worker, monitor} =
-      spawn_monitor(fn -> send(coordinator, {worker_ref, run_callback.(coordinator)}) end)
+    {outcome, result} = run_callback_result(run_callback, coordinator)
+    stop_cancellation_watcher(watcher, token)
+    :ok = ActivityRegistry.set_cancel_recipient(token, coordinator, name: registry)
+    send(parent, {:websocket_response_activity, coordinator, token})
+    send(parent, {:codex_response_done, coordinator, result})
+    await_delivery(parent, token, registry, cancel_callback, outcome)
+  end
 
-    receive do
-      {^worker_ref, result} ->
-        Process.demonitor(monitor, [:flush])
-        send(parent, {:websocket_response_activity, coordinator, token})
-        send(parent, {:codex_response_done, coordinator, result})
-        await_delivery(parent, token, registry, cancel_callback, :completed)
+  defp run_callback_result(run_callback, coordinator) do
+    {:completed, run_callback.(coordinator)}
+  rescue
+    _exception -> {:failed, {:error, :websocket_response_task_failed}}
+  catch
+    _kind, _reason -> {:failed, {:error, :websocket_response_task_failed}}
+  end
 
-      {:DOWN, ^monitor, :process, ^worker, _reason} ->
-        result = {:error, :websocket_response_task_failed}
-        send(parent, {:websocket_response_activity, coordinator, token})
-        send(parent, {:codex_response_done, coordinator, result})
-        await_delivery(parent, token, registry, cancel_callback, :failed)
+  defp start_cancellation_watcher(parent, coordinator, token, cancel_callback) do
+    spawn(fn ->
+      monitor = Process.monitor(coordinator)
 
-      {:websocket_activity_cancel, ^token, :owner_drained} ->
-        cancel_result = cancel_callback.(coordinator, :owner_drained)
-        settle_cancelled_worker(cancel_result, worker_ref, monitor, worker)
-        :ok = ActivityRegistry.unregister(token, :aborted, name: registry)
-        send(parent, {:codex_response_done, coordinator, {:error, :owner_drained}})
-    end
+      receive do
+        {:websocket_activity_cancel, ^token, :owner_drained} ->
+          _cancel_result = cancel_callback.(coordinator, :owner_drained)
+
+          send(
+            parent,
+            {:websocket_response_activity_cancelled, coordinator, token, :owner_drained}
+          )
+
+          Process.demonitor(monitor, [:flush])
+
+        {:websocket_response_cancel_watcher_stop, ^token} ->
+          Process.demonitor(monitor, [:flush])
+
+        {:DOWN, ^monitor, :process, ^coordinator, _reason} ->
+          :ok
+      end
+    end)
+  end
+
+  defp stop_cancellation_watcher(watcher, token) do
+    send(watcher, {:websocket_response_cancel_watcher_stop, token})
+    :ok
   end
 
   defp await_delivery(parent, token, registry, cancel_callback, outcome) do
@@ -85,23 +107,5 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
         send(parent, {:websocket_response_activity_cancelled, self(), token, :owner_drained})
         await_delivery(parent, token, registry, cancel_callback, :aborted)
     end
-  end
-
-  defp await_worker_down(monitor, worker) do
-    receive do
-      {:DOWN, ^monitor, :process, ^worker, _reason} -> :ok
-    end
-  end
-
-  defp settle_cancelled_worker(:await_worker, worker_ref, monitor, worker) do
-    receive do
-      {^worker_ref, _result} -> Process.demonitor(monitor, [:flush])
-      {:DOWN, ^monitor, :process, ^worker, _reason} -> :ok
-    end
-  end
-
-  defp settle_cancelled_worker(_cancel_result, _worker_ref, monitor, worker) do
-    Process.exit(worker, :kill)
-    await_worker_down(monitor, worker)
   end
 end

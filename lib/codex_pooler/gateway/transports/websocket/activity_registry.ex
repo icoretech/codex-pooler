@@ -51,6 +51,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
     GenServer.call(server(opts), {:unregister, token, outcome})
   end
 
+  @spec set_cancel_recipient(token(), pid(), keyword()) :: :ok | {:error, :unknown_activity}
+  def set_cancel_recipient(token, pid, opts \\ []) when is_reference(token) and is_pid(pid) do
+    GenServer.call(server(opts), {:set_cancel_recipient, token, pid})
+  end
+
   @spec begin_drain(keyword()) :: {reference(), [drain_entry()]}
   def begin_drain(opts \\ []), do: GenServer.call(server(opts), :begin_drain)
 
@@ -122,6 +127,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
     {:reply, :ok, finish_activity(state, token, outcome)}
   end
 
+  def handle_call({:set_cancel_recipient, token, pid}, _from, state) do
+    case Map.fetch(state.activities, token) do
+      {:ok, entry} ->
+        activities = Map.put(state.activities, token, Map.put(entry, :cancel_pid, pid))
+        {:reply, :ok, %{state | activities: activities}}
+
+      :error ->
+        {:reply, {:error, :unknown_activity}, state}
+    end
+  end
+
   def handle_call(:begin_drain, _from, %{drain: nil} = state) do
     epoch = make_ref()
     tokens = state.activities |> Map.keys() |> MapSet.new()
@@ -143,7 +159,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
   def handle_call({:cancel, token, reason}, _from, state) do
     case Map.get(state.activities, token) do
       %{status: status} = entry when status in [:registered, :admitted] ->
-        send(entry.pid, {:websocket_activity_cancel, token, reason})
+        send(Map.get(entry, :cancel_pid, entry.pid), {:websocket_activity_cancel, token, reason})
         activities = Map.put(state.activities, token, %{entry | status: :cancelling})
         {:reply, :ok, %{state | activities: activities}}
 

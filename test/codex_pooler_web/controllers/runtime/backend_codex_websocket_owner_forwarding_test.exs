@@ -62,7 +62,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
   alias CodexPooler.Gateway.Transports.Admission
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
-  alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
+  alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
 
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
@@ -1507,6 +1507,82 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     refute Repo.exists?(from(d in BridgeDemotion, where: d.pool_id == ^setup.pool.id))
     assert node(owner_pid) == remote_node
     assert :erpc.call(remote_node, Process, :alive?, [owner_pid])
+  end
+
+  test "admitted native proxy starts a real peer upstream before terminal delivery acknowledgement" do
+    ensure_test_distribution_started!()
+    use_fresh_rollout_drain!()
+    release_ref = make_ref()
+    response_id = "resp_native_proxy_predispatch_#{System.unique_integer([:positive])}"
+
+    terminal =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => response_id, "status" => "completed"}
+      })
+
+    upstream =
+      start_upstream(
+        FakeUpstream.websocket_terminal_then_close_barrier(
+          terminal,
+          notify: self(),
+          release_ref: release_ref
+        )
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    remote_node = start_bridge_peer!(:current, setup.identity)
+    session_header = "native-proxy-predispatch-#{System.unique_integer([:positive])}"
+    {_session, owner_pid} = start_remote_bridge_owner!(auth, session_header, remote_node)
+
+    {:ok, state} =
+      owner_socket(auth, "ws-native-proxy-predispatch", "native-proxy-predispatch",
+        session_header: session_header,
+        session_header_source: "x-session-id"
+      )
+
+    try do
+      payload = websocket_payload(setup, "native proxy predispatch")
+      assert {:ok, state} = CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+
+      assert_receive {:fake_upstream_websocket_barrier, :before_terminal, barrier_pid,
+                      ^release_ref},
+                     5_000
+
+      assert MapSet.size(state.tasks) == 1
+      refute_received {:websocket_response_activity, _task_pid, _activity_token}
+      send(barrier_pid, {:fake_upstream_release_websocket, release_ref})
+
+      assert_receive {:websocket_owner_frame, correlation_id, epoch, task_pid, {:data, ^terminal}} =
+                       terminal_message,
+                     5_000
+
+      assert {:push, {:text, ^terminal}, state} =
+               CodexResponsesSocket.handle_info(terminal_message, state)
+
+      assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, ^task_pid, :complete} =
+                       complete_message,
+                     5_000
+
+      assert {:ok, state} = CodexResponsesSocket.handle_info(complete_message, state)
+      assert_receive {:websocket_response_activity, ^task_pid, activity_token} = activity_message
+      assert {:ok, state} = CodexResponsesSocket.handle_info(activity_message, state)
+      assert_receive {:codex_response_done, ^task_pid, _result} = done_message
+      assert {:ok, state} = CodexResponsesSocket.handle_info(done_message, state)
+
+      assert_receive {:websocket_response_delivery_complete, ^task_pid, ^activity_token} =
+                       delivery_message
+
+      assert {:ok, _state} = CodexResponsesSocket.handle_info(delivery_message, state)
+      assert FakeUpstream.count(upstream) == 1
+      assert :erpc.call(remote_node, Process, :alive?, [owner_pid])
+
+      assert_receive {:fake_upstream_websocket_barrier, :before_close, close_pid, ^release_ref}
+      send(close_pid, {:fake_upstream_release_websocket, release_ref})
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
   end
 
   @tag :todo_9_public_protocol_fallback
@@ -8201,6 +8277,35 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           Map.new(extra_opts)
         )
     })
+  end
+
+  defp use_fresh_rollout_drain! do
+    previous_config = Application.get_env(:codex_pooler, RolloutDrain)
+
+    previous_status_config =
+      Application.get_env(:codex_pooler, CodexPooler.Gateway.OperationalStatus)
+
+    activity_registry = :"predispatch-activity-#{System.unique_integer([:positive])}"
+    drain_name = :"predispatch-drain-#{System.unique_integer([:positive])}"
+    start_supervised!({ActivityRegistry, name: activity_registry})
+    start_supervised!({RolloutDrain, name: drain_name, activity_registry: activity_registry})
+    Application.put_env(:codex_pooler, RolloutDrain, server_name: drain_name)
+    Application.delete_env(:codex_pooler, CodexPooler.Gateway.OperationalStatus)
+
+    on_exit(fn ->
+      case previous_config do
+        nil -> Application.delete_env(:codex_pooler, RolloutDrain)
+        config -> Application.put_env(:codex_pooler, RolloutDrain, config)
+      end
+
+      case previous_status_config do
+        nil ->
+          Application.delete_env(:codex_pooler, CodexPooler.Gateway.OperationalStatus)
+
+        config ->
+          Application.put_env(:codex_pooler, CodexPooler.Gateway.OperationalStatus, config)
+      end
+    end)
   end
 
   defp owner_output_state(task_pid, request_id, epoch \\ 1) when is_pid(task_pid) do

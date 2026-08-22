@@ -1587,6 +1587,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
         response_task_parent,
         :proxy,
         fn task_pid ->
+          send(parent, {:real_peer_proxy_dispatch_identity, self(), task_pid})
           per_call_downstream = Map.put(stable_downstream, :owner_turn_id, task_pid)
 
           client.call_owner(
@@ -1614,6 +1615,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
         activity_registry: harness.activity_registry
       )
 
+    assert_receive {:real_peer_proxy_dispatch_identity, ^response_task, ^response_task}
     assert_receive {:websocket_owner_harness_barrier, peer_turn_task, ^release_ref}
 
     assert_receive {:websocket_owner_frame, "corr-real-peer-rollout-proxy", 1, ^response_task,

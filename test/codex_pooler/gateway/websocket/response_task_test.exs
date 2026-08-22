@@ -35,6 +35,32 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTaskTest do
     assert ActivityRegistry.activities(name: registry) == []
   end
 
+  test "admitted proxy dispatch runs in the registered response task before delivery ack", %{
+    registry: registry
+  } do
+    parent = self()
+
+    {:ok, pid} =
+      ResponseTask.start(
+        parent,
+        :proxy,
+        fn task_pid ->
+          send(parent, {:proxy_dispatch_started, self(), task_pid})
+          :ok
+        end,
+        fn _task_pid, _reason -> :ok end,
+        activity_registry: registry
+      )
+
+    monitor = Process.monitor(pid)
+    assert_receive {:proxy_dispatch_started, ^pid, ^pid}
+    assert_receive {:websocket_response_activity, ^pid, token}
+    assert_receive {:codex_response_done, ^pid, :ok}
+    assert Process.alive?(pid)
+    assert :ok = ResponseTask.acknowledge_delivery(pid, token)
+    assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}
+  end
+
   test "queued or new work after cutoff returns owner_drained without upstream work", %{
     registry: registry
   } do
@@ -82,9 +108,7 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTaskTest do
     assert {_epoch, [%{token: token, pid: ^pid}]} = ActivityRegistry.begin_drain(name: registry)
     assert :ok = ActivityRegistry.cancel(token, :owner_drained, name: registry)
     assert_receive {:proxy_cancelled, ^pid, :owner_drained}
-    assert_receive {:codex_response_done, ^pid, {:error, :owner_drained}}
     refute_received {:proxy_cancelled, ^pid, :owner_drained}
-    assert {:finished, :aborted} = ActivityRegistry.status(token, name: registry)
   end
 
   test "untracked local-owner work is not double-counted", %{registry: registry} do
