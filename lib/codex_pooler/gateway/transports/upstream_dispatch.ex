@@ -468,10 +468,16 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
     end
   end
 
-  @egress_observation_flag :task10_egress_observation_enabled
-  @egress_observation_event [:codex_pooler, :gateway, :upstream, :egress_observation]
+  @egress_observation_flag :permanent_full_mode_egress_observation_enabled
 
-  # Metadata-only egress observation for the dev-runtime Task 10 observer.
+  @egress_observation_event [
+    :codex_pooler,
+    :gateway,
+    :upstream,
+    :permanent_full_mode_egress_observation
+  ]
+
+  # Metadata-only egress observation for the permanent Full-mode dev observer.
   # Emits upstream header *names* and websocket `client_metadata` *keys* only —
   # never values, payloads, tokens, or frames — and only while the dev observer
   # has armed the flag; production emits nothing. Observation must never affect

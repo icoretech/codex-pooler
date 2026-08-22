@@ -4791,7 +4791,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   test "backend Responses JSON and SSE derive current credential residency without persisting it",
        %{conn: conn} do
     previous_observation =
-      Application.get_env(:codex_pooler, :task10_egress_observation_enabled, false)
+      Application.get_env(:codex_pooler, :permanent_full_mode_egress_observation_enabled, false)
 
     handler_id = {__MODULE__, :residency, System.unique_integer([:positive])}
     parent = self()
@@ -4799,19 +4799,19 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     :ok =
       :telemetry.attach(
         handler_id,
-        [:codex_pooler, :gateway, :upstream, :egress_observation],
+        [:codex_pooler, :gateway, :upstream, :permanent_full_mode_egress_observation],
         fn _event, _measurements, metadata, _config ->
           send(parent, {handler_id, metadata})
         end,
         nil
       )
 
-    Application.put_env(:codex_pooler, :task10_egress_observation_enabled, true)
+    Application.put_env(:codex_pooler, :permanent_full_mode_egress_observation_enabled, true)
 
     on_exit(fn ->
       Application.put_env(
         :codex_pooler,
-        :task10_egress_observation_enabled,
+        :permanent_full_mode_egress_observation_enabled,
         previous_observation
       )
 

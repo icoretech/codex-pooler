@@ -1,6 +1,6 @@
-defmodule CodexPooler.Dev.Task10EgressObserver do
+defmodule CodexPooler.Dev.PermanentFullModeEgressObserver do
   @moduledoc """
-  Metadata-only Task 10 egress observer for the local dev runtime.
+  Metadata-only permanent Full-mode egress observer for the local dev runtime.
 
   Records, per trusted internal request correlator, the *names* of the HTTP
   headers and the *keys* of the websocket `client_metadata` that the gateway
@@ -9,7 +9,8 @@ defmodule CodexPooler.Dev.Task10EgressObserver do
   this BEAM only; nothing is persisted.
 
   Lifecycle is fail-closed: the gateway emits its sanitized egress observation
-  event only while `:task10_egress_observation_enabled` is true, and that flag
+  event only while `:permanent_full_mode_egress_observation_enabled` is true,
+  and that flag
   is set exclusively by `arm/0` (invoked through the loopback `POST /reset`)
   and cleared by `disarm/0`. Without an explicit arm, the observer records
   nothing and serves an empty capture.
@@ -22,10 +23,10 @@ defmodule CodexPooler.Dev.Task10EgressObserver do
   """
 
   @store __MODULE__.Store
-  @handler_id "codex-pooler-task10-egress-observer"
-  @event [:codex_pooler, :gateway, :upstream, :egress_observation]
-  @flag :task10_egress_observation_enabled
-  @identity_header_name "x-task10-egress-observer"
+  @handler_id "codex-pooler-permanent-full-mode-egress-observer"
+  @event [:codex_pooler, :gateway, :upstream, :permanent_full_mode_egress_observation]
+  @flag :permanent_full_mode_egress_observation_enabled
+  @identity_header_name "x-permanent-full-mode-egress-observer"
   @identity_header_value "pooler-egress-v1"
   @max_correlators 32
   @max_names 64
@@ -193,7 +194,7 @@ defmodule CodexPooler.Dev.Task10EgressObserver do
 
     import Elixir.Plug.Conn
 
-    alias CodexPooler.Dev.Task10EgressObserver
+    alias CodexPooler.Dev.PermanentFullModeEgressObserver
 
     @impl true
     def init(opts), do: opts
@@ -204,11 +205,11 @@ defmodule CodexPooler.Dev.Task10EgressObserver do
     end
 
     def call(%Elixir.Plug.Conn{method: "GET", path_info: ["status"]} = conn, _opts) do
-      json(conn, 200, Task10EgressObserver.status())
+      json(conn, 200, PermanentFullModeEgressObserver.status())
     end
 
     def call(%Elixir.Plug.Conn{method: "POST", path_info: ["reset"]} = conn, _opts) do
-      :ok = Task10EgressObserver.arm()
+      :ok = PermanentFullModeEgressObserver.arm()
       json(conn, 200, %{"status" => "reset"})
     end
 
@@ -216,8 +217,8 @@ defmodule CodexPooler.Dev.Task10EgressObserver do
     # emission flag, and clears the store, so nothing is observed or retained
     # once a round is finished.
     def call(%Elixir.Plug.Conn{method: "POST", path_info: ["disarm"]} = conn, _opts) do
-      :ok = Task10EgressObserver.disarm()
-      json(conn, 200, Map.put(Task10EgressObserver.status(), "status", "disarmed"))
+      :ok = PermanentFullModeEgressObserver.disarm()
+      json(conn, 200, Map.put(PermanentFullModeEgressObserver.status(), "status", "disarmed"))
     end
 
     def call(conn, _opts) do
@@ -225,7 +226,7 @@ defmodule CodexPooler.Dev.Task10EgressObserver do
     end
 
     defp serve_captures do
-      Map.new(Task10EgressObserver.captures(), fn {correlator, entry} ->
+      Map.new(PermanentFullModeEgressObserver.captures(), fn {correlator, entry} ->
         served =
           entry
           |> Enum.reject(fn {_key, value} -> is_nil(value) end)
@@ -236,7 +237,7 @@ defmodule CodexPooler.Dev.Task10EgressObserver do
     end
 
     defp json(conn, status, body) do
-      {name, value} = Task10EgressObserver.identity_header()
+      {name, value} = PermanentFullModeEgressObserver.identity_header()
 
       conn
       |> put_resp_header(name, value)

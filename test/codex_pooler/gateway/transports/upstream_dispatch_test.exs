@@ -534,23 +534,23 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     on_exit(fn -> FakeUpstream.stop(http_upstream) end)
     on_exit(fn -> FakeUpstream.stop(websocket_upstream) end)
 
-    handler_id = "task10-egress-observation-test"
+    handler_id = "permanent-full-mode-egress-observation-test"
     parent = self()
 
     :ok =
       :telemetry.attach(
         handler_id,
-        [:codex_pooler, :gateway, :upstream, :egress_observation],
+        [:codex_pooler, :gateway, :upstream, :permanent_full_mode_egress_observation],
         fn _event, _measurements, metadata, _config ->
           send(parent, {:egress_observation, metadata})
         end,
         nil
       )
 
-    Application.put_env(:codex_pooler, :task10_egress_observation_enabled, true)
+    Application.put_env(:codex_pooler, :permanent_full_mode_egress_observation_enabled, true)
 
     on_exit(fn ->
-      Application.put_env(:codex_pooler, :task10_egress_observation_enabled, false)
+      Application.put_env(:codex_pooler, :permanent_full_mode_egress_observation_enabled, false)
       :telemetry.detach(handler_id)
     end)
 
@@ -565,7 +565,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
       routing_hint_authorized?: true,
       request_options:
         RequestOptions.build(
-          %{receive_timeout_ms: 1_000, client_request_id: "task10-egress-correlator"},
+          %{receive_timeout_ms: 1_000, client_request_id: "permanent-full-mode-egress-correlator"},
           "/backend-api/codex/responses",
           upstream_payload
         )
@@ -575,7 +575,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
 
     assert_receive {:egress_observation, http_metadata}
     assert http_metadata.transport == :http
-    assert http_metadata.client_request_id == "task10-egress-correlator"
+    assert http_metadata.client_request_id == "permanent-full-mode-egress-correlator"
     assert "authorization" in http_metadata.header_names
     assert http_metadata.websocket_client_metadata == :none
     # Names only: the credential value must never ride along.
@@ -602,7 +602,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     assert websocket_metadata.websocket_client_metadata ==
              {:keys, ["ws_request_header_x_openai_internal_codex_responses_lite"]}
 
-    Application.put_env(:codex_pooler, :task10_egress_observation_enabled, false)
+    Application.put_env(:codex_pooler, :permanent_full_mode_egress_observation_enabled, false)
     assert {:ok, %Req.Response{status: 200}} = UpstreamDispatch.http_request(http_request)
     refute_receive {:egress_observation, _silent}, 100
   end

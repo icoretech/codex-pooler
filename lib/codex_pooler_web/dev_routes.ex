@@ -19,7 +19,8 @@ defmodule CodexPoolerWeb.DevRoutes do
         # Loopback JSON surface, deliberately outside the browser pipeline:
         # Development observers are armed via POST and must not require CSRF.
         scope "/dev" do
-          forward "/task10/egress-capture", CodexPooler.Dev.Task10EgressObserver.Plug
+          forward "/permanent-full-mode/egress-capture",
+                  CodexPooler.Dev.PermanentFullModeEgressObserver.Plug
 
           forward "/multi-agent-round/product-capture",
                   CodexPooler.Dev.MultiAgentRoundProductObserver.Plug

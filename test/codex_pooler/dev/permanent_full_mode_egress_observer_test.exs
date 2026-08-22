@@ -1,19 +1,19 @@
-defmodule CodexPooler.Dev.Task10EgressObserverTest do
+defmodule CodexPooler.Dev.PermanentFullModeEgressObserverTest do
   use ExUnit.Case, async: false
 
   import Plug.Test
 
-  alias CodexPooler.Dev.Task10EgressObserver
-  alias CodexPooler.Dev.Task10EgressObserver.Plug, as: ObserverPlug
+  alias CodexPooler.Dev.PermanentFullModeEgressObserver
+  alias CodexPooler.Dev.PermanentFullModeEgressObserver.Plug, as: ObserverPlug
 
-  @event [:codex_pooler, :gateway, :upstream, :egress_observation]
-  @flag :task10_egress_observation_enabled
+  @event [:codex_pooler, :gateway, :upstream, :permanent_full_mode_egress_observation]
+  @flag :permanent_full_mode_egress_observation_enabled
 
   setup do
     on_exit(fn ->
-      Task10EgressObserver.disarm()
+      PermanentFullModeEgressObserver.disarm()
 
-      case Process.whereis(Task10EgressObserver.Store) do
+      case Process.whereis(PermanentFullModeEgressObserver.Store) do
         nil -> :ok
         pid -> Agent.stop(pid)
       end
@@ -23,9 +23,9 @@ defmodule CodexPooler.Dev.Task10EgressObserverTest do
   end
 
   test "arming enables the flag, clears the store, and records sanitized names only" do
-    :ok = Task10EgressObserver.arm()
+    :ok = PermanentFullModeEgressObserver.arm()
     assert Application.get_env(:codex_pooler, @flag) == true
-    assert Task10EgressObserver.captures() == %{}
+    assert PermanentFullModeEgressObserver.captures() == %{}
 
     :telemetry.execute(@event, %{count: 1}, %{
       transport: :http,
@@ -34,7 +34,7 @@ defmodule CodexPooler.Dev.Task10EgressObserverTest do
       websocket_client_metadata: :none
     })
 
-    captures = Task10EgressObserver.captures()
+    captures = PermanentFullModeEgressObserver.captures()
     entry = captures["smoke-exact-multi_agent_full-abc123"]
     assert is_map(entry)
     assert "authorization" in entry["httpHeaderNames"]
@@ -44,7 +44,7 @@ defmodule CodexPooler.Dev.Task10EgressObserverTest do
   end
 
   test "websocket client_metadata keys are recorded and unparseable payloads poison the entry" do
-    :ok = Task10EgressObserver.arm()
+    :ok = PermanentFullModeEgressObserver.arm()
 
     :telemetry.execute(@event, %{count: 1}, %{
       transport: :websocket,
@@ -54,7 +54,7 @@ defmodule CodexPooler.Dev.Task10EgressObserverTest do
         {:keys, ["ws_request_header_x_openai_internal_codex_responses_lite"]}
     })
 
-    entry = Task10EgressObserver.captures()["smoke-ws-correlator"]
+    entry = PermanentFullModeEgressObserver.captures()["smoke-ws-correlator"]
 
     assert entry["websocketClientMetadataKeys"] == [
              "ws_request_header_x_openai_internal_codex_responses_lite"
@@ -67,12 +67,12 @@ defmodule CodexPooler.Dev.Task10EgressObserverTest do
       websocket_client_metadata: :unparseable
     })
 
-    poisoned = Task10EgressObserver.captures()["smoke-ws-correlator"]
+    poisoned = PermanentFullModeEgressObserver.captures()["smoke-ws-correlator"]
     assert poisoned["websocketClientMetadataKeys"] == nil
   end
 
   test "the store is bounded and disarm stops recording" do
-    :ok = Task10EgressObserver.arm()
+    :ok = PermanentFullModeEgressObserver.arm()
 
     for index <- 1..40 do
       :telemetry.execute(@event, %{count: 1}, %{
@@ -83,11 +83,11 @@ defmodule CodexPooler.Dev.Task10EgressObserverTest do
       })
     end
 
-    assert map_size(Task10EgressObserver.captures()) == 32
+    assert map_size(PermanentFullModeEgressObserver.captures()) == 32
 
-    :ok = Task10EgressObserver.disarm()
+    :ok = PermanentFullModeEgressObserver.disarm()
     assert Application.get_env(:codex_pooler, @flag) == false
-    assert Task10EgressObserver.captures() == %{}
+    assert PermanentFullModeEgressObserver.captures() == %{}
 
     :telemetry.execute(@event, %{count: 1}, %{
       transport: :http,
@@ -96,7 +96,7 @@ defmodule CodexPooler.Dev.Task10EgressObserverTest do
       websocket_client_metadata: :none
     })
 
-    assert Task10EgressObserver.captures() == %{}
+    assert PermanentFullModeEgressObserver.captures() == %{}
   end
 
   test "the loopback plug serves the identity header, captures, and reset lifecycle" do
@@ -105,7 +105,9 @@ defmodule CodexPooler.Dev.Task10EgressObserverTest do
       |> ObserverPlug.call([])
 
     assert reset.status == 200
-    assert Plug.Conn.get_resp_header(reset, "x-task10-egress-observer") == ["pooler-egress-v1"]
+    assert Plug.Conn.get_resp_header(reset, "x-permanent-full-mode-egress-observer") == [
+             "pooler-egress-v1"
+           ]
     assert Jason.decode!(reset.resp_body) == %{"status" => "reset"}
 
     :telemetry.execute(@event, %{count: 1}, %{
@@ -120,7 +122,9 @@ defmodule CodexPooler.Dev.Task10EgressObserverTest do
       |> ObserverPlug.call([])
 
     assert served.status == 200
-    assert Plug.Conn.get_resp_header(served, "x-task10-egress-observer") == ["pooler-egress-v1"]
+    assert Plug.Conn.get_resp_header(served, "x-permanent-full-mode-egress-observer") == [
+             "pooler-egress-v1"
+           ]
     body = Jason.decode!(served.resp_body)
     assert body["plug-correlator"]["httpHeaderNames"] == ["authorization"]
     # A poisoned entry omits the websocket keys entirely: downstream validation
@@ -135,7 +139,7 @@ defmodule CodexPooler.Dev.Task10EgressObserverTest do
   end
 
   test "a hostile correlator key is fingerprinted, never stored or served raw" do
-    :ok = Task10EgressObserver.arm()
+    :ok = PermanentFullModeEgressObserver.arm()
 
     :telemetry.execute(@event, %{count: 1}, %{
       transport: :http,
@@ -144,7 +148,7 @@ defmodule CodexPooler.Dev.Task10EgressObserverTest do
       websocket_client_metadata: :none
     })
 
-    captures = Task10EgressObserver.captures()
+    captures = PermanentFullModeEgressObserver.captures()
     refute Map.has_key?(captures, "bad correlator<looks-like-a-token>")
     assert [key] = Map.keys(captures)
     assert Regex.match?(~r/^[a-f0-9]{12}$/, key)
@@ -157,7 +161,7 @@ defmodule CodexPooler.Dev.Task10EgressObserverTest do
   end
 
   test "name overflow poisons the field instead of silently truncating" do
-    :ok = Task10EgressObserver.arm()
+    :ok = PermanentFullModeEgressObserver.arm()
 
     :telemetry.execute(@event, %{count: 1}, %{
       transport: :http,
@@ -166,7 +170,7 @@ defmodule CodexPooler.Dev.Task10EgressObserverTest do
       websocket_client_metadata: :none
     })
 
-    entry = Task10EgressObserver.captures()["overflow-correlator"]
+    entry = PermanentFullModeEgressObserver.captures()["overflow-correlator"]
     assert entry["httpHeaderNames"] == nil
 
     served =
@@ -178,7 +182,7 @@ defmodule CodexPooler.Dev.Task10EgressObserverTest do
   end
 
   test "the loopback disarm endpoint tears the observer down and reports bounded status" do
-    :ok = Task10EgressObserver.arm()
+    :ok = PermanentFullModeEgressObserver.arm()
 
     :telemetry.execute(@event, %{count: 1}, %{
       transport: :http,
@@ -205,7 +209,7 @@ defmodule CodexPooler.Dev.Task10EgressObserverTest do
 
     assert disarmed.status == 200
 
-    assert Plug.Conn.get_resp_header(disarmed, "x-task10-egress-observer") == [
+    assert Plug.Conn.get_resp_header(disarmed, "x-permanent-full-mode-egress-observer") == [
              "pooler-egress-v1"
            ]
 
@@ -234,7 +238,7 @@ defmodule CodexPooler.Dev.Task10EgressObserverTest do
              "captureEntries" => 0
            }
 
-    assert Task10EgressObserver.captures() == %{}
+    assert PermanentFullModeEgressObserver.captures() == %{}
   end
 
   test "the gateway flag defaults to disabled so production emits nothing" do
