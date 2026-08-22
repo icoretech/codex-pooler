@@ -92,9 +92,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Downstr
         requested
       )
       when is_map(active) and is_map(requested) do
-    with :active <- downstream_status(current, requested),
-         :active <- cancellation_downstream_status(active, requested) do
-      :active
+    case downstream_status(current, requested) do
+      :active -> cancellation_downstream_status(active, requested)
+      {:error, _reason} = error -> error
     end
   end
 

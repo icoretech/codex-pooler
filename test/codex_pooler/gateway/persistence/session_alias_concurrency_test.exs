@@ -66,17 +66,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionAliasConcurrencyTest do
 
     tasks =
       Enum.map(operations, fn operation ->
-        Task.async(fn ->
-          Sandbox.unboxed_run(Repo, fn ->
-            send(parent, {:alias_concurrency_ready, barrier, self()})
-
-            receive do
-              {:alias_concurrency_run, ^barrier} -> {:ok, operation.()}
-            after
-              5_000 -> {:error, :barrier_timeout}
-            end
-          end)
-        end)
+        Task.async(fn -> run_concurrent_operation(parent, barrier, operation) end)
       end)
 
     ready_pids =
@@ -88,6 +78,18 @@ defmodule CodexPooler.Gateway.Persistence.SessionAliasConcurrencyTest do
     assert MapSet.new(ready_pids) == MapSet.new(Enum.map(tasks, & &1.pid))
     Enum.each(tasks, &send(&1.pid, {:alias_concurrency_run, barrier}))
     Enum.map(tasks, &Task.await(&1, 10_000))
+  end
+
+  defp run_concurrent_operation(parent, barrier, operation) do
+    Sandbox.unboxed_run(Repo, fn ->
+      send(parent, {:alias_concurrency_ready, barrier, self()})
+
+      receive do
+        {:alias_concurrency_run, ^barrier} -> {:ok, operation.()}
+      after
+        5_000 -> {:error, :barrier_timeout}
+      end
+    end)
   end
 
   defp request_options(turn_state) do

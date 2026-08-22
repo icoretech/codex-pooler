@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
   @type activity_kind :: Entry.kind()
   @type outcome :: :completed | :aborted | :failed
   @type token :: reference()
+  @type drain_entry :: Drain.entry()
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do

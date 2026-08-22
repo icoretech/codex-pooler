@@ -12,8 +12,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
   alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
-  alias CodexPooler.Gateway.Websocket.{Adapter, ResponseTask}
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
+  alias CodexPooler.Gateway.Websocket.{Adapter, ResponseTask}
   alias CodexPooler.InstanceSettings.{Cache, Settings}
   alias CodexPooler.Pools.Membership
   alias CodexPoolerWeb.CodexResponsesSocket

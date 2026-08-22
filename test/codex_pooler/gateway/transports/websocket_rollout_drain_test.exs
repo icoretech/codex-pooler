@@ -4,9 +4,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
   import CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
 
   alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
-  alias CodexPooler.Gateway.Websocket.ResponseTask
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
+  alias CodexPooler.Gateway.Websocket.ResponseTask
 
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport.{
     ActiveShutdownProbeOwner,

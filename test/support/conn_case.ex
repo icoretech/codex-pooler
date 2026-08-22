@@ -71,7 +71,12 @@ defmodule CodexPoolerWeb.ConnCase do
     )
   end
 
-  @spec start_rollout_drain_harness(keyword()) :: %{deadline: pid(), name: atom()}
+  @spec start_rollout_drain_harness(keyword()) :: %{
+          activity_registry: atom(),
+          deadline: pid(),
+          name: atom(),
+          worker_tracker: pid()
+        }
   def start_rollout_drain_harness(opts \\ []) do
     WebsocketRolloutDrainSupport.start_rollout_drain_harness(self(), opts)
   end

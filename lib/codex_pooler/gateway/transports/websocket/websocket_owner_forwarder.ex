@@ -864,6 +864,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
           | :owner_crashed
           | :remote_cancel_v1_unsupported
   def normalize_remote_failure(kind, reason, module, function, args) do
+    case normalize_protocol_failure(kind, reason, module, function, args) do
+      nil -> normalize_remote_transport_failure(reason)
+      failure -> failure
+    end
+  end
+
+  defp normalize_protocol_failure(kind, reason, module, function, args) do
     cond do
       kind == :error and missing_remote_submit_v1?(reason, module, function, args) ->
         log_protocol_incompatibility()
@@ -872,6 +879,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
       kind == :error and missing_remote_cancel_v1?(reason, module, function, args) ->
         :remote_cancel_v1_unsupported
 
+      true ->
+        nil
+    end
+  end
+
+  defp normalize_remote_transport_failure(reason) do
+    cond do
       reason in [:timeout, {:erpc, :timeout}, :owner_forward_timeout] ->
         :owner_forward_timeout
 

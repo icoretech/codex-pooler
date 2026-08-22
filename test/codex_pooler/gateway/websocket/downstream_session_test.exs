@@ -8,6 +8,7 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSessionTest do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, CodexTurn}
+  alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
   alias CodexPooler.Gateway.Websocket, as: Gateway
@@ -180,7 +181,7 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSessionTest do
              })
 
     if Keyword.get(opts, :complete_turn?, true) do
-      CodexPooler.Gateway.Persistence.SessionContinuity.complete_codex_turn(
+      SessionContinuity.complete_codex_turn(
         {:ok, %{request: request, attempt: attempt}},
         status,
         error_code

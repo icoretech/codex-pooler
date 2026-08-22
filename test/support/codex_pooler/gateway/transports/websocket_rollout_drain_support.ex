@@ -466,7 +466,12 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
     ]
   end
 
-  @spec start_rollout_drain_harness(pid(), keyword()) :: %{deadline: pid(), name: atom()}
+  @spec start_rollout_drain_harness(pid(), keyword()) :: %{
+          activity_registry: atom(),
+          deadline: pid(),
+          name: atom(),
+          worker_tracker: pid()
+        }
   def start_rollout_drain_harness(parent, opts \\ []) when is_pid(parent) do
     deadline = start_virtual_deadline(parent, opts)
     drain_name = :"rollout-drain-harness-#{System.unique_integer([:positive])}"

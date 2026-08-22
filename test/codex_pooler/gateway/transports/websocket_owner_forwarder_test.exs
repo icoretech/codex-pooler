@@ -13,8 +13,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   alias CodexPooler.Gateway.Payloads.RequestOptions.{ResetProbe, TimeoutConfig}
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, SessionContinuity}
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
-  alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
+  alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession

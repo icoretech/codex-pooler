@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   alias CodexPooler.Access
   alias CodexPooler.Events
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
@@ -1223,10 +1224,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     {:stop, reason, detail, complete_response_task_delivery_for_pid(state, pid)}
   end
 
-  defp maybe_schedule_response_delivery({:stop, detail, state}, pid) do
-    {:stop, detail, complete_response_task_delivery_for_pid(state, pid)}
-  end
-
   defp maybe_schedule_response_delivery(result, pid) do
     map_socket_result_state(result, fn state ->
       if response_delivery_safe?(result, state, pid) do
@@ -1661,9 +1658,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       opts =
         state
         |> response_task_opts(task_pid)
-        |> CodexPooler.Gateway.Payloads.RequestOptions.put_runtime_context(
-          interrupt_reason: "owner_drained"
-        )
+        |> RequestOptions.put_runtime_context(interrupt_reason: "owner_drained")
 
       _result = Websocket.interrupt_codex_turn(Map.get(state, :codex_session), opts)
       :ok = Websocket.close_websocket_session(Map.get(state, :upstream_websocket_session))

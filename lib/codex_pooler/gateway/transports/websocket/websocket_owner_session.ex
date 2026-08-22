@@ -56,6 +56,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
           required(:correlation_id) => binary(),
           optional(:active_turn_reconnect?) => boolean()
         }
+  @type per_call_downstream :: %{
+          required(:pid) => pid(),
+          required(:epoch) => pos_integer(),
+          required(:correlation_id) => binary(),
+          required(:owner_turn_id) => pid(),
+          optional(:active_turn_reconnect?) => boolean()
+        }
 
   @type start_result :: {:ok, pid()} | {:ok, pid(), :existing} | {:error, term()}
   @type request_result ::
@@ -207,7 +214,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     GenServer.call(owner, {:detach_downstream, pid, epoch, correlation_id}, owner_call_timeout())
   end
 
-  @spec cancel_downstream(GenServer.server(), downstream(), :owner_drained) ::
+  @spec cancel_downstream(GenServer.server(), per_call_downstream(), :owner_drained) ::
           :ok | {:error, WebsocketOwnerContract.owner_error()}
   def cancel_downstream(
         owner,
