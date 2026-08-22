@@ -24,6 +24,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
 
   @session_active SessionStatus.active_status()
   @session_reconnectable_statuses SessionStatus.reconnectable_statuses()
+  @continuity_deadlock_retries 1
   @type auth :: CodexPooler.Access.auth_context()
   @type opts :: RequestOptions.t()
   @type payload :: map()
@@ -166,6 +167,19 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
         %RequestOptions{} = opts
       )
       when is_map(payload) do
+    register_codex_session_continuity(
+      session,
+      payload,
+      response_body,
+      opts,
+      @continuity_deadlock_retries
+    )
+  end
+
+  def register_codex_session_continuity(_session, _payload, _response_body, _opts),
+    do: {:error, :invalid_session_continuity}
+
+  defp register_codex_session_continuity(session, payload, response_body, opts, retries_left) do
     now = now()
 
     Repo.transaction(fn ->
@@ -180,10 +194,28 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
       :ok
     end)
     |> unwrap_ok_transaction()
+  rescue
+    error in Postgrex.Error ->
+      cond do
+        deadlock?(error) and retries_left > 0 ->
+          register_codex_session_continuity(
+            session,
+            payload,
+            response_body,
+            opts,
+            retries_left - 1
+          )
+
+        deadlock?(error) ->
+          {:error, :continuity_deadlock}
+
+        true ->
+          reraise error, __STACKTRACE__
+      end
   end
 
-  def register_codex_session_continuity(_session, _payload, _response_body, _opts),
-    do: {:error, :invalid_session_continuity}
+  defp deadlock?(%Postgrex.Error{postgres: %{code: :deadlock_detected}}), do: true
+  defp deadlock?(%Postgrex.Error{}), do: false
 
   @spec validate_owner_token(session_ref(), Ecto.UUID.t() | String.t()) :: owner_token_result()
   defdelegate validate_owner_token(session_ref, owner_lease_token), to: OwnerLease, as: :validate

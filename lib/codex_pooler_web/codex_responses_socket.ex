@@ -18,6 +18,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   alias CodexPooler.Repo
   alias CodexPoolerWeb.Plugs.RuntimeIngress.Firewall
   alias CodexPoolerWeb.WebsocketConnectionLogger
+  alias CodexPoolerWeb.WebsocketResponseTaskFailureDiagnostics
 
   require Logger
 
@@ -1848,7 +1849,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
         request_id: Adapter.request_id(opts),
         codex_session_id: session_id(Map.get(state, :codex_session)),
         active_task_count: MapSet.size(Map.get(state, :tasks, MapSet.new()))
-      ] ++ safe_payload_metadata(payload)
+      ] ++
+        WebsocketResponseTaskFailureDiagnostics.metadata(reason, stacktrace) ++
+        safe_payload_metadata(payload)
 
     Logger.error(
       "websocket response task failed #{format_log_metadata(metadata)}",
