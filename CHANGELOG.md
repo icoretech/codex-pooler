@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.8](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.7...codex-pooler-v0.6.8) (2026-08-22)
+
+
+### Bug Fixes
+
+* accept nullable Continue tool strictness ([d2852ab](https://github.com/icoretech/codex-pooler/commit/d2852ab6177f0f8d7d4319c1bb28d4130b0991d9))
+* **catalog:** align model info metadata contracts ([1f9e1c5](https://github.com/icoretech/codex-pooler/commit/1f9e1c5f45860d6a116b820f132ce53becc8f92c))
+* **catalog:** handle account-scoped context windows ([9b5d084](https://github.com/icoretech/codex-pooler/commit/9b5d08485233e9429640b4938dc9f4a9b93cf551))
+* **deps:** update dependency daisyui to v5.7.20 ([#298](https://github.com/icoretech/codex-pooler/issues/298)) ([46181ef](https://github.com/icoretech/codex-pooler/commit/46181efa974dbf441f25341bd3d3a3ed752ec25b))
+* **gateway:** accept valid OMP compaction streams ([b57e2eb](https://github.com/icoretech/codex-pooler/commit/b57e2ebca3d11980fae7644139ec9b212b2df047))
+* harden compatibility smoke isolation ([c9b14a8](https://github.com/icoretech/codex-pooler/commit/c9b14a8365cc764165c895be9a2b774884a2b5df))
+
 ## [0.6.7](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.6...codex-pooler-v0.6.7) (2026-08-21)
 
 
