@@ -310,19 +310,25 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       |> Map.get(:tasks, MapSet.new())
       |> await_response_tasks(@pre_cleanup_response_task_drain_ms)
 
+    cancel_abandoned_response_tasks(state, remaining_tasks)
+
     cleanup_websocket_session(reason, state)
 
     close_upstream_websocket_session(state)
 
     acknowledge_response_task_cleanup(state)
 
+    _remaining_tasks = remaining_response_tasks_after_cleanup(state, remaining_tasks)
+
+    :ok
+  end
+
+  defp cancel_abandoned_response_tasks(state, remaining_tasks) do
     unless owner_forwarded_socket?(state) do
       remaining_tasks
       |> Enum.reject(&authoritative_response_task_activity?(state, &1))
       |> cancel_response_tasks(:websocket_terminated)
     end
-
-    _remaining_tasks = remaining_response_tasks_after_cleanup(state, remaining_tasks)
 
     :ok
   end
