@@ -6,7 +6,7 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.OperationalStatus
-  alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
+  alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
   alias CodexPooler.Repo
 
   setup do
@@ -140,8 +140,12 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
 
   test "GET /readyz returns unavailable while runtime rollout drain is active without marker",
        %{conn: conn} do
+    activity_registry = :"health-rollout-activity-#{System.unique_integer([:positive])}"
     drain_name = :"health-rollout-drain-#{System.unique_integer([:positive])}"
-    start_supervised!({RolloutDrain, name: drain_name})
+    start_supervised!({ActivityRegistry, name: activity_registry})
+
+    start_supervised!({RolloutDrain, name: drain_name, activity_registry: activity_registry})
+
     Application.put_env(:codex_pooler, RolloutDrain, server_name: drain_name)
 
     Application.put_env(:codex_pooler, OperationalStatus, drain_marker_path: drain_marker_path())
@@ -150,8 +154,13 @@ defmodule CodexPoolerWeb.Operations.HealthControllerTest do
       readiness_probe: __MODULE__.UnexpectedReadinessProbe
     )
 
+    refute ActivityRegistry.draining?()
+
     assert %{result: :ok, owners_seen: 0} =
              RolloutDrain.start_drain(name: drain_name, timeout_ms: 100)
+
+    assert ActivityRegistry.draining?(name: activity_registry)
+    refute ActivityRegistry.draining?()
 
     {conn, log} = with_log([level: :info], fn -> get(conn, ~p"/readyz") end)
 
