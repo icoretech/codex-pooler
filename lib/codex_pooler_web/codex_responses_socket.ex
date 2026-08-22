@@ -9,7 +9,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
+  alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, WebsocketOwnerContract}
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Gateway.Websocket.Adapter
   alias CodexPooler.Gateway.Websocket.ResponseTask
@@ -316,7 +316,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
     unless owner_forwarded_socket?(state) do
       remaining_tasks
-      |> Enum.reject(&response_task_activity?(state, &1))
+      |> Enum.reject(&authoritative_response_task_activity?(state, &1))
       |> cancel_response_tasks(:websocket_terminated)
     end
 
@@ -1288,11 +1288,49 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp acknowledge_response_task_cleanup(state) do
+    registry = response_task_activity_registry(state)
+
     state
-    |> Map.get(:response_task_activities, %{})
-    |> Enum.each(fn {pid, token} -> ResponseTask.acknowledge_delivery(pid, token) end)
+    |> Map.get(:tasks, MapSet.new())
+    |> Enum.each(fn pid ->
+      case authoritative_delivery_target(state, pid, registry) do
+        {:ok, token, ack_pid} -> ResponseTask.acknowledge_delivery(ack_pid, token)
+        :unknown -> :ok
+      end
+    end)
 
     :ok
+  end
+
+  defp authoritative_response_task_activity?(state, pid) do
+    match?(
+      {:ok, _token, _ack_pid},
+      authoritative_delivery_target(state, pid, response_task_activity_registry(state))
+    )
+  end
+
+  defp authoritative_delivery_target(state, pid, registry) do
+    case ActivityRegistry.delivery_target(pid, name: registry) do
+      {:ok, token, ack_pid, _status} -> {:ok, token, ack_pid}
+      :unknown -> state_delivery_target(state, pid)
+    end
+  catch
+    :exit, _reason -> state_delivery_target(state, pid)
+  end
+
+  defp state_delivery_target(state, pid) do
+    case Map.get(Map.get(state, :response_task_activities, %{}), pid) do
+      token when is_reference(token) ->
+        ack_pid = Map.get(Map.get(state, :response_task_delivery_recipients, %{}), pid, pid)
+        {:ok, token, ack_pid}
+
+      _unknown ->
+        :unknown
+    end
+  end
+
+  defp response_task_activity_registry(state) do
+    Map.get(state, :response_task_activity_registry, ActivityRegistry)
   end
 
   defp handle_cancelled_response_activity(state, pid, token, ack_pid) do

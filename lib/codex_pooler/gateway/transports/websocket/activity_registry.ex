@@ -3,21 +3,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
 
   use GenServer
 
-  @type activity_kind :: :direct | :proxy
+  alias __MODULE__.{Drain, Entry}
+
+  @type activity_kind :: Entry.kind()
   @type outcome :: :completed | :aborted | :failed
   @type token :: reference()
-  @type entry :: %{
-          required(:token) => token(),
-          required(:kind) => activity_kind(),
-          required(:pid) => pid(),
-          required(:status) => :registered | :admitted | :cancelling
-        }
-  @type drain_entry :: %{
-          required(:token) => token(),
-          required(:kind) => activity_kind(),
-          required(:pid) => pid(),
-          required(:status) => :active | {:finished, outcome()}
-        }
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -56,7 +46,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
     GenServer.call(server(opts), {:set_cancel_recipient, token, pid})
   end
 
-  @spec begin_drain(keyword()) :: {reference(), [drain_entry()]}
+  @spec handoff_cancel_recipient(token(), pid(), pid(), keyword()) ::
+          :ok | {:cancelled, :owner_drained, pid()} | {:error, :unknown_activity}
+  def handoff_cancel_recipient(token, from_pid, to_pid, opts \\ [])
+      when is_reference(token) and is_pid(from_pid) and is_pid(to_pid) do
+    GenServer.call(server(opts), {:handoff_cancel_recipient, token, from_pid, to_pid})
+  end
+
+  @spec delivery_target(pid(), keyword()) ::
+          {:ok, token(), pid(), :registered | :admitted | :cancelling} | :unknown
+  def delivery_target(pid, opts \\ []) when is_pid(pid) do
+    GenServer.call(server(opts), {:delivery_target, pid})
+  end
+
+  @spec begin_drain(keyword()) :: {reference(), [Drain.entry()]}
   def begin_drain(opts \\ []), do: GenServer.call(server(opts), :begin_drain)
 
   @spec complete_drain(reference(), keyword()) :: :ok
@@ -77,7 +80,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
     GenServer.call(server(opts), {:status, token})
   end
 
-  @spec activities(keyword()) :: [entry()]
+  @spec activities(keyword()) :: [Entry.t()]
   def activities(opts \\ []), do: GenServer.call(server(opts), :activities)
 
   @spec draining?(keyword()) :: boolean()
@@ -92,7 +95,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
   def handle_call({:register, kind, pid}, _from, state) do
     token = make_ref()
     monitor = Process.monitor(pid)
-    entry = %{token: token, kind: kind, pid: pid, monitor: monitor, status: :registered}
+
+    entry = Entry.new(token, kind, pid, monitor)
 
     state = %{
       state
@@ -130,7 +134,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
   def handle_call({:set_cancel_recipient, token, pid}, _from, state) do
     case Map.fetch(state.activities, token) do
       {:ok, entry} ->
-        activities = Map.put(state.activities, token, Map.put(entry, :cancel_pid, pid))
+        entry = Entry.set_recipient(entry, pid)
+        activities = Map.put(state.activities, token, entry)
         {:reply, :ok, %{state | activities: activities}}
 
       :error ->
@@ -138,16 +143,46 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
     end
   end
 
+  def handle_call({:handoff_cancel_recipient, token, from_pid, to_pid}, _from, state) do
+    case Map.get(state.activities, token) do
+      entry when is_map(entry) ->
+        case Entry.handoff(entry, from_pid, to_pid) do
+          {:ok, entry} ->
+            {:reply, :ok, put_in(state.activities[token], entry)}
+
+          {:cancelled, reason, ack_pid} ->
+            {:reply, {:cancelled, reason, ack_pid}, state}
+
+          :stale ->
+            {:reply, {:error, :unknown_activity}, state}
+        end
+
+      nil ->
+        {:reply, {:error, :unknown_activity}, state}
+    end
+  end
+
+  def handle_call({:delivery_target, pid}, _from, state) do
+    reply =
+      Enum.find_value(state.activities, :unknown, fn {token, entry} ->
+        if entry.pid == pid do
+          {token, ack_pid, status} = Entry.delivery_target(entry, token)
+          {:ok, token, ack_pid, status}
+        end
+      end)
+
+    {:reply, reply, state}
+  end
+
   def handle_call(:begin_drain, _from, %{drain: nil} = state) do
-    epoch = make_ref()
-    tokens = state.activities |> Map.keys() |> MapSet.new()
-    drain = %{epoch: epoch, tokens: tokens, outcomes: %{}}
+    {drain, epoch, entries} = Drain.begin(nil, state.activities)
     state = %{state | draining?: true, drain: drain}
-    {:reply, {epoch, drain_entries(state)}, state}
+    {:reply, {epoch, entries}, state}
   end
 
   def handle_call(:begin_drain, _from, state) do
-    {:reply, {state.drain.epoch, drain_entries(state)}, state}
+    {drain, epoch, entries} = Drain.begin(state.drain, state.activities)
+    {:reply, {epoch, entries}, %{state | drain: drain}}
   end
 
   def handle_call({:complete_drain, epoch}, _from, %{drain: %{epoch: epoch}} = state) do
@@ -159,8 +194,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
   def handle_call({:cancel, token, reason}, _from, state) do
     case Map.get(state.activities, token) do
       %{status: status} = entry when status in [:registered, :admitted] ->
-        send(Map.get(entry, :cancel_pid, entry.pid), {:websocket_activity_cancel, token, reason})
-        activities = Map.put(state.activities, token, %{entry | status: :cancelling})
+        {cancel_pid, entry} = Entry.cancel(entry, reason)
+        send(cancel_pid, {:websocket_activity_cancel, token, reason})
+        activities = Map.put(state.activities, token, entry)
+
         {:reply, :ok, %{state | activities: activities}}
 
       _finished_unknown_or_cancelling ->
@@ -172,7 +209,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
     reply =
       case Map.get(state.activities, token) do
         %{status: status} -> {:active, status}
-        nil -> drain_outcome(state.drain, token)
+        nil -> Drain.outcome(state.drain, token)
       end
 
     {:reply, reply, state}
@@ -209,36 +246,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
 
         state = %{state | activities: activities, monitors: monitors}
 
-        if drain_member?(state.drain, token) do
-          put_in(state.drain.outcomes[token], %{entry: entry, outcome: outcome})
-        else
-          state
-        end
-    end
-  end
-
-  defp drain_entries(%{drain: drain, activities: activities}) do
-    Enum.map(drain.tokens, fn token ->
-      case Map.get(activities, token) do
-        nil ->
-          %{entry: entry, outcome: outcome} = Map.fetch!(drain.outcomes, token)
-          %{token: token, kind: entry.kind, pid: entry.pid, status: {:finished, outcome}}
-
-        entry ->
-          %{token: token, kind: entry.kind, pid: entry.pid, status: :active}
-      end
-    end)
-  end
-
-  defp drain_member?(nil, _token), do: false
-  defp drain_member?(drain, token), do: MapSet.member?(drain.tokens, token)
-
-  defp drain_outcome(nil, _token), do: :unknown
-
-  defp drain_outcome(drain, token) do
-    case Map.get(drain.outcomes, token) do
-      %{outcome: outcome} -> {:finished, outcome}
-      nil -> :unknown
+        %{state | drain: Drain.record_outcome(state.drain, token, entry, outcome)}
     end
   end
 

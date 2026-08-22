@@ -121,6 +121,50 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTaskTest do
     refute_received {:codex_response_done, ^pid, {:error, :owner_drained}}
   end
 
+  test "cancellation accepted before completion handoff cannot be lost to the old watcher", %{
+    registry: registry
+  } do
+    parent = self()
+
+    {:ok, pid} =
+      ResponseTask.start(
+        parent,
+        :proxy,
+        fn _task_pid -> :ok end,
+        fn task_pid, reason -> send(parent, {:handoff_cancelled, task_pid, reason}) end,
+        activity_registry: registry,
+        before_completion_handoff: fn token, watcher ->
+          send(parent, {:before_completion_handoff, self(), token, watcher})
+
+          receive do
+            :release_completion_handoff -> :ok
+          end
+        end
+      )
+
+    monitor = Process.monitor(pid)
+    assert_receive {:before_completion_handoff, ^pid, token, watcher}
+    watcher_monitor = Process.monitor(watcher)
+    assert {_epoch, [%{token: ^token, pid: ^pid}]} = ActivityRegistry.begin_drain(name: registry)
+    assert :ok = ActivityRegistry.cancel(token, :owner_drained, name: registry)
+    assert_receive {:handoff_cancelled, ^pid, :owner_drained}
+    send(pid, :release_completion_handoff)
+
+    assert_receive {:websocket_response_activity, ^pid, ^token}
+
+    assert_receive {:websocket_response_activity_cancelled, ^pid, ^token, ^watcher,
+                    :owner_drained}
+
+    assert :ok = ResponseTask.acknowledge_delivery(watcher, token)
+    assert_receive {:codex_response_done, ^pid, {:error, :owner_drained}}
+    assert_receive {:DOWN, ^watcher_monitor, :process, ^watcher, :normal}
+    assert_receive {:DOWN, ^monitor, :process, ^pid, :killed}
+    assert {:finished, :aborted} = ActivityRegistry.status(token, name: registry)
+    refute_received {:codex_response_done, ^pid, :ok}
+    refute_received {:handoff_cancelled, ^pid, :owner_drained}
+    assert ActivityRegistry.activities(name: registry) == []
+  end
+
   test "untracked local-owner work is not double-counted", %{registry: registry} do
     parent = self()
 

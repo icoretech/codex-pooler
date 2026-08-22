@@ -38,7 +38,7 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
     with {:ok, token} <- ActivityRegistry.register(kind, self(), name: registry) do
       case ActivityRegistry.admit(token, name: registry) do
         :ok ->
-          run_admitted(parent, token, registry, run_callback, cancel_callback)
+          run_admitted(parent, token, registry, run_callback, cancel_callback, opts)
 
         {:error, :owner_drained} ->
           :ok = ActivityRegistry.unregister(token, :aborted, name: registry)
@@ -47,9 +47,8 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
     end
   end
 
-  defp run_admitted(parent, token, registry, run_callback, cancel_callback) do
+  defp run_admitted(parent, token, registry, run_callback, cancel_callback, opts) do
     coordinator = self()
-    cancellation = :atomics.new(1, [])
 
     watcher =
       start_cancellation_watcher(
@@ -57,26 +56,37 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
         coordinator,
         token,
         registry,
-        cancellation,
         cancel_callback
       )
 
     :ok = ActivityRegistry.set_cancel_recipient(token, watcher, name: registry)
 
     {outcome, result} = run_callback_result(run_callback, coordinator)
+    run_before_completion_handoff(Keyword.get(opts, :before_completion_handoff), token, watcher)
 
-    if :atomics.compare_exchange(cancellation, 1, 0, 2) == :ok do
-      stop_cancellation_watcher(watcher, token)
-      :ok = ActivityRegistry.set_cancel_recipient(token, coordinator, name: registry)
-      send(parent, {:websocket_response_activity, coordinator, token})
-      send(parent, {:codex_response_done, coordinator, result})
-      await_delivery(parent, token, registry, cancel_callback, outcome)
-    else
-      receive do
-        {:websocket_response_cancellation_settled, ^token} -> :ok
-      end
+    case ActivityRegistry.handoff_cancel_recipient(
+           token,
+           watcher,
+           coordinator,
+           name: registry
+         ) do
+      :ok ->
+        stop_cancellation_watcher(watcher, token)
+        send(parent, {:websocket_response_activity, coordinator, token})
+        send(parent, {:codex_response_done, coordinator, result})
+        await_delivery(parent, token, registry, cancel_callback, outcome)
+
+      {:cancelled, :owner_drained, ^watcher} ->
+        receive do
+          {:websocket_response_cancellation_settled, ^token} -> :ok
+        end
     end
   end
+
+  defp run_before_completion_handoff(callback, token, watcher) when is_function(callback, 2),
+    do: callback.(token, watcher)
+
+  defp run_before_completion_handoff(_callback, _token, _watcher), do: :ok
 
   defp run_callback_result(run_callback, coordinator) do
     {:completed, run_callback.(coordinator)}
@@ -91,7 +101,6 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
          coordinator,
          token,
          registry,
-         cancellation,
          cancel_callback
        ) do
     spawn(fn ->
@@ -99,22 +108,20 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
 
       receive do
         {:websocket_activity_cancel, ^token, :owner_drained} ->
-          if :atomics.compare_exchange(cancellation, 1, 0, 1) == :ok do
-            _cancel_result = cancel_callback.(coordinator, :owner_drained)
-            send(parent, {:websocket_response_activity, coordinator, token})
+          _cancel_result = cancel_callback.(coordinator, :owner_drained)
+          send(parent, {:websocket_response_activity, coordinator, token})
 
-            send(
-              parent,
-              {:websocket_response_activity_cancelled, coordinator, token, self(), :owner_drained}
-            )
+          send(
+            parent,
+            {:websocket_response_activity_cancelled, coordinator, token, self(), :owner_drained}
+          )
 
-            receive do
-              {:websocket_response_delivery_ack, ^token} ->
-                :ok = ActivityRegistry.unregister(token, :aborted, name: registry)
-                send(parent, {:codex_response_done, coordinator, {:error, :owner_drained}})
-                send(coordinator, {:websocket_response_cancellation_settled, token})
-                Process.exit(coordinator, :kill)
-            end
+          receive do
+            {:websocket_response_delivery_ack, ^token} ->
+              :ok = ActivityRegistry.unregister(token, :aborted, name: registry)
+              send(parent, {:codex_response_done, coordinator, {:error, :owner_drained}})
+              send(coordinator, {:websocket_response_cancellation_settled, token})
+              Process.exit(coordinator, :kill)
           end
 
           Process.demonitor(monitor, [:flush])

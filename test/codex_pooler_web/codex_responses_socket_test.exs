@@ -1922,6 +1922,65 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert ActivityRegistry.activities(name: harness.activity_registry) == []
   end
 
+  test "socket termination acknowledges the authoritative cancellation watcher before handoff is consumed" do
+    harness = WebsocketRolloutDrainSupport.start_rollout_drain_harness(self())
+    parent = self()
+
+    {:ok, task_pid} =
+      ResponseTask.start(
+        parent,
+        :proxy,
+        fn _task_pid ->
+          send(parent, :termination_race_callback_started)
+
+          receive do
+            :never_release -> :ok
+          end
+        end,
+        fn cancelled_pid, reason ->
+          send(parent, {:termination_race_cancelled, cancelled_pid, reason})
+        end,
+        activity_registry: harness.activity_registry
+      )
+
+    task_monitor = Process.monitor(task_pid)
+    assert_receive :termination_race_callback_started
+
+    assert {_epoch, [%{token: token, pid: ^task_pid}]} =
+             ActivityRegistry.begin_drain(name: harness.activity_registry)
+
+    assert :ok = ActivityRegistry.cancel(token, :owner_drained, name: harness.activity_registry)
+    assert_receive {:termination_race_cancelled, ^task_pid, :owner_drained}
+    assert_receive {:websocket_response_activity, ^task_pid, ^token}
+
+    assert_receive {:websocket_response_activity_cancelled, ^task_pid, ^token, watcher,
+                    :owner_drained}
+
+    watcher_monitor = Process.monitor(watcher)
+
+    state = %{
+      auth: nil,
+      opts: RequestOptions.for_websocket(%{}),
+      codex_session: nil,
+      upstream_websocket_session: nil,
+      request_response_work_started?: true,
+      tasks: MapSet.new([task_pid]),
+      task_monitors: %{task_pid => task_monitor},
+      response_task_activity_registry: harness.activity_registry
+    }
+
+    assert :ok = CodexResponsesSocket.terminate(:normal, state)
+    assert_receive {:DOWN, ^watcher_monitor, :process, ^watcher, :normal}
+    assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, :killed}
+
+    assert {:finished, :aborted} =
+             ActivityRegistry.status(token, name: harness.activity_registry)
+
+    refute_received {:codex_response_done, ^task_pid, {:error, :owner_drained}}
+    refute_received {:termination_race_cancelled, ^task_pid, :owner_drained}
+    assert ActivityRegistry.activities(name: harness.activity_registry) == []
+  end
+
   @tag :task_1_fix_red
   test "owner drain schedules stay aborted through final owner down" do
     for order <- [:task_done_first, :owner_complete_first] do
