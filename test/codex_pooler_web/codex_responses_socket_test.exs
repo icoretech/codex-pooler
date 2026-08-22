@@ -1895,6 +1895,101 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert MapSet.size(final_state.tasks) == 0
   end
 
+  test "natural proxy terminal already scheduled for delivery wins a concurrent drain cancellation" do
+    harness = WebsocketRolloutDrainSupport.start_rollout_drain_harness(self())
+    parent = self()
+
+    {:ok, task_pid} =
+      ResponseTask.start(
+        parent,
+        :proxy,
+        fn _task_pid -> {:socket_response_result, :owner_completion_pending, :ok} end,
+        fn cancelled_pid, reason ->
+          send(parent, {:scheduled_terminal_cancel_started, cancelled_pid, reason})
+        end,
+        activity_registry: harness.activity_registry
+      )
+
+    task_monitor = Process.monitor(task_pid)
+    observer_monitor = Process.monitor(task_pid)
+    assert_receive {:websocket_response_activity, ^task_pid, activity_token}
+
+    assert_receive {:codex_response_done, ^task_pid,
+                    {:socket_response_result, :owner_completion_pending, :ok}} = done_message
+
+    state = %{
+      opts: RequestOptions.for_websocket(%{}),
+      tasks: MapSet.new([task_pid]),
+      task_monitors: %{task_pid => task_monitor},
+      queued_response_payloads: :queue.new(),
+      websocket_owner_downstream: %{
+        pid: self(),
+        epoch: 23,
+        correlation_id: "corr-rollout-terminal-cancel-race",
+        active_turn_reconnect?: false
+      },
+      native_turn_output_task_pids: MapSet.new()
+    }
+
+    assert {:ok, activity_state} =
+             CodexResponsesSocket.handle_info(
+               {:websocket_response_activity, task_pid, activity_token},
+               state
+             )
+
+    assert {:ok, result_state} = CodexResponsesSocket.handle_info(done_message, activity_state)
+
+    terminal = ~s({"type":"response.completed","response":{"id":"resp_terminal_race"}})
+
+    assert {:push, {:text, ^terminal}, terminal_state} =
+             CodexResponsesSocket.handle_info(
+               {:websocket_owner_frame, "corr-rollout-terminal-cancel-race", 23, task_pid,
+                {:data, terminal}},
+               result_state
+             )
+
+    assert {:ok, completed_state} =
+             CodexResponsesSocket.handle_info(
+               {:websocket_owner_frame, "corr-rollout-terminal-cancel-race", 23, task_pid,
+                :complete},
+               terminal_state
+             )
+
+    assert_receive {:websocket_response_delivery_complete, ^task_pid, ^activity_token} =
+                     delivery_ack
+
+    drain_task =
+      Task.async(fn ->
+        RolloutDrain.start_drain(
+          [
+            name: harness.name,
+            timeout_ms: 25,
+            deadline_margin_ms: 20,
+            deadline_floor_ms: 10
+          ] ++ WebsocketRolloutDrainSupport.deadline_options(harness.deadline)
+        )
+      end)
+
+    assert_receive {:rollout_drain_deadline_wait, deadline, 10}
+    assert :ok = WebsocketRolloutDrainSupport.VirtualDeadline.advance(deadline, 10)
+    assert_receive {:scheduled_terminal_cancel_started, ^task_pid, :owner_drained}
+
+    assert_receive {:websocket_response_activity_cancelled, ^task_pid, ^activity_token,
+                    :owner_drained} = cancellation
+
+    assert {:ok, cancellation_state} =
+             CodexResponsesSocket.handle_info(cancellation, completed_state)
+
+    assert {:ok, final_state} = CodexResponsesSocket.handle_info(delivery_ack, cancellation_state)
+
+    assert %{proxy_turns_seen: 1, proxy_turns_completed: 1, proxy_turns_aborted: 0} =
+             Task.await(drain_task, 5_000)
+
+    assert_receive {:DOWN, ^observer_monitor, :process, ^task_pid, :normal}
+    refute_received {:codex_response_done, ^task_pid, {:error, :owner_drained}}
+    assert MapSet.size(final_state.tasks) == 0
+  end
+
   test "rollout deadline after proxy task result delivers one owner_drained terminal before abort completes" do
     harness = WebsocketRolloutDrainSupport.start_rollout_drain_harness(self())
     parent = self()

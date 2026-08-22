@@ -105,6 +105,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistryTest do
     assert {:finished, :aborted} = ActivityRegistry.status(token, name: registry)
   end
 
+  test "delivery completion can win after cancellation is marked", %{registry: registry} do
+    assert {:ok, token} = ActivityRegistry.register(:proxy, self(), name: registry)
+    assert :ok = ActivityRegistry.admit(token, name: registry)
+    assert {_epoch, [%{token: ^token}]} = ActivityRegistry.begin_drain(name: registry)
+    assert :ok = ActivityRegistry.cancel(token, :owner_drained, name: registry)
+    assert {:active, :cancelling} = ActivityRegistry.status(token, name: registry)
+
+    assert :ok = ActivityRegistry.complete(token, :completed, name: registry)
+
+    assert {:finished, :completed} = ActivityRegistry.status(token, name: registry)
+  end
+
   test "cancellation can target a watcher without changing the registered activity pid", %{
     registry: registry
   } do

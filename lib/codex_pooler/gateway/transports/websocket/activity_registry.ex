@@ -42,6 +42,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
     GenServer.call(server(opts), {:unregister, token, outcome})
   end
 
+  @spec complete(token(), outcome(), keyword()) :: :ok
+  def complete(token, outcome, opts \\ [])
+      when is_reference(token) and outcome in [:completed, :aborted, :failed] do
+    GenServer.call(server(opts), {:complete, token, outcome})
+  end
+
   @spec set_cancel_recipient(token(), pid(), keyword()) :: :ok | {:error, :unknown_activity}
   def set_cancel_recipient(token, pid, opts \\ []) when is_reference(token) and is_pid(pid) do
     GenServer.call(server(opts), {:set_cancel_recipient, token, pid})
@@ -130,6 +136,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
 
   def handle_call({:unregister, token, outcome}, _from, state) do
     {:reply, :ok, finish_activity(state, token, outcome)}
+  end
+
+  def handle_call({:complete, token, outcome}, _from, state) do
+    {:reply, :ok, finish_activity(state, token, outcome, true, true)}
   end
 
   def handle_call({:set_cancel_recipient, token, pid}, _from, state) do
@@ -235,7 +245,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
     end
   end
 
-  defp finish_activity(state, token, outcome, demonitor? \\ true) do
+  defp finish_activity(
+         state,
+         token,
+         outcome,
+         demonitor? \\ true,
+         honor_outcome? \\ false
+       ) do
     case Map.pop(state.activities, token) do
       {nil, _activities} ->
         state
@@ -243,7 +259,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ActivityRegistry do
       {entry, activities} ->
         if demonitor?, do: Process.demonitor(entry.monitor, [:flush])
         monitors = Map.delete(state.monitors, entry.monitor)
-        outcome = if entry.status == :cancelling, do: :aborted, else: outcome
+
+        outcome =
+          if not honor_outcome? and entry.status == :cancelling,
+            do: :aborted,
+            else: outcome
 
         state = %{state | activities: activities, monitors: monitors}
 

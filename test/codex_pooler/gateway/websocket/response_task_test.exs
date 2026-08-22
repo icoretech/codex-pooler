@@ -211,6 +211,39 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTaskTest do
     assert ActivityRegistry.activities(name: registry) == []
   end
 
+  test "natural delivery ack wins after drain cancellation is marked but before it settles", %{
+    registry: registry
+  } do
+    parent = self()
+
+    {:ok, pid} =
+      ResponseTask.start(
+        parent,
+        :proxy,
+        fn _task_pid -> :ok end,
+        fn task_pid, reason ->
+          send(parent, {:natural_winner_cancel_started, task_pid, reason})
+        end,
+        activity_registry: registry
+      )
+
+    monitor = Process.monitor(pid)
+    assert_receive {:websocket_response_activity, ^pid, token}
+    assert_receive {:codex_response_done, ^pid, :ok}
+    assert {_epoch, [%{token: ^token, pid: ^pid}]} = ActivityRegistry.begin_drain(name: registry)
+    assert :ok = ActivityRegistry.cancel(token, :owner_drained, name: registry)
+    assert {:active, :cancelling} = ActivityRegistry.status(token, name: registry)
+    assert_receive {:natural_winner_cancel_started, ^pid, :owner_drained}
+    assert_receive {:websocket_response_activity_cancelled, ^pid, ^token, :owner_drained}
+
+    send(pid, {:websocket_response_delivery_ack, token, :completed})
+
+    assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}
+    assert {:finished, :completed} = ActivityRegistry.status(token, name: registry)
+    refute_received {:codex_response_done, ^pid, {:error, :owner_drained}}
+    assert ActivityRegistry.activities(name: registry) == []
+  end
+
   test "untracked local-owner work is not double-counted", %{registry: registry} do
     parent = self()
 

@@ -32,6 +32,13 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
     :ok
   end
 
+  @spec acknowledge_delivery(pid(), activity_token(), :completed | :aborted) :: :ok
+  def acknowledge_delivery(task_pid, token, outcome)
+      when is_pid(task_pid) and is_reference(token) and outcome in [:completed, :aborted] do
+    send(task_pid, {:websocket_response_delivery_ack, token, outcome})
+    :ok
+  end
+
   defp run_tracked(parent, kind, run_callback, cancel_callback, opts) do
     registry = Keyword.get(opts, :activity_registry, ActivityRegistry)
 
@@ -220,12 +227,35 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
     )
 
     receive do
-      {:websocket_response_delivery_ack, ^token} ->
-        :ok = ActivityRegistry.unregister(token, :aborted, name: registry)
-        send(parent, {:codex_response_done, coordinator, {:error, :owner_drained}})
+      {:websocket_response_delivery_ack, ^token, :completed} ->
+        :ok = ActivityRegistry.complete(token, :completed, name: registry)
         send(coordinator, {:websocket_response_cancellation_settled, token})
-        if kill_coordinator?, do: Process.exit(coordinator, :kill)
+
+      {:websocket_response_delivery_ack, ^token, :aborted} ->
+        settle_aborted_cancellation(
+          parent,
+          coordinator,
+          token,
+          registry,
+          kill_coordinator?
+        )
+
+      {:websocket_response_delivery_ack, ^token} ->
+        settle_aborted_cancellation(
+          parent,
+          coordinator,
+          token,
+          registry,
+          kill_coordinator?
+        )
     end
+  end
+
+  defp settle_aborted_cancellation(parent, coordinator, token, registry, kill_coordinator?) do
+    :ok = ActivityRegistry.complete(token, :aborted, name: registry)
+    send(parent, {:codex_response_done, coordinator, {:error, :owner_drained}})
+    send(coordinator, {:websocket_response_cancellation_settled, token})
+    if kill_coordinator?, do: Process.exit(coordinator, :kill)
   end
 
   defp stop_cancellation_watcher(watcher, token) do
@@ -235,6 +265,12 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
 
   defp await_delivery(parent, token, registry, cancel_callback, outcome) do
     receive do
+      {:websocket_response_delivery_ack, ^token, :completed} ->
+        :ok = ActivityRegistry.complete(token, :completed, name: registry)
+
+      {:websocket_response_delivery_ack, ^token, :aborted} ->
+        :ok = ActivityRegistry.complete(token, :aborted, name: registry)
+
       {:websocket_response_delivery_ack, ^token} ->
         :ok = ActivityRegistry.unregister(token, outcome, name: registry)
 
