@@ -8552,44 +8552,65 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
   defp receive_owner_socket_push(state) do
     receive do
-      {:websocket_owner_frame, _correlation_id, _epoch, _payload} = message ->
-        case CodexResponsesSocket.handle_info(message, state) do
-          {:push, {:text, frame}, state} = result ->
-            if StreamProtocol.internal_control_event?(frame) do
-              receive_owner_socket_push(state)
-            else
-              result
-            end
+      {:websocket_owner_frame, _correlation_id, _epoch, _owner_turn_id, _payload} = message ->
+        handle_owner_socket_push_message(message, state)
 
-          {:ok, state} ->
-            receive_owner_socket_push(state)
-        end
+      {:websocket_owner_frame, _correlation_id, _epoch, _payload} = message ->
+        handle_owner_socket_push_message(message, state)
     after
       1_000 -> flunk("expected owner websocket response frame")
+    end
+  end
+
+  defp handle_owner_socket_push_message(message, state) do
+    case CodexResponsesSocket.handle_info(message, state) do
+      {:push, {:text, frame}, state} = result ->
+        if StreamProtocol.internal_control_event?(frame) do
+          receive_owner_socket_push(state)
+        else
+          result
+        end
+
+      {:ok, state} ->
+        receive_owner_socket_push(state)
     end
   end
 
   defp receive_owner_socket_raw_push(state) do
     receive do
+      {:websocket_owner_frame, _correlation_id, _epoch, _owner_turn_id, _payload} = message ->
+        handle_owner_socket_raw_push_message(message, state)
+
       {:websocket_owner_frame, _correlation_id, _epoch, _payload} = message ->
-        case CodexResponsesSocket.handle_info(message, state) do
-          {:push, {:text, _frame}, _state} = result -> result
-          {:ok, state} -> receive_owner_socket_raw_push(state)
-        end
+        handle_owner_socket_raw_push_message(message, state)
     after
       1_000 -> flunk("expected owner websocket response frame")
     end
   end
 
+  defp handle_owner_socket_raw_push_message(message, state) do
+    case CodexResponsesSocket.handle_info(message, state) do
+      {:push, {:text, _frame}, _state} = result -> result
+      {:ok, state} -> receive_owner_socket_raw_push(state)
+    end
+  end
+
   defp receive_owner_socket_complete(state) do
     receive do
+      {:websocket_owner_frame, _correlation_id, _epoch, _owner_turn_id, _payload} = message ->
+        handle_owner_socket_complete_message(message, state)
+
       {:websocket_owner_frame, _correlation_id, _epoch, _payload} = message ->
-        case CodexResponsesSocket.handle_info(message, state) do
-          {:ok, state} -> {:ok, state}
-          {:push, _frame, state} -> receive_owner_socket_complete(state)
-        end
+        handle_owner_socket_complete_message(message, state)
     after
       1_000 -> flunk("expected owner websocket completion frame")
+    end
+  end
+
+  defp handle_owner_socket_complete_message(message, state) do
+    case CodexResponsesSocket.handle_info(message, state) do
+      {:ok, state} -> {:ok, state}
+      {:push, _frame, state} -> receive_owner_socket_complete(state)
     end
   end
 

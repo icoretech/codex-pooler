@@ -1338,10 +1338,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                      ^active_turn_ref, ^probe_ref, true}}
   end
 
-  test "native owner-forwarded socket acknowledges a probe for its sole tracked task" do
+  test "native owner-forwarded socket acknowledges a probe for the exact tracked task" do
     task_pid = owner_turn_pid()
+    other_task_pid = owner_turn_pid()
     owner_pid = self()
     on_exit(fn -> send(task_pid, :stop) end)
+    on_exit(fn -> send(other_task_pid, :stop) end)
     active_turn_ref = make_ref()
     probe_ref = make_ref()
 
@@ -1351,7 +1353,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         ] do
       state = %{
         opts: RequestOptions.for_websocket(%{}),
-        tasks: MapSet.new([task_pid]),
+        tasks: MapSet.new([task_pid, other_task_pid]),
         public_response_task_pid: nil,
         public_turn_aborted?: false,
         public_turn_owner_complete?: false,
@@ -1375,7 +1377,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     end
   end
 
-  test "native output probe rejects ambiguous stale and non-owner task state" do
+  test "native output probe rejects missing stale and non-owner task state" do
     task_pid = owner_turn_pid()
     other_task_pid = owner_turn_pid()
     owner_pid = self()
@@ -1406,7 +1408,6 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     for state <- [
           %{base | tasks: MapSet.new()},
-          %{base | tasks: MapSet.new([task_pid, other_task_pid])},
           Map.delete(base, :websocket_owner_downstream)
         ] do
       assert {:ok, ^state} =

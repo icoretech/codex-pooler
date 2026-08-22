@@ -1457,7 +1457,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
          false <- Map.get(state, :public_turn_owner_complete?, false),
          %{epoch: epoch, correlation_id: correlation_id} <-
            Map.get(state, :websocket_owner_downstream),
-         owner_turn_id when is_pid(owner_turn_id) <- output_commit_probe_task_pid(state),
+         owner_turn_id when is_pid(owner_turn_id) <- output_commit_probe_task_pid(message, state),
          {:ok, active_turn_ref, owner_pid, probe_ref} <-
            WebsocketOwnerContract.accept_output_commit_probe(
              message,
@@ -1475,18 +1475,29 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     {:ok, state}
   end
 
-  defp output_commit_probe_task_pid(state) do
+  defp output_commit_probe_task_pid(message, state) do
     cond do
       Adapter.public_responses_stream?(state) ->
         Map.get(state, :public_response_task_pid)
 
       owner_forwarded_socket?(state) ->
-        active_native_owner_turn_pid(state)
+        tracked_native_owner_turn_pid(message, state)
 
       true ->
         nil
     end
   end
+
+  defp tracked_native_owner_turn_pid(
+         {:websocket_owner_output_commit_probe, _correlation_id, _epoch, owner_turn_id,
+          _active_turn_ref, _owner_pid, _probe_ref},
+         state
+       )
+       when is_pid(owner_turn_id) do
+    if tracked_response_task?(state, owner_turn_id), do: owner_turn_id
+  end
+
+  defp tracked_native_owner_turn_pid(_message, _state), do: nil
 
   defp output_commit_probe_visible?(state, owner_turn_id) do
     if Adapter.public_responses_stream?(state) do

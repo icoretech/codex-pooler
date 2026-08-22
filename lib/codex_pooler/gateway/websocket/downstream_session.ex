@@ -151,17 +151,15 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
         %{websocket_owner_downstream: downstream, tasks: tasks}
       )
       when is_pid(owner_turn_id) and is_map(downstream) do
-    case MapSet.to_list(tasks) do
-      [^owner_turn_id] ->
-        WebsocketOwnerContract.accept_downstream_message(
-          message,
-          Map.get(downstream, :epoch),
-          Map.get(downstream, :correlation_id),
-          owner_turn_id
-        )
-
-      _no_matching_turn ->
-        :drop
+    if MapSet.member?(tasks, owner_turn_id) do
+      WebsocketOwnerContract.accept_downstream_message(
+        message,
+        Map.get(downstream, :epoch),
+        Map.get(downstream, :correlation_id),
+        owner_turn_id
+      )
+    else
+      :drop
     end
   end
 
