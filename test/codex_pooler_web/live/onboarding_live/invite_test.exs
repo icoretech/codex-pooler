@@ -18,6 +18,11 @@ defmodule CodexPoolerWeb.OnboardingLive.InviteTest do
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
   alias CodexPoolerWeb.OnboardingLive.Invite.Components
 
+  setup do
+    reset_bootstrap_state_fixture!()
+    :ok
+  end
+
   @tag :relative_countdown_contract
   test "renders a valid invite link without authentication" do
     pool = pool_fixture(%{slug: "team-alpha", name: "Team Alpha"})

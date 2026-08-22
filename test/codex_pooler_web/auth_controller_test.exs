@@ -15,6 +15,17 @@ defmodule CodexPoolerWeb.AuthControllerTest do
     :ok
   end
 
+  test "bootstrap reset restores the pending auth surface after a completed owner", %{conn: conn} do
+    bootstrap_owner_fixture(%{"email" => "completed-owner@example.com"})
+    refute Accounts.bootstrap_pending?()
+
+    reset_bootstrap_state_fixture!()
+
+    assert Accounts.bootstrap_pending?()
+    assert html_response(get(conn, ~p"/bootstrap"), 200) =~ ~s(id="bootstrap-form")
+    assert redirected_to(get(build_conn(), ~p"/login")) == ~p"/bootstrap"
+  end
+
   test "bootstrap and login pages expose stable form selectors", %{conn: conn} do
     conn = get(conn, ~p"/bootstrap")
     bootstrap_html = html_response(conn, 200)

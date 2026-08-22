@@ -4,6 +4,8 @@ defmodule CodexPoolerWeb.Runtime.RequestLoggingTest do
   import Ecto.Query
   import ExUnit.CaptureLog
 
+  import CodexPooler.AccountsFixtures, only: [reset_bootstrap_state_fixture!: 0]
+
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [auth: 2, gateway_setup: 1, start_upstream: 1]
 
@@ -13,6 +15,8 @@ defmodule CodexPoolerWeb.Runtime.RequestLoggingTest do
   alias CodexPooler.Repo
 
   setup do
+    reset_bootstrap_state_fixture!()
+
     previous_level = Logger.level()
 
     previous_owner_forwarding =
