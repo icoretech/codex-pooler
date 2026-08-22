@@ -121,6 +121,52 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTaskTest do
     refute_received {:codex_response_done, ^pid, {:error, :owner_drained}}
   end
 
+  test "cancellation admitted before watcher handoff settles without dispatch", %{
+    registry: registry
+  } do
+    parent = self()
+
+    {:ok, pid} =
+      ResponseTask.start(
+        parent,
+        :proxy,
+        fn _task_pid ->
+          send(parent, :forbidden_gap_dispatch)
+          :ok
+        end,
+        fn task_pid, reason -> send(parent, {:gap_cancelled, task_pid, reason}) end,
+        activity_registry: registry,
+        before_cancel_recipient_handoff: fn token ->
+          send(parent, {:before_cancel_recipient_handoff, self(), token})
+
+          receive do
+            :release_cancel_recipient_handoff -> :ok
+          end
+        end
+      )
+
+    on_exit(fn -> if Process.alive?(pid), do: Process.exit(pid, :kill) end)
+    monitor = Process.monitor(pid)
+    assert_receive {:before_cancel_recipient_handoff, ^pid, token}
+    assert {_epoch, [%{token: ^token, pid: ^pid}]} = ActivityRegistry.begin_drain(name: registry)
+    assert :ok = ActivityRegistry.cancel(token, :owner_drained, name: registry)
+    assert {:active, :cancelling} = ActivityRegistry.status(token, name: registry)
+    send(pid, :release_cancel_recipient_handoff)
+
+    refute_received :forbidden_gap_dispatch
+    assert_receive {:gap_cancelled, ^pid, :owner_drained}
+    assert_receive {:websocket_response_activity, ^pid, ^token}
+
+    assert_receive {:websocket_response_activity_cancelled, ^pid, ^token, ack_pid, :owner_drained}
+
+    assert :ok = ResponseTask.acknowledge_delivery(ack_pid, token)
+    assert_receive {:codex_response_done, ^pid, {:error, :owner_drained}}
+    assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}
+    assert {:finished, :aborted} = ActivityRegistry.status(token, name: registry)
+    refute_received :forbidden_gap_dispatch
+    refute_received {:codex_response_done, ^pid, {:error, :owner_drained}}
+  end
+
   test "cancellation accepted before completion handoff cannot be lost to the old watcher", %{
     registry: registry
   } do

@@ -50,6 +50,11 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
   defp run_admitted(parent, token, registry, run_callback, cancel_callback, opts) do
     coordinator = self()
 
+    run_before_cancel_recipient_handoff(
+      Keyword.get(opts, :before_cancel_recipient_handoff),
+      token
+    )
+
     watcher =
       start_cancellation_watcher(
         parent,
@@ -61,6 +66,34 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
 
     :ok = ActivityRegistry.set_cancel_recipient(token, watcher, name: registry)
 
+    case settle_admission_cancellation(token, registry, watcher) do
+      :active ->
+        run_callback_and_await_delivery(
+          parent,
+          coordinator,
+          token,
+          watcher,
+          registry,
+          run_callback,
+          cancel_callback,
+          opts
+        )
+
+      :cancelled ->
+        :ok
+    end
+  end
+
+  defp run_callback_and_await_delivery(
+         parent,
+         coordinator,
+         token,
+         watcher,
+         registry,
+         run_callback,
+         cancel_callback,
+         opts
+       ) do
     {outcome, result} = run_callback_result(run_callback, coordinator)
     run_before_completion_handoff(Keyword.get(opts, :before_completion_handoff), token, watcher)
 
@@ -82,6 +115,40 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
         end
     end
   end
+
+  defp settle_admission_cancellation(token, registry, watcher) do
+    case ActivityRegistry.status(token, name: registry) do
+      {:active, :cancelling} ->
+        forward_queued_admission_cancellation(token, watcher)
+
+        receive do
+          {:websocket_response_cancellation_settled, ^token} -> :cancelled
+        end
+
+      {:active, _status} ->
+        :active
+
+      {:finished, _outcome} ->
+        :cancelled
+
+      :unknown ->
+        :cancelled
+    end
+  end
+
+  defp forward_queued_admission_cancellation(token, watcher) do
+    receive do
+      {:websocket_activity_cancel, ^token, :owner_drained} ->
+        send(watcher, {:websocket_activity_cancel, token, :owner_drained, :pre_dispatch})
+    after
+      0 -> :ok
+    end
+  end
+
+  defp run_before_cancel_recipient_handoff(callback, token) when is_function(callback, 1),
+    do: callback.(token)
+
+  defp run_before_cancel_recipient_handoff(_callback, _token), do: :ok
 
   defp run_before_completion_handoff(callback, token, watcher) when is_function(callback, 2),
     do: callback.(token, watcher)
@@ -107,24 +174,25 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
       monitor = Process.monitor(coordinator)
 
       receive do
-        {:websocket_activity_cancel, ^token, :owner_drained} ->
-          _cancel_result = cancel_callback.(coordinator, :owner_drained)
-          send(parent, {:websocket_response_activity, coordinator, token})
-
-          send(
+        {:websocket_activity_cancel, ^token, :owner_drained, :pre_dispatch} ->
+          settle_cancellation(
             parent,
-            {:websocket_response_activity_cancelled, coordinator, token, self(), :owner_drained}
+            coordinator,
+            token,
+            registry,
+            cancel_callback,
+            false
           )
 
-          receive do
-            {:websocket_response_delivery_ack, ^token} ->
-              :ok = ActivityRegistry.unregister(token, :aborted, name: registry)
-              send(parent, {:codex_response_done, coordinator, {:error, :owner_drained}})
-              send(coordinator, {:websocket_response_cancellation_settled, token})
-              Process.exit(coordinator, :kill)
-          end
-
-          Process.demonitor(monitor, [:flush])
+        {:websocket_activity_cancel, ^token, :owner_drained} ->
+          settle_cancellation(
+            parent,
+            coordinator,
+            token,
+            registry,
+            cancel_callback,
+            true
+          )
 
         {:websocket_response_cancel_watcher_stop, ^token} ->
           Process.demonitor(monitor, [:flush])
@@ -133,6 +201,31 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
           :ok
       end
     end)
+  end
+
+  defp settle_cancellation(
+         parent,
+         coordinator,
+         token,
+         registry,
+         cancel_callback,
+         kill_coordinator?
+       ) do
+    _cancel_result = cancel_callback.(coordinator, :owner_drained)
+    send(parent, {:websocket_response_activity, coordinator, token})
+
+    send(
+      parent,
+      {:websocket_response_activity_cancelled, coordinator, token, self(), :owner_drained}
+    )
+
+    receive do
+      {:websocket_response_delivery_ack, ^token} ->
+        :ok = ActivityRegistry.unregister(token, :aborted, name: registry)
+        send(parent, {:codex_response_done, coordinator, {:error, :owner_drained}})
+        send(coordinator, {:websocket_response_cancellation_settled, token})
+        if kill_coordinator?, do: Process.exit(coordinator, :kill)
+    end
   end
 
   defp stop_cancellation_watcher(watcher, token) do
