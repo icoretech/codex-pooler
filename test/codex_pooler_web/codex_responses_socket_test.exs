@@ -10,8 +10,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Transports.Admission
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
+  alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
-  alias CodexPooler.Gateway.Websocket.Adapter
+  alias CodexPooler.Gateway.Websocket.{Adapter, ResponseTask}
+  alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.InstanceSettings.{Cache, Settings}
   alias CodexPooler.Pools.Membership
   alias CodexPoolerWeb.CodexResponsesSocket
@@ -1713,6 +1715,211 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     assert_native_turn_logs(logs, 1, "owner_drained")
     assert logs =~ "request_id=ws-owner-drain-late-native-log"
+  end
+
+  test "rollout drain waits after proxy task result until the native owner terminal is delivered" do
+    harness = WebsocketRolloutDrainSupport.start_rollout_drain_harness(self())
+    parent = self()
+
+    {:ok, task_pid} =
+      ResponseTask.start(
+        parent,
+        :proxy,
+        fn _task_pid -> {:socket_response_result, :owner_completion_pending, :ok} end,
+        fn _task_pid, _reason -> :kill_worker end,
+        activity_registry: harness.activity_registry
+      )
+
+    task_monitor = Process.monitor(task_pid)
+
+    assert_receive {:websocket_response_activity, ^task_pid, activity_token}
+
+    assert_receive {:codex_response_done, ^task_pid,
+                    {:socket_response_result, :owner_completion_pending, :ok}}
+
+    state = %{
+      opts: RequestOptions.for_websocket(%{}),
+      tasks: MapSet.new([task_pid]),
+      task_monitors: %{task_pid => task_monitor},
+      queued_response_payloads: :queue.new(),
+      websocket_owner_downstream: %{
+        pid: self(),
+        epoch: 21,
+        correlation_id: "corr-rollout-terminal-delivery",
+        active_turn_reconnect?: false
+      },
+      native_turn_output_task_pids: MapSet.new()
+    }
+
+    assert {:ok, activity_state} =
+             CodexResponsesSocket.handle_info(
+               {:websocket_response_activity, task_pid, activity_token},
+               state
+             )
+
+    assert {:ok, result_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_done, task_pid,
+                {:socket_response_result, :owner_completion_pending, :ok}},
+               activity_state
+             )
+
+    drain_task =
+      Task.async(fn ->
+        RolloutDrain.start_drain(
+          [name: harness.name, timeout_ms: 500] ++
+            WebsocketRolloutDrainSupport.deadline_options(harness.deadline)
+        )
+      end)
+
+    assert_receive {:rollout_drain_deadline_wait, _deadline, _wait_ms}
+    assert Process.alive?(drain_task.pid)
+
+    terminal = ~s({"type":"response.completed","response":{"id":"resp_terminal_safe"}})
+
+    assert {:push, {:text, ^terminal}, terminal_state} =
+             CodexResponsesSocket.handle_info(
+               {:websocket_owner_frame, "corr-rollout-terminal-delivery", 21, task_pid,
+                {:data, terminal}},
+               result_state
+             )
+
+    assert Process.alive?(drain_task.pid)
+
+    assert {:ok, completed_state} =
+             CodexResponsesSocket.handle_info(
+               {:websocket_owner_frame, "corr-rollout-terminal-delivery", 21, task_pid,
+                :complete},
+               terminal_state
+             )
+
+    assert_receive {:websocket_response_delivery_complete, ^task_pid, ^activity_token} =
+                     delivery_ack
+
+    assert {:ok, final_state} = CodexResponsesSocket.handle_info(delivery_ack, completed_state)
+
+    assert %{proxy_turns_seen: 1, proxy_turns_completed: 1, proxy_turns_aborted: 0} =
+             Task.await(drain_task, 5_000)
+
+    assert MapSet.size(final_state.tasks) == 0
+  end
+
+  test "rollout deadline after proxy task result delivers one owner_drained terminal before abort completes" do
+    harness = WebsocketRolloutDrainSupport.start_rollout_drain_harness(self())
+    parent = self()
+
+    {:ok, task_pid} =
+      ResponseTask.start(
+        parent,
+        :proxy,
+        fn _task_pid -> {:socket_response_result, :owner_completion_pending, :ok} end,
+        fn cancelled_pid, reason ->
+          send(parent, {:terminal_wait_cancelled, cancelled_pid, reason})
+        end,
+        activity_registry: harness.activity_registry
+      )
+
+    task_monitor = Process.monitor(task_pid)
+    assert_receive {:websocket_response_activity, ^task_pid, activity_token}
+
+    assert_receive {:codex_response_done, ^task_pid,
+                    {:socket_response_result, :owner_completion_pending, :ok}}
+
+    state = %{
+      opts: RequestOptions.for_websocket(%{}),
+      tasks: MapSet.new([task_pid]),
+      task_monitors: %{task_pid => task_monitor},
+      queued_response_payloads: :queue.new(),
+      websocket_owner_downstream: %{
+        pid: self(),
+        epoch: 22,
+        correlation_id: "corr-rollout-terminal-deadline",
+        active_turn_reconnect?: false
+      },
+      native_turn_output_task_pids: MapSet.new()
+    }
+
+    assert {:ok, activity_state} =
+             CodexResponsesSocket.handle_info(
+               {:websocket_response_activity, task_pid, activity_token},
+               state
+             )
+
+    assert {:ok, result_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_done, task_pid,
+                {:socket_response_result, :owner_completion_pending, :ok}},
+               activity_state
+             )
+
+    drain_task =
+      Task.async(fn ->
+        RolloutDrain.start_drain(
+          [
+            name: harness.name,
+            timeout_ms: 25,
+            deadline_margin_ms: 20,
+            deadline_floor_ms: 10
+          ] ++ WebsocketRolloutDrainSupport.deadline_options(harness.deadline)
+        )
+      end)
+
+    assert_receive {:rollout_drain_deadline_wait, deadline, 10}
+    assert :ok = WebsocketRolloutDrainSupport.VirtualDeadline.advance(deadline, 10)
+    assert_receive {:terminal_wait_cancelled, ^task_pid, :owner_drained}
+
+    assert_receive {:websocket_response_activity_cancelled, ^task_pid, ^activity_token,
+                    :owner_drained} = cancellation
+
+    assert {:push, {:text, terminal}, cancelled_state} =
+             CodexResponsesSocket.handle_info(cancellation, result_state)
+
+    assert Jason.decode!(terminal)["error"]["code"] == "owner_drained"
+    assert Process.alive?(drain_task.pid)
+
+    assert_receive {:websocket_response_delivery_complete, ^task_pid, ^activity_token} =
+                     delivery_ack
+
+    assert {:ok, final_state} = CodexResponsesSocket.handle_info(delivery_ack, cancelled_state)
+
+    assert %{proxy_turns_seen: 1, proxy_turns_completed: 0, proxy_turns_aborted: 1} =
+             Task.await(drain_task, 5_000)
+
+    refute_received {:terminal_wait_cancelled, ^task_pid, :owner_drained}
+    assert MapSet.size(final_state.tasks) == 0
+  end
+
+  test "socket termination acknowledges a task already waiting only for terminal cleanup" do
+    harness = WebsocketRolloutDrainSupport.start_rollout_drain_harness(self())
+    parent = self()
+
+    {:ok, task_pid} =
+      ResponseTask.start(
+        parent,
+        :direct,
+        fn _task_pid -> :ok end,
+        fn _task_pid, _reason -> :kill_worker end,
+        activity_registry: harness.activity_registry
+      )
+
+    task_monitor = Process.monitor(task_pid)
+    assert_receive {:websocket_response_activity, ^task_pid, activity_token}
+    assert_receive {:codex_response_done, ^task_pid, :ok}
+
+    state = %{
+      auth: nil,
+      opts: RequestOptions.for_websocket(%{}),
+      codex_session: nil,
+      upstream_websocket_session: nil,
+      request_response_work_started?: true,
+      tasks: MapSet.new([task_pid]),
+      task_monitors: %{task_pid => task_monitor},
+      response_task_activities: %{task_pid => activity_token}
+    }
+
+    assert :ok = CodexResponsesSocket.terminate(:normal, state)
+    assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, :normal}
+    assert ActivityRegistry.activities(name: harness.activity_registry) == []
   end
 
   @tag :task_1_fix_red

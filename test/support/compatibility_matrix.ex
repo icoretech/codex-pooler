@@ -2451,6 +2451,7 @@ defmodule CodexPooler.CompatibilityMatrix do
           local_activity: ["direct_response_task", "remote_owner_proxy_response_task"],
           admission: "register_before_atomic_cutoff_gate",
           deadline: "shared_absolute_existing_budget",
+          completion_boundary: "socket_terminal_delivery_safe",
           remote_owner: "matching_turn_cancelled_owner_and_lease_reusable",
           summary_counters: [
             "direct_turns_seen",

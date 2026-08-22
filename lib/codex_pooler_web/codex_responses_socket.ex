@@ -155,10 +155,30 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> close_if_revoked_idle()
   end
 
+  def handle_info({:websocket_response_activity, pid, token}, state)
+      when is_pid(pid) and is_reference(token) do
+    {:ok, put_response_task_activity(state, pid, token)}
+  end
+
   def handle_info({:codex_response_done, pid, result}, state) when is_pid(pid) do
-    result = handle_response_done(pid, result, state)
+    result =
+      pid
+      |> handle_response_done(result, state)
+      |> maybe_schedule_response_delivery(pid)
 
     close_if_revoked_idle(result)
+  end
+
+  def handle_info({:websocket_response_delivery_complete, pid, token}, state)
+      when is_pid(pid) and is_reference(token) do
+    state = complete_response_task_delivery(state, pid, token)
+    close_if_revoked_idle({:ok, state})
+  end
+
+  def handle_info({:websocket_response_activity_cancelled, pid, token, :owner_drained}, state)
+      when is_pid(pid) and is_reference(token) do
+    handle_cancelled_response_activity(state, pid, token)
+    |> close_if_revoked_idle()
   end
 
   def handle_info({:public_response_start_error, ref, reason}, state)
@@ -279,13 +299,17 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       |> Map.get(:tasks, MapSet.new())
       |> await_response_tasks(@pre_cleanup_response_task_drain_ms)
 
-    unless owner_forwarded_socket?(state) do
-      cancel_response_tasks(remaining_tasks, :websocket_terminated)
-    end
-
     cleanup_websocket_session(reason, state)
 
     close_upstream_websocket_session(state)
+
+    acknowledge_response_task_cleanup(state)
+
+    unless owner_forwarded_socket?(state) do
+      remaining_tasks
+      |> Enum.reject(&response_task_activity?(state, &1))
+      |> cancel_response_tasks(:websocket_terminated)
+    end
 
     _remaining_tasks = remaining_response_tasks_after_cleanup(state, remaining_tasks)
 
@@ -361,6 +385,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> Map.put(:public_turn_aborted?, false)
     |> Map.put(:public_turn_output_committed?, false)
     |> Map.put(:native_turn_output_task_pids, MapSet.new())
+    |> Map.put(:response_task_activities, %{})
+    |> Map.put(:response_task_delivery_scheduled, MapSet.new())
+    |> Map.put(:native_owner_terminal_delivered?, false)
   end
 
   defp initialize_revocation_state(state) do
@@ -651,6 +678,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       state
       |> Map.put(:websocket_owner_drain_observed?, true)
       |> abort_public_turn(:owner_drained)
+      |> schedule_response_task_delivery(Map.get(state, :public_response_task_pid))
 
     {:push, {:text, encoded}, state}
   end
@@ -708,6 +736,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       |> Map.put(:websocket_owner_drain_observed?, true)
       |> cancel_tracked_response_tasks(:owner_drained)
       |> reset_owner_turn_output()
+      |> schedule_active_response_task_delivery()
 
     {:push, {:text, Jason.encode!(Adapter.websocket_error(payload))}, state}
   end
@@ -720,7 +749,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     state =
       state
       |> Map.put(:websocket_owner_active_turn_reconnect?, false)
+      |> Map.put(:native_owner_terminal_delivered?, true)
       |> reset_owner_turn_output()
+      |> schedule_active_response_task_delivery()
 
     {:ok, state}
   end
@@ -916,6 +947,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp finish_public_turn(state) do
+    task_pid = Map.get(state, :public_response_task_pid)
+
     state
     |> Map.put(:public_response_task_pid, nil)
     |> clear_public_response_context()
@@ -924,6 +957,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     |> Map.put(:public_owner_retarget_error?, false)
     |> Map.put(:public_turn_aborted?, false)
     |> Map.put(:public_turn_output_committed?, false)
+    |> schedule_response_task_delivery(task_pid)
     |> maybe_start_queued_response_task()
   end
 
@@ -1035,7 +1069,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       {:ok, payload, state} ->
         case Adapter.maybe_retarget_before_start(payload, state) do
           {:ok, state} ->
-            state = maybe_mark_request_response_work_started(state, payload)
+            state =
+              state
+              |> maybe_mark_request_response_work_started(payload)
+              |> reset_native_owner_terminal_delivery()
 
             parent = self()
             {:ok, pid} = start_response_task(parent, payload, state)
@@ -1137,6 +1174,149 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     state
     |> Map.update(:tasks, MapSet.new([pid]), &MapSet.put(&1, pid))
     |> Map.update(:task_monitors, %{pid => monitor}, &Map.put(&1, pid, monitor))
+  end
+
+  defp put_response_task_activity(state, pid, token) do
+    Map.update(
+      state,
+      :response_task_activities,
+      %{pid => token},
+      &Map.put(&1, pid, token)
+    )
+  end
+
+  defp response_task_activity?(state, pid) when is_pid(pid) do
+    Map.has_key?(Map.get(state, :response_task_activities, %{}), pid)
+  end
+
+  defp maybe_schedule_response_delivery({:stop, reason, detail, state}, pid) do
+    {:stop, reason, detail, complete_response_task_delivery_for_pid(state, pid)}
+  end
+
+  defp maybe_schedule_response_delivery({:stop, detail, state}, pid) do
+    {:stop, detail, complete_response_task_delivery_for_pid(state, pid)}
+  end
+
+  defp maybe_schedule_response_delivery(result, pid) do
+    map_socket_result_state(result, fn state ->
+      if response_delivery_safe?(result, state, pid) do
+        schedule_response_task_delivery(state, pid)
+      else
+        state
+      end
+    end)
+  end
+
+  defp response_delivery_safe?(_result, state, pid) do
+    cond do
+      not owner_forwarded_socket?(state) -> true
+      Adapter.public_responses_stream?(state) -> Map.get(state, :public_response_task_pid) != pid
+      true -> Map.get(state, :native_owner_terminal_delivered?, false)
+    end
+  end
+
+  defp map_socket_result_state({:ok, state}, fun), do: {:ok, fun.(state)}
+  defp map_socket_result_state({:push, frame, state}, fun), do: {:push, frame, fun.(state)}
+
+  defp schedule_active_response_task_delivery(state) do
+    state
+    |> Map.get(:response_task_activities, %{})
+    |> Map.keys()
+    |> Enum.find(&tracked_response_task?(state, &1))
+    |> then(&schedule_response_task_delivery(state, &1))
+  end
+
+  defp schedule_response_task_delivery(state, pid) when is_pid(pid) do
+    activities = Map.get(state, :response_task_activities, %{})
+    scheduled = Map.get(state, :response_task_delivery_scheduled, MapSet.new())
+
+    case Map.get(activities, pid) do
+      token when is_reference(token) ->
+        if MapSet.member?(scheduled, token) do
+          state
+        else
+          send(self(), {:websocket_response_delivery_complete, pid, token})
+          Map.put(state, :response_task_delivery_scheduled, MapSet.put(scheduled, token))
+        end
+
+      _unknown ->
+        state
+    end
+  end
+
+  defp schedule_response_task_delivery(state, _pid), do: state
+
+  defp complete_response_task_delivery(state, pid, token) do
+    case Map.get(Map.get(state, :response_task_activities, %{}), pid) do
+      ^token ->
+        :ok = ResponseTask.acknowledge_delivery(pid, token)
+
+        state
+        |> Map.update(:response_task_activities, %{}, &Map.delete(&1, pid))
+        |> Map.update(
+          :response_task_delivery_scheduled,
+          MapSet.new(),
+          &MapSet.delete(&1, token)
+        )
+        |> do_remove_tracked_response_task(pid)
+        |> remove_native_turn_output(pid)
+        |> Map.put(:native_owner_terminal_delivered?, false)
+        |> maybe_start_queued_response_task()
+
+      _stale ->
+        state
+    end
+  end
+
+  defp complete_response_task_delivery_for_pid(state, pid) do
+    case Map.get(Map.get(state, :response_task_activities, %{}), pid) do
+      token when is_reference(token) -> complete_response_task_delivery(state, pid, token)
+      _unknown -> state
+    end
+  end
+
+  defp acknowledge_response_task_cleanup(state) do
+    state
+    |> Map.get(:response_task_activities, %{})
+    |> Enum.each(fn {pid, token} -> ResponseTask.acknowledge_delivery(pid, token) end)
+
+    :ok
+  end
+
+  defp handle_cancelled_response_activity(state, pid, token) do
+    case Map.get(Map.get(state, :response_task_activities, %{}), pid) do
+      ^token ->
+        {:ok, payload} = WebsocketOwnerContract.safe_error_payload(:owner_drained, nil)
+
+        if Adapter.public_responses_stream?(state) do
+          state =
+            state
+            |> Map.put(:websocket_owner_drain_observed?, true)
+            |> abort_public_turn(:owner_drained)
+            |> schedule_response_task_delivery(pid)
+
+          {:push, {:text, encode_public_error(payload, state)}, state}
+        else
+          state =
+            state
+            |> Map.put(:websocket_owner_drain_observed?, true)
+            |> reset_owner_turn_output()
+            |> schedule_response_task_delivery(pid)
+
+          {:push, {:text, Jason.encode!(Adapter.websocket_error(payload))}, state}
+        end
+
+      _stale ->
+        {:ok, state}
+    end
+  end
+
+  defp reset_native_owner_terminal_delivery(state) do
+    if owner_forwarded_socket?(state) and not Adapter.public_responses_stream?(state) do
+      Map.put(state, :native_owner_terminal_delivered?, false)
+    else
+      state
+    end
   end
 
   defp maybe_open_public_turn(state, payload, pid) do
@@ -1260,6 +1440,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     do: reason
 
   defp remove_tracked_response_task(state, pid) when is_pid(pid) do
+    if response_task_activity?(state, pid) do
+      state
+    else
+      do_remove_tracked_response_task(state, pid)
+    end
+  end
+
+  defp do_remove_tracked_response_task(state, pid) when is_pid(pid) do
     {monitor, state} = pop_task_monitor(state, pid)
 
     if monitor do
@@ -1281,6 +1469,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp cancel_tracked_response_tasks(state, reason) do
     state
     |> Map.get(:tasks, MapSet.new())
+    |> Enum.reject(&response_task_activity?(state, &1))
     |> cancel_response_tasks(reason)
 
     state

@@ -23,6 +23,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Gateway.Websocket.ResponseTask
+  alias CodexPoolerWeb.CodexResponsesSocket
 
   @epmd_ready_timeout_ms 2_000
   @epmd_ready_poll_ms 10
@@ -1615,6 +1616,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
 
     assert_receive {:websocket_owner_harness_barrier, peer_turn_task, ^release_ref}
 
+    assert_receive {:websocket_owner_frame, "corr-real-peer-rollout-proxy", 1, ^response_task,
+                    {:data, ^terminal}} = terminal_message
+
     drain_task =
       Task.async(fn ->
         RolloutDrain.start_drain(
@@ -1623,14 +1627,51 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
         )
       end)
 
-    assert_receive {:rollout_drain_deadline_wait, deadline, wait_ms}
+    assert_receive {:rollout_drain_deadline_wait, _deadline, _wait_ms}
     refute_received {:codex_response_done, ^response_task, _result}
     send(peer_turn_task, {:websocket_owner_harness_release, release_ref})
 
-    assert_receive {:codex_response_done, ^response_task,
-                    {:ok, %{terminal: "response.completed"}}}
+    assert_receive {:websocket_response_activity, ^response_task, activity_token}
 
-    assert :ok = WebsocketRolloutDrainSupport.VirtualDeadline.advance(deadline, wait_ms)
+    assert_receive {:codex_response_done, ^response_task,
+                    {:ok, %{terminal: "response.completed"}}} = done_message
+
+    assert_receive {:websocket_owner_frame, "corr-real-peer-rollout-proxy", 1, ^response_task,
+                    :complete} = complete_message
+
+    task_monitor = Process.monitor(response_task)
+
+    socket_state = %{
+      opts: RequestOptions.for_websocket(%{}),
+      tasks: MapSet.new([response_task]),
+      task_monitors: %{response_task => task_monitor},
+      queued_response_payloads: :queue.new(),
+      websocket_owner_downstream: stable_downstream,
+      native_turn_output_task_pids: MapSet.new()
+    }
+
+    assert {:ok, activity_state} =
+             CodexResponsesSocket.handle_info(
+               {:websocket_response_activity, response_task, activity_token},
+               socket_state
+             )
+
+    assert {:ok, result_state} = CodexResponsesSocket.handle_info(done_message, activity_state)
+
+    assert Process.alive?(drain_task.pid)
+
+    assert {:push, {:text, ^terminal}, terminal_state} =
+             CodexResponsesSocket.handle_info(terminal_message, result_state)
+
+    assert Process.alive?(drain_task.pid)
+
+    assert {:ok, completed_state} =
+             CodexResponsesSocket.handle_info(complete_message, terminal_state)
+
+    assert_receive {:websocket_response_delivery_complete, ^response_task, ^activity_token} =
+                     delivery_ack
+
+    assert {:ok, _final_state} = CodexResponsesSocket.handle_info(delivery_ack, completed_state)
 
     assert %{proxy_turns_seen: 1, proxy_turns_completed: 1, proxy_turns_aborted: 0} =
              Task.await(drain_task, @peer_detection_timeout_ms)

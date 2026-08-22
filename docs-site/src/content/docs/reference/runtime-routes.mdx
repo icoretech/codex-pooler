@@ -765,6 +765,9 @@ response tasks and response tasks proxying a turn to an owner on another app
 instance. Each response task registers before its synchronous drain-admission
 gate, and the drain sets its cutoff before taking the snapshot, so every task is
 either in the shared absolute drain budget or rejected before upstream dispatch.
+Completion is counted only after the WebSock callback that owns the active turn
+has returned its terminal push, or has reached an equivalent safe terminal or
+close lifecycle; task exit alone is not completion.
 When that budget expires, the proxy cancels only its matching owner turn with
 `owner_drained`; it does not drain or release the healthy remote owner, which
 remains reusable. Local owner turns keep their existing owner-derived accounting

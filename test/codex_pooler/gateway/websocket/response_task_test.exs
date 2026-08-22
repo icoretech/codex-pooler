@@ -26,7 +26,12 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTaskTest do
       )
 
     assert_receive {:upstream_started, ^pid, [%{kind: :direct, pid: ^pid, status: :admitted}]}
+    monitor = Process.monitor(pid)
+    assert_receive {:websocket_response_activity, ^pid, token}
     assert_receive {:codex_response_done, ^pid, :ok}
+    assert {:active, :admitted} = ActivityRegistry.status(token, name: registry)
+    assert :ok = ResponseTask.acknowledge_delivery(pid, token)
+    assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}
     assert ActivityRegistry.activities(name: registry) == []
   end
 

@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
   @type activity_kind :: :direct | :proxy | :local_owner
   @type run_callback :: (pid() -> term())
   @type cancel_callback :: (pid(), :owner_drained -> term())
+  @type activity_token :: reference()
 
   @spec start(pid(), activity_kind(), run_callback(), cancel_callback(), keyword()) ::
           {:ok, pid()}
@@ -14,29 +15,39 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
              is_function(run_callback, 1) and is_function(cancel_callback, 2) do
     Task.start(fn ->
       Process.flag(:sensitive, true)
-      result = run(kind, run_callback, cancel_callback, opts)
-      send(parent, {:codex_response_done, self(), result})
+
+      case kind do
+        :local_owner ->
+          send(parent, {:codex_response_done, self(), run_callback.(self())})
+
+        tracked_kind ->
+          run_tracked(parent, tracked_kind, run_callback, cancel_callback, opts)
+      end
     end)
   end
 
-  defp run(:local_owner, run_callback, _cancel_callback, _opts), do: run_callback.(self())
+  @spec acknowledge_delivery(pid(), activity_token()) :: :ok
+  def acknowledge_delivery(task_pid, token) when is_pid(task_pid) and is_reference(token) do
+    send(task_pid, {:websocket_response_delivery_ack, token})
+    :ok
+  end
 
-  defp run(kind, run_callback, cancel_callback, opts) do
+  defp run_tracked(parent, kind, run_callback, cancel_callback, opts) do
     registry = Keyword.get(opts, :activity_registry, ActivityRegistry)
 
     with {:ok, token} <- ActivityRegistry.register(kind, self(), name: registry) do
       case ActivityRegistry.admit(token, name: registry) do
         :ok ->
-          run_admitted(token, registry, run_callback, cancel_callback)
+          run_admitted(parent, token, registry, run_callback, cancel_callback)
 
         {:error, :owner_drained} ->
           :ok = ActivityRegistry.unregister(token, :aborted, name: registry)
-          {:error, :owner_drained}
+          send(parent, {:codex_response_done, self(), {:error, :owner_drained}})
       end
     end
   end
 
-  defp run_admitted(token, registry, run_callback, cancel_callback) do
+  defp run_admitted(parent, token, registry, run_callback, cancel_callback) do
     coordinator = self()
     worker_ref = make_ref()
 
@@ -46,18 +57,33 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
     receive do
       {^worker_ref, result} ->
         Process.demonitor(monitor, [:flush])
-        :ok = ActivityRegistry.unregister(token, :completed, name: registry)
-        result
+        send(parent, {:websocket_response_activity, coordinator, token})
+        send(parent, {:codex_response_done, coordinator, result})
+        await_delivery(parent, token, registry, cancel_callback, :completed)
 
       {:DOWN, ^monitor, :process, ^worker, _reason} ->
-        :ok = ActivityRegistry.unregister(token, :failed, name: registry)
-        {:error, :websocket_response_task_failed}
+        result = {:error, :websocket_response_task_failed}
+        send(parent, {:websocket_response_activity, coordinator, token})
+        send(parent, {:codex_response_done, coordinator, result})
+        await_delivery(parent, token, registry, cancel_callback, :failed)
 
       {:websocket_activity_cancel, ^token, :owner_drained} ->
         cancel_result = cancel_callback.(coordinator, :owner_drained)
         settle_cancelled_worker(cancel_result, worker_ref, monitor, worker)
         :ok = ActivityRegistry.unregister(token, :aborted, name: registry)
-        {:error, :owner_drained}
+        send(parent, {:codex_response_done, coordinator, {:error, :owner_drained}})
+    end
+  end
+
+  defp await_delivery(parent, token, registry, cancel_callback, outcome) do
+    receive do
+      {:websocket_response_delivery_ack, ^token} ->
+        :ok = ActivityRegistry.unregister(token, outcome, name: registry)
+
+      {:websocket_activity_cancel, ^token, :owner_drained} ->
+        _cancel_result = cancel_callback.(self(), :owner_drained)
+        send(parent, {:websocket_response_activity_cancelled, self(), token, :owner_drained})
+        await_delivery(parent, token, registry, cancel_callback, :aborted)
     end
   end
 

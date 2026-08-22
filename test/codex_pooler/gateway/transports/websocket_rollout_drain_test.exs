@@ -472,7 +472,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
     assert_receive {:rollout_drain_deadline_wait, ^deadline, _wait_ms}
     send(direct_worker, :complete_direct_turn)
+    assert_receive {:websocket_response_activity, ^response_task, activity_token}
     assert_receive {:codex_response_done, ^response_task, :ok}
+    assert Process.alive?(drain_task.pid)
+    assert :ok = ResponseTask.acknowledge_delivery(response_task, activity_token)
 
     assert %{
              direct_turns_seen: 1,
@@ -586,7 +589,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
     assert_receive {:rollout_drain_deadline_wait, _deadline, _wait_ms}
     send(worker, :complete_restart_proxy_turn)
+    assert_receive {:websocket_response_activity, ^response_task, activity_token}
     assert_receive {:codex_response_done, ^response_task, :ok}
+    assert Process.alive?(second_drain.pid)
+    assert :ok = ResponseTask.acknowledge_delivery(response_task, activity_token)
 
     assert %{proxy_turns_seen: 1, proxy_turns_completed: 1, proxy_turns_failed: 0} =
              Task.await(second_drain, @await_timeout_ms)

@@ -146,6 +146,25 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
       ),
       do: :drop
 
+  def accept_downstream_message(
+        {:websocket_owner_frame, _correlation_id, _epoch, owner_turn_id, _payload} = message,
+        %{websocket_owner_downstream: downstream, tasks: tasks}
+      )
+      when is_pid(owner_turn_id) and is_map(downstream) do
+    case MapSet.to_list(tasks) do
+      [^owner_turn_id] ->
+        WebsocketOwnerContract.accept_downstream_message(
+          message,
+          Map.get(downstream, :epoch),
+          Map.get(downstream, :correlation_id),
+          owner_turn_id
+        )
+
+      _no_matching_turn ->
+        :drop
+    end
+  end
+
   def accept_downstream_message(message, %{websocket_owner_downstream: downstream})
       when is_map(downstream) do
     WebsocketOwnerContract.accept_downstream_message(
@@ -340,21 +359,12 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
   defp per_call_downstream(state, owner_turn_id) do
     downstream = Map.get(state, :websocket_owner_downstream)
 
-    if public_responses_stream?(state) and is_map(downstream) and is_pid(owner_turn_id) do
+    if is_map(downstream) and is_pid(owner_turn_id) do
       Map.put(downstream, :owner_turn_id, owner_turn_id)
     else
       downstream
     end
   end
-
-  defp public_responses_stream?(%{
-         opts: %RequestOptions{
-           openai_compatibility: %{public_openai_responses_stream: true}
-         }
-       }),
-       do: true
-
-  defp public_responses_stream?(_state), do: false
 
   defp after_detach(result, state) do
     recovery_result = recover_leftovers(result, state)
