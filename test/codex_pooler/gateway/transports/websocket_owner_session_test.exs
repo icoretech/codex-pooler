@@ -1436,6 +1436,45 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     refute_received {:websocket_owner_frame, ^correlation_id, ^epoch, ^owner_turn_id, _payload}
   end
 
+  test "native owner interruption probe is acknowledged by the sole socket task", context do
+    upstream = interrupted_upstream(self(), "visible-native-ack")
+    {:ok, owner} = start_owner(context, upstream: upstream)
+
+    {:ok, stable_downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("native-probe-ack"))
+
+    owner_turn_id = self()
+    downstream = Map.put(stable_downstream, :owner_turn_id, owner_turn_id)
+
+    submit_task =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_request(owner, downstream, websocket_request())
+      end)
+
+    assert_receive {:websocket_owner_frame, "native-probe-ack", epoch, ^owner_turn_id,
+                    {:data, "visible-native-ack"}}
+
+    assert_receive {:websocket_owner_output_commit_probe, "native-probe-ack", ^epoch,
+                    ^owner_turn_id, _active_turn_ref, ^owner, _probe_ref} = probe
+
+    socket_state = %{
+      opts: RequestOptions.for_websocket(%{}),
+      tasks: MapSet.new([owner_turn_id]),
+      public_response_task_pid: nil,
+      public_turn_aborted?: false,
+      public_turn_owner_complete?: false,
+      native_turn_output_task_pids: MapSet.new([owner_turn_id]),
+      websocket_owner_downstream: stable_downstream
+    }
+
+    assert {:ok, ^socket_state} = CodexResponsesSocket.handle_info(probe, socket_state)
+    assert_receive {:websocket_owner_frame, "native-probe-ack", ^epoch, ^owner_turn_id, :complete}
+    assert Task.await(submit_task, 1_000) == interrupted_result()
+
+    refute_received {:websocket_owner_frame, "native-probe-ack", ^epoch, ^owner_turn_id,
+                     {:error, :owner_forward_timeout, _payload}}
+  end
+
   test "reconnect while probing settles the old turn without downstream delivery", context do
     upstream = interrupted_upstream(self(), "visible-reconnect")
     {:ok, owner} = start_owner(context, upstream: upstream)

@@ -1456,7 +1456,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
          false <- Map.get(state, :public_turn_owner_complete?, false),
          %{epoch: epoch, correlation_id: correlation_id} <-
            Map.get(state, :websocket_owner_downstream),
-         owner_turn_id when is_pid(owner_turn_id) <- Map.get(state, :public_response_task_pid),
+         owner_turn_id when is_pid(owner_turn_id) <- output_commit_probe_task_pid(state),
          {:ok, active_turn_ref, owner_pid, probe_ref} <-
            WebsocketOwnerContract.accept_output_commit_probe(
              message,
@@ -1467,11 +1467,34 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       send(
         owner_pid,
         {:websocket_owner_output_commit_ack, correlation_id, epoch, owner_turn_id,
-         active_turn_ref, probe_ref, Map.get(state, :public_turn_output_committed?, false)}
+         active_turn_ref, probe_ref, output_commit_probe_visible?(state, owner_turn_id)}
       )
     end
 
     {:ok, state}
+  end
+
+  defp output_commit_probe_task_pid(state) do
+    cond do
+      Adapter.public_responses_stream?(state) ->
+        Map.get(state, :public_response_task_pid)
+
+      owner_forwarded_socket?(state) ->
+        active_native_owner_turn_pid(state)
+
+      true ->
+        nil
+    end
+  end
+
+  defp output_commit_probe_visible?(state, owner_turn_id) do
+    if Adapter.public_responses_stream?(state) do
+      Map.get(state, :public_turn_output_committed?, false)
+    else
+      state
+      |> Map.get(:native_turn_output_task_pids, MapSet.new())
+      |> MapSet.member?(owner_turn_id)
+    end
   end
 
   defp maybe_mark_public_turn_output_committed(state, data) do

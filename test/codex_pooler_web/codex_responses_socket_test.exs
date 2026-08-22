@@ -1338,6 +1338,96 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
                      ^active_turn_ref, ^probe_ref, true}}
   end
 
+  test "native owner-forwarded socket acknowledges a probe for its sole tracked task" do
+    task_pid = owner_turn_pid()
+    owner_pid = self()
+    on_exit(fn -> send(task_pid, :stop) end)
+    active_turn_ref = make_ref()
+    probe_ref = make_ref()
+
+    for {visible_task_pids, expected_visible?} <- [
+          {MapSet.new(), false},
+          {MapSet.new([task_pid]), true}
+        ] do
+      state = %{
+        opts: RequestOptions.for_websocket(%{}),
+        tasks: MapSet.new([task_pid]),
+        public_response_task_pid: nil,
+        public_turn_aborted?: false,
+        public_turn_owner_complete?: false,
+        native_turn_output_task_pids: visible_task_pids,
+        websocket_owner_downstream: %{
+          pid: self(),
+          epoch: 31,
+          correlation_id: "corr-native-probe",
+          active_turn_reconnect?: false
+        }
+      }
+
+      probe =
+        {:websocket_owner_output_commit_probe, "corr-native-probe", 31, task_pid, active_turn_ref,
+         owner_pid, probe_ref}
+
+      assert {:ok, ^state} = CodexResponsesSocket.handle_info(probe, state)
+
+      assert_receive {:websocket_owner_output_commit_ack, "corr-native-probe", 31, ^task_pid,
+                      ^active_turn_ref, ^probe_ref, ^expected_visible?}
+    end
+  end
+
+  test "native output probe rejects ambiguous stale and non-owner task state" do
+    task_pid = owner_turn_pid()
+    other_task_pid = owner_turn_pid()
+    owner_pid = self()
+    on_exit(fn -> send(task_pid, :stop) end)
+    on_exit(fn -> send(other_task_pid, :stop) end)
+    active_turn_ref = make_ref()
+    probe_ref = make_ref()
+
+    base = %{
+      opts: RequestOptions.for_websocket(%{}),
+      tasks: MapSet.new([task_pid]),
+      public_response_task_pid: nil,
+      public_turn_aborted?: false,
+      public_turn_owner_complete?: false,
+      native_turn_output_task_pids: MapSet.new(),
+      websocket_owner_downstream: %{
+        pid: self(),
+        epoch: 32,
+        correlation_id: "corr-native-probe-reject",
+        active_turn_reconnect?: false
+      }
+    }
+
+    probe = fn correlation_id, epoch, owner_turn_id, carried_owner_pid ->
+      {:websocket_owner_output_commit_probe, correlation_id, epoch, owner_turn_id,
+       active_turn_ref, carried_owner_pid, probe_ref}
+    end
+
+    for state <- [
+          %{base | tasks: MapSet.new()},
+          %{base | tasks: MapSet.new([task_pid, other_task_pid])},
+          Map.delete(base, :websocket_owner_downstream)
+        ] do
+      assert {:ok, ^state} =
+               CodexResponsesSocket.handle_info(
+                 probe.("corr-native-probe-reject", 32, task_pid, owner_pid),
+                 state
+               )
+    end
+
+    for invalid_probe <- [
+          probe.("wrong-correlation", 32, task_pid, owner_pid),
+          probe.("corr-native-probe-reject", 33, task_pid, owner_pid),
+          probe.("corr-native-probe-reject", 32, other_task_pid, owner_pid),
+          probe.("corr-native-probe-reject", 32, task_pid, :not_a_pid)
+        ] do
+      assert {:ok, ^base} = CodexResponsesSocket.handle_info(invalid_probe, base)
+    end
+
+    refute_received {:websocket_owner_output_commit_ack, _, _, _, _, _, _}
+  end
+
   test "public socket refuses commitment probes for stale aborted or completed turns" do
     task_pid = self()
     active_turn_ref = make_ref()
