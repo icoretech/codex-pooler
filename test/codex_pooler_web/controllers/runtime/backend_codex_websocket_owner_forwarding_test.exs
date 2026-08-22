@@ -7779,6 +7779,59 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert_owner_three_turn_continuity_chain(:proxy)
   end
 
+  test "owner completion helper waits through response task control messages" do
+    task_pid = socket_test_task()
+    on_exit(fn -> stop_socket_test_task(task_pid) end)
+    token = make_ref()
+    active_turn_ref = make_ref()
+    probe_ref = make_ref()
+
+    base_state = %{
+      opts: RequestOptions.for_websocket(%{}),
+      tasks: MapSet.new([task_pid]),
+      task_monitors: %{},
+      queued_response_payloads: :queue.new(),
+      public_response_task_pid: nil,
+      public_turn_aborted?: false,
+      public_turn_owner_complete?: false,
+      native_turn_output_task_pids: MapSet.new(),
+      native_owner_terminal_delivered?: false,
+      websocket_owner_active_turn_reconnect?: true,
+      response_task_activities: %{task_pid => token},
+      response_task_delivery_scheduled: MapSet.new(),
+      response_task_delivery_recipients: %{},
+      websocket_owner_downstream: %{
+        pid: self(),
+        epoch: 41,
+        correlation_id: "owner-helper-control",
+        active_turn_reconnect?: true
+      }
+    }
+
+    controls = [
+      {:websocket_owner_output_commit_probe, "owner-helper-control", 41, task_pid,
+       active_turn_ref, self(), probe_ref},
+      {:websocket_response_activity, task_pid, token},
+      {:codex_response_done, task_pid, :ok},
+      {:websocket_response_delivery_complete, task_pid, token}
+    ]
+
+    for control <- controls do
+      send(self(), control)
+      send(self(), {:websocket_owner_frame, "owner-helper-control", 41, task_pid, :complete})
+
+      assert {:ok, completed_state} = receive_owner_socket_complete(base_state)
+      refute completed_state.websocket_owner_active_turn_reconnect?
+      assert completed_state.native_owner_terminal_delivered?
+    end
+
+    receive do
+      {:websocket_owner_output_commit_ack, _, _, _, _, _, _} -> :ok
+    after
+      0 -> :ok
+    end
+  end
+
   defp assert_owner_three_turn_continuity_chain(route) do
     response_ids =
       Enum.map(1..3, fn turn ->
@@ -8636,16 +8689,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         handle_owner_socket_complete_message(message, state)
 
       {:websocket_owner_output_commit_probe, _, _, _, _, _, _} = message ->
-        handle_owner_socket_complete_message(message, state)
+        handle_owner_socket_complete_control(message, state)
 
       {:websocket_response_activity, _, _} = message ->
-        handle_owner_socket_complete_message(message, state)
+        handle_owner_socket_complete_control(message, state)
 
       {:codex_response_done, _, _} = message ->
-        handle_owner_socket_complete_message(message, state)
+        handle_owner_socket_complete_control(message, state)
 
       {:websocket_response_delivery_complete, _, _} = message ->
-        handle_owner_socket_complete_message(message, state)
+        handle_owner_socket_complete_control(message, state)
     after
       1_000 -> flunk("expected owner websocket completion frame")
     end
@@ -8655,6 +8708,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     case CodexResponsesSocket.handle_info(message, state) do
       {:ok, state} -> {:ok, state}
       {:push, _frame, state} -> receive_owner_socket_complete(state)
+    end
+  end
+
+  defp handle_owner_socket_complete_control(message, state) do
+    case CodexResponsesSocket.handle_info(message, state) do
+      {:ok, state} -> receive_owner_socket_complete(state)
+      {:push, _frame, state} -> receive_owner_socket_complete(state)
+      {:stop, _reason, _detail, _state} = stop -> stop
+      {:stop, _reason, _detail, _frames, _state} = stop -> stop
     end
   end
 
