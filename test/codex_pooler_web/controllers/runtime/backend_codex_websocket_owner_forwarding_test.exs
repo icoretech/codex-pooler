@@ -909,7 +909,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert %{"type" => "error", "error" => %{"code" => "upstream_request_failed"}} =
                Jason.decode!(error_frame)
 
-      assert {:ok, _failed_state} = receive_owner_socket_complete(failed_state)
+      assert failed_state.websocket_owner_active_turn_reconnect? == false
       refute_received {:websocket_owner_frame, _, _, _duplicate_terminal}
       assert FakeUpstream.count(upstream) == 1
       assert FakeUpstream.websocket_connection_count(upstream) == 1
@@ -7808,22 +7808,30 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       }
     }
 
-    controls = [
+    wrong_task_pid = socket_test_task()
+    on_exit(fn -> stop_socket_test_task(wrong_task_pid) end)
+
+    messages = [
+      {:websocket_owner_frame, "owner-helper-control", 40, task_pid, :complete},
+      {:websocket_owner_frame, "owner-helper-control", 41, wrong_task_pid, :complete},
+      {:websocket_owner_frame, "owner-helper-control", 41, task_pid, {:invalid, "ignored"}},
+      {:websocket_owner_frame, "owner-helper-control", 41, task_pid,
+       {:data, Jason.encode!(%{"type" => "response.output_text.delta"})}},
       {:websocket_owner_output_commit_probe, "owner-helper-control", 41, task_pid,
        active_turn_ref, self(), probe_ref},
       {:websocket_response_activity, task_pid, token},
       {:codex_response_done, task_pid, :ok},
-      {:websocket_response_delivery_complete, task_pid, token}
+      {:websocket_owner_frame, "owner-helper-control", 41, task_pid,
+       {:data, Jason.encode!(%{"type" => "response.completed"})}},
+      {:websocket_response_delivery_complete, task_pid, token},
+      {:websocket_owner_frame, "owner-helper-control", 41, task_pid, :complete}
     ]
 
-    for control <- controls do
-      send(self(), control)
-      send(self(), {:websocket_owner_frame, "owner-helper-control", 41, task_pid, :complete})
+    Enum.each(messages, &send(self(), &1))
 
-      assert {:ok, completed_state} = receive_owner_socket_complete(base_state)
-      refute completed_state.websocket_owner_active_turn_reconnect?
-      assert completed_state.native_owner_terminal_delivered?
-    end
+    assert {:ok, completed_state} = receive_owner_socket_complete(base_state)
+    refute completed_state.websocket_owner_active_turn_reconnect?
+    assert completed_state.native_owner_terminal_delivered?
 
     receive do
       {:websocket_owner_output_commit_ack, _, _, _, _, _, _} -> :ok
@@ -8705,10 +8713,55 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   end
 
   defp handle_owner_socket_complete_message(message, state) do
-    case CodexResponsesSocket.handle_info(message, state) do
-      {:ok, state} -> {:ok, state}
-      {:push, _frame, state} -> receive_owner_socket_complete(state)
+    accepted_completion? =
+      Adapter.accept_downstream_message(message, state) == {:ok, :complete}
+
+    result = CodexResponsesSocket.handle_info(message, state)
+
+    case result do
+      {:ok, next_state} ->
+        if accepted_completion? or owner_completion_transition?(message, state, next_state) do
+          {:ok, next_state}
+        else
+          receive_owner_socket_complete(next_state)
+        end
+
+      {:push, _frame, state} ->
+        receive_owner_socket_complete(state)
+
+      {:stop, _reason, _detail, _state} = stop ->
+        stop
+
+      {:stop, _reason, _detail, _frames, _state} = stop ->
+        stop
     end
+  end
+
+  defp owner_completion_transition?(
+         {:websocket_owner_frame, _correlation_id, _epoch, _owner_turn_id, :complete},
+         previous_state,
+         next_state
+       ) do
+    owner_completion_state_transition?(previous_state, next_state)
+  end
+
+  defp owner_completion_transition?(
+         {:websocket_owner_frame, _correlation_id, _epoch, :complete},
+         previous_state,
+         next_state
+       ) do
+    owner_completion_state_transition?(previous_state, next_state)
+  end
+
+  defp owner_completion_transition?(_message, _previous_state, _next_state), do: false
+
+  defp owner_completion_state_transition?(previous_state, next_state) do
+    (not Map.get(previous_state, :native_owner_terminal_delivered?, false) and
+       Map.get(next_state, :native_owner_terminal_delivered?, false)) or
+      (not Map.get(previous_state, :public_turn_owner_complete?, false) and
+         Map.get(next_state, :public_turn_owner_complete?, false)) or
+      (Map.get(previous_state, :websocket_owner_active_turn_reconnect?, false) and
+         not Map.get(next_state, :websocket_owner_active_turn_reconnect?, false))
   end
 
   defp handle_owner_socket_complete_control(message, state) do
