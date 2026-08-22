@@ -19,6 +19,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
   alias CodexPooler.Gateway.Transports.UpstreamDispatch.RejectionDrain
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
@@ -274,7 +275,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     forwarder_opts =
       [remote_node]
       |> WebsocketOwnerNodeHarness.node_client_opts(calls: %{remote_node => :timeout})
-      |> Keyword.put(:timeout, 25)
+      |> Keyword.put(:request_timeout, 25)
 
     request_options =
       websocket_owner_request_options(session, lease_token, downstream, forwarder_opts)
@@ -296,6 +297,49 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
                       function: :remote_submit_request_v1,
                       arity: 3,
                       timeout: 25
+                    }}
+  end
+
+  test "owner submit replaces a stale control timeout with the websocket session budget", %{
+    auth: auth
+  } do
+    Application.put_env(:codex_pooler, OperationalSettings,
+      settings: %OperationalSettings{
+        upstream_receive_timeout_ms: @receive_timeout_ms,
+        websocket_idle_timeout_ms: 1_800_000
+      }
+    )
+
+    remote_node = :"codex_pooler@stale-control-timeout-owner.example"
+
+    %{session: session, lease_token: lease_token} =
+      owner_session_fixture(auth, Atom.to_string(remote_node))
+
+    downstream = %{pid: self(), epoch: 1, correlation_id: "corr-stale-control-timeout"}
+
+    forwarder_opts =
+      [remote_node]
+      |> WebsocketOwnerNodeHarness.node_client_opts(calls: %{remote_node => :timeout})
+      |> Keyword.put(:timeout, WebsocketOwnerContract.default_forward_timeout_ms())
+
+    request_options =
+      websocket_owner_request_options(session, lease_token, downstream, forwarder_opts)
+
+    assert {:error, %{reason: :owner_forward_timeout, started: false}} =
+             UpstreamDispatch.websocket_request(%UpstreamDispatch.Request{
+               url: "https://upstream.example.test/backend-api/codex/responses",
+               token: "redacted",
+               upstream_payload: "{}",
+               identity: upstream_identity(),
+               accounting_request: nil,
+               writer: fn _message -> :ok end,
+               request_options: request_options
+             })
+
+    assert_receive {:websocket_owner_harness_node_call,
+                    %{
+                      function: :remote_submit_request_v1,
+                      timeout: 1_801_000
                     }}
   end
 

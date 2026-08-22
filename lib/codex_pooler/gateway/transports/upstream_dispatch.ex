@@ -541,17 +541,17 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   defp connection_bound_continuation?(%RequestOptions{}), do: false
 
   defp owner_request_forwarder_opts(forwarder_opts, %RequestOptions{} = request_options) do
-    timeout =
+    derived_timeout =
       max(
         request_options.timeout_config.receive_timeout_ms + 1_000,
         OperationalSettings.current().websocket_idle_timeout_ms + 1_000
       )
 
-    Keyword.put_new(
-      forwarder_opts,
-      :timeout,
-      timeout
-    )
+    request_timeout = Keyword.get(forwarder_opts, :request_timeout, derived_timeout)
+
+    forwarder_opts
+    |> Keyword.delete(:request_timeout)
+    |> Keyword.put(:timeout, request_timeout)
   end
 
   @spec direct_websocket_request_data(

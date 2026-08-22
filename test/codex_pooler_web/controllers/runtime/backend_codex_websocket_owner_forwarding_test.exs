@@ -152,12 +152,50 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     defp state, do: Process.get(__MODULE__, %{nodes: []})
   end
 
+  defmodule TurnBudgetNodeClient do
+    @moduledoc false
+
+    @behaviour CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder.NodeClient
+
+    @key {__MODULE__, :state}
+
+    def configure(node, notify, minimum_timeout_ms) do
+      :persistent_term.put(@key, %{
+        node: node,
+        notify: notify,
+        minimum_timeout_ms: minimum_timeout_ms
+      })
+    end
+
+    def reset, do: :persistent_term.erase(@key)
+
+    @impl true
+    def connected_app_nodes, do: [state().node]
+
+    @impl true
+    def app_node?(node), do: node == state().node
+
+    @impl true
+    def call_owner(_node, module, function, args, timeout) do
+      send(state().notify, {:turn_budget_remote_call, function, timeout})
+
+      if function == :remote_submit_request_v1 and timeout <= state().minimum_timeout_ms do
+        {:error, :owner_forward_timeout}
+      else
+        apply(module, function, args)
+      end
+    end
+
+    defp state, do: :persistent_term.get(@key)
+  end
+
   setup do
     previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
     Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
 
     on_exit(fn ->
       cleanup_local_owner_sessions()
+      TurnBudgetNodeClient.reset()
 
       case previous do
         nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
@@ -1584,6 +1622,64 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       send(close_pid, {:fake_upstream_release_websocket, release_ref})
     after
       CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
+  test "native proxy turn replaces the attach timeout with the full request budget" do
+    terminal =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_owner_turn_budget", "status" => "completed"}
+      })
+
+    upstream = start_upstream(FakeUpstream.websocket_text_frames([terminal]))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = owner_socket(auth, "ws-owner-turn-budget", "owner-turn-budget")
+    remote_node = :"codex_pooler@turn-budget-owner.example"
+    TurnBudgetNodeClient.configure(remote_node, self(), 15_000)
+
+    node_opts = [
+      node_client: TurnBudgetNodeClient,
+      timeout: WebsocketOwnerContract.default_forward_timeout_ms()
+    ]
+
+    remote_state = remote_owner_state(state, remote_node, node_opts)
+
+    try do
+      payload = websocket_payload(setup, "owner turn budget")
+
+      assert {:ok, remote_state} =
+               CodexResponsesSocket.handle_in({payload, [opcode: :text]}, remote_state)
+
+      assert_receive {:turn_budget_remote_call, :remote_submit_request_v1, 1_801_000}
+
+      assert_receive {:websocket_owner_frame, correlation_id, epoch, task_pid, {:data, ^terminal}} =
+                       terminal_message
+
+      assert {:push, {:text, ^terminal}, remote_state} =
+               CodexResponsesSocket.handle_info(terminal_message, remote_state)
+
+      assert_receive {:websocket_owner_frame, ^correlation_id, ^epoch, ^task_pid, :complete} =
+                       complete_message
+
+      assert {:ok, remote_state} =
+               CodexResponsesSocket.handle_info(complete_message, remote_state)
+
+      assert_receive {:websocket_response_activity, ^task_pid, activity_token} = activity_message
+
+      assert {:ok, remote_state} =
+               CodexResponsesSocket.handle_info(activity_message, remote_state)
+
+      assert_receive {:codex_response_done, ^task_pid, _result} = done_message
+      assert {:ok, remote_state} = CodexResponsesSocket.handle_info(done_message, remote_state)
+
+      assert_receive {:websocket_response_delivery_complete, ^task_pid, ^activity_token} =
+                       delivery_message
+
+      assert {:ok, _state} = CodexResponsesSocket.handle_info(delivery_message, remote_state)
+    after
+      CodexResponsesSocket.terminate(:closed, remote_state)
     end
   end
 

@@ -34,7 +34,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
           app_node_names: [binary()],
           local_node_string: binary(),
           upstream: map(),
-          request_id: binary()
+          request_id: binary(),
+          request_timeout: pos_integer()
         ]
   @type submit_error ::
           WebsocketOwnerContract.owner_error() | UpstreamWebsocketSession.request_failure()
