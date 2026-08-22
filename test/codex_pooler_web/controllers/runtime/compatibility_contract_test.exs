@@ -2183,7 +2183,21 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  "upstream request failed: stream interrupted before terminal response event",
                post_budget_owner_drain: %{
                  applies_to: "committed websocket bridge turn aborted after rollout drain budget",
-                 accounting_error_code: "owner_drained"
+                 accounting_error_code: "owner_drained",
+                 local_activity: ["direct_response_task", "remote_owner_proxy_response_task"],
+                 admission: "register_before_atomic_cutoff_gate",
+                 deadline: "shared_absolute_existing_budget",
+                 remote_owner: "matching_turn_cancelled_owner_and_lease_reusable",
+                 summary_counters: [
+                   "direct_turns_seen",
+                   "direct_turns_completed",
+                   "direct_turns_aborted",
+                   "direct_turns_failed",
+                   "proxy_turns_seen",
+                   "proxy_turns_completed",
+                   "proxy_turns_aborted",
+                   "proxy_turns_failed"
+                 ]
                },
                precommit_drain: "existing_fallback_or_refusal",
                client_disconnect: "unchanged",

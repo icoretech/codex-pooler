@@ -209,6 +209,26 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
     end
   end
 
+  @spec cancel_owner_turn(socket_state(), pid(), :owner_drained) :: :ok
+  def cancel_owner_turn(state, owner_turn_id, :owner_drained)
+      when is_pid(owner_turn_id) do
+    session = Map.get(state, :codex_session)
+    owner_lease_token = Map.get(state, :websocket_owner_lease_token)
+    downstream = per_call_downstream(state, owner_turn_id)
+    opts = Map.get(state, :opts, %{})
+
+    _result =
+      Websocket.cancel_websocket_owner_turn(
+        session,
+        owner_lease_token,
+        downstream,
+        :owner_drained,
+        opts
+      )
+
+    :ok
+  end
+
   defp detach_downstream(state) do
     state
     |> Map.get(:codex_session)
@@ -221,8 +241,15 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
   end
 
   defp rollout_drain_cleanup?(state, reason) do
-    owner?(state) and (RolloutDrain.draining?() or shutdown_reason?(reason))
+    local_owner?(state) and (RolloutDrain.draining?() or shutdown_reason?(reason))
   end
+
+  defp local_owner?(%{codex_session: %{owner_instance_id: owner_instance_id}} = state)
+       when is_binary(owner_instance_id) do
+    owner?(state) and owner_instance_id == Atom.to_string(node())
+  end
+
+  defp local_owner?(_state), do: false
 
   defp shutdown_reason?(:shutdown), do: true
   defp shutdown_reason?({:shutdown, _details}), do: true

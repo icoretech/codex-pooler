@@ -417,7 +417,8 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness do
   # remote_attach_downstream/2 but not /3 and has no versioned request entrypoint.
   defp dispatch_call_mode(:old_release, _node, module, function, args) do
     if (function == :remote_attach_downstream and length(args) == 3) or
-         (function == :remote_submit_request_v1 and length(args) == 3) do
+         (function == :remote_submit_request_v1 and length(args) == 3) or
+         (function == :remote_cancel_downstream_v1 and length(args) == 3) do
       {:error, {:exception, :undef, [{module, function, args, []}]}}
     else
       apply(module, function, args)

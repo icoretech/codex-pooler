@@ -404,14 +404,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
     Task.shutdown(submitter, :brutal_kill)
 
-    assert_receive {:cancellation_node_call, watcher_pid, @remote_node, :remote_cancel_downstream}
+    assert_receive {:cancellation_node_call, watcher_pid, @remote_node,
+                    :remote_cancel_downstream_v1}
 
     refute watcher_pid == submitter.pid
 
     assert_receive {:cancellation_node_call_complete, ^watcher_pid, @remote_node,
-                    :remote_cancel_downstream, :ok}
+                    :remote_cancel_downstream_v1, :ok}
 
-    refute_received {:cancellation_node_call, _duplicate, @remote_node, :remote_cancel_downstream}
+    refute_received {:cancellation_node_call, _duplicate, @remote_node,
+                     :remote_cancel_downstream_v1}
 
     assert_receive {:DOWN, ^owner_task_ref, :process, ^owner_task, :shutdown},
                    @detection_timeout_ms

@@ -59,7 +59,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Downstr
   @spec cancel_active_turn_downstream(map(), map()) :: map()
   def cancel_active_turn_downstream(%{active_turn: active_turn} = state, downstream)
       when is_map(active_turn) and is_map(downstream) do
-    case downstream_status(Map.get(active_turn, :downstream), downstream) do
+    cancel_active_turn_downstream(state, downstream, :client_disconnected)
+  end
+
+  def cancel_active_turn_downstream(state, _downstream), do: state
+
+  @spec cancel_active_turn_downstream(map(), map(), atom()) :: map()
+  def cancel_active_turn_downstream(%{active_turn: active_turn} = state, downstream, reason)
+      when is_map(active_turn) and is_map(downstream) and is_atom(reason) do
+    case cancellation_downstream_status(Map.get(active_turn, :downstream), downstream) do
       :active ->
         cancel_active_turn_task(active_turn)
 
@@ -67,7 +75,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Downstr
           state
           | active_turn:
               active_turn
-              |> Map.put(:canceled_result, {:error, :client_disconnected})
+              |> Map.put(:canceled_result, {:error, reason})
               |> Map.put(:downstream, nil)
         }
 
@@ -76,7 +84,21 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Downstr
     end
   end
 
-  def cancel_active_turn_downstream(state, _downstream), do: state
+  def cancel_active_turn_downstream(state, _downstream, _reason), do: state
+
+  @spec cancellation_status(map(), map()) :: :active | {:error, atom()}
+  def cancellation_status(
+        %{downstream: current, active_turn: %{downstream: active}},
+        requested
+      )
+      when is_map(active) and is_map(requested) do
+    with :active <- downstream_status(current, requested),
+         :active <- cancellation_downstream_status(active, requested) do
+      :active
+    end
+  end
+
+  def cancellation_status(_state, _requested), do: {:error, :stale_downstream}
 
   @spec cancel_active_turn_task(map()) :: :ok
   def cancel_active_turn_task(%{task_pid: task_pid}) when is_pid(task_pid) do
@@ -142,4 +164,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Downstr
   end
 
   defp preserve_owner_turn_id(downstream, _active_downstream), do: downstream
+
+  defp cancellation_downstream_status(
+         %{owner_turn_id: owner_turn_id} = active,
+         %{owner_turn_id: owner_turn_id} = requested
+       )
+       when is_pid(owner_turn_id) do
+    downstream_status(active, requested)
+  end
+
+  defp cancellation_downstream_status(%{owner_turn_id: _owner_turn_id}, %{owner_turn_id: _other}),
+    do: {:error, :stale_downstream}
+
+  defp cancellation_downstream_status(active, requested),
+    do: downstream_status(active, requested)
 end

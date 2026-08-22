@@ -3,7 +3,7 @@ defmodule CodexPooler.Application do
 
   use Application
 
-  alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
+  alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
 
   @impl true
   def start(_type, _args) do
@@ -19,6 +19,7 @@ defmodule CodexPooler.Application do
        name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Registry},
       {Task.Supervisor,
        name: CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.TaskSupervisor},
+      ActivityRegistry,
       CodexPooler.Gateway.Transports.Websocket.RolloutDrain,
       {Task.Supervisor, name: CodexPooler.RateLimitEventSupervisor},
       {Phoenix.PubSub, name: CodexPooler.PubSub},

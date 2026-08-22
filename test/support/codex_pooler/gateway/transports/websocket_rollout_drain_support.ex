@@ -1,7 +1,7 @@
 defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
   @moduledoc false
 
-  alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
+  alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
 
   # The real owner shutdown path can spend the transport's one-second close
@@ -469,14 +469,17 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport do
   def start_rollout_drain_harness(parent, opts \\ []) when is_pid(parent) do
     deadline = start_virtual_deadline(parent, opts)
     drain_name = :"rollout-drain-harness-#{System.unique_integer([:positive])}"
+    activity_registry = :"rollout-drain-activity-#{System.unique_integer([:positive])}"
+    ExUnit.Callbacks.start_supervised!({ActivityRegistry, name: activity_registry})
 
-    start_opts = [name: drain_name] ++ deadline_options(deadline)
+    start_opts =
+      [name: drain_name, activity_registry: activity_registry] ++ deadline_options(deadline)
 
     {RolloutDrain, start_opts}
     |> Supervisor.child_spec(id: {RolloutDrain, drain_name})
     |> ExUnit.Callbacks.start_supervised!()
 
-    %{deadline: deadline, name: drain_name}
+    %{activity_registry: activity_registry, deadline: deadline, name: drain_name}
   end
 
   @spec restore_env(String.t(), String.t() | nil) :: :ok

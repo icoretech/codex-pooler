@@ -207,6 +207,27 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     GenServer.call(owner, {:detach_downstream, pid, epoch, correlation_id}, owner_call_timeout())
   end
 
+  @spec cancel_downstream(GenServer.server(), downstream(), :owner_drained) ::
+          :ok | {:error, WebsocketOwnerContract.owner_error()}
+  def cancel_downstream(
+        owner,
+        %{
+          pid: pid,
+          epoch: epoch,
+          correlation_id: correlation_id,
+          owner_turn_id: owner_turn_id
+        },
+        :owner_drained = reason
+      )
+      when is_pid(pid) and is_integer(epoch) and epoch > 0 and is_binary(correlation_id) and
+             is_pid(owner_turn_id) do
+    GenServer.call(
+      owner,
+      {:cancel_downstream, pid, epoch, correlation_id, owner_turn_id, reason},
+      owner_call_timeout()
+    )
+  end
+
   @spec submit_frame(GenServer.server(), downstream(), binary()) ::
           :ok | {:error, WebsocketOwnerContract.owner_error() | term()}
   def submit_frame(owner, downstream, payload)
@@ -406,6 +427,35 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call(
+        {:cancel_downstream, pid, epoch, correlation_id, owner_turn_id, reason},
+        _from,
+        state
+      ) do
+    downstream = %{
+      pid: pid,
+      epoch: epoch,
+      correlation_id: correlation_id,
+      owner_turn_id: owner_turn_id
+    }
+
+    case DownstreamState.cancellation_status(state, downstream) do
+      :active ->
+        state =
+          state
+          |> DownstreamState.demonitor_downstream()
+          |> DownstreamState.schedule_idle_shutdown()
+          |> DownstreamState.cancel_active_turn_downstream(downstream, reason)
+          |> Map.put(:downstream, nil)
+
+        state = settle_cancelled_active_turn(state, reason)
+        reply_or_retire(state, :ok)
+
+      {:error, status_reason} ->
+        {:reply, {:error, status_reason}, state}
     end
   end
 
@@ -934,6 +984,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     state
     |> Map.put(:active_turn, nil)
     |> DownstreamState.maybe_schedule_idle_shutdown()
+  end
+
+  defp settle_cancelled_active_turn(state, reason) do
+    case state.active_turn do
+      %{output_commit_probe: probe} when is_map(probe) ->
+        settle_active_turn_without_downstream_delivery(state, {:error, reason})
+
+      %{pending_result: pending_result} when not is_nil(pending_result) ->
+        settle_active_turn(state, {:error, reason})
+
+      _active_turn ->
+        state
+    end
   end
 
   defp settle_active_turn(state, result) do

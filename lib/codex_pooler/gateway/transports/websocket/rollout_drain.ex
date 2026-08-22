@@ -6,6 +6,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
   require Logger
 
   alias CodexPooler.Gateway.Transports.Websocket.{
+    ActivityDrain,
+    ActivityRegistry,
     OwnerDefaults,
     WebsocketOwnerSession
   }
@@ -26,6 +28,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
           required(:owners_failed) => non_neg_integer(),
           required(:turns_completed) => non_neg_integer(),
           required(:turns_aborted) => non_neg_integer(),
+          required(:direct_turns_seen) => non_neg_integer(),
+          required(:direct_turns_completed) => non_neg_integer(),
+          required(:direct_turns_aborted) => non_neg_integer(),
+          required(:direct_turns_failed) => non_neg_integer(),
+          required(:proxy_turns_seen) => non_neg_integer(),
+          required(:proxy_turns_completed) => non_neg_integer(),
+          required(:proxy_turns_aborted) => non_neg_integer(),
+          required(:proxy_turns_failed) => non_neg_integer(),
           required(:timeout_ms) => pos_integer(),
           required(:elapsed_ms) => non_neg_integer(),
           required(:already_draining?) => boolean()
@@ -43,6 +53,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
           | {:deadline, deadline()}
           | {:deadline_margin_ms, non_neg_integer()}
           | {:deadline_floor_ms, non_neg_integer()}
+          | {:activity_registry, GenServer.server()}
           | {:owner_post_deadline_call_budget_ms, pos_integer()}
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -92,13 +103,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
 
   @impl GenServer
   def init(opts) do
+    activity_registry = Keyword.get(opts, :activity_registry, ActivityRegistry)
+
     {:ok,
      %{
-       draining?: false,
+       draining?: activity_registry_draining?(activity_registry),
        active_drain: nil,
        shutdown_started_at_ms: nil,
        shutdown_timeout_ms: nil,
-       drain_policy: drain_policy(opts)
+       drain_policy: drain_policy(opts),
+       activity_registry: activity_registry
      }}
   end
 
@@ -118,7 +132,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
   end
 
   def handle_call({:start_drain, timeout_ms, drain_policy}, from, state) do
-    start_owner_drain(timeout_ms, from, state, false, drain_policy)
+    start_local_drain(timeout_ms, from, state, false, drain_policy)
   end
 
   def handle_call(
@@ -138,10 +152,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
   def handle_call({:drain_for_shutdown, timeout_ms}, from, state) do
     case shutdown_timeout_budget(state) do
       :not_started ->
-        start_owner_drain(timeout_ms, from, state, true, state.drain_policy)
+        start_local_drain(timeout_ms, from, state, true, state.drain_policy)
 
       {:remaining, remaining_timeout_ms} ->
-        start_owner_drain(remaining_timeout_ms, from, state, true, state.drain_policy)
+        start_local_drain(remaining_timeout_ms, from, state, true, state.drain_policy)
 
       :exhausted ->
         summary = empty_summary(:ok, state.shutdown_timeout_ms, true)
@@ -158,36 +172,58 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
 
   def handle_info(_message, state), do: {:noreply, state}
 
-  @spec drain_local_owners(pos_integer(), boolean(), map()) :: summary()
-  defp drain_local_owners(timeout_ms, already_draining?, drain_policy) do
+  @spec drain_local_work(pos_integer(), boolean(), map(), GenServer.server()) :: summary()
+  defp drain_local_work(timeout_ms, already_draining?, drain_policy, activity_registry) do
     started_at = System.monotonic_time(:millisecond)
     deadline_started_at = drain_policy.now_ms.()
+    deadline_ms = poll_deadline_ms(timeout_ms, deadline_started_at, drain_policy)
+    {drain_epoch, activities} = ActivityRegistry.begin_drain(name: activity_registry)
     owners = local_owner_sessions()
+    work = Enum.map(owners, &{:owner, &1}) ++ Enum.map(activities, &{:activity, &1})
 
-    counters =
-      owners
+    results =
+      work
       |> Task.async_stream(
-        fn {_key, owner} ->
-          drain_owner_after_turn(owner, timeout_ms, deadline_started_at, drain_policy)
+        fn
+          {:owner, {_key, owner}} ->
+            {:owner, drain_owner_after_turn(owner, deadline_ms, drain_policy)}
+
+          {:activity, activity} ->
+            {:activity, activity.kind,
+             ActivityDrain.drain(activity, deadline_ms, drain_policy, activity_registry)}
         end,
-        max_concurrency: max(1, length(owners)),
+        max_concurrency: max(1, length(work)),
         on_timeout: :kill_task,
-        ordered: false,
+        ordered: true,
         timeout: owner_task_timeout_ms(timeout_ms, drain_policy)
       )
-      |> Enum.reduce(empty_counters(), &count_owner_result/2)
+
+    counters =
+      work
+      |> Enum.zip(results)
+      |> Enum.reduce(empty_counters(activities), &count_work_result/2)
+
+    :ok = ActivityRegistry.complete_drain(drain_epoch, name: activity_registry)
 
     elapsed_ms = max(0, System.monotonic_time(:millisecond) - started_at)
     owners_seen = length(owners)
 
     %{
-      result: drain_result(counters.owners_failed),
+      result: drain_result(counters),
       owners_seen: owners_seen,
       owners_drained: counters.owners_drained,
       owners_idle: counters.owners_idle,
       owners_failed: counters.owners_failed,
       turns_completed: counters.turns_completed,
       turns_aborted: counters.turns_aborted,
+      direct_turns_seen: counters.direct_turns_seen,
+      direct_turns_completed: counters.direct_turns_completed,
+      direct_turns_aborted: counters.direct_turns_aborted,
+      direct_turns_failed: counters.direct_turns_failed,
+      proxy_turns_seen: counters.proxy_turns_seen,
+      proxy_turns_completed: counters.proxy_turns_completed,
+      proxy_turns_aborted: counters.proxy_turns_aborted,
+      proxy_turns_failed: counters.proxy_turns_failed,
       timeout_ms: timeout_ms,
       elapsed_ms: elapsed_ms,
       already_draining?: already_draining?
@@ -205,17 +241,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
     :exit, _reason -> {:error, :owner_unavailable}
   end
 
-  defp drain_owner_after_turn(owner, timeout_ms, started_at, drain_policy) do
+  defp drain_owner_after_turn(owner, deadline_ms, drain_policy) do
     :ok = WebsocketOwnerSession.begin_drain(owner)
     owner_ref = Process.monitor(owner)
 
     outcome =
       owner
-      |> await_turn_outcome(
-        owner_ref,
-        poll_deadline_ms(timeout_ms, started_at, drain_policy),
-        drain_policy
-      )
+      |> await_turn_outcome(owner_ref, deadline_ms, drain_policy)
       |> drain_settled_owner(owner)
 
     Process.demonitor(owner_ref, [:flush])
@@ -310,15 +342,24 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
     end
   end
 
-  defp count_owner_result({:ok, {:ok, outcome}}, counters) do
+  defp count_work_result({{:owner, _owner}, {:ok, {:owner, {:ok, outcome}}}}, counters) do
     counters
     |> Map.update!(:owners_drained, &(&1 + 1))
     |> count_outcome(outcome)
   end
 
-  defp count_owner_result(_result, counters) do
+  defp count_work_result({{:owner, _owner}, _result}, counters) do
     Map.update!(counters, :owners_failed, &(&1 + 1))
   end
+
+  defp count_work_result(
+         {{:activity, %{kind: kind}}, {:ok, {:activity, kind, outcome}}},
+         counters
+       ),
+       do: count_activity_outcome(counters, kind, outcome)
+
+  defp count_work_result({{:activity, %{kind: kind}}, _result}, counters),
+    do: count_activity_outcome(counters, kind, :failed)
 
   defp count_outcome(counters, :idle), do: Map.update!(counters, :owners_idle, &(&1 + 1))
 
@@ -328,12 +369,40 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
   defp count_outcome(counters, :aborted),
     do: Map.update!(counters, :turns_aborted, &(&1 + 1))
 
-  defp empty_counters do
-    %{owners_drained: 0, owners_idle: 0, owners_failed: 0, turns_completed: 0, turns_aborted: 0}
+  defp count_activity_outcome(counters, kind, outcome) do
+    Map.update!(counters, activity_counter(kind, outcome), &(&1 + 1))
   end
 
-  defp drain_result(0), do: :ok
-  defp drain_result(_owners_failed), do: :error
+  defp activity_counter(:direct, :completed), do: :direct_turns_completed
+  defp activity_counter(:direct, :aborted), do: :direct_turns_aborted
+  defp activity_counter(:direct, :failed), do: :direct_turns_failed
+  defp activity_counter(:proxy, :completed), do: :proxy_turns_completed
+  defp activity_counter(:proxy, :aborted), do: :proxy_turns_aborted
+  defp activity_counter(:proxy, :failed), do: :proxy_turns_failed
+
+  defp empty_counters(activities) do
+    %{
+      owners_drained: 0,
+      owners_idle: 0,
+      owners_failed: 0,
+      turns_completed: 0,
+      turns_aborted: 0,
+      direct_turns_seen: Enum.count(activities, &(&1.kind == :direct)),
+      direct_turns_completed: 0,
+      direct_turns_aborted: 0,
+      direct_turns_failed: 0,
+      proxy_turns_seen: Enum.count(activities, &(&1.kind == :proxy)),
+      proxy_turns_completed: 0,
+      proxy_turns_aborted: 0,
+      proxy_turns_failed: 0
+    }
+  end
+
+  defp drain_result(counters) do
+    if counters.owners_failed + counters.direct_turns_failed + counters.proxy_turns_failed == 0,
+      do: :ok,
+      else: :error
+  end
 
   defp call_drain(opts, request, timeout_ms, call_timeout) do
     case GenServer.whereis(configured_server_name(opts)) do
@@ -347,7 +416,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
     end
   end
 
-  defp start_owner_drain(timeout_ms, from, state, shutdown?, drain_policy) do
+  defp start_local_drain(timeout_ms, from, state, shutdown?, drain_policy) do
     already_draining? = state.draining?
     ref = make_ref()
     caller = self()
@@ -356,7 +425,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
 
     {:ok, _pid} =
       Task.start(fn ->
-        summary = drain_local_owners(timeout_ms, already_draining?, drain_policy)
+        summary =
+          drain_local_work(
+            timeout_ms,
+            already_draining?,
+            drain_policy,
+            state.activity_registry
+          )
+
         log_drain_finished(summary)
         send(caller, {:rollout_drain_finished, ref, summary})
       end)
@@ -527,6 +603,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
         "owners_failed=#{summary.owners_failed} " <>
         "turns_completed=#{summary.turns_completed} " <>
         "turns_aborted=#{summary.turns_aborted} " <>
+        "direct_turns_seen=#{summary.direct_turns_seen} " <>
+        "direct_turns_completed=#{summary.direct_turns_completed} " <>
+        "direct_turns_aborted=#{summary.direct_turns_aborted} " <>
+        "direct_turns_failed=#{summary.direct_turns_failed} " <>
+        "proxy_turns_seen=#{summary.proxy_turns_seen} " <>
+        "proxy_turns_completed=#{summary.proxy_turns_completed} " <>
+        "proxy_turns_aborted=#{summary.proxy_turns_aborted} " <>
+        "proxy_turns_failed=#{summary.proxy_turns_failed} " <>
         "timeout_ms=#{summary.timeout_ms} " <>
         "elapsed_ms=#{summary.elapsed_ms} " <>
         "result=#{summary.result}"
@@ -542,9 +626,23 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrain do
       owners_failed: 0,
       turns_completed: 0,
       turns_aborted: 0,
+      direct_turns_seen: 0,
+      direct_turns_completed: 0,
+      direct_turns_aborted: 0,
+      direct_turns_failed: 0,
+      proxy_turns_seen: 0,
+      proxy_turns_completed: 0,
+      proxy_turns_aborted: 0,
+      proxy_turns_failed: 0,
       timeout_ms: timeout_ms,
       elapsed_ms: 0,
       already_draining?: already_draining?
     }
+  end
+
+  defp activity_registry_draining?(registry) do
+    ActivityRegistry.draining?(name: registry)
+  catch
+    :exit, _reason -> false
   end
 end

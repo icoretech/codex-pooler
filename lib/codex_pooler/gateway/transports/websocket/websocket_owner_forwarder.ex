@@ -228,6 +228,44 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     end
   end
 
+  @doc false
+  @spec remote_cancel_downstream_v1(
+          binary(),
+          WebsocketOwnerSession.downstream(),
+          :client_disconnected | :owner_drained
+        ) :: :ok | {:error, WebsocketOwnerContract.owner_error()}
+  def remote_cancel_downstream_v1(codex_session_id, downstream, reason)
+      when is_binary(codex_session_id) and is_map(downstream) and
+             reason in [:client_disconnected, :owner_drained] do
+    with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
+      case reason do
+        :owner_drained -> WebsocketOwnerSession.cancel_downstream(owner_pid, downstream, reason)
+        :client_disconnected -> WebsocketOwnerSession.detach_downstream(owner_pid, downstream)
+      end
+    end
+  end
+
+  @spec cancel_remote_downstream(
+          node(),
+          binary(),
+          WebsocketOwnerSession.downstream(),
+          :client_disconnected | :owner_drained,
+          submit_opts()
+        ) :: :ok | {:error, WebsocketOwnerContract.owner_error()}
+  def cancel_remote_downstream(node, codex_session_id, downstream, reason, opts)
+      when is_atom(node) and is_binary(codex_session_id) and is_map(downstream) and
+             reason in [:client_disconnected, :owner_drained] and is_list(opts) do
+    args = [codex_session_id, downstream, reason]
+
+    case call_remote_versioned_cancel(node, args, opts) do
+      {:error, :remote_cancel_v1_unsupported} ->
+        call_remote(node, :remote_cancel_downstream, [codex_session_id, downstream], opts)
+
+      result ->
+        result
+    end
+  end
+
   defp resolve_remote_owner(owner_instance_id, opts) do
     node_client = node_client(opts)
 
@@ -349,8 +387,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
         {:remote_submit_complete, ^submitter} ->
           Process.demonitor(submitter_monitor, [:flush])
 
-        {:DOWN, ^submitter_monitor, :process, ^submitter, _reason} ->
-          best_effort_cancel_downstream(node, codex_session_id, downstream, opts)
+        {:DOWN, ^submitter_monitor, :process, ^submitter, reason} ->
+          best_effort_cancel_downstream(
+            node,
+            codex_session_id,
+            downstream,
+            remote_cancel_reason(reason),
+            opts
+          )
       end
     end)
   end
@@ -674,15 +718,53 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   defp notify_recovered_runtime(_session, _downstream), do: {:error, :stale_downstream}
 
   defp best_effort_cancel_downstream(node, codex_session_id, downstream, opts) do
+    best_effort_cancel_downstream(
+      node,
+      codex_session_id,
+      downstream,
+      :client_disconnected,
+      opts
+    )
+  end
+
+  defp best_effort_cancel_downstream(
+         node,
+         codex_session_id,
+         downstream,
+         reason,
+         opts
+       ) do
     _result =
-      call_remote(
+      cancel_remote_downstream(
         node,
-        :remote_cancel_downstream,
-        [codex_session_id, downstream],
+        codex_session_id,
+        downstream,
+        reason,
         Keyword.put(opts, :timeout, WebsocketOwnerContract.default_downstream_send_timeout_ms())
       )
 
     :ok
+  end
+
+  defp remote_cancel_reason({:shutdown, :owner_drained}), do: :owner_drained
+  defp remote_cancel_reason(_reason), do: :client_disconnected
+
+  defp call_remote_versioned_cancel(node, args, opts) do
+    timeout = Keyword.get(opts, :timeout, WebsocketOwnerContract.default_forward_timeout_ms())
+
+    opts
+    |> node_client()
+    |> safe_remote_call(
+      node,
+      __MODULE__,
+      :remote_cancel_downstream_v1,
+      args,
+      timeout
+    )
+    |> case do
+      {:error, :remote_cancel_v1_unsupported} = unsupported -> unsupported
+      result -> normalize_forward_result(result)
+    end
   end
 
   @doc false
@@ -719,11 +801,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   end
 
   defp normalize_returned_remote_failure({:error, reason}, module, function, args) do
-    if missing_remote_submit_v1?(reason, module, function, args) do
-      log_protocol_incompatibility()
-      {:error, :owner_unavailable}
-    else
-      {:error, reason}
+    cond do
+      missing_remote_submit_v1?(reason, module, function, args) ->
+        log_protocol_incompatibility()
+        {:error, :owner_unavailable}
+
+      missing_remote_cancel_v1?(reason, module, function, args) ->
+        {:error, :remote_cancel_v1_unsupported}
+
+      true ->
+        {:error, reason}
     end
   end
 
@@ -771,12 +858,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
 
   @doc false
   @spec normalize_remote_failure(atom(), term(), module(), atom(), [term()]) ::
-          :owner_forward_timeout | :owner_unavailable | :owner_crashed
+          :owner_forward_timeout
+          | :owner_unavailable
+          | :owner_crashed
+          | :remote_cancel_v1_unsupported
   def normalize_remote_failure(kind, reason, module, function, args) do
     cond do
       kind == :error and missing_remote_submit_v1?(reason, module, function, args) ->
         log_protocol_incompatibility()
         :owner_unavailable
+
+      kind == :error and missing_remote_cancel_v1?(reason, module, function, args) ->
+        :remote_cancel_v1_unsupported
 
       reason in [:timeout, {:erpc, :timeout}, :owner_forward_timeout] ->
         :owner_forward_timeout
@@ -802,6 +895,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
        do: remote_args == args and length(remote_args) == 3
 
   defp missing_remote_submit_v1?(_reason, _module, _function, _args), do: false
+
+  defp missing_remote_cancel_v1?(
+         {:exception, :undef,
+          [{module, :remote_cancel_downstream_v1, remote_args, _location} | _stack]},
+         module,
+         :remote_cancel_downstream_v1,
+         args
+       ),
+       do: remote_args == args and length(remote_args) == 3
+
+  defp missing_remote_cancel_v1?(_reason, _module, _function, _args), do: false
 
   defp log_protocol_incompatibility do
     require Logger

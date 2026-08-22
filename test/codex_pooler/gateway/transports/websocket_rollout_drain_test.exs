@@ -3,7 +3,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
 
   import CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
 
-  alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
+  alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
+  alias CodexPooler.Gateway.Websocket.ResponseTask
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
 
@@ -30,7 +31,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     previous_config = Application.get_env(:codex_pooler, RolloutDrain)
     previous_timeout = System.get_env("CODEX_POOLER_WEBSOCKET_DRAIN_TIMEOUT_MS")
     drain_name = :"rollout-drain-#{System.unique_integer([:positive])}"
-    start_supervised!({RolloutDrain, name: drain_name})
+    activity_registry = :"rollout-drain-activity-#{System.unique_integer([:positive])}"
+    start_supervised!({ActivityRegistry, name: activity_registry})
+    start_supervised!({RolloutDrain, name: drain_name, activity_registry: activity_registry})
 
     on_exit(fn ->
       if previous_config do
@@ -42,7 +45,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
       restore_env("CODEX_POOLER_WEBSOCKET_DRAIN_TIMEOUT_MS", previous_timeout)
     end)
 
-    {:ok, drain_name: drain_name}
+    {:ok, activity_registry: activity_registry, drain_name: drain_name}
   end
 
   test "flips the app drain flag and drains local owner sessions with a compact summary",
@@ -410,6 +413,185 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
     assert VirtualDeadline.waiter_pids(deadline) == []
   end
 
+  test "an active local owner turn contributes exactly one owner-derived completed turn" do
+    harness = start_rollout_drain_harness(self())
+    owner_key = owner_key()
+    owner = start_supervised!({WaitingOwner, key: owner_key, parent: self()})
+
+    drain_task =
+      Task.async(fn ->
+        RolloutDrain.start_drain(
+          [name: harness.name, timeout_ms: 500] ++ deadline_options(harness.deadline)
+        )
+      end)
+
+    assert_receive {:rollout_drain_begin_wait, ^owner_key, 1}
+    assert_receive {:rollout_drain_deadline_wait, deadline, wait_ms}
+    assert :ok = WaitingOwner.complete_turn(owner)
+    assert_receive {:rollout_drain_terminal_delivered, ^owner_key}
+    assert :ok = VirtualDeadline.advance(deadline, wait_ms)
+
+    assert %{
+             owners_seen: 1,
+             owners_drained: 1,
+             turns_completed: 1,
+             turns_aborted: 0,
+             direct_turns_seen: 0,
+             proxy_turns_seen: 0
+           } = Task.await(drain_task, @await_timeout_ms)
+  end
+
+  test "drain waits for a registered direct response task and counts its completion" do
+    harness = start_rollout_drain_harness(self())
+    parent = self()
+
+    {:ok, response_task} =
+      ResponseTask.start(
+        parent,
+        :direct,
+        fn _task_pid ->
+          send(parent, {:direct_turn_started, self()})
+
+          receive do
+            :complete_direct_turn -> :ok
+          end
+        end,
+        fn _task_pid, _reason -> send(parent, :unexpected_direct_cancel) end,
+        activity_registry: harness.activity_registry
+      )
+
+    assert_receive {:direct_turn_started, direct_worker}
+    deadline = harness.deadline
+
+    drain_task =
+      Task.async(fn ->
+        RolloutDrain.start_drain(
+          [name: harness.name, timeout_ms: 500] ++ deadline_options(harness.deadline)
+        )
+      end)
+
+    assert_receive {:rollout_drain_deadline_wait, ^deadline, _wait_ms}
+    send(direct_worker, :complete_direct_turn)
+    assert_receive {:codex_response_done, ^response_task, :ok}
+
+    assert %{
+             direct_turns_seen: 1,
+             direct_turns_completed: 1,
+             direct_turns_aborted: 0,
+             direct_turns_failed: 0,
+             proxy_turns_seen: 0,
+             owners_seen: 0
+           } = Task.await(drain_task, @await_timeout_ms)
+
+    refute_received :unexpected_direct_cancel
+  end
+
+  test "drain deadline cancels a registered proxy task once and counts one abort" do
+    harness = start_rollout_drain_harness(self())
+    parent = self()
+
+    {:ok, response_task} =
+      ResponseTask.start(
+        parent,
+        :proxy,
+        fn _task_pid ->
+          send(parent, {:proxy_turn_started, self()})
+
+          receive do
+            :never_released -> :ok
+          end
+        end,
+        fn task_pid, reason ->
+          send(parent, {:proxy_turn_cancelled, task_pid, reason})
+          :kill_worker
+        end,
+        activity_registry: harness.activity_registry
+      )
+
+    assert_receive {:proxy_turn_started, _proxy_worker}
+
+    drain_task =
+      Task.async(fn ->
+        RolloutDrain.start_drain(
+          [
+            name: harness.name,
+            timeout_ms: 25,
+            deadline_margin_ms: 20,
+            deadline_floor_ms: 10
+          ] ++ deadline_options(harness.deadline)
+        )
+      end)
+
+    assert_receive {:rollout_drain_deadline_wait, deadline, 10}
+    assert :ok = VirtualDeadline.advance(deadline, 10)
+    assert_receive {:proxy_turn_cancelled, ^response_task, :owner_drained}
+    assert_receive {:codex_response_done, ^response_task, {:error, :owner_drained}}
+    refute_received {:proxy_turn_cancelled, ^response_task, :owner_drained}
+
+    assert %{
+             proxy_turns_seen: 1,
+             proxy_turns_completed: 0,
+             proxy_turns_aborted: 1,
+             proxy_turns_failed: 0,
+             direct_turns_seen: 0,
+             owners_seen: 0
+           } = Task.await(drain_task, @await_timeout_ms)
+  end
+
+  test "a restarted rollout coordinator re-enumerates the registry's active proxy task" do
+    harness = start_rollout_drain_harness(self())
+    parent = self()
+
+    {:ok, response_task} =
+      ResponseTask.start(
+        parent,
+        :proxy,
+        fn _task_pid ->
+          send(parent, {:restart_proxy_turn_started, self()})
+
+          receive do
+            :complete_restart_proxy_turn -> :ok
+          end
+        end,
+        fn _task_pid, _reason -> :kill_worker end,
+        activity_registry: harness.activity_registry
+      )
+
+    assert_receive {:restart_proxy_turn_started, worker}
+    old_coordinator = Process.whereis(harness.name)
+    old_ref = Process.monitor(old_coordinator)
+
+    first_caller =
+      spawn(fn ->
+        RolloutDrain.start_drain(
+          [name: harness.name, timeout_ms: 500] ++ deadline_options(harness.deadline)
+        )
+      end)
+
+    first_caller_ref = Process.monitor(first_caller)
+    assert_receive {:rollout_drain_deadline_wait, _deadline, _wait_ms}
+    Process.exit(old_coordinator, :kill)
+    assert_receive {:DOWN, ^old_ref, :process, ^old_coordinator, :killed}
+    assert_receive {:DOWN, ^first_caller_ref, :process, ^first_caller, _reason}
+
+    new_coordinator = await_restarted_coordinator(harness.name, old_coordinator)
+    assert Process.alive?(new_coordinator)
+
+    second_drain =
+      Task.async(fn ->
+        RolloutDrain.start_drain(
+          [name: harness.name, timeout_ms: 500] ++ deadline_options(harness.deadline)
+        )
+      end)
+
+    assert_receive {:rollout_drain_deadline_wait, _deadline, _wait_ms}
+    send(worker, :complete_restart_proxy_turn)
+    assert_receive {:codex_response_done, ^response_task, :ok}
+
+    assert %{proxy_turns_seen: 1, proxy_turns_completed: 1, proxy_turns_failed: 0} =
+             Task.await(second_drain, @await_timeout_ms)
+  end
+
   @tag :rollout_drain_t2
   test "T2 injectable deadline clamps a tiny budget and preserves exact abort fallback" do
     harness = start_rollout_drain_harness(self())
@@ -681,5 +863,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.RolloutDrainTest do
              turns_completed: 0,
              turns_aborted: 0
            } = Task.await(drain_task, @await_timeout_ms)
+  end
+
+  defp await_restarted_coordinator(name, old_pid) do
+    case Process.whereis(name) do
+      pid when is_pid(pid) and pid != old_pid ->
+        pid
+
+      _not_restarted ->
+        :erlang.yield()
+        await_restarted_coordinator(name, old_pid)
+    end
   end
 end

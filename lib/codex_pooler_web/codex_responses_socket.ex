@@ -12,6 +12,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Gateway.Websocket.Adapter
+  alias CodexPooler.Gateway.Websocket.ResponseTask
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Cache, as: InstanceSettingsCache
   alias CodexPooler.Repo
@@ -983,10 +984,12 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp start_response_task(parent, payload, state) do
-    Task.start(fn ->
-      Process.flag(:sensitive, true)
-      send(parent, {:codex_response_done, self(), safe_run_response(parent, payload, state)})
-    end)
+    ResponseTask.start(
+      parent,
+      response_task_activity_kind(payload, state),
+      fn task_pid -> safe_run_response(parent, payload, state, task_pid) end,
+      fn task_pid, reason -> cancel_response_task_activity(state, task_pid, reason) end
+    )
   end
 
   defp start_or_queue_response_task(_payload, %{firewall_revoked?: true} = state), do: state
@@ -1302,12 +1305,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     {monitor, Map.put(state, :task_monitors, task_monitors)}
   end
 
-  defp safe_run_response(_parent, {:owner_retarget_error, reason}, _state) do
+  defp safe_run_response(_parent, {:owner_retarget_error, reason}, _state, _task_pid) do
     Adapter.retarget_error_payload(reason)
   end
 
-  defp safe_run_response(parent, payload, state) do
-    task_pid = self()
+  defp safe_run_response(parent, payload, state, task_pid) do
     opts = response_task_opts(state, task_pid)
 
     try do
@@ -1330,6 +1332,41 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
           log_response_task_failure(kind, reason, __STACKTRACE__, payload, state, opts)
           {:response_task_failure, response_task_failure()}
         end
+    end
+  end
+
+  defp response_task_activity_kind({:owner_retarget_error, _reason}, _state),
+    do: :local_owner
+
+  defp response_task_activity_kind(_payload, state) do
+    cond do
+      not owner_forwarded_socket?(state) -> :direct
+      local_owner_socket?(state) -> :local_owner
+      true -> :proxy
+    end
+  end
+
+  defp local_owner_socket?(%{codex_session: %{owner_instance_id: owner_instance_id}})
+       when is_binary(owner_instance_id),
+       do: owner_instance_id == Atom.to_string(node())
+
+  defp local_owner_socket?(_state), do: false
+
+  defp cancel_response_task_activity(state, task_pid, :owner_drained) do
+    if owner_forwarded_socket?(state) do
+      :ok = Adapter.cancel_owner_turn(state, task_pid, :owner_drained)
+      :await_worker
+    else
+      opts =
+        state
+        |> response_task_opts(task_pid)
+        |> CodexPooler.Gateway.Payloads.RequestOptions.put_runtime_context(
+          interrupt_reason: "owner_drained"
+        )
+
+      _result = Websocket.interrupt_codex_turn(Map.get(state, :codex_session), opts)
+      :ok = Websocket.close_websocket_session(Map.get(state, :upstream_websocket_session))
+      :kill_worker
     end
   end
 

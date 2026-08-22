@@ -692,6 +692,35 @@ defmodule CodexPooler.Gateway.Websocket do
 
   def detach_websocket_owner_downstream(_session, _owner_lease_token, _downstream, _opts), do: :ok
 
+  @spec cancel_websocket_owner_turn(
+          CodexSession.t() | nil,
+          String.t() | nil,
+          WebsocketOwnerSession.downstream() | nil,
+          :owner_drained,
+          opts()
+        ) :: :ok | {:error, WebsocketOwnerContract.owner_error()}
+  def cancel_websocket_owner_turn(
+        %CodexSession{} = session,
+        owner_lease_token,
+        downstream,
+        :owner_drained = reason,
+        opts
+      )
+      when is_binary(owner_lease_token) and is_map(downstream) do
+    opts = websocket_request_options(opts)
+
+    with :ok <- SessionContinuity.validate_owner_token(session, owner_lease_token),
+         {:ok, owner} <-
+           WebsocketOwnerForwarder.resolve_owner(session, owner_forwarder_opts(opts)) do
+      cancel_owner_turn(owner, session.id, downstream, reason, opts)
+    else
+      {:error, :stale_owner} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def cancel_websocket_owner_turn(_session, _token, _downstream, _reason, _opts), do: :ok
+
   defp owner_detach_error(reason, session, opts),
     do: OwnerErrorDiagnostics.normalize(reason, :detach, owner_error_context(session, opts))
 
@@ -883,6 +912,34 @@ defmodule CodexPooler.Gateway.Websocket do
       node,
       :remote_cancel_downstream,
       [codex_session_id, downstream],
+      opts
+      |> owner_forwarder_opts()
+      |> Keyword.put_new(:timeout, WebsocketOwnerContract.default_downstream_send_timeout_ms())
+    )
+  end
+
+  defp cancel_owner_turn({:local, owner_instance_id}, codex_session_id, downstream, reason, opts) do
+    with {:ok, pid} <-
+           WebsocketOwnerSession.lookup(
+             codex_session_id,
+             owner_lookup_metadata(owner_instance_id, opts)
+           ) do
+      WebsocketOwnerSession.cancel_downstream(pid, downstream, reason)
+    end
+  end
+
+  defp cancel_owner_turn(
+         {:remote, node, _owner_instance_id},
+         codex_session_id,
+         downstream,
+         reason,
+         opts
+       ) do
+    WebsocketOwnerForwarder.cancel_remote_downstream(
+      node,
+      codex_session_id,
+      downstream,
+      reason,
       opts
       |> owner_forwarder_opts()
       |> Keyword.put_new(:timeout, WebsocketOwnerContract.default_downstream_send_timeout_ms())

@@ -74,6 +74,11 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
   @spec cleanup_owner_session(socket_state(), term()) :: :ok
   def cleanup_owner_session(state, reason), do: DownstreamSession.cleanup(state, reason)
 
+  @spec cancel_owner_turn(socket_state(), pid(), :owner_drained) :: :ok
+  def cancel_owner_turn(state, owner_turn_id, reason) do
+    DownstreamSession.cancel_owner_turn(state, owner_turn_id, reason)
+  end
+
   @spec downstream_response_chunk(binary()) :: binary()
   def downstream_response_chunk(data) when is_binary(data) do
     StreamProtocol.canonicalize_native_codex_responses_json_message(data)

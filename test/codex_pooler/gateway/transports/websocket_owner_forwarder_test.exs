@@ -14,6 +14,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, SessionContinuity}
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
+  alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
@@ -21,6 +22,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   alias CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseCaller
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.Gateway.Websocket, as: Gateway
+  alias CodexPooler.Gateway.Websocket.ResponseTask
 
   @epmd_ready_timeout_ms 2_000
   @epmd_ready_poll_ms 10
@@ -1430,6 +1432,245 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
                    @peer_detection_timeout_ms
 
     await_owner_cancellation!(owner_pid)
+  end
+
+  test "owner_drained remote cancellation stops only the matching turn and preserves owner reuse",
+       %{
+         auth: auth
+       } do
+    remote_node = :"codex_pooler@drain-cancel-owner-app.example"
+
+    %{session: session} =
+      owner_session_fixture(auth, Atom.to_string(remote_node), "remote-drain-cancel")
+
+    parent = self()
+    release_ref = make_ref()
+
+    upstream = %{
+      start: fn -> Agent.start_link(fn -> :ready end) end,
+      send: fn _upstream_pid, request, _writer ->
+        send(parent, {:remote_drain_turn_started, self(), request})
+
+        receive do
+          {:release_remote_drain_turn, ^release_ref} -> :ok
+        end
+      end,
+      close: fn upstream_pid ->
+        if Process.alive?(upstream_pid), do: Agent.stop(upstream_pid)
+      end
+    }
+
+    assert {:ok, owner_pid} = start_owner(session, upstream)
+
+    opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node], calls: %{remote_node => :success})
+
+    assert {:ok, stable_downstream} =
+             WebsocketOwnerForwarder.call_remote(
+               remote_node,
+               :remote_attach_downstream,
+               [session.id, downstream("corr-drain-cancel")],
+               opts
+             )
+
+    owner_turn_id = spawn(fn -> receive do: (:stop -> :ok) end)
+    downstream = Map.put(stable_downstream, :owner_turn_id, owner_turn_id)
+
+    submitter =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_request(
+          owner_pid,
+          downstream,
+          request("remote-drain-cancel"),
+          true
+        )
+      end)
+
+    assert_receive {:remote_drain_turn_started, remote_turn_task, _request}
+
+    wrong_turn_id = spawn(fn -> receive do: (:stop -> :ok) end)
+
+    assert {:error, :stale_downstream} =
+             WebsocketOwnerSession.cancel_downstream(
+               owner_pid,
+               Map.put(downstream, :owner_turn_id, wrong_turn_id),
+               :owner_drained
+             )
+
+    assert %{active_turn: %{task_pid: ^remote_turn_task}, downstream: ^stable_downstream} =
+             :sys.get_state(owner_pid)
+
+    send(wrong_turn_id, :stop)
+
+    assert :ok =
+             WebsocketOwnerForwarder.cancel_remote_downstream(
+               remote_node,
+               session.id,
+               downstream,
+               :owner_drained,
+               opts
+             )
+
+    assert {:websocket_owner_submission_accepted, {:error, :owner_drained}} =
+             Task.await(submitter, @peer_detection_timeout_ms)
+
+    assert Process.alive?(owner_pid)
+    assert %{active_turn: nil, draining?: false} = :sys.get_state(owner_pid)
+
+    assert {:ok, replacement_downstream} =
+             WebsocketOwnerSession.attach_downstream(
+               owner_pid,
+               downstream("corr-drain-cancel-reuse")
+             )
+
+    retry =
+      Task.async(fn ->
+        WebsocketOwnerSession.submit_request(owner_pid, replacement_downstream, request("retry"))
+      end)
+
+    assert_receive {:remote_drain_turn_started, retry_task, _request}
+    send(retry_task, {:release_remote_drain_turn, release_ref})
+    assert :ok = Task.await(retry, @peer_detection_timeout_ms)
+    assert Process.alive?(owner_pid)
+
+    send(owner_turn_id, :stop)
+    refute_received {:websocket_owner_frame, "corr-drain-cancel", 1, :complete}
+    refute Process.alive?(remote_turn_task)
+  end
+
+  @tag :rollout_drain_peer_qa
+  test "real peer owner stays reusable while rollout drain waits for its proxy-local task" do
+    peer_node = start_current_peer!("rollout_proxy_owner")
+    parent = self()
+    release_ref = make_ref()
+    session_id = "real-peer-rollout-proxy"
+
+    terminal = terminal_frame("resp_real_peer_rollout_proxy")
+
+    upstream =
+      :erpc.call(peer_node, WebsocketOwnerNodeHarness, :fake_upstream_boundary, [
+        parent,
+        [block_ref: release_ref, messages: [terminal], return_request_result?: true]
+      ])
+
+    persistence = :erpc.call(peer_node, WebsocketOwnerNodeHarness, :fake_persistence_boundary, [])
+
+    assert {:ok, owner_pid} =
+             :erpc.call(peer_node, WebsocketOwnerSession, :start_owner, [
+               [
+                 codex_session_id: session_id,
+                 owner_lease_token: "synthetic-rollout-proxy-token",
+                 owner_instance_id: Atom.to_string(peer_node),
+                 owner_renewal_ms: 60_000,
+                 upstream: upstream,
+                 persistence: persistence
+               ]
+             ])
+
+    client = WebsocketOwnerForwarder.ERPCNodeClient
+
+    assert {:ok, stable_downstream} =
+             client.call_owner(
+               peer_node,
+               WebsocketOwnerForwarder,
+               :remote_attach_downstream,
+               [session_id, downstream("corr-real-peer-rollout-proxy")],
+               @peer_detection_timeout_ms
+             )
+
+    harness = WebsocketRolloutDrainSupport.start_rollout_drain_harness(self())
+    response_task_parent = self()
+
+    {:ok, response_task} =
+      ResponseTask.start(
+        response_task_parent,
+        :proxy,
+        fn task_pid ->
+          per_call_downstream = Map.put(stable_downstream, :owner_turn_id, task_pid)
+
+          client.call_owner(
+            peer_node,
+            WebsocketOwnerSession,
+            :submit_request,
+            [owner_pid, per_call_downstream, request("real-peer-rollout-proxy")],
+            @peer_detection_timeout_ms
+          )
+        end,
+        fn task_pid, :owner_drained ->
+          per_call_downstream = Map.put(stable_downstream, :owner_turn_id, task_pid)
+
+          assert :ok =
+                   client.call_owner(
+                     peer_node,
+                     WebsocketOwnerForwarder,
+                     :remote_cancel_downstream_v1,
+                     [session_id, per_call_downstream, :owner_drained],
+                     @peer_detection_timeout_ms
+                   )
+
+          :await_worker
+        end,
+        activity_registry: harness.activity_registry
+      )
+
+    assert_receive {:websocket_owner_harness_barrier, peer_turn_task, ^release_ref}
+
+    drain_task =
+      Task.async(fn ->
+        RolloutDrain.start_drain(
+          [name: harness.name, timeout_ms: 500] ++
+            WebsocketRolloutDrainSupport.deadline_options(harness.deadline)
+        )
+      end)
+
+    assert_receive {:rollout_drain_deadline_wait, deadline, wait_ms}
+    refute_received {:codex_response_done, ^response_task, _result}
+    send(peer_turn_task, {:websocket_owner_harness_release, release_ref})
+
+    assert_receive {:codex_response_done, ^response_task,
+                    {:ok, %{terminal: "response.completed"}}}
+
+    assert :ok = WebsocketRolloutDrainSupport.VirtualDeadline.advance(deadline, wait_ms)
+
+    assert %{proxy_turns_seen: 1, proxy_turns_completed: 1, proxy_turns_aborted: 0} =
+             Task.await(drain_task, @peer_detection_timeout_ms)
+
+    assert :erpc.call(peer_node, Process, :alive?, [owner_pid])
+
+    assert %{active_turn: nil, draining?: false} =
+             :erpc.call(peer_node, :sys, :get_state, [owner_pid])
+  end
+
+  test "versioned remote cancellation falls back to the legacy /2 entrypoint" do
+    remote_node = :"codex_pooler@legacy-cancel-owner-app.example"
+    session_id = "legacy-cancel-session"
+
+    assert {:ok, _owner_pid} =
+             WebsocketOwnerSession.start_owner(
+               codex_session_id: session_id,
+               owner_lease_token: "synthetic-legacy-cancel-token",
+               owner_instance_id: Atom.to_string(node()),
+               owner_renewal_ms: 60_000,
+               upstream: WebsocketOwnerNodeHarness.fake_upstream_boundary(self()),
+               persistence: WebsocketOwnerNodeHarness.fake_persistence_boundary()
+             )
+
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+    downstream = attach_downstream(session_id, "corr-legacy-cancel")
+
+    opts =
+      WebsocketOwnerNodeHarness.node_client_opts([remote_node],
+        calls: %{remote_node => :old_release}
+      )
+
+    assert :ok =
+             WebsocketOwnerForwarder.cancel_remote_downstream(
+               remote_node,
+               session_id,
+               downstream,
+               :client_disconnected,
+               opts
+             )
   end
 
   @tag :continuation_generation_boundary

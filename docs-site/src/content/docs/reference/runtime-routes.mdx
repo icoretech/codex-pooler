@@ -760,6 +760,23 @@ behavior, and native backend raw Responses GET or POST does not synthesize a
 terminal. Once hidden bridge traffic has committed the handoff, the request is
 not replayed over HTTP.
 
+During a rollout, the draining app instance also waits for direct websocket
+response tasks and response tasks proxying a turn to an owner on another app
+instance. Each response task registers before its synchronous drain-admission
+gate, and the drain sets its cutoff before taking the snapshot, so every task is
+either in the shared absolute drain budget or rejected before upstream dispatch.
+When that budget expires, the proxy cancels only its matching owner turn with
+`owner_drained`; it does not drain or release the healthy remote owner, which
+remains reusable. Local owner turns keep their existing owner-derived accounting
+and are not counted again as proxy tasks. Public HTTP and websocket payloads are
+unchanged.
+
+The first rollout that introduces this protocol is asymmetric: an old draining
+proxy does not yet register its local response tasks, while a new proxy uses the
+versioned remote cancellation entrypoint and falls back to the legacy detach
+entrypoint when the owner is still on the previous release. Full direct/proxy
+drain coverage applies after every app pod runs the new release.
+
 Owner submission uses a versioned, data-only request. The owner node builds callbacks from current local state, so payloads and authorization data don't cross that boundary as callbacks. If a remote owner doesn't understand the current protocol, Codex Pooler detects the mismatch before upstream submission and applies its existing behavior automatically: native work returns its normal safe owner error, while an eligible bridge falls back to HTTP before visible output. Operators need no migration, manual procedure, or deployment-specific action.
 
 Crash and status diagnostics stay safe at the same boundary. Formatted status exposes only bounded lifecycle and boolean state, and transient request inspection is opaque, so payload and authorization data aren't disclosed through status or crash reporting.
