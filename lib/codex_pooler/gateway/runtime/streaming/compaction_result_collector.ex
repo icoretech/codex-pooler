@@ -136,31 +136,47 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
           {:error, :invalid_compaction}
         end
 
-      _other ->
-        {:error, :invalid_compaction}
+      nil ->
+        {:ok, state}
     end
   end
 
-  defp collect_event("response.output_item.done", %{"item" => item}, %{item: nil} = state)
-       when is_map(item) do
+  defp collect_event(
+         "response.output_item.done",
+         %{"item" => %{"type" => "compaction"} = item},
+         %{item: nil} = state
+       ) do
     case compact_item(item) do
       {:ok, item} -> {:ok, %{state | item: item}}
       {:error, _reason} = error -> error
     end
   end
 
-  defp collect_event("response.output_item.done", %{"item" => _item}, _state),
-    do: {:error, :duplicate_compaction}
+  defp collect_event(
+         "response.output_item.done",
+         %{"item" => %{"type" => "compaction"}},
+         _state
+       ),
+       do: {:error, :duplicate_compaction}
+
+  defp collect_event("response.output_item.done", %{"item" => item}, state)
+       when is_map(item),
+       do: {:ok, state}
+
+  defp collect_event("response.output_item.done", _event, _state),
+    do: {:error, :invalid_compaction}
 
   defp collect_event(
-         "response.completed",
+         type,
          %{"response" => %{"status" => "completed"} = response},
          %{item: item, terminal?: false} = state
        )
-       when is_map(item),
+       when type in ["response.completed", "response.done"] and is_map(item),
        do: {:ok, %{state | response: response, terminal?: true}}
 
-  defp collect_event("response.completed", _event, _state), do: {:error, :missing_terminal}
+  defp collect_event(type, _event, _state)
+       when type in ["response.completed", "response.done"],
+       do: {:error, :missing_terminal}
 
   defp collect_event(type, _event, _state)
        when type in ["error", "response.failed", "response.incomplete"],

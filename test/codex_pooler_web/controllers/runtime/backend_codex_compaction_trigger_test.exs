@@ -201,6 +201,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     upstream =
       start_upstream(
         FakeUpstream.sse_stream([
+          ": keepalive\n\n",
+          {"response.output_item.done",
+           %{
+             "type" => "response.output_item.done",
+             "item" => %{
+               "type" => "reasoning",
+               "id" => "reasoning_before_compaction",
+               "encrypted_content" => "synthetic-reasoning-content"
+             }
+           }},
           {"response.output_item.done",
            %{"type" => "response.output_item.done", "item" => compact_item}},
           {"response.completed",
@@ -249,6 +259,59 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses/compact"
     assert request.transport == "http_compact_json"
+    assert request.status == "succeeded"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+  end
+
+  test "OMP V2 compaction accepts a completed response.done terminal", %{conn: conn} do
+    compact_item = %{
+      "type" => "compaction",
+      "encrypted_content" => "synthetic-response-done-compaction"
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.output_item.done",
+           %{"type" => "response.output_item.done", "item" => compact_item}},
+          {"response.done",
+           %{
+             "type" => "response.done",
+             "response" => %{
+               "id" => "resp_done_compaction",
+               "status" => "completed",
+               "output" => [compact_item]
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => visible_input("synthetic response.done compact") ++ [compaction_trigger()],
+        "stream" => true,
+        "client_metadata" => %{
+          "x-codex-turn-metadata" =>
+            Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
+        }
+      })
+
+    assert response.status == 200
+    assert [done_event, terminal_event] = backend_sse_events(response(response, 200))
+    assert done_event["data"]["item"] == compact_item
+    assert terminal_event["event"] == "response.completed"
+    assert terminal_event["data"]["response"]["status"] == "completed"
+    assert terminal_event["data"]["response"]["output"] == [compact_item]
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses/compact"
     assert request.status == "succeeded"
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
