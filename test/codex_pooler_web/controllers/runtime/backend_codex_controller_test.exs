@@ -42,6 +42,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Files
+  alias CodexPooler.Files.FileRecord
   alias CodexPooler.Gateway.Metadata
   alias CodexPooler.Gateway.Metadata.CodexCatalog
   alias CodexPooler.Gateway.OperationalSettings
@@ -3991,6 +3992,47 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses"
     assert request.status == "succeeded"
+  end
+
+  @tag :unsupported_video_url
+  test "POST /backend-api/codex/v1/chat/completions rejects video_url before dispatch", %{
+    conn: conn
+  } do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+    durable_counts = pre_dispatch_durable_counts()
+
+    assert durable_counts == %{requests: 0, attempts: 0, file_records: 0}
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/v1/chat/completions", %{
+        "model" => setup.model.exposed_model_id,
+        "messages" => [
+          %{
+            "role" => "user",
+            "content" => [
+              %{
+                "type" => "video_url",
+                "video_url" => %{"url" => "https://example.com/video.mp4"}
+              }
+            ]
+          }
+        ]
+      })
+
+    assert json_response(response, 400) == %{
+             "error" => %{
+               "type" => "invalid_request_error",
+               "code" => "invalid_request",
+               "message" => "messages must contain role/content objects",
+               "param" => "messages"
+             }
+           }
+
+    assert FakeUpstream.count(upstream) == 0
+    assert pre_dispatch_durable_counts() == durable_counts
   end
 
   @tag :issue_78
@@ -14629,6 +14671,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
       attempts: Repo.aggregate(Attempt, :count),
       ledger_entries: Repo.aggregate(LedgerEntry, :count),
       request_log_facts: Repo.aggregate(RequestLogFact, :count)
+    }
+  end
+
+  defp pre_dispatch_durable_counts do
+    %{
+      requests: Repo.aggregate(Request, :count),
+      attempts: Repo.aggregate(Attempt, :count),
+      file_records: Repo.aggregate(FileRecord, :count)
     }
   end
 

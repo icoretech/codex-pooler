@@ -2,6 +2,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
+  import ExUnit.CaptureLog
 
   import CodexPooler.Gateway.OpenAICompatibility.AudioTestSupport,
     only: [
@@ -30,6 +31,7 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
   alias CodexPooler.Accounting.{Attempt, Request, RequestLogFact, RequestLogs}
   alias CodexPooler.Accounting.LedgerEntry
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Files.FileRecord
   alias CodexPooler.Gateway.Metadata.CanonicalModelSource
 
   alias CodexPooler.Gateway.Persistence.{
@@ -1993,6 +1995,52 @@ defmodule CodexPoolerWeb.V1.ChatCompletionsControllerTest do
     assert FakeUpstream.count(upstream) == 0
     assert Repo.aggregate(Request, :count) == 0
     assert Repo.aggregate(Attempt, :count) == 0
+  end
+
+  @tag :unsupported_video_url
+  test "POST /v1/chat/completions rejects video_url before dispatch in buffered and streaming modes",
+       %{conn: conn} do
+    sentinel = "https://example.com/video-url-sentinel.mp4"
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "should_not_dispatch"}))
+    setup = gateway_setup(upstream)
+    file_count_before = Repo.aggregate(FileRecord, :count)
+
+    assert file_count_before == 0
+
+    for stream <- [false, true] do
+      {response, log} =
+        with_log(fn ->
+          conn
+          |> recycle()
+          |> auth(setup)
+          |> post("/v1/chat/completions", %{
+            "model" => setup.model.exposed_model_id,
+            "messages" => [
+              %{
+                "role" => "user",
+                "content" => [%{"type" => "video_url", "video_url" => %{"url" => sentinel}}]
+              }
+            ],
+            "stream" => stream
+          })
+        end)
+
+      assert json_response(response, 400) == %{
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_request",
+                 "message" => "messages must contain role/content objects",
+                 "param" => "messages"
+               }
+             }
+
+      refute response.resp_body =~ sentinel
+      refute log =~ sentinel
+      assert FakeUpstream.count(upstream) == 0
+      assert Repo.aggregate(Request, :count) == 0
+      assert Repo.aggregate(Attempt, :count) == 0
+      assert Repo.aggregate(FileRecord, :count) == file_count_before
+    end
   end
 
   test "POST /v1/chat/completions rejects invalid strict nested function tools before dispatch",

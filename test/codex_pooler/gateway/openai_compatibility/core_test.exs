@@ -6901,6 +6901,31 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
                  ]
                })
     end
+
+    @tag :unsupported_video_url
+    test "Chat rejects Vercel-style video_url parts" do
+      assert {:error,
+              %{
+                status: 400,
+                code: "invalid_request",
+                message: "messages must contain role/content objects",
+                param: "messages"
+              }} =
+               Chat.coerce(%{
+                 "model" => "gpt-fixture-text",
+                 "messages" => [
+                   %{
+                     "role" => "user",
+                     "content" => [
+                       %{
+                         "type" => "video_url",
+                         "video_url" => %{"url" => "https://example.com/sample.mp4"}
+                       }
+                     ]
+                   }
+                 ]
+               })
+    end
   end
 
   defp function_tool(name, parameters, strict \\ true) do
