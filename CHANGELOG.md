@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.6.9](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.8...codex-pooler-v0.6.9) (2026-08-23)
+
+
+### Bug Fixes
+
+* **websocket:** accept exact tracked owner turn frames ([7ecf2b7](https://github.com/icoretech/codex-pooler/commit/7ecf2b746c0410d6849a2733479047be4ed8c9d1))
+* **websocket:** acknowledge native owner output probes ([653494f](https://github.com/icoretech/codex-pooler/commit/653494fb0519b096d6ffaf387e4660bb52ee1931))
+* **websocket:** bind carried reconnect owner turns ([e87f0e4](https://github.com/icoretech/codex-pooler/commit/e87f0e4b5f71969b0667e2f910d0d6f4e58abed4))
+* **websocket:** cancel abandoned tasks before cleanup ([ca15d0e](https://github.com/icoretech/codex-pooler/commit/ca15d0e644010348393eb42663da963eb7b8f53a))
+* **websocket:** drain active proxy turns during rollout ([a74442e](https://github.com/icoretech/codex-pooler/commit/a74442e119e2eeb594296bbffe6e604b98ac4cf8))
+* **websocket:** preserve completed remote owner sessions on detach ([b7cd6a0](https://github.com/icoretech/codex-pooler/commit/b7cd6a00eea91a3a365b7a153ebd1b9e8118423b))
+* **websocket:** preserve natural terminal drain completion ([e73c49e](https://github.com/icoretech/codex-pooler/commit/e73c49e26bca164b071d506661943f9fb2669707))
+* **websocket:** preserve remote owner turn timeout budget ([75cb539](https://github.com/icoretech/codex-pooler/commit/75cb539d4e903eb649e811340aa5be6aacea31df))
+* **websocket:** reject remote owner drain commands ([2a1ec62](https://github.com/icoretech/codex-pooler/commit/2a1ec62f6802fd8b13814d232d3bfdb2efab4eb1))
+* **websocket:** restore mixed-release owner drain behavior ([bcffe8b](https://github.com/icoretech/codex-pooler/commit/bcffe8b178d66cb1606051c2ef8374628aac831e))
+* **websocket:** retry continuity alias deadlocks ([d69c859](https://github.com/icoretech/codex-pooler/commit/d69c859f427c5eba0f056900c25b986bae2c2c00))
+* **websocket:** serialize rollout cancellation ownership ([6c84efd](https://github.com/icoretech/codex-pooler/commit/6c84efd0ffb087df65e16b9f0aca1bc4b7367b99))
+* **websocket:** settle cancellation before watcher dispatch ([5e16cc7](https://github.com/icoretech/codex-pooler/commit/5e16cc79d8cb5295c858671ef9346b20f832976e))
+* **websocket:** settle cancelled rollout activities ([36c7b6b](https://github.com/icoretech/codex-pooler/commit/36c7b6b5b868f7b05f610a7b2aba3f2bf5e8d533))
+* **websocket:** start admitted proxy turns before delivery ack ([c295bdf](https://github.com/icoretech/codex-pooler/commit/c295bdffb2cfd190a001115d4140d3fb00044eee))
+* **websocket:** wait for proxy terminal delivery during drain ([80f0967](https://github.com/icoretech/codex-pooler/commit/80f0967ffe5dbcf47d2389c6f1f041a29df7c502))
+
 ## [0.6.8](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.7...codex-pooler-v0.6.8) (2026-08-22)
 
 
