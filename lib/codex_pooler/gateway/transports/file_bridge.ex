@@ -64,10 +64,10 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
 
   def upload_file(upload_url, %{"path" => path, "content_type" => content_type}, opts)
       when is_binary(upload_url) do
-    with {:ok, body} <- readable_file_stream(path) do
+    with {:ok, body, byte_size} <- readable_file_stream(path) do
       upload_url
       |> upload_request()
-      |> Req.put(upload_req_options(body, content_type))
+      |> Req.put(upload_req_options(body, content_type, byte_size))
       |> normalize_upload_response(opts)
     end
   rescue
@@ -266,11 +266,12 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
     path == root or String.starts_with?(path, root <> "/")
   end
 
-  defp upload_req_options(body, content_type) do
+  defp upload_req_options(body, content_type, byte_size) do
     configured_upload_req_options()
     |> Keyword.merge(
       body: body,
       headers: [
+        {"content-length", Integer.to_string(byte_size)},
         {"content-type", content_type || "application/octet-stream"},
         {"x-ms-blob-type", "BlockBlob"}
       ],
@@ -311,7 +312,14 @@ defmodule CodexPooler.Gateway.Transports.FileBridge do
     case File.open(path, [:read]) do
       {:ok, file} ->
         File.close(file)
-        {:ok, File.stream!(path, 64 * 1024, [])}
+
+        case File.stat(path) do
+          {:ok, %File.Stat{size: byte_size}} ->
+            {:ok, File.stream!(path, 64 * 1024, []), byte_size}
+
+          {:error, _reason} ->
+            {:error, Error.reason(400, "invalid_request", "file upload is not readable", "file")}
+        end
 
       {:error, _reason} ->
         {:error, Error.reason(400, "invalid_request", "file upload is not readable", "file")}

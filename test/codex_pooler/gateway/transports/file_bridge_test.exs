@@ -125,6 +125,12 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
 
     assert String.starts_with?(request_head, "PUT /upload HTTP/1.1\r\n")
     assert raw_header_values(request_head, "content-type") == ["text/plain"]
+
+    assert raw_header_values(request_head, "content-length") == [
+             Integer.to_string(byte_size(contents))
+           ]
+
+    assert raw_header_values(request_head, "transfer-encoding") == []
     assert raw_header_values(request_head, "x-ms-blob-type") == ["BlockBlob"]
     assert raw_header_values(request_head, "x-openai-internal-codex-residency") == []
     assert raw_header_values(request_head, "authorization") == []
