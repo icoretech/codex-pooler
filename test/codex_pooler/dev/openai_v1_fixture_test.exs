@@ -2,6 +2,7 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
   use CodexPooler.DataCase, async: false
 
   import CodexPooler.AccountsFixtures
+  import CodexPooler.PoolerFixtures
 
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Catalog.Model
@@ -118,6 +119,53 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
              OpenAIV1Fixture.acquire(other)
 
     assert {:ok, %{status: "released"}} = OpenAIV1Fixture.release(context.options)
+  end
+
+  test "request compression opt-in restores the exact prior routing setting", context do
+    baseline_updated_at = ~U[2026-08-01 12:34:56.123456Z]
+
+    pool = pool_fixture(%{slug: @pool_slug})
+
+    %RoutingSettings{pool_id: pool.id}
+    |> RoutingSettings.changeset(%{
+      routing_strategy: "quota_first",
+      bridge_ring_size: 7,
+      sticky_websocket_sessions: false,
+      sticky_http_sessions: true,
+      prompt_cache_affinity_enabled: false,
+      v1_compatibility_enabled: false,
+      request_compression_enabled: false,
+      allow_image_generation: false,
+      metadata: %{"baseline" => true},
+      created_at: ~U[2026-08-01 12:00:00.000000Z],
+      updated_at: baseline_updated_at
+    })
+    |> Repo.insert!()
+
+    options = Keyword.put(context.options, :request_compression, :enabled)
+
+    assert {:ok, %{status: "ready"}} = OpenAIV1Fixture.acquire(options)
+
+    assert %RoutingSettings{request_compression_enabled: true} =
+             Repo.get!(RoutingSettings, pool.id)
+
+    assert {:error, "OpenAI V1 fixture is leased with another request compression mode"} =
+             OpenAIV1Fixture.acquire(context.options)
+
+    assert {:ok, %{status: "released"}} = OpenAIV1Fixture.release(options)
+
+    assert %RoutingSettings{
+             routing_strategy: "quota_first",
+             bridge_ring_size: 7,
+             sticky_websocket_sessions: false,
+             sticky_http_sessions: true,
+             prompt_cache_affinity_enabled: false,
+             v1_compatibility_enabled: false,
+             request_compression_enabled: false,
+             allow_image_generation: false,
+             metadata: %{"baseline" => true},
+             updated_at: ^baseline_updated_at
+           } = Repo.get!(RoutingSettings, pool.id)
   end
 
   defp assert_private_mode(path, expected) do

@@ -3,6 +3,7 @@ defmodule Mix.Tasks.Dev.OpenaiV1Fixture do
   Acquires, releases, or inspects the reversible local OpenAI V1 smoke fixture.
 
       MIX_ENV=dev mix dev.openai_v1_fixture acquire --upstream-base-url http://127.0.0.1:4057
+      MIX_ENV=dev mix dev.openai_v1_fixture acquire --upstream-base-url http://127.0.0.1:4057 --request-compression
       MIX_ENV=dev mix dev.openai_v1_fixture status
       MIX_ENV=dev mix dev.openai_v1_fixture release
   """
@@ -29,9 +30,12 @@ defmodule Mix.Tasks.Dev.OpenaiV1Fixture do
   end
 
   defp parse_args(args) do
-    case OptionParser.parse(args, strict: [upstream_base_url: :string], aliases: []) do
+    case OptionParser.parse(args,
+           strict: [upstream_base_url: :string, request_compression: :boolean],
+           aliases: []
+         ) do
       {options, ["acquire"], []} ->
-        {:ok, :acquire, options}
+        {:ok, :acquire, normalize_acquire_options(options)}
 
       {[], ["release"], []} ->
         {:ok, :release, []}
@@ -40,7 +44,16 @@ defmodule Mix.Tasks.Dev.OpenaiV1Fixture do
         {:ok, :status, []}
 
       _invalid ->
-        {:error, "use acquire [--upstream-base-url URL], release, or status"}
+        {:error,
+         "use acquire [--upstream-base-url URL] [--request-compression], release, or status"}
+    end
+  end
+
+  defp normalize_acquire_options(options) do
+    if Keyword.get(options, :request_compression, false) do
+      Keyword.put(options, :request_compression, :enabled)
+    else
+      Keyword.delete(options, :request_compression)
     end
   end
 

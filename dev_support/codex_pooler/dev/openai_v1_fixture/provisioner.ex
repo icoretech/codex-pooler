@@ -28,13 +28,15 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Provisioner do
           required(:image_model) => String.t()
         }
 
-  @spec provision!(String.t()) :: result()
-  def provision!(upstream_base_url) do
+  @type request_compression_mode :: :preserve | :enabled
+
+  @spec provision!(String.t(), request_compression_mode()) :: result()
+  def provision!(upstream_base_url, request_compression_mode) do
     scope = operator_scope!()
     {identity, identity_created?} = ensure_identity!(upstream_base_url)
     {pool, pool_created?} = ensure_pool!(scope)
     ensure_active_pool!(pool)
-    ensure_routing_settings!(pool)
+    ensure_routing_settings!(pool, request_compression_mode)
     {assignment, assignment_created?} = ensure_assignment!(pool, identity)
     ensure_active_assignment!(assignment)
     models = Models.provision!(pool, assignment, identity)
@@ -149,7 +151,7 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Provisioner do
     pool |> Pool.changeset(%{status: "active", disabled_at: nil}) |> Repo.update!()
   end
 
-  defp ensure_routing_settings!(pool) do
+  defp ensure_routing_settings!(pool, request_compression_mode) do
     settings = Pools.get_routing_settings(pool) || Pools.ensure_routing_settings(pool)
 
     settings
@@ -160,7 +162,8 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Provisioner do
       sticky_http_sessions: false,
       v1_compatibility_enabled: true,
       prompt_cache_affinity_enabled: settings.prompt_cache_affinity_enabled,
-      request_compression_enabled: settings.request_compression_enabled,
+      request_compression_enabled:
+        request_compression_enabled(settings, request_compression_mode),
       allow_image_generation: true,
       metadata: settings.metadata || %{},
       created_at: settings.created_at,
@@ -168,6 +171,11 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Provisioner do
     })
     |> Repo.update!()
   end
+
+  defp request_compression_enabled(_settings, :enabled), do: true
+
+  defp request_compression_enabled(settings, :preserve),
+    do: settings.request_compression_enabled
 
   defp ensure_assignment!(pool, identity) do
     case Repo.get_by(PoolUpstreamAssignment,
