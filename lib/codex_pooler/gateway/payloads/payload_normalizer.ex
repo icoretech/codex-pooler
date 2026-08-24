@@ -13,6 +13,8 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   alias CodexPooler.Gateway.Payloads.ToolSchemaLowering
 
   @backend_turn_state_client_metadata_key "x-codex-turn-state"
+  @backend_turn_state_param "client_metadata.x-codex-turn-state"
+  @backend_turn_state_max_bytes 4_096
   @websocket_responses_lite_client_metadata_key "ws_request_header_x_openai_internal_codex_responses_lite"
 
   @prompt_cache_adaptation_endpoints [
@@ -65,6 +67,79 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   end
 
   def backend_client_metadata_turn_state(%{}), do: nil
+
+  @type backend_compaction_turn_state_validation ::
+          :passthrough
+          | {:ok, String.t() | nil}
+          | {:error, CodexPooler.Gateway.Contracts.gateway_error()}
+
+  @spec validate_backend_compaction_turn_state(map()) ::
+          backend_compaction_turn_state_validation()
+  def validate_backend_compaction_turn_state(%{} = payload) do
+    case CompactionTrigger.prepare_bridge("/backend-api/codex/responses", payload) do
+      {:ok, _compact_payload} -> validate_backend_compaction_turn_state_value(payload)
+      :passthrough -> :passthrough
+      {:error, _reason} -> :passthrough
+    end
+  end
+
+  defp validate_backend_compaction_turn_state_value(payload) do
+    case payload do
+      %{"client_metadata" => %{} = metadata} ->
+        case Map.fetch(metadata, @backend_turn_state_client_metadata_key) do
+          :error -> {:ok, nil}
+          {:ok, value} -> validate_backend_compaction_turn_state_field(value)
+        end
+
+      %{"client_metadata" => _metadata} ->
+        {:ok, nil}
+
+      %{} ->
+        {:ok, nil}
+    end
+  end
+
+  defp validate_backend_compaction_turn_state_field(value) when is_binary(value) do
+    if ascii_http_field_value?(value) do
+      value = trim_ascii_spaces(value)
+
+      if byte_size(value) in 1..@backend_turn_state_max_bytes do
+        {:ok, value}
+      else
+        invalid_backend_compaction_turn_state()
+      end
+    else
+      invalid_backend_compaction_turn_state()
+    end
+  end
+
+  defp validate_backend_compaction_turn_state_field(_value) do
+    invalid_backend_compaction_turn_state()
+  end
+
+  defp ascii_http_field_value?(value) do
+    value
+    |> :binary.bin_to_list()
+    |> Enum.all?(&(&1 in 0x20..0x7E))
+  end
+
+  defp trim_ascii_spaces(value) do
+    value
+    |> :binary.bin_to_list()
+    |> Enum.drop_while(&(&1 == 0x20))
+    |> Enum.reverse()
+    |> Enum.drop_while(&(&1 == 0x20))
+    |> Enum.reverse()
+    |> :binary.list_to_bin()
+  end
+
+  defp invalid_backend_compaction_turn_state do
+    {:error,
+     Error.invalid_request(
+       "client_metadata x-codex-turn-state must be a nonblank 1-4096 byte ASCII HTTP field value",
+       @backend_turn_state_param
+     )}
+  end
 
   @spec normalize(map()) :: {:ok, map()}
   def normalize(%{} = payload) do

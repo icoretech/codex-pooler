@@ -116,6 +116,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         RouteClass.streaming?(payload) or CompactionTrigger.streaming_result?(request_options) ->
           normalize_stream_result(callbacks.stream_result.(response, context))
 
+        native_compaction_result?(context) ->
+          finalize_native_compaction_response(response, context, body, callbacks)
+
         Metadata.json_content?(response) and not StreamProtocol.valid_json?(body) ->
           finalize_invalid_json_response(response, context)
 
@@ -674,6 +677,34 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
 
   defp validate_public_compaction_response(_response, %SelectedCandidateContext{}, _body), do: :ok
 
+  defp native_compaction_result?(%SelectedCandidateContext{
+         request_options: %RequestOptions{
+           payload_context: %{
+             compaction_trigger_bridge?: true,
+             compaction_result_transport: :buffered,
+             compaction_result_mode: :native_websocket
+           }
+         }
+       }),
+       do: true
+
+  defp native_compaction_result?(%SelectedCandidateContext{}), do: false
+
+  defp finalize_native_compaction_response(response, context, body, callbacks) do
+    result =
+      {:ok,
+       %{
+         status: response.status,
+         headers: Metadata.response_headers(response, false, context.request_options),
+         raw_body: body
+       }}
+
+    case CompactionTrigger.adapt_gateway_result(result, :native_websocket) do
+      {:ok, _adapted} -> finalize_successful_json_response(response, context, body, callbacks)
+      {:error, error} -> finalize_invalid_compaction(response, context, error)
+    end
+  end
+
   defp finalize_valid_json_response(response, context, body, callbacks) do
     with :ok <- validate_public_compaction_response(response, context, body) do
       finalize_successful_json_response(response, context, body, callbacks)
@@ -681,6 +712,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
   end
 
   defp finalize_invalid_public_compaction(response, context, error) do
+    finalize_invalid_compaction(response, context, error, public_compaction_error?: true)
+  end
+
+  defp finalize_invalid_compaction(response, context, error, opts \\ []) do
     %{reserved: reserved, attempt: attempt, request_options: request_options} = context
 
     attrs =
@@ -694,8 +729,15 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
       )
 
     case AttemptSettlement.finalize_failure(reserved.request, attempt, attrs) do
-      {:ok, _finalized} -> {:error, Map.put(error, :public_compaction_error?, true)}
-      {:error, gateway_error} -> {:error, gateway_error}
+      {:ok, _finalized} ->
+        if Keyword.get(opts, :public_compaction_error?, false) do
+          {:error, Map.put(error, :public_compaction_error?, true)}
+        else
+          {:error, error}
+        end
+
+      {:error, gateway_error} ->
+        {:error, gateway_error}
     end
   end
 

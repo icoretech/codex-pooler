@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Payloads.CompactionTrigger
   alias CodexPooler.Gateway.Runtime.Dispatch.ResponseContext
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.Finalization
@@ -213,7 +214,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
     if String.trim(content) == "" do
       {:error, :invalid_compaction}
     else
-      {:ok, Map.take(item, ["type", "encrypted_content", "id"])}
+      {:ok, CompactionTrigger.normalize_native_item(item)}
     end
   end
 

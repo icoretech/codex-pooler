@@ -37,17 +37,15 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
 
   @spec v2_streaming?(payload()) :: boolean()
   def v2_streaming?(%{"client_metadata" => %{} = metadata}) do
-    with turn_metadata when is_binary(turn_metadata) <- metadata["x-codex-turn-metadata"],
-         {:ok, %{"compaction" => %{"implementation" => "responses_compaction_v2"}}} <-
-           Jason.decode(turn_metadata) do
-      true
-    else
-      _other -> false
-    end
+    turn_metadata = metadata["x-codex-turn-metadata"]
+
+    is_binary(turn_metadata) and
+      Jason.decode(turn_metadata) ==
+        {:ok, %{"compaction" => %{"implementation" => "responses_compaction_v2"}}}
   end
 
   def v2_streaming?(%{}), do: false
-  @type result_mode :: :sse | :public_sse | :response | :websocket
+  @type result_mode :: :sse | :public_sse | :response | :websocket | :native_websocket
 
   @spec prepare_bridge(String.t(), payload()) :: bridge_decision()
   def prepare_bridge(@public_response_endpoint, %{"input" => input} = payload)
@@ -141,7 +139,8 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
         ) ::
           {:ok, Contracts.gateway_result()} | {:error, Contracts.gateway_error()}
   def adapt_gateway_result({:ok, %{status: status} = result}, mode)
-      when mode in [:sse, :public_sse, :response, :websocket] and is_integer(status) and
+      when mode in [:sse, :public_sse, :response, :websocket, :native_websocket] and
+             is_integer(status) and
              status >= 200 and status < 300 do
     with {:ok, decoded} <- decode_result(result),
          {:ok, item} <- compaction_item(decoded, mode) do
@@ -310,7 +309,7 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
     |> Enum.find_value(fn
       %{"type" => type, "encrypted_content" => content} = item
       when type in ["compaction", "compaction_summary"] and is_binary(content) ->
-        normalize_compaction_item(item)
+        normalize_native_item(item)
 
       _item ->
         nil
@@ -325,6 +324,8 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
 
   defp compaction_item(decoded, :sse), do: compaction_item(decoded)
 
+  defp compaction_item(decoded, :native_websocket), do: compaction_item(decoded)
+
   defp compaction_item(decoded, mode) when mode in [:public_sse, :response, :websocket],
     do: public_compaction_item(decoded)
 
@@ -332,7 +333,7 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
          "compaction_summary" => %{"encrypted_content" => content} = item
        })
        when is_binary(content),
-       do: {:ok, normalize_compaction_item(item)}
+       do: {:ok, normalize_native_item(item)}
 
   defp compaction_item_from_summary(_decoded), do: {:error, :missing_encrypted_content}
 
@@ -380,7 +381,9 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
     end
   end
 
-  defp normalize_compaction_item(source_item) do
+  @doc false
+  @spec normalize_native_item(payload()) :: payload()
+  def normalize_native_item(source_item) when is_map(source_item) do
     %{
       "type" => "compaction",
       "encrypted_content" => source_item["encrypted_content"]
@@ -452,6 +455,17 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
       websocket_messages: [
         %{"type" => "response.output_item.done", "item" => item},
         %{"type" => "response.completed", "response" => public_response(decoded, item)}
+      ]
+    }
+  end
+
+  defp adapted_result(result, decoded, item, :native_websocket) do
+    %{
+      status: 200,
+      headers: json_headers(result),
+      websocket_messages: [
+        %{"type" => "response.output_item.done", "item" => item},
+        %{"type" => "response.completed", "response" => response(decoded, item)}
       ]
     }
   end

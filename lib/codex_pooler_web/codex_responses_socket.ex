@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   alias CodexPooler.Access
   alias CodexPooler.Events
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Payloads.PayloadNormalizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
@@ -1106,7 +1107,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp start_tracked_response_task(payload, state) do
-    case prepare_public_response_payload(payload, state) do
+    case prepare_response_payload(payload, state) do
       {:ok, payload, state} ->
         case Adapter.maybe_retarget_before_start(payload, state) do
           {:ok, state} ->
@@ -1130,6 +1131,69 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       {:error, reason, state} ->
         schedule_public_response_start_error(reason, state)
     end
+  end
+
+  defp prepare_response_payload(payload, state) do
+    with {:ok, payload, state} <- prepare_backend_compaction_payload(payload, state) do
+      prepare_public_response_payload(payload, state)
+    end
+  end
+
+  defp prepare_backend_compaction_payload(payload, state) do
+    case WebsocketCodec.decode_payload(payload) do
+      {:ok, decoded_payload} ->
+        case PayloadNormalizer.validate_backend_compaction_turn_state(decoded_payload) do
+          :passthrough ->
+            {:ok, payload, state}
+
+          {:ok, nil} ->
+            {:ok, payload, state}
+
+          {:ok, turn_state} ->
+            {:ok, put_frame_turn_state(payload, decoded_payload, turn_state),
+             put_frame_turn_state_options(state, turn_state)}
+
+          {:error, reason} ->
+            {:error, reason, state}
+        end
+
+      {:error, _reason} ->
+        {:ok, payload, state}
+    end
+  end
+
+  defp put_frame_turn_state(payload, decoded_payload, turn_state) do
+    client_metadata =
+      decoded_payload
+      |> Map.get("client_metadata", %{})
+      |> Map.put("x-codex-turn-state", turn_state)
+
+    decoded_payload
+    |> Map.put("client_metadata", client_metadata)
+    |> Jason.encode()
+    |> case do
+      {:ok, encoded_payload} -> encoded_payload
+      {:error, _reason} -> payload
+    end
+  end
+
+  defp put_frame_turn_state_options(state, turn_state) do
+    opts = Map.get(state, :opts, %{})
+
+    forwarded_headers =
+      opts
+      |> Map.get(:forwarded_headers, [])
+      |> Enum.reject(fn
+        {name, _value} when is_binary(name) -> String.downcase(name) == "x-codex-turn-state"
+        _header -> false
+      end)
+      |> then(&[{"x-codex-turn-state", turn_state} | &1])
+
+    Map.put(
+      state,
+      :opts,
+      Map.merge(opts, %{accepted_turn_state: turn_state, forwarded_headers: forwarded_headers})
+    )
   end
 
   defp queue_response_payload(state, payload) do

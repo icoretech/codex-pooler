@@ -304,8 +304,87 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
     end
   end
 
+  defp coerce_response_payload(%{"type" => "response.create"} = payload, opts) do
+    prepare_native_compaction_bridge(%{
+      endpoint: "/backend-api/codex/responses",
+      payload: payload,
+      request_options: opts
+    })
+  end
+
   defp coerce_response_payload(payload, opts) do
     {:ok, %{endpoint: "/backend-api/codex/responses", payload: payload, request_options: opts}}
+  end
+
+  defp prepare_native_compaction_bridge(%{payload: payload} = coerced) do
+    result_transport = if CompactionTrigger.v2_streaming?(payload), do: :sse, else: :buffered
+
+    with {:ok, turn_state} <- validated_native_compaction_turn_state(payload) do
+      prepare_native_compaction_bridge(coerced, result_transport, turn_state)
+    end
+  end
+
+  defp prepare_native_compaction_bridge(coerced, result_transport, turn_state) do
+    case CompactionTrigger.prepare_bridge("/backend-api/codex/responses", coerced.payload) do
+      :passthrough ->
+        {:ok, coerced}
+
+      {:ok, compact_payload} ->
+        compact_payload =
+          CompactionTrigger.project_responses_payload(compact_payload, result_transport)
+
+        request_options =
+          coerced.request_options
+          |> RequestOptions.retarget("/backend-api/codex/responses/compact", compact_payload)
+          |> RequestOptions.put_transport(
+            transport: "http_compact_json",
+            upstream_endpoint: "/backend-api/codex/responses",
+            route_class: RouteClass.proxy_compact(),
+            websocket_writer: nil
+          )
+          |> RequestOptions.put_payload_context(
+            compaction_trigger_bridge?: true,
+            compaction_result_transport: result_transport,
+            compaction_result_mode: :native_websocket
+          )
+          |> put_validated_native_compaction_turn_state(turn_state)
+
+        {:ok,
+         %{
+           coerced
+           | endpoint: "/backend-api/codex/responses/compact",
+             payload: compact_payload,
+             request_options: request_options
+         }
+         |> Map.put(
+           :result_adapter,
+           &CompactionTrigger.adapt_gateway_result(&1, :native_websocket)
+         )}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp validated_native_compaction_turn_state(payload) do
+    case PayloadNormalizer.validate_backend_compaction_turn_state(payload) do
+      :passthrough -> {:ok, nil}
+      {:ok, turn_state} -> {:ok, turn_state}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp put_validated_native_compaction_turn_state(request_options, nil), do: request_options
+
+  defp put_validated_native_compaction_turn_state(request_options, turn_state) do
+    forwarded_headers =
+      request_options.transport.forwarded_metadata_headers
+      |> Enum.reject(fn {name, _value} -> String.downcase(name) == "x-codex-turn-state" end)
+      |> then(&[{"x-codex-turn-state", turn_state} | &1])
+
+    request_options
+    |> RequestOptions.put_continuity(accepted_turn_state: turn_state)
+    |> RequestOptions.put_transport(forwarded_metadata_headers: forwarded_headers)
   end
 
   defp prepare_public_compaction_bridge(%{payload: payload} = coerced) do

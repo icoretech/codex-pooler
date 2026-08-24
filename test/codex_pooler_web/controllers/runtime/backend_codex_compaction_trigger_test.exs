@@ -197,6 +197,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     compact_item = %{
       "type" => "compaction",
       "encrypted_content" => "synthetic-streamed-compaction",
+      "id" => "cmp_streamed",
       "internal_chat_message_metadata_passthrough" => %{"turn_id" => "provider-only"}
     }
 
@@ -245,13 +246,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     assert response.status == 200
     assert [done_event, completed_event] = backend_sse_events(response(response, 200))
 
-    assert done_event["data"]["item"] == Map.take(compact_item, ["type", "encrypted_content"])
+    assert done_event["data"]["item"] == compact_item
 
-    refute response(response, 200) =~ "provider-only"
-
-    assert completed_event["data"]["response"]["output"] == [
-             Map.take(compact_item, ["type", "encrypted_content"])
-           ]
+    assert completed_event["data"]["response"]["output"] == [compact_item]
 
     assert [captured] = FakeUpstream.requests(upstream)
     assert captured.path == "/backend-api/codex/responses"
@@ -261,6 +258,71 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/responses/compact"
     assert request.transport == "http_compact_json"
+    assert request.status == "succeeded"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+  end
+
+  test "OMP V2 compaction omits malformed optional native item metadata", %{conn: conn} do
+    source_item = %{
+      "type" => "compaction",
+      "encrypted_content" => "synthetic-streamed-malformed-metadata",
+      "id" => 17,
+      "internal_chat_message_metadata_passthrough" => %{
+        "turn_id" => ["invalid"],
+        "unknown_nested_field" => "drop"
+      },
+      "summary" => "drop"
+    }
+
+    canonical_item = %{
+      "type" => "compaction",
+      "encrypted_content" => "synthetic-streamed-malformed-metadata"
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.output_item.done",
+           %{"type" => "response.output_item.done", "item" => source_item}},
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_streamed_malformed_metadata",
+               "status" => "completed",
+               "output" => [source_item]
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" =>
+          visible_input("synthetic malformed metadata compact") ++ [compaction_trigger()],
+        "stream" => true,
+        "client_metadata" => %{
+          "x-codex-turn-metadata" =>
+            Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
+        }
+      })
+
+    assert response.status == 200
+    assert [done_event, completed_event] = backend_sse_events(response(response, 200))
+    assert done_event["data"]["item"] == canonical_item
+    assert completed_event["data"]["response"]["output"] == [canonical_item]
+    refute response(response, 200) =~ "unknown_nested_field"
+    refute response(response, 200) =~ "summary"
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses/compact"
     assert request.status == "succeeded"
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))

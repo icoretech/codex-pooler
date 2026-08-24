@@ -19,6 +19,293 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
   end
 
   describe "coerce_request/3" do
+    test "keeps ordinary native Responses websocket creates on passthrough" do
+      payload = %{
+        "type" => "response.create",
+        "model" => "gpt-example",
+        "input" => [%{"type" => "message", "content" => "ordinary native input"}],
+        "stream" => true
+      }
+
+      push_frame = fn _frame -> :ok end
+
+      assert {:ok, coerced} =
+               WebsocketCodec.coerce_request(
+                 payload,
+                 native_responses_options(payload),
+                 push_frame
+               )
+
+      assert coerced.endpoint == "/backend-api/codex/responses"
+      assert coerced.payload == payload
+      refute Map.has_key?(coerced, :result_adapter)
+      assert coerced.request_options.transport.transport == "websocket"
+      assert coerced.request_options.transport.upstream_endpoint == coerced.endpoint
+      assert coerced.request_options.transport.route_class == "proxy_websocket"
+      assert is_function(coerced.request_options.transport.websocket_writer, 1)
+      refute coerced.request_options.payload_context.compaction_trigger_bridge?
+    end
+
+    test "bridges valid terminal native compaction triggers through canonical compact HTTP" do
+      for {client_metadata, result_transport} <- [
+            {v2_client_metadata(), :sse},
+            {%{"x-codex-turn-metadata" => "not-json"}, :buffered},
+            {%{"x-codex-turn-metadata" => Jason.encode!(%{"compaction" => %{}})}, :buffered},
+            {%{
+               "x-codex-turn-metadata" =>
+                 Jason.encode!(%{
+                   "compaction" => %{"implementation" => "responses_compaction_v2"},
+                   "extra" => true
+                 })
+             }, :buffered},
+            {nil, :buffered}
+          ] do
+        payload = native_compaction_trigger_payload(client_metadata)
+
+        assert {:ok, coerced} =
+                 WebsocketCodec.coerce_request(
+                   payload,
+                   native_responses_options(payload),
+                   fn _frame -> :ok end
+                 )
+
+        assert coerced.endpoint == "/backend-api/codex/responses/compact"
+
+        expected_payload = %{
+          "model" => "gpt-example",
+          "instructions" => "compact synthetic history",
+          "input" => [
+            %{"type" => "message", "content" => "visible native input"},
+            %{"type" => "compaction_trigger"}
+          ],
+          "store" => false
+        }
+
+        expected_payload =
+          if result_transport == :sse,
+            do: Map.put(expected_payload, "stream", true),
+            else: expected_payload
+
+        assert coerced.payload == expected_payload
+
+        assert is_function(coerced.result_adapter, 1)
+        assert coerced.request_options.transport.transport == "http_compact_json"
+
+        assert coerced.request_options.transport.upstream_endpoint ==
+                 "/backend-api/codex/responses"
+
+        assert coerced.request_options.transport.route_class == "proxy_compact"
+        assert is_nil(coerced.request_options.transport.websocket_writer)
+        assert coerced.request_options.payload_context.compaction_trigger_bridge?
+
+        assert coerced.request_options.payload_context.compaction_result_transport ==
+                 result_transport
+
+        assert coerced.request_options.payload_context.compaction_result_mode ==
+                 :native_websocket
+      end
+    end
+
+    test "bridges a singleton native compaction trigger" do
+      payload = %{
+        "type" => "response.create",
+        "model" => "gpt-example",
+        "input" => [%{"type" => "compaction_trigger"}],
+        "stream" => true
+      }
+
+      assert {:ok, coerced} =
+               WebsocketCodec.coerce_request(
+                 payload,
+                 native_responses_options(payload),
+                 fn _frame -> :ok end
+               )
+
+      assert coerced.endpoint == "/backend-api/codex/responses/compact"
+      assert coerced.payload["input"] == [%{"type" => "compaction_trigger"}]
+      assert coerced.request_options.payload_context.compaction_result_transport == :buffered
+    end
+
+    test "rejects malformed native compaction trigger placement without retaining metadata" do
+      marker_sentinel = "raw-native-marker-must-not-survive"
+
+      invalid_inputs = [
+        [
+          %{"type" => "compaction_trigger"},
+          %{"type" => "message", "content" => "visible native input"}
+        ],
+        [
+          %{"type" => "message", "content" => "visible native input"},
+          %{"type" => "compaction_trigger"},
+          %{"type" => "compaction_trigger"}
+        ],
+        [
+          %{"type" => "reasoning", "encrypted_content" => "hidden-only"},
+          %{"type" => "compaction_trigger"}
+        ]
+      ]
+
+      for input <- invalid_inputs do
+        payload = %{
+          "type" => "response.create",
+          "model" => "gpt-example",
+          "input" => input,
+          "stream" => true,
+          "client_metadata" => %{"x-codex-turn-metadata" => marker_sentinel}
+        }
+
+        assert {:error, error} =
+                 WebsocketCodec.coerce_request(
+                   payload,
+                   native_responses_options(payload),
+                   fn _frame -> :ok end
+                 )
+
+        assert error == %{
+                 status: 400,
+                 code: "invalid_request",
+                 message:
+                   "compaction_trigger must be the final input item and must follow visible input",
+                 param: "input"
+               }
+
+        refute inspect(error) =~ marker_sentinel
+      end
+    end
+
+    test "emits the exact native websocket compaction result wire" do
+      payload = native_compaction_trigger_payload(v2_client_metadata())
+
+      assert {:ok, %{result_adapter: result_adapter}} =
+               WebsocketCodec.coerce_request(
+                 payload,
+                 native_responses_options(payload),
+                 fn _frame -> :ok end
+               )
+
+      source = %{
+        "id" => "resp_native_compaction",
+        "object" => "response.compaction",
+        "output" => [
+          %{
+            "type" => "compaction_summary",
+            "encrypted_content" => "synthetic-native-encrypted",
+            "id" => "cmp_native",
+            "internal_chat_message_metadata_passthrough" => %{
+              "turn_id" => "turn_native"
+            },
+            "summary" => "must drop"
+          }
+        ],
+        "usage" => %{"input_tokens" => 8, "output_tokens" => 2, "total_tokens" => 10}
+      }
+
+      assert {:ok, adapted} =
+               result_adapter.(
+                 {:ok, %{status: 200, headers: [], raw_body: Jason.encode!(source)}}
+               )
+
+      item = %{
+        "type" => "compaction",
+        "encrypted_content" => "synthetic-native-encrypted",
+        "id" => "cmp_native",
+        "internal_chat_message_metadata_passthrough" => %{"turn_id" => "turn_native"}
+      }
+
+      assert adapted.websocket_messages == [
+               %{"type" => "response.output_item.done", "item" => item},
+               %{
+                 "type" => "response.completed",
+                 "response" => %{
+                   "id" => "resp_native_compaction",
+                   "status" => "completed",
+                   "output" => [item],
+                   "usage" => %{
+                     "input_tokens" => 8,
+                     "output_tokens" => 2,
+                     "total_tokens" => 10
+                   }
+                 }
+               }
+             ]
+
+      refute Map.has_key?(adapted, :raw_body)
+      refute Map.has_key?(adapted, :body)
+      refute inspect(adapted.websocket_messages) =~ "object"
+      refute inspect(adapted.websocket_messages) =~ "stream_id"
+      refute inspect(adapted.websocket_messages) =~ "[DONE]"
+      refute inspect(adapted.websocket_messages) =~ "must drop"
+    end
+
+    test "omits malformed optional native compaction item metadata" do
+      payload = native_compaction_trigger_payload(nil)
+
+      assert {:ok, %{result_adapter: result_adapter}} =
+               WebsocketCodec.coerce_request(
+                 payload,
+                 native_responses_options(payload),
+                 fn _frame -> :ok end
+               )
+
+      source = %{
+        "output" => [
+          %{
+            "type" => "compaction",
+            "encrypted_content" => "synthetic-native-encrypted",
+            "id" => 7,
+            "internal_chat_message_metadata_passthrough" => %{"turn_id" => false}
+          }
+        ]
+      }
+
+      assert {:ok, %{websocket_messages: [done, completed]}} =
+               result_adapter.({:ok, %{status: 200, body: source}})
+
+      assert done == %{
+               "type" => "response.output_item.done",
+               "item" => %{
+                 "type" => "compaction",
+                 "encrypted_content" => "synthetic-native-encrypted"
+               }
+             }
+
+      assert completed["response"]["output"] == [done["item"]]
+    end
+
+    test "keeps the public compaction websocket result wrapper compatible" do
+      payload = %{
+        "type" => "response.create",
+        "model" => "gpt-example",
+        "input" => [
+          %{"type" => "message", "content" => "visible public input"},
+          %{"type" => "compaction_trigger"}
+        ]
+      }
+
+      assert {:ok, %{result_adapter: result_adapter}} =
+               WebsocketCodec.coerce_request(
+                 payload,
+                 public_responses_options(payload),
+                 fn _frame -> :ok end
+               )
+
+      source = %{
+        "id" => "resp_public_compaction",
+        "output" => [
+          %{
+            "type" => "compaction",
+            "encrypted_content" => "synthetic-public-encrypted",
+            "id" => nil
+          }
+        ]
+      }
+
+      assert {:ok, %{websocket_messages: [_done, completed]}} =
+               result_adapter.({:ok, %{status: 200, body: source}})
+
+      assert completed["response"]["object"] == "response"
+    end
+
     test "keeps public Responses websocket creates without stream_id compatible" do
       payload = %{"type" => "response.create", "model" => "gpt-example", "input" => "hello"}
 
@@ -420,6 +707,33 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
       "/backend-api/codex/responses",
       payload
     )
+  end
+
+  defp native_responses_options(payload) do
+    RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+  end
+
+  defp native_compaction_trigger_payload(client_metadata) do
+    %{
+      "type" => "response.create",
+      "model" => "gpt-example",
+      "instructions" => "compact synthetic history",
+      "input" => [
+        %{"type" => "message", "content" => "visible native input"},
+        %{"type" => "compaction_trigger"}
+      ],
+      "stream" => true,
+      "client_metadata" => client_metadata,
+      "include" => ["reasoning.encrypted_content"],
+      "tool_choice" => "auto"
+    }
+  end
+
+  defp v2_client_metadata do
+    %{
+      "x-codex-turn-metadata" =>
+        Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
+    }
   end
 
   defp contains_stream_id?(%{__struct__: _} = value),
