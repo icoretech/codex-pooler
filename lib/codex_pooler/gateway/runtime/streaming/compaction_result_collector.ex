@@ -76,7 +76,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
         end
       end,
       finalize_failure: fn body, reason ->
-        Finalization.finalize_stream_failure(body, reason, response_context)
+        Finalization.finalize_stream_failure(
+          body,
+          compaction_failure_reason(reason),
+          response_context
+        )
       end,
       first_event_retry: fn _state, body, failure ->
         Finalization.finalize_first_event_stream_failure(body, failure, response_context)
@@ -219,6 +223,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
   end
 
   defp compact_item(_item), do: {:error, :invalid_compaction}
+
+  defp compaction_failure_reason({:upstream_idle_timeout, _reason} = reason), do: reason
+  defp compaction_failure_reason(reason), do: {:upstream_stream_interrupted, reason}
 
   @spec terminal_failure(String.t() | nil, map()) :: StreamProtocol.terminal_failure()
   def terminal_failure(event_type, decoded) when is_map(decoded) do

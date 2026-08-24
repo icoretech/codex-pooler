@@ -475,7 +475,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       when is_binary(raw_payload) and is_function(push_frame, 1) do
     with {:ok, payload} <- decode_websocket_payload(raw_payload),
          {:ok, result} <-
-           execute_websocket_payload(auth, payload, opts, push_frame, false) do
+           execute_websocket_payload(auth, payload, opts, push_frame, true) do
       WebsocketCodec.deliver_result(result, push_frame)
     end
   end
