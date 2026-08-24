@@ -1,13 +1,14 @@
 defmodule CodexPooler.Pools.ModelServingModesTest do
   use CodexPooler.DataCase, async: false
 
-  alias CodexPooler.Accounts.Scope
+  alias CodexPooler.Accounts.{PlatformBootstrapState, Scope, User}
   alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Events
   alias CodexPooler.Pools
   alias CodexPooler.Pools.{ModelServingModes, ModelServingOverride, Pool}
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
   alias Ecto.Adapters.SQL.Sandbox
 
   import CodexPooler.AccountsFixtures
@@ -30,10 +31,10 @@ defmodule CodexPooler.Pools.ModelServingModesTest do
 
     @tag :unboxed
     test "writes one safe audit and one post-commit pool event for real transitions" do
-      %{owner: owner, scope: scope, pool: pool, revision: revision} =
-        create_unboxed_model_serving_fixture("gpt-event")
+      fixture = create_unboxed_model_serving_fixture("gpt-event")
+      %{owner: owner, scope: scope, pool: pool, revision: revision} = fixture
 
-      on_exit(&reset_unboxed_fixture!/0)
+      on_exit(fn -> cleanup_unboxed_model_serving_fixture!(fixture) end)
       assert :ok = Events.subscribe_all_pools()
 
       assert {:ok, %{changed?: true}} =
@@ -598,10 +599,10 @@ defmodule CodexPooler.Pools.ModelServingModesTest do
   describe "concurrency" do
     @tag :unboxed
     test "a concurrent update waits on the Pool row and then rejects the stale revision" do
-      %{scope: scope, pool: pool, revision: revision} =
-        create_unboxed_model_serving_fixture("gpt-concurrent")
+      fixture = create_unboxed_model_serving_fixture("gpt-concurrent")
+      %{scope: scope, pool: pool, revision: revision} = fixture
 
-      on_exit(&reset_unboxed_fixture!/0)
+      on_exit(fn -> cleanup_unboxed_model_serving_fixture!(fixture) end)
 
       parent = self()
 
@@ -673,21 +674,87 @@ defmodule CodexPooler.Pools.ModelServingModesTest do
     end
   end
 
+  describe "unboxed fixture cleanup" do
+    @tag :unboxed
+    test "removes only its committed fixture rows" do
+      fixture = create_unboxed_model_serving_fixture("gpt-cleanup")
+      on_exit(fn -> cleanup_unboxed_model_serving_fixture!(fixture) end)
+
+      unrelated_user =
+        Sandbox.unboxed_run(Repo, fn ->
+          %User{}
+          |> User.bootstrap_changeset(
+            valid_bootstrap_attributes(%{"email" => unique_user_email()})
+          )
+          |> Repo.insert!()
+        end)
+
+      on_exit(fn ->
+        Sandbox.unboxed_run(Repo, fn ->
+          Repo.delete_all(from user in User, where: user.id == ^unrelated_user.id)
+        end)
+      end)
+
+      cleanup_unboxed_model_serving_fixture!(fixture)
+
+      Sandbox.unboxed_run(Repo, fn ->
+        refute Repo.get(User, fixture.owner.id)
+        refute Repo.get(Pool, fixture.pool.id)
+        refute Repo.get(UpstreamIdentity, fixture.identity.id)
+
+        refute Repo.exists?(
+                 from membership in CodexPooler.Pools.Membership,
+                   where: membership.user_id == ^fixture.owner.id
+               )
+
+        refute Repo.exists?(
+                 from state in PlatformBootstrapState,
+                   where: state.owner_user_id == ^fixture.owner.id
+               )
+
+        refute Repo.exists?(
+                 from event in AuditEvent, where: event.actor_user_id == ^fixture.owner.id
+               )
+
+        assert Repo.get(User, unrelated_user.id)
+      end)
+    end
+  end
+
   defp create_unboxed_model_serving_fixture(exposed_model_id) do
     Sandbox.unboxed_run(Repo, fn ->
       reset_bootstrap_state_fixture!()
       %{user: owner} = bootstrap_owner_fixture()
       scope = Scope.for_user(owner, ["instance_owner"])
       pool = pool_fixture(%{created_by_user_id: owner.id})
-      %{assignment: assignment} = upstream_assignment_fixture(pool)
+      %{assignment: assignment, identity: identity} = upstream_assignment_fixture(pool)
       visible_model_fixture(pool, assignment, %{exposed_model_id: exposed_model_id})
       assert {:ok, snapshot} = Pools.model_serving_modes_snapshot(scope, pool)
-      %{owner: owner, scope: scope, pool: pool, revision: snapshot.revision}
+      %{owner: owner, scope: scope, pool: pool, identity: identity, revision: snapshot.revision}
     end)
   end
 
-  defp reset_unboxed_fixture! do
-    Sandbox.unboxed_run(Repo, fn -> reset_bootstrap_state_fixture!() end)
+  defp cleanup_unboxed_model_serving_fixture!(fixture) do
+    Sandbox.unboxed_run(Repo, fn ->
+      {deleted_bootstrap_state_count, _nil} =
+        Repo.delete_all(
+          from state in PlatformBootstrapState,
+            where: state.owner_user_id == ^fixture.owner.id
+        )
+
+      if deleted_bootstrap_state_count == 1 do
+        Repo.insert!(%PlatformBootstrapState{singleton: true, status: "pending"})
+      end
+
+      Repo.delete_all(from pool in Pool, where: pool.id == ^fixture.pool.id)
+
+      Repo.delete_all(
+        from identity in UpstreamIdentity, where: identity.id == ^fixture.identity.id
+      )
+
+      Repo.delete_all(from event in AuditEvent, where: event.actor_user_id == ^fixture.owner.id)
+      Repo.delete_all(from user in User, where: user.id == ^fixture.owner.id)
+    end)
   end
 
   defp visible_model_fixture(pool, assignment, attrs) do

@@ -745,11 +745,59 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
     refute inspect(default_log) =~ replacement_lifecycle_id
   end
 
+  test "request log failed rows retain semantic errors and fact-backed list behavior before terminal diagnostics" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-terminal-diagnostic-baseline",
+        status: "failed",
+        last_error_code: "invalid_compaction_response",
+        correlation_id: "terminal-diagnostic-baseline"
+      })
+
+    attempt =
+      attempt_fixture(request, assignment, %{
+        status: "failed",
+        network_error_code: "invalid_compaction_response",
+        response_metadata: %{
+          "upstream_error_code" => "context_length_exceeded",
+          "stream_terminal_type" => "response.failed",
+          "upstream_error_param" => "input"
+        }
+      })
+
+    assert %{items: [log], total: 1} =
+             Accounting.list_request_logs(pool, filters: [status: "failed"])
+
+    assert log.debug.failure == %{
+             error_code: "invalid_compaction_response",
+             error_source: "request_error"
+           }
+
+    assert Enum.any?(log.errors, fn error ->
+             error.source == "request" and error.code == "invalid_compaction_response"
+           end)
+
+    assert Enum.any?(log.errors, fn error ->
+             error.source == "attempt" and error.attempt_number == attempt.attempt_number and
+               error.code == "invalid_compaction_response"
+           end)
+
+    refute Enum.any?(log.errors, &(&1.code == "context_length_exceeded"))
+
+    fact = Repo.get!(RequestLogFact, request.id)
+    assert fact.latest_attempt_id == attempt.id
+    assert fact.latest_attempt_status == "failed"
+    assert fact.latest_network_error_code == "invalid_compaction_response"
+  end
+
   test "request log detail projects only valid upstream error parameters from failed attempts" do
     %{pool: pool, api_key: api_key} = active_api_key_fixture()
     %{assignment: assignment} = upstream_assignment_fixture(pool)
     raw_message = "raw upstream error message must stay hidden"
-    raw_value = "https://example.com/raw-error-value"
+    invalid_param_url = "https://example.com/raw-error-value"
     raw_frame = ~s({"type":"error","message":"raw websocket frame"})
     raw_header = "Bearer hidden-header-value"
     raw_prompt = "raw upstream prompt must stay hidden"
@@ -769,7 +817,7 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
         response_metadata: %{
           "upstream_error_param" => "reasoning.summary",
           "raw_message" => raw_message,
-          "value" => raw_value,
+          "value" => invalid_param_url,
           "websocket_frame" => raw_frame,
           "headers" => %{"authorization" => raw_header},
           "prompt" => raw_prompt,
@@ -781,7 +829,7 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
       attempt_fixture(request, assignment, %{
         attempt_number: 2,
         status: "failed",
-        response_metadata: %{"upstream_error_param" => raw_value}
+        response_metadata: %{"upstream_error_param" => invalid_param_url}
       })
 
     succeeded_attempt =
@@ -810,7 +858,278 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
       refute Map.has_key?(projected_attempt, :upstream_error_param)
     end
 
-    for forbidden <- [raw_message, raw_value, raw_frame, raw_header, raw_prompt, raw_body] do
+    for forbidden <- [raw_message, invalid_param_url, raw_frame, raw_header, raw_prompt, raw_body] do
+      refute inspect(log) =~ forbidden
+      refute captured_logs =~ forbidden
+    end
+  end
+
+  test "request log detail projects bounded terminal diagnostics for retryable and final failed attempts" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-terminal-diagnostic-detail",
+        status: "failed",
+        last_error_code: "invalid_compaction_response",
+        correlation_id: "terminal-diagnostic-detail"
+      })
+
+    retryable_attempt =
+      attempt_fixture(request, assignment, %{
+        attempt_number: 1,
+        status: "retryable_failed",
+        retryable: true,
+        network_error_code: "invalid_compaction_response",
+        response_metadata: %{
+          "upstream_error_code" => "context_length_exceeded",
+          "stream_terminal_type" => "response.failed",
+          "upstream_error_param" => "input"
+        }
+      })
+
+    final_attempt =
+      attempt_fixture(request, assignment, %{
+        attempt_number: 2,
+        status: "failed",
+        retryable: false,
+        network_error_code: "invalid_compaction_response",
+        response_metadata: %{
+          "upstream_error_code" => "sha256_0123456789ab",
+          "stream_terminal_type" => "response.incomplete",
+          "upstream_error_param" => "input[0].content"
+        }
+      })
+
+    assert %{items: [log], total: 1} = Accounting.list_request_logs(pool)
+
+    assert log.debug.failure == %{
+             error_code: "invalid_compaction_response",
+             error_source: "request_error"
+           }
+
+    assert Enum.any?(
+             log.errors,
+             &(&1.source == "request" and &1.code == "invalid_compaction_response")
+           )
+
+    assert Enum.any?(log.errors, fn error ->
+             error.source == "attempt" and error.attempt_number == final_attempt.attempt_number and
+               error.code == "invalid_compaction_response"
+           end)
+
+    refute Enum.any?(log.errors, &(&1.code in ["context_length_exceeded", "sha256_0123456789ab"]))
+
+    retryable_projection =
+      Enum.find(log.debug.attempts, &(&1.attempt_number == retryable_attempt.attempt_number))
+
+    assert Map.take(retryable_projection, [
+             :upstream_error_code,
+             :stream_terminal_type,
+             :upstream_error_param
+           ]) == %{
+             upstream_error_code: "context_length_exceeded",
+             stream_terminal_type: "response.failed",
+             upstream_error_param: "input"
+           }
+
+    final_projection =
+      Enum.find(log.debug.attempts, &(&1.attempt_number == final_attempt.attempt_number))
+
+    assert Map.take(final_projection, [
+             :upstream_error_code,
+             :stream_terminal_type,
+             :upstream_error_param
+           ]) == %{
+             upstream_error_code: "sha256_0123456789ab",
+             stream_terminal_type: "response.incomplete",
+             upstream_error_param: "input[0].content"
+           }
+  end
+
+  test "request log detail retains readable terminal identifiers and fingerprints malformed identifiers" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    readable_identifier = "authorization.value"
+    readable_bearer_identifier = "bearer_expired"
+    readable_authorization_identifier = "invalid_authorization_value"
+    safe_unknown_event = "provider.event-v2"
+    malformed_url_identifier = "https://example.com/not-an-identifier"
+    malformed_event = "response\nfailed"
+    overlong_identifier = String.duplicate("x", 81)
+    invalid_param_url = "https://example.com/not-a-param"
+    raw_body = "terminal body must remain private"
+    raw_frame = ~s({"type":"error","message":"terminal frame must remain private"})
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-terminal-diagnostic-redaction",
+        status: "failed",
+        last_error_code: "invalid_compaction_response",
+        correlation_id: "terminal-diagnostic-redaction"
+      })
+
+    readable_identifier_attempt =
+      attempt_fixture(request, assignment, %{
+        attempt_number: 1,
+        status: "failed",
+        network_error_code: "invalid_compaction_response",
+        response_metadata: %{
+          "upstream_error_code" => readable_identifier,
+          "stream_terminal_type" => "response.failed",
+          "upstream_error_param" => "input",
+          "body" => raw_body,
+          "websocket_frame" => raw_frame
+        }
+      })
+
+    readable_unknown_attempt =
+      attempt_fixture(request, assignment, %{
+        attempt_number: 2,
+        status: "retryable_failed",
+        retryable: true,
+        network_error_code: "invalid_compaction_response",
+        response_metadata: %{
+          "upstream_error_code" => readable_bearer_identifier,
+          "stream_terminal_type" => safe_unknown_event,
+          "upstream_error_param" => "input[0].content"
+        }
+      })
+
+    readable_authorization_attempt =
+      attempt_fixture(request, assignment, %{
+        attempt_number: 3,
+        status: "failed",
+        network_error_code: "invalid_compaction_response",
+        response_metadata: %{
+          "upstream_error_code" => readable_authorization_identifier,
+          "stream_terminal_type" => "response.incomplete",
+          "upstream_error_param" => "input"
+        }
+      })
+
+    malformed_identifier_attempt =
+      attempt_fixture(request, assignment, %{
+        attempt_number: 4,
+        status: "failed",
+        response_metadata: %{
+          "upstream_error_code" => malformed_url_identifier,
+          "stream_terminal_type" => malformed_event,
+          "upstream_error_param" => invalid_param_url,
+          "body" => raw_body,
+          "websocket_frame" => raw_frame
+        }
+      })
+
+    overlong_identifier_attempt =
+      attempt_fixture(request, assignment, %{
+        attempt_number: 5,
+        status: "failed",
+        response_metadata: %{
+          "upstream_error_code" => overlong_identifier,
+          "stream_terminal_type" => overlong_identifier,
+          "upstream_error_param" => %{"invalid" => "shape"}
+        }
+      })
+
+    succeeded_attempt =
+      attempt_fixture(request, assignment, %{
+        attempt_number: 6,
+        status: "succeeded",
+        response_metadata: %{
+          "upstream_error_code" => "context_length_exceeded",
+          "stream_terminal_type" => "response.failed",
+          "upstream_error_param" => "input"
+        }
+      })
+
+    historical_attempt =
+      attempt_fixture(request, assignment, %{
+        attempt_number: 7,
+        status: "failed",
+        response_metadata: %{}
+      })
+
+    {log, captured_logs} =
+      with_log(fn ->
+        assert %{items: [log], total: 1} = Accounting.list_request_logs(pool)
+        log
+      end)
+
+    readable_identifier_projection =
+      Enum.find(
+        log.debug.attempts,
+        &(&1.attempt_number == readable_identifier_attempt.attempt_number)
+      )
+
+    assert Map.take(readable_identifier_projection, [
+             :upstream_error_code,
+             :stream_terminal_type,
+             :upstream_error_param
+           ]) == %{
+             upstream_error_code: readable_identifier,
+             stream_terminal_type: "response.failed",
+             upstream_error_param: "input"
+           }
+
+    readable_unknown_projection =
+      Enum.find(
+        log.debug.attempts,
+        &(&1.attempt_number == readable_unknown_attempt.attempt_number)
+      )
+
+    assert Map.take(readable_unknown_projection, [
+             :upstream_error_code,
+             :stream_terminal_type,
+             :upstream_error_param
+           ]) == %{
+             upstream_error_code: readable_bearer_identifier,
+             stream_terminal_type: safe_unknown_event,
+             upstream_error_param: "input[0].content"
+           }
+
+    readable_authorization_projection =
+      Enum.find(
+        log.debug.attempts,
+        &(&1.attempt_number == readable_authorization_attempt.attempt_number)
+      )
+
+    assert Map.take(readable_authorization_projection, [
+             :upstream_error_code,
+             :stream_terminal_type,
+             :upstream_error_param
+           ]) == %{
+             upstream_error_code: readable_authorization_identifier,
+             stream_terminal_type: "response.incomplete",
+             upstream_error_param: "input"
+           }
+
+    for attempt <- [malformed_identifier_attempt, overlong_identifier_attempt] do
+      projected_attempt =
+        Enum.find(log.debug.attempts, &(&1.attempt_number == attempt.attempt_number))
+
+      assert projected_attempt.upstream_error_code =~ ~r/\Asha256_[0-9a-f]{12}\z/
+      assert projected_attempt.stream_terminal_type =~ ~r/\Asha256_[0-9a-f]{12}\z/
+      refute Map.has_key?(projected_attempt, :upstream_error_param)
+    end
+
+    for attempt <- [succeeded_attempt, historical_attempt] do
+      projected_attempt =
+        Enum.find(log.debug.attempts, &(&1.attempt_number == attempt.attempt_number))
+
+      refute Map.has_key?(projected_attempt, :upstream_error_code)
+      refute Map.has_key?(projected_attempt, :stream_terminal_type)
+      refute Map.has_key?(projected_attempt, :upstream_error_param)
+    end
+
+    for forbidden <- [
+          malformed_url_identifier,
+          malformed_event,
+          overlong_identifier,
+          raw_body,
+          raw_frame
+        ] do
       refute inspect(log) =~ forbidden
       refute captured_logs =~ forbidden
     end

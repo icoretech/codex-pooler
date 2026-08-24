@@ -277,17 +277,51 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
     assert :binary.referenced_byte_size(retained) == byte_size(retained)
   end
 
-  test "production compilation omits test-only gates and buffers ordinary residue" do
-    source = Path.expand("lib/codex_pooler/gateway/runtime/streaming/stream_attempt.ex")
-
-    compile_dir =
+  test "production compilation directory claim skips stale candidates without removing them" do
+    stale_dir =
       Path.join(
         System.tmp_dir!(),
-        "codex-pooler-stream-attempt-prod-#{System.unique_integer([:positive])}"
+        "codex-pooler-stream-attempt-prod-stale-#{System.unique_integer([:positive])}"
       )
 
-    File.mkdir!(compile_dir)
-    on_exit(fn -> File.rm_rf!(compile_dir) end)
+    owned_dir =
+      Path.join(
+        System.tmp_dir!(),
+        "codex-pooler-stream-attempt-prod-owned-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir!(stale_dir)
+    on_exit(fn -> File.rm_rf!(stale_dir) end)
+
+    compile_dir = claim_production_compile_dir([stale_dir, owned_dir])
+
+    assert compile_dir == owned_dir
+    assert File.dir?(stale_dir)
+    assert File.dir?(compile_dir)
+
+    File.rm_rf!(compile_dir)
+    refute File.exists?(compile_dir)
+    assert File.dir?(stale_dir)
+  end
+
+  test "production compilation directory claim raises noncollision filesystem errors" do
+    blocked_path =
+      Path.join(
+        System.tmp_dir!(),
+        "codex-pooler-stream-attempt-prod-file-#{System.unique_integer([:positive])}"
+      )
+
+    File.write!(blocked_path, "blocked")
+    on_exit(fn -> File.rm_rf!(blocked_path) end)
+
+    assert_raise File.Error, fn ->
+      claim_temp_compile_dir([Path.join(blocked_path, "child")])
+    end
+  end
+
+  test "production compilation omits test-only gates and buffers ordinary residue" do
+    source = Path.expand("lib/codex_pooler/gateway/runtime/streaming/stream_attempt.ex")
+    compile_dir = claim_production_compile_dir()
 
     code_path_args =
       Enum.flat_map(:code.get_path(), fn code_path ->
@@ -496,6 +530,39 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.FirstEventClassifierDifferential
     else
       :incomplete
     end
+  end
+
+  defp claim_production_compile_dir(candidates \\ []) do
+    compile_dir = claim_temp_compile_dir(candidates)
+
+    on_exit(fn ->
+      File.rm_rf!(compile_dir)
+      refute File.exists?(compile_dir)
+    end)
+
+    compile_dir
+  end
+
+  defp claim_temp_compile_dir([]) do
+    claim_temp_compile_dir([random_compile_dir()])
+  end
+
+  defp claim_temp_compile_dir([compile_dir | remaining_candidates]) do
+    case File.mkdir(compile_dir) do
+      :ok ->
+        compile_dir
+
+      {:error, :eexist} ->
+        claim_temp_compile_dir(remaining_candidates)
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "make directory", path: compile_dir
+    end
+  end
+
+  defp random_compile_dir do
+    suffix = Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
+    Path.join(System.tmp_dir!(), "codex-pooler-stream-attempt-prod-#{suffix}")
   end
 
   defp classification_projection({classification, state}),

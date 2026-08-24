@@ -27,6 +27,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     pool_model_serving_modes
     backend_responses_envelope
     upstream_error_param
+    terminal_failure_diagnostics
     rejection_metadata
     backend_fast_service_tier
     responses_chat
@@ -766,6 +767,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       responses_etag = CompatibilityMatrix.by_slug!(:backend_responses_etag)
       envelope = CompatibilityMatrix.by_slug!(:backend_responses_envelope)
       error_param = CompatibilityMatrix.by_slug!(:upstream_error_param)
+      terminal_failure_diagnostics = CompatibilityMatrix.by_slug!(:terminal_failure_diagnostics)
 
       assert models_etag.contract =~ "policy-visible native catalog body"
       assert models_etag.contract =~ "eventual"
@@ -814,6 +816,25 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert responses_etag.contract =~ "authoritative codex.response.metadata"
       assert responses_etag.contract =~ "current predispatch snapshot"
       assert responses_etag.contract =~ "never relayed from upstream"
+
+      assert terminal_failure_diagnostics.contract =~ "failed and retryable_failed"
+
+      assert terminal_failure_diagnostics.contract =~
+               "strict ASCII identifiers through 80 bytes remain cleartext"
+
+      assert terminal_failure_diagnostics.contract =~
+               "malformed control invalid-UTF8 or overlong identifiers fingerprint"
+
+      assert terminal_failure_diagnostics.contract =~ "raw provider messages, bodies, and frames"
+
+      assert CompatibilityMatrix.fixture!(:terminal_failure_diagnostics) == %{
+               fields: ~w(upstream_error_code stream_terminal_type upstream_error_param),
+               projection: "failed_and_retryable_failed_attempt_detail_only",
+               readable_identifier: "strict_ascii_80_bytes_or_less_cleartext",
+               malformed_identifier: "sha256_12",
+               invalid_or_successful_or_historical_attempt: "omitted",
+               raw_provider_message_body_or_frame: "never_projected"
+             }
 
       assert CompatibilityMatrix.fixture!(:backend_responses_etag) == %{
                header: "x-models-etag",

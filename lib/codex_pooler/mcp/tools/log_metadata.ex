@@ -6,6 +6,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
   alias CodexPooler.Accounting
   alias CodexPooler.Accounts.Scope
   alias CodexPooler.Audit
+  alias CodexPooler.MCP.Redaction
   alias CodexPooler.MCP.ToolRegistry
   alias CodexPooler.MCP.Tools.DetailEnvelope
   alias CodexPooler.MCP.Tools.LogMetadata.{AuditLogPresenter, RequestLogPresenter}
@@ -47,10 +48,20 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
   @spec get_request_log(map(), map()) :: {:ok, map(), String.t()} | {:error, map()}
   def get_request_log(%{"id" => id}, context) when is_binary(id) do
     with {:ok, scope} <- scope_from_context(context) do
-      scope
-      |> request_log_detail(id)
-      |> detail_output(&RequestLogPresenter.item/1, "request_log")
-      |> then(fn structured -> {:ok, structured, RequestLogPresenter.detail_text(structured)} end)
+      structured =
+        scope
+        |> request_log_detail(id)
+        |> detail_output(&RequestLogPresenter.item/1, "request_log")
+
+      text = RequestLogPresenter.detail_text(structured)
+
+      :ok =
+        Redaction.assert_mcp_output_safe!(%{
+          "structuredContent" => structured,
+          "content" => [%{"type" => "text", "text" => text}]
+        })
+
+      {:ok, structured, text}
     end
   end
 
@@ -355,6 +366,8 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
         "network_error_code" => nullable_string_property(),
         "latency_ms" => %{"type" => ["integer", "null"]},
         "final" => %{"type" => ["boolean", "null"]},
+        "upstream_error_code" => nullable_string_property(),
+        "stream_terminal_type" => nullable_string_property(),
         "upstream_error_param" => nullable_string_property(),
         "rejection_error_code" => string_property(),
         "rejection_error_type" => string_property(),

@@ -1447,6 +1447,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     %{assignment: assignment} = upstream_assignment_fixture(pool)
     raw_message = "raw upstream message must not render"
     raw_value = "https://example.com/raw-upstream-value"
+    malformed_provider_code = "https://example.invalid/provider-code"
+    malformed_terminal_type = "https://example.invalid/terminal-event"
     raw_frame = ~s({"type":"error","message":"raw websocket frame"})
     raw_header = "Bearer raw-upstream-header"
     raw_prompt = "raw upstream prompt must not render"
@@ -1463,6 +1465,8 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
       attempt_number: 1,
       status: "failed",
       response_metadata: %{
+        "upstream_error_code" => "context_length_exceeded",
+        "stream_terminal_type" => "response.failed",
         "upstream_error_param" => "reasoning.summary",
         "rejection_error_code" => "invalid_request",
         "rejection_error_type" => "invalid_request_error",
@@ -1481,7 +1485,20 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     attempt_fixture(request, assignment, %{
       attempt_number: 2,
       status: "failed",
-      response_metadata: %{"upstream_error_param" => raw_value}
+      response_metadata: %{
+        "upstream_error_code" => malformed_provider_code,
+        "stream_terminal_type" => malformed_terminal_type,
+        "upstream_error_param" => raw_value
+      }
+    })
+
+    attempt_fixture(request, assignment, %{
+      attempt_number: 3,
+      status: "failed",
+      response_metadata: %{
+        "upstream_error_code" => "bearer_expired",
+        "stream_terminal_type" => "invalid_authorization_value"
+      }
     })
 
     {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
@@ -1489,6 +1506,30 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
     for prefix <- ["request-log"] do
       render_click(element(view, "##{prefix}-#{request.id}-open-details"))
       assert_patch(view)
+
+      assert has_element?(
+               view,
+               "#request-log-detail-attempt-1-upstream-error-code",
+               "Provider terminal code"
+             )
+
+      assert has_element?(
+               view,
+               "#request-log-detail-attempt-1-upstream-error-code",
+               "context_length_exceeded"
+             )
+
+      assert has_element?(
+               view,
+               "#request-log-detail-attempt-1-stream-terminal-type",
+               "Terminal event"
+             )
+
+      assert has_element?(
+               view,
+               "#request-log-detail-attempt-1-stream-terminal-type",
+               "response.failed"
+             )
 
       assert has_element?(
                view,
@@ -1504,9 +1545,42 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
       refute has_element?(view, "#request-log-detail-attempt-2-upstream-error-param")
 
+      assert has_element?(
+               view,
+               "#request-log-detail-attempt-2-upstream-error-code",
+               "sha256_b68ae8589ac9"
+             )
+
+      assert has_element?(
+               view,
+               "#request-log-detail-attempt-2-stream-terminal-type",
+               "sha256_4a302a48caea"
+             )
+
+      assert has_element?(
+               view,
+               "#request-log-detail-attempt-3-upstream-error-code",
+               "bearer_expired"
+             )
+
+      assert has_element?(
+               view,
+               "#request-log-detail-attempt-3-stream-terminal-type",
+               "invalid_authorization_value"
+             )
+
       html = render(view)
 
-      for forbidden <- [raw_message, raw_value, raw_frame, raw_header, raw_prompt, raw_body] do
+      for forbidden <- [
+            raw_message,
+            raw_value,
+            malformed_provider_code,
+            malformed_terminal_type,
+            raw_frame,
+            raw_header,
+            raw_prompt,
+            raw_body
+          ] do
         refute html =~ forbidden
       end
 
@@ -1516,6 +1590,47 @@ defmodule CodexPoolerWeb.Admin.RequestLogsLiveTest do
 
       assert_patch(view)
     end
+  end
+
+  test "detail drawer characterizes the existing failed-attempt upstream parameter row", %{
+    conn: conn,
+    scope: scope
+  } do
+    {:ok, pool} =
+      Pools.create_pool(scope, %{slug: "upstream-param-baseline", name: "Upstream Param Baseline"})
+
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-upstream-param-baseline",
+        status: "failed",
+        correlation_id: "upstream-param-baseline"
+      })
+
+    attempt_fixture(request, assignment, %{
+      attempt_number: 1,
+      status: "failed",
+      response_metadata: %{"upstream_error_param" => "input[0].content"}
+    })
+
+    {:ok, view, _html} = live_request_logs(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+
+    render_click(element(view, "#request-log-#{request.id}-open-details"))
+    assert_patch(view)
+
+    assert has_element?(
+             view,
+             "#request-log-detail-attempt-1-upstream-error-param",
+             "Upstream error parameter"
+           )
+
+    assert has_element?(
+             view,
+             "#request-log-detail-attempt-1-upstream-error-param",
+             "input[0].content"
+           )
   end
 
   test "renders compression savings from safe metadata with token-first and byte fallback",

@@ -74,8 +74,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy do
 
   defp relayable_unknown_code?(value) do
     byte_size(value) <= @max_unknown_code_bytes and
-      Regex.match?(@unknown_code_allowlist, value) and
-      not sensitive_value?(value)
+      Regex.match?(@unknown_code_allowlist, value)
   end
 
   defp fingerprint(value) do

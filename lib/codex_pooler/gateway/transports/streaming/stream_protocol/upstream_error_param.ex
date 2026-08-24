@@ -13,6 +13,19 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.UpstreamErrorP
     |> sanitize()
   end
 
+  @spec sanitize(term()) :: t()
+  def sanitize(value) when is_binary(value) do
+    if String.valid?(value) do
+      value = String.trim(value)
+
+      if byte_size(value) in 1..@max_bytes and Regex.match?(@path_pattern, value),
+        do: value,
+        else: nil
+    end
+  end
+
+  def sanitize(_value), do: nil
+
   defp first_present_candidate(decoded) do
     candidates = [
       ["response", "error", "param"],
@@ -52,14 +65,4 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.UpstreamErrorP
   end
 
   defp top_level_error_param(_decoded), do: nil
-
-  defp sanitize(value) when is_binary(value) do
-    value = String.trim(value)
-
-    if byte_size(value) in 1..@max_bytes and Regex.match?(@path_pattern, value),
-      do: value,
-      else: nil
-  end
-
-  defp sanitize(_value), do: nil
 end

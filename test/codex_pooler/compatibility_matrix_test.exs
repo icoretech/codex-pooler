@@ -486,6 +486,20 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert fixture.raw_error_message_or_value == "never_projected"
     end
 
+    test "pins bounded terminal failure diagnostics as attempt detail only" do
+      feature = CompatibilityMatrix.by_slug!(:terminal_failure_diagnostics)
+      fixture = CompatibilityMatrix.fixture!(:terminal_failure_diagnostics)
+
+      assert feature.current == :bounded_terminal_failure_attempt_detail
+      assert feature.routes == CompatibilityMatrix.by_slug!(:upstream_error_param).routes
+      assert fixture.fields == ~w(upstream_error_code stream_terminal_type upstream_error_param)
+      assert fixture.projection == "failed_and_retryable_failed_attempt_detail_only"
+      assert fixture.readable_identifier == "strict_ascii_80_bytes_or_less_cleartext"
+      assert fixture.malformed_identifier == "sha256_12"
+      assert fixture.invalid_or_successful_or_historical_attempt == "omitted"
+      assert fixture.raw_provider_message_body_or_frame == "never_projected"
+    end
+
     test "pins bounded rejection metadata extraction and publication" do
       feature = CompatibilityMatrix.by_slug!(:rejection_metadata)
       fixture = CompatibilityMatrix.fixture!(:rejection_metadata)

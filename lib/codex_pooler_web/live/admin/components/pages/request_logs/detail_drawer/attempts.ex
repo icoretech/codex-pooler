@@ -39,6 +39,18 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Attempts do
         mono: true
       ),
       detail(
+        "request-log-detail-attempt-#{attempt.attempt_number}-upstream-error-code",
+        "Provider terminal code",
+        Map.get(attempt, :upstream_error_code),
+        mono: true
+      ),
+      detail(
+        "request-log-detail-attempt-#{attempt.attempt_number}-stream-terminal-type",
+        "Terminal event",
+        Map.get(attempt, :stream_terminal_type),
+        mono: true
+      ),
+      detail(
         "request-log-detail-attempt-#{attempt.attempt_number}-upstream-error-param",
         "Upstream error parameter",
         Map.get(attempt, :upstream_error_param),

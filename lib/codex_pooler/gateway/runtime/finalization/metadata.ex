@@ -7,6 +7,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   alias CodexPooler.Gateway.Transports.BoundedResponseBody
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl
   alias CodexPooler.Gateway.Transports.RejectionBody
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.UpstreamErrorParam
   alias CodexPooler.Quotas.Evidence.CodexParsers.RateLimitReachedType
 
   @canonical_uuid_byte_size 36
@@ -331,9 +332,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   def maybe_put_masked_error_metadata(metadata, _upstream_code, _code), do: metadata
 
   @spec maybe_put_upstream_error_param(map(), term()) :: map()
-  def maybe_put_upstream_error_param(metadata, %{upstream_error_param: value})
-      when is_binary(value) and value != "" do
-    Map.put(metadata, "upstream_error_param", value)
+  def maybe_put_upstream_error_param(metadata, %{upstream_error_param: value}) do
+    case UpstreamErrorParam.sanitize(value) do
+      sanitized when is_binary(sanitized) -> Map.put(metadata, "upstream_error_param", sanitized)
+      nil -> metadata
+    end
   end
 
   def maybe_put_upstream_error_param(metadata, _failure), do: metadata

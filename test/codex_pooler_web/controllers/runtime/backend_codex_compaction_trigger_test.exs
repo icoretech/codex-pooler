@@ -10,6 +10,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.FakeUpstream
+  alias CodexPooler.Gateway.Persistence.{BridgeDemotion, RoutingCircuitState}
+  alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Repo
 
@@ -969,6 +971,218 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     refute persistence_text =~ response_turn_state
   end
 
+  test "V2 compaction trigger retains response.failed terminal diagnostics", %{conn: conn} do
+    raw_sentinel = "synthetic-v2-response-failed-terminal-message"
+
+    result =
+      assert_v2_compaction_terminal_failure!(
+        conn,
+        "response.failed",
+        %{
+          "type" => "response.failed",
+          "response" => %{
+            "status" => "failed",
+            "error" => %{
+              "code" => "context_length_exceeded",
+              "param" => "input",
+              "message" => raw_sentinel
+            }
+          }
+        },
+        raw_sentinel,
+        expected_diagnostics: {"context_length_exceeded", "response.failed", "input"}
+      )
+
+    assert result.attempt.response_metadata["upstream_error_code"] ==
+             "context_length_exceeded"
+
+    assert result.attempt.response_metadata["stream_terminal_type"] == "response.failed"
+    assert result.attempt.response_metadata["upstream_error_param"] == "input"
+  end
+
+  test "V2 compaction trigger retains failure-coded response.incomplete terminal diagnostics", %{
+    conn: conn
+  } do
+    raw_sentinel = "synthetic-v2-failed-incomplete-terminal-message"
+
+    result =
+      assert_v2_compaction_terminal_failure!(
+        conn,
+        "response.incomplete",
+        %{
+          "type" => "response.incomplete",
+          "response" => %{
+            "status" => "incomplete",
+            "error" => %{
+              "code" => "server_error",
+              "param" => "input",
+              "message" => raw_sentinel
+            }
+          }
+        },
+        raw_sentinel,
+        expected_diagnostics: {"server_error", "response.incomplete", "input"}
+      )
+
+    assert result.attempt.response_metadata["upstream_error_code"] == "server_error"
+
+    assert result.attempt.response_metadata["stream_terminal_type"] ==
+             "response.incomplete"
+
+    assert result.attempt.response_metadata["upstream_error_param"] == "input"
+  end
+
+  test "V2 compaction trigger retains top-level error terminal diagnostics", %{conn: conn} do
+    raw_sentinel = "synthetic-v2-top-level-error-terminal-message"
+
+    result =
+      assert_v2_compaction_terminal_failure!(
+        conn,
+        "error",
+        %{
+          "type" => "error",
+          "error" => %{
+            "code" => "invalid_request",
+            "param" => "input",
+            "message" => raw_sentinel
+          }
+        },
+        raw_sentinel,
+        expected_diagnostics: {"invalid_request", "error", "input"}
+      )
+
+    assert result.attempt.response_metadata["upstream_error_code"] == "invalid_request"
+    assert result.attempt.response_metadata["stream_terminal_type"] == "error"
+    assert result.attempt.response_metadata["upstream_error_param"] == "input"
+  end
+
+  test "V2 compaction trigger retains ordinary response.incomplete reason diagnostics", %{
+    conn: conn
+  } do
+    raw_sentinel = "synthetic-v2-ordinary-incomplete-terminal-message"
+
+    result =
+      assert_v2_compaction_terminal_failure!(
+        conn,
+        "response.incomplete",
+        %{
+          "type" => "response.incomplete",
+          "response" => %{
+            "status" => "incomplete",
+            "incomplete_details" => %{"reason" => "max_output_tokens"},
+            "metadata" => %{"ignored_terminal_message" => raw_sentinel}
+          }
+        },
+        raw_sentinel,
+        expected_diagnostics: {"max_output_tokens", "response.incomplete", nil}
+      )
+
+    assert result.attempt.response_metadata["upstream_error_code"] == "max_output_tokens"
+
+    assert result.attempt.response_metadata["stream_terminal_type"] ==
+             "response.incomplete"
+
+    refute Map.has_key?(result.attempt.response_metadata, "upstream_error_param")
+  end
+
+  test "V2 compaction trigger retains bearer_expired as a readable terminal code", %{
+    conn: conn
+  } do
+    raw_sentinel = "synthetic-v2-bearer-terminal-message"
+
+    result =
+      assert_v2_compaction_terminal_failure!(
+        conn,
+        "response.failed",
+        %{
+          "type" => "response.failed",
+          "response" => %{
+            "status" => "failed",
+            "error" => %{
+              "code" => "bearer_expired",
+              "param" => "input",
+              "message" => raw_sentinel
+            }
+          }
+        },
+        raw_sentinel,
+        expected_diagnostics: {"bearer_expired", "response.failed", "input"}
+      )
+
+    assert result.attempt.response_metadata["upstream_error_code"] == "bearer_expired"
+    assert result.attempt.response_metadata["stream_terminal_type"] == "response.failed"
+    assert result.attempt.response_metadata["upstream_error_param"] == "input"
+  end
+
+  test "V2 compaction trigger retains invalid_authorization_value as a readable terminal code", %{
+    conn: conn
+  } do
+    raw_sentinel = "synthetic-v2-authorization-terminal-message"
+
+    result =
+      assert_v2_compaction_terminal_failure!(
+        conn,
+        "response.failed",
+        %{
+          "type" => "response.failed",
+          "response" => %{
+            "status" => "failed",
+            "error" => %{
+              "code" => "invalid_authorization_value",
+              "param" => "input",
+              "message" => raw_sentinel
+            }
+          }
+        },
+        raw_sentinel,
+        expected_diagnostics: {"invalid_authorization_value", "response.failed", "input"}
+      )
+
+    assert result.attempt.response_metadata["upstream_error_code"] ==
+             "invalid_authorization_value"
+
+    assert result.attempt.response_metadata["stream_terminal_type"] == "response.failed"
+    assert result.attempt.response_metadata["upstream_error_param"] == "input"
+  end
+
+  test "V2 compaction trigger fingerprints malformed terminal codes and omits invalid params", %{
+    conn: conn
+  } do
+    malformed_code = "https://example.invalid/terminal"
+    malformed_param = "input/terminal"
+    raw_sentinel = "synthetic-v2-malformed-terminal-message"
+
+    result =
+      assert_v2_compaction_terminal_failure!(
+        conn,
+        "response.failed",
+        %{
+          "type" => "response.failed",
+          "response" => %{
+            "status" => "failed",
+            "error" => %{
+              "code" => malformed_code,
+              "param" => malformed_param,
+              "message" => raw_sentinel
+            }
+          }
+        },
+        raw_sentinel,
+        expected_diagnostics:
+          {DiagnosticTaxonomy.identifier(malformed_code), "response.failed", nil}
+      )
+
+    assert result.attempt.response_metadata["upstream_error_code"] =~
+             ~r/^sha256_[0-9a-f]{12}$/
+
+    assert result.attempt.response_metadata["stream_terminal_type"] == "response.failed"
+    refute Map.has_key?(result.attempt.response_metadata, "upstream_error_param")
+
+    persisted = inspect({result.request, result.attempt, result.settlement})
+    refute persisted =~ malformed_code
+    refute persisted =~ malformed_param
+  end
+
   @tag :prompt_cache_adaptation
   test "compaction trigger bridge records only prompt cache downgrade metadata", %{conn: conn} do
     for {label, prompt_cache_options} <- [
@@ -1594,6 +1808,123 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
         "content" => [%{"type" => "input_text", "text" => text}]
       }
     ]
+  end
+
+  defp assert_v2_compaction_terminal_failure!(
+         conn,
+         terminal_event,
+         terminal_payload,
+         raw_sentinel,
+         opts
+       ) do
+    expected_diagnostics = Keyword.fetch!(opts, :expected_diagnostics)
+
+    v2_turn_metadata =
+      Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
+
+    rate_limits_block =
+      "event: codex.rate_limits\n" <>
+        "data: #{Jason.encode!(%{"type" => "codex.rate_limits", "rate_limits" => %{"secondary" => %{"used_percent" => 11, "window_minutes" => 10_080, "reset_at" => DateTime.to_unix(DateTime.add(DateTime.utc_now(), 3, :day))}}})}\n\n"
+
+    terminal_block =
+      "event: #{terminal_event}\n" <> "data: #{Jason.encode!(terminal_payload)}\n\n"
+
+    upstream = start_upstream({:sse, [rate_limits_block, terminal_block]})
+    setup = gateway_setup(upstream, compact?: true)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" =>
+          visible_input("synthetic V2 compact terminal trigger") ++ [compaction_trigger()],
+        "stream" => true,
+        "client_metadata" => %{"x-codex-turn-metadata" => v2_turn_metadata}
+      })
+
+    await_rate_limit_event_tasks!()
+
+    assert %{
+             "error" => %{
+               "code" => "invalid_compaction_response",
+               "message" => "upstream compact stream was invalid",
+               "param" => nil,
+               "type" => "invalid_request_error"
+             }
+           } = json_response(response, 502)
+
+    refute response.resp_body =~ raw_sentinel
+    refute response.resp_body =~ "event: response.failed"
+    refute response.resp_body =~ "event: response.incomplete"
+    refute response.resp_body =~ "event: codex.rate_limits"
+
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert FakeUpstream.http_request_count(upstream) == 1
+    assert captured.path == "/backend-api/codex/responses"
+
+    assert captured.json["input"] ==
+             visible_input("synthetic V2 compact terminal trigger") ++ [compaction_trigger()]
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.endpoint == "/backend-api/codex/responses/compact"
+    assert request.transport == "http_compact_json"
+    assert request.retry_count == 0
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.upstream_status_code == 200
+    refute attempt.retryable
+    refute Map.has_key?(attempt.response_metadata, "diagnostic_upstream_code")
+
+    assert [settlement] =
+             Repo.all(
+               from(l in LedgerEntry,
+                 where:
+                   l.request_id == ^request.id and l.entry_kind == "settlement" and
+                     l.amount_status == "recorded"
+               )
+             )
+
+    persisted = inspect({request, attempt, settlement})
+    refute persisted =~ raw_sentinel
+
+    assert get_in(request.request_metadata, ["routing", "demotion_reason"]) ==
+             "invalid_compaction_response"
+
+    assert [demotion] = Repo.all(from(d in BridgeDemotion))
+    assert demotion.pool_upstream_assignment_id == setup.assignment.id
+    assert demotion.reason_code == "invalid_compaction_response"
+    assert demotion.status == "active"
+    assert demotion.metadata == %{"source" => "gateway_failure"}
+
+    assert [circuit] = Repo.all(from(c in RoutingCircuitState))
+    assert circuit.pool_upstream_assignment_id == setup.assignment.id
+    assert circuit.reason_code == "invalid_compaction_response"
+    assert circuit.failure_count == 1
+
+    assert {
+             request.status,
+             request.last_error_code,
+             attempt.status,
+             attempt.network_error_code,
+             attempt.response_metadata["upstream_error_code"],
+             attempt.response_metadata["stream_terminal_type"],
+             attempt.response_metadata["upstream_error_param"]
+           } ==
+             {"failed", "invalid_compaction_response", "failed", "invalid_compaction_response",
+              elem(expected_diagnostics, 0), elem(expected_diagnostics, 1),
+              elem(expected_diagnostics, 2)}
+
+    %{attempt: attempt, request: request, response: response, settlement: settlement}
+  end
+
+  defp await_rate_limit_event_tasks! do
+    CodexPooler.RateLimitEventSupervisor
+    |> Task.Supervisor.children()
+    |> Enum.each(fn task_pid ->
+      monitor_ref = Process.monitor(task_pid)
+      assert_receive {:DOWN, ^monitor_ref, :process, ^task_pid, :normal}, 1_000
+    end)
   end
 
   defp compaction_trigger, do: %{"type" => "compaction_trigger"}

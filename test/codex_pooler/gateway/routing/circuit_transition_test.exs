@@ -1,17 +1,21 @@
 defmodule CodexPooler.Gateway.Routing.CircuitTransitionTest do
   use CodexPooler.DataCase, async: false
 
+  import CodexPooler.AccountsFixtures
   import CodexPooler.PoolerFixtures
+  import Ecto.Query
   import ExUnit.CaptureLog
 
   alias CodexPooler.Access.APIKey
+  alias CodexPooler.Accounts.{PlatformBootstrapState, User}
+  alias CodexPooler.Audit.AuditEvent
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Persistence.RoutingCircuitState
   alias CodexPooler.Gateway.Routing.CircuitState
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Settings
-  alias CodexPooler.Pools.Pool
+  alias CodexPooler.Pools.{Membership, Pool}
   alias CodexPooler.Upstreams.Schemas.{PoolUpstreamAssignment, UpstreamIdentity}
 
   alias Ecto.Adapters.SQL
@@ -242,8 +246,9 @@ defmodule CodexPooler.Gateway.Routing.CircuitTransitionTest do
   end
 
   test "emits exactly one event after a deadlock retry commits" do
-    {auth, model, assignment} = in_db_observer(&routing_fixture/0)
-    cleanup_unboxed_fixture(auth.pool.id, [assignment.upstream_identity_id])
+    fixture = unboxed_routing_fixture()
+    %{auth: auth, model: model, assignment: assignment} = fixture
+    cleanup_unboxed_fixture(fixture)
 
     assert {:ok, %RoutingCircuitState{status: "closed", failure_count: 1}} =
              in_db_observer(fn ->
@@ -287,8 +292,9 @@ defmodule CodexPooler.Gateway.Routing.CircuitTransitionTest do
   end
 
   test "does not emit or persist when deadlock retry is exhausted" do
-    {auth, model, assignment} = in_db_observer(&routing_fixture/0)
-    cleanup_unboxed_fixture(auth.pool.id, [assignment.upstream_identity_id])
+    fixture = unboxed_routing_fixture()
+    %{auth: auth, model: model, assignment: assignment} = fixture
+    cleanup_unboxed_fixture(fixture)
 
     assert {:ok, %RoutingCircuitState{id: state_id, status: "closed", failure_count: 1}} =
              in_db_observer(fn ->
@@ -361,6 +367,37 @@ defmodule CodexPooler.Gateway.Routing.CircuitTransitionTest do
     assert log =~ "code=upstream_identity_not_found"
 
     refute_receive {^events, _in_transaction?, _metadata}
+  end
+
+  @tag :unboxed
+  test "unboxed routing cleanup removes its committed fixture owner graph only" do
+    fixture = unboxed_routing_fixture()
+    assert is_binary(fixture.owner_id)
+    cleanup_unboxed_fixture(fixture)
+
+    unrelated_user =
+      in_db_observer(fn ->
+        %User{}
+        |> User.bootstrap_changeset(valid_bootstrap_attributes(%{"email" => unique_user_email()}))
+        |> Repo.insert!()
+      end)
+
+    on_exit(fn ->
+      Sandbox.unboxed_run(Repo, fn ->
+        Repo.delete_all(from user in User, where: user.id == ^unrelated_user.id)
+      end)
+    end)
+
+    cleanup_fixture!(fixture)
+
+    in_db_observer(fn ->
+      refute Repo.get(Pool, fixture.auth.pool.id)
+      refute Repo.get(UpstreamIdentity, fixture.assignment.upstream_identity_id)
+
+      assert_fixture_owner_cleanup!(fixture)
+
+      assert Repo.get(User, unrelated_user.id)
+    end)
   end
 
   defp open_circuit!(auth, model, assignment, attrs) do
@@ -490,6 +527,22 @@ defmodule CodexPooler.Gateway.Routing.CircuitTransitionTest do
     {%{pool: pool, api_key: api_key}, model, assignment}
   end
 
+  defp unboxed_routing_fixture do
+    in_db_observer(fn ->
+      existing_owner_ids = active_instance_owner_ids()
+      {auth, model, assignment} = routing_fixture()
+      assert Repo.get(User, auth.api_key.created_by_user_id)
+
+      %{
+        auth: auth,
+        model: model,
+        assignment: assignment,
+        owner_id: auth.api_key.created_by_user_id,
+        created_owner?: auth.api_key.created_by_user_id not in existing_owner_ids
+      }
+    end)
+  end
+
   defp half_open_circuit!(auth, model, assignment, attrs) do
     now = now()
     updated_at = Keyword.fetch!(attrs, :updated_at)
@@ -529,19 +582,76 @@ defmodule CodexPooler.Gateway.Routing.CircuitTransitionTest do
     Task.await(task, 5_000)
   end
 
-  defp cleanup_unboxed_fixture(pool_id, upstream_identity_ids) do
+  defp cleanup_unboxed_fixture(fixture) do
     on_exit(fn ->
-      Sandbox.unboxed_run(Repo, fn -> cleanup_fixture(pool_id, upstream_identity_ids) end)
+      cleanup_fixture!(fixture)
     end)
   end
 
-  defp cleanup_fixture(pool_id, upstream_identity_ids) do
-    pool = Repo.get(Pool, pool_id)
-    if pool, do: Repo.delete!(pool)
+  defp cleanup_fixture!(fixture) do
+    Sandbox.unboxed_run(Repo, fn ->
+      pool = Repo.get(Pool, fixture.auth.pool.id)
+      if pool, do: Repo.delete!(pool)
 
-    Repo.delete_all(
-      from identity in UpstreamIdentity,
-        where: identity.id in ^upstream_identity_ids
+      Repo.delete_all(
+        from identity in UpstreamIdentity,
+          where: identity.id == ^fixture.assignment.upstream_identity_id
+      )
+
+      cleanup_fixture_owner_graph!(fixture)
+    end)
+  end
+
+  defp cleanup_fixture_owner_graph!(%{created_owner?: false}), do: :ok
+
+  defp cleanup_fixture_owner_graph!(%{created_owner?: true, owner_id: owner_id}) do
+    {deleted_bootstrap_state_count, _nil} =
+      Repo.delete_all(
+        from state in PlatformBootstrapState,
+          where: state.owner_user_id == ^owner_id
+      )
+
+    if deleted_bootstrap_state_count == 1 do
+      Repo.insert!(%PlatformBootstrapState{singleton: true, status: "pending"})
+    end
+
+    Repo.delete_all(from event in AuditEvent, where: event.actor_user_id == ^owner_id)
+    Repo.delete_all(from membership in Membership, where: membership.user_id == ^owner_id)
+    Repo.delete_all(from user in User, where: user.id == ^owner_id)
+  end
+
+  defp assert_fixture_owner_cleanup!(%{created_owner?: true, owner_id: owner_id}) do
+    refute Repo.get(User, owner_id)
+
+    refute Repo.exists?(
+             from membership in Membership,
+               where: membership.user_id == ^owner_id
+           )
+
+    refute Repo.exists?(
+             from state in PlatformBootstrapState,
+               where: state.owner_user_id == ^owner_id
+           )
+
+    refute Repo.exists?(
+             from event in AuditEvent,
+               where: event.actor_user_id == ^owner_id
+           )
+
+    assert %PlatformBootstrapState{status: "pending", owner_user_id: nil} =
+             Repo.get!(PlatformBootstrapState, true)
+  end
+
+  defp assert_fixture_owner_cleanup!(%{created_owner?: false, owner_id: owner_id}) do
+    assert Repo.get(User, owner_id)
+  end
+
+  defp active_instance_owner_ids do
+    Repo.all(
+      from membership in Membership,
+        where: membership.role == "instance_owner" and membership.status == "active",
+        select: membership.user_id
     )
+    |> MapSet.new()
   end
 end

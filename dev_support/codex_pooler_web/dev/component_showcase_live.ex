@@ -58,6 +58,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
         oauth_cases: @oauth_cases,
         variants: ComponentShowcaseData.primitive_variants(),
         observatory: ComponentShowcaseData.observatory_presentation(),
+        request_log: request_log_fixture(),
         oauth_link_form:
           to_form(%{"pool_id" => "dev-component-showcase", "callback_url" => ""},
             as: :oauth_link
@@ -345,6 +346,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
           review_state={@review_state}
           variants={@variants}
           observatory={@observatory}
+          request_log={@request_log}
         />
       </Layouts.app>
     </div>
@@ -437,6 +439,59 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseLive do
        do: review_state
 
   defp selected_review_state(_params, _session), do: "catalog"
+
+  defp request_log_fixture do
+    %{
+      id: "showcase-request",
+      correlation_id: "showcase-terminal-diagnostics",
+      status: "failed",
+      endpoint: "/backend-api/codex/responses/compact",
+      requested_model: "sample-model",
+      reasoning_effort: nil,
+      applied_reasoning_effort: nil,
+      effective_reasoning_effort: nil,
+      transport: "http_compact_json",
+      response_status_code: 200,
+      denial_reason: "invalid_compaction_response",
+      retry_count: 0,
+      admitted_at: ~U[2026-08-24 10:00:00Z],
+      completed_at: ~U[2026-08-24 10:00:01Z],
+      pool_name: "Sample Pool",
+      upstream_account_label: "Sample upstream",
+      assignment_label: "Sample assignment",
+      api_key_id: "sample-key-id",
+      api_key_display_name: "Sample key",
+      api_key_prefix: "cxp_sample",
+      metadata: %{},
+      token_counts: nil,
+      cost: nil,
+      usage_status: "usage_unknown",
+      payload_compression: %{},
+      debug: %{
+        continuity: %{},
+        failure: %{error_code: "invalid_compaction_response", error_source: "request_error"},
+        attempt: %{attempt_count: 1, latest_attempt_number: 1},
+        terminal_state: %{state: "terminal", mismatch: false},
+        turn: %{},
+        attempts: [
+          %{
+            attempt_ref: "attempt_sample",
+            attempt_number: 1,
+            pool_upstream_assignment_id: "assignment_sample",
+            status: "failed",
+            upstream_status_code: 200,
+            network_error_code: "invalid_compaction_response",
+            upstream_error_code: "context_length_exceeded",
+            stream_terminal_type: "response.failed",
+            upstream_error_param: "input[0].content",
+            latency_ms: 120,
+            retryable: false,
+            final: true
+          }
+        ]
+      }
+    }
+  end
 
   defp select_review_state(socket, review_state) do
     socket = socket |> clear_flash() |> assign(:review_state, review_state)

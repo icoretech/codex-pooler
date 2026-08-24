@@ -10,14 +10,14 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
   }
 
   alias CodexPooler.Gateway.Persistence.SessionReadModel
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.UpstreamErrorParam
+  alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
 
   @bounded_detail_attempts 10
-  @upstream_error_param_max_bytes 160
-  @upstream_error_param_pattern ~r/\A[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*|\[(?:0|[1-9][0-9]{0,3})\])*\z/
   @rejection_token_max_bytes 80
   @rejection_token_pattern ~r/\A[A-Za-z0-9_.-]+\z/
   @rejection_param_max_bytes 160
-  @rejection_param_pattern @upstream_error_param_pattern
+  @rejection_param_pattern ~r/\A[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*|\[(?:0|[1-9][0-9]{0,3})\])*\z/
 
   @type surface :: :default | :admin
 
@@ -239,7 +239,7 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
       final: maybe_field(turn, :final_attempt_id) == attempt.id
     }
     |> maybe_put_transport_failure(attempt)
-    |> maybe_put_upstream_error_param(attempt)
+    |> maybe_put_terminal_failure_diagnostics(attempt)
     |> maybe_put_rejection_metadata(attempt)
     |> maybe_put_model_serving_mode(attempt, surface)
     |> maybe_put_upstream_websocket_connection(attempt, surface)
@@ -286,26 +286,38 @@ defmodule CodexPooler.Accounting.RequestLogs.DebugProjection do
     end
   end
 
-  defp maybe_put_upstream_error_param(projection, %Attempt{status: status} = attempt)
+  defp maybe_put_terminal_failure_diagnostics(projection, %Attempt{status: status} = attempt)
        when status in ["failed", "retryable_failed"] do
-    case valid_upstream_error_param(attempt.response_metadata) do
+    metadata = attempt.response_metadata
+
+    projection
+    |> maybe_put_terminal_identifier(:upstream_error_code, metadata)
+    |> maybe_put_terminal_identifier(:stream_terminal_type, metadata)
+    |> maybe_put_terminal_param(metadata)
+  end
+
+  defp maybe_put_terminal_failure_diagnostics(projection, _attempt), do: projection
+
+  defp maybe_put_terminal_identifier(projection, key, metadata) when is_map(metadata) do
+    case Map.get(metadata, Atom.to_string(key)) do
+      nil -> projection
+      value -> maybe_put_identifier(projection, key, DiagnosticTaxonomy.identifier(value))
+    end
+  end
+
+  defp maybe_put_terminal_identifier(projection, _key, _metadata), do: projection
+
+  defp maybe_put_identifier(projection, _key, nil), do: projection
+  defp maybe_put_identifier(projection, key, value), do: Map.put(projection, key, value)
+
+  defp maybe_put_terminal_param(projection, metadata) when is_map(metadata) do
+    case UpstreamErrorParam.sanitize(Map.get(metadata, "upstream_error_param")) do
       nil -> projection
       value -> Map.put(projection, :upstream_error_param, value)
     end
   end
 
-  defp maybe_put_upstream_error_param(projection, _attempt), do: projection
-
-  defp valid_upstream_error_param(%{"upstream_error_param" => value}) when is_binary(value) do
-    value = String.trim(value)
-
-    if byte_size(value) in 1..@upstream_error_param_max_bytes and
-         Regex.match?(@upstream_error_param_pattern, value) do
-      value
-    end
-  end
-
-  defp valid_upstream_error_param(_metadata), do: nil
+  defp maybe_put_terminal_param(projection, _metadata), do: projection
 
   defp maybe_put_rejection_metadata(projection, %Attempt{status: status} = attempt)
        when status in ["failed", "retryable_failed"] do

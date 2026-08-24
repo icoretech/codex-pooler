@@ -134,6 +134,35 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcaseTest do
     end
   end
 
+  test "request drawer showcase renders terminal diagnostics through the real component in both themes" do
+    for theme <- ~w(light dark) do
+      {:ok, view, _html} = mount_showcase(theme, "request-drawer")
+
+      assert has_element?(
+               view,
+               "#component-showcase[data-theme='#{theme}'][data-review-state='request-drawer']"
+             )
+
+      assert has_element?(
+               view,
+               "#request-log-detail-attempt-1-upstream-error-code",
+               "context_length_exceeded"
+             )
+
+      assert has_element?(
+               view,
+               "#request-log-detail-attempt-1-stream-terminal-type",
+               "response.failed"
+             )
+
+      assert has_element?(
+               view,
+               "#request-log-detail-attempt-1-upstream-error-param",
+               "input[0].content"
+             )
+    end
+  end
+
   test "browser OAuth review state renders the real pending link dialog with synthetic data" do
     {:ok, view, html} = mount_showcase("light", "oauth-browser-dialog")
 

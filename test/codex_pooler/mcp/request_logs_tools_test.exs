@@ -394,6 +394,32 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
            ]) == ["continuity", "failure", "attempt"]
   end
 
+  test "request-log detail attempt schema stays closed with terminal diagnostic keys" do
+    request_logs_tool =
+      Enum.find(LogMetadata.tools(), &(&1.name == "codex_pooler_get_request_log"))
+
+    attempt_schema =
+      get_in(request_logs_tool.output_schema, [
+        "properties",
+        "item",
+        "properties",
+        "debug",
+        "properties",
+        "attempts",
+        "items"
+      ])
+
+    assert attempt_schema["additionalProperties"] == false
+
+    assert attempt_schema["properties"]["upstream_error_code"] == %{
+             "type" => ["string", "null"]
+           }
+
+    assert attempt_schema["properties"]["stream_terminal_type"] == %{
+             "type" => ["string", "null"]
+           }
+  end
+
   test "request-log list text handles empty results without echoing caller filters", %{auth: auth} do
     sentinels = caller_filter_sentinels()
 
@@ -760,7 +786,7 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert_no_unsafe_request_log_text(result)
   end
 
-  test "gets only valid failed-attempt upstream error parameters in structured detail and readable text",
+  test "gets only valid failed-attempt terminal diagnostics in structured detail and readable text",
        %{
          auth: auth
        } do
@@ -769,6 +795,8 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     %{assignment: assignment} = upstream_assignment_fixture(pool)
     raw_message = "raw upstream message must stay out of MCP"
     raw_value = "https://example.com/raw-upstream-value"
+    malformed_provider_code = "https://example.invalid/provider-code"
+    malformed_terminal_type = "https://example.invalid/terminal-event"
     raw_frame = ~s({"type":"error","message":"raw websocket frame"})
     raw_header = "Bearer raw-upstream-header"
     raw_prompt = "raw upstream prompt must stay out of MCP"
@@ -785,6 +813,8 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
       attempt_number: 1,
       status: "failed",
       response_metadata: %{
+        "upstream_error_code" => "context_length_exceeded",
+        "stream_terminal_type" => "response.failed",
         "upstream_error_param" => "reasoning.summary",
         "raw_message" => raw_message,
         "value" => raw_value,
@@ -798,13 +828,45 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     attempt_fixture(request, assignment, %{
       attempt_number: 2,
       status: "failed",
-      response_metadata: %{"upstream_error_param" => raw_value}
+      response_metadata: %{
+        "upstream_error_code" => malformed_provider_code,
+        "stream_terminal_type" => malformed_terminal_type,
+        "upstream_error_param" => raw_value
+      }
     })
 
+    final_attempt =
+      attempt_fixture(request, assignment, %{
+        attempt_number: 3,
+        status: "failed",
+        response_metadata: %{
+          "upstream_error_code" => "bearer_expired",
+          "stream_terminal_type" => "invalid_authorization_value"
+        }
+      })
+
     attempt_fixture(request, assignment, %{
-      attempt_number: 3,
+      attempt_number: 4,
       status: "succeeded",
-      response_metadata: %{"upstream_error_param" => "reasoning.effort"}
+      response_metadata: %{
+        "upstream_error_code" => "server_error",
+        "stream_terminal_type" => "response.incomplete",
+        "upstream_error_param" => "reasoning.effort"
+      }
+    })
+
+    debug_turn_fixture(request, %{
+      session:
+        debug_session_fixture(
+          pool,
+          api_key,
+          assignment,
+          "session-key-terminal-diagnostics"
+        ),
+      status: "failed",
+      error_code: "invalid_compaction_response",
+      final_attempt_id: final_attempt.id,
+      turn_sequence: 1
     })
 
     assert {:ok, result} =
@@ -816,17 +878,130 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     assert :ok = Redaction.assert_mcp_output_safe!(result)
     assert [%{"type" => "text", "text" => text}] = result["content"]
     assert %{"status" => "ok", "item" => item} = result["structuredContent"]
-    assert [first_attempt, second_attempt, third_attempt] = item["debug"]["attempts"]
-    assert first_attempt["upstream_error_param"] == "reasoning.summary"
-    refute Map.has_key?(second_attempt, "upstream_error_param")
-    refute Map.has_key?(third_attempt, "upstream_error_param")
-    assert text =~ "upstream_error_param=reasoning.summary"
 
-    for forbidden <- [raw_message, raw_value, raw_frame, raw_header, raw_prompt, raw_body] do
+    assert [first_attempt, second_attempt, third_attempt, fourth_attempt] =
+             item["debug"]["attempts"]
+
+    assert first_attempt["upstream_error_code"] == "context_length_exceeded"
+    assert first_attempt["stream_terminal_type"] == "response.failed"
+    assert first_attempt["upstream_error_param"] == "reasoning.summary"
+    assert second_attempt["upstream_error_code"] == "sha256_b68ae8589ac9"
+    assert second_attempt["stream_terminal_type"] == "sha256_4a302a48caea"
+    refute Map.has_key?(second_attempt, "upstream_error_param")
+    assert third_attempt["upstream_error_code"] == "bearer_expired"
+    assert third_attempt["stream_terminal_type"] == "invalid_authorization_value"
+    refute Map.has_key?(fourth_attempt, "upstream_error_code")
+    refute Map.has_key?(fourth_attempt, "stream_terminal_type")
+    refute Map.has_key?(fourth_attempt, "upstream_error_param")
+    assert text =~ "upstream_error_code=bearer_expired"
+    assert text =~ "stream_terminal_type=invalid_authorization_value"
+    refute text =~ "sha256_b68ae8589ac9"
+    refute text =~ "sha256_4a302a48caea"
+    refute text =~ "upstream_error_code=context_length_exceeded"
+    refute text =~ "stream_terminal_type=response.failed"
+
+    for forbidden <- [
+          raw_message,
+          raw_value,
+          malformed_provider_code,
+          malformed_terminal_type,
+          raw_frame,
+          raw_header,
+          raw_prompt,
+          raw_body
+        ] do
       refute text =~ forbidden
       refute Jason.encode!(result["structuredContent"]) =~ forbidden
       refute inspect(result) =~ forbidden
     end
+  end
+
+  test "characterizes semantic failure and current readable upstream parameter precedence", %{
+    auth: auth
+  } do
+    pool = pool_fixture(%{slug: "mcp-terminal-baseline", name: "MCP Terminal Baseline"})
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+
+    %{request: request} =
+      failed_debug_request_fixture(pool, api_key, assignment, %{
+        correlation_id: "mcp-terminal-baseline",
+        codex_session_id: "session-terminal-baseline",
+        codex_session_key: "session-key-terminal-baseline",
+        request_error: "invalid_compaction_response",
+        attempt_error: "upstream_status",
+        response_metadata: %{
+          "upstream_error_code" => "server_error",
+          "stream_terminal_type" => "response.incomplete",
+          "upstream_error_param" => "input[0].content"
+        }
+      })
+
+    final_attempt =
+      request
+      |> attempt_fixture(assignment, %{
+        attempt_number: 2,
+        status: "failed",
+        response_metadata: %{
+          "upstream_error_code" => "context_length_exceeded",
+          "stream_terminal_type" => "response.failed",
+          "upstream_error_param" => "reasoning.summary"
+        }
+      })
+      |> Ecto.Changeset.change(network_error_code: "invalid_compaction_response")
+      |> Repo.update!()
+
+    debug_turn_fixture(request, %{
+      session:
+        debug_session_fixture(
+          pool,
+          api_key,
+          assignment,
+          "session-key-terminal-baseline"
+        ),
+      status: "failed",
+      error_code: "invalid_compaction_response",
+      final_attempt_id: final_attempt.id,
+      turn_sequence: 1
+    })
+
+    request
+    |> attempt_fixture(assignment, %{
+      attempt_number: 3,
+      status: "retryable_failed",
+      retryable: true,
+      response_metadata: %{
+        "upstream_error_code" => "stale_later_retry",
+        "stream_terminal_type" => "response.stale_retry",
+        "upstream_error_param" => "stale.retry"
+      }
+    })
+    |> Ecto.Changeset.change(network_error_code: "upstream_status")
+    |> Repo.update!()
+
+    assert {:ok, result} =
+             ToolDispatch.call("codex_pooler_get_request_log", %{"id" => request.id}, %{
+               auth: auth
+             })
+
+    assert :ok = Redaction.assert_mcp_output_safe!(result)
+    assert [%{"type" => "text", "text" => text}] = result["content"]
+    assert %{"status" => "ok", "item" => item} = result["structuredContent"]
+
+    assert Enum.any?(item["errors"], fn error ->
+             error["source"] == "request" and
+               error["code"] == "invalid_compaction_response"
+           end)
+
+    assert text =~ "upstream_error_code=context_length_exceeded"
+    assert text =~ "stream_terminal_type=response.failed"
+    assert text =~ "upstream_error_param=reasoning.summary"
+    refute text =~ "upstream_error_code=server_error"
+    refute text =~ "upstream_error_code=stale_later_retry"
+    refute text =~ "stream_terminal_type=response.stale_retry"
+    refute text =~ "upstream_error_param=stale.retry"
+    refute text =~ "stream_terminal_type=response.incomplete"
+    refute text =~ "upstream_error_param=input[0].content"
   end
 
   test "gets bounded rejection metadata in structured detail and readable text without raw message",

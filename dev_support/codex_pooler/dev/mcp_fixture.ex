@@ -90,7 +90,14 @@ defmodule CodexPooler.Dev.MCPFixture do
   end
 
   defp provision_new(path) do
-    operator = Provisioner.usable_owner!()
+    with {:ok, operator} <- Provisioner.canonical_owner() do
+      provision_new(path, operator)
+    end
+  rescue
+    error -> {:error, "MCP fixture provisioning raised #{inspect(error.__struct__)}"}
+  end
+
+  defp provision_new(path, operator) do
     snapshot = Snapshot.capture!(operator.id)
     token_id = Ecto.UUID.generate()
     {token_prefix, raw_token, _key_hash} = Material.generate()
@@ -116,8 +123,6 @@ defmodule CodexPooler.Dev.MCPFixture do
       {:error, _message} = error ->
         recover_failed_provision(path, prepared, error)
     end
-  rescue
-    error -> {:error, "MCP fixture provisioning raised #{inspect(error.__struct__)}"}
   end
 
   defp release_locked(path) do

@@ -145,6 +145,35 @@ Common causes to inspect are:
 
 The Errors column should stay safe to copy into operator tickets. It should not include raw prompts, responses, uploaded file contents, credentials, or provider payloads.
 
+### Failed-attempt terminal diagnostics
+
+The attempt detail drawer can include three metadata-only fields for `failed` and `retryable_failed` attempts:
+
+<table>
+  <thead>
+    <tr>
+      <th>Field</th>
+      <th>Meaning and safety behavior</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>upstream_error_code</code></td>
+      <td>The sanitized provider terminal code. Any ASCII identifier using only <code>[A-Za-z0-9_.-]</code> and no more than 80 bytes stays readable; invalid grammar, control or invalid UTF-8, and overlong values are stored as <code>sha256_&lt;12 lowercase hex&gt;</code>.</td>
+    </tr>
+    <tr>
+      <td><code>stream_terminal_type</code></td>
+      <td>The sanitized terminal event type, using the same ASCII grammar and 80-byte limit, then the same <code>sha256_&lt;12 lowercase hex&gt;</code> fallback for invalid values.</td>
+    </tr>
+    <tr>
+      <td><code>upstream_error_param</code></td>
+      <td>A provider field or index path only when it matches the accepted grammar. Invalid values are omitted.</td>
+    </tr>
+  </tbody>
+</table>
+
+These fields are detail-only diagnostics. They do not replace the semantic error shown in request status and error summaries, and they do not change the public response, retry, routing, health, or settlement behavior. Successful attempts do not show them. Rows written before this contract was deployed may have no diagnostic fields; treat that absence as unknown rather than as evidence that the provider omitted a code. Historical rows are not backfilled.
+
 ### Serving-mode labels
 
 When a request or attempt has a complete validated serving-mode snapshot, the detail drawer shows three metadata rows:

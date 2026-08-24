@@ -17,6 +17,7 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcase do
 
   attr :variants, :map, required: true
   attr :observatory, :map, required: true
+  attr :request_log, :map, required: true
 
   def component_showcase(assigns) do
     assigns = assign(assigns, :datetime_preferences, DateTimeDisplay.preferences_for_user(nil))
@@ -68,7 +69,10 @@ defmodule CodexPoolerWeb.Dev.ComponentShowcase do
         </div>
       </div>
 
-      <RequestLogDetailDrawer.request_log_detail_drawer datetime_preferences={@datetime_preferences} />
+      <RequestLogDetailDrawer.request_log_detail_drawer
+        selected_request_log={@request_log}
+        datetime_preferences={@datetime_preferences}
+      />
     </div>
     """
   end

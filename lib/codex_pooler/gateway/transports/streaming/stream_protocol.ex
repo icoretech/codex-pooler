@@ -16,6 +16,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
           required(:upstream_error_param) => String.t() | nil,
           required(:event_type) => String.t() | nil,
           required(:data_type) => String.t() | nil,
+          optional(:diagnostic_upstream_code) => String.t(),
           optional(:withheld_body) => String.t()
         }
   @type terminal_outcome :: %{
@@ -149,6 +150,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   @spec event_summary(map()) :: map()
   def event_summary(decoded) when is_map(decoded) do
     ErrorCanonicalization.event_summary(Map.get(decoded, "type"), decoded)
+  end
+
+  @spec event_summary(String.t() | nil, map()) :: map()
+  def event_summary(event_type, decoded) when is_map(decoded) do
+    ErrorCanonicalization.event_summary(event_type, decoded)
   end
 
   @spec terminal_outcome(binary()) :: {:ok, terminal_outcome()} | :error

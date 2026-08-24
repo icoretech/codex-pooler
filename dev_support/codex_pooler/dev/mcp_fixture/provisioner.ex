@@ -2,25 +2,22 @@ defmodule CodexPooler.Dev.MCPFixture.Provisioner do
   @moduledoc false
 
   alias CodexPooler.Accounts
-  alias CodexPooler.Accounts.User
+  alias CodexPooler.Accounts.{PlatformBootstrapState, User}
   alias CodexPooler.Dev.MCPFixture.Snapshot
   alias CodexPooler.InstanceSettings
   alias CodexPooler.InstanceSettings.Cache
   alias CodexPooler.MCP.{Material, OperatorMCPKey, OperatorMCPSettings}
   alias CodexPooler.Repo
 
-  @spec usable_owner!() :: User.t()
-  def usable_owner! do
-    Accounts.list_operators()
-    |> Enum.find(fn operator ->
-      roles = Accounts.roles_for_user(operator)
+  @spec canonical_owner() :: {:ok, User.t()} | {:error, String.t()}
+  def canonical_owner do
+    case Repo.get(PlatformBootstrapState, true) do
+      %PlatformBootstrapState{status: "completed", owner_user_id: owner_user_id}
+      when is_binary(owner_user_id) ->
+        canonical_owner(owner_user_id)
 
-      operator.status == "active" and not operator.password_change_required and
-        "instance_owner" in roles
-    end)
-    |> case do
-      %User{} = operator -> operator
-      nil -> raise "MCP fixture requires an active local instance owner"
+      _state ->
+        {:error, "MCP fixture requires a completed platform bootstrap with a canonical owner"}
     end
   end
 
@@ -54,6 +51,24 @@ defmodule CodexPooler.Dev.MCPFixture.Provisioner do
     enable_operator_gate!(operator)
     create_token!(setup, operator)
     {:ok, :ok}
+  end
+
+  defp canonical_owner(owner_user_id) do
+    case Repo.get(User, owner_user_id) do
+      %User{} = operator -> validate_canonical_owner(operator)
+      nil -> {:error, "MCP fixture canonical bootstrap owner is missing"}
+    end
+  end
+
+  defp validate_canonical_owner(%User{} = operator) do
+    if operator.status == "active" and is_nil(operator.deleted_at) and
+         not operator.password_change_required and
+         "instance_owner" in Accounts.roles_for_user(operator) do
+      {:ok, operator}
+    else
+      {:error,
+       "MCP fixture canonical bootstrap owner is not usable: expected active, undeleted, password-ready instance owner"}
+    end
   end
 
   defp enable_global_gate! do

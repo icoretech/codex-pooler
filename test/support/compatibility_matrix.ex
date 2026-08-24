@@ -248,6 +248,20 @@ defmodule CodexPooler.CompatibilityMatrix do
         "upstream_error_param is a bounded allowlisted field-path value projected on failed-attempt detail only; invalid values and successful attempts are omitted, with never raw upstream error messages or values projected"
     },
     %{
+      slug: :terminal_failure_diagnostics,
+      status: :supported,
+      current: :bounded_terminal_failure_attempt_detail,
+      categories: [:error, :ownership, :degraded],
+      routes: [
+        %{method: :post, path: "/backend-api/codex/responses"},
+        %{method: :get, path: "/backend-api/codex/responses", transport: "websocket"}
+      ],
+      future_routes: [],
+      fixture: :terminal_failure_diagnostics,
+      contract:
+        "terminal failure diagnostics project bounded upstream_error_code, stream_terminal_type, and upstream_error_param only on failed and retryable_failed attempt detail; strict ASCII identifiers through 80 bytes remain cleartext, while malformed control invalid-UTF8 or overlong identifiers fingerprint; malformed successful and historical rows omit them, and raw provider messages, bodies, and frames are never projected"
+    },
+    %{
       slug: :rejection_metadata,
       status: :supported,
       current: :bounded_non_429_4xx_rejection_metadata,
@@ -955,6 +969,14 @@ defmodule CodexPooler.CompatibilityMatrix do
       allowed_shape: "field_name_or_index_path",
       invalid_or_successful_attempt: "omitted",
       raw_error_message_or_value: "never_projected"
+    },
+    terminal_failure_diagnostics: %{
+      fields: ~w(upstream_error_code stream_terminal_type upstream_error_param),
+      projection: "failed_and_retryable_failed_attempt_detail_only",
+      readable_identifier: "strict_ascii_80_bytes_or_less_cleartext",
+      malformed_identifier: "sha256_12",
+      invalid_or_successful_or_historical_attempt: "omitted",
+      raw_provider_message_body_or_frame: "never_projected"
     },
     rejection_metadata: %{
       fields: [

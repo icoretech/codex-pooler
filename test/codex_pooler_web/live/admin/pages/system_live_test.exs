@@ -752,14 +752,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     user: user
   } do
     now = DateTime.utc_now()
-
-    current_session =
-      Repo.one!(
-        from session in Session,
-          where: session.user_id == ^user.id,
-          where: session.status == "active",
-          where: session.expires_at > ^now
-      )
+    current_session = current_session_from_conn!(conn)
 
     Repo.update_all(
       from(session in Session, where: session.id == ^current_session.id),
@@ -824,18 +817,12 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
   end
 
   test "looks up only the current user's active unexpired session IP", %{
+    conn: conn,
     scope: scope,
     user: user
   } do
     now = DateTime.utc_now()
-
-    current_session =
-      Repo.one!(
-        from session in Session,
-          where: session.user_id == ^user.id,
-          where: session.status == "active",
-          where: session.expires_at > ^now
-      )
+    current_session = current_session_from_conn!(conn)
 
     Repo.update_all(
       from(session in Session, where: session.id == ^current_session.id),
@@ -868,15 +855,11 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     assert Accounts.current_user_session_ip(user, current_session.id) == nil
   end
 
-  test "renders a normalized IPv6 address for the current session", %{conn: conn, user: user} do
-    now = DateTime.utc_now()
+  test "renders a normalized IPv6 address for the current session", %{conn: conn} do
+    current_session = current_session_from_conn!(conn)
 
     Repo.update_all(
-      from(session in Session,
-        where: session.user_id == ^user.id,
-        where: session.status == "active",
-        where: session.expires_at > ^now
-      ),
+      from(session in Session, where: session.id == ^current_session.id),
       set: [ip_address: "2001:db8::7"]
     )
 
@@ -912,18 +895,10 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
   end
 
   test "drops an expired current-session IP on repeated LiveView refresh", %{
-    conn: conn,
-    user: user
+    conn: conn
   } do
     now = DateTime.utc_now()
-
-    current_session =
-      Repo.one!(
-        from session in Session,
-          where: session.user_id == ^user.id,
-          where: session.status == "active",
-          where: session.expires_at > ^now
-      )
+    current_session = current_session_from_conn!(conn)
 
     Repo.update_all(
       from(session in Session, where: session.id == ^current_session.id),
@@ -964,6 +939,68 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
              "#system-current-session-ip[data-state='unavailable']",
              "not recorded"
            )
+  end
+
+  test "renders only the authenticated current session across multiple active sessions and refreshes",
+       %{
+         conn: conn,
+         user: user
+       } do
+    now = DateTime.utc_now()
+    current_ip = "198.51.100.61"
+    other_ip = "203.0.113.161"
+    current_session = current_session_from_conn!(conn)
+
+    Repo.update_all(
+      from(session in Session, where: session.id == ^current_session.id),
+      set: [ip_address: current_ip]
+    )
+
+    assert {:ok, %{token: other_token}} =
+             Accounts.login_user(
+               %{"email" => user.email, "password" => valid_user_password()},
+               %{ip_address: other_ip, user_agent: "other-system-session"}
+             )
+
+    assert other_session_id = Accounts.session_id_for_token(other_token)
+    other_session = Repo.get!(Session, other_session_id)
+    assert other_session.user_id == user.id
+    assert other_session.status == "active"
+    assert DateTime.after?(other_session.expires_at, now)
+    assert other_session.ip_address == other_ip
+
+    {:ok, view, html} = live(conn, ~p"/admin/system?#{%{"tab" => "firewall"}}")
+
+    assert has_element?(
+             view,
+             "#system-current-session-ip[data-state='available']",
+             current_ip
+           )
+
+    refute html =~ other_ip
+
+    Repo.update_all(
+      from(session in Session, where: session.id == ^current_session.id),
+      set: [status: "revoked", revoked_at: now]
+    )
+
+    render_patch(view, ~p"/admin/system?#{%{"tab" => "gateway"}}")
+    render_patch(view, ~p"/admin/system?#{%{"tab" => "firewall"}}")
+
+    assert has_element?(
+             view,
+             "#system-current-session-ip[data-state='unavailable']",
+             "not recorded"
+           )
+
+    refreshed_html = render(view)
+    refute refreshed_html =~ current_ip
+    refute refreshed_html =~ other_ip
+
+    reloaded_other_session = Repo.get!(Session, other_session_id)
+    assert reloaded_other_session.status == "active"
+    assert DateTime.after?(reloaded_other_session.expires_at, now)
+    assert reloaded_other_session.ip_address == other_ip
   end
 
   test "normalizes stored session IPs and rejects malformed values" do
@@ -2417,6 +2454,15 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     view
     |> element("#system-tab-#{tab}")
     |> render_click()
+  end
+
+  defp current_session_from_conn!(conn) do
+    with token when is_binary(token) <- get_session(conn, :user_token),
+         session_id when is_binary(session_id) <- Accounts.session_id_for_token(token) do
+      Repo.get!(Session, session_id)
+    else
+      _ -> flunk("expected authenticated test connection to resolve one active session")
+    end
   end
 
   defp assert_mcp_initialize(conn, raw_token, expected_status, expected_value) do

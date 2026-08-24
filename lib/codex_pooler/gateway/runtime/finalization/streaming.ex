@@ -19,8 +19,10 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
   alias CodexPooler.Gateway.Transports.ModelUnavailability
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.UpstreamErrorParam
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketBridgeStream
   alias CodexPooler.Gateway.Transports.TransportFailureReason
+  alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
   alias CodexPooler.Quotas.Evidence.CodexParsers.RateLimitReachedType
 
   @type callbacks :: %{
@@ -235,8 +237,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
             terminal_failure && terminal_failure.upstream_code,
             code
           )
-          |> Metadata.maybe_put_upstream_error_param(terminal_failure)
-          |> terminal_failure_attempt_metadata(code)
+          |> non_first_event_terminal_attempt_metadata(terminal_failure, code)
           |> TransportFailureReason.maybe_put_upstream_stream_interrupted_metadata(reason, body)
           |> merge_websocket_transport_failure(
             websocket_attempt_metadata.transport_failure,
@@ -501,6 +502,41 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
     if code == MisalignmentPolicyViolation.code(),
       do: Map.delete(metadata, "upstream_error_param"),
       else: metadata
+  end
+
+  defp non_first_event_terminal_attempt_metadata(
+         metadata,
+         %{diagnostic_upstream_code: diagnostic_upstream_code} = failure,
+         code
+       ) do
+    metadata
+    |> maybe_put_compaction_terminal_code(diagnostic_upstream_code)
+    |> maybe_put_compaction_terminal_type(failure.event_type)
+    |> Map.delete("upstream_error_param")
+    |> Metadata.maybe_put_upstream_error_param(%{
+      upstream_error_param: UpstreamErrorParam.sanitize(failure.upstream_error_param)
+    })
+    |> terminal_failure_attempt_metadata(code)
+  end
+
+  defp non_first_event_terminal_attempt_metadata(metadata, failure, code) do
+    metadata
+    |> Metadata.maybe_put_upstream_error_param(failure)
+    |> terminal_failure_attempt_metadata(code)
+  end
+
+  defp maybe_put_compaction_terminal_code(metadata, diagnostic_upstream_code) do
+    case DiagnosticTaxonomy.identifier(diagnostic_upstream_code) do
+      code when is_binary(code) -> Map.put(metadata, "upstream_error_code", code)
+      nil -> metadata
+    end
+  end
+
+  defp maybe_put_compaction_terminal_type(metadata, event_type) do
+    case DiagnosticTaxonomy.identifier(event_type) do
+      type when is_binary(type) -> Map.put(metadata, "stream_terminal_type", type)
+      nil -> metadata
+    end
   end
 
   defp terminal_failure_reason({:terminal_stream_failure, %{} = failure}), do: failure

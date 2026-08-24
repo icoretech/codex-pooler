@@ -162,7 +162,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
       assert Task.yield(submitter, 0) == nil
       assert FakeUpstream.count(upstream) == 1
 
-      await_quota_commit!(quota_handler_id)
+      quota_task_pid = await_quota_commit!(quota_handler_id)
       :telemetry.detach(quota_handler_id)
       send(barrier_pid, {:websocket_owner_harness_release_terminal_delivery, release_ref})
 
@@ -189,6 +189,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
       assert {:ok, %{status: 200, websocket_messages: []}} =
                Task.await(submitter, @detection_timeout_ms)
+
+      quota_fence = Task.async(&await_rate_limit_event_tasks!/0)
+      assert Task.yield(quota_fence, 0) == nil
+      send(quota_task_pid, {quota_handler_id, :release_quota_commit})
+      assert :ok = Task.await(quota_fence, @detection_timeout_ms)
 
       assert_receive {:submission_observed, ^mapper, observer_pid}
       assert observer_pid == submitter.pid
@@ -1667,14 +1672,28 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
   end
 
   defp maybe_pause_quota_write(metadata, handler_id, parent, identity_id, dumped_identity_id) do
-    if quota_window_insert?(metadata, identity_id, dumped_identity_id) do
-      send(parent, {handler_id, :quota_write_ready, self()})
+    cond do
+      quota_window_insert?(metadata, identity_id, dumped_identity_id) ->
+        Process.put({handler_id, :quota_write_task}, true)
+        send(parent, {handler_id, :quota_write_ready, self()})
 
-      receive do
-        {^handler_id, :release_quota_write} -> :ok
-      after
-        5_000 -> raise "timed out waiting to release quota persistence"
-      end
+        receive do
+          {^handler_id, :release_quota_write} -> :ok
+        after
+          5_000 -> raise "timed out waiting to release quota persistence"
+        end
+
+      quota_write_task_commit?(metadata, handler_id) ->
+        send(parent, {handler_id, :quota_write_committed, self()})
+
+        receive do
+          {^handler_id, :release_quota_commit} -> :ok
+        after
+          5_000 -> raise "timed out waiting to release committed quota persistence"
+        end
+
+      true ->
+        :ok
     end
   end
 
@@ -1688,6 +1707,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
   defp insert_query?(_query), do: false
 
+  defp quota_write_task_commit?(metadata, handler_id) do
+    Process.get({handler_id, :quota_write_task}) == true and
+      String.upcase(String.trim(metadata[:query] || "")) == "COMMIT"
+  end
+
   defp identity_parameter?(params, identity_id, dumped_identity_id) when is_list(params),
     do: Enum.any?(params, &(&1 in [identity_id, dumped_identity_id]))
 
@@ -1695,10 +1719,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
 
   defp await_quota_commit!(handler_id) do
     assert_receive {^handler_id, :quota_write_ready, task_pid}
-    task_ref = Process.monitor(task_pid)
     send(task_pid, {handler_id, :release_quota_write})
     await_quota_commit_query!(handler_id, task_pid)
-    assert_receive {:DOWN, ^task_ref, :process, ^task_pid, :normal}
+
+    assert_receive {^handler_id, :quota_write_committed, ^task_pid}
+    assert task_pid in Task.Supervisor.children(CodexPooler.RateLimitEventSupervisor)
+    task_pid
   end
 
   defp await_quota_commit_query!(handler_id, task_pid) do
@@ -1715,6 +1741,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerProtocolIntegra
     after
       @detection_timeout_ms -> flunk("expected owner-local quota persistence commit")
     end
+  end
+
+  defp await_rate_limit_event_tasks! do
+    CodexPooler.RateLimitEventSupervisor
+    |> Task.Supervisor.children()
+    |> Enum.each(fn task_pid ->
+      monitor_ref = Process.monitor(task_pid)
+
+      assert_receive {:DOWN, ^monitor_ref, :process, ^task_pid, reason},
+                     @detection_timeout_ms
+
+      assert reason in [:normal, :noproc]
+    end)
   end
 
   defp quota_observations(identity) do

@@ -503,6 +503,59 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.MetadataTest do
     refute encoded =~ "raw-header-sentinel"
   end
 
+  test "first-event metadata re-sanitizes directly constructed terminal failure params" do
+    safe_param = "input[0].content"
+
+    unsafe_params = [
+      "input[0].content?bearer=raw-param-sentinel",
+      "input[0].content\nraw-param-sentinel",
+      <<255>>,
+      "a" <> String.duplicate("b", 160),
+      7,
+      %{"param" => safe_param}
+    ]
+
+    valid_metadata =
+      Metadata.first_event_stream_metadata(
+        %Req.Response{status: 200},
+        %{
+          code: "invalid_compaction_response",
+          upstream_code: nil,
+          diagnostic_upstream_code: "context_length_exceeded",
+          upstream_error_param: safe_param,
+          event_type: "response.failed",
+          data_type: nil
+        },
+        "invalid_compaction_response",
+        %{}
+      )
+
+    assert valid_metadata["upstream_error_param"] == safe_param
+    refute Map.has_key?(valid_metadata, "upstream_error_code")
+    refute Map.has_key?(valid_metadata, "diagnostic_upstream_code")
+
+    for unsafe_param <- unsafe_params do
+      metadata =
+        Metadata.first_event_stream_metadata(
+          %Req.Response{status: 200},
+          %{
+            code: "invalid_compaction_response",
+            upstream_code: nil,
+            diagnostic_upstream_code: "context_length_exceeded",
+            upstream_error_param: unsafe_param,
+            event_type: "response.failed",
+            data_type: nil
+          },
+          "invalid_compaction_response",
+          %{}
+        )
+
+      refute Map.has_key?(metadata, "upstream_error_param")
+      refute Map.has_key?(metadata, "diagnostic_upstream_code")
+      refute inspect(metadata) =~ "raw-param-sentinel"
+    end
+  end
+
   test "response metadata preserves known Codex rate limit reached type headers" do
     response = %Req.Response{
       status: 429,

@@ -32,29 +32,31 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomyTest do
     end
 
     test "fingerprints unknown binaries outside the relay allowlist" do
-      assert DiagnosticTaxonomy.identifier("has spaces inside") =~ ~r/^sha256_[0-9a-f]{12}$/
-      assert DiagnosticTaxonomy.identifier(<<255>>) =~ ~r/^sha256_[0-9a-f]{12}$/
+      malformed_identifiers = [
+        "https://example.invalid/terminal",
+        "provider/terminal",
+        "has spaces inside",
+        "clean_code\n",
+        <<255>>,
+        String.duplicate("a", 81)
+      ]
 
-      # A trailing newline must not survive: it would split the log line this
-      # value is interpolated into, orphaning the fields that follow it. Only
-      # this case regressed under the old anchors — an interior newline always
-      # failed the character class — so it is the one the fix has to pin.
-      assert DiagnosticTaxonomy.identifier("clean_code\n") =~ ~r/\Asha256_[0-9a-f]{12}\z/
+      fingerprints = Enum.map(malformed_identifiers, &DiagnosticTaxonomy.identifier/1)
 
-      oversized = String.duplicate("a", 81)
-      assert DiagnosticTaxonomy.identifier(oversized) =~ ~r/^sha256_[0-9a-f]{12}$/
-
-      refute DiagnosticTaxonomy.identifier("has spaces inside") =~ "has spaces"
+      assert Enum.all?(fingerprints, &(&1 =~ ~r/^sha256_[0-9a-f]{12}$/))
+      assert length(Enum.uniq(fingerprints)) == length(fingerprints)
       assert DiagnosticTaxonomy.identifier(%{code: "any_code"}) == nil
     end
 
-    test "fingerprints sensitive-looking unknown codes even when charset-clean" do
-      assert DiagnosticTaxonomy.identifier("bearer_expired") =~ ~r/^sha256_[0-9a-f]{12}$/
-
-      assert DiagnosticTaxonomy.identifier("invalid_authorization_value") =~
-               ~r/^sha256_[0-9a-f]{12}$/
-
-      refute DiagnosticTaxonomy.identifier("bearer_expired") =~ "bearer"
+    test "keeps word-bearing structured unknown identifiers in cleartext" do
+      for identifier <- [
+            "bearer_expired",
+            "invalid_authorization_value",
+            "authorization.value",
+            "cookie_parse_failed"
+          ] do
+        assert DiagnosticTaxonomy.identifier(identifier) == identifier
+      end
     end
   end
 

@@ -1,6 +1,8 @@
 defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.UpstreamErrorParam
+  alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
   alias CodexPooler.MCP.{MetadataSanitizer, PrivacyMatrix}
   alias CodexPooler.MCP.Tools.ReadableText
 
@@ -14,12 +16,8 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
                           "attempt_error"
                         ])
 
-  @upstream_error_param_max_bytes 160
-  @upstream_error_param_pattern ~r/\A[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*|\[(?:0|[1-9][0-9]{0,3})\])*\z/
   @rejection_token_max_bytes 80
   @rejection_token_pattern ~r/\A[A-Za-z0-9_.-]+\z/
-  @rejection_param_max_bytes 160
-  @rejection_param_pattern @upstream_error_param_pattern
 
   @list_debug_keys ~w(continuity failure attempt)
   @detail_debug_keys ~w(continuity terminal_state turn attempts)
@@ -136,7 +134,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
     |> text_row()
     |> maybe_put_value("response", Map.get(item, "response_status_code"))
     |> Map.put("upstream", upstream_text(item))
-    |> maybe_put_upstream_error_param_text(Map.get(item, "debug"))
+    |> maybe_put_terminal_diagnostics_text(Map.get(item, "debug"))
     |> maybe_put_rejection_metadata_text(Map.get(item, "debug"))
     |> maybe_put_metadata_summary(Map.get(item, "metadata"))
   end
@@ -176,6 +174,8 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
       [
         {"response", "response"},
         {"upstream", "upstream", required: true},
+        {"upstream_error_code", "upstream_error_code"},
+        {"stream_terminal_type", "stream_terminal_type"},
         {"upstream_error_param", "upstream_error_param"},
         {"rejection_error_code", "rejection_error_code"},
         {"rejection_error_type", "rejection_error_type"},
@@ -263,14 +263,32 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
 
   defp maybe_put_metadata_summary(row, _metadata), do: row
 
-  defp maybe_put_upstream_error_param_text(row, %{"attempts" => attempts})
+  defp maybe_put_terminal_diagnostics_text(row, %{"attempts" => attempts})
        when is_list(attempts) do
     attempts
-    |> Enum.find_value(&valid_failed_attempt_upstream_error_param/1)
-    |> then(&maybe_put_value(row, "upstream_error_param", &1))
+    |> Enum.find(&final_failed_attempt?/1)
+    |> case do
+      nil ->
+        row
+
+      attempt ->
+        row
+        |> maybe_put_value(
+          "upstream_error_code",
+          valid_terminal_identifier(attempt["upstream_error_code"])
+        )
+        |> maybe_put_value(
+          "stream_terminal_type",
+          valid_terminal_identifier(attempt["stream_terminal_type"])
+        )
+        |> maybe_put_value(
+          "upstream_error_param",
+          valid_upstream_error_param(attempt["upstream_error_param"])
+        )
+    end
   end
 
-  defp maybe_put_upstream_error_param_text(row, _debug), do: row
+  defp maybe_put_terminal_diagnostics_text(row, _debug), do: row
 
   defp maybe_put_rejection_metadata_text(row, %{"attempts" => attempts})
        when is_list(attempts) do
@@ -282,20 +300,25 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
 
   defp maybe_put_rejection_metadata_text(row, _debug), do: row
 
-  defp valid_failed_attempt_upstream_error_param(%{
-         "status" => status,
-         "upstream_error_param" => value
-       })
-       when status in ["failed", "retryable_failed"] and is_binary(value) do
-    value = String.trim(value)
-
-    if byte_size(value) in 1..@upstream_error_param_max_bytes and
-         Regex.match?(@upstream_error_param_pattern, value) do
-      value
-    end
+  defp valid_failed_attempt_upstream_error_param(%{"status" => status} = attempt)
+       when status in ["failed", "retryable_failed"] do
+    UpstreamErrorParam.sanitize(attempt["upstream_error_param"])
   end
 
   defp valid_failed_attempt_upstream_error_param(_attempt), do: nil
+
+  defp final_failed_attempt?(%{"final" => true, "status" => status})
+       when status in ["failed", "retryable_failed"],
+       do: true
+
+  defp final_failed_attempt?(_attempt), do: false
+
+  defp valid_terminal_identifier(value) when is_binary(value),
+    do: DiagnosticTaxonomy.identifier(value)
+
+  defp valid_terminal_identifier(_value), do: nil
+
+  defp valid_upstream_error_param(value), do: UpstreamErrorParam.sanitize(value)
 
   defp valid_failed_attempt_rejection_metadata(%{"status" => status} = attempt)
        when status in ["failed", "retryable_failed"] do
@@ -331,14 +354,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
 
   defp valid_rejection_token(_value), do: nil
 
-  defp valid_rejection_param(value) when is_binary(value) do
-    if byte_size(value) in 1..@rejection_param_max_bytes and
-         Regex.match?(@rejection_param_pattern, value),
-       do: value,
-       else: nil
-  end
-
-  defp valid_rejection_param(_value), do: nil
+  defp valid_rejection_param(value), do: UpstreamErrorParam.sanitize(value)
 
   defp maybe_put_valid_rejection_message(
          metadata,
@@ -499,12 +515,24 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
         value -> Map.put(attempt, "upstream_error_param", value)
       end
 
+    attempt =
+      attempt
+      |> put_or_delete_terminal_identifier("upstream_error_code")
+      |> put_or_delete_terminal_identifier("stream_terminal_type")
+
     attempt
     |> Map.drop(rejection_keys)
     |> Map.merge(valid_rejection_metadata(attempt))
   end
 
   defp sanitize_debug_attempt(value), do: value
+
+  defp put_or_delete_terminal_identifier(attempt, key) do
+    case valid_terminal_identifier(attempt[key]) do
+      nil -> Map.delete(attempt, key)
+      value -> Map.put(attempt, key, value)
+    end
+  end
 
   defp safe_source(source) when is_binary(source) do
     if MapSet.member?(@public_debug_sources, source), do: source, else: nil

@@ -3,10 +3,12 @@ defmodule CodexPooler.Dev.MCPFixtureTest do
 
   import CodexPooler.AccountsFixtures
 
+  alias CodexPooler.Accounts.{PlatformBootstrapState, User}
   alias CodexPooler.Dev.MCPFixture
   alias CodexPooler.InstanceSettings
   alias CodexPooler.MCP
   alias CodexPooler.MCP.{OperatorMCPKey, OperatorMCPSettings}
+  alias CodexPooler.Pools.Membership
   alias CodexPooler.Repo
 
   setup do
@@ -94,6 +96,99 @@ defmodule CodexPooler.Dev.MCPFixtureTest do
     assert restored.updated_at == original.updated_at
   end
 
+  test "acquire binds the key and settings lifecycle to the canonical bootstrap owner", %{
+    owner: owner,
+    path: path,
+    options: options
+  } do
+    canonical_setting = insert_operator_setting!(owner, false)
+    noncanonical_owner = insert_active_owner!("canonical-binding")
+    noncanonical_setting = insert_operator_setting!(noncanonical_owner, false)
+
+    assert {:ok, %{status: "ready", leases: 1}} = MCPFixture.acquire(options)
+    receipt = path |> File.read!() |> Jason.decode!()
+    raw_token = receipt["mcp_token"]
+
+    assert %OperatorMCPKey{operator_id: operator_id} =
+             Repo.get!(OperatorMCPKey, receipt["token_id"])
+
+    assert operator_id == owner.id
+    assert Repo.get!(OperatorMCPSettings, owner.id).enabled
+    assert Repo.get!(OperatorMCPSettings, noncanonical_owner.id) == noncanonical_setting
+    assert {:ok, %{operator: %{id: operator_id}}} = MCP.authenticate_token(raw_token)
+    assert operator_id == owner.id
+
+    assert {:ok, %{status: "released", leases: 0}} = MCPFixture.release(options)
+    assert Repo.get!(OperatorMCPSettings, owner.id) == canonical_setting
+    assert Repo.get!(OperatorMCPSettings, noncanonical_owner.id) == noncanonical_setting
+    refute Repo.get(OperatorMCPKey, receipt["token_id"])
+  end
+
+  test "acquire fails closed while the canonical bootstrap is pending", %{
+    owner: owner,
+    path: path,
+    options: options
+  } do
+    noncanonical_owner = insert_active_owner!("pending-fallback")
+    noncanonical_setting = insert_operator_setting!(noncanonical_owner, false)
+
+    PlatformBootstrapState
+    |> Repo.get!(true)
+    |> Ecto.Changeset.change(status: "pending", owner_user_id: nil, completed_at: nil)
+    |> Repo.update!()
+
+    assert {:error, "MCP fixture requires a completed platform bootstrap with a canonical owner"} =
+             MCPFixture.acquire(options)
+
+    refute File.exists?(path)
+    assert Repo.aggregate(OperatorMCPKey, :count) == 0
+    refute Repo.get(OperatorMCPSettings, owner.id)
+    assert Repo.get!(OperatorMCPSettings, noncanonical_owner.id) == noncanonical_setting
+    refute InstanceSettings.current().mcp.enabled
+  end
+
+  test "acquire fails closed when the canonical bootstrap state is missing", %{
+    owner: owner,
+    path: path,
+    options: options
+  } do
+    noncanonical_owner = insert_active_owner!("missing-bootstrap-fallback")
+    noncanonical_setting = insert_operator_setting!(noncanonical_owner, false)
+    Repo.delete_all(PlatformBootstrapState)
+
+    assert {:error, "MCP fixture requires a completed platform bootstrap with a canonical owner"} =
+             MCPFixture.acquire(options)
+
+    refute File.exists?(path)
+    assert Repo.aggregate(OperatorMCPKey, :count) == 0
+    refute Repo.get(OperatorMCPSettings, owner.id)
+    assert Repo.get!(OperatorMCPSettings, noncanonical_owner.id) == noncanonical_setting
+    refute InstanceSettings.current().mcp.enabled
+  end
+
+  test "acquire fails closed when the canonical owner requires a password change", %{
+    owner: owner,
+    path: path,
+    options: options
+  } do
+    owner
+    |> Ecto.Changeset.change(password_change_required: true)
+    |> Repo.update!()
+
+    noncanonical_owner = insert_active_owner!("unusable-fallback")
+    noncanonical_setting = insert_operator_setting!(noncanonical_owner, false)
+
+    assert {:error,
+            "MCP fixture canonical bootstrap owner is not usable: expected active, undeleted, password-ready instance owner"} =
+             MCPFixture.acquire(options)
+
+    refute File.exists?(path)
+    assert Repo.aggregate(OperatorMCPKey, :count) == 0
+    refute Repo.get(OperatorMCPSettings, owner.id)
+    assert Repo.get!(OperatorMCPSettings, noncanonical_owner.id) == noncanonical_setting
+    refute InstanceSettings.current().mcp.enabled
+  end
+
   test "status never exposes the raw token", %{path: path, options: options} do
     assert {:ok, %{status: "absent", leases: 0}} = MCPFixture.status(options)
     assert {:ok, status} = MCPFixture.acquire(options)
@@ -112,5 +207,30 @@ defmodule CodexPooler.Dev.MCPFixtureTest do
 
   defp fixture_options(path) do
     [environment: :test, allow_test_database: true, receipt_path: path]
+  end
+
+  defp insert_active_owner!(label) do
+    email = "000-#{label}-#{System.unique_integer([:positive])}@example.com"
+
+    user =
+      %User{}
+      |> User.bootstrap_changeset(valid_bootstrap_attributes(%{"email" => email}))
+      |> Repo.insert!()
+
+    %Membership{}
+    |> Membership.changeset(%{
+      user_id: user.id,
+      role: "instance_owner",
+      status: "active"
+    })
+    |> Repo.insert!()
+
+    user
+  end
+
+  defp insert_operator_setting!(operator, enabled) do
+    %OperatorMCPSettings{operator_id: operator.id}
+    |> OperatorMCPSettings.changeset(%{operator_id: operator.id, enabled: enabled})
+    |> Repo.insert!()
   end
 end
