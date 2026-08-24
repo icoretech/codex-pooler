@@ -26,6 +26,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
     "expected_outcome",
     "allowed_statuses"
   ]
+  @observation_max_entries 8
 
   @profiles [
     %{
@@ -135,6 +136,30 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
       "close_mode" => "clean_close",
       "expected_outcome" => "success",
       "allowed_statuses" => [200]
+    },
+    %{
+      "name" => "native-compaction-v2-success",
+      "first_event_delay_ms" => 0,
+      "inter_event_delay_ms" => 0,
+      "event_count" => 2,
+      "chunk_bytes" => 0,
+      "http_status" => 200,
+      "failure_phase" => "before_none",
+      "close_mode" => "clean_close",
+      "expected_outcome" => "success",
+      "allowed_statuses" => [200]
+    },
+    %{
+      "name" => "native-compaction-terminal-failure",
+      "first_event_delay_ms" => 0,
+      "inter_event_delay_ms" => 0,
+      "event_count" => 1,
+      "chunk_bytes" => 0,
+      "http_status" => 200,
+      "failure_phase" => "before_none",
+      "close_mode" => "upstream_error",
+      "expected_outcome" => "classified_failure",
+      "allowed_statuses" => [502]
     }
   ]
 
@@ -171,6 +196,10 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
   # Full-mode fact the correlated Pooler request rows deliberately do not persist.
   get "/__smoke/wire-capture" do
     json(conn, wire_captures())
+  end
+
+  get "/__smoke/request-observations" do
+    json(conn, %{"observations" => request_observations()})
   end
 
   post "/__smoke/wire-capture/reset" do
@@ -257,6 +286,8 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
     host = Keyword.get(opts, :host, @default_host)
     port = Keyword.get(opts, :port, @default_port)
 
+    reset_request_observations()
+
     with {:ok, ip} <- parse_host(host),
          {:ok, server} <-
            Bandit.start_link(
@@ -321,10 +352,10 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
     Enum.map(profiles, &Map.take(&1, @manifest_fields))
   end
 
-  @spec stream_event_payloads(profile()) :: [map()]
-  def stream_event_payloads(profile) when is_map(profile) do
+  @spec stream_event_payloads(profile(), map()) :: [map()]
+  def stream_event_payloads(profile, payload \\ %{}) when is_map(profile) and is_map(payload) do
     profile
-    |> stream_events()
+    |> stream_events(payload)
     |> Enum.map(fn {_index, _event, payload} -> payload end)
   end
 
@@ -439,6 +470,53 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
       _pid ->
         :ok
     end
+  end
+
+  @observation_store __MODULE__.RequestObservation
+
+  @spec request_observations() :: [map()]
+  def request_observations do
+    ensure_observation_store()
+    Agent.get(@observation_store, & &1)
+  end
+
+  @spec reset_request_observations() :: :ok
+  def reset_request_observations do
+    ensure_observation_store()
+    Agent.update(@observation_store, fn _observations -> [] end)
+  end
+
+  defp ensure_observation_store do
+    case Process.whereis(@observation_store) do
+      nil ->
+        case Agent.start(fn -> [] end, name: @observation_store) do
+          {:ok, _pid} -> :ok
+          {:error, {:already_started, _pid}} -> :ok
+        end
+
+      _pid ->
+        :ok
+    end
+  end
+
+  defp record_request_observation(
+         %Plug.Conn{body_params: body_params, request_path: endpoint} = conn
+       )
+       when is_map(body_params) do
+    input = Map.get(body_params, "input")
+
+    observation = %{
+      "endpoint" => endpoint,
+      "inputCount" => if(is_list(input), do: length(input), else: 0),
+      "terminalCompactionTrigger" =>
+        is_list(input) and List.last(input) == %{"type" => "compaction_trigger"},
+      "store" => Map.get(body_params, "store"),
+      "stream" => Map.get(body_params, "stream")
+    }
+
+    ensure_observation_store()
+    Agent.update(@observation_store, &Enum.take(&1 ++ [observation], -@observation_max_entries))
+    conn
   end
 
   @doc """
@@ -582,6 +660,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
   end
 
   defp serve_http_stream(conn) do
+    conn = record_request_observation(conn)
     {conn, _fingerprint} = with_upstream_request_id(conn, :http)
 
     case selected_profile(conn) do
@@ -657,17 +736,21 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
       |> put_resp_content_type("text/event-stream")
       |> send_chunked(200)
 
-    stream_profile(conn, profile)
+    stream_profile(conn, profile, conn.body_params)
   end
 
-  defp stream_profile(conn, %{"close_mode" => "timeout", "first_event_delay_ms" => delay_ms}) do
+  defp stream_profile(
+         conn,
+         %{"close_mode" => "timeout", "first_event_delay_ms" => delay_ms},
+         _payload
+       ) do
     wait_ms(delay_ms)
     conn
   end
 
-  defp stream_profile(conn, profile) do
+  defp stream_profile(conn, profile, payload) do
     profile
-    |> stream_events()
+    |> stream_events(payload)
     |> Enum.reduce_while(conn, fn {index, event, payload}, conn ->
       maybe_wait_for_event(index, profile)
 
@@ -679,7 +762,7 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
     |> maybe_send_done(profile)
   end
 
-  defp stream_events(%{"name" => "opencode-text-ok"}) do
+  defp stream_events(%{"name" => "opencode-text-ok"}, _payload) do
     response_id = "resp_perf_opencode_text_ok"
     item_id = "msg_perf_opencode_text_ok"
     text = "ok"
@@ -769,7 +852,19 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
     |> Enum.map(fn {payload, index} -> {index, payload["type"], payload} end)
   end
 
-  defp stream_events(%{"event_count" => count} = profile) do
+  defp stream_events(%{"name" => "native-compaction-v2-success"}, payload) do
+    if terminal_compaction_trigger?(payload),
+      do: native_compaction_success_events(),
+      else: ordinary_events()
+  end
+
+  defp stream_events(%{"name" => "native-compaction-terminal-failure"}, payload) do
+    if terminal_compaction_trigger?(payload),
+      do: native_compaction_failure_events(),
+      else: ordinary_events()
+  end
+
+  defp stream_events(%{"event_count" => count} = profile, _payload) do
     count = max(count, 0)
 
     if count == 0 do
@@ -778,6 +873,59 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
       Enum.map(1..count, fn index -> event_payload(index, profile) end)
     end
   end
+
+  defp native_compaction_success_events do
+    item = %{
+      "type" => "compaction",
+      "encrypted_content" => "synthetic-encrypted-compaction",
+      "id" => "cmp_native_local",
+      "internal_chat_message_metadata_passthrough" => %{"turn_id" => "turn-native-local"}
+    }
+
+    response = %{
+      "id" => "resp_native_local",
+      "status" => "completed",
+      "output" => [item],
+      "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8}
+    }
+
+    [
+      {1, "response.output_item.done", %{"type" => "response.output_item.done", "item" => item}},
+      {2, "response.completed", %{"type" => "response.completed", "response" => response}}
+    ]
+  end
+
+  defp native_compaction_failure_events do
+    [
+      {1, "response.failed",
+       %{
+         "type" => "response.failed",
+         "response" => %{
+           "status" => "failed",
+           "error" => %{
+             "code" => "server_error",
+             "message" => "synthetic compaction failure"
+           }
+         }
+       }}
+    ]
+  end
+
+  defp ordinary_events do
+    response = %{
+      "id" => "resp_native_follow_up",
+      "status" => "completed",
+      "output" => [],
+      "usage" => %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}
+    }
+
+    [{1, "response.completed", %{"type" => "response.completed", "response" => response}}]
+  end
+
+  defp terminal_compaction_trigger?(%{"input" => input}) when is_list(input),
+    do: List.last(input) == %{"type" => "compaction_trigger"}
+
+  defp terminal_compaction_trigger?(_payload), do: false
 
   defp output_text(text) do
     %{"type" => "output_text", "annotations" => [], "logprobs" => [], "text" => text}
@@ -946,18 +1094,22 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
       # Only its keys are recorded.
       record_client_metadata(state, payload)
 
-      case profile["http_status"] do
-        200 ->
-          push_profile(profile, state)
+      with {:ok, decoded} <- Jason.decode(payload) do
+        case profile["http_status"] do
+          200 ->
+            push_profile(profile, decoded, state)
 
-        status ->
-          {:push,
-           {:text,
-            Jason.encode!(%{
-              "type" => "error",
-              "status" => status,
-              "error" => %{"code" => "rate_limit_exceeded"}
-            })}, state}
+          status ->
+            {:push,
+             {:text,
+              Jason.encode!(%{
+                "type" => "error",
+                "status" => status,
+                "error" => %{"code" => "rate_limit_exceeded"}
+              })}, state}
+        end
+      else
+        {:error, _reason} -> {:stop, :invalid_json, state}
       end
     end
 
@@ -983,7 +1135,11 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
       {:stop, :normal, {code, reason}, state}
     end
 
-    defp push_profile(%{"close_mode" => "timeout", "first_event_delay_ms" => delay_ms}, state) do
+    defp push_profile(
+           %{"close_mode" => "timeout", "first_event_delay_ms" => delay_ms},
+           _payload,
+           state
+         ) do
       receive do
       after
         delay_ms -> :ok
@@ -992,10 +1148,10 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
       {:ok, state}
     end
 
-    defp push_profile(profile, state) do
+    defp push_profile(profile, payload, state) do
       messages =
         profile
-        |> GatewayPerfFakeUpstream.stream_event_payloads()
+        |> GatewayPerfFakeUpstream.stream_event_payloads(payload)
         |> Enum.map(&Jason.encode!/1)
 
       messages = maybe_limit_failure_messages(messages, profile)

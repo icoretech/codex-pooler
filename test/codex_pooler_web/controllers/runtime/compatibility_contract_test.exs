@@ -1903,7 +1903,47 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                    unknown_fields: "dropped",
                    terminal_events_share_identical_item: true
                  },
-                 websocket_bridge: false,
+                 websocket_bridge: %{
+                   client_routes: [
+                     "/backend-api/codex/responses",
+                     "/backend-api/codex/v1/responses"
+                   ],
+                   admission: %{
+                     outer_route_class: "proxy_websocket",
+                     nested_route_class: "proxy_compact",
+                     nested_timing: "after_coercion_before_compact_execution"
+                   },
+                   canonical_identity: %{
+                     upstream_endpoint: "/backend-api/codex/responses",
+                     accounting_endpoint: "/backend-api/codex/responses/compact",
+                     request_transport: "http_compact_json",
+                     attempt_transport: "http_json"
+                   },
+                   result_transports: %{
+                     buffered: "responses_json",
+                     v2: "responses_sse_exact_marker"
+                   },
+                   turn_state: %{
+                     source: "client_metadata.x-codex-turn-state_or_upgrade_header",
+                     forwarded_header: "x-codex-turn-state",
+                     persistence: "hashed_alias_only"
+                   },
+                   native_frames: ["response.output_item.done", "response.completed"],
+                   errors: %{
+                     malformed_trigger: "pre_dispatch_invalid_request",
+                     compact_saturation: "server_is_overloaded",
+                     invalid_result: "invalid_compaction_response",
+                     provider_terminal: "invalid_compaction_response"
+                   },
+                   socket_reuse: "ordinary_follow_up_same_downstream_socket",
+                   collector_retry: false,
+                   diagnostic: %{
+                     request_metadata: "compaction_bridge",
+                     applied: true,
+                     result_transport: ["buffered", "sse"],
+                     raw_payload_or_frame: false
+                   }
+                 },
                  hidden_replay: false,
                  direct_compact_preservation: %{
                    client_routes: [

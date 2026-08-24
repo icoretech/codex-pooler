@@ -84,6 +84,14 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                "configured_local_fallback_from_pinned_configuration"
     end
 
+    test "pins the native websocket compaction bridge as a closed machine contract" do
+      bridge =
+        CompatibilityMatrix.fixture!(:responses_chat).compaction_recovery_boundary
+        |> get_in([:backend_compaction_trigger, :websocket_bridge])
+
+      assert bridge == native_websocket_compaction_bridge_contract()
+    end
+
     test "keeps the issue-75 policy exception narrow and generic redaction intact" do
       fixture = CompatibilityMatrix.fixture!(:misalignment_policy_violation)
 
@@ -1067,6 +1075,50 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       {:get, "/backend-api/codex/agent-identities/jwks"},
       {:get, "/backend-api/wham/agent-identities/jwks"}
     ]
+  end
+
+  defp native_websocket_compaction_bridge_contract do
+    %{
+      client_routes: [
+        "/backend-api/codex/responses",
+        "/backend-api/codex/v1/responses"
+      ],
+      admission: %{
+        outer_route_class: "proxy_websocket",
+        nested_route_class: "proxy_compact",
+        nested_timing: "after_coercion_before_compact_execution"
+      },
+      canonical_identity: %{
+        upstream_endpoint: "/backend-api/codex/responses",
+        accounting_endpoint: "/backend-api/codex/responses/compact",
+        request_transport: "http_compact_json",
+        attempt_transport: "http_json"
+      },
+      result_transports: %{
+        buffered: "responses_json",
+        v2: "responses_sse_exact_marker"
+      },
+      turn_state: %{
+        source: "client_metadata.x-codex-turn-state_or_upgrade_header",
+        forwarded_header: "x-codex-turn-state",
+        persistence: "hashed_alias_only"
+      },
+      native_frames: ["response.output_item.done", "response.completed"],
+      errors: %{
+        malformed_trigger: "pre_dispatch_invalid_request",
+        compact_saturation: "server_is_overloaded",
+        invalid_result: "invalid_compaction_response",
+        provider_terminal: "invalid_compaction_response"
+      },
+      socket_reuse: "ordinary_follow_up_same_downstream_socket",
+      collector_retry: false,
+      diagnostic: %{
+        request_metadata: "compaction_bridge",
+        applied: true,
+        result_transport: ["buffered", "sse"],
+        raw_payload_or_frame: false
+      }
+    }
   end
 
   defp function_call_output_contract do

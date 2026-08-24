@@ -60,7 +60,29 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
     ],
     "timeout" => [999_999, 25, 20, 512, 200, "before_first_event", "timeout", "timeout", [504]],
     "quota-429" => [0, 0, 0, 0, 429, "before_stream", "http_error", "rate_limited", [429]],
-    "opencode-text-ok" => [0, 0, 8, 2, 200, "before_none", "clean_close", "success", [200]]
+    "opencode-text-ok" => [0, 0, 8, 2, 200, "before_none", "clean_close", "success", [200]],
+    "native-compaction-v2-success" => [
+      0,
+      0,
+      2,
+      0,
+      200,
+      "before_none",
+      "clean_close",
+      "success",
+      [200]
+    ],
+    "native-compaction-terminal-failure" => [
+      0,
+      0,
+      1,
+      0,
+      200,
+      "before_none",
+      "upstream_error",
+      "classified_failure",
+      [502]
+    ]
   }
   @profile_order [
     "short-ok",
@@ -71,7 +93,9 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
     "partial-failure",
     "timeout",
     "quota-429",
-    "opencode-text-ok"
+    "opencode-text-ok",
+    "native-compaction-v2-success",
+    "native-compaction-terminal-failure"
   ]
 
   setup_all do
@@ -275,6 +299,60 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstreamTest do
              "output_tokens_details" => %{"reasoning_tokens" => 0},
              "total_tokens" => 2
            }
+  end
+
+  test "native compaction profiles emit exact success and terminal event families" do
+    assert {:ok, [success]} =
+             GatewayPerfFakeUpstream.profiles_from_selector("native-compaction-v2-success")
+
+    assert {:ok, [failure]} =
+             GatewayPerfFakeUpstream.profiles_from_selector("native-compaction-terminal-failure")
+
+    trigger = %{"input" => [%{"type" => "compaction_trigger"}]}
+
+    assert Enum.map(GatewayPerfFakeUpstream.stream_event_payloads(success, trigger), & &1["type"]) ==
+             [
+               "response.output_item.done",
+               "response.completed"
+             ]
+
+    assert Enum.map(GatewayPerfFakeUpstream.stream_event_payloads(failure, trigger), & &1["type"]) ==
+             [
+               "response.failed"
+             ]
+  end
+
+  test "native compaction observations are bounded and shape-only" do
+    server = start_server!("native-compaction-v2-success")
+
+    response =
+      Req.post!(server.url <> "/backend-api/codex/responses",
+        json: %{
+          "model" => "gateway-perf-full",
+          "store" => false,
+          "stream" => true,
+          "input" => [%{"type" => "compaction_trigger"}]
+        },
+        retry: false
+      )
+
+    assert response.status == 200
+
+    assert %{"observations" => [observation]} =
+             Req.get!(server.url <> "/__smoke/request-observations").body
+
+    assert observation == %{
+             "endpoint" => "/backend-api/codex/responses",
+             "inputCount" => 1,
+             "terminalCompactionTrigger" => true,
+             "store" => false,
+             "stream" => true
+           }
+
+    encoded = Jason.encode!(observation)
+    refute encoded =~ "encrypted_content"
+    refute encoded =~ "authorization"
+    refute encoded =~ "client_metadata"
   end
 
   test "write_manifest! persists metadata-only manifest JSON" do
