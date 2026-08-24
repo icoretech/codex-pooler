@@ -115,24 +115,24 @@ These endpoints keep Codex backend semantics and do not translate through the pu
     </tr>
     <tr>
       <td><code>POST /backend-api/codex/responses</code></td>
-      <td><code>/backend-api/codex/responses</code>; terminal compaction triggers keep compact accounting and transport</td>
+      <td><code>/backend-api/codex/responses</code></td>
       <td>No; backend payload is proxied through gateway normalization</td>
       <td>Supported</td>
-      <td>Primary Codex Responses route for JSON and SSE work. A valid terminal <code>compaction_trigger</code> retains its final input item, dispatches through the normal backend Responses upstream endpoint, remains compact-accounted and buffered through compact transport, and returns backend Responses SSE with encrypted compaction output. The bridge selects the first valid <code>compaction</code> or <code>compaction_summary</code> item in output, then falls back to a valid top-level <code>compaction_summary</code>. Strict variant validation and a fixed safe allowlist rebuild a canonical <code>compaction</code> item from encrypted content, a string source item <code>id</code> when present, and structurally validated opaque replay data. The response-level <code>id</code> remains separate from the item <code>id</code>. Malformed or missing optional values are omitted, all other compact-result fields are dropped, and the same canonical item appears in both terminal events. This is terminal-item fidelity only and does not widen the metadata-only privacy boundary. The compact bridge strips compact-unsupported controls such as <code>store</code>, <code>stream</code>, <code>include</code>, and <code>prompt_cache_options</code> before upstream dispatch.</td>
+      <td>Primary Codex Responses route for JSON and SSE work, including supported backend compaction.</td>
     </tr>
     <tr>
       <td><code>GET /backend-api/codex/responses</code></td>
       <td>Persistent upstream Codex websocket response session</td>
       <td>No HTTP adapter translation</td>
       <td>Supported</td>
-      <td>Narrow backend websocket route. It preserves websocket session continuity, uses <code>x-codex-turn-state</code>, and applies the admin-managed <code>websocket_idle_timeout_ms</code> downstream idle window.</td>
+      <td>Narrow backend websocket response-stream compatibility for Codex-compatible clients, including native backend compaction support.</td>
     </tr>
     <tr>
       <td><code>POST /backend-api/codex/responses/compact</code></td>
       <td><code>/backend-api/codex/responses/compact</code></td>
       <td>No</td>
       <td>Supported</td>
-      <td>Backend compact compatibility route. Direct compact requests use the canonical legacy <code>/backend-api/codex/responses/compact</code> upstream endpoint; this remains distinct from terminal-trigger requests on the normal Responses route.</td>
+      <td>Backend compact compatibility route.</td>
     </tr>
     <tr>
       <td><code>POST /backend-api/codex/images/generations</code></td>
@@ -175,24 +175,24 @@ Some Codex clients use `/backend-api/codex/v1` as their base URL. Codex Pooler e
     </tr>
     <tr>
       <td><code>POST /backend-api/codex/v1/responses</code></td>
-      <td><code>/backend-api/codex/responses</code>; terminal compaction triggers keep compact accounting and transport</td>
+      <td><code>/backend-api/codex/responses</code></td>
       <td>No</td>
       <td>Supported</td>
-      <td>Alias for backend Responses. Prompt-cache routing locality can apply here. A terminal <code>compaction_trigger</code> retains its final input item, uses the normal backend Responses upstream endpoint, and remains compact-accounted and buffered through compact transport. The bridge then selects the first valid <code>compaction</code> or <code>compaction_summary</code> output item, then a valid top-level <code>compaction_summary</code> fallback. Strict variant validation and a fixed safe allowlist rebuild a canonical <code>compaction</code> item from encrypted content, a string source item <code>id</code> when present, and structurally validated opaque replay data; the response-level <code>id</code> remains separate. Missing or malformed optional values are omitted, other compact-result fields are dropped, and both terminal events contain the identical item. This is terminal-item fidelity only and does not widen the metadata-only privacy boundary.</td>
+      <td>Alias for backend Responses, including supported backend compaction. Prompt-cache routing locality can apply here.</td>
     </tr>
     <tr>
       <td><code>GET /backend-api/codex/v1/responses</code></td>
       <td>Backend websocket response session</td>
       <td>No</td>
       <td>Supported</td>
-      <td>Alias for the backend websocket route. Prompt-cache routing locality is excluded, and the same <code>websocket_idle_timeout_ms</code> downstream idle window applies.</td>
+      <td>Alias for the backend websocket response-stream compatibility route, including native backend compaction support.</td>
     </tr>
     <tr>
       <td><code>POST /backend-api/codex/v1/responses/compact</code></td>
       <td><code>/backend-api/codex/responses/compact</code></td>
       <td>No</td>
       <td>Supported</td>
-      <td>Alias for backend compact. Direct compact requests use the canonical legacy <code>/backend-api/codex/responses/compact</code> upstream endpoint. Prompt-cache routing locality is excluded.</td>
+      <td>Alias for backend compact. Prompt-cache routing locality is excluded.</td>
     </tr>
     <tr>
       <td><code>POST /backend-api/codex/v1/chat/completions</code></td>
@@ -310,14 +310,14 @@ Supported work is translated into Codex-compatible requests and then routed thro
       <td><code>/backend-api/codex/responses</code></td>
       <td>Yes</td>
       <td>Translated</td>
-      <td>OpenAI Responses payloads are coerced to Codex-compatible work. Input audio uses the public <code>&#123;data, format&#125;</code> shape and accepts <code>WAV</code>, <code>MP3</code>, <code>M4A</code>, <code>WebM</code>, and <code>OGG</code>. The decoded audio ceiling is 50 MiB (52,428,800 bytes), while the configured request envelope may reject a request earlier. Malformed, unsupported, or oversized audio returns a sanitized <code>invalid_request</code> before upstream dispatch. System/developer input-message text is lifted into top-level instructions. Encrypted <code>type: "compaction"</code> replay items from prior remote compaction turns are forwarded. Remote MCP tool definitions are rejected before dispatch. Streaming responses use the public Responses stream adapter, and early terminal errors emit first without synthetic success prefixes. For public HTTP SSE only, if upstream has already emitted public Responses-visible data and an ordinary interruption ends the stream before a terminal Responses event, Codex Pooler emits the sequence-valid sanitized hybrid <code>type: "error"</code> / nested <code>server_error</code> terminal. A committed websocket-bridge turn aborted at the post-budget owner-drain deadline emits the same wire frame byte-for-byte; only accounting distinguishes <code>owner_drained</code> from <code>upstream_stream_error</code>. Precommit drain admission still follows the existing HTTP fallback or websocket refusal path, and client disconnects keep their existing classification. Native/backend raw streams and backend websocket surfaces are not rewritten.</td>
+      <td>OpenAI Responses payloads are coerced to Codex-compatible work. Input audio uses the public <code>&#123;data, format&#125;</code> shape and accepts <code>WAV</code>, <code>MP3</code>, <code>M4A</code>, <code>WebM</code>, and <code>OGG</code>. The decoded audio ceiling is 50 MiB (52,428,800 bytes), while the configured request envelope may reject a request earlier. Malformed, unsupported, or oversized audio returns a sanitized <code>invalid_request</code> before upstream dispatch. System/developer input-message text is lifted into top-level instructions. Exactly one final <code>compaction_trigger</code> after visible input requests an explicit compaction turn; non-streaming JSON and public SSE return the normalized compact item. Encrypted <code>type: "compaction"</code> replay items from prior remote compaction turns are forwarded. Remote MCP tool definitions are rejected before dispatch. Streaming responses use the public Responses stream adapter, and early terminal errors emit first without synthetic success prefixes. If visible public output ends without a terminal Responses event, public HTTP SSE returns a sequence-valid sanitized <code>type: "error"</code> / nested <code>server_error</code> terminal. Native backend streams and websocket surfaces retain their route-native behavior.</td>
     </tr>
     <tr>
       <td><code>GET /v1/responses</code></td>
       <td>Backend Codex websocket response session</td>
       <td>Partial</td>
       <td>Partial</td>
-      <td>Narrow Responses websocket compatibility only. It is not OpenAI Realtime SDK support. Replay-verified encrypted compaction items follow the same exact preservation, ordering, and new-chain contract as <code>POST /v1/responses</code>. It uses the same downstream idle and frame guardrails as backend Codex websockets. Malformed JSON and JSON non-object provider frames are dropped without consuming a public sequence number or creating a local terminal, including on accepted owner-forwarded turns.</td>
+      <td>Narrow Responses websocket compatibility only. It is not OpenAI Realtime SDK support. Exactly one final <code>compaction_trigger</code> after visible input returns the same normalized compaction item as HTTP through <code>response.output_item.done</code> and <code>response.completed</code>. Encrypted compaction replay follows the same field and ordering contract as <code>POST /v1/responses</code>. It uses the same downstream idle and frame guardrails as backend Codex websockets. Malformed JSON and JSON non-object provider frames are dropped without consuming a public sequence number or creating a local terminal.</td>
     </tr>
     <tr>
       <td><code>POST /v1/chat/completions</code></td>
@@ -392,15 +392,9 @@ Supported work is translated into Codex-compatible requests and then routed thro
   </tbody>
 </table>
 
-For remote-compaction replay, `POST /v1/responses` and narrow
-`GET /v1/responses` websocket turns preserve accepted encrypted compaction
-items and their input order exactly. Start a new chain without
-`previous_response_id`; the compact response envelope id is not an item id.
-The stable public item fields are `type: "compaction"`, nonblank string
-`encrypted_content`, and optional `id` as absent, string, or `null`. Unknown
-compaction fields and malformed values fail before upstream dispatch. Public
-`POST /v1/responses/compact` remains unsupported. This replay behavior does not
-enable a public direct compact route.
+For explicit remote compaction on the narrow public surface, the request must contain visible input followed by exactly one final `{"type":"compaction_trigger"}` item. Invalid placement returns `400 invalid_request` on `input` before upstream dispatch. Successful HTTP JSON returns one completed Responses object; public SSE emits `response.output_item.done`, `response.completed`, and `[DONE]`; narrow Responses websocket completion emits the same two Responses events without `[DONE]`.
+
+The returned replay item has `type: "compaction"`, nonblank opaque `encrypted_content`, and optional `id` whose absence, string value, or explicit `null` is preserved. Start the next request as a new chain without `previous_response_id`, put the compaction item first, and append new visible input after it. Unknown replay fields and malformed values reject before upstream dispatch. Malformed upstream compact JSON or missing encrypted content returns sanitized `502 invalid_compaction_response`. Direct `POST /v1/responses/compact` remains unsupported.
 
 ### Pool image permission
 
@@ -506,7 +500,7 @@ account. Smoke verification retains metadata only. This narrow contract does
 not imply backend or broad OpenAI tool parity.
 
 When an accepted namespace custom declaration has one exact executable name,
-public Responses HTTP, SSE, and direct or owner-forwarded websocket output
+public Responses HTTP, SSE, and websocket output
 restores that namespace on a `custom_tool_call` only if the provider omits it or
 returns `null`. An explicit provider namespace is preserved. Flat, unknown, and
 non-unique names remain unchanged rather than guessed.
@@ -701,94 +695,11 @@ The root `/mcp` operator endpoint is not a bridge for `/v1/responses` remote MCP
 
 ## Prompt-cache and continuity boundaries
 
-Prompt-cache routing locality is a local routing hint. It can apply on `POST /backend-api/codex/responses`, `POST /backend-api/codex/v1/responses`, `POST /backend-api/codex/v1/chat/completions`, `POST /v1/responses`, and `POST /v1/chat/completions`. It is excluded from websocket, compact, file, audio, image, usage, and app-server helper routes. Locality is always a heuristic: it can improve the chance that compatible work reaches a reusable upstream connection, but it never guarantees a provider cache hit or cached-token accounting.
-
-An otherwise-qualified streaming `POST /v1/responses` request keeps HTTP SSE as
-its downstream contract while first attempting upstream dispatch through the
-continuity owner's websocket. This has no Pool-level enablement toggle.
-Qualification requires websocket owner forwarding, no attached websocket
-writer, and a continuity session that is unpinned or pinned to the selected
-assignment. Pre-commit events that carry no client-rendered content remain
-buffered and do not commit the bridge. The bridge commits on the first
-content-bearing event (text, refusal, reasoning, or tool-argument fragments),
-on any unknown event fail-closed, on any structurally valid terminal, or when
-the bounded pre-commit buffer reaches its caps or its pre-content commit
-deadline.
-
-Before that commit boundary, a peer-initiated websocket death — a close
-without a terminal, a TCP cut, or an explicit peer Close frame — falls back to
-plain HTTP on the same candidate and attempt, with one settlement. A
-pre-commit locally-declared death (a receive or pong timeout) fails once
-without HTTP fallback, because the upstream turn may still be running. After a
-public event has committed the websocket transport, Codex Pooler does not
-replay the turn over HTTP; a later upstream websocket failure ends the request
-as failed. Reusing an owner websocket is a cache-locality heuristic, never a
-cache guarantee.
-
-The pre-commit buffer holds `response.created`, `response.in_progress`,
-`response.queued`, item and part envelope adds (`response.output_item.added`,
-`response.content_part.added`, `response.reasoning_summary_part.added`), and
-internal `codex.*` events. Unknown typed events commit conservatively. Legacy
-typeless success commits as a completed response while backend routes retain
-its original payload.
-
-Backend Responses SSE and websocket routes preserve upstream `response.done`
-and legacy typeless success payloads. Public `POST /v1/responses` SSE and
-`GET /v1/responses` websocket normalize those successful terminals to
-`response.completed`. Synthetic missing-terminal frames are limited to
-OpenAI-compatible HTTP SSE surfaces and never appear on native backend raw
-Responses streams or websocket surfaces. On `POST /v1/responses`, the
-sequence-valid synthetic `error` event uses the hybrid flat-and-nested
-`type: "error"` / `server_error` shape. Absent, blank, and whitespace-only SSE
-event labels are treated as absent before event/data type precedence; nonblank
-mismatches remain rejected. An ordinary incomplete public Responses SSE block
-may retain at most 8 MiB so single large provider events, such as reasoning
-items carrying encrypted content, can finish decoding. A structurally
-recognizable terminal candidate
-may retain up to 64 MiB so large completed responses split across upstream
-chunks can finish decoding. Crossing the applicable bound emits one bounded
-sanitized `error` event, relays none of the overflowing source block, and
-latches later source frames out. Complete blocks are still parsed before that
-overflow decision. A
-post-budget owner-drain abort emits
-the same wire frame byte-for-byte while accounting records `owner_drained`
-instead of `upstream_stream_error`. On `POST /v1/chat/completions` and its
-translated `POST /backend-api/codex/v1/chat/completions` alias, the terminal is
-one `data: {"error":{...}}` chunk with nested `server_error` fields, no top-level
-`type`, and no following `[DONE]`. Public GET keeps its websocket error/close
-behavior, and native backend raw Responses GET or POST does not synthesize a
-terminal. Once hidden bridge traffic has committed the handoff, the request is
-not replayed over HTTP.
-
-During a rollout, the draining app instance also waits for direct websocket
-response tasks and response tasks proxying a turn to an owner on another app
-instance. Each response task registers before its synchronous drain-admission
-gate, and the drain sets its cutoff before taking the snapshot, so every task is
-either in the shared absolute drain budget or rejected before upstream dispatch.
-Completion is counted only after the WebSock callback that owns the active turn
-has returned its terminal push, or has reached an equivalent safe terminal or
-close lifecycle; task exit alone is not completion.
-When that budget expires, the proxy cancels only its matching owner turn with
-`owner_drained`; it does not drain or release the healthy remote owner, which
-remains reusable. Local owner turns keep their existing owner-derived accounting
-and are not counted again as proxy tasks. Public HTTP and websocket payloads are
-unchanged.
-
-The first rollout that introduces this protocol is asymmetric: an old draining
-proxy does not yet register its local response tasks, while a new proxy uses the
-versioned remote cancellation entrypoint and falls back to the legacy detach
-entrypoint when the owner is still on the previous release. Full direct/proxy
-drain coverage applies after every app pod runs the new release.
-
-Owner submission uses a versioned, data-only request. The owner node builds callbacks from current local state, so payloads and authorization data don't cross that boundary as callbacks. If a remote owner doesn't understand the current protocol, Codex Pooler detects the mismatch before upstream submission and applies its existing behavior automatically: native work returns its normal safe owner error, while an eligible bridge falls back to HTTP before visible output. Operators need no migration, manual procedure, or deployment-specific action.
-
-Crash and status diagnostics stay safe at the same boundary. Formatted status exposes only bounded lifecycle and boolean state, and transient request inspection is opaque, so payload and authorization data aren't disclosed through status or crash reporting.
+Prompt-cache routing locality is a local routing hint. It can apply on `POST /backend-api/codex/responses`, `POST /backend-api/codex/v1/responses`, `POST /backend-api/codex/v1/chat/completions`, `POST /v1/responses`, and `POST /v1/chat/completions`. It is excluded from websocket, compact, file, audio, image, usage, and app-server helper routes. Locality is always a heuristic and never guarantees a provider cache hit or cached-token accounting.
 
 ## Websocket Guardrails
 
-Backend Codex websocket routes and the narrow public `GET /v1/responses` websocket route use bounded downstream guardrails. `websocket_idle_timeout_ms` controls the downstream websocket idle close window for new upgrades. It also bounds owner-forwarded full-turn submit waits for new websocket requests, so healthy long turns are not limited by upstream receive timeout. Its default is `1_800_000` ms, and accepted values are `60_000..3_600_000` ms.
-
-`websocket_owner_idle_timeout_ms` is separate. It controls post-detach owner retention after no downstream or active turn remains, not downstream idle closure. It has the same `1_800_000` ms default and `60_000..3_600_000` ms bounds. Each new or recovered owner captures its node-local value at startup, and existing owners retain the value they captured.
+Backend Codex websocket routes and the narrow public `GET /v1/responses` websocket route use bounded downstream guardrails. `websocket_idle_timeout_ms` controls the downstream websocket idle close window for new upgrades. Its default is `1_800_000` ms, and accepted values are `60_000..3_600_000` ms.
 
 Inbound websocket frames are also bounded by the configured gateway request body limit. Operators should treat `reason_class=max_frame_size_exceeded` as an oversized client frame, `reason_class=timeout` as downstream websocket idle close, and upstream receive timeout errors as separate upstream-side failures. These classifications are metadata-only and must not include raw websocket frames or request bodies.
 
@@ -850,7 +761,7 @@ Eligible route families are exact:
   </tbody>
 </table>
 
-Unsupported surfaces are multipart, file, audio, image, admin, MCP, usage, and other non-Responses routes. `POST /v1/responses/compact` remains unsupported because the public compact route has no upstream dispatch. This does not change support for direct backend compact aliases or terminal-trigger backend Responses dispatches.
+Unsupported surfaces are multipart, file, audio, image, admin, MCP, usage, and other non-Responses routes. `POST /v1/responses/compact` remains unsupported because the public compact route has no upstream dispatch. This does not change support for backend compact compatibility.
 
 Compression is fail-open. Scanner, tokenizer, compression, and limit errors preserve the original upstream request body and record safe `payload_compression` metadata. JSON request bodies over 1 MiB skip before scanning, and a dispatch processes at most 50 output candidates. Token counting is local and in-process with tokenizer data shipped by the application; it does not call OpenAI or load a local model.
 

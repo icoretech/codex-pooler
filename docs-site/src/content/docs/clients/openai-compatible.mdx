@@ -6,7 +6,7 @@ head:
     attrs:
       type: application/ld+json
     content: |
-      {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Can I use the official OpenAI SDK with Codex Pooler?","acceptedAnswer":{"@type":"Answer","text":"Yes, for selected SDK routes. Set the SDK base_url or baseURL to https://codex-pooler.example.com/v1, use a Pool API key as the bearer credential, and keep requests on supported route shapes such as responses, chat completions, models, usage, files, audio transcription, and image generation or edits."}},{"@type":"Question","name":"Should Codex backend clients use /v1?","acceptedAnswer":{"@type":"Answer","text":"No. Codex backend-compatible clients should use /backend-api/codex. The /v1 surface is for selected OpenAI SDK-compatible clients and translates supported requests into Codex-compatible work."}},{"@type":"Question","name":"Does /v1 support OpenAI Realtime?","acceptedAnswer":{"@type":"Answer","text":"No. /v1/realtime and OpenAI Realtime SDK websocket or session routes are unsupported. GET /v1/responses is narrow Responses websocket compatibility only, not OpenAI Realtime support."}},{"@type":"Question","name":"Does /v1/responses/compact work?","acceptedAnswer":{"@type":"Answer","text":"No. POST /v1/responses/compact returns a deterministic unsupported_endpoint error. Explicit compaction through selected provider clients is supported on normal /v1/responses requests when the client appends exactly one final compaction_trigger after visible input."}},{"@type":"Question","name":"Can I use the same key for /v1 and /mcp?","acceptedAnswer":{"@type":"Answer","text":"No. /v1 uses Pool API keys for runtime work. /mcp uses operator-owned MCP bearer tokens for metadata-only lookup. Keep those credentials separate in client configuration and storage."}}]}
+      {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"Can I use the official OpenAI SDK with Codex Pooler?","acceptedAnswer":{"@type":"Answer","text":"Yes, for selected SDK routes. Set the SDK base_url or baseURL to https://codex-pooler.example.com/v1, use a Pool API key as the bearer credential, and keep requests on supported route shapes such as responses, chat completions, models, usage, files, audio transcription, and image generation or edits."}},{"@type":"Question","name":"Should Codex backend clients use /v1?","acceptedAnswer":{"@type":"Answer","text":"No. Codex backend-compatible clients should use /backend-api/codex. The /v1 surface is for selected OpenAI SDK-compatible clients and translates supported requests into Codex-compatible work."}},{"@type":"Question","name":"Does /v1 support OpenAI Realtime?","acceptedAnswer":{"@type":"Answer","text":"No. /v1/realtime and OpenAI Realtime SDK websocket or session routes are unsupported. GET /v1/responses is narrow Responses websocket compatibility only, not OpenAI Realtime support."}},{"@type":"Question","name":"Does /v1/responses/compact work?","acceptedAnswer":{"@type":"Answer","text":"No. POST /v1/responses/compact returns a deterministic unsupported_endpoint error. Explicit compaction is supported on normal /v1/responses requests when a client appends exactly one final compaction_trigger after visible input."}},{"@type":"Question","name":"Can I use the same key for /v1 and /mcp?","acceptedAnswer":{"@type":"Answer","text":"No. /v1 uses Pool API keys for runtime work. /mcp uses operator-owned MCP bearer tokens for metadata-only lookup. Keep those credentials separate in client configuration and storage."}}]}
 ---
 
 Codex Pooler provides narrow OpenAI-compatible `/v1` support for selected SDK routes. It translates supported requests into Codex-compatible work, then sends them through the same Pool routing, limit checks, account selection, and accounting path used by Codex backend clients.
@@ -230,15 +230,11 @@ accepts only ordered `url_citation` annotations with exactly `type`,
 explicit empty annotation lists, and omission exactly. Malformed or unsupported
 annotation shapes are rejected before dispatch rather than filtered.
 
-`GET /v1/models` may include `context_length` for clients that probe OpenAI-compatible model lists, such as Hermes. The official OpenAI SDK request APIs and Vercel AI SDK generation APIs do not expose Codex model-catalog context controls. Use their output-budget fields only when your application needs one: `max_output_tokens` in OpenAI Responses, `max_completion_tokens` in Chat Completions, and `maxOutputTokens` at the Vercel AI SDK layer. Codex Pooler's public `/v1/responses` rejects `context_management`, and direct `POST /v1/responses/compact` remains unsupported. Selected provider clients can instead request an explicit compaction turn by appending a terminal `compaction_trigger` to a normal `/v1/responses` request.
+`GET /v1/models` may include `context_length` for clients that probe OpenAI-compatible model lists, such as Hermes. The official OpenAI SDK request APIs and Vercel AI SDK generation APIs do not expose Codex model-catalog context controls. Use their output-budget fields only when your application needs one: `max_output_tokens` in OpenAI Responses, `max_completion_tokens` in Chat Completions, and `maxOutputTokens` at the Vercel AI SDK layer. Codex Pooler's public `/v1/responses` rejects `context_management`, and direct `POST /v1/responses/compact` remains unsupported. Explicit compaction is available on the normal `/v1/responses` route.
 
 ### Request an explicit compaction turn
 
-Provider clients that expose an OpenAI compaction option can use the normal
-`/v1/responses` route. For example, Vercel AI SDK can append the closed trigger
-shape with `providerOptions.openai.compactionTrigger: true`. This requires
-`@ai-sdk/openai` 4.0.42 or later, where that option serializes the terminal
-trigger:
+Provider clients that expose an OpenAI compaction option can use the normal `/v1/responses` route. Vercel AI SDK serializes the required trigger with `providerOptions.openai.compactionTrigger: true` in `@ai-sdk/openai` 4.0.42 or later:
 
 ```ts
 import {
@@ -256,6 +252,7 @@ const result = await generateText({
   model: pooler.responses("gpt-5.6-terra"),
   providerOptions: {
     openai: {
+      store: false,
       compactionTrigger: true,
     } satisfies OpenAILanguageModelResponsesOptions,
   },
@@ -267,40 +264,17 @@ const compaction = result.content.find(
 );
 ```
 
-The request must contain visible input followed by exactly one final
-`{"type":"compaction_trigger"}` item. Codex Pooler dispatches it through the
-buffered compact bridge, returns the compacted item as collected JSON, public
-SSE, or narrow Responses websocket events, and keeps prompt and encrypted
-content out of durable metadata. Non-terminal, duplicate, hidden-only, or
-otherwise malformed triggers return a sanitized `400` before upstream dispatch.
-This does not enable direct `POST /v1/responses/compact`.
+The serialized request must contain visible input followed by exactly one final `{"type":"compaction_trigger"}` item. Non-terminal, duplicate, trigger-only, hidden-only, or otherwise malformed placement returns an OpenAI-shaped `400 invalid_request` on `input` before upstream dispatch.
 
-On a narrow Responses websocket turn, the trigger first retains the normal
-`proxy_websocket` admission, then receives nested `proxy_compact` admission
-before compact execution. Local websocket completion returns the same compact
-terminal item as the HTTP JSON and SSE surfaces. This does not change legacy
-Codex backend compaction behavior.
+Successful non-streaming HTTP returns a completed Responses JSON object containing the normalized compaction item. Public SSE emits `response.output_item.done`, then `response.completed`, then `[DONE]`. Narrow Responses websocket completion emits the same two Responses events without the HTTP `[DONE]` sentinel. Direct `POST /v1/responses/compact` remains unsupported.
+
+If upstream compact output is malformed JSON or does not contain nonblank encrypted compaction content, Codex Pooler returns a sanitized `502 invalid_compaction_response`. Other provider failures follow the public error rules documented below.
 
 ### Replay a remote-compaction item
 
-When a remote compaction response supplies an encrypted `type: "compaction"`
-output item, submit that item unchanged at the start of the next
-`POST /v1/responses` input, followed by the new user item. Start a new chain:
-omit `previous_response_id` rather than using the compact response id. Codex
-Pooler preserves accepted compaction items and their input order over collected
-JSON, public SSE, and narrow Responses websocket turns.
+When a compaction turn returns an encrypted `type: "compaction"` output item, submit that item unchanged at the start of the next `POST /v1/responses` input, followed by the new user input. Start a new chain by omitting `previous_response_id`; the compact response envelope id is not a replay anchor.
 
-The stable public replay fields are `type`, a nonblank opaque
-`encrypted_content` string, and optional `id`. The `id` key may be absent, a
-string, or explicitly `null`; key presence is preserved exactly. Each public
-terminal carries the identical normalized item. Native metadata and unknown
-fields are stripped from public compact output, while malformed upstream compact
-output returns a sanitized `502`. Unknown replay fields or malformed values are
-rejected before upstream dispatch. Treat encrypted content as opaque and do not
-log or persist it in application telemetry.
-
-This replay path is separate from the explicit terminal-trigger bridge.
-`POST /v1/responses/compact` remains unsupported.
+The stable public replay fields are `type`, a nonblank opaque `encrypted_content` string, and optional `id`. The `id` key may be absent, a string, or explicitly `null`, and its presence is preserved. JSON, SSE, and narrow Responses websocket surfaces return the same normalized item. Native-only metadata and unknown fields are removed from output; unknown replay fields or malformed values are rejected before upstream dispatch. Treat `encrypted_content` as opaque and do not log or persist it in application telemetry.
 
 ## Supported or translated route support
 
@@ -379,7 +353,7 @@ Streaming `/v1/chat/completions` clients must separately handle a terminal `data
 
 For public SSE, an absent, blank, or whitespace-only `event:` label is treated as absent before the label is compared with the JSON `type`. A nonblank mismatch is still rejected. Ordinary incomplete `POST /v1/responses` SSE blocks are capped at 8 MiB so single large provider events, such as reasoning items carrying encrypted content, can finish decoding; structurally recognizable terminal candidates may retain up to 64 MiB so a large terminal split across upstream chunks can finish decoding. Crossing the applicable cap sends one bounded sanitized `type: "error"` event, relays none of that source block, and drops later source frames.
 
-On narrow `GET /v1/responses` websocket compatibility, malformed JSON and JSON values that are not objects are ignored without consuming a sequence number or creating a local terminal. This applies to direct and accepted owner-forwarded public clients; native backend websocket behavior is unchanged.
+On narrow `GET /v1/responses` websocket compatibility, malformed JSON and JSON values that are not objects are ignored without consuming a sequence number or creating a local terminal. Native backend websocket behavior is unchanged.
 
 ### Responses WebSocket stream IDs
 
@@ -528,9 +502,7 @@ No. `/v1/realtime` and OpenAI Realtime SDK websocket or session routes are unsup
 
 ### Does `/v1/responses/compact` work?
 
-No. `POST /v1/responses/compact` returns a deterministic OpenAI-shaped `unsupported_endpoint` error. Explicit compaction through selected provider clients is supported on normal `/v1/responses` requests when the client appends exactly one final `compaction_trigger` after visible input.
-
-Codex backend clients that send the same terminal trigger to `POST /backend-api/codex/responses` or `/backend-api/codex/v1/responses` retain that final item and use the normal backend Responses upstream endpoint. The request remains compact-accounted and buffered through the compact transport, then receives canonical backend Responses SSE compaction output. Direct backend compact aliases remain supported and use the canonical legacy `/backend-api/codex/responses/compact` upstream endpoint.
+No. `POST /v1/responses/compact` returns a deterministic OpenAI-shaped `unsupported_endpoint` error. Explicit compaction is supported on normal `/v1/responses` requests when the client appends exactly one final `compaction_trigger` after visible input. Backend compact compatibility remains available under `/backend-api/codex`.
 
 ### Can I use the same key for `/v1` and `/mcp`?
 

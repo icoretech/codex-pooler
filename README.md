@@ -968,22 +968,19 @@ the direct backend compact endpoint for OMP's direct compact path, while
 streaming compaction. Normal OMP model traffic stays on the narrow
 OpenAI-compatible `/v1` Responses route. Do not use
 `compaction.remoteEndpoint` for this path: OMP reserves that setting for generic
-summary services that accept `{systemPrompt, prompt}` JSON, not provider-native
+summary services that accept `{systemPrompt, prompt}` JSON or an
+OpenAI-compatible chat-completions summary request, not provider-native
 Responses compact payloads. In this setup, `omp config get
 compaction.remoteEndpoint` should remain `(not set)`; remote capability comes
 from the provider-level `remoteCompaction` block in `models.yml`.
 
-`remoteCompaction.v2StreamingEnabled: true` lets OMP use the Codex-style
-streaming compaction path. OMP sends a normal backend Responses request with a
-terminal `compaction_trigger` to `remoteCompaction.v2Endpoint`; Codex Pooler
-retains that final item and sends the request through the normal backend
-Responses upstream endpoint. The request remains compact-accounted and buffered
-through the compact transport, while downstream canonical Responses SSE remains
-the same.
-Direct backend compact aliases remain supported and use the canonical legacy
-`/backend-api/codex/responses/compact` upstream endpoint. The V2 flag is not a
-global `compaction` setting: keep it inside
-`remoteCompaction`.
+Both V2 switches are required. Set provider-level
+`remoteCompaction.v2StreamingEnabled: true` in `models.yml` to make the model
+V2-capable, and keep global `compaction.remoteStreamingV2Enabled: true` in
+`config.yml` to allow OMP to select it. OMP sends a normal backend Responses
+request with a terminal `compaction_trigger` to `remoteCompaction.v2Endpoint`.
+If V2 is unavailable or fails, OMP can use the configured direct compact
+endpoint before falling back to its local compaction behavior.
 
 Current OMP source derives an effort thinking surface, including `xhigh`, for
 custom `openai-responses` models that set `reasoning: true`. You only need an
@@ -1041,7 +1038,7 @@ modelRoles:
 compaction:
   thresholdPercent: 95
   reserveTokens: 128000
-  remoteEnabled: true
+  enabled: true
   remoteStreamingV2Enabled: true
   midTurnEnabled: true
   handoffSaveToDisk: true
@@ -1753,10 +1750,18 @@ value as authoritative for advertised client context settings. The official Open
 APIs and Vercel AI SDK generation APIs do not expose Codex model-catalog context
 controls. Use their output-budget fields only when your application needs one:
 `max_output_tokens` in OpenAI Responses, `max_completion_tokens` in Chat
-Completions, and `maxOutputTokens` at the Vercel AI SDK layer. Codex Pooler's
-public `/v1/responses` currently rejects `context_management`, and public
-`/v1/responses/compact` is routed but unsupported, so do not document SDK-side
-compaction as a Codex Pooler feature.
+Completions, and `maxOutputTokens` at the Vercel AI SDK layer.
+
+Vercel AI SDK can request explicit compaction on the normal `/v1/responses`
+route with `providerOptions.openai.store: false` and
+`providerOptions.openai.compactionTrigger: true` when using `@ai-sdk/openai`
+4.0.42 or later. Codex Pooler accepts exactly one final
+`compaction_trigger` after visible input and returns the compact item through
+Responses JSON, SSE, or the narrow Responses websocket surface. Replay the
+returned opaque `type: "compaction"` item at the start of a new request without
+`previous_response_id`, followed by new user input. Direct
+`POST /v1/responses/compact` remains unsupported, and `/v1/responses` rejects
+`context_management`.
 </details>
 
 <details>

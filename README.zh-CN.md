@@ -887,19 +887,18 @@ providers:
 OMP 直接 compact 路径使用的后端 compact endpoint，而 `v2Endpoint` 是终端触发器
 流式 compaction 使用的普通后端 Responses endpoint。普通 OMP 模型流量仍走窄范围
 OpenAI 兼容的 `/v1` Responses 路径。不要把 `compaction.remoteEndpoint` 用于这里：
-OMP 会把该设置保留给接受 `{systemPrompt, prompt}` JSON 的通用摘要服务，而不是
-provider 原生的 Responses compact payload。在这个配置中，`omp config get
+OMP 会把该设置保留给接受 `{systemPrompt, prompt}` JSON 或 OpenAI 兼容
+chat-completions 摘要请求的通用摘要服务，而不是 provider 原生的 Responses compact
+payload。在这个配置中，`omp config get
 compaction.remoteEndpoint` 应保持为 `(not set)`；远程能力来自 `models.yml` 内
 provider 级别的 `remoteCompaction` 块。
 
-`remoteCompaction.v2StreamingEnabled: true` 让 OMP 使用 Codex 风格的流式
-compaction 路径。OMP 会把带有终端 `compaction_trigger` 的普通后端 Responses 请求
-发送到 `remoteCompaction.v2Endpoint`；Codex Pooler 会保留该最后一项，并通过普通
-后端 Responses upstream endpoint 发送请求。该请求仍通过 compact transport 做
-compact accounting 和缓冲，而下游规范化 Responses SSE 保持不变。直接后端 compact alias
-仍受支持，并使用规范的旧版
-`/backend-api/codex/responses/compact` upstream endpoint。V2 标志不是全局
-`compaction` 设置：请将它保留在 `remoteCompaction` 内。
+两个 V2 开关都必须启用。在 `models.yml` 中设置 provider 级别的
+`remoteCompaction.v2StreamingEnabled: true`，让模型具备 V2 能力；同时在
+`config.yml` 中保留全局 `compaction.remoteStreamingV2Enabled: true`，允许 OMP
+选择该能力。OMP 会把带有终端 `compaction_trigger` 的普通后端 Responses 请求发送到
+`remoteCompaction.v2Endpoint`。如果 V2 不可用或失败，OMP 可以先使用已配置的直接
+compact endpoint，再回退到本地 compaction 行为。
 
 当前 OMP 源码会为设置了 `reasoning: true` 的自定义 `openai-responses` 模型推导
 包含 `xhigh` 的 effort thinking 能力。只有在你要覆盖推导出的 effort 列表、wire
@@ -950,7 +949,7 @@ modelRoles:
 compaction:
   thresholdPercent: 95
   reserveTokens: 128000
-  remoteEnabled: true
+  enabled: true
   remoteStreamingV2Enabled: true
   midTurnEnabled: true
   handoffSaveToDisk: true
@@ -1628,10 +1627,17 @@ console.log(text);
 这个有效值为准。官方 OpenAI SDK 请求 API 和 Vercel AI SDK 生成 API
 不暴露 Codex 模型 catalog 的上下文控制。只有当应用需要时才使用它们的输出预算
 字段：OpenAI Responses 中的 `max_output_tokens`，Chat Completions 中的
-`max_completion_tokens`，以及 Vercel AI SDK 层的
-`maxOutputTokens`。Codex Pooler 的 public `/v1/responses` 当前拒绝
-`context_management`，public `/v1/responses/compact` 虽然有路由但不支持，因此不要
-把 SDK 侧压缩记录为 Codex Pooler 功能。
+`max_completion_tokens`，以及 Vercel AI SDK 层的 `maxOutputTokens`。
+
+使用 `@ai-sdk/openai` 4.0.42 或更高版本时，Vercel AI SDK 可以通过
+`providerOptions.openai.store: false` 和
+`providerOptions.openai.compactionTrigger: true` 在普通 `/v1/responses` 路由请求
+显式 compaction。Codex Pooler 接受位于可见输入之后、且恰好只有一个的最终
+`compaction_trigger`，并通过 Responses JSON、SSE 或窄范围 Responses websocket
+接口返回 compact item。下一次请求应开启新链：省略 `previous_response_id`，把返回的
+不透明 `type: "compaction"` item 放在最前面，再追加新的用户输入。直接
+`POST /v1/responses/compact` 仍不受支持，`/v1/responses` 也仍会拒绝
+`context_management`。
 
 </details>
 

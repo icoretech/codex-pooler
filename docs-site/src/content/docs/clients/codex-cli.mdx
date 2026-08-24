@@ -185,6 +185,6 @@ Get-ChildItem -Path $CodexHome -Filter "state_*.sqlite" |
 
 `/backend-api/codex/*` is an authenticated Codex backend compatibility surface for Codex CLI and Codex Desktop. It is not a wildcard proxy and it is not the OpenAI-compatible `/v1` SDK surface.
 
-The backend route family includes `GET /backend-api/codex/models`, `POST /backend-api/codex/responses`, backend websocket response-stream compatibility on `GET /backend-api/codex/responses`, and `POST /backend-api/codex/responses/compact`.
+The backend route family includes `GET /backend-api/codex/models`, `POST /backend-api/codex/responses`, backend websocket response-stream compatibility on `GET /backend-api/codex/responses`, and `POST /backend-api/codex/responses/compact`. The public `POST /v1/responses/compact` route remains unsupported.
 
 Codex Pooler supports Codex model-provider traffic only. Do not point `chatgpt_base_url` at Codex Pooler for account, realtime, identity, or other app-server helper calls.
