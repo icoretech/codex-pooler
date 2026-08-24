@@ -71,6 +71,30 @@ test-fast:
 		exit 2; \
 	fi; \
 	partitions=$$((10#$$partitions)); \
+	logical_cpus="$${TEST_FAST_LOGICAL_CPUS:-}"; \
+	if [ -n "$$logical_cpus" ]; then \
+		if [[ ! "$$logical_cpus" =~ ^[0-9]+$$ ]] || (( 10#$$logical_cpus < 1 )); then \
+			echo "test-fast: TEST_FAST_LOGICAL_CPUS must be a positive integer (got '$$logical_cpus')"; \
+			exit 2; \
+		fi; \
+	else \
+		logical_cpus=$$(getconf _NPROCESSORS_ONLN 2>/dev/null || true); \
+		if [[ ! "$$logical_cpus" =~ ^[0-9]+$$ ]] || (( 10#$$logical_cpus < 1 )); then \
+			logical_cpus=$$(nproc 2>/dev/null || true); \
+		fi; \
+		if [[ ! "$$logical_cpus" =~ ^[0-9]+$$ ]] || (( 10#$$logical_cpus < 1 )); then \
+			logical_cpus=$$(sysctl -n hw.logicalcpu 2>/dev/null || true); \
+		fi; \
+		if [[ ! "$$logical_cpus" =~ ^[0-9]+$$ ]] || (( 10#$$logical_cpus < 1 )); then \
+			echo "test-fast: failed to detect the host logical CPU count"; \
+			exit 1; \
+		fi; \
+	fi; \
+	logical_cpus=$$((10#$$logical_cpus)); \
+	schedulers_per_partition=$$((logical_cpus / partitions)); \
+	if [ "$$schedulers_per_partition" -lt 1 ]; then schedulers_per_partition=1; fi; \
+	partition_erl_flags="$${ERL_FLAGS:+$${ERL_FLAGS} }+S $$schedulers_per_partition:$$schedulers_per_partition"; \
+	echo "test-fast: scheduler budget $$logical_cpus logical CPUs, $$schedulers_per_partition per partition"; \
 	run_namespace=$$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n'); \
 	if [[ ! "$$run_namespace" =~ ^[0-9a-f]{16}$$ ]]; then \
 		echo "test-fast: failed to generate invocation namespace"; \
@@ -155,7 +179,7 @@ test-fast:
 	trap 'interrupt 143' TERM; \
 	for partition in $$(seq 1 "$$partitions"); do \
 		logs[$$partition]="$$log_dir/partition-$$partition.log"; \
-		(CODEX_POOLER_TEST_RUN_NAMESPACE="$$run_namespace" MIX_TEST_PARTITION="$$partition" $(TEST_FAST_COMMAND) --partitions $$partitions) > "$${logs[$$partition]}" 2>&1 & \
+		(ERL_FLAGS="$$partition_erl_flags" CODEX_POOLER_TEST_RUN_NAMESPACE="$$run_namespace" MIX_TEST_PARTITION="$$partition" $(TEST_FAST_COMMAND) --partitions $$partitions) > "$${logs[$$partition]}" 2>&1 & \
 		pids[$$partition]=$$!; \
 	done; \
 	failures=0; \

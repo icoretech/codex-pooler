@@ -8698,7 +8698,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
         refute Task.yield(terminator, 0)
         send(refresh_pid, {:fake_upstream_release_timeout, release_ref})
-        assert :ok = Task.await(terminator, 2_000)
+        assert :ok = Task.await(terminator, @connection_shutdown_timeout_ms)
       end)
 
     assert [first_request, refresh_request, retried_request] = FakeUpstream.requests(upstream)
@@ -11889,7 +11889,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     send(pid, {:finish_during_task_drain, release_ref})
 
     assert_receive {:task_drain_finalized, ^pid}, 1_000
-    assert :ok = Task.await(terminator, 1_000)
+    assert :ok = Task.await(terminator, @connection_shutdown_timeout_ms)
 
     assert Repo.get!(CodexTurn, turn.id).status == "succeeded"
     assert Repo.get!(CodexTurn, turn.id).error_code == nil
@@ -11991,7 +11991,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert_receive {:DOWN, ^upstream_socket_monitor, :process, ^upstream_socket_pid, _reason},
                    1_000
 
-    assert :ok = Task.await(terminator, 1_000)
+    assert :ok = Task.await(terminator, @connection_shutdown_timeout_ms)
 
     assert %CodexTurn{status: "interrupted", error_code: "client_disconnected"} =
              completed_turn = Repo.get!(CodexTurn, turn.id)

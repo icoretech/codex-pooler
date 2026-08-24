@@ -27,6 +27,31 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
     end
   end
 
+  test "N=4 partitions share the host scheduler budget without dropping existing ERL flags" do
+    unless partitioned_child?() do
+      fixture = start_fixture!()
+
+      assert {output, 0} =
+               run_make(fixture, 4,
+                 TEST_FAST_CAPTURE_SCHEDULERS: "1",
+                 TEST_FAST_LOGICAL_CPUS: "12",
+                 TEST_FAST_RELEASE: "1",
+                 ERL_FLAGS: "+sbwt none"
+               )
+
+      assert output =~ "test-fast: PASS (4/4 partitions)"
+
+      fixture.directory
+      |> await_receipts!("run-", 4)
+      |> Enum.each(fn receipt ->
+        contents = File.read!(Path.join(fixture.directory, receipt))
+
+        assert contents =~ "schedulers=3"
+        assert contents =~ "erl_flags=+sbwt none +S 3:3"
+      end)
+    end
+  end
+
   test "two simultaneous N=4 invocations overlap with distinct namespaces and clean exact databases" do
     unless partitioned_child?() do
       fixture = start_fixture!()
@@ -117,7 +142,14 @@ defmodule CodexPooler.MixTasks.TestFastMakeTest do
       exit 0
     fi
 
-    printf 'namespace=%s partition=%s\n' "$namespace" "$partition" > "$receipt"
+    schedulers=""
+
+    if [ "${TEST_FAST_CAPTURE_SCHEDULERS:-}" = "1" ]; then
+      schedulers="$(elixir -e 'IO.write(System.schedulers_online())')"
+    fi
+
+    printf 'namespace=%s partition=%s schedulers=%s erl_flags=%s\n' \
+      "$namespace" "$partition" "$schedulers" "${ERL_FLAGS:-}" > "$receipt"
 
     if [ "${TEST_FAST_REQUIRE_EPMD:-}" = "1" ] && ! epmd -names >/dev/null 2>&1; then
       exit 19

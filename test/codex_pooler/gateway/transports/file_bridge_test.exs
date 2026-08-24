@@ -6,6 +6,8 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
   alias CodexPooler.Gateway.Payloads.{RequestOptions, TransportEnvelope}
   alias CodexPooler.Gateway.Transports.FileBridge
 
+  @request_detection_timeout_ms 15_000
+
   test "logs upload transport failures with safe request context" do
     request_id = Ecto.UUID.generate()
     assignment_id = Ecto.UUID.generate()
@@ -76,7 +78,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
                  )
       end)
 
-    assert_receive {^served_ref, :served}, 1_000
+    assert_receive {^served_ref, :served}, @request_detection_timeout_ms
 
     assert log =~ "file bridge transport failed"
     assert log =~ "operation=upload"
@@ -119,7 +121,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
                  )
       end)
 
-    assert_receive {^served_ref, request}, 1_000
+    assert_receive {^served_ref, request}, @request_detection_timeout_ms
     {request_head, encoded_request_body} = split_raw_http_request!(request)
     request_body = decode_request_body!(request_head, encoded_request_body)
 
@@ -304,7 +306,7 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
   end
 
   defp read_raw_http_request(socket, acc \\ "") do
-    case :gen_tcp.recv(socket, 0, 1_000) do
+    case :gen_tcp.recv(socket, 0, @request_detection_timeout_ms) do
       {:ok, data} ->
         acc = acc <> data
 
@@ -314,8 +316,8 @@ defmodule CodexPooler.Gateway.Transports.FileBridgeTest do
           read_raw_http_request(socket, acc)
         end
 
-      {:error, _reason} ->
-        acc
+      {:error, reason} ->
+        raise "failed to read complete raw HTTP request: #{inspect(reason)}"
     end
   end
 
