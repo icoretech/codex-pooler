@@ -421,6 +421,105 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawerLiveTest do
     refute Enum.any?(attempt_row_ids, &has_element?(view, &1))
   end
 
+  test "renders bounded compaction bridge diagnostics only in the selected drawer",
+       %{conn: conn, scope: scope} do
+    pool =
+      create_pool!(scope, %{
+        slug: "drawer-compaction-bridge",
+        name: "Drawer Compaction Bridge"
+      })
+
+    sensitive_marker = "drawer-compaction-bridge-sensitive-value"
+
+    %{request: buffered_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-drawer-compaction-bridge-buffered",
+        requested_model: "gpt-drawer-compaction-bridge-buffered",
+        request_metadata: %{
+          "compaction_bridge" => %{"applied" => true, "result_transport" => "buffered"}
+        }
+      })
+
+    %{request: sse_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-drawer-compaction-bridge-sse",
+        requested_model: "gpt-drawer-compaction-bridge-sse",
+        request_metadata: %{
+          "compaction_bridge" => %{"applied" => true, "result_transport" => "sse"}
+        }
+      })
+
+    %{request: absent_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-drawer-compaction-bridge-absent",
+        requested_model: "gpt-drawer-compaction-bridge-absent"
+      })
+
+    %{request: malformed_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-drawer-compaction-bridge-malformed",
+        requested_model: "gpt-drawer-compaction-bridge-malformed",
+        request_metadata: %{
+          "compaction_bridge" => %{"applied" => true, "result_transport" => "websocket"}
+        }
+      })
+
+    %{request: sentinel_request} =
+      request_log_fixture(pool, %{
+        correlation_id: "req-drawer-compaction-bridge-sentinel",
+        requested_model: "gpt-drawer-compaction-bridge-sentinel",
+        request_metadata: %{
+          "compaction_bridge" => %{
+            "applied" => true,
+            "result_transport" => "sse",
+            "raw_payload" => sensitive_marker
+          }
+        }
+      })
+
+    row_ids = [
+      "#request-log-detail-compaction-bridge-applied",
+      "#request-log-detail-compaction-result-transport"
+    ]
+
+    {:ok, view, _html} = live(conn, ~p"/admin/request-logs?pool_id=#{pool.id}")
+    _ = await_request_logs(view)
+
+    list_html = render(view)
+    refute Enum.any?(row_ids, &has_element?(view, &1))
+    refute list_html =~ sensitive_marker
+
+    for {request, result_transport} <- [{buffered_request, "buffered"}, {sse_request, "sse"}] do
+      render_click(element(view, "#request-log-#{request.id}-open-details"))
+      assert_patch(view)
+
+      assert has_element?(view, "#request-log-detail-compaction-bridge-applied", "applied")
+
+      assert has_element?(
+               view,
+               "#request-log-detail-compaction-result-transport",
+               result_transport
+             )
+
+      assert Enum.count(row_ids, &has_element?(view, &1)) == 2
+
+      render_click(element(view, "#request-log-detail-sidebar-close"))
+      assert_patch(view)
+    end
+
+    for request <- [absent_request, malformed_request, sentinel_request] do
+      render_click(element(view, "#request-log-#{request.id}-open-details"))
+      assert_patch(view)
+
+      drawer_html = view |> element("#request-log-detail-sidebar") |> render()
+      refute Enum.any?(row_ids, &has_element?(view, &1))
+      refute drawer_html =~ sensitive_marker
+
+      render_click(element(view, "#request-log-detail-sidebar-close"))
+      assert_patch(view)
+    end
+  end
+
   defp create_pool!(scope, attrs) do
     {:ok, pool} = Pools.create_pool(scope, attrs)
     pool

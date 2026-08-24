@@ -1919,6 +1919,67 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     refute log_text =~ compressed_sentinel
   end
 
+  test "request logs strictly project valid historical compaction bridge metadata" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+    requests =
+      for result_transport <- ["buffered", "sse"] do
+        request_fixture(%{pool: pool, api_key: api_key}, %{
+          requested_model: "gpt-compaction-bridge-#{result_transport}",
+          endpoint: "/backend-api/codex/responses",
+          transport: "websocket",
+          correlation_id: "compaction-bridge-#{result_transport}",
+          request_metadata: %{
+            "compaction_bridge" => %{
+              "applied" => true,
+              "result_transport" => result_transport
+            }
+          }
+        })
+      end
+
+    assert %{items: logs, total: 2} =
+             Accounting.list_request_logs(pool, filters: [model: "compaction-bridge-"])
+
+    logs_by_id = Map.new(logs, &{&1.id, &1})
+
+    for {request, result_transport} <- Enum.zip(requests, ["buffered", "sse"]) do
+      log = Map.fetch!(logs_by_id, request.id)
+
+      assert log.compaction_bridge == %{
+               applied: true,
+               result_transport: result_transport
+             }
+
+      assert log.metadata["compaction_bridge"] == %{
+               "applied" => true,
+               "result_transport" => result_transport
+             }
+    end
+  end
+
+  test "request logs omit compaction bridge projection for ordinary and direct compact history" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+    for {suffix, endpoint, transport} <- [
+          {"ordinary-websocket", "/backend-api/codex/responses", "websocket"},
+          {"direct-compact", "/backend-api/codex/responses/compact", "http_compact_json"}
+        ] do
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-compaction-bridge-#{suffix}",
+        endpoint: endpoint,
+        transport: transport,
+        correlation_id: "compaction-bridge-#{suffix}"
+      })
+    end
+
+    assert %{items: logs, total: 2} =
+             Accounting.list_request_logs(pool, filters: [model: "compaction-bridge-"])
+
+    assert Enum.all?(logs, &is_nil(&1.compaction_bridge))
+    assert Enum.all?(logs, &(not Map.has_key?(&1.metadata, "compaction_bridge")))
+  end
+
   test "request logs keep skipped and failure compression reasons as safe codes" do
     %{pool: pool, api_key: api_key} = active_api_key_fixture()
     %{assignment: assignment} = upstream_assignment_fixture(pool)

@@ -116,6 +116,7 @@ defmodule CodexPooler.MCP.PrivacyMatrixTest do
     assert PrivacyMatrix.field_policy!(:request_logs, :endpoint) == :summarized
     assert PrivacyMatrix.field_policy!(:request_logs, :query) == :omitted
     assert PrivacyMatrix.field_policy!(:request_logs, :debug) == :allowed
+    assert PrivacyMatrix.field_policy!(:request_logs, :compaction_bridge) == :allowed
     assert PrivacyMatrix.field_policy!(:audit_logs, :actor_summary) == :summarized
     assert PrivacyMatrix.field_policy!(:audit_logs, :ip_address) == :masked
     assert PrivacyMatrix.field_policy!(:pool_api_keys, :key_prefix) == :allowed

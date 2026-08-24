@@ -126,6 +126,9 @@ defmodule CodexPooler.MCP.ToolDispatch do
 
   defp valid_value?(value, %{"const" => const}), do: value == const
 
+  defp valid_value?(value, %{"enum" => values} = schema) when is_list(values),
+    do: value in values and valid_value?(value, Map.delete(schema, "enum"))
+
   defp valid_value?(value, %{"type" => types}) when is_list(types),
     do: Enum.any?(types, &valid_type?(value, &1))
 

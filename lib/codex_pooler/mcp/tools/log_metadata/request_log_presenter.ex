@@ -73,6 +73,13 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
     |> Map.put("debug", detail_debug(log))
   end
 
+  @spec detail_item(map()) :: map()
+  def detail_item(log) do
+    log
+    |> item()
+    |> maybe_put_compaction_bridge(log.compaction_bridge)
+  end
+
   @spec list_item(map()) :: map()
   def list_item(log) do
     log
@@ -136,6 +143,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
     |> Map.put("upstream", upstream_text(item))
     |> maybe_put_terminal_diagnostics_text(Map.get(item, "debug"))
     |> maybe_put_rejection_metadata_text(Map.get(item, "debug"))
+    |> maybe_put_compaction_bridge_text(Map.get(item, "compaction_bridge"))
     |> maybe_put_metadata_summary(Map.get(item, "metadata"))
   end
 
@@ -182,6 +190,8 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
         {"rejection_error_param", "rejection_error_param"},
         {"rejection_message_present", "rejection_message_present"},
         {"rejection_message_bytes", "rejection_message_bytes"},
+        {"compaction_bridge_applied", "compaction_bridge_applied"},
+        {"compaction_result_transport", "compaction_result_transport"},
         {"metadata_summary", "metadata"}
       ]
   end
@@ -262,6 +272,28 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
   end
 
   defp maybe_put_metadata_summary(row, _metadata), do: row
+
+  defp maybe_put_compaction_bridge(item, %{applied: true, result_transport: result_transport})
+       when result_transport in ["buffered", "sse"] do
+    Map.put(item, "compaction_bridge", %{
+      "applied" => true,
+      "result_transport" => result_transport
+    })
+  end
+
+  defp maybe_put_compaction_bridge(item, _compaction_bridge), do: item
+
+  defp maybe_put_compaction_bridge_text(
+         row,
+         %{"applied" => true, "result_transport" => result_transport}
+       )
+       when result_transport in ["buffered", "sse"] do
+    row
+    |> Map.put("compaction_bridge_applied", true)
+    |> Map.put("compaction_result_transport", result_transport)
+  end
+
+  defp maybe_put_compaction_bridge_text(row, _compaction_bridge), do: row
 
   defp maybe_put_terminal_diagnostics_text(row, %{"attempts" => attempts})
        when is_list(attempts) do
@@ -442,7 +474,19 @@ defmodule CodexPooler.MCP.Tools.LogMetadata.RequestLogPresenter do
     metadata
     |> MetadataSanitizer.safe_metadata()
     |> Map.drop(["codex_session_id", "codex_session_key", "conversation_key"])
+    |> drop_compaction_bridge()
   end
+
+  defp drop_compaction_bridge(value) when is_map(value) do
+    value
+    |> Enum.reject(fn {key, _child} -> key in ["compaction_bridge", :compaction_bridge] end)
+    |> Map.new(fn {key, child} -> {key, drop_compaction_bridge(child)} end)
+  end
+
+  defp drop_compaction_bridge(value) when is_list(value),
+    do: Enum.map(value, &drop_compaction_bridge/1)
+
+  defp drop_compaction_bridge(value), do: value
 
   defp stringify_keys(map) do
     Map.new(map, fn {key, value} -> {Atom.to_string(key), MetadataSanitizer.safe_value(value)} end)

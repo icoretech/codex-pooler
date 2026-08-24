@@ -127,6 +127,7 @@ defmodule CodexPooler.MCP.PrivacyMatrix do
         :service_tier,
         :requested_service_tier,
         :actual_service_tier,
+        :compaction_bridge,
         :metadata
       ],
       masked: [:upstream_account_email, :client_ip, :ip_address],

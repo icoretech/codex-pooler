@@ -484,6 +484,45 @@ defmodule CodexPooler.MCP.ToolDispatchTest do
     refute Map.has_key?(result, "structuredContent")
   end
 
+  test "output schema validation rejects values outside a declared enum", %{auth: auth} do
+    enum_tool = %{
+      name: "codex_pooler_enum_status",
+      title: "Enum status",
+      description:
+        "Use when testing. Returns an invalid enum value. Never returns secrets. Filters/limits: none.",
+      input_schema: %{
+        "type" => "object",
+        "properties" => %{},
+        "required" => [],
+        "additionalProperties" => false
+      },
+      output_schema: %{
+        "type" => "object",
+        "required" => ["result_transport"],
+        "properties" => %{
+          "result_transport" => %{
+            "type" => "string",
+            "enum" => ["buffered", "sse"]
+          }
+        },
+        "additionalProperties" => false
+      },
+      annotations: %{
+        "readOnlyHint" => true,
+        "destructiveHint" => false,
+        "idempotentHint" => true,
+        "openWorldHint" => false
+      },
+      handler: {__MODULE__, :invalid_enum_handler}
+    }
+
+    assert {:ok, result} = ToolDispatch.call(enum_tool, %{}, %{auth: auth})
+    assert result["isError"] == true
+    assert [%{"type" => "text", "text" => text}] = result["content"]
+    assert text == "invalid_tool_output: MCP tool output failed schema validation"
+    refute Map.has_key?(result, "structuredContent")
+  end
+
   test "output schema validation rejects present null values unless explicitly nullable", %{
     auth: auth
   } do
@@ -548,6 +587,10 @@ defmodule CodexPooler.MCP.ToolDispatchTest do
   end
 
   def bad_handler(_arguments, _context), do: {:ok, %{"missing" => true}, "bad output"}
+
+  def invalid_enum_handler(_arguments, _context),
+    do: {:ok, %{"result_transport" => "unknown"}, "bad"}
+
   def null_item_handler(_arguments, _context), do: {:ok, %{"item" => nil}, "nullable output"}
   def crashing_handler(_arguments, _context), do: raise("PRIVATE_CONTEXT")
 end

@@ -178,6 +178,24 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer.Rows do
     |> present_rows()
   end
 
+  @spec compaction_bridge_rows(map()) :: [detail_row()]
+  def compaction_bridge_rows(%{
+        compaction_bridge: %{applied: true, result_transport: result_transport}
+      })
+      when result_transport in ["buffered", "sse"] do
+    [
+      detail("request-log-detail-compaction-bridge-applied", "Compaction bridge", "applied"),
+      detail(
+        "request-log-detail-compaction-result-transport",
+        "Compaction result transport",
+        result_transport,
+        mono: true
+      )
+    ]
+  end
+
+  def compaction_bridge_rows(_log), do: []
+
   defp cache_write_token_count(%{cache_write_tokens: value}) when is_integer(value),
     do: "#{value} cache write"
 

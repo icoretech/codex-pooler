@@ -10,6 +10,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Denials
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.PayloadContext
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Payloads.RequestOptions.Routing
   alias CodexPooler.Gateway.Routing.CandidateEligibility
@@ -227,6 +228,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
     |> Map.merge(RequestOptions.openai_compatibility_metadata(request_options))
     |> Map.merge(owner_forwarding_metadata(request_options))
     |> Map.merge(reservation_snapshot_metadata(route_state))
+    |> Map.merge(compaction_bridge_metadata(request_options.payload_context))
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()
     |> SessionContinuity.put_session_metadata(request_options)
@@ -250,6 +252,21 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
   end
 
   defp reservation_snapshot_metadata(_route_state), do: %{}
+
+  defp compaction_bridge_metadata(%PayloadContext{
+         compaction_trigger_bridge?: true,
+         compaction_result_transport: result_transport
+       })
+       when result_transport in [:buffered, :sse] do
+    %{
+      "compaction_bridge" => %{
+        "applied" => true,
+        "result_transport" => Atom.to_string(result_transport)
+      }
+    }
+  end
+
+  defp compaction_bridge_metadata(%PayloadContext{}), do: %{}
 
   defp request_class(
          _endpoint,

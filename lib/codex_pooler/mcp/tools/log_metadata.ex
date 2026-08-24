@@ -51,7 +51,7 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
       structured =
         scope
         |> request_log_detail(id)
-        |> detail_output(&RequestLogPresenter.item/1, "request_log")
+        |> detail_output(&RequestLogPresenter.detail_item/1, "request_log")
 
       text = RequestLogPresenter.detail_text(structured)
 
@@ -348,7 +348,20 @@ defmodule CodexPooler.MCP.Tools.LogMetadata do
               "items" => request_log_detail_attempt_output_schema()
             }
           }
-        }
+        },
+        "compaction_bridge" => compaction_bridge_output_schema()
+      }
+    }
+  end
+
+  defp compaction_bridge_output_schema do
+    %{
+      "type" => "object",
+      "required" => ["applied", "result_transport"],
+      "additionalProperties" => false,
+      "properties" => %{
+        "applied" => %{"const" => true},
+        "result_transport" => %{"type" => "string", "enum" => ["buffered", "sse"]}
       }
     }
   end

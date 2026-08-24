@@ -365,6 +365,86 @@ defmodule CodexPooler.Accounting.MetadataTest do
   end
 
   describe "request log metadata" do
+    test "ordinary direct compact and websocket reservations omit compaction bridge metadata" do
+      setup = accounting_setup()
+      sentinel = "client-shaped-compaction-bridge-must-not-authorize"
+
+      payload = %{
+        "model" => setup.model.exposed_model_id,
+        "metadata" => %{
+          "compaction_bridge" => %{
+            "applied" => true,
+            "result_transport" => "sse",
+            "raw_payload" => sentinel
+          }
+        }
+      }
+
+      reservation_cases = [
+        {"/backend-api/codex/responses/compact", %{transport: "http_compact_json"}},
+        {"/backend-api/codex/responses", %{transport: "websocket"}}
+      ]
+
+      for {endpoint, opts} <- reservation_cases do
+        request_options =
+          opts
+          |> Map.merge(%{
+            requested_model: setup.model.exposed_model_id,
+            effective_model: setup.model.exposed_model_id
+          })
+          |> RequestOptions.build(endpoint, payload)
+
+        attrs = AccountingReservation.attrs(setup.auth, payload, endpoint, request_options)
+
+        refute Map.has_key?(attrs.request_metadata, "compaction_bridge")
+        refute inspect(attrs.request_metadata) =~ sentinel
+      end
+    end
+
+    test "typed compaction bridge reservations persist only the bounded diagnostic" do
+      setup = accounting_setup()
+
+      for result_transport <- [:buffered, :sse] do
+        endpoint = "/backend-api/codex/responses"
+        sentinel = "raw-compaction-bridge-sentinel-#{result_transport}"
+
+        payload = %{
+          "model" => setup.model.exposed_model_id,
+          "input" => [%{"type" => "compaction_trigger", "content" => sentinel}],
+          "metadata" => %{"compaction_bridge" => %{"raw_payload" => sentinel}}
+        }
+
+        request_options =
+          RequestOptions.build(
+            %{
+              requested_model: setup.model.exposed_model_id,
+              effective_model: setup.model.exposed_model_id,
+              transport: "websocket",
+              compaction_trigger_bridge?: true,
+              compaction_result_transport: result_transport
+            },
+            endpoint,
+            payload
+          )
+
+        attrs = AccountingReservation.attrs(setup.auth, payload, endpoint, request_options)
+
+        expected = %{
+          "applied" => true,
+          "result_transport" => Atom.to_string(result_transport)
+        }
+
+        assert attrs.request_metadata["compaction_bridge"] == expected
+
+        assert Map.keys(attrs.request_metadata["compaction_bridge"]) |> Enum.sort() ==
+                 ["applied", "result_transport"]
+
+        assert {:ok, reserved} = Accounting.reserve(setup.auth, setup.model, payload, attrs)
+        assert reserved.request.request_metadata["compaction_bridge"] == expected
+        refute inspect(reserved.request.request_metadata) =~ sentinel
+      end
+    end
+
     test "omits the typed reset probe token and scope before persistence" do
       setup = accounting_setup()
       endpoint = "/backend-api/codex/responses"

@@ -420,6 +420,25 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
            }
   end
 
+  test "request-log detail compaction bridge schema is optional and closed" do
+    request_logs_tool =
+      Enum.find(LogMetadata.tools(), &(&1.name == "codex_pooler_get_request_log"))
+
+    item_schema = get_in(request_logs_tool.output_schema, ["properties", "item"])
+    bridge_schema = item_schema["properties"]["compaction_bridge"]
+
+    refute "compaction_bridge" in Map.get(item_schema, "required", [])
+    assert bridge_schema["type"] == "object"
+    assert bridge_schema["required"] == ["applied", "result_transport"]
+    assert bridge_schema["additionalProperties"] == false
+    assert bridge_schema["properties"]["applied"] == %{"const" => true}
+
+    assert bridge_schema["properties"]["result_transport"] == %{
+             "type" => "string",
+             "enum" => ["buffered", "sse"]
+           }
+  end
+
   test "request-log list text handles empty results without echoing caller filters", %{auth: auth} do
     sentinels = caller_filter_sentinels()
 
@@ -784,6 +803,188 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
     refute text =~ long_metadata
 
     assert_no_unsafe_request_log_text(result)
+  end
+
+  test "request-log compaction bridge is detail-only and list output remains byte-compatible", %{
+    auth: auth
+  } do
+    pool = pool_fixture(%{slug: "mcp-compaction-list-golden", name: "MCP Compaction List Golden"})
+    %{api_key: api_key} = active_api_key_fixture(pool)
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-mcp-compaction-list-golden",
+        transport: "websocket",
+        correlation_id: "mcp-compaction-list-golden",
+        request_metadata: %{"safe" => "stable"}
+      })
+
+    assert {:ok, before_result} =
+             ToolDispatch.call(
+               "codex_pooler_list_request_logs",
+               %{"pool_id" => pool.id, "limit" => 10},
+               %{auth: auth}
+             )
+
+    request
+    |> Ecto.Changeset.change(
+      request_metadata: %{
+        "safe" => "stable",
+        "compaction_bridge" => %{"applied" => true, "result_transport" => "buffered"}
+      }
+    )
+    |> Repo.update!()
+
+    assert {:ok, after_result} =
+             ToolDispatch.call(
+               "codex_pooler_list_request_logs",
+               %{"pool_id" => pool.id, "limit" => 10},
+               %{auth: auth}
+             )
+
+    assert after_result == before_result
+    refute deep_key?(after_result, "compaction_bridge")
+    refute inspect(after_result) =~ "buffered"
+    assert :ok = Redaction.assert_mcp_output_safe!(after_result)
+  end
+
+  test "request-log generic metadata recursively omits compaction bridge maps and lists", %{
+    auth: auth
+  } do
+    pool = pool_fixture(%{slug: "mcp-compaction-nested", name: "MCP Compaction Nested"})
+    %{api_key: api_key} = active_api_key_fixture(pool)
+    sentinel = Redaction.forbidden_sentinel!(:request_body)
+
+    _request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-mcp-compaction-nested",
+        correlation_id: "mcp-compaction-nested",
+        request_metadata: %{
+          "safe_root" => "kept",
+          "nested" => %{
+            "safe_map" => "kept",
+            "children" => [
+              %{
+                "safe_list_map" => "kept",
+                "compaction_bridge" => %{
+                  "applied" => true,
+                  "result_transport" => "buffered",
+                  "raw" => sentinel
+                }
+              },
+              %{compaction_bridge: [%{"raw" => sentinel}], safe_atom_sibling: "kept"}
+            ]
+          }
+        }
+      })
+
+    assert {:ok, result} =
+             ToolDispatch.call(
+               "codex_pooler_list_request_logs",
+               %{"pool_id" => pool.id, "limit" => 10},
+               %{auth: auth}
+             )
+
+    assert [item] = result["structuredContent"]["items"]
+    assert item["metadata"]["safe_root"] == "kept"
+    assert item["metadata"]["nested"]["safe_map"] == "kept"
+    assert [first_child, second_child] = item["metadata"]["nested"]["children"]
+    assert first_child["safe_list_map"] == "kept"
+    assert second_child["safe_atom_sibling"] == "kept"
+    refute deep_key?(result, "compaction_bridge")
+    refute inspect(result) =~ sentinel
+    assert :ok = Redaction.assert_mcp_output_safe!(result)
+  end
+
+  test "request-log detail exposes only strict compaction bridge diagnostics", %{auth: auth} do
+    for result_transport <- ["buffered", "sse"] do
+      pool =
+        pool_fixture(%{
+          slug: "mcp-compaction-detail-#{result_transport}",
+          name: "MCP Compaction Detail #{result_transport}"
+        })
+
+      %{api_key: api_key} = active_api_key_fixture(pool)
+
+      request =
+        request_fixture(%{pool: pool, api_key: api_key}, %{
+          requested_model: "gpt-mcp-compaction-detail",
+          transport: "websocket",
+          correlation_id: "mcp-compaction-detail-#{result_transport}",
+          request_metadata: %{
+            "compaction_bridge" => %{
+              "applied" => true,
+              "result_transport" => result_transport
+            }
+          }
+        })
+
+      assert {:ok, result} =
+               ToolDispatch.call("codex_pooler_get_request_log", %{"id" => request.id}, %{
+                 auth: auth
+               })
+
+      assert %{"status" => "ok", "item" => item} = result["structuredContent"]
+
+      assert item["compaction_bridge"] == %{
+               "applied" => true,
+               "result_transport" => result_transport
+             }
+
+      refute Map.has_key?(item["metadata"], "compaction_bridge")
+      assert [%{"type" => "text", "text" => text}] = result["content"]
+      assert text =~ "compaction_bridge_applied=true"
+      assert text =~ "compaction_result_transport=#{result_transport}"
+      assert :ok = Redaction.assert_mcp_output_safe!(result)
+    end
+  end
+
+  test "request-log detail omits absent malformed unknown and sentinel compaction bridge shapes",
+       %{
+         auth: auth
+       } do
+    sentinel = Redaction.forbidden_sentinel!(:request_body)
+
+    shapes = [
+      nil,
+      %{"applied" => false, "result_transport" => "buffered"},
+      %{"applied" => "true", "result_transport" => "buffered"},
+      %{"applied" => true, "result_transport" => "unknown"},
+      %{"applied" => true, "result_transport" => "sse", "raw" => sentinel},
+      [%{"applied" => true, "result_transport" => "buffered", "raw" => sentinel}]
+    ]
+
+    for {shape, index} <- Enum.with_index(shapes) do
+      pool =
+        pool_fixture(%{
+          slug: "mcp-compaction-invalid-#{index}",
+          name: "MCP Compaction Invalid #{index}"
+        })
+
+      %{api_key: api_key} = active_api_key_fixture(pool)
+      metadata = if is_nil(shape), do: %{}, else: %{"compaction_bridge" => shape}
+
+      request =
+        request_fixture(%{pool: pool, api_key: api_key}, %{
+          requested_model: "gpt-mcp-compaction-invalid",
+          correlation_id: "mcp-compaction-invalid-#{index}",
+          request_metadata: metadata
+        })
+
+      assert {:ok, result} =
+               ToolDispatch.call("codex_pooler_get_request_log", %{"id" => request.id}, %{
+                 auth: auth
+               })
+
+      assert %{"status" => "ok", "item" => item} = result["structuredContent"]
+      refute Map.has_key?(item, "compaction_bridge")
+      refute Map.has_key?(item["metadata"], "compaction_bridge")
+      assert [%{"type" => "text", "text" => text}] = result["content"]
+      refute text =~ "compaction_bridge"
+      refute text =~ "compaction_result_transport"
+      refute inspect(result) =~ sentinel
+      assert :ok = Redaction.assert_mcp_output_safe!(result)
+    end
   end
 
   test "gets only valid failed-attempt terminal diagnostics in structured detail and readable text",
@@ -2415,6 +2616,14 @@ defmodule CodexPooler.MCP.RequestLogsToolsTest do
       extra
     )
   end
+
+  defp deep_key?(value, key) when is_map(value) do
+    Map.has_key?(value, key) or
+      Enum.any?(value, fn {_child_key, child} -> deep_key?(child, key) end)
+  end
+
+  defp deep_key?(value, key) when is_list(value), do: Enum.any?(value, &deep_key?(&1, key))
+  defp deep_key?(_value, _key), do: false
 
   defp caller_filter_sentinels do
     %{

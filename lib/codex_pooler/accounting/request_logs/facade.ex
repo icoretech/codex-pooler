@@ -22,6 +22,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request, RequestLogFact}
 
   alias CodexPooler.Accounting.RequestLogs.{
+    CompactionBridgeProjection,
     DebugProjection,
     ErrorSummaries,
     PayloadCompressionProjection,
@@ -215,6 +216,7 @@ defmodule CodexPooler.Accounting.RequestLogs do
       settlement_entry_id: maybe_field(settlement, :settlement_entry_id),
       token_counts: SettlementPresentation.token_counts(settlement),
       cost: SettlementPresentation.cost(settlement),
+      compaction_bridge: CompactionBridgeProjection.build(metadata),
       payload_compression: PayloadCompressionProjection.build(metadata),
       errors: ErrorSummaries.build(request, metadata, request_attempts),
       debug: DebugProjection.build(request, metadata, turn, request_attempts, surface),

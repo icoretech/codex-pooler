@@ -360,6 +360,57 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
     refute log_text =~ compressed_sentinel
   end
 
+  test "request log details omit malformed compaction bridge history and raw nested values" do
+    reset_bootstrap_state_fixture!()
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    owner_scope = Scope.for_user(owner, [])
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    sentinel = "raw-compaction-bridge-history-must-not-leak"
+
+    malformed_values = [
+      nil,
+      %{},
+      "not-a-map",
+      %{"applied" => false, "result_transport" => "buffered"},
+      %{"applied" => "true", "result_transport" => "buffered"},
+      %{"applied" => true, "result_transport" => "websocket"},
+      %{
+        "applied" => true,
+        "result_transport" => "sse",
+        "raw_payload" => %{"content" => sentinel}
+      }
+    ]
+
+    requests =
+      for {value, index} <- Enum.with_index(malformed_values, 1) do
+        metadata = if is_nil(value), do: %{}, else: %{"compaction_bridge" => value}
+
+        request_fixture(%{pool: pool, api_key: api_key}, %{
+          requested_model: "gpt-malformed-compaction-bridge-#{index}",
+          endpoint: "/backend-api/codex/responses",
+          transport: "websocket",
+          correlation_id: "malformed-compaction-bridge-#{index}",
+          request_metadata: metadata
+        })
+      end
+
+    for request <- requests do
+      log = Accounting.get_request_log_for_scope(owner_scope, request.id)
+
+      assert is_nil(log.compaction_bridge)
+      refute inspect(log) =~ sentinel
+    end
+
+    sentinel_log =
+      requests |> List.last() |> then(&Accounting.get_request_log_for_scope(owner_scope, &1.id))
+
+    assert sentinel_log.metadata["compaction_bridge"] == %{
+             "applied" => true,
+             "result_transport" => "sse",
+             "raw_payload" => "[REDACTED]"
+           }
+  end
+
   test "request log rows aggregate all sanitized denial attempt degraded and retryable errors" do
     %{pool: pool, api_key: api_key} = active_api_key_fixture()
     %{assignment: assignment} = upstream_assignment_fixture(pool)

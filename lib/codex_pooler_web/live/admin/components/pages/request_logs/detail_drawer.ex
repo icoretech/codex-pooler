@@ -45,6 +45,20 @@ defmodule CodexPoolerWeb.Admin.RequestLogDetailDrawer do
             </dl>
           </section>
 
+          <section
+            :if={Rows.compaction_bridge_rows(@selected_request_log) != []}
+            id="request-log-detail-compaction-bridge"
+            class="grid gap-3"
+          >
+            <.section_heading title="Compaction bridge" />
+            <dl class="grid gap-2 text-sm sm:grid-cols-2">
+              <.detail_row
+                :for={row <- Rows.compaction_bridge_rows(@selected_request_log)}
+                row={row}
+              />
+            </dl>
+          </section>
+
           <section id="request-log-detail-attempts" class="grid gap-3">
             <.section_heading title="Attempts timeline" />
             <div
