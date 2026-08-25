@@ -3,6 +3,7 @@ defmodule CodexPooler.MixTasks.DevMeteredQuotaFixtureTest do
 
   import Ecto.Query
 
+  alias CodexPooler.Access.APIKeys.Authentication
   alias CodexPooler.Accounts.User
   alias CodexPooler.Dev.MeteredQuotaFixture
   alias CodexPooler.Pools.Membership
@@ -53,6 +54,69 @@ defmodule CodexPooler.MixTasks.DevMeteredQuotaFixtureTest do
     %{options: options, owner: owner, receipt_path: receipt_path, root: root}
   end
 
+  test "acquire, status, and release preserve exact fixture ownership", context do
+    assert {:ok, %{status: "ready", leases: 1, rows_present: true}} =
+             MeteredQuotaFixture.acquire(context.options)
+
+    assert Repo.aggregate(AccountQuotaWindow, :count, :id) == 8
+
+    assert {:ok, %{status: "ready", leases: 1, rows_present: true}} =
+             MeteredQuotaFixture.status(context.options)
+
+    assert {:ok, %{status: "released", leases: 0}} =
+             MeteredQuotaFixture.release(context.options)
+
+    assert Repo.aggregate(AccountQuotaWindow, :count, :id) == 0
+    assert Repo.get(User, context.owner.id)
+  end
+
+  test "receipt and repeatable output omit secrets and owner identifiers", context do
+    assert {:ok,
+            %{
+              status: "ready",
+              one_time_api_key: raw_key,
+              admin_identity_route: admin_identity_route
+            } = acquisition} = MeteredQuotaFixture.acquire(context.options)
+
+    assert raw_key =~ ~r/^sk-cxp-/
+    assert admin_identity_route =~ ~r|^/admin/upstreams/[0-9a-f-]{36}$|
+    assert {:ok, %{key_prefix: key_prefix}} = Authentication.authenticate_api_key(raw_key)
+
+    receipt_body = File.read!(context.receipt_path)
+    receipt = Jason.decode!(receipt_body)
+
+    assert Enum.sort(Map.keys(receipt)) ==
+             ~w(api_key_prefix fixture_hash leases owned_row_count route_paths state version)
+
+    refute receipt_body =~ raw_key
+
+    refute receipt_body =~
+             ~r/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i
+
+    refute Map.has_key?(receipt, "identity_id")
+    refute Map.has_key?(receipt, "owned_row_ids")
+
+    assert {:ok, status} = MeteredQuotaFixture.status(context.options)
+    status_output = Jason.encode!(status)
+
+    refute Map.has_key?(status, :one_time_api_key)
+    refute Map.has_key?(status, :identity_id)
+    refute Map.has_key?(status, :admin_identity_route)
+    refute status_output =~ raw_key
+
+    refute status_output =~
+             ~r/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i
+
+    assert acquisition.api_key_prefix == receipt["api_key_prefix"]
+    assert key_prefix == receipt["api_key_prefix"]
+
+    assert {:ok, %{status: "released", leases: 0}} =
+             MeteredQuotaFixture.release(context.options)
+
+    refute File.exists?(context.receipt_path)
+    assert Repo.aggregate(AccountQuotaWindow, :count, :id) == 0
+  end
+
   test "acquire is reference counted and release deletes only exact journaled ids", context do
     assert {:ok, %{status: "ready", leases: 1, selector_complete: true}} =
              MeteredQuotaFixture.acquire(context.options)
@@ -61,21 +125,16 @@ defmodule CodexPooler.MixTasks.DevMeteredQuotaFixtureTest do
     assert file_mode(context.receipt_path) == 0o600
 
     receipt = context.receipt_path |> File.read!() |> Jason.decode!()
-    assert receipt["login"] == %{"email" => "dev-owner@example.com", "password" => @password}
-    assert receipt["local_url"] == "http://127.0.0.1:4000"
-    assert receipt["api_key"]["value"] =~ ~r/^sk-cxp-/
-    assert receipt["api_key"]["prefix"] =~ ~r/^sk-cxp-/
-    assert receipt["identity_id"] == receipt["owned_row_ids"]["identity_id"]
-
-    window_ids = receipt["owned_row_ids"]["quota_window_ids"]
-    assert length(window_ids) == 8
+    assert receipt["api_key_prefix"] =~ ~r/^sk-cxp-/
+    assert receipt["owned_row_count"] == 12
 
     windows =
       Repo.all(
         from window in AccountQuotaWindow,
-          where: window.id in ^window_ids,
           order_by: [asc: window.quota_key, asc: window.raw_metered_feature]
       )
+
+    assert length(windows) == 8
 
     snapshot_at = now()
 

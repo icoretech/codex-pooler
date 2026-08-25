@@ -6,6 +6,7 @@ defmodule CodexPooler.Dev.MeteredQuotaFixture.Provisioner do
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Access.APIKeys.Material
   alias CodexPooler.Accounts.User
+  alias CodexPooler.Dev.MeteredQuotaFixture.Provisioner.{Ownership, Rows}
   alias CodexPooler.Dev.Seeds
   alias CodexPooler.Pools.{Membership, Pool}
   alias CodexPooler.Quotas.Evidence
@@ -19,53 +20,43 @@ defmodule CodexPooler.Dev.MeteredQuotaFixture.Provisioner do
   @identity_account_id "dev-metered-quota"
   @marker "metered_quota"
 
-  @type owned_ids :: %{
-          required(String.t()) => String.t() | [String.t()]
-        }
-
   @type result :: %{
           required(:api_key) => String.t(),
           required(:api_key_prefix) => String.t(),
+          required(:fixture_hash) => String.t(),
           required(:identity_id) => Ecto.UUID.t(),
-          required(:owned_row_ids) => owned_ids()
+          required(:owned_row_count) => pos_integer()
         }
 
   @spec prepare() :: result()
   def prepare do
-    ids = generated_ids()
+    fixture_hash = random_fixture_hash()
+    ids = Ownership.derived_ids(fixture_hash)
     {key_prefix, raw_key, _key_hash} = Material.generate()
 
     %{
       api_key: raw_key,
       api_key_prefix: key_prefix,
+      fixture_hash: fixture_hash,
       identity_id: ids.identity_id,
-      owned_row_ids: %{
-        "pool_id" => ids.pool_id,
-        "api_key_id" => ids.api_key_id,
-        "identity_id" => ids.identity_id,
-        "assignment_id" => ids.assignment_id,
-        "quota_window_ids" => ids.quota_window_ids
-      }
+      owned_row_count: 12
     }
   end
 
-  @spec provision!(map()) :: :ok
-  def provision!(document) do
+  @spec provision!(map(), String.t()) :: :ok
+  def provision!(document, raw_key) do
     owner = owner!()
     refuse_unjournaled_collisions!()
-    {:ok, ids} = parse_owned_ids(document["owned_row_ids"])
-    %{"prefix" => key_prefix, "value" => raw_key} = document["api_key"]
+    {:ok, ids} = Ownership.ids_from_document(document)
+    key_prefix = document["api_key_prefix"]
     {:ok, ^key_prefix, secret} = Material.split(raw_key)
     key_hash = Material.hash_secret(secret)
     timestamp = now()
+    fixture_hash = document["fixture_hash"]
 
     {:ok, :created} =
       Repo.transact(fn ->
-        pool = insert_pool!(ids.pool_id, owner, timestamp)
-        identity = insert_identity!(ids.identity_id, owner, timestamp)
-        insert_assignment!(ids.assignment_id, pool, identity, owner, timestamp)
-        insert_api_key!(ids.api_key_id, pool, owner, key_prefix, key_hash, timestamp)
-        insert_windows!(ids.quota_window_ids, identity, timestamp)
+        Rows.insert!(ids, owner, key_prefix, key_hash, fixture_hash, timestamp)
         {:ok, :created}
       end)
 
@@ -73,30 +64,16 @@ defmodule CodexPooler.Dev.MeteredQuotaFixture.Provisioner do
   end
 
   @spec release(map()) :: :ok | {:error, String.t()}
-  def release(%{"owned_row_ids" => owned_ids}) when is_map(owned_ids) do
-    with {:ok, ids} <- parse_owned_ids(owned_ids),
-         :ok <- validate_owned_rows(ids),
-         {:ok, :released} <- exact_delete(ids) do
-      :ok
-    end
+  def release(document) do
+    Ownership.release(document)
   end
-
-  def release(_document), do: {:error, "metered quota fixture receipt has no owned row ids"}
 
   @spec status(map()) ::
           {:ok, %{rows_present: boolean(), selector_complete: boolean()}}
           | {:error, String.t()}
-  def status(%{"owned_row_ids" => owned_ids}) when is_map(owned_ids) do
-    with {:ok, ids} <- parse_owned_ids(owned_ids),
-         :ok <- validate_owned_rows(ids) do
-      rows_present = owned_row_count(ids) == 4 + length(ids.quota_window_ids)
-
-      {:ok,
-       %{rows_present: rows_present, selector_complete: rows_present and selector_complete?(ids)}}
-    end
+  def status(document) do
+    Ownership.status(document)
   end
-
-  def status(_document), do: {:error, "metered quota fixture receipt has no owned row ids"}
 
   defp owner! do
     owner = Repo.get_by(User, email: @owner_email)
@@ -137,13 +114,15 @@ defmodule CodexPooler.Dev.MeteredQuotaFixture.Provisioner do
     end
   end
 
-  defp generated_ids do
+  defp derived_ids(fixture_hash) do
     %{
-      pool_id: Ecto.UUID.generate(),
-      api_key_id: Ecto.UUID.generate(),
-      identity_id: Ecto.UUID.generate(),
-      assignment_id: Ecto.UUID.generate(),
-      quota_window_ids: Enum.map(1..8, fn _index -> Ecto.UUID.generate() end)
+      fixture_hash: fixture_hash,
+      pool_id: derived_uuid(fixture_hash, "pool"),
+      api_key_id: derived_uuid(fixture_hash, "api-key"),
+      identity_id: derived_uuid(fixture_hash, "identity"),
+      assignment_id: derived_uuid(fixture_hash, "assignment"),
+      quota_window_ids:
+        Enum.map(1..8, fn index -> derived_uuid(fixture_hash, "quota-window-#{index}") end)
     }
   end
 
@@ -160,7 +139,7 @@ defmodule CodexPooler.Dev.MeteredQuotaFixture.Provisioner do
     |> Repo.insert!()
   end
 
-  defp insert_identity!(id, owner, timestamp) do
+  defp insert_identity!(id, owner, fixture_hash, timestamp) do
     %UpstreamIdentity{id: id}
     |> UpstreamIdentity.changeset(%{
       chatgpt_account_id: @identity_account_id,
@@ -177,12 +156,12 @@ defmodule CodexPooler.Dev.MeteredQuotaFixture.Provisioner do
       created_by_user_id: owner.id,
       created_at: timestamp,
       updated_at: timestamp,
-      metadata: %{"dev_fixture" => @marker}
+      metadata: %{"dev_fixture" => @marker, "fixture_hash" => fixture_hash}
     })
     |> Repo.insert!()
   end
 
-  defp insert_assignment!(id, pool, identity, owner, timestamp) do
+  defp insert_assignment!(id, pool, identity, owner, fixture_hash, timestamp) do
     %PoolUpstreamAssignment{id: id}
     |> PoolUpstreamAssignment.changeset(%{
       pool_id: pool.id,
@@ -195,12 +174,16 @@ defmodule CodexPooler.Dev.MeteredQuotaFixture.Provisioner do
       created_by_user_id: owner.id,
       created_at: timestamp,
       updated_at: timestamp,
-      metadata: %{"dev_fixture" => @marker, "quota_priming" => %{"status" => "known"}}
+      metadata: %{
+        "dev_fixture" => @marker,
+        "fixture_hash" => fixture_hash,
+        "quota_priming" => %{"status" => "known"}
+      }
     })
     |> Repo.insert!()
   end
 
-  defp insert_api_key!(id, pool, owner, key_prefix, key_hash, timestamp) do
+  defp insert_api_key!(id, pool, owner, key_prefix, key_hash, fixture_hash, timestamp) do
     %APIKey{id: id}
     |> APIKey.changeset(%{
       pool_id: pool.id,
@@ -209,14 +192,14 @@ defmodule CodexPooler.Dev.MeteredQuotaFixture.Provisioner do
       key_hash: key_hash,
       status: "active",
       dashboard_access: false,
-      metadata: %{"dev_fixture" => @marker},
+      metadata: %{"dev_fixture" => @marker, "fixture_hash" => fixture_hash},
       created_by_user_id: owner.id,
       created_at: timestamp
     })
     |> Repo.insert!()
   end
 
-  defp insert_windows!(ids, identity, timestamp) do
+  defp insert_windows!(ids, identity, fixture_hash, timestamp) do
     stale_at = DateTime.add(timestamp, -2, :day)
 
     specs = [
@@ -247,7 +230,7 @@ defmodule CodexPooler.Dev.MeteredQuotaFixture.Provisioner do
           source_precision: "observed",
           last_sync_at: attrs.observed_at,
           merge_precedence: 50,
-          metadata: %{"dev_fixture" => @marker},
+          metadata: %{"dev_fixture" => @marker, "fixture_hash" => fixture_hash},
           created_at: timestamp,
           updated_at: timestamp
         })
@@ -291,49 +274,28 @@ defmodule CodexPooler.Dev.MeteredQuotaFixture.Provisioner do
     }
   end
 
-  defp parse_owned_ids(owned_ids) do
-    with {:ok, pool_id} <- uuid(owned_ids["pool_id"]),
-         {:ok, api_key_id} <- uuid(owned_ids["api_key_id"]),
-         {:ok, identity_id} <- uuid(owned_ids["identity_id"]),
-         {:ok, assignment_id} <- uuid(owned_ids["assignment_id"]),
-         {:ok, quota_window_ids} <- uuid_list(owned_ids["quota_window_ids"], 8) do
-      {:ok,
-       %{
-         pool_id: pool_id,
-         api_key_id: api_key_id,
-         identity_id: identity_id,
-         assignment_id: assignment_id,
-         quota_window_ids: quota_window_ids
-       }}
+  defp derive_document_ids(%{"fixture_hash" => fixture_hash})
+       when is_binary(fixture_hash) and byte_size(fixture_hash) == 64 do
+    if fixture_hash =~ ~r/\A[0-9a-f]{64}\z/ do
+      {:ok, derived_ids(fixture_hash)}
     else
-      :error -> {:error, "metered quota fixture receipt contains invalid owned row ids"}
+      {:error, "metered quota fixture receipt contains an invalid fixture hash"}
     end
   end
 
-  defp uuid(value) when is_binary(value) do
-    case Ecto.UUID.cast(value) do
-      {:ok, uuid} -> {:ok, uuid}
-      :error -> :error
-    end
+  defp derive_document_ids(_document),
+    do: {:error, "metered quota fixture receipt has no fixture hash"}
+
+  defp derived_uuid(fixture_hash, label) do
+    <<a::48, _version::4, b::12, _variant::2, c::62, _rest::128>> =
+      :crypto.hash(:sha256, [fixture_hash, ?:, label])
+
+    Ecto.UUID.load!(<<a::48, 5::4, b::12, 2::2, c::62>>)
   end
 
-  defp uuid(_value), do: :error
-
-  defp uuid_list(values, expected_count)
-       when is_list(values) and length(values) == expected_count do
-    Enum.reduce_while(values, {:ok, []}, fn value, {:ok, acc} ->
-      case uuid(value) do
-        {:ok, uuid} -> {:cont, {:ok, [uuid | acc]}}
-        :error -> {:halt, :error}
-      end
-    end)
-    |> case do
-      {:ok, ids} -> {:ok, Enum.reverse(ids)}
-      :error -> :error
-    end
+  defp random_fixture_hash do
+    32 |> :crypto.strong_rand_bytes() |> Base.encode16(case: :lower)
   end
-
-  defp uuid_list(_values, _expected_count), do: :error
 
   defp validate_owned_rows(ids) do
     checks =
@@ -342,26 +304,24 @@ defmodule CodexPooler.Dev.MeteredQuotaFixture.Provisioner do
         owned?(
           APIKey,
           ids.api_key_id,
-          &(&1.pool_id == ids.pool_id and &1.metadata["dev_fixture"] == @marker)
+          &owned_api_key?(&1, ids)
         ),
         owned?(
           UpstreamIdentity,
           ids.identity_id,
-          &(&1.chatgpt_account_id == @identity_account_id and
-              &1.metadata["dev_fixture"] == @marker)
+          &owned_identity?(&1, ids)
         ),
         owned?(
           PoolUpstreamAssignment,
           ids.assignment_id,
-          &(&1.pool_id == ids.pool_id and &1.upstream_identity_id == ids.identity_id and
-              &1.metadata["dev_fixture"] == @marker)
+          &owned_assignment?(&1, ids)
         )
       ] ++
         Enum.map(ids.quota_window_ids, fn id ->
           owned?(
             AccountQuotaWindow,
             id,
-            &(&1.upstream_identity_id == ids.identity_id and &1.metadata["dev_fixture"] == @marker)
+            &owned_window?(&1, ids)
           )
         end)
 
@@ -370,6 +330,29 @@ defmodule CodexPooler.Dev.MeteredQuotaFixture.Provisioner do
     else
       {:error, "metered quota fixture receipt points to a row outside fixture ownership"}
     end
+  end
+
+  defp owned_api_key?(row, ids) do
+    row.pool_id == ids.pool_id and owned_metadata?(row.metadata, ids.fixture_hash)
+  end
+
+  defp owned_identity?(row, ids) do
+    row.chatgpt_account_id == @identity_account_id and
+      owned_metadata?(row.metadata, ids.fixture_hash)
+  end
+
+  defp owned_assignment?(row, ids) do
+    row.pool_id == ids.pool_id and row.upstream_identity_id == ids.identity_id and
+      owned_metadata?(row.metadata, ids.fixture_hash)
+  end
+
+  defp owned_window?(row, ids) do
+    row.upstream_identity_id == ids.identity_id and
+      owned_metadata?(row.metadata, ids.fixture_hash)
+  end
+
+  defp owned_metadata?(metadata, fixture_hash) do
+    metadata["dev_fixture"] == @marker and metadata["fixture_hash"] == fixture_hash
   end
 
   defp owned?(schema, id, predicate) do

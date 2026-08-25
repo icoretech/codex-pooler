@@ -30,14 +30,19 @@ defmodule Mix.Tasks.Dev.MeteredQuotaFixture do
 
   defp parse_args(args) do
     case OptionParser.parse(args, strict: [output: :string, receipt: :string], aliases: []) do
-      {[output: path], ["acquire"], []} -> {:ok, :acquire, [receipt_path: path]}
+      {[output: path], ["acquire"], []} -> {:ok, :acquire, receipt_options(path)}
       {[], ["acquire"], []} -> {:ok, :acquire, []}
-      {[receipt: path], ["status"], []} -> {:ok, :status, [receipt_path: path]}
+      {[receipt: path], ["status"], []} -> {:ok, :status, receipt_options(path)}
       {[], ["status"], []} -> {:ok, :status, []}
-      {[receipt: path], ["release"], []} -> {:ok, :release, [receipt_path: path]}
+      {[receipt: path], ["release"], []} -> {:ok, :release, receipt_options(path)}
       {[], ["release"], []} -> {:ok, :release, []}
       _invalid -> {:error, usage()}
     end
+  end
+
+  defp receipt_options(path) do
+    expanded_path = Path.expand(path)
+    [receipt_path: expanded_path, allowed_receipt_root: Path.dirname(expanded_path)]
   end
 
   defp maybe_start_application(:status, options) do
