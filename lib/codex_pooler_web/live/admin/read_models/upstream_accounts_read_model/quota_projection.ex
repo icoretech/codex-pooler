@@ -148,6 +148,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     additional_limits =
       windows
       |> Enum.reject(&account_quota_window?/1)
+      |> Enum.reject(&(Evidence.current_freshness_state(&1, snapshot_at) == "stale"))
       |> Enum.filter(&informative_additional_quota_window?/1)
       |> Enum.sort_by(&quota_limit_sort_key/1)
       |> quota_limit_presentations()

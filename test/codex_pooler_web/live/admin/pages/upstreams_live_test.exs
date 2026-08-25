@@ -3789,7 +3789,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
   end
 
   @tag :upstream_quota_evidence_stability
-  test "mounted upstream cards retain stale additional quota history without presenting it as current",
+  test "mounted upstream routes omit stale additional quota history without mutating it",
        %{
          conn: conn,
          scope: scope
@@ -3809,13 +3809,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
     fresh_observed_at = DateTime.add(now, -60, :second)
 
-    stale_observed_at =
-      DateTime.add(now, -(Evidence.freshness_ttl_seconds() + 60), :second)
+    stale_observed_at = DateTime.add(now, -(Evidence.freshness_ttl_seconds() + 60), :second)
 
-    raw_limit_name = "private-provider-descriptor-stale-history"
-    raw_metered_feature = "private-provider-meter-stale-history"
+    raw_limit_name = "gpt-reserve"
+    raw_metered_feature = "base_model_inference"
+    raw_metadata = "sanitized-reserve-provider-metadata"
 
-    assert {:ok, _windows} =
+    assert {:ok, windows} =
              QuotaWindows.upsert_quota_windows(identity, [
                %{
                  quota_key: "account",
@@ -3877,30 +3877,31 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
                  observed_at: fresh_observed_at
                },
                %{
-                 quota_key: "shared_history",
+                 quota_key: "unknown_additional",
                  quota_scope: "feature",
-                 quota_family: "current",
-                 display_label: "Shared history",
+                 quota_family: "unknown",
+                 display_label: "Unknown additional",
                  window_kind: "primary",
                  window_minutes: 300,
                  active_limit: 100,
                  credits: 90,
                  used_percent: Decimal.new("10"),
-                 reset_at: DateTime.add(now, 5, :hour),
+                 reset_at: nil,
                  source: "codex_usage_api",
                  source_precision: "observed",
-                 freshness_state: "fresh",
-                 observed_at: fresh_observed_at
+                 freshness_state: "unknown",
+                 observed_at: nil
                },
                %{
-                 quota_key: "shared_history",
-                 quota_scope: "feature",
-                 quota_family: "historical",
-                 display_label: "Shared history",
+                 quota_key: "gpt_reserve",
+                 quota_scope: "model",
+                 quota_family: "codex_model",
+                 model: "gpt-reserve",
+                 display_label: "GPT-Reserve",
                  raw_limit_name: raw_limit_name,
                  raw_metered_feature: raw_metered_feature,
-                 window_kind: "primary",
-                 window_minutes: 300,
+                 window_kind: "secondary",
+                 window_minutes: 10_080,
                  active_limit: 100,
                  credits: 75,
                  used_percent: Decimal.new("25"),
@@ -3910,108 +3911,63 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
                  freshness_state: "fresh",
                  observed_at: stale_observed_at,
                  metadata: %{
-                   "private_descriptor" => "private-provider-metadata-stale-history"
+                   "private_descriptor" => raw_metadata
                  }
-               },
-               %{
-                 quota_key: "shared_history",
-                 quota_scope: "feature",
-                 quota_family: "exhausted",
-                 display_label: "Shared history",
-                 window_kind: "primary",
-                 window_minutes: 300,
-                 active_limit: 100,
-                 credits: 0,
-                 used_percent: Decimal.new("100"),
-                 reset_at: DateTime.add(now, 5, :hour),
-                 source: "codex_usage_api",
-                 source_precision: "observed",
-                 freshness_state: "fresh",
-                 observed_at: stale_observed_at
                }
              ])
 
-    {:ok, view, _html} = live(conn, ~p"/admin/upstreams")
+    stale_window = Enum.find(windows, &(&1.quota_key == "gpt_reserve"))
+    assert %AccountQuotaWindow{} = stale_window
+
+    before_count =
+      Repo.aggregate(
+        from(window in AccountQuotaWindow, where: window.upstream_identity_id == ^identity.id),
+        :count,
+        :id
+      )
+
+    {:ok, list_view, _html} = live(conn, ~p"/admin/upstreams")
 
     prefix = "upstream-account-#{identity.id}-limit"
 
-    current_id =
-      "#{prefix}-feature-shared_history-primary-300-identity-" <>
-        "smzswc5dvojsq-smn2xe4tfnz2a-s-s-sonugc4tfmrpwq2ltorxxe6i-sobzgs3lboj4q-i300"
+    current_id = "#{prefix}-model-codex_spark-primary-300"
+    unknown_id = "#{prefix}-feature-unknown_additional-primary-300"
+    stale_id = "#{prefix}-model-gpt_reserve-secondary-10080"
 
-    exhausted_id =
-      "#{prefix}-feature-shared_history-primary-300-identity-" <>
-        "smzswc5dvojsq-smv4gqylvon2gkza-s-s-sonugc4tfmrpwq2ltorxxe6i-sobzgs3lboj4q-i300"
-
-    historical_id =
-      "#{prefix}-feature-shared_history-primary-300-identity-" <>
-        "smzswc5dvojsq-snbuxg5dpojuwgylm-s-s-sonugc4tfmrpwq2ltorxxe6i-sobzgs3lboj4q-i300-" <>
-        "s#{raw_metered_feature |> String.trim() |> Base.encode32(padding: false) |> String.downcase()}"
-
-    assert has_element?(view, "##{prefix}-primary_5h[data-evidence-state='fresh']", "64%")
-    assert has_element?(view, "##{prefix}-weekly[data-evidence-state='fresh']", "90%")
+    assert has_element?(list_view, "##{prefix}-primary_5h[data-evidence-state='fresh']", "64%")
+    assert has_element?(list_view, "##{prefix}-weekly[data-evidence-state='fresh']", "90%")
 
     assert has_element?(
-             view,
+             list_view,
              "##{prefix}-primary_30d[data-evidence-state='fresh']",
              "601 credits"
            )
 
     assert has_element?(
-             view,
-             "##{prefix}-model-codex_spark-primary-300[data-evidence-state='fresh']",
+             list_view,
+             "##{current_id}[data-evidence-state='fresh'][data-meter-state='current']",
              "45%"
            )
 
     assert has_element?(
-             view,
-             "##{current_id}[data-evidence-state='fresh'][data-meter-state='current']",
-             "90%"
-           )
-
-    assert has_element?(
-             view,
+             list_view,
              "##{current_id}-progress[data-evidence-state='fresh'][data-meter-state='current']" <>
-               ".progress-success[value='90']:not([aria-describedby])"
+               ".progress-warning[value='45']:not([aria-describedby])"
            )
 
-    assert has_element?(view, "##{current_id}-reset[phx-hook='RelativeCountdown']")
+    assert has_element?(list_view, "##{current_id}-reset[phx-hook='RelativeCountdown']")
 
     assert has_element?(
-             view,
-             "##{historical_id}[data-evidence-state='stale'][data-meter-state='historical']",
-             "75%"
+             list_view,
+             "##{unknown_id}[data-evidence-state='unknown'][data-meter-state='unknown']",
+             "Unknown additional 5h"
            )
 
-    assert has_element?(
-             view,
-             "##{historical_id}-progress[data-evidence-state='stale']" <>
-               "[data-meter-state='historical'].progress-success[value='75']:not([aria-describedby])"
-           )
+    assert has_element?(list_view, "##{unknown_id}-progress")
+    refute has_element?(list_view, "##{stale_id}")
+    refute has_element?(list_view, "GPT-Reserve Weekly")
 
-    refute has_element?(view, "##{historical_id}-freshness")
-    refute has_element?(view, "##{historical_id}-observed")
-    refute has_element?(view, "##{historical_id}-reset")
-
-    assert has_element?(
-             view,
-             "##{exhausted_id}[data-evidence-state='stale']" <>
-               "[data-meter-state='historical_exhausted']",
-             "0%"
-           )
-
-    assert has_element?(
-             view,
-             "##{exhausted_id}-progress[data-evidence-state='stale']" <>
-               "[data-meter-state='historical_exhausted'].progress-error:not(.progress-success)" <>
-               "[value='0']:not([aria-describedby])"
-           )
-
-    refute has_element?(view, "##{exhausted_id}-freshness")
-    refute has_element?(view, "##{exhausted_id}-observed")
-    refute has_element?(view, "##{exhausted_id}-reset")
-
-    limits_fragment = view |> element("##{prefix}s") |> render()
+    limits_fragment = list_view |> element("##{prefix}s") |> render()
     limits_document = LazyHTML.from_fragment(limits_fragment)
 
     rendered_limit_ids =
@@ -4019,41 +3975,45 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       |> LazyHTML.query("[data-role='upstream-limit-chart']")
       |> Enum.map(fn node -> node |> LazyHTML.attribute("id") |> List.first() end)
 
-    assert rendered_limit_ids == [
-             "#{prefix}-primary_5h",
-             "#{prefix}-primary_30d",
-             "#{prefix}-weekly",
-             "#{prefix}-model-codex_spark-primary-300",
-             current_id,
-             exhausted_id,
-             historical_id
-           ]
-
     assert rendered_limit_ids == Enum.uniq(rendered_limit_ids)
     refute limits_fragment =~ raw_limit_name
     refute limits_fragment =~ raw_metered_feature
-    refute limits_fragment =~ "private-provider-metadata-stale-history"
+    refute limits_fragment =~ raw_metadata
 
-    evidence_path =
-      Path.expand(
-        "../../../../../.omo/evidence/gpt-reserve-quota-freshness-and-identity/task-7-upstreams.html",
-        __DIR__
-      )
+    {:ok, cockpit_view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
 
-    File.mkdir_p!(Path.dirname(evidence_path))
+    assert has_element?(
+             cockpit_view,
+             "#upstream-quota-limit-primary_5h-progress.progress-warning[value='64']"
+           )
 
-    File.write!(
-      evidence_path,
-      "<!-- actual mounted /admin/upstreams quota DOM; selectors asserted in upstreams_live_test.exs -->\n" <>
-        limits_fragment
-    )
+    assert has_element?(
+             cockpit_view,
+             "#upstream-quota-limit-model-codex_spark-primary-300-progress.progress-warning[value='45']"
+           )
 
-    evidence_document = evidence_path |> File.read!() |> LazyHTML.from_fragment()
+    assert has_element?(
+             cockpit_view,
+             "#upstream-quota-limit-feature-unknown_additional-primary-300" <>
+               "[data-evidence-state='unknown'][data-meter-state='unknown']",
+             "Unknown additional 5h"
+           )
 
-    assert LazyHTML.query(
-             evidence_document,
-             "##{historical_id}[data-evidence-state='stale'][data-meter-state='historical']"
-           ) != []
+    refute has_element?(cockpit_view, "#upstream-quota-limit-model-gpt_reserve-secondary-10080")
+    cockpit_html = render(cockpit_view)
+    refute cockpit_html =~ "GPT-Reserve Weekly"
+    refute cockpit_html =~ raw_limit_name
+    refute cockpit_html =~ raw_metered_feature
+    refute cockpit_html =~ raw_metadata
+    assert Repo.get(AccountQuotaWindow, stale_window.id).id == stale_window.id
+
+    assert Repo.aggregate(
+             from(window in AccountQuotaWindow,
+               where: window.upstream_identity_id == ^identity.id
+             ),
+             :count,
+             :id
+           ) == before_count
   end
 
   @tag :upstream_quota_evidence_stability

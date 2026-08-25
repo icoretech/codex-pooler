@@ -16,6 +16,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
+  alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPooler.Upstreams.Auth.CodexAuth
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
@@ -3600,7 +3601,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
   @tag :upstream_quota_evidence_stability
   @tag :manual_cockpit_quota_render
-  test "cockpit renders additional stale quota history independently from account health", %{
+  test "cockpit omits stale additional quota variants without mutating persisted history", %{
     conn: conn,
     scope: scope
   } do
@@ -3617,8 +3618,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
       })
 
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    stale_at = DateTime.add(now, -16, :minute)
-    raw_descriptor = "raw-cockpit-descriptor-#{System.unique_integer([:positive])}"
+    stale_at = DateTime.add(now, -(Evidence.freshness_ttl_seconds() + 60), :second)
+    future_at = DateTime.add(now, Evidence.future_observed_skew_seconds() + 60, :second)
+    raw_descriptor = "sanitized-cockpit-provider-descriptor"
 
     upsert_quota_window!(identity, %{
       window_kind: "primary",
@@ -3632,52 +3634,124 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     for attrs <- [
           %{
-            quota_key: "generic_history",
-            display_label: "Generic history",
+            quota_key: "gpt_reserve",
+            quota_scope: "model",
+            quota_family: "codex_model",
+            model: "gpt-reserve",
+            display_label: "GPT-Reserve",
+            limit_name: "gpt-reserve",
+            metered_feature: "base_model_inference",
+            window_kind: "secondary",
+            window_minutes: 10_080,
             used_percent: Decimal.new("25"),
             reset_at: DateTime.add(now, 6, :day),
+            observed_at: stale_at,
             metadata: %{"reset_state" => "anchored"}
           },
           %{
             quota_key: "generic_exhausted",
+            quota_scope: "feature",
+            quota_family: "generic_additional",
             display_label: "Generic exhausted",
+            limit_name: "Generic additional",
+            metered_feature: "generic_exhausted",
+            window_kind: "primary",
+            window_minutes: 300,
             used_percent: Decimal.new("100"),
             reset_at: DateTime.add(now, 6, :day),
+            observed_at: stale_at,
             metadata: %{"reset_state" => "anchored"}
           },
           %{
             quota_key: "generic_markerless",
+            quota_scope: "feature",
+            quota_family: "generic_additional",
             display_label: "Generic markerless",
+            limit_name: "Generic additional",
+            metered_feature: "generic_markerless",
+            window_kind: "primary",
+            window_minutes: 300,
             used_percent: Decimal.new("10"),
             reset_at: nil,
+            observed_at: stale_at,
             metadata: %{}
           },
           %{
-            quota_key: "generic_malformed_reset",
-            display_label: "Generic malformed reset",
+            quota_key: "generic_future_skew",
+            quota_scope: "feature",
+            quota_family: "generic_additional",
+            display_label: "Generic future skew",
+            limit_name: "Generic additional",
+            metered_feature: "generic_future_skew",
+            window_kind: "primary",
+            window_minutes: 300,
             used_percent: Decimal.new("40"),
             reset_at: DateTime.add(now, 6, :day),
-            metadata: %{"reset_state" => "malformed"}
+            observed_at: future_at,
+            metadata: %{"reset_state" => "anchored"}
+          },
+          %{
+            quota_key: "fresh_additional",
+            quota_scope: "model",
+            quota_family: "synthetic_model",
+            model: "model-fresh",
+            display_label: "Fresh additional",
+            limit_name: "Fresh additional",
+            metered_feature: "fresh_additional",
+            window_kind: "primary",
+            window_minutes: 300,
+            used_percent: Decimal.new("55"),
+            reset_at: DateTime.add(now, 4, :hour),
+            observed_at: now,
+            metadata: %{"reset_state" => "anchored"}
+          },
+          %{
+            quota_key: "unknown_additional",
+            quota_scope: "feature",
+            quota_family: "unknown",
+            display_label: "Unknown additional",
+            limit_name: "Unknown additional",
+            metered_feature: "unknown_additional",
+            window_kind: "primary",
+            window_minutes: 300,
+            used_percent: Decimal.new("10"),
+            reset_at: nil,
+            observed_at: nil,
+            freshness_state: "unknown",
+            metadata: %{}
           }
         ] do
       upsert_quota_window!(identity, %{
         quota_key: attrs.quota_key,
-        quota_scope: "feature",
-        quota_family: "generic_additional",
+        quota_scope: attrs.quota_scope,
+        quota_family: attrs.quota_family,
+        model: Map.get(attrs, :model),
         display_label: attrs.display_label,
-        limit_name: "Generic additional",
-        metered_feature: attrs.quota_key,
+        limit_name: attrs.limit_name,
+        metered_feature: attrs.metered_feature,
         raw_limit_id: "#{raw_descriptor}-limit-id",
         raw_limit_name: "#{raw_descriptor}-limit-name",
         raw_metered_feature: "#{raw_descriptor}-#{attrs.quota_key}-meter",
-        window_kind: "primary",
-        window_minutes: 300,
+        window_kind: attrs.window_kind,
+        window_minutes: attrs.window_minutes,
         used_percent: attrs.used_percent,
         reset_at: attrs.reset_at,
-        observed_at: stale_at,
+        observed_at: attrs.observed_at,
+        freshness_state: Map.get(attrs, :freshness_state, "fresh"),
         metadata: attrs.metadata
       })
     end
+
+    persisted_windows = QuotaWindows.list_evidence(identity)
+    stale_window = Enum.find(persisted_windows, &(&1.quota_key == "gpt_reserve"))
+    assert %AccountQuotaWindow{} = stale_window
+
+    before_count =
+      Repo.aggregate(
+        from(window in AccountQuotaWindow, where: window.upstream_identity_id == ^identity.id),
+        :count,
+        :id
+      )
 
     assert {:ok, cockpit} = UpstreamCockpitReadModel.load_visible(scope, identity.id)
     assert cockpit.charts.quota_health.state == "fresh"
@@ -3686,99 +3760,63 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     additional_limits = Enum.reject(cockpit.quota_limits, &is_atom(&1.key))
 
     assert Enum.sort(Enum.map(additional_limits, & &1.label)) == [
-             "Generic exhausted 5h",
-             "Generic history 5h",
-             "Generic malformed reset 5h",
-             "Generic markerless 5h"
+             "Fresh additional 5h",
+             "Unknown additional 5h"
            ]
-
-    assert Enum.all?(additional_limits, &(&1.evidence_state == :stale))
 
     {:ok, view, _html} = live(conn, ~p"/admin/upstreams/#{identity.id}")
 
     assert has_element?(view, "#upstream-quota", "Fresh")
     assert has_element?(view, "#upstream-routing-verdict", "Routing ready")
 
-    history = "#upstream-quota-limit-feature-generic_history-primary-300"
+    reserve = "#upstream-quota-limit-model-gpt_reserve-secondary-10080"
     exhausted = "#upstream-quota-limit-feature-generic_exhausted-primary-300"
     markerless = "#upstream-quota-limit-feature-generic_markerless-primary-300"
-    malformed = "#upstream-quota-limit-feature-generic_malformed_reset-primary-300"
+    future_skew = "#upstream-quota-limit-feature-generic_future_skew-primary-300"
+    fresh = "#upstream-quota-limit-model-fresh_additional-primary-300"
+    unknown = "#upstream-quota-limit-feature-unknown_additional-primary-300"
 
     assert has_element?(
              view,
-             "#{history}[data-role='upstream-limit-chart']" <>
-               "[data-evidence-state='stale'][data-meter-state='historical']",
-             "Generic history 5h"
+             "#upstream-quota-limit-primary_5h-progress.progress-success[value='80']"
            )
 
     assert has_element?(
              view,
-             "#{history}-progress.progress-success" <>
-               "[data-evidence-state='stale'][data-meter-state='historical']" <>
-               ":not([aria-describedby])"
-           )
-
-    refute has_element?(view, "#{history}-freshness")
-    refute has_element?(view, "#{history}-observed")
-    refute has_element?(view, "#{history}-reset")
-
-    assert has_element?(
-             view,
-             "#{exhausted}[data-evidence-state='stale']" <>
-               "[data-meter-state='historical_exhausted']",
-             "Generic exhausted 5h"
+             "#{fresh}[data-evidence-state='fresh'][data-meter-state='current']",
+             "Fresh additional 5h"
            )
 
     assert has_element?(
              view,
-             "#{exhausted}-progress.progress-error:not(.progress-success)" <>
-               ":not([aria-describedby])"
+             "#{fresh}-progress.progress-warning[value='45']:not([aria-describedby])"
            )
-
-    refute has_element?(view, "#{exhausted}-freshness")
-    refute has_element?(view, "#{exhausted}-observed")
-    refute has_element?(view, "#{exhausted}-reset")
 
     assert has_element?(
              view,
-             "#{markerless}[data-evidence-state='stale'][data-meter-state='historical']",
-             "Generic markerless 5h"
+             "#{unknown}[data-evidence-state='unknown'][data-meter-state='unknown']",
+             "Unknown additional 5h"
            )
 
-    refute has_element?(view, "#{markerless}-reset")
+    for selector <- [reserve, exhausted, markerless, future_skew] do
+      refute has_element?(view, selector)
+    end
 
-    assert has_element?(
-             view,
-             "#{malformed}[data-evidence-state='stale'][data-meter-state='historical']",
-             "Generic malformed reset 5h"
-           )
+    html = render(view)
+    refute html =~ "GPT-Reserve Weekly"
+    refute html =~ "Generic exhausted 5h"
+    refute html =~ "Generic markerless 5h"
+    refute html =~ "Generic future skew 5h"
+    refute html =~ raw_descriptor
+    assert Repo.get(AccountQuotaWindow, stale_window.id).id == stale_window.id
 
-    refute has_element?(view, "#{malformed}-reset")
-
-    routing_readiness_html = view |> element("#upstream-routing-verdict") |> render()
-    account_health_html = view |> element("#upstream-quota > header") |> render()
-
-    stale_rows_html =
-      [history, exhausted, markerless, malformed]
-      |> Enum.map_join(&(view |> element(&1) |> render()))
-
-    refute stale_rows_html =~ raw_descriptor
-    refute stale_rows_html =~ "RelativeCountdown"
-    refute stale_rows_html =~ "data-countdown-at="
-
-    evidence_html =
-      "<section data-role=\"cockpit-stale-history-evidence\">" <>
-        routing_readiness_html <> account_health_html <> stale_rows_html <> "</section>"
-
-    evidence_path =
-      Path.expand(
-        "../../../../../.omo/evidence/gpt-reserve-quota-freshness-and-identity/task-8-cockpit.html",
-        __DIR__
-      )
-
-    File.mkdir_p!(Path.dirname(evidence_path))
-    File.write!(evidence_path, evidence_html)
-    assert File.read!(evidence_path) == evidence_html
+    assert Repo.aggregate(
+             from(window in AccountQuotaWindow,
+               where: window.upstream_identity_id == ^identity.id
+             ),
+             :count,
+             :id
+           ) == before_count
   end
 
   @tag :quota_health

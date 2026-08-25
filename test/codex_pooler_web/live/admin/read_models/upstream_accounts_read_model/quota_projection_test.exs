@@ -1,6 +1,7 @@
 defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
   use CodexPooler.DataCase, async: false
 
+  alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Quota.WindowSelector
@@ -341,6 +342,127 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
   end
 
   describe "additional quota freshness presentation" do
+    @tag :stale_additional_visibility
+    test "keeps fresh additional evidence visible" do
+      rows =
+        [spark_window("primary", 300, @snapshot_at, used_percent: Decimal.new("25"))]
+        |> QuotaProjection.quota_limit_rows(
+          DateTimeDisplay.preferences_for_user(nil),
+          @snapshot_at
+        )
+
+      assert Enum.any?(rows, &(&1.key == "model-codex_spark-primary-300"))
+    end
+
+    @tag :stale_additional_visibility
+    test "keeps additional evidence with unknown freshness visible" do
+      rows =
+        [
+          spark_window("primary", 300, @snapshot_at,
+            used_percent: Decimal.new("25"),
+            observed_at: nil,
+            freshness_state: "unknown"
+          )
+        ]
+        |> QuotaProjection.quota_limit_rows(
+          DateTimeDisplay.preferences_for_user(nil),
+          @snapshot_at
+        )
+
+      assert Enum.any?(rows, &(&1.key == "model-codex_spark-primary-300"))
+    end
+
+    @tag :stale_additional_visibility
+    test "omits stale non-exhausted additional evidence" do
+      observed_at = DateTime.add(@snapshot_at, -(Evidence.freshness_ttl_seconds() + 1), :second)
+
+      rows =
+        [spark_window("primary", 300, observed_at, used_percent: Decimal.new("25"))]
+        |> QuotaProjection.quota_limit_rows(
+          DateTimeDisplay.preferences_for_user(nil),
+          @snapshot_at
+        )
+
+      refute Enum.any?(rows, &(&1.key == "model-codex_spark-primary-300"))
+    end
+
+    @tag :stale_additional_visibility
+    test "omits stale exhausted additional evidence" do
+      observed_at = DateTime.add(@snapshot_at, -(Evidence.freshness_ttl_seconds() + 1), :second)
+
+      rows =
+        [spark_window("primary", 300, observed_at, used_percent: Decimal.new("100"))]
+        |> QuotaProjection.quota_limit_rows(
+          DateTimeDisplay.preferences_for_user(nil),
+          @snapshot_at
+        )
+
+      refute Enum.any?(rows, &(&1.key == "model-codex_spark-primary-300"))
+    end
+
+    @tag :stale_additional_visibility
+    test "omits stale markerless additional evidence" do
+      observed_at = DateTime.add(@snapshot_at, -(Evidence.freshness_ttl_seconds() + 1), :second)
+
+      rows =
+        [
+          spark_window("primary", 300, observed_at,
+            used_percent: Decimal.new("0"),
+            metadata: %{}
+          )
+        ]
+        |> QuotaProjection.quota_limit_rows(
+          DateTimeDisplay.preferences_for_user(nil),
+          @snapshot_at
+        )
+
+      refute Enum.any?(rows, &(&1.key == "model-codex_spark-primary-300"))
+    end
+
+    @tag :stale_additional_visibility
+    test "keeps fixed account evidence visible when stale" do
+      observed_at = DateTime.add(@snapshot_at, -(Evidence.freshness_ttl_seconds() + 1), :second)
+
+      rows =
+        [
+          account_window(
+            observed_at: observed_at,
+            used_percent: Decimal.new("25"),
+            reset_at: DateTime.add(@snapshot_at, 5, :hour)
+          )
+        ]
+        |> QuotaProjection.quota_limit_rows(
+          DateTimeDisplay.preferences_for_user(nil),
+          @snapshot_at
+        )
+
+      assert Enum.any?(rows, &(&1.key == :primary_5h))
+    end
+
+    @tag :stale_additional_visibility
+    test "uses the supplied snapshot timestamp for additional evidence freshness" do
+      observed_at = @snapshot_at
+      row = spark_window("primary", 300, observed_at, used_percent: Decimal.new("25"))
+      ttl_seconds = Evidence.freshness_ttl_seconds()
+
+      before_expiry_rows =
+        [row]
+        |> QuotaProjection.quota_limit_rows(
+          DateTimeDisplay.preferences_for_user(nil),
+          DateTime.add(observed_at, ttl_seconds - 1, :second)
+        )
+
+      after_expiry_rows =
+        [row]
+        |> QuotaProjection.quota_limit_rows(
+          DateTimeDisplay.preferences_for_user(nil),
+          DateTime.add(observed_at, ttl_seconds + 1, :second)
+        )
+
+      assert Enum.any?(before_expiry_rows, &(&1.key == "model-codex_spark-primary-300"))
+      refute Enum.any?(after_expiry_rows, &(&1.key == "model-codex_spark-primary-300"))
+    end
+
     @tag :quota_projection
     test "projects fresh anchored evidence as a current countdown-capable meter" do
       row = projected_spark_row(used_percent: "25", metadata: %{"reset_state" => "anchored"})
@@ -360,7 +482,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
     @tag :quota_projection
     test "projects stale non-exhausted evidence as historical with an unconfirmed reset" do
       row =
-        projected_spark_row(
+        projected_account_row(
           used_percent: "25",
           observed_at: DateTime.add(@snapshot_at, -16, :minute),
           reset_at: DateTime.add(@snapshot_at, 6, :day),
@@ -382,7 +504,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
     @tag :quota_projection
     test "projects stale exhausted evidence as historical exhaustion with an error state" do
       row =
-        projected_spark_row(
+        projected_account_row(
           used_percent: "100",
           observed_at: DateTime.add(@snapshot_at, -16, :minute),
           reset_at: DateTime.add(@snapshot_at, 6, :day),
@@ -406,24 +528,6 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
       assert row.evidence_state == :fresh
       assert row.meter_state == :current
       assert row.freshness_label == "current"
-      assert row.reset_display_state == :absent
-      assert row.reset_at == nil
-      assert row.reset_label == nil
-    end
-
-    @tag :quota_projection
-    test "projects stale markerless zero-use evidence as historical without a reset" do
-      row =
-        projected_spark_row(
-          used_percent: "0",
-          observed_at: DateTime.add(@snapshot_at, -16, :minute),
-          metadata: %{}
-        )
-
-      assert Decimal.equal?(row.percent, Decimal.new("100"))
-      assert row.evidence_state == :stale
-      assert row.meter_state == :historical
-      assert row.freshness_label == "last reported"
       assert row.reset_display_state == :absent
       assert row.reset_at == nil
       assert row.reset_label == nil
@@ -1134,7 +1238,9 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
 
     future_rows =
       [
-        spark_window("secondary", 10_080, snapshot_at,
+        account_window(
+          observed_at: snapshot_at,
+          used_percent: Decimal.new("25"),
           reset_at: subsecond_future,
           metadata: %{"reset_state" => "anchored"}
         )
@@ -1143,17 +1249,18 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
 
     due_rows =
       [
-        spark_window("secondary", 10_080, snapshot_at,
+        account_window(
+          observed_at: snapshot_at,
+          used_percent: Decimal.new("25"),
           reset_at: snapshot_at,
           metadata: %{"reset_state" => "anchored"}
         )
       ]
       |> QuotaProjection.quota_limit_rows(preferences, snapshot_at)
 
-    assert Enum.find(future_rows, &(&1.key == "model-codex_spark-secondary-10080")).reset_label ==
-             "in <1m"
+    assert Enum.find(future_rows, &(&1.key == :primary_5h)).reset_label == "in <1m"
 
-    due_row = Enum.find(due_rows, &(&1.key == "model-codex_spark-secondary-10080"))
+    due_row = Enum.find(due_rows, &(&1.key == :primary_5h))
     assert due_row.evidence_state == :stale
     assert due_row.reset_display_state == :unconfirmed
     assert due_row.reset_at == nil
@@ -1409,6 +1516,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
       @snapshot_at
     )
     |> Enum.find(&(&1.key == "model-codex_spark-secondary-10080"))
+  end
+
+  defp projected_account_row(attrs) do
+    observed_at = Keyword.get(attrs, :observed_at, @snapshot_at)
+    used_percent = Decimal.new(Keyword.get(attrs, :used_percent, "25"))
+    attrs = attrs |> Keyword.delete(:observed_at) |> Keyword.put(:used_percent, used_percent)
+
+    [account_window(Keyword.put(attrs, :observed_at, observed_at))]
+    |> QuotaProjection.quota_limit_rows(
+      DateTimeDisplay.preferences_for_user(nil),
+      @snapshot_at
+    )
+    |> Enum.find(&(&1.key == :primary_5h))
   end
 
   defp projected_rows(identity, snapshot_at) do

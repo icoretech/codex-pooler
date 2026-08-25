@@ -173,7 +173,7 @@ defmodule CodexPoolerWeb.Admin.QuotaLimitRowTest do
   end
 
   @tag :manual_quota_row_render
-  test "manual quota row render writes and verifies the restored compact HTML" do
+  test "manual quota row render verifies the restored compact HTML" do
     stale_html = render_quota_row(stale_limit(Decimal.new(75), 75, "75%"))
 
     exhausted_html =
@@ -224,17 +224,6 @@ defmodule CodexPoolerWeb.Admin.QuotaLimitRowTest do
     assert LazyHTML.query(document, "#quota-row-exhausted-observed") |> Enum.empty?()
 
     assert LazyHTML.query(document, "#quota-row-markerless-reset") |> Enum.empty?()
-
-    evidence_path =
-      Path.expand(
-        "../../../../../../../.omo/evidence/gpt-reserve-quota-freshness-and-identity/task-2-component.html",
-        __DIR__
-      )
-
-    File.mkdir_p!(Path.dirname(evidence_path))
-    File.write!(evidence_path, html)
-
-    assert File.read!(evidence_path) == html
   end
 
   defp render_quota_row(limit) do
