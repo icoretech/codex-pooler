@@ -1,7 +1,8 @@
 defmodule CodexPooler.Upstreams.Quota.WindowSelector do
   @moduledoc false
 
-  alias CodexPooler.Quotas.{Evidence, ModelWeeklyResetSemantics, WindowClassifier}
+  alias CodexPooler.Quotas.{AdditionalMeterIdentity, Evidence, ModelWeeklyResetSemantics}
+  alias CodexPooler.Quotas.WindowClassifier
   alias CodexPooler.Quotas.Evidence.Descriptors
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Windows.CycleConfirmation
@@ -57,7 +58,7 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
   # manufacture a third group beside meter-aware observations for the same
   # logical window.
   defp additional_window_groups(candidates) do
-    groups = Enum.group_by(candidates, &Evidence.additional_window_group_key/1)
+    groups = Enum.group_by(candidates, &AdditionalMeterIdentity.group_key/1)
 
     metered_groups =
       for {{:metered, _logical_key, token}, windows} <- groups,
@@ -227,7 +228,7 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
   defp logical_sort_key(%Quota.AccountQuotaWindow{} = window) do
     {window.quota_key, window.window_kind, window.window_minutes, window.quota_scope,
      window.quota_family, window.model || "", window.upstream_model || "",
-     Evidence.additional_meter_token(window) || ""}
+     AdditionalMeterIdentity.token(window) || ""}
   end
 
   defp usable_rank(%Quota.AccountQuotaWindow{} = window, as_of) do

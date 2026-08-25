@@ -2,7 +2,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageMeteredIdentityTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   alias CodexPooler.FakeUpstream
-  alias CodexPooler.Quotas.Evidence
+  alias CodexPooler.Quotas.{AdditionalMeterIdentity, Evidence}
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Quota.Windows, as: QuotaWindows
   alias CodexPooler.Upstreams.Reconciliation.UsageProbe
@@ -49,7 +49,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageMeteredIdentityTest do
     covered_additional = Enum.reject(probe.covered_descriptors, &(elem(&1, 4) == "account"))
 
     assert length(probe_additional) == 2
-    assert MapSet.size(MapSet.new(probe_additional, &Evidence.additional_meter_token/1)) == 2
+    assert MapSet.size(MapSet.new(probe_additional, &AdditionalMeterIdentity.token/1)) == 2
     assert MapSet.size(MapSet.new(covered_additional)) == 2
 
     assert {:ok, %{status: :succeeded}} =
@@ -63,17 +63,17 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageMeteredIdentityTest do
     raw_usage_rows = Enum.filter(raw_additional, &(&1.source == "codex_usage_api"))
     assert length(raw_usage_rows) == 2
 
-    assert MapSet.new(raw_usage_rows, &Evidence.additional_meter_token/1) ==
+    assert MapSet.new(raw_usage_rows, &AdditionalMeterIdentity.token/1) ==
              MapSet.new(["meter_alpha", "meter_beta"])
 
     assert Enum.any?(raw_additional, fn window ->
              window.source == "local_reconciliation" and
-               is_nil(Evidence.additional_meter_token(window))
+               is_nil(AdditionalMeterIdentity.token(window))
            end)
 
     assert Enum.any?(raw_additional, fn window ->
              window.source == "codex_response_headers" and
-               Evidence.additional_meter_token(window) == "meter_alpha"
+               AdditionalMeterIdentity.token(window) == "meter_alpha"
            end)
 
     effective_at = DateTime.utc_now()
@@ -85,7 +85,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageMeteredIdentityTest do
 
     assert length(effective_additional) == 2
 
-    assert MapSet.new(effective_additional, &Evidence.additional_meter_token/1) ==
+    assert MapSet.new(effective_additional, &AdditionalMeterIdentity.token/1) ==
              MapSet.new(["meter_alpha", "meter_beta"])
 
     conn =

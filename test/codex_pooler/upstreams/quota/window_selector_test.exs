@@ -1,7 +1,7 @@
 defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
   use ExUnit.Case, async: true
 
-  alias CodexPooler.Quotas.Evidence
+  alias CodexPooler.Quotas.AdditionalMeterIdentity
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.WindowSelector
 
@@ -377,10 +377,10 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
         raw_metered_feature: "   "
       )
 
-    assert Evidence.additional_meter_token(window) == "reserve-images"
+    assert AdditionalMeterIdentity.token(window) == "reserve-images"
 
     assert {:metered, _legacy_key, "reserve-images"} =
-             Evidence.additional_window_group_key(window)
+             AdditionalMeterIdentity.group_key(window)
   end
 
   test "every recognized Spark token folds from both eligible fields and target scopes in both candidate orders" do

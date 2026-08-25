@@ -5,7 +5,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
   import ExUnit.CaptureLog
 
   alias CodexPooler.Accounting.UsageResponses
-  alias CodexPooler.Quotas.{Evidence, ModelWeeklyResetSemantics}
+  alias CodexPooler.Quotas.{AdditionalMeterIdentity, Evidence, ModelWeeklyResetSemantics}
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows
@@ -859,13 +859,13 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
 
     assert [legacy_readable] = Windows.list_quota_windows(identity, observed_at)
     assert legacy_readable.id == generic_row.id
-    assert Evidence.additional_meter_token(legacy_readable) == nil
+    assert AdditionalMeterIdentity.token(legacy_readable) == nil
 
     assert {:ok, alpha_row} =
              EvidenceStore.record_evidence(identity, rich_alpha, observed_at, observed_at)
 
     assert [alpha_effective] = Windows.list_quota_windows(identity, observed_at)
-    assert Evidence.additional_meter_token(alpha_effective) == "meter-alpha"
+    assert AdditionalMeterIdentity.token(alpha_effective) == "meter-alpha"
 
     assert {:ok, beta_row} =
              EvidenceStore.record_evidence(identity, rich_beta, observed_at, observed_at)
@@ -915,7 +915,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     end
 
     assert Windows.list_quota_windows(identity, observed_at)
-           |> Enum.map(&Evidence.additional_meter_token/1) == ["meter-alpha", "meter-beta"]
+           |> Enum.map(&AdditionalMeterIdentity.token/1) == ["meter-alpha", "meter-beta"]
   end
 
   defp permutations([]), do: [[]]

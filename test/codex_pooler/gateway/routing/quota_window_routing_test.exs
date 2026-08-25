@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Routing.QuotaWindowRoutingTest do
 
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.Routing.CandidateEligibility
+  alias CodexPooler.Quotas.AdditionalMeterIdentity
   alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
@@ -288,7 +289,7 @@ defmodule CodexPooler.Gateway.Routing.QuotaWindowRoutingTest do
                  upstream_model: "sample-codex-spark-upstream"
                )
 
-      assert Enum.map(routing_windows, &Evidence.additional_meter_token/1) == [
+      assert Enum.map(routing_windows, &AdditionalMeterIdentity.token/1) == [
                nil,
                "feature-alpha",
                "feature-beta"
@@ -325,7 +326,7 @@ defmodule CodexPooler.Gateway.Routing.QuotaWindowRoutingTest do
                )
 
       assert length(routing_windows) == 3
-      assert Evidence.additional_meter_token(blocked_window) == "feature-beta"
+      assert AdditionalMeterIdentity.token(blocked_window) == "feature-beta"
     end
 
     test "out-of-scope and stale meter evidence does not affect current ranking" do
@@ -364,7 +365,7 @@ defmodule CodexPooler.Gateway.Routing.QuotaWindowRoutingTest do
                )
 
       assert [selected_meter] =
-               Enum.filter(routing_windows, &(Evidence.additional_meter_token(&1) != nil))
+               Enum.filter(routing_windows, &(AdditionalMeterIdentity.token(&1) != nil))
 
       assert selected_meter == fresh_meter
     end
