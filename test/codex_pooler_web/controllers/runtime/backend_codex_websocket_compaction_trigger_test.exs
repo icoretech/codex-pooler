@@ -19,6 +19,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
   @turn_state_param "client_metadata.x-codex-turn-state"
   @detection_timeout_ms 15_000
+  @stale_native_content "stale-native-content-must-not-succeed"
 
   for {path, transport, optional_metadata} <- [
         {"/backend-api/codex/responses", :buffered, :valid},
@@ -411,7 +412,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       {FakeUpstream.malformed_json("{malformed-native-compact", 200),
        "upstream compact response was not valid JSON"},
       {FakeUpstream.json_response(%{"id" => "resp_missing_native_compact_content"}),
-       "upstream compact response did not include encrypted compaction content"}
+       "upstream compact response did not include encrypted compaction content"},
+      {buffered_native_compaction_response("resp_empty_native_compact_content", "", :output),
+       "upstream compact response did not include encrypted compaction content"},
+      {buffered_native_compaction_response(
+         "resp_blank_native_compact_content",
+         " \t\r\n",
+         :top_level
+       ), "upstream compact response did not include encrypted compaction content"}
     ]
 
     for {mode, expected_message} <- cases do
@@ -438,12 +446,27 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
       assert request.status == "failed"
       assert request.last_error_code == "invalid_compaction_response"
+      assert request.retry_count == 0
 
       assert [attempt] =
                Repo.all(from(attempt in Attempt, where: attempt.request_id == ^request.id))
 
       assert attempt.status == "failed"
+      assert attempt.network_error_code == "invalid_compaction_response"
+      refute attempt.retryable
+
+      assert [turn] =
+               Repo.all(
+                 from(turn in CodexTurn,
+                   where: turn.codex_session_id == ^session.id and turn.request_id == ^request.id
+                 )
+               )
+
+      assert turn.status == "failed"
+      assert turn.error_code == "invalid_compaction_response"
+      assert turn.final_attempt_id == attempt.id
       assert settlement_count(request.id) == 1
+      refute inspect({request, attempt, turn}) =~ @stale_native_content
     end
   end
 
@@ -623,6 +646,24 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     }
     |> Map.merge(extra)
     |> Jason.encode!()
+  end
+
+  defp buffered_native_compaction_response(response_id, encrypted_content, :output) do
+    FakeUpstream.json_response(%{
+      "id" => response_id,
+      "output" => [
+        %{"type" => "compaction", "encrypted_content" => encrypted_content},
+        %{"type" => "compaction_summary", "encrypted_content" => @stale_native_content}
+      ],
+      "compaction_summary" => %{"encrypted_content" => @stale_native_content}
+    })
+  end
+
+  defp buffered_native_compaction_response(response_id, encrypted_content, :top_level) do
+    FakeUpstream.json_response(%{
+      "id" => response_id,
+      "compaction_summary" => %{"encrypted_content" => encrypted_content}
+    })
   end
 
   defp invalid_turn_states do

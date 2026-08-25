@@ -309,14 +309,14 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
     |> Enum.find_value(fn
       %{"type" => type, "encrypted_content" => content} = item
       when type in ["compaction", "compaction_summary"] and is_binary(content) ->
-        normalize_native_item(item)
+        validate_native_compaction_item(item)
 
       _item ->
         nil
     end)
     |> case do
       nil -> compaction_item_from_summary(decoded)
-      item -> {:ok, item}
+      result -> result
     end
   end
 
@@ -329,13 +329,22 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   defp compaction_item(decoded, mode) when mode in [:public_sse, :response, :websocket],
     do: public_compaction_item(decoded)
 
-  defp compaction_item_from_summary(%{
-         "compaction_summary" => %{"encrypted_content" => content} = item
-       })
-       when is_binary(content),
-       do: {:ok, normalize_native_item(item)}
+  defp compaction_item_from_summary(%{"compaction_summary" => item}) when is_map(item),
+    do: validate_native_compaction_item(item)
 
   defp compaction_item_from_summary(_decoded), do: {:error, :missing_encrypted_content}
+
+  defp validate_native_compaction_item(%{"encrypted_content" => content} = source_item)
+       when is_binary(content) do
+    if nonblank_compaction_content?(content) do
+      {:ok, normalize_native_item(source_item)}
+    else
+      {:error, :missing_encrypted_content}
+    end
+  end
+
+  defp validate_native_compaction_item(_source_item),
+    do: {:error, :missing_encrypted_content}
 
   defp public_compaction_item(%{"output" => output} = decoded) when is_list(output) do
     case Enum.find(output, &public_compaction_candidate?/1) do
@@ -359,15 +368,17 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
 
   defp validate_public_compaction_item(%{"encrypted_content" => content} = source_item)
        when is_binary(content) do
-    if String.trim(content) == "" do
-      {:error, :missing_encrypted_content}
-    else
+    if nonblank_compaction_content?(content) do
       {:ok, normalize_public_compaction_item(source_item)}
+    else
+      {:error, :missing_encrypted_content}
     end
   end
 
   defp validate_public_compaction_item(_source_item),
     do: {:error, :missing_encrypted_content}
+
+  defp nonblank_compaction_content?(content), do: String.trim(content) != ""
 
   defp normalize_public_compaction_item(source_item) do
     item = %{

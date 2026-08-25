@@ -56,7 +56,7 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
   test "legacy SSE keeps first valid compact output and native replay metadata byte-identical" do
     first_invalid = %{
       "type" => "compaction",
-      "encrypted_content" => " \t\n",
+      "encrypted_content" => nil,
       "id" => nil,
       "internal_chat_message_metadata_passthrough" => %{"turn_id" => "turn-invalid"}
     }
@@ -81,8 +81,9 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
 
     expected_item = %{
       "type" => "compaction",
-      "encrypted_content" => " \t\n",
-      "internal_chat_message_metadata_passthrough" => %{"turn_id" => "turn-invalid"}
+      "encrypted_content" => "opaque-legacy-content",
+      "id" => "",
+      "internal_chat_message_metadata_passthrough" => %{"turn_id" => ""}
     }
 
     assert done == %{"type" => "response.output_item.done", "item" => expected_item}
