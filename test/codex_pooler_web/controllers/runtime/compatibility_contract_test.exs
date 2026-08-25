@@ -235,6 +235,36 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert CompatibilityMatrix.pending_gaps() == []
     end
 
+    test "keeps the registered usage aliases on the shared dynamic freshness contract" do
+      feature =
+        Enum.find(CompatibilityMatrix.features(), &(&1.slug == :usage_alias_meter_identity))
+
+      assert feature
+      fixture = CompatibilityMatrix.fixture!(:usage_alias_meter_identity)
+
+      assert feature.routes == [
+               %{method: :get, path: "/api/codex/usage"},
+               %{method: :get, path: "/wham/usage"},
+               %{method: :get, path: "/backend-api/wham/usage"}
+             ]
+
+      assert feature.contract =~ "dynamically stale additional rows are omitted"
+
+      assert fixture.additional_rate_limits == %{
+               stale: "omitted_by_dynamic_freshness",
+               unknown: "preserved",
+               ordering: ["quota_key", "canonical_meter_token", "window_kind", "window_minutes"],
+               repeated_legacy_quota_key: true,
+               cross_meter_window_pairing: false
+             }
+
+      assert fixture.wire_schema == %{
+               legacy_fields_and_types: "unchanged",
+               freshness_fields: false,
+               raw_identity_fields: false
+             }
+    end
+
     test "keeps the baseline matrix characterization intact before specialized contracts" do
       assert CompatibilityMatrix.feature_slugs() == @expected_features
       assert CompatibilityMatrix.pending_gaps() == []

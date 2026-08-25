@@ -835,7 +835,11 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
   meter CSS (`admin-live-progress`, `progress-striped`, and shine keyframes) in
   `app.css`.
 - **Purpose:** one reported quota window (e.g. Weekly, 30d) as label +
-  remaining percent + live `<progress>` meter + optional count/reset detail.
+  remaining percent + live `<progress>` meter + optional count detail. Current
+  admin views omit dynamically stale additional rows at their snapshot time.
+  Fixed account rows and fresh or unknown-freshness additional rows remain
+  visible. The compact row shows no freshness or history copy, reset status, or
+  unconfirmed reset.
 - **Tones:** percent ≥ 70 → `progress-success`/`text-success`; ≥ 30 →
   warning; below → error. Unreported remains `progress-neutral` with muted
   text and adds `admin-static-unknown-progress`; it is never presented as a
@@ -857,11 +861,6 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
   gradient/animation with `admin-static-unknown-progress`; it stays static in
   normal and `prefers-reduced-motion` sessions. Firefox falls back to a static
   bar for the known-value gloss; reduced motion disables known-value motion.
-- **Reset timing:** anchored reset labels use the `RelativeCountdown` hook to
-  keep the compact `6d 23h` / `1h 30m` / `42m` value current without a
-  LiveView round trip. Floating rolling windows remain static as
-  `starts on use` until provider evidence anchors their reset. Unconfirmed,
-  markerless, and unknown resets stay absent from the compact row.
 - **A11y:** a solid included-quota `<progress>` carries `aria-label`
   "{label} included Codex quota remaining {pct}". A striped burn meter carries
   "{label} credit balance remaining {pct}; credits in use" and a
@@ -1526,6 +1525,9 @@ control.
 - **Quota & banked resets** (`#upstream-quota`): account plus additional
   model, upstream-model, and feature window rows (reusing the index card's
   `quota_limit_row`, [Quota progress row](#quota-progress-row-including-striped-credit-backed-state)).
+  Both current admin views apply the same snapshot-time rule: dynamically stale
+  additional rows are omitted, while fixed account rows and fresh or
+  unknown-freshness additional rows remain visible.
   The saved-reset meter
   ([Saved-reset badge and meter](#saved-reset-badge-and-meter)), expiration table, and the auto-redeem policy form behind a
   `<details>` disclosure with an on/off state chip.
