@@ -6,7 +6,6 @@ defmodule CodexPooler.Dev.MeteredQuotaFixture.Provisioner do
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Access.APIKeys.Material
   alias CodexPooler.Accounts.User
-  alias CodexPooler.Dev.MeteredQuotaFixture.Provisioner.{Ownership, Rows}
   alias CodexPooler.Dev.Seeds
   alias CodexPooler.Pools.{Membership, Pool}
   alias CodexPooler.Quotas.Evidence
@@ -31,7 +30,7 @@ defmodule CodexPooler.Dev.MeteredQuotaFixture.Provisioner do
   @spec prepare() :: result()
   def prepare do
     fixture_hash = random_fixture_hash()
-    ids = Ownership.derived_ids(fixture_hash)
+    ids = derived_ids(fixture_hash)
     {key_prefix, raw_key, _key_hash} = Material.generate()
 
     %{
@@ -47,7 +46,7 @@ defmodule CodexPooler.Dev.MeteredQuotaFixture.Provisioner do
   def provision!(document, raw_key) do
     owner = owner!()
     refuse_unjournaled_collisions!()
-    {:ok, ids} = Ownership.ids_from_document(document)
+    {:ok, ids} = derive_document_ids(document)
     key_prefix = document["api_key_prefix"]
     {:ok, ^key_prefix, secret} = Material.split(raw_key)
     key_hash = Material.hash_secret(secret)
@@ -56,7 +55,21 @@ defmodule CodexPooler.Dev.MeteredQuotaFixture.Provisioner do
 
     {:ok, :created} =
       Repo.transact(fn ->
-        Rows.insert!(ids, owner, key_prefix, key_hash, fixture_hash, timestamp)
+        pool = insert_pool!(ids.pool_id, owner, timestamp)
+        identity = insert_identity!(ids.identity_id, owner, fixture_hash, timestamp)
+        insert_assignment!(ids.assignment_id, pool, identity, owner, fixture_hash, timestamp)
+
+        insert_api_key!(
+          ids.api_key_id,
+          pool,
+          owner,
+          key_prefix,
+          key_hash,
+          fixture_hash,
+          timestamp
+        )
+
+        insert_windows!(ids.quota_window_ids, identity, fixture_hash, timestamp)
         {:ok, :created}
       end)
 
@@ -65,14 +78,24 @@ defmodule CodexPooler.Dev.MeteredQuotaFixture.Provisioner do
 
   @spec release(map()) :: :ok | {:error, String.t()}
   def release(document) do
-    Ownership.release(document)
+    with {:ok, ids} <- derive_document_ids(document),
+         :ok <- validate_owned_rows(ids),
+         {:ok, :released} <- exact_delete(ids) do
+      :ok
+    end
   end
 
   @spec status(map()) ::
           {:ok, %{rows_present: boolean(), selector_complete: boolean()}}
           | {:error, String.t()}
   def status(document) do
-    Ownership.status(document)
+    with {:ok, ids} <- derive_document_ids(document),
+         :ok <- validate_owned_rows(ids) do
+      rows_present = owned_row_count(ids) == 4 + length(ids.quota_window_ids)
+
+      {:ok,
+       %{rows_present: rows_present, selector_complete: rows_present and selector_complete?(ids)}}
+    end
   end
 
   defp owner! do
