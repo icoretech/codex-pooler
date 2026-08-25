@@ -12,10 +12,17 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
   alias CodexPooler.Accounting
   alias CodexPooler.Accounting.Request
   alias CodexPooler.Accounting.UsageResponses
+  alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.Windows.EvidenceStore
+
+  @usage_alias_paths [
+    "/api/codex/usage",
+    "/wham/usage",
+    "/backend-api/wham/usage"
+  ]
 
   @removed_reset_credit_paths [
     "/api/codex/rate-limit-reset-credits/consume",
@@ -348,12 +355,19 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
     end)
   end
 
-  test "GET /api/codex/usage supports ChatGPT account usage branch", %{conn: conn} do
+  test "usage aliases preserve current meter identity and the legacy wire schema", %{conn: conn} do
     pool = pool_fixture()
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    unique = System.unique_integer([:positive])
+    account_id = "usage-alias-account-#{unique}"
+    token = "usage-alias-token-#{unique}"
+
+    stale_observed_at =
+      DateTime.add(now, -Evidence.freshness_ttl_seconds() - 1, :second)
 
     %{identity: identity} =
       upstream_assignment_fixture(pool, %{
-        chatgpt_account_id: "chatgpt-account-1",
+        chatgpt_account_id: account_id,
         account_label: "Percent-only selected account",
         plan_family: "pro"
       })
@@ -361,7 +375,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
     assert {:ok, _secret} =
              Upstreams.store_encrypted_secret(identity, %{
                secret_kind: "access_token",
-               plaintext: "upstream-chatgpt-token"
+               plaintext: token
              })
 
     assert {:ok, _windows} =
@@ -370,30 +384,103 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
                  window_kind: "primary",
                  window_minutes: 300,
                  used_percent: Decimal.new("67"),
-                 reset_at: DateTime.add(DateTime.utc_now(), 300, :second),
                  source: "test",
-                 freshness_state: "fresh"
+                 freshness_state: "fresh",
+                 observed_at: now
                },
                %{
-                 quota_key: "gpt_5_3_codex_spark",
+                 quota_key: "shared_feature",
                  window_kind: "primary",
                  window_minutes: 300,
-                 used_percent: Decimal.new("55"),
-                 display_label: "GPT-5.3-Codex-Spark",
-                 limit_name: "codex_other",
-                 metered_feature: "codex_bengalfox",
+                 used_percent: Decimal.new("70"),
+                 display_label: "Shared feature",
+                 limit_name: "Shared feature",
+                 metered_feature: "meter_beta",
+                 raw_metered_feature: " meter_beta ",
                  source: "test",
-                 freshness_state: "fresh"
+                 freshness_state: "fresh",
+                 observed_at: now
+               },
+               %{
+                 quota_key: "shared_feature",
+                 window_kind: "secondary",
+                 window_minutes: 10_080,
+                 used_percent: Decimal.new("80"),
+                 display_label: "Shared feature",
+                 limit_name: "Shared feature",
+                 metered_feature: "meter_beta",
+                 raw_metered_feature: " meter_beta ",
+                 source: "test",
+                 freshness_state: "fresh",
+                 observed_at: now
+               },
+               %{
+                 quota_key: "shared_feature",
+                 window_kind: "secondary",
+                 window_minutes: 10_080,
+                 used_percent: Decimal.new("40"),
+                 display_label: "Shared feature",
+                 limit_name: "Shared feature",
+                 metered_feature: "meter_alpha",
+                 raw_metered_feature: "meter_alpha",
+                 source: "test",
+                 freshness_state: "fresh",
+                 observed_at: now
+               },
+               %{
+                 quota_key: "shared_feature",
+                 window_kind: "primary",
+                 window_minutes: 300,
+                 used_percent: Decimal.new("25"),
+                 display_label: "Shared feature",
+                 limit_name: "Shared feature",
+                 metered_feature: "meter_alpha",
+                 raw_metered_feature: "meter_alpha",
+                 source: "test",
+                 freshness_state: "fresh",
+                 observed_at: now
+               },
+               %{
+                 quota_key: "stale_feature",
+                 window_kind: "primary",
+                 window_minutes: 300,
+                 used_percent: Decimal.new("85"),
+                 display_label: "Stale feature",
+                 metered_feature: "stale_meter",
+                 reset_at: DateTime.add(now, 300, :second),
+                 source: "test",
+                 freshness_state: "fresh",
+                 observed_at: stale_observed_at
+               },
+               %{
+                 quota_key: "unknown_feature",
+                 window_kind: "primary",
+                 window_minutes: 300,
+                 used_percent: Decimal.new("22"),
+                 display_label: "Unknown feature",
+                 metered_feature: "unknown_meter",
+                 source: "test",
+                 freshness_state: "unknown",
+                 observed_at: now
                }
              ])
 
-    conn =
-      conn
-      |> put_req_header("authorization", "Bearer upstream-chatgpt-token")
-      |> put_req_header("chatgpt-account-id", "chatgpt-account-1")
-      |> get("/api/codex/usage")
+    responses =
+      Enum.map(@usage_alias_paths, fn path ->
+        response =
+          conn
+          |> recycle()
+          |> put_req_header("authorization", "Bearer #{token}")
+          |> put_req_header("chatgpt-account-id", account_id)
+          |> get(path)
+          |> json_response(200)
+          |> normalize_usage_alias_payload()
 
-    response = json_response(conn, 200)
+        {path, response}
+      end)
+
+    assert [{_, canonical_response} | _] = responses
+    assert Enum.all?(responses, fn {_path, response} -> response == canonical_response end)
 
     assert %{
              "plan_type" => "pro",
@@ -404,28 +491,63 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
              },
              "additional_rate_limits" => [
                %{
-                 "quota_key" => "codex_spark",
-                 "display_label" => "GPT-5.3-Codex-Spark",
-                 "metered_feature" => "codex_bengalfox",
-                 "rate_limit" => %{"primary_window" => %{"used_percent" => 55}}
+                 "quota_key" => "shared_feature",
+                 "metered_feature" => "meter_alpha",
+                 "rate_limit" => %{
+                   "primary_window" => %{"used_percent" => 25},
+                   "secondary_window" => %{"used_percent" => 40}
+                 }
+               },
+               %{
+                 "quota_key" => "shared_feature",
+                 "metered_feature" => "meter_beta",
+                 "rate_limit" => %{
+                   "primary_window" => %{"used_percent" => 70},
+                   "secondary_window" => %{"used_percent" => 80}
+                 }
+               },
+               %{
+                 "quota_key" => "unknown_feature",
+                 "metered_feature" => "unknown_meter",
+                 "rate_limit" => %{"primary_window" => %{"used_percent" => 22}}
                }
              ]
-           } = response
+           } = canonical_response
 
-    refute Map.has_key?(response, "credits")
+    assert_usage_alias_schema!(canonical_response)
 
-    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^pool.id))
-    assert request.api_key_id == nil
-    assert request.endpoint == "/api/codex/usage"
-    assert request.status == "succeeded"
-    assert request.request_metadata["auth_mode"] == "chatgpt_account_token"
-    assert request.upstream_account_label == identity.account_label
-    assert is_nil(request.upstream_account_email)
+    refute Enum.any?(
+             canonical_response["additional_rate_limits"],
+             &(&1["quota_key"] == "stale_feature")
+           )
 
-    assert %{items: [log], total: 1} = Accounting.list_request_logs(pool)
-    assert log.api_key_id == nil
-    assert log.upstream_account_label == identity.account_label
-    assert is_nil(log.upstream_account_email)
+    assert Enum.map(canonical_response["additional_rate_limits"], & &1["quota_key"]) == [
+             "shared_feature",
+             "shared_feature",
+             "unknown_feature"
+           ]
+
+    requests =
+      Repo.all(from(r in Request, where: r.pool_id == ^pool.id, order_by: r.endpoint))
+
+    assert Enum.map(requests, & &1.endpoint) == Enum.sort(@usage_alias_paths)
+
+    Enum.each(requests, fn request ->
+      assert request.api_key_id == nil
+      assert request.status == "succeeded"
+      assert request.request_metadata["operation"] == "usage"
+      assert request.request_metadata["auth_mode"] == "chatgpt_account_token"
+      assert request.upstream_account_label == identity.account_label
+      assert is_nil(request.upstream_account_email)
+    end)
+
+    assert %{items: logs, total: 3} = Accounting.list_request_logs(pool)
+    assert Enum.sort(Enum.map(logs, & &1.endpoint)) == Enum.sort(@usage_alias_paths)
+    assert Enum.all?(logs, &is_nil(&1.api_key_id))
+    assert Enum.all?(logs, &(&1.upstream_account_label == identity.account_label))
+    assert Enum.all?(logs, &is_nil(&1.upstream_account_email))
+
+    maybe_write_usage_alias_evidence!(responses)
   end
 
   test "Codex rate-limit output keeps absent and jointly healthy windows allowed" do
@@ -808,6 +930,95 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
            } = json_response(burn_conn, 200)
   end
 
+  test "GET /api/codex/usage keeps model quota additional and account credits unchanged", %{
+    conn: conn
+  } do
+    pool = pool_fixture()
+    account_id = "additional-isolation-account-#{System.unique_integer([:positive])}"
+    token = "additional-isolation-token-#{System.unique_integer([:positive])}"
+
+    %{identity: identity} =
+      upstream_assignment_fixture(pool, %{
+        chatgpt_account_id: account_id,
+        account_label: "Additional isolation account",
+        plan_family: "pro"
+      })
+
+    assert {:ok, _secret} =
+             Upstreams.store_encrypted_secret(identity, %{
+               secret_kind: "access_token",
+               plaintext: token
+             })
+
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    assert {:ok, [_account, _reserve]} =
+             QuotaWindows.upsert_quota_windows(identity, [
+               %{
+                 quota_key: "account",
+                 quota_scope: "account",
+                 quota_family: "account",
+                 window_kind: "secondary",
+                 window_minutes: 10_080,
+                 active_limit: 1_000,
+                 credits: 640,
+                 used_percent: Decimal.new("36"),
+                 reset_at: DateTime.add(now, 5, :day),
+                 observed_at: now,
+                 last_sync_at: now,
+                 source: "codex_usage_api",
+                 source_precision: "observed",
+                 freshness_state: "fresh"
+               },
+               %{
+                 quota_key: "gpt_reserve",
+                 quota_scope: "model",
+                 quota_family: "codex_model",
+                 model: "gpt-reserve",
+                 window_kind: "secondary",
+                 window_minutes: 10_080,
+                 used_percent: Decimal.new("0"),
+                 display_label: "GPT Reserve",
+                 limit_name: "gpt-reserve",
+                 metered_feature: "base_model_inference",
+                 raw_metered_feature: "base_model_inference",
+                 reset_at: DateTime.add(now, 7, :day),
+                 observed_at: now,
+                 last_sync_at: now,
+                 source: "codex_usage_api",
+                 source_precision: "observed",
+                 freshness_state: "fresh"
+               }
+             ])
+
+    response =
+      conn
+      |> put_req_header("authorization", "Bearer #{token}")
+      |> put_req_header("chatgpt-account-id", account_id)
+      |> get("/api/codex/usage")
+      |> json_response(200)
+
+    assert response["credits"] == %{
+             "has_credits" => true,
+             "unlimited" => false,
+             "balance" => "640"
+           }
+
+    assert response["rate_limit"]["secondary_window"]["used_percent"] == 36
+
+    assert [
+             %{
+               "quota_key" => "gpt_reserve",
+               "metered_feature" => "base_model_inference",
+               "rate_limit" => %{"secondary_window" => %{"used_percent" => 0}}
+             }
+           ] = response["additional_rate_limits"]
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^pool.id))
+    assert request.status == "succeeded"
+    assert request.request_metadata["operation"] == "usage"
+  end
+
   test "GET /api/codex/usage returns monthly-only primary window seconds without secondary synthesis",
        %{
          conn: conn
@@ -896,13 +1107,22 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
     assert json_response(conn, 401)["error"]["code"] == "invalid_authorization"
   end
 
-  test "GET /api/codex/usage rejects invalid auth before admission", %{conn: conn} do
+  test "usage aliases reject invalid auth before admission and accounting", %{conn: conn} do
     attach_admission_probe()
 
-    conn = conn |> put_req_header("chatgpt-account-id", "acct") |> get("/api/codex/usage")
+    for path <- @usage_alias_paths do
+      response =
+        conn
+        |> recycle()
+        |> put_req_header("chatgpt-account-id", "synthetic-account")
+        |> get(path)
+        |> json_response(401)
 
-    assert json_response(conn, 401)["error"]["code"] == "invalid_authorization"
+      assert response["error"]["code"] == "invalid_authorization"
+    end
+
     refute_received {:usage_admission_event, _event, _metadata}
+    assert Repo.aggregate(Request, :count, :id) == 0
   end
 
   test "GET /api/codex/usage rejects mismatched ChatGPT account token", %{conn: conn} do
@@ -962,6 +1182,84 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
       )
 
     on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
+
+  defp normalize_usage_alias_payload(response) do
+    Map.update!(response, "additional_rate_limits", fn limits ->
+      Enum.sort_by(limits, &{&1["quota_key"], &1["metered_feature"] || ""})
+    end)
+  end
+
+  defp assert_usage_alias_schema!(response) do
+    assert Enum.sort(Map.keys(response)) == ["additional_rate_limits", "plan_type", "rate_limit"]
+    assert is_binary(response["plan_type"])
+    assert is_boolean(response["rate_limit"]["allowed"])
+    assert is_boolean(response["rate_limit"]["limit_reached"])
+
+    Enum.each(response["additional_rate_limits"], fn additional_limit ->
+      assert Enum.sort(Map.keys(additional_limit)) == [
+               "display_label",
+               "limit_name",
+               "metered_feature",
+               "quota_key",
+               "rate_limit"
+             ]
+
+      assert is_binary(additional_limit["quota_key"])
+      assert is_binary(additional_limit["limit_name"])
+      assert is_binary(additional_limit["display_label"])
+      assert is_binary(additional_limit["metered_feature"])
+
+      assert Enum.sort(Map.keys(additional_limit["rate_limit"])) == [
+               "allowed",
+               "limit_reached",
+               "primary_window",
+               "secondary_window"
+             ]
+
+      for window_key <- ["primary_window", "secondary_window"],
+          window = additional_limit["rate_limit"][window_key],
+          is_map(window) do
+        assert Enum.sort(Map.keys(window)) == [
+                 "limit_window_seconds",
+                 "reset_after_seconds",
+                 "reset_at",
+                 "used_percent"
+               ]
+
+        assert is_integer(window["limit_window_seconds"])
+        assert is_integer(window["used_percent"])
+        assert is_nil(window["reset_after_seconds"]) or is_integer(window["reset_after_seconds"])
+        assert is_nil(window["reset_at"]) or is_integer(window["reset_at"])
+      end
+    end)
+
+    encoded = Jason.encode!(response)
+    refute encoded =~ "freshness_state"
+    refute encoded =~ "raw_limit_id"
+    refute encoded =~ "raw_metered_feature"
+  end
+
+  defp maybe_write_usage_alias_evidence!(responses) do
+    case System.get_env("CODEX_POOLER_USAGE_ALIAS_EVIDENCE_PATH") do
+      path when is_binary(path) and path != "" ->
+        path |> Path.dirname() |> File.mkdir_p!()
+
+        File.write!(
+          path,
+          Jason.encode!(
+            %{
+              "aliases" => Map.new(responses),
+              "equivalent" => true,
+              "sanitized" => true
+            },
+            pretty: true
+          )
+        )
+
+      _other ->
+        :ok
+    end
   end
 
   defp usage_reset_identity_fixture do

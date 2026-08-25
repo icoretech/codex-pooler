@@ -122,8 +122,10 @@ defmodule CodexPooler.Accounting.UsageResponses do
       &(&1.quota_key in [nil, "account"] or
           Evidence.current_freshness_state(&1, as_of) == "stale")
     )
-    |> Enum.group_by(& &1.quota_key)
-    |> Enum.map(fn {quota_key, quota_windows} ->
+    |> additional_rate_limit_groups()
+    |> Enum.map(fn {{quota_key, meter_token}, quota_windows} ->
+      quota_windows = Enum.sort_by(quota_windows, &{&1.window_kind, &1.window_minutes})
+
       primary =
         quota_windows
         |> Enum.find(&(&1.window_kind == "primary"))
@@ -140,9 +142,28 @@ defmodule CodexPooler.Accounting.UsageResponses do
         quota_key: quota_key,
         limit_name: representative.display_label || representative.limit_name || quota_key,
         display_label: representative.display_label || representative.limit_name || quota_key,
-        metered_feature: representative.metered_feature,
+        metered_feature: meter_token || representative.metered_feature,
         rate_limit: codex_rate_limit(primary, secondary)
       }
+    end)
+  end
+
+  defp additional_rate_limit_groups(windows) do
+    groups = Enum.group_by(windows, &{&1.quota_key, Evidence.additional_meter_token(&1)})
+
+    metered_quota_keys =
+      for {{quota_key, meter_token}, _windows} <- groups,
+          is_binary(meter_token),
+          into: MapSet.new(),
+          do: quota_key
+
+    groups
+    |> Enum.reject(fn {{quota_key, meter_token}, _windows} ->
+      is_nil(meter_token) and MapSet.member?(metered_quota_keys, quota_key)
+    end)
+    |> Enum.sort_by(fn {{quota_key, meter_token}, quota_windows} ->
+      first_window = Enum.min_by(quota_windows, &{&1.window_kind, &1.window_minutes})
+      {quota_key, meter_token || "", first_window.window_kind, first_window.window_minutes}
     end)
   end
 

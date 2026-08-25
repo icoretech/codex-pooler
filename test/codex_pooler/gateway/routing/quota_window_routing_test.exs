@@ -269,6 +269,136 @@ defmodule CodexPooler.Gateway.Routing.QuotaWindowRoutingTest do
                )
     end
 
+    test "two preserved fresh in-scope meters remain eligible under all-windows policy" do
+      assert %{
+               eligible?: true,
+               routing_state: :precise,
+               exclusions: [],
+               selection: %{routing_windows: routing_windows, blocked_windows: []}
+             } =
+               Windows.routing_quota_eligibility_from_windows(
+                 [
+                   account_primary_window(),
+                   metered_model_window("feature-alpha", used_percent: Decimal.new("20")),
+                   metered_model_window("feature-beta", used_percent: Decimal.new("80"))
+                 ],
+                 at: @observed_at,
+                 model: "sample-codex-spark",
+                 requested_model: "sample-codex-spark",
+                 upstream_model: "sample-codex-spark-upstream"
+               )
+
+      assert Enum.map(routing_windows, &Evidence.additional_meter_token/1) == [
+               nil,
+               "feature-alpha",
+               "feature-beta"
+             ]
+    end
+
+    test "one preserved exhausted in-scope meter blocks otherwise usable windows" do
+      assert %{
+               eligible?: false,
+               routing_state: :blocked,
+               exclusions: [
+                 %{
+                   quota_key: "shared_feature_limit",
+                   quota_scope: "model",
+                   model: "sample-codex-spark",
+                   reason_codes: ["exhausted"]
+                 }
+               ],
+               selection: %{
+                 routing_windows: routing_windows,
+                 blocked_windows: [blocked_window]
+               }
+             } =
+               Windows.routing_quota_eligibility_from_windows(
+                 [
+                   account_primary_window(),
+                   metered_model_window("feature-alpha", used_percent: Decimal.new("20")),
+                   metered_model_window("feature-beta", used_percent: Decimal.new("100"))
+                 ],
+                 at: @observed_at,
+                 model: "sample-codex-spark",
+                 requested_model: "sample-codex-spark",
+                 upstream_model: "sample-codex-spark-upstream"
+               )
+
+      assert length(routing_windows) == 3
+      assert Evidence.additional_meter_token(blocked_window) == "feature-beta"
+    end
+
+    test "out-of-scope and stale meter evidence does not affect current ranking" do
+      stale_observed_at =
+        DateTime.add(@observed_at, -Evidence.freshness_ttl_seconds() - 1, :second)
+
+      fresh_meter = metered_model_window("feature-alpha", used_percent: Decimal.new("20"))
+
+      stale_meter =
+        metered_model_window("feature-alpha",
+          source: "codex_response_headers",
+          used_percent: Decimal.new("100"),
+          freshness_state: "stale",
+          observed_at: stale_observed_at
+        )
+
+      out_of_scope_meter =
+        metered_model_window("feature-beta",
+          model: "sample-codex-other",
+          upstream_model: "sample-codex-other-upstream",
+          used_percent: Decimal.new("100")
+        )
+
+      assert %{
+               eligible?: true,
+               routing_state: :precise,
+               exclusions: [],
+               selection: %{routing_windows: routing_windows, blocked_windows: []}
+             } =
+               Windows.routing_quota_eligibility_from_windows(
+                 [account_primary_window(), stale_meter, fresh_meter, out_of_scope_meter],
+                 at: @observed_at,
+                 model: "sample-codex-spark",
+                 requested_model: "sample-codex-spark",
+                 upstream_model: "sample-codex-spark-upstream"
+               )
+
+      assert [selected_meter] =
+               Enum.filter(routing_windows, &(Evidence.additional_meter_token(&1) != nil))
+
+      assert selected_meter == fresh_meter
+    end
+
+    test "missing meter evidence does not block but account baseline remains required" do
+      present_meter = metered_model_window("feature-alpha")
+
+      assert %{eligible?: true, routing_state: :precise, exclusions: []} =
+               Windows.routing_quota_eligibility_from_windows(
+                 [account_primary_window(), present_meter],
+                 at: @observed_at,
+                 model: "sample-codex-spark",
+                 requested_model: "sample-codex-spark",
+                 upstream_model: "sample-codex-spark-upstream"
+               )
+
+      assert %{
+               eligible?: false,
+               routing_state: :blocked,
+               exclusions: [
+                 %{
+                   code: "quota_account_primary_missing",
+                   message: "account primary quota evidence is required for routing"
+                 }
+               ]
+             } =
+               Windows.routing_quota_eligibility_from_windows([present_meter],
+                 at: @observed_at,
+                 model: "sample-codex-spark",
+                 requested_model: "sample-codex-spark",
+                 upstream_model: "sample-codex-spark-upstream"
+               )
+    end
+
     test "account primary routing blocks resetless quota evidence" do
       assert %{
                eligible?: false,
@@ -974,6 +1104,21 @@ defmodule CodexPooler.Gateway.Routing.QuotaWindowRoutingTest do
           upstream_model: "sample-codex-spark-upstream",
           freshness_state: "fresh",
           observed_at: @observed_at
+        ],
+        attrs
+      )
+    )
+  end
+
+  defp metered_model_window(meter_token, attrs \\ []) do
+    model_window(
+      Keyword.merge(
+        [
+          quota_key: "shared_feature_limit",
+          quota_family: "codex_feature",
+          metered_feature: meter_token,
+          raw_metered_feature: meter_token,
+          raw_limit_id: "shared-feature-limit"
         ],
         attrs
       )

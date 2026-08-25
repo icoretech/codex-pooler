@@ -40,12 +40,33 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
     |> Enum.reject(&future_observation?(&1, as_of))
     |> Enum.map(&normalize_legacy_weekly_primary/1)
     |> Enum.group_by(&logical_key/1)
-    |> Enum.map(fn {_logical_key, candidates} ->
+    |> Enum.flat_map(fn {_logical_key, candidates} ->
       candidates
-      |> reject_prior_cycle_windows(as_of)
-      |> best_logical_window(as_of)
+      |> additional_window_groups()
+      |> Enum.map(fn candidates ->
+        candidates
+        |> reject_prior_cycle_windows(as_of)
+        |> best_logical_window(as_of)
+      end)
     end)
     |> Enum.sort_by(&logical_sort_key/1)
+  end
+
+  # Generic observations predate provider meter identity. They remain one
+  # legacy group when no rich observation exists, but cannot compete with or
+  # manufacture a third group beside meter-aware observations for the same
+  # logical window.
+  defp additional_window_groups(candidates) do
+    groups = Enum.group_by(candidates, &Evidence.additional_window_group_key/1)
+
+    metered_groups =
+      for {{:metered, _logical_key, token}, windows} <- groups,
+          do: {token, windows}
+
+    case metered_groups do
+      [] -> [candidates]
+      groups -> groups |> Enum.sort_by(&elem(&1, 0)) |> Enum.map(&elem(&1, 1))
+    end
   end
 
   # A fresh sibling whose reset lies a full margin beyond a STALE row's reset
@@ -205,7 +226,8 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelector do
 
   defp logical_sort_key(%Quota.AccountQuotaWindow{} = window) do
     {window.quota_key, window.window_kind, window.window_minutes, window.quota_scope,
-     window.quota_family, window.model || "", window.upstream_model || ""}
+     window.quota_family, window.model || "", window.upstream_model || "",
+     Evidence.additional_meter_token(window) || ""}
   end
 
   defp usable_rank(%Quota.AccountQuotaWindow{} = window, as_of) do

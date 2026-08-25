@@ -128,7 +128,6 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
        when is_list(limits) do
     limits
     |> Enum.flat_map(&additional_limit_evidence(&1, observed_at))
-    |> keep_highest_percent_per_identity()
     |> Enum.sort_by(&{&1.quota_key, &1.window_kind})
   end
 
@@ -137,8 +136,11 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
   # Reason: additional limits combine model, feature, reset, and usage hints.
   # credo:disable-for-next-line Credo.Check.Refactor.CyclomaticComplexity
   defp additional_limit_evidence(%{"rate_limit" => %{} = rate_limit} = limit, observed_at) do
-    limit_id =
-      present_string(limit["metered_feature"]) || present_string(limit["limit_id"]) ||
+    raw_metered_feature = present_string(limit["metered_feature"])
+    raw_limit_id = present_string(limit["limit_id"]) || raw_metered_feature
+
+    descriptor_id =
+      raw_metered_feature || raw_limit_id ||
         present_string(limit["limit_name"]) || present_string(limit["model"]) ||
         present_string(limit["model_id"]) || present_string(limit["model_identifier"]) ||
         "additional"
@@ -148,10 +150,11 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
         present_string(limit["model_id"]) || present_string(limit["model_identifier"])
 
     descriptor =
-      Descriptors.limit_descriptor(limit_id, limit_name, %{
-        display_label: Descriptors.additional_display_label(limit, limit_id),
-        raw_limit_id: limit_id,
-        raw_metered_feature: present_string(limit["metered_feature"])
+      Descriptors.limit_descriptor(descriptor_id, limit_name, %{
+        display_label: Descriptors.additional_display_label(limit, descriptor_id),
+        metered_feature: raw_metered_feature || raw_limit_id,
+        raw_limit_id: raw_limit_id,
+        raw_metered_feature: raw_metered_feature
       })
 
     primary_window = rate_limit["primary_window"] || rate_limit["primary"]
@@ -225,7 +228,7 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
   defp dedupe_by_identity(evidences) do
     evidences
     |> Enum.reduce(%{}, fn evidence, acc ->
-      Map.update(acc, Evidence.identity_key(evidence), evidence, fn existing ->
+      Map.update(acc, payload_identity_key(evidence), evidence, fn existing ->
         # Reason: reduce callback keeps only the strongest duplicate evidence row.
         # credo:disable-for-next-line Credo.Check.Refactor.Nesting
         if quota_used_percent(evidence) >= quota_used_percent(existing),
@@ -237,22 +240,28 @@ defmodule CodexPooler.Quotas.Evidence.CodexParsers do
     |> Enum.sort_by(&{&1.quota_key, &1.window_kind, &1.source, &1.raw_limit_id || ""})
   end
 
-  defp keep_highest_percent_per_identity(attrs_list) do
-    attrs_list
-    |> Enum.reduce(%{}, fn attrs, acc ->
-      key = {
-        Map.get(attrs, :quota_key),
-        Map.get(attrs, :window_kind)
-      }
+  defp payload_identity_key(%Evidence{} = evidence) do
+    case canonical_meter_token(evidence) do
+      nil ->
+        Evidence.identity_key(evidence)
 
-      Map.update(acc, key, attrs, fn existing ->
-        # Reason: reduce callback keeps the highest observed usage percent.
-        # credo:disable-for-next-line Credo.Check.Refactor.Nesting
-        if quota_used_percent(attrs) >= quota_used_percent(existing), do: attrs, else: existing
-      end)
-    end)
-    |> Map.values()
+      meter_token ->
+        {
+          evidence.quota_scope,
+          evidence.quota_family,
+          evidence.model,
+          evidence.upstream_model,
+          evidence.quota_key,
+          evidence.window_kind,
+          evidence.window_minutes,
+          evidence.source,
+          meter_token
+        }
+    end
   end
+
+  defp canonical_meter_token(%Evidence{} = evidence),
+    do: present_string(evidence.raw_metered_feature) || present_string(evidence.raw_limit_id)
 
   defp usage_window_minutes(kind, window) do
     seconds = integer_or_nil(window["limit_window_seconds"])

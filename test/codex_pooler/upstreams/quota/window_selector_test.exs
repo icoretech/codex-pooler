@@ -1,6 +1,7 @@
 defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
   use ExUnit.Case, async: true
 
+  alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
   alias CodexPooler.Upstreams.Quota.WindowSelector
 
@@ -263,6 +264,125 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
            |> :erlang.term_to_binary() == expected_bytes
   end
 
+  test "account source variants ignore meter-shaped raw identity and keep the stable logical key" do
+    expected_key = {"account", "account", "", "", "account", "primary", 300}
+
+    usage =
+      account_window(
+        id: "10000000-0000-4000-8000-000000000001",
+        raw_limit_id: "usage-account",
+        raw_metered_feature: "usage-meter",
+        used_percent: Decimal.new("11")
+      )
+
+    headers =
+      account_window(
+        id: "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        source: "codex_response_headers",
+        merge_precedence: 80,
+        raw_limit_id: "header-account",
+        raw_metered_feature: "header-meter",
+        used_percent: Decimal.new("17")
+      )
+
+    assert WindowSelector.logical_key(usage) == expected_key
+    assert WindowSelector.logical_key(headers) == expected_key
+    assert WindowSelector.logical_windows([usage, headers], @as_of) == [headers]
+  end
+
+  test "same additional meter from different sources folds into one meter-aware group" do
+    usage =
+      additional_window(
+        id: "10000000-0000-4000-8000-000000000001",
+        source: "codex_usage_api",
+        merge_precedence: 60,
+        raw_limit_id: "usage-limit",
+        raw_metered_feature: "image-generation",
+        used_percent: Decimal.new("11")
+      )
+
+    headers =
+      additional_window(
+        id: "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        source: "codex_response_headers",
+        merge_precedence: 80,
+        raw_limit_id: "header-limit",
+        raw_metered_feature: "image-generation",
+        used_percent: Decimal.new("17")
+      )
+
+    assert WindowSelector.logical_windows([usage, headers], @as_of) == [headers]
+  end
+
+  test "mixed rich and generic additional rows are deterministic in every writer order" do
+    first_meter =
+      additional_window(
+        id: "10000000-0000-4000-8000-000000000001",
+        raw_metered_feature: " image-generation ",
+        used_percent: Decimal.new("11")
+      )
+
+    second_meter =
+      additional_window(
+        id: "20000000-0000-4000-8000-000000000002",
+        raw_metered_feature: "deep-research",
+        used_percent: Decimal.new("17")
+      )
+
+    generic =
+      additional_window(
+        id: "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        raw_metered_feature: "   ",
+        used_percent: Decimal.new("99")
+      )
+
+    expected = [second_meter, first_meter]
+    expected_bytes = :erlang.term_to_binary(expected)
+
+    for candidates <- permutations([generic, second_meter, first_meter]) do
+      result = WindowSelector.logical_windows(candidates, @as_of)
+
+      assert Enum.map(result, & &1.id) == Enum.map(expected, & &1.id)
+      assert :erlang.term_to_binary(result) == expected_bytes
+
+      assert candidates
+             |> Enum.map(&WindowSelector.logical_key/1)
+             |> Enum.uniq()
+             |> length() == 1
+    end
+  end
+
+  test "generic additional rows keep legacy folding when no rich meter exists" do
+    lower =
+      additional_window(
+        id: "10000000-0000-4000-8000-000000000001",
+        raw_metered_feature: nil,
+        used_percent: Decimal.new("11")
+      )
+
+    higher =
+      additional_window(
+        id: "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        raw_metered_feature: "   ",
+        used_percent: Decimal.new("17")
+      )
+
+    assert WindowSelector.logical_windows([lower, higher], @as_of) == [higher]
+  end
+
+  test "blank meter text falls back to the trimmed raw limit id" do
+    window =
+      additional_window(
+        raw_limit_id: " reserve-images ",
+        raw_metered_feature: "   "
+      )
+
+    assert Evidence.additional_meter_token(window) == "reserve-images"
+
+    assert {:metered, _legacy_key, "reserve-images"} =
+             Evidence.additional_window_group_key(window)
+  end
+
   test "every recognized Spark token folds from both eligible fields and target scopes in both candidate orders" do
     for token <- @spark_tokens,
         scope <- ["model", "upstream_model"],
@@ -292,6 +412,30 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
         assert WindowSelector.logical_key(winner) == canonical_spark_key(scope)
       end
     end
+  end
+
+  test "canonical Spark aliases with distinct raw meter tokens retain legacy folding" do
+    alias_window =
+      spark_alias_window(
+        "model",
+        :quota_key,
+        "codex_bengalfox",
+        "ffffffff-ffff-4fff-bfff-ffffffffffff",
+        raw_metered_feature: "codex_bengalfox"
+      )
+
+    canonical_window =
+      spark_alias_window(
+        "model",
+        :canonical,
+        "codex_spark",
+        "10000000-0000-4000-8000-000000000001",
+        raw_metered_feature: "codex_spark"
+      )
+
+    assert [winner] = WindowSelector.logical_windows([alias_window, canonical_window], @as_of)
+    assert winner.id == alias_window.id
+    assert WindowSelector.logical_key(winner) == canonical_spark_key("model")
   end
 
   test "legacy weekly primary Spark rows fold into the secondary canonical identity" do
@@ -572,6 +716,30 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
         attrs
       )
     )
+  end
+
+  defp additional_window(attrs) do
+    account_window(
+      Keyword.merge(
+        [
+          quota_key: "gpt-reserve",
+          quota_scope: "feature",
+          quota_family: "gpt-reserve",
+          window_kind: "secondary",
+          window_minutes: 10_080,
+          reset_at: DateTime.add(@as_of, 7, :day)
+        ],
+        attrs
+      )
+    )
+  end
+
+  defp permutations([]), do: [[]]
+
+  defp permutations(items) do
+    for item <- items,
+        rest <- permutations(List.delete(items, item)),
+        do: [item | rest]
   end
 
   defp spark_alias_window(scope, field, token, id, attrs \\ []) do

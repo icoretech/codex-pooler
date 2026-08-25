@@ -78,6 +78,31 @@ defmodule CodexPooler.Upstreams.SavedResets.PostResetEvidenceTest do
     assert PostResetEvidence.classify(windows, @consumed_at, @now) == :pending
   end
 
+  test "model-scoped additional quota cannot confirm or reblock a consumed reset" do
+    reserve_window =
+      window(
+        quota_key: "gpt_reserve",
+        used_percent: Decimal.new("0")
+      )
+      |> Map.merge(%{
+        quota_scope: "model",
+        quota_family: "codex_model",
+        model: "gpt-reserve",
+        metered_feature: "base_model_inference"
+      })
+
+    assert PostResetEvidence.classify([reserve_window], @consumed_at, @now) == :pending
+
+    account_mutation = %{
+      reserve_window
+      | quota_key: "account",
+        quota_scope: "account",
+        quota_family: "account"
+    }
+
+    assert PostResetEvidence.classify([account_mutation], @consumed_at, @now) == :confirmed
+  end
+
   test "an exhausted sibling reblocks even when another window is usable" do
     # A single blocking window still excludes the identity from routing, so the
     # reset is not confirmed just because a different window is usable.

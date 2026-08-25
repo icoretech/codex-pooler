@@ -4,6 +4,7 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
   import CodexPooler.PoolerFixtures
   import ExUnit.CaptureLog
 
+  alias CodexPooler.Accounting.UsageResponses
   alias CodexPooler.Quotas.{Evidence, ModelWeeklyResetSemantics}
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
@@ -823,6 +824,115 @@ defmodule CodexPooler.Upstreams.Quota.Windows.EvidenceStoreModelWeeklyRestartTes
     assert persisted_alias.quota_scope == "model"
     assert persisted_alias.model == "gpt-5.3-codex-spark"
     assert_markerless_anchor(persisted_alias, canonical_at)
+  end
+
+  test "mixed-version generic and rich writers remain shared-postgres readable without schema changes" do
+    observed_at = ~U[2026-08-25 09:00:00Z]
+    reset_at = DateTime.add(observed_at, @window_seconds, :second)
+    identity = identity!()
+
+    rich_alpha =
+      parsed_additional_weekly!(
+        generic_weekly_payload("Example Weekly Model", "meter-alpha", 31, reset_at),
+        observed_at
+      )
+
+    rich_beta =
+      parsed_additional_weekly!(
+        generic_weekly_payload("Example Weekly Model", "meter-beta", 72, reset_at),
+        observed_at
+      )
+
+    generic = %{
+      rich_alpha
+      | metered_feature: nil,
+        raw_limit_id: nil,
+        raw_metered_feature: nil
+    }
+
+    assert advisory_lock_count() == 0
+
+    assert {:ok, generic_row} =
+             EvidenceStore.record_evidence(identity, generic, observed_at, observed_at)
+
+    assert advisory_lock_count() >= 1
+
+    assert [legacy_readable] = Windows.list_quota_windows(identity, observed_at)
+    assert legacy_readable.id == generic_row.id
+    assert Evidence.additional_meter_token(legacy_readable) == nil
+
+    assert {:ok, alpha_row} =
+             EvidenceStore.record_evidence(identity, rich_alpha, observed_at, observed_at)
+
+    assert [alpha_effective] = Windows.list_quota_windows(identity, observed_at)
+    assert Evidence.additional_meter_token(alpha_effective) == "meter-alpha"
+
+    assert {:ok, beta_row} =
+             EvidenceStore.record_evidence(identity, rich_beta, observed_at, observed_at)
+
+    rows = identity_rows(identity)
+
+    assert Enum.map(rows, & &1.id) |> Enum.sort() ==
+             Enum.sort([generic_row.id, alpha_row.id, beta_row.id])
+
+    assert rows
+           |> Enum.map(&Evidence.logical_window_key/1)
+           |> Enum.uniq()
+           |> length() == 1
+
+    assert [[index_definition]] =
+             Repo.query!(
+               "SELECT pg_get_indexdef(indexrelid) FROM pg_index WHERE indexrelid = 'account_quota_windows_evidence_identity_uq'::regclass"
+             ).rows
+
+    assert index_definition =~ "raw_metered_feature"
+
+    duplicate_alpha =
+      %AccountQuotaWindow{id: Ecto.UUID.generate()}
+      |> AccountQuotaWindow.changeset(Map.from_struct(alpha_row))
+
+    assert {:error, duplicate_changeset} = Repo.insert(duplicate_alpha, mode: :savepoint)
+
+    assert duplicate_changeset.errors[:window_kind] ==
+             {"has already been taken",
+              [
+                constraint: :unique,
+                constraint_name: "account_quota_windows_evidence_identity_uq"
+              ]}
+
+    expected_public = [
+      {"example_weekly_model", "meter-alpha", 31},
+      {"example_weekly_model", "meter-beta", 72}
+    ]
+
+    for candidate_order <- permutations(rows) do
+      assert candidate_order
+             |> UsageResponses.additional_codex_rate_limits(observed_at)
+             |> Enum.map(fn entry ->
+               {entry.quota_key, entry.metered_feature,
+                entry.rate_limit.secondary_window.used_percent}
+             end) == expected_public
+    end
+
+    assert Windows.list_quota_windows(identity, observed_at)
+           |> Enum.map(&Evidence.additional_meter_token/1) == ["meter-alpha", "meter-beta"]
+  end
+
+  defp permutations([]), do: [[]]
+
+  defp permutations(items) do
+    for item <- items,
+        rest <- permutations(List.delete(items, item)),
+        do: [item | rest]
+  end
+
+  defp advisory_lock_count do
+    assert [[count]] =
+             Repo.query!(
+               "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid() AND granted"
+             ).rows
+
+    count
   end
 
   test "an accepted floating Spark row rebases only after a persisted moving candidate confirms" do

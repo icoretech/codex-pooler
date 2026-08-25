@@ -3,9 +3,12 @@ defmodule CodexPooler.Accounting.RequestLogsUsageTest do
 
   alias CodexPooler.Access.APIKeyPolicyBinding
   alias CodexPooler.Accounting
+  alias CodexPooler.Accounting.LedgerEntry
   alias CodexPooler.Accounting.Rollups
+  alias CodexPooler.Accounting.UsageResponses
   alias CodexPooler.Catalog.PricingSnapshot
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
 
   import CodexPooler.PoolerFixtures
 
@@ -221,6 +224,86 @@ defmodule CodexPooler.Accounting.RequestLogsUsageTest do
     assert codex_usage.rate_limit.primary_window.used_percent == 3
   end
 
+  test "model-scoped additional quota stays outside request settlement and account credits" do
+    %{pool: pool, api_key: api_key} =
+      active_api_key_fixture(pool_fixture(), %{
+        default_policy: %{max_tokens_per_day: 1_000, max_requests_per_minute: 60}
+      })
+
+    ensure_default_policy!(api_key)
+
+    model =
+      model_fixture(pool, %{
+        exposed_model_id: "gpt-isolation-mini",
+        upstream_model_id: "provider-gpt-isolation-mini"
+      })
+
+    %{assignment: assignment} = upstream_assignment_fixture(pool)
+    auth = %{pool: pool, api_key: api_key, key_prefix: api_key.key_prefix}
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    account_window = %AccountQuotaWindow{
+      quota_key: "account",
+      quota_scope: "account",
+      quota_family: "account",
+      window_kind: "secondary",
+      window_minutes: 10_080,
+      active_limit: 1_000,
+      credits: 640,
+      used_percent: Decimal.new("36"),
+      reset_at: DateTime.add(now, 5, :day),
+      observed_at: now,
+      last_sync_at: now,
+      source: "codex_usage_api",
+      source_precision: "observed",
+      freshness_state: "fresh"
+    }
+
+    reserve_window = reserve_model_window(now)
+
+    {primary, secondary} =
+      UsageResponses.account_usage_windows([account_window, reserve_window], now)
+
+    assert primary == nil
+    assert UsageResponses.codex_credits(primary, secondary).balance == "640"
+
+    assert [%{quota_key: "gpt_reserve", metered_feature: "base_model_inference"}] =
+             UsageResponses.additional_codex_rate_limits([account_window, reserve_window], now)
+
+    assert {:ok, reserved} =
+             Accounting.reserve(
+               auth,
+               model,
+               %{"model" => "gpt-isolation-mini", "input" => "synthetic"},
+               %{
+                 correlation_id: "corr-additional-quota-isolation"
+               }
+             )
+
+    assert {:ok, attempt} = Accounting.create_attempt(reserved.request, assignment)
+
+    assert {:ok, _result} =
+             Accounting.finalize_success(
+               reserved.request,
+               attempt,
+               %{status: "usage_known", input_tokens: 4, output_tokens: 6, total_tokens: 10},
+               %{response_status_code: 200}
+             )
+
+    assert Repo.all(
+             from(entry in LedgerEntry,
+               where: entry.request_id == ^reserved.request.id,
+               order_by: entry.entry_kind,
+               select: entry.entry_kind
+             )
+           ) == ["release", "reservation", "settlement"]
+
+    assert {:ok, self_usage} = Accounting.build_api_key_self_usage(pool, api_key, as_of: now)
+    assert self_usage.request_count == 1
+    assert self_usage.total_tokens == 10
+    assert usage_limit(self_usage.limits, "credits", "daily").remaining_value == 990
+  end
+
   defp ensure_default_policy!(api_key) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
@@ -254,5 +337,27 @@ defmodule CodexPooler.Accounting.RequestLogsUsageTest do
 
   defp usage_limit(limits, limit_type, limit_window) do
     Enum.find(limits, &(&1.limit_type == limit_type and &1.limit_window == limit_window))
+  end
+
+  defp reserve_model_window(now) do
+    %AccountQuotaWindow{
+      quota_key: "gpt_reserve",
+      quota_scope: "model",
+      quota_family: "codex_model",
+      model: "gpt-reserve",
+      window_kind: "secondary",
+      window_minutes: 10_080,
+      used_percent: Decimal.new("0"),
+      display_label: "GPT Reserve",
+      limit_name: "gpt-reserve",
+      metered_feature: "base_model_inference",
+      raw_metered_feature: "base_model_inference",
+      reset_at: DateTime.add(now, 7, :day),
+      observed_at: now,
+      last_sync_at: now,
+      source: "codex_usage_api",
+      source_precision: "observed",
+      freshness_state: "fresh"
+    }
   end
 end

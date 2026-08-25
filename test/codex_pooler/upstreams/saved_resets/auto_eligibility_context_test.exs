@@ -1,6 +1,8 @@
 defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.ContextTest do
   use ExUnit.Case, async: true
 
+  alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+  alias CodexPooler.Upstreams.SavedResets.AutoEligibility
   alias CodexPooler.Upstreams.SavedResets.AutoEligibility.Context
 
   @assignment_id "00000000-0000-4000-8000-000000000001"
@@ -8,6 +10,7 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.ContextTest do
   @sibling_id "00000000-0000-4000-8000-000000000003"
   @sibling_assignment_id "00000000-0000-4000-8000-000000000004"
   @circuit_id "00000000-0000-4000-8000-000000000005"
+  @now ~U[2026-08-25 10:00:00Z]
 
   test "normalizes the required immutable cohort separately from trigger candidates" do
     context = %{
@@ -134,6 +137,29 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.ContextTest do
     end
   end
 
+  test "model-scoped additional quota cannot trigger saved-reset auto eligibility" do
+    reserve_window = reserve_model_window()
+    policy = %{min_blocked_minutes: 60}
+    snapshot = %{source: "codex_usage_api"}
+
+    refute AutoEligibility.blocked_weekly_exhaustion?([reserve_window], policy, @now)
+
+    assert AutoEligibility.scheduled_weekly_eligibility([reserve_window], snapshot, @now) ==
+             :unavailable
+
+    account_mutation = %{
+      reserve_window
+      | quota_key: "account",
+        quota_scope: "account",
+        quota_family: "account"
+    }
+
+    assert AutoEligibility.blocked_weekly_exhaustion?([account_mutation], policy, @now)
+
+    assert {:eligible, [^account_mutation]} =
+             AutoEligibility.scheduled_weekly_eligibility([account_mutation], snapshot, @now)
+  end
+
   defp valid_context(exclusions, cohort_identity_ids) do
     %{
       trigger: :blocked_weekly_exhaustion,
@@ -169,6 +195,24 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.ContextTest do
       exposed_model_id: "test-model",
       upstream_model: "test-model-upstream",
       upstream_model_id: "test-model-upstream"
+    }
+  end
+
+  defp reserve_model_window do
+    %AccountQuotaWindow{
+      quota_key: "gpt_reserve",
+      quota_scope: "model",
+      quota_family: "codex_model",
+      model: "gpt-reserve",
+      window_kind: "secondary",
+      window_minutes: 10_080,
+      used_percent: Decimal.new("100"),
+      reset_at: DateTime.add(@now, 5, :day),
+      observed_at: @now,
+      last_sync_at: @now,
+      source: "codex_usage_api",
+      source_precision: "observed",
+      freshness_state: "fresh"
     }
   end
 end

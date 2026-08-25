@@ -73,7 +73,7 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
     assert {:ok, [window]} =
              Windows.upsert_quota_windows(identity, [
                %{
-                 quota_key: "account",
+                 quota_key: Keyword.get(opts, :quota_key, "account"),
                  window_kind: Keyword.get(opts, :window_kind, "secondary"),
                  window_minutes: Keyword.get(opts, :window_minutes, 10_080),
                  used_percent: used_percent,
@@ -82,8 +82,10 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
                  last_sync_at: observed_at,
                  source: Keyword.fetch!(opts, :source),
                  source_precision: "observed",
-                 quota_scope: "account",
-                 quota_family: "account",
+                 quota_scope: Keyword.get(opts, :quota_scope, "account"),
+                 quota_family: Keyword.get(opts, :quota_family, "account"),
+                 model: Keyword.get(opts, :model),
+                 metered_feature: Keyword.get(opts, :metered_feature),
                  freshness_state: "fresh",
                  metadata: Keyword.get(opts, :metadata, %{})
                }
@@ -434,6 +436,27 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
     # No fresh account window observed after consume -> nothing to converge yet.
     assert {:ok, :unchanged} = Convergence.converge(identity)
     assert redemption(identity)["phase"] == "consumed_pending_probe"
+  end
+
+  test "model-scoped additional quota leaves account-weekly convergence pending" do
+    consumed_at =
+      DateTime.utc_now() |> DateTime.add(-60, :second) |> DateTime.truncate(:microsecond)
+
+    identity = identity_with_pending(consumed_at)
+
+    upsert_source_window!(identity, Decimal.new("0"),
+      source: "codex_usage_api",
+      observed_at: DateTime.utc_now() |> DateTime.truncate(:microsecond),
+      quota_key: "gpt_reserve",
+      quota_scope: "model",
+      quota_family: "codex_model",
+      model: "gpt-reserve",
+      metered_feature: "base_model_inference"
+    )
+
+    before = redemption(identity)
+    assert {:ok, :unchanged} = Convergence.converge(identity)
+    assert redemption(identity) == before
   end
 
   test "a pending reset past its bounded window expires fail-closed" do
