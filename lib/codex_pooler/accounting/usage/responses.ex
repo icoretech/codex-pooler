@@ -3,8 +3,8 @@ defmodule CodexPooler.Accounting.UsageResponses do
   Codex-compatible usage-limit response shaping for accounting reads.
   """
 
-  alias CodexPooler.Quotas.{Evidence, WindowClassifier}
   alias CodexPooler.Quotas.AdditionalMeterIdentity
+  alias CodexPooler.Quotas.{Evidence, WindowClassifier}
   alias CodexPooler.Upstreams.Quota
 
   @spec self_usage_limits([map()], integer(), integer(), integer(), DateTime.t()) :: [map()]

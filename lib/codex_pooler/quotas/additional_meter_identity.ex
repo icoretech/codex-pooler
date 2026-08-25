@@ -53,24 +53,35 @@ defmodule CodexPooler.Quotas.AdditionalMeterIdentity do
           [{{String.t(), String.t() | nil}, [Evidence.t() | map()]}]
   def split_quota_groups(quota_groups) when is_map(quota_groups) do
     quota_groups
-    |> Enum.flat_map(fn {quota_key, windows} ->
-      meter_groups = Enum.group_by(windows, &token/1)
-
-      case Enum.reject(meter_groups, fn {meter_token, _windows} -> is_nil(meter_token) end) do
-        [] ->
-          [{{quota_key, nil}, windows}]
-
-        groups ->
-          Enum.map(groups, fn {meter_token, grouped} -> {{quota_key, meter_token}, grouped} end)
-      end
-    end)
-    |> Enum.sort_by(fn {{quota_key, meter_token}, windows} ->
-      first_window = Enum.min_by(windows, &{fetch(&1, :window_kind), fetch(&1, :window_minutes)})
-
-      {quota_key, meter_token || "", fetch(first_window, :window_kind),
-       fetch(first_window, :window_minutes)}
-    end)
+    |> Enum.flat_map(&split_quota_group/1)
+    |> Enum.sort_by(&quota_group_sort_key/1)
   end
+
+  defp split_quota_group({quota_key, windows}) do
+    meter_groups =
+      windows
+      |> Enum.group_by(&token/1)
+      |> Enum.reject(&unmetered_group?/1)
+
+    quota_group_entries(meter_groups, quota_key, windows)
+  end
+
+  defp quota_group_entries([], quota_key, windows), do: [{{quota_key, nil}, windows}]
+
+  defp quota_group_entries(meter_groups, quota_key, _windows) do
+    Enum.map(meter_groups, fn {meter_token, grouped} -> {{quota_key, meter_token}, grouped} end)
+  end
+
+  defp unmetered_group?({meter_token, _windows}), do: is_nil(meter_token)
+
+  defp quota_group_sort_key({{quota_key, meter_token}, windows}) do
+    first_window = Enum.min_by(windows, &window_sort_key/1)
+
+    {quota_key, meter_token || "", fetch(first_window, :window_kind),
+     fetch(first_window, :window_minutes)}
+  end
+
+  defp window_sort_key(window), do: {fetch(window, :window_kind), fetch(window, :window_minutes)}
 
   defp fetch(attrs, key) do
     case Map.fetch(attrs, key) do

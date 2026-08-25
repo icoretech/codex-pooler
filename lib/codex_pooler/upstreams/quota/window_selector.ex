@@ -1,9 +1,15 @@
 defmodule CodexPooler.Upstreams.Quota.WindowSelector do
   @moduledoc false
 
-  alias CodexPooler.Quotas.{AdditionalMeterIdentity, Evidence, ModelWeeklyResetSemantics}
-  alias CodexPooler.Quotas.WindowClassifier
   alias CodexPooler.Quotas.Evidence.Descriptors
+
+  alias CodexPooler.Quotas.{
+    AdditionalMeterIdentity,
+    Evidence,
+    ModelWeeklyResetSemantics,
+    WindowClassifier
+  }
+
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Windows.CycleConfirmation
 
