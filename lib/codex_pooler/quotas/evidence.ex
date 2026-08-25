@@ -74,6 +74,8 @@ defmodule CodexPooler.Quotas.Evidence do
            String.t(), String.t()}
   @type logical_window_key ::
           {String.t(), String.t(), String.t(), String.t(), String.t(), String.t(), pos_integer()}
+  @type additional_window_group_key ::
+          {:legacy, logical_window_key()} | {:metered, logical_window_key(), String.t()}
   @type t :: %__MODULE__{
           quota_key: String.t(),
           window_kind: String.t(),
@@ -274,6 +276,41 @@ defmodule CodexPooler.Quotas.Evidence do
                 _raw_limit_id, _raw_limit_name, _raw_metered_feature} ->
       {scope, family, model, upstream_model, quota_key, kind, minutes}
     end)
+  end
+
+  @doc """
+  Returns the richer grouping identity used only when selecting additional windows.
+
+  The stable seven-element `logical_window_key/1` remains the account, reset,
+  and saved-reset identity. Additional provider rows may carry a canonical
+  meter token; those rows add the token to selection grouping so observations
+  from different sources fold without collapsing distinct meters. Rows without
+  a token retain the legacy group identity.
+  """
+  @spec additional_window_group_key(t() | map()) :: additional_window_group_key()
+  def additional_window_group_key(evidence) when is_map(evidence) do
+    logical_key = logical_window_key(evidence)
+
+    case additional_meter_token(evidence) do
+      nil -> {:legacy, logical_key}
+      token -> {:metered, logical_key, token}
+    end
+  end
+
+  @spec additional_meter_token(t() | map()) :: String.t() | nil
+  def additional_meter_token(evidence) when is_map(evidence) do
+    case evidence |> logical_window_key() |> Descriptors.canonical_logical_window_key() do
+      {"account", _family, _model, _upstream_model, "account", _kind, _minutes} ->
+        nil
+
+      {scope, _family, _model, _upstream_model, "codex_spark", _kind, _minutes}
+      when scope in ["model", "upstream_model"] ->
+        nil
+
+      _additional_key ->
+        present_string(fetch(evidence, :raw_metered_feature)) ||
+          present_string(fetch(evidence, :raw_limit_id))
+    end
   end
 
   # Reason: evidence normalization preserves all optional upstream quota identity fields.

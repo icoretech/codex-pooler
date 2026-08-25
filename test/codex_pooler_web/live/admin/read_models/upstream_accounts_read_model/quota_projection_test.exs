@@ -230,6 +230,150 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
     refute function_exported?(QuotaProjection, :quota_limit_rows, 2)
   end
 
+  @tag :quota_projection
+  test "characterizes account and Spark quota row arithmetic before freshness presentation" do
+    account =
+      account_window(
+        window_kind: "primary",
+        window_minutes: 300,
+        used_percent: Decimal.new("25"),
+        reset_at: DateTime.add(@snapshot_at, 5, :hour),
+        observed_at: @snapshot_at
+      )
+
+    spark =
+      spark_window("primary", 300, @snapshot_at,
+        used_percent: Decimal.new("40"),
+        metadata: %{"reset_state" => "anchored"}
+      )
+
+    rows =
+      QuotaProjection.quota_limit_rows(
+        [account, spark],
+        DateTimeDisplay.preferences_for_user(nil),
+        @snapshot_at
+      )
+
+    assert account_row = Enum.find(rows, &(&1.key == :primary_5h))
+    assert Decimal.equal?(account_row.percent, Decimal.new("75"))
+    assert account_row.percent_value == 75
+    assert account_row.percent_label == "75%"
+
+    assert spark_row = Enum.find(rows, &(&1.key == "model-codex_spark-primary-300"))
+    assert Decimal.equal?(spark_row.percent, Decimal.new("60"))
+    assert spark_row.percent_value == 60
+    assert spark_row.percent_label == "60%"
+    assert spark_row.reset_semantics == :anchored
+    assert spark_row.reset_label == "in 5h"
+  end
+
+  describe "additional quota freshness presentation" do
+    @tag :quota_projection
+    test "projects fresh anchored evidence as a current countdown-capable meter" do
+      row = projected_spark_row(used_percent: "25", metadata: %{"reset_state" => "anchored"})
+
+      assert Decimal.equal?(row.percent, Decimal.new("75"))
+      assert row.percent_value == 75
+      assert row.evidence_state == :fresh
+      assert row.meter_state == :current
+      assert row.freshness_label == "current"
+      assert row.freshness_title == "evidence current"
+      assert row.observed_label == "observed just now"
+      assert row.observed_title == "observed 2026-07-25 12:00:00 UTC"
+      assert row.reset_display_state == :countdown
+      assert row.reset_label == "in 7d"
+    end
+
+    @tag :quota_projection
+    test "projects stale non-exhausted evidence as historical with an unconfirmed reset" do
+      row =
+        projected_spark_row(
+          used_percent: "25",
+          observed_at: DateTime.add(@snapshot_at, -16, :minute),
+          reset_at: DateTime.add(@snapshot_at, 6, :day),
+          metadata: %{"reset_state" => "anchored"}
+        )
+
+      assert Decimal.equal?(row.percent, Decimal.new("75"))
+      assert row.percent_value == 75
+      assert row.evidence_state == :stale
+      assert row.meter_state == :historical
+      assert row.freshness_label == "last reported"
+      assert row.freshness_title == "evidence stale; showing the last reported value"
+      assert row.observed_label == "last reported 16m ago"
+      assert row.reset_display_state == :unconfirmed
+      assert row.reset_at == nil
+      assert row.reset_label == "reset unconfirmed"
+    end
+
+    @tag :quota_projection
+    test "projects stale exhausted evidence as historical exhaustion with an error state" do
+      row =
+        projected_spark_row(
+          used_percent: "100",
+          observed_at: DateTime.add(@snapshot_at, -16, :minute),
+          reset_at: DateTime.add(@snapshot_at, 6, :day),
+          metadata: %{"reset_state" => "anchored"}
+        )
+
+      assert Decimal.equal?(row.percent, Decimal.new("0"))
+      assert row.percent_value == 0
+      assert row.evidence_state == :stale
+      assert row.meter_state == :historical_exhausted
+      assert row.freshness_label == "last reported"
+      assert row.reset_display_state == :unconfirmed
+      assert row.reset_label == "reset unconfirmed"
+    end
+
+    @tag :quota_projection
+    test "projects fresh markerless zero-use evidence as current without a reset" do
+      row = projected_spark_row(used_percent: "0", metadata: %{})
+
+      assert Decimal.equal?(row.percent, Decimal.new("100"))
+      assert row.evidence_state == :fresh
+      assert row.meter_state == :current
+      assert row.freshness_label == "current"
+      assert row.reset_display_state == :absent
+      assert row.reset_at == nil
+      assert row.reset_label == nil
+    end
+
+    @tag :quota_projection
+    test "projects stale markerless zero-use evidence as historical without a reset" do
+      row =
+        projected_spark_row(
+          used_percent: "0",
+          observed_at: DateTime.add(@snapshot_at, -16, :minute),
+          metadata: %{}
+        )
+
+      assert Decimal.equal?(row.percent, Decimal.new("100"))
+      assert row.evidence_state == :stale
+      assert row.meter_state == :historical
+      assert row.freshness_label == "last reported"
+      assert row.reset_display_state == :absent
+      assert row.reset_at == nil
+      assert row.reset_label == nil
+    end
+
+    @tag :quota_projection
+    test "projects fresh unknown-reset evidence as current without a reset" do
+      row =
+        projected_spark_row(
+          used_percent: "40",
+          metadata: %{"reset_state" => "unknown"}
+        )
+
+      assert Decimal.equal?(row.percent, Decimal.new("60"))
+      assert row.evidence_state == :fresh
+      assert row.meter_state == :current
+      assert row.freshness_label == "current"
+      assert row.reset_display_state == :absent
+      assert row.reset_at == nil
+      assert row.reset_label == nil
+    end
+  end
+
   describe "identity observability projection" do
     test "newer success supersedes an older sibling failure" do
       now = ~U[2026-07-13 12:00:00Z]
@@ -910,7 +1054,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
   end
 
   @tag :relative_countdown_contract
-  test "anchored reset state stays future for a subsecond target and due at the instant" do
+  test "anchored reset state stays future for a subsecond target and becomes unconfirmed at the instant" do
     snapshot_at = ~U[2026-07-31 12:00:00.000000Z]
     subsecond_future = ~U[2026-07-31 12:00:00.999999Z]
     preferences = DateTimeDisplay.preferences_for_user(nil)
@@ -936,8 +1080,11 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
     assert Enum.find(future_rows, &(&1.key == "model-codex_spark-secondary-10080")).reset_label ==
              "in <1m"
 
-    assert Enum.find(due_rows, &(&1.key == "model-codex_spark-secondary-10080")).reset_label ==
-             "due"
+    due_row = Enum.find(due_rows, &(&1.key == "model-codex_spark-secondary-10080"))
+    assert due_row.evidence_state == :stale
+    assert due_row.reset_display_state == :unconfirmed
+    assert due_row.reset_at == nil
+    assert due_row.reset_label == "reset unconfirmed"
   end
 
   @tag :quota_spark_projection
@@ -1176,6 +1323,19 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
         attrs
       )
     )
+  end
+
+  defp projected_spark_row(attrs) do
+    observed_at = Keyword.get(attrs, :observed_at, @snapshot_at)
+    used_percent = Decimal.new(Keyword.get(attrs, :used_percent, "25"))
+    attrs = attrs |> Keyword.delete(:observed_at) |> Keyword.put(:used_percent, used_percent)
+
+    [spark_window("secondary", 10_080, observed_at, attrs)]
+    |> QuotaProjection.quota_limit_rows(
+      DateTimeDisplay.preferences_for_user(nil),
+      @snapshot_at
+    )
+    |> Enum.find(&(&1.key == "model-codex_spark-secondary-10080"))
   end
 
   defp projected_rows(identity, snapshot_at) do

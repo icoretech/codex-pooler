@@ -2,6 +2,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   @moduledoc false
 
   alias CodexPooler.Admin.UpstreamQuotaReadiness
+  alias CodexPooler.Quotas.Evidence
   alias CodexPooler.Quotas.ModelWeeklyResetSemantics
   alias CodexPooler.Upstreams.Quota
   alias CodexPooler.Upstreams.Quota.Charts.Measurements
@@ -31,6 +32,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     codex_rate_limit_error
   )
 
+  @type evidence_state :: :fresh | :stale | :unknown
+  @type meter_state :: :current | :historical | :historical_exhausted | :unknown
+  @type reset_display_state :: :countdown | :static | :unconfirmed | :absent
+
   @type quota_limit_row :: %{
           required(:key) => atom() | String.t(),
           required(:label) => String.t(),
@@ -40,7 +45,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
           required(:count_label) => String.t() | nil,
           required(:count_title) => String.t() | nil,
           required(:burning_credits) => boolean(),
+          required(:evidence_state) => evidence_state(),
+          required(:meter_state) => meter_state(),
+          required(:freshness_label) => String.t(),
+          required(:freshness_title) => String.t(),
+          required(:observed_label) => String.t(),
+          required(:observed_title) => String.t() | nil,
           required(:reset_semantics) => :anchored | :floating | :unknown,
+          required(:reset_display_state) => reset_display_state(),
           required(:reset_at) => DateTime.t() | nil,
           required(:reset_label) => String.t() | nil,
           required(:reset_title) => String.t() | nil
@@ -222,9 +234,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     {scope, family, model, upstream_model, quota_key, window_kind, window_minutes} =
       WindowSelector.logical_key(window)
 
-    [scope, family, model, upstream_model, quota_key, window_kind, window_minutes]
+    identity =
+      [scope, family, model, upstream_model, quota_key, window_kind, window_minutes] ++
+        quota_additional_meter_identity(window)
+
+    identity
     |> Enum.map(&quota_identity_token/1)
     |> then(&"#{quota_limit_key_prefix(window)}-identity-#{Enum.join(&1, "-")}")
+  end
+
+  defp quota_additional_meter_identity(%Quota.AccountQuotaWindow{} = window) do
+    case Evidence.additional_meter_token(window) do
+      nil -> []
+      meter_token -> [meter_token]
+    end
   end
 
   defp quota_limit_key_prefix(%Quota.AccountQuotaWindow{} = window) do
@@ -397,12 +420,17 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
          snapshot_at
        ) do
     remaining_percent = quota_remaining_percent(window)
+    evidence_state = quota_evidence_state(window, snapshot_at)
 
-    {reset_semantics, reset_at, reset_label, reset_title} =
-      quota_reset_presentation(window, datetime_preferences, snapshot_at)
+    {reset_semantics, reset_display_state, reset_at, reset_label, reset_title} =
+      quota_reset_presentation(window, evidence_state, datetime_preferences, snapshot_at)
 
     count_label = quota_count_label(window)
     burning_credits = burning_credits?(window)
+    {freshness_label, freshness_title} = freshness_presentation(evidence_state)
+
+    {observed_label, observed_title} =
+      observed_presentation(window.observed_at, evidence_state, datetime_preferences, snapshot_at)
 
     %{
       key: key,
@@ -413,7 +441,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       count_label: count_label,
       count_title: quota_count_title(window, count_label, burning_credits),
       burning_credits: burning_credits,
+      evidence_state: evidence_state,
+      meter_state: quota_meter_state(evidence_state, remaining_percent),
+      freshness_label: freshness_label,
+      freshness_title: freshness_title,
+      observed_label: observed_label,
+      observed_title: observed_title,
       reset_semantics: reset_semantics,
+      reset_display_state: reset_display_state,
       reset_at: reset_at,
       reset_label: reset_label,
       reset_title: reset_title
@@ -430,7 +465,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       count_label: nil,
       count_title: nil,
       burning_credits: false,
+      evidence_state: :unknown,
+      meter_state: :unknown,
+      freshness_label: "freshness unknown",
+      freshness_title: "quota evidence was not reported",
+      observed_label: "observed time not reported",
+      observed_title: nil,
       reset_semantics: :unknown,
+      reset_display_state: :absent,
       reset_at: nil,
       reset_label: nil,
       reset_title: nil
@@ -589,22 +631,51 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
 
   defp burning_credits?(_window), do: false
 
-  defp quota_reset_presentation(window, datetime_preferences, snapshot_at) do
-    case ModelWeeklyResetSemantics.classify(window) do
-      :anchored ->
-        anchored_reset_presentation(window.reset_at, datetime_preferences, snapshot_at)
+  defp quota_reset_presentation(window, evidence_state, datetime_preferences, snapshot_at) do
+    {reset_semantics, reset_at, reset_label, reset_title} =
+      case ModelWeeklyResetSemantics.classify(window) do
+        :anchored ->
+          anchored_reset_presentation(window.reset_at, datetime_preferences, snapshot_at)
 
-      :floating ->
-        {:floating, nil, "starts on use",
-         "provider reports a rolling seven-day window until use starts"}
+        :floating ->
+          {:floating, nil, "starts on use",
+           "provider reports a rolling seven-day window until use starts"}
 
-      :unknown ->
-        {:unknown, nil, nil, nil}
+        :unknown ->
+          {:unknown, nil, nil, nil}
 
-      :not_applicable ->
-        legacy_quota_reset_presentation(window, datetime_preferences, snapshot_at)
-    end
+        :not_applicable ->
+          legacy_quota_reset_presentation(window, datetime_preferences, snapshot_at)
+      end
+
+    reset_display_presentation(
+      reset_semantics,
+      reset_at,
+      reset_label,
+      reset_title,
+      evidence_state
+    )
   end
+
+  defp reset_display_presentation(:anchored, _reset_at, _reset_label, _reset_title, :stale) do
+    {:anchored, :unconfirmed, nil, "reset unconfirmed",
+     "last reported reset is unconfirmed because quota evidence is stale"}
+  end
+
+  defp reset_display_presentation(:anchored, reset_at, reset_label, reset_title, _evidence_state),
+    do: {:anchored, :countdown, reset_at, reset_label, reset_title}
+
+  defp reset_display_presentation(:floating, reset_at, reset_label, reset_title, _evidence_state),
+    do: {:floating, :static, reset_at, reset_label, reset_title}
+
+  defp reset_display_presentation(
+         :unknown,
+         _reset_at,
+         _reset_label,
+         _reset_title,
+         _evidence_state
+       ),
+       do: {:unknown, :absent, nil, nil, nil}
 
   defp legacy_quota_reset_presentation(
          %Quota.AccountQuotaWindow{metadata: metadata, reset_at: reset_at},
@@ -661,6 +732,51 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
   defp quota_reset_title(%DateTime{} = reset_at, datetime_preferences) do
     "resets #{DateTimeDisplay.format_datetime(reset_at, datetime_preferences)}"
   end
+
+  defp quota_evidence_state(%Quota.AccountQuotaWindow{} = window, snapshot_at) do
+    case Evidence.current_freshness_state(window, snapshot_at) do
+      "fresh" -> :fresh
+      "stale" -> :stale
+      _other -> :unknown
+    end
+  end
+
+  defp quota_meter_state(:stale, %Decimal{} = remaining_percent) do
+    if Decimal.compare(remaining_percent, Decimal.new(0)) == :gt do
+      :historical
+    else
+      :historical_exhausted
+    end
+  end
+
+  defp quota_meter_state(:stale, _remaining_percent), do: :historical
+  defp quota_meter_state(:fresh, _remaining_percent), do: :current
+  defp quota_meter_state(:unknown, _remaining_percent), do: :unknown
+
+  defp freshness_presentation(:fresh), do: {"current", "evidence current"}
+
+  defp freshness_presentation(:stale),
+    do: {"last reported", "evidence stale; showing the last reported value"}
+
+  defp freshness_presentation(:unknown),
+    do: {"freshness unknown", "quota evidence freshness was not reported"}
+
+  defp observed_presentation(
+         %DateTime{} = observed_at,
+         evidence_state,
+         datetime_preferences,
+         snapshot_at
+       ) do
+    prefix = if evidence_state == :stale, do: "last reported", else: "observed"
+
+    {
+      "#{prefix} #{Formatting.relative_time_label(observed_at, snapshot_at)}",
+      "observed #{DateTimeDisplay.format_datetime(observed_at, datetime_preferences)}"
+    }
+  end
+
+  defp observed_presentation(_observed_at, _evidence_state, _datetime_preferences, _snapshot_at),
+    do: {"observed time not reported", nil}
 
   defp remaining_percent_from_used(%Decimal{} = used_percent) do
     Decimal.sub(Decimal.new(100), used_percent)
