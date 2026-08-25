@@ -1917,7 +1917,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                      upstream_endpoint: "/backend-api/codex/responses",
                      accounting_endpoint: "/backend-api/codex/responses/compact",
                      request_transport: "http_compact_json",
-                     attempt_transport: "http_json"
+                     attempt_transport: "http_compact_json"
                    },
                    result_transports: %{
                      buffered: "responses_json",
