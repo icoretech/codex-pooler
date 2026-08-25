@@ -3,7 +3,10 @@ defmodule CodexPoolerWeb.Admin.QuotaLimitRowTest do
 
   import Phoenix.LiveViewTest
 
+  alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
+  alias CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection
   alias CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow
+  alias CodexPoolerWeb.DateTimeDisplay
 
   test "keeps the existing quota-meter ids, determinate value, threshold tone, stripes, and reset hook" do
     html =
@@ -133,6 +136,51 @@ defmodule CodexPoolerWeb.Admin.QuotaLimitRowTest do
 
       assert LazyHTML.query(document, "##{id}-reset") |> Enum.empty?()
     end
+  end
+
+  test "does not render raw provider meter labels when the projection has no safe identity" do
+    unsafe_limit_name = "private-provider-limit-name"
+    unsafe_metered_feature = "private-provider-metered-feature"
+    observed_at = ~U[2026-08-25 12:00:00Z]
+
+    limit =
+      %AccountQuotaWindow{
+        quota_key: "provider_feature",
+        quota_scope: "feature",
+        quota_family: "provider_feature",
+        display_label: nil,
+        model: nil,
+        upstream_model: nil,
+        limit_name: nil,
+        raw_limit_name: unsafe_limit_name,
+        metered_feature: unsafe_metered_feature,
+        window_kind: "primary",
+        window_minutes: 300,
+        used_percent: Decimal.new("25"),
+        reset_at: DateTime.add(observed_at, 5, :hour),
+        source: "codex_usage_api",
+        source_precision: "observed",
+        freshness_state: "fresh",
+        observed_at: observed_at,
+        last_sync_at: observed_at,
+        updated_at: observed_at,
+        metadata: %{}
+      }
+      |> then(
+        &QuotaProjection.quota_limit_rows(
+          [&1],
+          DateTimeDisplay.preferences_for_user(nil),
+          observed_at
+        )
+      )
+      |> Enum.find(&is_binary(&1.key))
+
+    html =
+      render_component(&QuotaLimitRow.quota_limit_row/1, %{id: "quota-row-redacted", limit: limit})
+
+    assert html =~ "Additional limit 5h"
+    refute html =~ unsafe_limit_name
+    refute html =~ unsafe_metered_feature
   end
 
   @tag :manual_quota_row_render

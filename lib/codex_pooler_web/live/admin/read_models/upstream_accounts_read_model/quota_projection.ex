@@ -307,12 +307,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
       window.display_label,
       window.model,
       window.upstream_model,
-      window.limit_name,
-      window.raw_limit_name,
-      window.metered_feature,
-      window.quota_key
+      window.limit_name
     ]
     |> Enum.find(&Formatting.present_string?/1)
+    |> then(&(&1 || "Additional limit"))
     |> humanize_quota_label()
   end
 

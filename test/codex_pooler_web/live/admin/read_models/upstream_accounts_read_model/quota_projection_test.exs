@@ -230,6 +230,50 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
     refute function_exported?(QuotaProjection, :quota_limit_rows, 2)
   end
 
+  test "uses a generic label when an additional quota window has no safe display identity" do
+    unsafe_limit_name = "private-provider-limit-name"
+    unsafe_metered_feature = "private-provider-metered-feature"
+
+    row =
+      %AccountQuotaWindow{
+        quota_key: "provider_feature",
+        quota_scope: "feature",
+        quota_family: "provider_feature",
+        display_label: nil,
+        model: nil,
+        upstream_model: nil,
+        limit_name: nil,
+        raw_limit_name: unsafe_limit_name,
+        metered_feature: unsafe_metered_feature,
+        window_kind: "primary",
+        window_minutes: 300,
+        used_percent: Decimal.new("25"),
+        reset_at: DateTime.add(@snapshot_at, 5, :hour),
+        source: "codex_usage_api",
+        source_precision: "observed",
+        freshness_state: "fresh",
+        observed_at: @snapshot_at,
+        last_sync_at: @snapshot_at,
+        updated_at: @snapshot_at,
+        metadata: %{}
+      }
+      |> then(
+        &QuotaProjection.quota_limit_rows(
+          [&1],
+          DateTimeDisplay.preferences_for_user(nil),
+          @snapshot_at
+        )
+      )
+      |> Enum.find(&is_binary(&1.key))
+
+    assert row.label == "Additional limit 5h"
+
+    for value <- [row.label, row.freshness_title, row.observed_label, row.observed_title] do
+      refute value =~ unsafe_limit_name
+      refute value =~ unsafe_metered_feature
+    end
+  end
+
   @tag :quota_projection
   test "characterizes account and Spark quota row arithmetic before freshness presentation" do
     account =
@@ -265,6 +309,35 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
     assert spark_row.percent_label == "60%"
     assert spark_row.reset_semantics == :anchored
     assert spark_row.reset_label == "in 5h"
+  end
+
+  @tag :quota_projection
+  test "keeps approved display labels and limit names ahead of quota-key fallback" do
+    rows =
+      [
+        spark_window("primary", 300, @snapshot_at,
+          quota_key: "safe_display_label",
+          model: nil,
+          display_label: "Approved display label",
+          limit_name: "Approved limit name"
+        ),
+        spark_window("primary", 300, @snapshot_at,
+          quota_key: "safe_limit_name",
+          model: nil,
+          display_label: nil,
+          limit_name: "Approved limit name"
+        )
+      ]
+      |> QuotaProjection.quota_limit_rows(
+        DateTimeDisplay.preferences_for_user(nil),
+        @snapshot_at
+      )
+
+    assert Enum.filter(rows, &(&1.key not in [:primary_5h, :primary_30d, :weekly]))
+           |> Enum.map(& &1.label) == [
+             "Approved display label 5h",
+             "Approved limit name 5h"
+           ]
   end
 
   describe "additional quota freshness presentation" do
