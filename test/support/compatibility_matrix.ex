@@ -345,6 +345,21 @@ defmodule CodexPooler.CompatibilityMatrix do
         "backend /backend-api/codex/v1 aliases are explicit authenticated backend routes for models, responses, websocket responses, compact, and chat completions, preserve generic backend API-key auth, proxy to the canonical backend gateway paths, allow prompt-cache routing locality only on POST responses and chat completions aliases, keep the chat alias fallback limited to top-level input only when messages is absent or empty, and the translated chat alias emits the nested server_error terminal after visible output when the upstream stream ends without a terminal"
     },
     %{
+      slug: :usage_alias_meter_identity,
+      status: :supported,
+      current: :alias_equivalent_current_meter_lists,
+      categories: [:route, :auth, :ownership],
+      routes: [
+        %{method: :get, path: "/api/codex/usage"},
+        %{method: :get, path: "/wham/usage"},
+        %{method: :get, path: "/backend-api/wham/usage"}
+      ],
+      future_routes: [],
+      fixture: :usage_alias_meter_identity,
+      contract:
+        "the three authenticated Codex usage aliases return schema-equivalent deterministic current usage lists; dynamically stale additional rows are omitted, unknown rows remain, distinct canonical meters may repeat the legacy quota_key without cross-meter window pairing, no freshness or raw identity fields extend the wire shape, and request logs retain the exact alias endpoint with metadata-only usage facts"
+    },
+    %{
       slug: :websocket_continuity,
       status: :supported,
       current: :persisted_session_turns,
@@ -1617,6 +1632,32 @@ defmodule CodexPooler.CompatibilityMatrix do
       json: %{
         "model" => "gpt-fixture-text",
         "input" => "synthetic alias surface request"
+      }
+    },
+    usage_alias_meter_identity: %{
+      auth: "required_bearer_api_key_or_matching_chatgpt_account_token",
+      routes: [
+        "/api/codex/usage",
+        "/wham/usage",
+        "/backend-api/wham/usage"
+      ],
+      payload_equivalence: "normalized_json_exact",
+      additional_rate_limits: %{
+        stale: "omitted_by_dynamic_freshness",
+        unknown: "preserved",
+        ordering: ["quota_key", "canonical_meter_token", "window_kind", "window_minutes"],
+        repeated_legacy_quota_key: true,
+        cross_meter_window_pairing: false
+      },
+      wire_schema: %{
+        legacy_fields_and_types: "unchanged",
+        freshness_fields: false,
+        raw_identity_fields: false
+      },
+      request_log: %{
+        endpoint: "exact_requested_alias",
+        operation: "usage",
+        metadata_only: true
       }
     },
     websocket_turn: %{

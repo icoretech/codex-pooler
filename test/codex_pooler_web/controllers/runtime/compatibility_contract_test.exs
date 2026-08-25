@@ -33,6 +33,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     responses_chat
     response_body_cap
     backend_v1_alias_surface
+    usage_alias_meter_identity
     websocket_continuity
     reasoning_minimal
     reasoning_none
