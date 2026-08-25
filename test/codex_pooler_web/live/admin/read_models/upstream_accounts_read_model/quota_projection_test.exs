@@ -275,6 +275,64 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
     end
   end
 
+  test "fingerprints private meter identities when additional quota DOM keys collide" do
+    raw_metered_feature = "private-meter-alpha-7b"
+    raw_limit_id = "private-limit-beta-7b"
+
+    windows = [
+      private_meter_window(raw_metered_feature: raw_metered_feature),
+      private_meter_window(raw_limit_id: raw_limit_id, used_percent: Decimal.new("40"))
+    ]
+
+    singleton_rows =
+      QuotaProjection.quota_limit_rows(
+        [hd(windows)],
+        DateTimeDisplay.preferences_for_user(nil),
+        @snapshot_at
+      )
+
+    assert Enum.any?(singleton_rows, &(&1.key == "feature-shared_meter-primary-300"))
+
+    rows =
+      QuotaProjection.quota_limit_rows(
+        windows,
+        DateTimeDisplay.preferences_for_user(nil),
+        @snapshot_at
+      )
+
+    additional_rows = Enum.reject(rows, &is_atom(&1.key))
+    keys = Enum.map(additional_rows, & &1.key)
+
+    assert length(keys) == 2
+    assert keys == Enum.uniq(keys)
+    assert Enum.all?(keys, &Regex.match?(~r/-meter-[0-9a-f]{24}$/, &1))
+
+    assert Enum.sort(keys) ==
+             windows
+             |> Enum.reverse()
+             |> QuotaProjection.quota_limit_rows(
+               DateTimeDisplay.preferences_for_user(nil),
+               @snapshot_at
+             )
+             |> Enum.reject(&is_atom(&1.key))
+             |> Enum.map(& &1.key)
+             |> Enum.sort()
+
+    assert Enum.map(additional_rows, & &1.label) == [
+             "Approved shared meter 5h (Feature scope, Family shared family)",
+             "Approved shared meter 5h (Feature scope, Family shared family)"
+           ]
+
+    rendered_projection = inspect(additional_rows)
+
+    for private_value <- [raw_metered_feature, raw_limit_id] do
+      reversible_token = private_value |> Base.encode32(padding: false) |> String.downcase()
+
+      refute rendered_projection =~ private_value
+      refute rendered_projection =~ reversible_token
+    end
+  end
+
   @tag :quota_projection
   test "characterizes account and Spark quota row arithmetic before freshness presentation" do
     account =
@@ -1370,6 +1428,32 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjectionTest do
           merge_precedence: 60,
           last_sync_at: observed_at,
           updated_at: observed_at,
+          metadata: %{}
+        ],
+        attrs
+      )
+    )
+  end
+
+  defp private_meter_window(attrs) do
+    struct!(
+      AccountQuotaWindow,
+      Keyword.merge(
+        [
+          quota_key: "shared_meter",
+          quota_scope: "feature",
+          quota_family: "shared_family",
+          display_label: "Approved shared meter",
+          window_kind: "primary",
+          window_minutes: 300,
+          used_percent: Decimal.new("25"),
+          reset_at: DateTime.add(@snapshot_at, 5, :hour),
+          source: "codex_usage_api",
+          source_precision: "observed",
+          freshness_state: "fresh",
+          observed_at: @snapshot_at,
+          last_sync_at: @snapshot_at,
+          updated_at: @snapshot_at,
           metadata: %{}
         ],
         attrs

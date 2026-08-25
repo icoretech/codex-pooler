@@ -3697,12 +3697,20 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
 
     now = DateTime.utc_now()
 
+    private_meter_values = [
+      "private-mounted-model-alpha",
+      "private-mounted-model-beta",
+      "private-mounted-upstream-alpha",
+      "private-mounted-upstream-beta"
+    ]
+
     model_alpha = %{
       quota_key: "shared_capacity",
       quota_scope: "model",
       quota_family: "alpha",
       model: "alpha",
       display_label: "Shared capacity",
+      raw_metered_feature: Enum.at(private_meter_values, 0),
       window_kind: "primary",
       window_minutes: 300,
       used_percent: Decimal.new("10"),
@@ -3720,12 +3728,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
                  model_alpha
                  | quota_family: "beta",
                    model: "beta",
+                   raw_metered_feature: Enum.at(private_meter_values, 1),
                    used_percent: Decimal.new("20")
                },
                Map.merge(model_alpha, %{
                  quota_scope: "upstream_model",
                  upstream_model: "alpha",
                  model: nil,
+                 raw_metered_feature: Enum.at(private_meter_values, 2),
                  used_percent: Decimal.new("30")
                }),
                Map.merge(model_alpha, %{
@@ -3733,6 +3743,7 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
                  quota_family: "beta",
                  upstream_model: "beta",
                  model: nil,
+                 raw_metered_feature: Enum.at(private_meter_values, 3),
                  used_percent: Decimal.new("40")
                })
              ])
@@ -3779,6 +3790,22 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
       |> List.flatten()
 
     assert limit_ids == Enum.uniq(limit_ids)
+
+    limit_row_ids =
+      Enum.reject(
+        limit_ids,
+        &(String.ends_with?(&1, "-progress") or String.ends_with?(&1, "-reset"))
+      )
+
+    assert length(limit_row_ids) == 4
+    assert Enum.all?(limit_row_ids, &Regex.match?(~r/-meter-[0-9a-f]{24}$/, &1))
+
+    for private_value <- private_meter_values do
+      reversible_token = private_value |> Base.encode32(padding: false) |> String.downcase()
+
+      refute html =~ private_value
+      refute html =~ reversible_token
+    end
 
     for limit <- additional_limits do
       selector = "#upstream-account-#{identity.id}-limit-#{limit.key}"

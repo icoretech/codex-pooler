@@ -32,6 +32,10 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     codex_rate_limit_error
   )
 
+  @additional_meter_fingerprint_prefix "meter-"
+  @additional_meter_fingerprint_hex_length 24
+  @additional_meter_fingerprint_domain "quota-additional-meter-dom-v1:"
+
   @type evidence_state :: :fresh | :stale | :unknown
   @type meter_state :: :current | :historical | :historical_exhausted | :unknown
   @type reset_display_state :: :countdown | :static | :unconfirmed | :absent
@@ -237,20 +241,27 @@ defmodule CodexPoolerWeb.Admin.UpstreamAccountsReadModel.QuotaProjection do
     {scope, family, model, upstream_model, quota_key, window_kind, window_minutes} =
       WindowSelector.logical_key(window)
 
-    identity =
-      [scope, family, model, upstream_model, quota_key, window_kind, window_minutes] ++
-        quota_additional_meter_identity(window)
+    identity = [scope, family, model, upstream_model, quota_key, window_kind, window_minutes]
 
     identity
     |> Enum.map(&quota_identity_token/1)
     |> then(&"#{quota_limit_key_prefix(window)}-identity-#{Enum.join(&1, "-")}")
+    |> Kernel.<>(quota_additional_meter_fingerprint(window))
   end
 
-  defp quota_additional_meter_identity(%Quota.AccountQuotaWindow{} = window) do
+  defp quota_additional_meter_fingerprint(%Quota.AccountQuotaWindow{} = window) do
     case Evidence.additional_meter_token(window) do
-      nil -> []
-      meter_token -> [meter_token]
+      nil -> ""
+      meter_token -> "-#{additional_meter_fingerprint(meter_token)}"
     end
+  end
+
+  defp additional_meter_fingerprint(meter_token) do
+    (@additional_meter_fingerprint_domain <> meter_token)
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, @additional_meter_fingerprint_hex_length)
+    |> then(&(@additional_meter_fingerprint_prefix <> &1))
   end
 
   defp quota_limit_key_prefix(%Quota.AccountQuotaWindow{} = window) do

@@ -172,6 +172,51 @@ defmodule CodexPoolerWeb.Admin.QuotaLimitRowTest do
     refute html =~ unsafe_metered_feature
   end
 
+  test "renders colliding additional meters under fingerprinted private DOM ids" do
+    observed_at = ~U[2026-08-25 12:00:00Z]
+    raw_meter_values = ["private-component-meter-alpha", "private-component-meter-beta"]
+
+    projected_limits =
+      raw_meter_values
+      |> Enum.with_index(25)
+      |> Enum.map(fn {raw_meter_value, used_percent} ->
+        private_meter_window(observed_at, raw_meter_value, used_percent)
+      end)
+      |> QuotaProjection.quota_limit_rows(
+        DateTimeDisplay.preferences_for_user(nil),
+        observed_at
+      )
+      |> Enum.reject(&is_atom(&1.key))
+
+    html =
+      projected_limits
+      |> Enum.map_join(fn limit ->
+        render_component(&QuotaLimitRow.quota_limit_row/1, %{
+          id: "quota-row-#{limit.key}",
+          limit: limit
+        })
+      end)
+
+    document = LazyHTML.from_fragment(html)
+
+    rendered_ids =
+      document
+      |> LazyHTML.query("[data-role='upstream-limit-chart']")
+      |> Enum.map(fn node -> node |> LazyHTML.attribute("id") |> List.first() end)
+
+    assert length(rendered_ids) == 2
+    assert rendered_ids == Enum.uniq(rendered_ids)
+    assert Enum.all?(rendered_ids, &Regex.match?(~r/-meter-[0-9a-f]{24}$/, &1))
+    assert LazyHTML.text(document) =~ "Approved component meter 5h"
+
+    for private_value <- raw_meter_values do
+      reversible_token = private_value |> Base.encode32(padding: false) |> String.downcase()
+
+      refute html =~ private_value
+      refute html =~ reversible_token
+    end
+  end
+
   @tag :manual_quota_row_render
   test "manual quota row render verifies the restored compact HTML" do
     stale_html = render_quota_row(stale_limit(Decimal.new(75), 75, "75%"))
@@ -248,6 +293,27 @@ defmodule CodexPoolerWeb.Admin.QuotaLimitRowTest do
       reset_title: "Reset time is unconfirmed because evidence is stale.",
       reset_semantics: :anchored,
       reset_at: ~U[2026-08-31 12:00:00Z]
+    }
+  end
+
+  defp private_meter_window(observed_at, raw_meter_value, used_percent) do
+    %AccountQuotaWindow{
+      quota_key: "component_shared_meter",
+      quota_scope: "feature",
+      quota_family: "component_shared_family",
+      display_label: "Approved component meter",
+      raw_metered_feature: raw_meter_value,
+      window_kind: "primary",
+      window_minutes: 300,
+      used_percent: Decimal.new(used_percent),
+      reset_at: DateTime.add(observed_at, 5, :hour),
+      source: "codex_usage_api",
+      source_precision: "observed",
+      freshness_state: "fresh",
+      observed_at: observed_at,
+      last_sync_at: observed_at,
+      updated_at: observed_at,
+      metadata: %{}
     }
   end
 end
