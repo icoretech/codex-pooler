@@ -110,26 +110,6 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageMeteredIdentityTest do
              public_additional,
              &get_in(&1, ["rate_limit", "secondary_window", "used_percent"])
            ) == [83, 71]
-
-    maybe_write_evidence!(%{
-      "http_status" => conn.status,
-      "parser_probe_count" => length(probe_additional),
-      "descriptor_count" => MapSet.size(MapSet.new(covered_additional)),
-      "raw_usage_row_count" => length(raw_usage_rows),
-      "effective_meter_group_count" => length(effective_additional),
-      "public_entry_count" => length(public_additional),
-      "legacy_generic_present" => true,
-      "stale_sibling_folded" => true,
-      "public_entries" =>
-        Enum.map(public_additional, fn entry ->
-          %{
-            "quota_key" => entry["quota_key"],
-            "metered_feature" => entry["metered_feature"],
-            "used_percent" => get_in(entry, ["rate_limit", "secondary_window", "used_percent"])
-          }
-        end),
-      "sanitized" => true
-    })
   end
 
   defp metered_usage_payload(observed_at) do
@@ -214,16 +194,5 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageMeteredIdentityTest do
         Application.delete_env(:codex_pooler, CodexPooler.Upstreams)
       end
     end)
-  end
-
-  defp maybe_write_evidence!(evidence) do
-    case System.get_env("CODEX_POOLER_METERED_IDENTITY_EVIDENCE_PATH") do
-      path when is_binary(path) and path != "" ->
-        path |> Path.dirname() |> File.mkdir_p!()
-        File.write!(path, Jason.encode!(evidence, pretty: true))
-
-      _other ->
-        :ok
-    end
   end
 end

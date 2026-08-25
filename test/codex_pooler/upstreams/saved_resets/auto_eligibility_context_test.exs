@@ -138,17 +138,17 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.ContextTest do
   end
 
   test "model-scoped additional quota cannot trigger saved-reset auto eligibility" do
-    reserve_window = reserve_model_window()
+    additional_window = model_additional_window()
     policy = %{min_blocked_minutes: 60}
     snapshot = %{source: "codex_usage_api"}
 
-    refute AutoEligibility.blocked_weekly_exhaustion?([reserve_window], policy, @now)
+    refute AutoEligibility.blocked_weekly_exhaustion?([additional_window], policy, @now)
 
-    assert AutoEligibility.scheduled_weekly_eligibility([reserve_window], snapshot, @now) ==
+    assert AutoEligibility.scheduled_weekly_eligibility([additional_window], snapshot, @now) ==
              :unavailable
 
     account_mutation = %{
-      reserve_window
+      additional_window
       | quota_key: "account",
         quota_scope: "account",
         quota_family: "account"
@@ -198,12 +198,12 @@ defmodule CodexPooler.Upstreams.SavedResets.AutoEligibility.ContextTest do
     }
   end
 
-  defp reserve_model_window do
+  defp model_additional_window do
     %AccountQuotaWindow{
-      quota_key: "gpt_reserve",
+      quota_key: "synthetic_model_weekly",
       quota_scope: "model",
       quota_family: "codex_model",
-      model: "gpt-reserve",
+      model: "synthetic-model",
       window_kind: "secondary",
       window_minutes: 10_080,
       used_percent: Decimal.new("100"),

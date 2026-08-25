@@ -447,11 +447,11 @@ defmodule CodexPooler.Upstreams.SavedResets.ConvergenceTest do
     upsert_source_window!(identity, Decimal.new("0"),
       source: "codex_usage_api",
       observed_at: DateTime.utc_now() |> DateTime.truncate(:microsecond),
-      quota_key: "gpt_reserve",
+      quota_key: "synthetic_model_weekly",
       quota_scope: "model",
       quota_family: "codex_model",
-      model: "gpt-reserve",
-      metered_feature: "base_model_inference"
+      model: "synthetic-model",
+      metered_feature: "synthetic_model_meter"
     )
 
     before = redemption(identity)

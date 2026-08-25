@@ -79,22 +79,22 @@ defmodule CodexPooler.Upstreams.SavedResets.PostResetEvidenceTest do
   end
 
   test "model-scoped additional quota cannot confirm or reblock a consumed reset" do
-    reserve_window =
+    additional_window =
       window(
-        quota_key: "gpt_reserve",
+        quota_key: "synthetic_model_weekly",
         used_percent: Decimal.new("0")
       )
       |> Map.merge(%{
         quota_scope: "model",
         quota_family: "codex_model",
-        model: "gpt-reserve",
-        metered_feature: "base_model_inference"
+        model: "synthetic-model",
+        metered_feature: "synthetic_model_meter"
       })
 
-    assert PostResetEvidence.classify([reserve_window], @consumed_at, @now) == :pending
+    assert PostResetEvidence.classify([additional_window], @consumed_at, @now) == :pending
 
     account_mutation = %{
-      reserve_window
+      additional_window
       | quota_key: "account",
         quota_scope: "account",
         quota_family: "account"

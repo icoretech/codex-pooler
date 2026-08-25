@@ -546,8 +546,6 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
     assert Enum.all?(logs, &is_nil(&1.api_key_id))
     assert Enum.all?(logs, &(&1.upstream_account_label == identity.account_label))
     assert Enum.all?(logs, &is_nil(&1.upstream_account_email))
-
-    maybe_write_usage_alias_evidence!(responses)
   end
 
   test "Codex rate-limit output keeps absent and jointly healthy windows allowed" do
@@ -952,7 +950,7 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
 
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-    assert {:ok, [_account, _reserve]} =
+    assert {:ok, [_account, _additional]} =
              QuotaWindows.upsert_quota_windows(identity, [
                %{
                  quota_key: "account",
@@ -971,17 +969,17 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
                  freshness_state: "fresh"
                },
                %{
-                 quota_key: "gpt_reserve",
+                 quota_key: "synthetic_model_weekly",
                  quota_scope: "model",
                  quota_family: "codex_model",
-                 model: "gpt-reserve",
+                 model: "synthetic-model",
                  window_kind: "secondary",
                  window_minutes: 10_080,
                  used_percent: Decimal.new("0"),
-                 display_label: "GPT Reserve",
-                 limit_name: "gpt-reserve",
-                 metered_feature: "base_model_inference",
-                 raw_metered_feature: "base_model_inference",
+                 display_label: "Synthetic model weekly",
+                 limit_name: "synthetic-model-weekly",
+                 metered_feature: "synthetic_model_meter",
+                 raw_metered_feature: "synthetic_model_meter",
                  reset_at: DateTime.add(now, 7, :day),
                  observed_at: now,
                  last_sync_at: now,
@@ -1008,8 +1006,8 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
 
     assert [
              %{
-               "quota_key" => "gpt_reserve",
-               "metered_feature" => "base_model_inference",
+               "quota_key" => "synthetic_model_weekly",
+               "metered_feature" => "synthetic_model_meter",
                "rate_limit" => %{"secondary_window" => %{"used_percent" => 0}}
              }
            ] = response["additional_rate_limits"]
@@ -1238,28 +1236,6 @@ defmodule CodexPoolerWeb.Runtime.CodexUsageControllerTest do
     refute encoded =~ "freshness_state"
     refute encoded =~ "raw_limit_id"
     refute encoded =~ "raw_metered_feature"
-  end
-
-  defp maybe_write_usage_alias_evidence!(responses) do
-    case System.get_env("CODEX_POOLER_USAGE_ALIAS_EVIDENCE_PATH") do
-      path when is_binary(path) and path != "" ->
-        path |> Path.dirname() |> File.mkdir_p!()
-
-        File.write!(
-          path,
-          Jason.encode!(
-            %{
-              "aliases" => Map.new(responses),
-              "equivalent" => true,
-              "sanitized" => true
-            },
-            pretty: true
-          )
-        )
-
-      _other ->
-        :ok
-    end
   end
 
   defp usage_reset_identity_fixture do

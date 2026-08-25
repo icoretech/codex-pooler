@@ -259,16 +259,16 @@ defmodule CodexPooler.Accounting.RequestLogsUsageTest do
       freshness_state: "fresh"
     }
 
-    reserve_window = reserve_model_window(now)
+    additional_window = model_additional_window(now)
 
     {primary, secondary} =
-      UsageResponses.account_usage_windows([account_window, reserve_window], now)
+      UsageResponses.account_usage_windows([account_window, additional_window], now)
 
     assert primary == nil
     assert UsageResponses.codex_credits(primary, secondary).balance == "640"
 
-    assert [%{quota_key: "gpt_reserve", metered_feature: "base_model_inference"}] =
-             UsageResponses.additional_codex_rate_limits([account_window, reserve_window], now)
+    assert [%{quota_key: "synthetic_model_weekly", metered_feature: "synthetic_model_meter"}] =
+             UsageResponses.additional_codex_rate_limits([account_window, additional_window], now)
 
     assert {:ok, reserved} =
              Accounting.reserve(
@@ -339,19 +339,19 @@ defmodule CodexPooler.Accounting.RequestLogsUsageTest do
     Enum.find(limits, &(&1.limit_type == limit_type and &1.limit_window == limit_window))
   end
 
-  defp reserve_model_window(now) do
+  defp model_additional_window(now) do
     %AccountQuotaWindow{
-      quota_key: "gpt_reserve",
+      quota_key: "synthetic_model_weekly",
       quota_scope: "model",
       quota_family: "codex_model",
-      model: "gpt-reserve",
+      model: "synthetic-model",
       window_kind: "secondary",
       window_minutes: 10_080,
       used_percent: Decimal.new("0"),
-      display_label: "GPT Reserve",
-      limit_name: "gpt-reserve",
-      metered_feature: "base_model_inference",
-      raw_metered_feature: "base_model_inference",
+      display_label: "Synthetic model weekly",
+      limit_name: "synthetic-model-weekly",
+      metered_feature: "synthetic_model_meter",
+      raw_metered_feature: "synthetic_model_meter",
       reset_at: DateTime.add(now, 7, :day),
       observed_at: now,
       last_sync_at: now,

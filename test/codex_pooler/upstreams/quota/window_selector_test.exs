@@ -373,13 +373,13 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
   test "blank meter text falls back to the trimmed raw limit id" do
     window =
       additional_window(
-        raw_limit_id: " reserve-images ",
+        raw_limit_id: " image-meter ",
         raw_metered_feature: "   "
       )
 
-    assert AdditionalMeterIdentity.token(window) == "reserve-images"
+    assert AdditionalMeterIdentity.token(window) == "image-meter"
 
-    assert {:metered, _legacy_key, "reserve-images"} =
+    assert {:metered, _legacy_key, "image-meter"} =
              AdditionalMeterIdentity.group_key(window)
   end
 
@@ -722,9 +722,9 @@ defmodule CodexPooler.Upstreams.Quota.WindowSelectorTest do
     account_window(
       Keyword.merge(
         [
-          quota_key: "gpt-reserve",
+          quota_key: "synthetic-additional",
           quota_scope: "feature",
-          quota_family: "gpt-reserve",
+          quota_family: "synthetic-additional",
           window_kind: "secondary",
           window_minutes: 10_080,
           reset_at: DateTime.add(@as_of, 7, :day)
