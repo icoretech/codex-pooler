@@ -3,7 +3,7 @@ defmodule CodexPooler.Accounting.UsageResponses do
   Codex-compatible usage-limit response shaping for accounting reads.
   """
 
-  alias CodexPooler.Quotas.WindowClassifier
+  alias CodexPooler.Quotas.{Evidence, WindowClassifier}
   alias CodexPooler.Upstreams.Quota
 
   @spec self_usage_limits([map()], integer(), integer(), integer(), DateTime.t()) :: [map()]
@@ -118,7 +118,10 @@ defmodule CodexPooler.Accounting.UsageResponses do
   def additional_codex_rate_limits(windows, as_of) do
     windows
     |> Quota.Windows.effective_quota_windows(as_of)
-    |> Enum.reject(&(&1.quota_key in [nil, "account"]))
+    |> Enum.reject(
+      &(&1.quota_key in [nil, "account"] or
+          Evidence.current_freshness_state(&1, as_of) == "stale")
+    )
     |> Enum.group_by(& &1.quota_key)
     |> Enum.map(fn {quota_key, quota_windows} ->
       primary =
