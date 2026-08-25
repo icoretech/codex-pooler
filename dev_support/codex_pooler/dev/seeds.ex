@@ -74,6 +74,21 @@ defmodule CodexPooler.Dev.Seeds do
     Perf.run(%{owner: owner})
   end
 
+  @doc "Ensures the deterministic local owner used by metered-quota QA."
+  @spec ensure_metered_quota_owner!() :: User.t()
+  def ensure_metered_quota_owner! do
+    require_dev_seeds_enabled!()
+
+    owner = reset_owner_password!(ensure_user!(owner_spec()))
+    ensure_membership!(owner, "instance_owner", owner.id)
+
+    if Repo.get!(PlatformBootstrapState, true).status == "pending" do
+      complete_bootstrap!(owner)
+    end
+
+    owner
+  end
+
   defp ensure_perf_owner! do
     owner = reset_owner_password!(ensure_user!(owner_spec()))
     ensure_membership!(owner, "instance_owner", owner.id)
