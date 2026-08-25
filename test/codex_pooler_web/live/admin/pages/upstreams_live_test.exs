@@ -3966,13 +3966,13 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(
              view,
              "##{current_id}[data-evidence-state='fresh'][data-meter-state='current']",
-             "current"
+             "90%"
            )
 
     assert has_element?(
              view,
              "##{current_id}-progress[data-evidence-state='fresh'][data-meter-state='current']" <>
-               ".progress-success[value='90'][aria-describedby='#{current_id}-freshness #{current_id}-observed']"
+               ".progress-success[value='90']:not([aria-describedby])"
            )
 
     assert has_element?(view, "##{current_id}-reset[phx-hook='RelativeCountdown']")
@@ -3980,55 +3980,36 @@ defmodule CodexPoolerWeb.Admin.UpstreamsLiveTest do
     assert has_element?(
              view,
              "##{historical_id}[data-evidence-state='stale'][data-meter-state='historical']",
-             "last reported"
+             "75%"
            )
 
     assert has_element?(
              view,
              "##{historical_id}-progress[data-evidence-state='stale']" <>
-               "[data-meter-state='historical'].progress-warning:not(.progress-success)" <>
-               "[value='75'][aria-describedby='#{historical_id}-freshness #{historical_id}-observed']"
+               "[data-meter-state='historical'].progress-success[value='75']:not([aria-describedby])"
            )
 
-    assert has_element?(
-             view,
-             "##{historical_id}-observed[aria-label='last reported 75%; evidence stale']",
-             "last reported"
-           )
-
-    assert has_element?(
-             view,
-             "##{historical_id}-reset[data-countdown-state='unconfirmed']" <>
-               ":not([data-countdown-at]):not([phx-hook])",
-             "reset unconfirmed"
-           )
+    refute has_element?(view, "##{historical_id}-freshness")
+    refute has_element?(view, "##{historical_id}-observed")
+    refute has_element?(view, "##{historical_id}-reset")
 
     assert has_element?(
              view,
              "##{exhausted_id}[data-evidence-state='stale']" <>
                "[data-meter-state='historical_exhausted']",
-             "last reported"
+             "0%"
            )
 
     assert has_element?(
              view,
              "##{exhausted_id}-progress[data-evidence-state='stale']" <>
                "[data-meter-state='historical_exhausted'].progress-error:not(.progress-success)" <>
-               "[value='0'][aria-describedby='#{exhausted_id}-freshness #{exhausted_id}-observed']"
+               "[value='0']:not([aria-describedby])"
            )
 
-    assert has_element?(
-             view,
-             "##{exhausted_id}-observed[aria-label='last reported exhausted; evidence stale']",
-             "last reported"
-           )
-
-    assert has_element?(
-             view,
-             "##{exhausted_id}-reset[data-countdown-state='unconfirmed']" <>
-               ":not([data-countdown-at]):not([phx-hook])",
-             "reset unconfirmed"
-           )
+    refute has_element?(view, "##{exhausted_id}-freshness")
+    refute has_element?(view, "##{exhausted_id}-observed")
+    refute has_element?(view, "##{exhausted_id}-reset")
 
     limits_fragment = view |> element("##{prefix}s") |> render()
     limits_document = LazyHTML.from_fragment(limits_fragment)

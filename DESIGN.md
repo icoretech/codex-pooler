@@ -840,14 +840,6 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
   warning; below → error. Unreported remains `progress-neutral` with muted
   text and adds `admin-static-unknown-progress`; it is never presented as a
   determinate zero-value meter.
-- **Freshness and history:** every row exposes `data-evidence-state` and
-  `data-meter-state` on both the row and `<progress>`, plus row-local
-  `-freshness` and `-observed` description nodes referenced by
-  `aria-describedby`. Fresh evidence reads `Current`; stale evidence remains
-  visible as `Stale` with `last reported` percent/observation copy. A stale
-  exhausted row remains error-toned, while any other stale determinate row is
-  warning-toned and can never appear successful. Unknown freshness remains a
-  neutral unknown state rather than being silently treated as current.
 - **Credit burn state:** a positive credit balance does not change the
   quota meter while included Codex quota remains. The row continues to show
   the provider's remaining quota percentage with a solid fill and may show the
@@ -868,10 +860,8 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
 - **Reset timing:** anchored reset labels use the `RelativeCountdown` hook to
   keep the compact `6d 23h` / `1h 30m` / `42m` value current without a
   LiveView round trip. Floating rolling windows remain static as
-  `starts on use` until provider evidence anchors their reset. When an
-  anchored observation becomes stale, the row shows `reset unconfirmed`
-  without a countdown timestamp or hook; markerless and unknown resets remain
-  absent.
+  `starts on use` until provider evidence anchors their reset. Unconfirmed,
+  markerless, and unknown resets stay absent from the compact row.
 - **A11y:** a solid included-quota `<progress>` carries `aria-label`
   "{label} included Codex quota remaining {pct}". A striped burn meter carries
   "{label} credit balance remaining {pct}; credits in use" and a
@@ -879,10 +869,7 @@ of actions, lifecycle warning block via `ReconciliationStatus`.
   are being consumed. When a credit count is present, its `aria-label` and
   title explain that the value is a credit balance, separate from
   included Codex quota and not a currency amount. The visible percent remains
-  text beside the bar. Freshness and observation descriptions provide the
-  current-versus-historical context; stale exhausted rows are announced as
-  last reported exhausted with stale evidence rather than as a current
-  healthy or neutral state.
+  text beside the bar.
 
 ```heex
 <%!-- Known credit-burn meter: numeric fill plus stripes, with current balance in details. --%>
@@ -1539,9 +1526,7 @@ control.
 - **Quota & banked resets** (`#upstream-quota`): account plus additional
   model, upstream-model, and feature window rows (reusing the index card's
   `quota_limit_row`, [Quota progress row](#quota-progress-row-including-striped-credit-backed-state)).
-  Row-local freshness/history text and ARIA are authoritative; account
-  quota-health and routing-readiness copy are summaries only and never
-  substitute for row freshness. The saved-reset meter
+  The saved-reset meter
   ([Saved-reset badge and meter](#saved-reset-badge-and-meter)), expiration table, and the auto-redeem policy form behind a
   `<details>` disclosure with an on/off state chip.
 - **Request health** (`#request-health-chart`): inline facts (24h/7d

@@ -45,7 +45,7 @@ defmodule CodexPoolerWeb.Admin.QuotaLimitRowTest do
              "500 credits"
   end
 
-  test "renders stale historical quota evidence with row-local accessible descriptions" do
+  test "keeps stale state internal while restoring the compact historical row" do
     html = render_quota_row(stale_limit(Decimal.new(75), 75, "75%"))
     document = LazyHTML.from_fragment(html)
 
@@ -56,24 +56,15 @@ defmodule CodexPoolerWeb.Admin.QuotaLimitRowTest do
 
     assert LazyHTML.query(
              document,
-             "#quota-row-progress[data-evidence-state='stale'][data-meter-state='historical'].progress-warning[aria-describedby='quota-row-freshness quota-row-observed']"
+             "#quota-row-progress[data-evidence-state='stale'][data-meter-state='historical'].progress-success:not([aria-describedby])"
            ) != []
 
-    assert LazyHTML.query(document, "#quota-row-freshness") |> LazyHTML.text() |> String.trim() ==
-             "last reported"
-
-    assert LazyHTML.query(document, "#quota-row-observed") |> LazyHTML.text() |> String.trim() ==
-             "last reported"
-
-    assert LazyHTML.query(
-             document,
-             "#quota-row-reset[data-countdown-state='unconfirmed']:not([data-countdown-at]):not([phx-hook])"
-           ) != []
-
-    assert LazyHTML.query(document, "#quota-row-reset") |> LazyHTML.text() =~ "reset unconfirmed"
+    assert LazyHTML.query(document, "#quota-row-freshness") |> Enum.empty?()
+    assert LazyHTML.query(document, "#quota-row-observed") |> Enum.empty?()
+    assert LazyHTML.query(document, "#quota-row-reset") |> Enum.empty?()
   end
 
-  test "keeps stale exhaustion error-toned and describes it as historical" do
+  test "keeps stale exhaustion error-toned without adding historical copy" do
     html = render_quota_row(stale_limit(Decimal.new(0), 0, "0%"))
     document = LazyHTML.from_fragment(html)
 
@@ -84,16 +75,14 @@ defmodule CodexPoolerWeb.Admin.QuotaLimitRowTest do
 
     assert LazyHTML.query(
              document,
-             "#quota-row-progress.progress-error:not(.progress-success)[aria-describedby='quota-row-freshness quota-row-observed']"
+             "#quota-row-progress.progress-error:not(.progress-success):not([aria-describedby])"
            ) != []
 
-    assert LazyHTML.query(
-             document,
-             "#quota-row-observed[aria-label='last reported exhausted; evidence stale']"
-           ) != []
+    assert LazyHTML.query(document, "#quota-row-freshness") |> Enum.empty?()
+    assert LazyHTML.query(document, "#quota-row-observed") |> Enum.empty?()
   end
 
-  test "keeps stale low quota error-toned without presenting it as current" do
+  test "keeps the previous percent thresholds for stale low quota" do
     html = render_quota_row(stale_limit(Decimal.new(25), 25, "25%"))
     document = LazyHTML.from_fragment(html)
 
@@ -184,7 +173,7 @@ defmodule CodexPoolerWeb.Admin.QuotaLimitRowTest do
   end
 
   @tag :manual_quota_row_render
-  test "manual quota row render writes and verifies historical HTML evidence" do
+  test "manual quota row render writes and verifies the restored compact HTML" do
     stale_html = render_quota_row(stale_limit(Decimal.new(75), 75, "75%"))
 
     exhausted_html =
@@ -221,24 +210,18 @@ defmodule CodexPoolerWeb.Admin.QuotaLimitRowTest do
 
     assert LazyHTML.query(
              document,
-             "#quota-row-progress.progress-warning:not(.progress-success)[aria-describedby='quota-row-freshness quota-row-observed']"
+             "#quota-row-progress.progress-success:not([aria-describedby])"
            ) != []
 
-    assert LazyHTML.query(document, "#quota-row-freshness") |> LazyHTML.text() |> String.trim() ==
-             "last reported"
-
-    assert LazyHTML.query(document, "#quota-row-observed") |> LazyHTML.text() |> String.trim() ==
-             "last reported"
+    assert LazyHTML.query(document, "#quota-row-freshness") |> Enum.empty?()
+    assert LazyHTML.query(document, "#quota-row-observed") |> Enum.empty?()
 
     assert LazyHTML.query(
              document,
-             "#quota-row-exhausted-progress.progress-error:not(.progress-success)[aria-describedby='quota-row-exhausted-freshness quota-row-exhausted-observed']"
+             "#quota-row-exhausted-progress.progress-error:not(.progress-success):not([aria-describedby])"
            ) != []
 
-    assert LazyHTML.query(
-             document,
-             "#quota-row-exhausted-observed[aria-label='last reported exhausted; evidence stale']"
-           ) != []
+    assert LazyHTML.query(document, "#quota-row-exhausted-observed") |> Enum.empty?()
 
     assert LazyHTML.query(document, "#quota-row-markerless-reset") |> Enum.empty?()
 

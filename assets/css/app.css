@@ -102,18 +102,6 @@
 @custom-variant phx-submit-loading (.phx-submit-loading&, .phx-submit-loading &);
 @custom-variant phx-change-loading (.phx-change-loading&, .phx-change-loading &);
 
-.admin-quota-value-success {
-  color: color-mix(in oklab, var(--color-success) 45%, var(--color-base-content));
-}
-
-.admin-quota-value-warning {
-  color: color-mix(in oklab, var(--color-warning) 55%, var(--color-base-content));
-}
-
-.admin-quota-value-error {
-  color: color-mix(in oklab, var(--color-error) 75%, var(--color-base-content));
-}
-
 /* Use the data attribute for dark mode  */
 @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
 

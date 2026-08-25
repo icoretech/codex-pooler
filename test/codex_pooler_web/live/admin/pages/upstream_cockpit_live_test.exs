@@ -3713,24 +3713,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
 
     assert has_element?(
              view,
-             "#{history}-progress.progress-warning:not(.progress-success)" <>
+             "#{history}-progress.progress-success" <>
                "[data-evidence-state='stale'][data-meter-state='historical']" <>
-               "[aria-describedby='upstream-quota-limit-feature-generic_history-primary-300-freshness upstream-quota-limit-feature-generic_history-primary-300-observed']"
+               ":not([aria-describedby])"
            )
 
-    assert has_element?(view, "#{history}-freshness", "last reported")
-
-    assert has_element?(
-             view,
-             "#{history}-observed[aria-label='last reported 75%; evidence stale']"
-           )
-
-    assert has_element?(
-             view,
-             "#{history}-reset[data-countdown-state='unconfirmed']" <>
-               ":not([data-countdown-at]):not([phx-hook])",
-             "reset unconfirmed"
-           )
+    refute has_element?(view, "#{history}-freshness")
+    refute has_element?(view, "#{history}-observed")
+    refute has_element?(view, "#{history}-reset")
 
     assert has_element?(
              view,
@@ -3742,13 +3732,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamCockpitLiveTest do
     assert has_element?(
              view,
              "#{exhausted}-progress.progress-error:not(.progress-success)" <>
-               "[aria-describedby='upstream-quota-limit-feature-generic_exhausted-primary-300-freshness upstream-quota-limit-feature-generic_exhausted-primary-300-observed']"
+               ":not([aria-describedby])"
            )
 
-    assert has_element?(
-             view,
-             "#{exhausted}-observed[aria-label='last reported exhausted; evidence stale']"
-           )
+    refute has_element?(view, "#{exhausted}-freshness")
+    refute has_element?(view, "#{exhausted}-observed")
+    refute has_element?(view, "#{exhausted}-reset")
 
     assert has_element?(
              view,

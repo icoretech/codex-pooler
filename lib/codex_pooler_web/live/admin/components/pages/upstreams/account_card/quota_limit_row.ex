@@ -21,32 +21,12 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
         </span>
         <span class={[quota_limit_percent_class(@limit), "shrink-0"]}>{@limit.percent_label}</span>
       </div>
-      <div class="flex min-w-0 items-center gap-2 text-[11px] text-base-content/60">
-        <span
-          id={"#{@id}-freshness"}
-          data-role="upstream-limit-freshness"
-          title={quota_limit_freshness_title(@limit)}
-        >
-          {quota_limit_freshness_label(@limit)}
-        </span>
-        <span
-          id={"#{@id}-observed"}
-          data-role="upstream-limit-observed"
-          role="note"
-          class="sr-only"
-          aria-label={quota_limit_observed_aria_label(@limit)}
-          title={quota_limit_observed_title(@limit)}
-        >
-          {quota_limit_observed_label(@limit)}
-        </span>
-      </div>
       <progress
         id={"#{@id}-progress"}
         data-role="upstream-limit-progress"
         data-evidence-state={quota_limit_evidence_state(@limit)}
         data-meter-state={quota_limit_meter_state(@limit)}
         aria-label={quota_limit_progress_label(@limit)}
-        aria-describedby={"#{@id}-freshness #{@id}-observed"}
         title={quota_limit_progress_title(@limit)}
         class={quota_limit_progress_class(@limit)}
         value={if is_nil(@limit.percent), do: nil, else: @limit.percent_value}
@@ -93,19 +73,14 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
   defp strip_in_prefix("in " <> rest), do: rest
   defp strip_in_prefix(label), do: label
 
-  defp countdown_at(%{reset_display_state: :unconfirmed}), do: nil
-
   defp countdown_at(%{reset_semantics: :anchored, reset_at: %DateTime{} = reset_at}),
     do: DateTime.to_iso8601(reset_at)
 
   defp countdown_at(_limit), do: nil
 
-  defp countdown_state(%{reset_display_state: :unconfirmed}), do: "unconfirmed"
   defp countdown_state(%{reset_semantics: :anchored}), do: "running"
   defp countdown_state(%{reset_semantics: :floating}), do: "waiting"
   defp countdown_state(_limit), do: "unknown"
-
-  defp countdown_hook(%{reset_display_state: :unconfirmed}), do: nil
 
   defp countdown_hook(%{reset_semantics: :anchored, reset_at: %DateTime{}}),
     do: "RelativeCountdown"
@@ -121,21 +96,32 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
     present_string?(count_label) or present_string?(reset_label)
   end
 
-  defp quota_limit_reset_visible?(%{reset_display_state: :absent}), do: false
+  defp quota_limit_reset_visible?(%{reset_display_state: state})
+       when state in [:absent, :unconfirmed],
+       do: false
+
   defp quota_limit_reset_visible?(limit), do: present_string?(Map.get(limit, :reset_label))
 
   defp present_string?(value) when is_binary(value), do: String.trim(value) != ""
   defp present_string?(_value), do: false
 
-  defp quota_limit_percent_class(%{percent: %Decimal{} = percent} = limit) do
-    tone = quota_limit_tone(percent, quota_limit_evidence_state(limit))
-    "admin-quota-value-#{tone} tabular-nums font-medium"
+  defp quota_limit_percent_class(%{percent: %Decimal{} = percent}) do
+    cond do
+      Decimal.compare(percent, Decimal.new(70)) != :lt -> "tabular-nums font-medium text-success"
+      Decimal.compare(percent, Decimal.new(30)) != :lt -> "tabular-nums font-medium text-warning"
+      true -> "tabular-nums font-medium text-error"
+    end
   end
 
   defp quota_limit_percent_class(_limit), do: "tabular-nums font-medium text-base-content/50"
 
   defp quota_limit_progress_class(%{percent: %Decimal{} = percent} = limit) do
-    tone_class = "progress-#{quota_limit_tone(percent, quota_limit_evidence_state(limit))}"
+    tone_class =
+      cond do
+        Decimal.compare(percent, Decimal.new(70)) != :lt -> "progress-success"
+        Decimal.compare(percent, Decimal.new(30)) != :lt -> "progress-warning"
+        true -> "progress-error"
+      end
 
     "progress admin-live-progress #{tone_class}#{credit_burning_class(limit)} h-1.5 w-full"
   end
@@ -181,38 +167,4 @@ defmodule CodexPoolerWeb.Admin.UpstreamPageComponents.AccountCard.QuotaLimitRow 
        do: state
 
   defp quota_limit_meter_state(_limit), do: "current"
-
-  defp quota_limit_freshness_label(limit),
-    do: Map.get(limit, :freshness_label, default_freshness_label(limit))
-
-  defp quota_limit_freshness_title(limit), do: Map.get(limit, :freshness_title)
-
-  defp quota_limit_observed_label(limit),
-    do: Map.get(limit, :observed_label, "observed at snapshot")
-
-  defp quota_limit_observed_title(limit), do: Map.get(limit, :observed_title)
-
-  defp quota_limit_observed_aria_label(limit) do
-    case quota_limit_meter_state(limit) do
-      "historical_exhausted" -> "last reported exhausted; evidence stale"
-      "historical" -> "last reported #{limit.percent_label}; evidence stale"
-      _other -> quota_limit_observed_label(limit)
-    end
-  end
-
-  defp default_freshness_label(limit) do
-    if quota_limit_evidence_state(limit) == "stale", do: "last reported", else: "current"
-  end
-
-  defp quota_limit_tone(percent, "stale") do
-    if Decimal.compare(percent, Decimal.new(30)) == :lt, do: "error", else: "warning"
-  end
-
-  defp quota_limit_tone(percent, _evidence_state) do
-    cond do
-      Decimal.compare(percent, Decimal.new(70)) != :lt -> "success"
-      Decimal.compare(percent, Decimal.new(30)) != :lt -> "warning"
-      true -> "error"
-    end
-  end
 end
