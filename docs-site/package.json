@@ -12,13 +12,13 @@
     "check:llms": "node scripts/check-llms-inventory.mjs"
   },
   "dependencies": {
-    "@astrojs/starlight": "0.41.8",
-    "astro": "7.2.6",
+    "@astrojs/starlight": "0.41.9",
+    "astro": "7.2.8",
     "starlight-page-actions": "0.7.1"
   },
   "devDependencies": {
     "@astrojs/check": "0.9.10",
-    "@grafana/grafana-foundation-sdk": "^11.6.0-cogv0.0.x.1769699379",
+    "@grafana/grafana-foundation-sdk": "11.6.0-cogv0.0.x.1769699379",
     "typescript": "6.0.3"
   },
   "overrides": {
