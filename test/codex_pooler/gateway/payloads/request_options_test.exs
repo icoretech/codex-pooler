@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   alias CodexPooler.Access.APIKeys.ReasoningEffortPolicy.Decision
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.CompactionProjectionContext
   alias CodexPooler.Gateway.Payloads.RequestOptions.Continuity
   alias CodexPooler.Gateway.Payloads.RequestOptions.OpenAICompatibility
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
@@ -30,6 +31,114 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   end
 
   describe "boundary constructors" do
+    test "keeps compaction projection provenance typed, transient, redacted, and non-serializable" do
+      downstream = %{
+        "previous_response_id" => "resp_projection_raw_anchor_a",
+        "input" => [
+          %{"type" => "custom_tool_call_output", "output" => "raw tool output sentinel"},
+          %{"type" => "compaction_trigger"}
+        ]
+      }
+
+      compact = %{downstream | "input" => [%{"type" => "compaction_trigger"}]}
+      context = CompactionProjectionContext.new(downstream, compact)
+
+      options =
+        RequestOptions.build(
+          %{compaction_projection_context: context},
+          "/backend-api/codex/responses/compact",
+          compact
+        )
+
+      assert options.payload_context.compaction_projection_context == context
+      assert options.extra == %{}
+      assert inspect(context) == "#CompactionProjectionContext<redacted>"
+      assert {:error, %Protocol.UndefinedError{}} = Jason.encode(context)
+
+      assert {safe, finalized_options} =
+               CompactionProjectionContext.finalize(options, compact)
+
+      assert safe["action"] == "preserved"
+      assert safe["downstream_frame"]["state"] == "valid"
+      assert safe["downstream_frame"]["item_count"] == 2
+
+      assert safe["downstream_frame"]["item_classes"] == %{
+               "compaction_trigger" => 1,
+               "tool_output" => 1
+             }
+
+      assert safe["compact_projection"]["item_classes"] == %{"compaction_trigger" => 1}
+      assert safe["upstream_payload"]["state"] == "valid"
+      assert safe["downstream_frame"]["anchor_fingerprint"] =~ ~r/\A[0-9a-f]{16}\z/
+      refute inspect(safe) =~ "resp_projection_raw_anchor_a"
+      refute inspect(safe) =~ "raw tool output sentinel"
+      assert finalized_options.payload_context.compaction_projection_context == nil
+      assert finalized_options.payload_context.compaction_projection == safe
+    end
+
+    test "caps compaction projection counts at one million without inspecting item bodies" do
+      items = List.duplicate(%{"type" => "compaction_trigger"}, 1_000_001)
+      context = CompactionProjectionContext.new(%{"input" => items}, %{"input" => []})
+      safe = CompactionProjectionContext.finalize(context, %{"input" => []})
+
+      assert safe["downstream_frame"]["item_count"] == 1_000_000
+      assert safe["downstream_frame"]["count_capped"]
+      assert safe["downstream_frame"]["item_classes"] == %{"compaction_trigger" => 1_000_000}
+    end
+
+    test "compaction projection provenance applies every action precedence and invalid anchor state" do
+      valid_a = %{"previous_response_id" => "anchor-a", "input" => []}
+      valid_b = %{"previous_response_id" => "anchor-b", "input" => []}
+      absent = %{"input" => []}
+      invalid = %{"previous_response_id" => 123, "input" => []}
+
+      cases = [
+        {:malformed_stage, valid_a, valid_a, "invalid"},
+        {invalid, valid_a, valid_a, "invalid"},
+        {absent, absent, absent, "absent"},
+        {absent, valid_a, valid_a, "introduced"},
+        {valid_a, absent, absent, "dropped"},
+        {valid_a, valid_a, absent, "dropped"},
+        {valid_a, valid_a, valid_a, "preserved"},
+        {valid_a, valid_a, valid_b, "changed"}
+      ]
+
+      for {downstream, compact, upstream, action} <- cases do
+        context = CompactionProjectionContext.new(downstream, compact)
+        assert CompactionProjectionContext.finalize(context, upstream)["action"] == action
+      end
+    end
+
+    test "compaction projection provenance uses only the fixed item class vocabulary" do
+      payload = %{
+        "input" => [
+          %{"type" => "compaction_trigger"},
+          %{"type" => "custom_tool_call"},
+          %{"type" => "function_call"},
+          %{"type" => "custom_tool_call_output"},
+          %{"type" => "message"},
+          %{"type" => "reasoning_summary"},
+          %{"type" => "future_private_shape"},
+          "scalar"
+        ]
+      }
+
+      stage =
+        payload
+        |> CompactionProjectionContext.new(payload)
+        |> CompactionProjectionContext.finalize(payload)
+        |> Map.fetch!("downstream_frame")
+
+      assert stage["item_classes"] == %{
+               "compaction_trigger" => 1,
+               "tool_call" => 2,
+               "tool_output" => 1,
+               "message" => 1,
+               "reasoning" => 1,
+               "other" => 2
+             }
+    end
+
     @tag :prompt_cache_adaptation
     test "prompt cache adaptation state is non-injectable and excluded from extra options" do
       for opts <- [

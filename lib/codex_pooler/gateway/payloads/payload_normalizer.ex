@@ -9,6 +9,7 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
   alias CodexPooler.Gateway.Payloads.DebugPayloadSummary
   alias CodexPooler.Gateway.Payloads.ReasoningEffort
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.CompactionProjectionContext
   alias CodexPooler.Gateway.Payloads.ToolResultShape
   alias CodexPooler.Gateway.Payloads.ToolSchemaLowering
 
@@ -273,6 +274,9 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
     with :ok <- validate(payload, request_options),
          {:ok, encoded} <- Jason.encode(upstream_payload) do
+      {_compaction_projection, request_options} =
+        CompactionProjectionContext.finalize(request_options, upstream_payload)
+
       {:ok, encoded, request_options}
     end
   end

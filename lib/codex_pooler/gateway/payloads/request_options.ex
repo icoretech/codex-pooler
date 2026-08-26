@@ -80,6 +80,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :collect_openai_response_stream,
     :chatgpt_account_id,
     :compaction_trigger_bridge?,
+    :compaction_projection_context,
     :compaction_result_mode,
     :compaction_result_transport,
     :conversation_key,

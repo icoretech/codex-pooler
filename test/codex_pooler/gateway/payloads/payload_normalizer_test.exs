@@ -4,14 +4,95 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
   alias CodexPooler.AgentV2ContractFixture
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Payloads.CompactionTrigger
   alias CodexPooler.Gateway.Payloads.ContinuityPayload
   alias CodexPooler.Gateway.Payloads.PayloadNormalizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.CompactionProjectionContext
   alias CodexPooler.Gateway.Payloads.ToolSchemaLowering
   alias CodexPooler.Gateway.Transports.UpstreamDispatch
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
   describe "upstream_payload/4" do
+    test "finalizes three-stage compaction provenance and clears transient digests" do
+      downstream = %{
+        "model" => "client-model",
+        "previous_response_id" => "resp_projection_anchor_a",
+        "input" => [
+          %{"type" => "custom_tool_call_output", "output" => "raw-output-sentinel"},
+          %{"type" => "compaction_trigger"}
+        ]
+      }
+
+      {:ok, compact} =
+        CompactionTrigger.prepare_bridge(
+          "/backend-api/codex/responses",
+          Map.put(downstream, "stream", true)
+        )
+
+      request_options =
+        %{
+          compaction_trigger_bridge?: true,
+          compaction_projection_context: CompactionProjectionContext.new(downstream, compact)
+        }
+        |> RequestOptions.build("/backend-api/codex/responses/compact", compact)
+        |> RequestOptions.put_transport(upstream_endpoint: "/backend-api/codex/responses")
+
+      assert {:ok, encoded, normalized_options} =
+               PayloadNormalizer.prepare_upstream_payload(
+                 compact,
+                 %Model{upstream_model_id: "provider-model"},
+                 "/backend-api/codex/responses/compact",
+                 request_options
+               )
+
+      assert Jason.decode!(encoded)["previous_response_id"] == "resp_projection_anchor_a"
+      assert normalized_options.payload_context.compaction_projection_context == nil
+
+      assert normalized_options.payload_context.compaction_projection["action"] == "preserved"
+
+      refute inspect(normalized_options.payload_context.compaction_projection) =~
+               "resp_projection"
+
+      refute inspect(normalized_options.payload_context.compaction_projection) =~ "raw-output"
+    end
+
+    test "keeps transient provenance when final JSON encoding fails" do
+      downstream = %{
+        "model" => "client-model",
+        "previous_response_id" => "resp_projection_encode_failure",
+        "input" => [%{"type" => "compaction_trigger"}]
+      }
+
+      compact =
+        downstream
+        |> Map.put("tools", [self()])
+        |> CompactionTrigger.project_responses_payload()
+
+      request_options =
+        RequestOptions.build(
+          %{
+            compaction_trigger_bridge?: true,
+            compaction_projection_context: CompactionProjectionContext.new(downstream, compact)
+          },
+          "/backend-api/codex/responses/compact",
+          compact
+        )
+
+      assert {:error, %Protocol.UndefinedError{protocol: Jason.Encoder}} =
+               PayloadNormalizer.prepare_upstream_payload(
+                 compact,
+                 %Model{upstream_model_id: "provider-model"},
+                 "/backend-api/codex/responses/compact",
+                 request_options
+               )
+
+      assert %CompactionProjectionContext{} =
+               request_options.payload_context.compaction_projection_context
+
+      assert request_options.payload_context.compaction_projection == nil
+    end
+
     @tag :prompt_cache_characterization
     test "non-Responses serialization preserves prompt cache controls and unrelated JSON structure" do
       payload = %{
