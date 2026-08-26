@@ -82,7 +82,7 @@ defmodule CodexPooler.MixProject do
       {:finch, "== 0.23.0"},
       {:mint, "== 1.9.3"},
       {:mint_web_socket, "== 1.0.6"},
-      {:telemetry_metrics, "== 1.1.0"},
+      {:telemetry_metrics, "== 1.2.0"},
       {:telemetry_metrics_prometheus_core, "== 1.2.1"},
       {:telemetry_poller, "== 1.3.0"},
       {:zoneinfo, "== 0.1.9"},
