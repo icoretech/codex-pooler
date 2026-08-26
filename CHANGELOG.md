@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.6.10](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.9...codex-pooler-v0.6.10) (2026-08-26)
+
+
+### Features
+
+* **dev:** add Codex compaction fixture ([1259b25](https://github.com/icoretech/codex-pooler/commit/1259b25f1601613124210b7aa4307aa83e1d27ed))
+* **dev:** add request compression fixture mode ([25e7638](https://github.com/icoretech/codex-pooler/commit/25e76388a4429b5d8ff65a1d821ff7103a8034f7))
+* **dev:** add reversible smoke fixture lifecycles ([126808c](https://github.com/icoretech/codex-pooler/commit/126808cf76f09f22a6d12ae29ce8cf2f3d721fb1))
+* **gateway:** capture compact projection provenance ([0f37693](https://github.com/icoretech/codex-pooler/commit/0f376935407b1e971c4c0837bda5388fb039d44f))
+* **observability:** expose compact bridge diagnostics ([a68383b](https://github.com/icoretech/codex-pooler/commit/a68383b89040ffea090e05977a2eea8146c85719))
+
+
+### Bug Fixes
+
+* **accounting:** omit stale additional usage limits ([8ca1b4e](https://github.com/icoretech/codex-pooler/commit/8ca1b4e7660446492205efa855b87065efe51f1d))
+* **admin:** fingerprint colliding quota meter ids ([cf6e0e7](https://github.com/icoretech/codex-pooler/commit/cf6e0e76ba9c61ce7ca64c124488aae7ba383fa8))
+* **admin:** hide raw quota labels ([0e3bd0d](https://github.com/icoretech/codex-pooler/commit/0e3bd0db0c85159caad80810d37e426a3756fdb0))
+* **admin:** hide stale additional quota rows ([1ab2f8d](https://github.com/icoretech/codex-pooler/commit/1ab2f8d28b102f2cec8083cc40db48014e34e1c1))
+* **admin:** render stale quota history ([3c1acbd](https://github.com/icoretech/codex-pooler/commit/3c1acbd6dc38e953ccf065a11ea2cf487c1e8183))
+* **admin:** restore compact quota rows ([8f36c4f](https://github.com/icoretech/codex-pooler/commit/8f36c4f8a7bc17b9dd4ac2f70b6298435f48df89))
+* **deps:** update dependency @astrojs/starlight to v0.41.8 ([#308](https://github.com/icoretech/codex-pooler/issues/308)) ([a137333](https://github.com/icoretech/codex-pooler/commit/a1373335ddafdf0490b1362d7086e15388115183))
+* **deps:** update dependency astro to v7.2.6 ([#300](https://github.com/icoretech/codex-pooler/issues/300)) ([d15cd3e](https://github.com/icoretech/codex-pooler/commit/d15cd3ed6e24c483f3a70d8fe65caf67d66bf68f))
+* **deps:** update dependency daisyui to v5.7.22 ([#307](https://github.com/icoretech/codex-pooler/issues/307)) ([3e37d3b](https://github.com/icoretech/codex-pooler/commit/3e37d3b6f22de20914f84b733c9864bcf20d18f9))
+* **dev:** redact metered fixture receipts ([5835e3c](https://github.com/icoretech/codex-pooler/commit/5835e3c8a8c25eb5dd1ac9faffe21a39d5dde8f4))
+* **dev:** restore metered fixture lifecycle helpers ([0ca70e3](https://github.com/icoretech/codex-pooler/commit/0ca70e3b66872d418a1635b6e4a7dd5a0b74c1c8))
+* **files:** send content length for streaming uploads ([fce3ba0](https://github.com/icoretech/codex-pooler/commit/fce3ba054be61ee396f6e8703dd37310b12be78b))
+* **gateway:** accept idless OMP compaction replay ([4c86221](https://github.com/icoretech/codex-pooler/commit/4c86221e9f13f1dcb1010f08723ac82b5fbdacc8))
+* **gateway:** accept unframed compact terminal SSE ([94fe65d](https://github.com/icoretech/codex-pooler/commit/94fe65dc0d30a9e01b1a7d0b4b6c6dbc8834de80))
+* **gateway:** bound native compact rejection errors ([16fc185](https://github.com/icoretech/codex-pooler/commit/16fc185a3524f70c3a427181a274cb2ca376c4ec))
+* **gateway:** bridge native websocket compaction triggers ([cb09c7a](https://github.com/icoretech/codex-pooler/commit/cb09c7a7c7451a595b5192742fb234f0977e9f22))
+* **gateway:** collect large compact streams incrementally ([5909f3f](https://github.com/icoretech/codex-pooler/commit/5909f3f9802f6cf025bf9c3f11afe7914ced7d8b))
+* **gateway:** persist compact projection before dispatch ([6ae1528](https://github.com/icoretech/codex-pooler/commit/6ae15288a2aed4acb58a5ab17700132cf762ea60))
+* **gateway:** preserve compact result finalization ([c0fbc42](https://github.com/icoretech/codex-pooler/commit/c0fbc4288e3b167cd6b432e0cc85ad8d0d147254))
+* **gateway:** preserve compact terminal diagnostics ([4a523de](https://github.com/icoretech/codex-pooler/commit/4a523deecd18f5bed88c400bddd8803139d4e654))
+* **gateway:** preserve native websocket compaction lifecycle ([429329b](https://github.com/icoretech/codex-pooler/commit/429329b7fe82f53b8c9ca0c81e7d3edecf152ffc))
+* **gateway:** recognize semantic Codex V2 compaction metadata ([71fc5c2](https://github.com/icoretech/codex-pooler/commit/71fc5c2e701ca393f5b2784ce5f00fa8bc6e591c))
+* **gateway:** reject blank native compaction content ([55876dc](https://github.com/icoretech/codex-pooler/commit/55876dc6f9c0b0adb9445b3386968ab5296f8c10))
+* **gateway:** reject compact data after terminal event ([7c95107](https://github.com/icoretech/codex-pooler/commit/7c9510730f4bc202d6d6a1328a7c3970d4945df0))
+* **gateway:** retain compact tool continuation context ([bc2090a](https://github.com/icoretech/codex-pooler/commit/bc2090aae2422db837153bb72dddac668da153cc))
+* **gateway:** retain native compact bridge anchors ([cf01a37](https://github.com/icoretech/codex-pooler/commit/cf01a377b1d7b96e73694bfb9bdccc3a7a0ea710))
+* **gateway:** retain opaque compaction anchors ([341feb7](https://github.com/icoretech/codex-pooler/commit/341feb7f9da29091b399050f85e48108747c69e7))
+* **gateway:** sanitize compact projection metadata ([17289a0](https://github.com/icoretech/codex-pooler/commit/17289a0831e6f912fdb88966198cb855c1924e1a))
+* **jobs:** configure Oban 2.24 release roles ([6901f38](https://github.com/icoretech/codex-pooler/commit/6901f3818d4a4d86a4ad03d5eb6cbdd3561ae30d))
+* **jobs:** use Oban 2.24 scheduling options ([bac268a](https://github.com/icoretech/codex-pooler/commit/bac268a2a6473d117bc702d5b1ed6cae75472eb7))
+* **quotas:** isolate additional meter identity ([4fab084](https://github.com/icoretech/codex-pooler/commit/4fab084fea5234cbb7cc3fd845377dc516bec356))
+* **quotas:** preserve metered quota evidence ([fd75a29](https://github.com/icoretech/codex-pooler/commit/fd75a29fbb4c9e5e4c1acdf33c3a62f338107775))
+* **quotas:** simplify meter identity grouping ([0f57b37](https://github.com/icoretech/codex-pooler/commit/0f57b37ffd07e6ecc7aa7de89b51a096faf62fb2))
+* **runtime:** preserve backend compact provenance ([1b2fdb0](https://github.com/icoretech/codex-pooler/commit/1b2fdb00ce8f5ddcf4e4248952355593ab4d2fb7))
+* **streaming:** accept compact summary aliases ([2bba139](https://github.com/icoretech/codex-pooler/commit/2bba139225e48f2b6a0947f48ddff363938d35a5))
+* **telemetry:** retain Prometheus tag callbacks ([1a151f2](https://github.com/icoretech/codex-pooler/commit/1a151f20f545755832c4de80a4a2c0f769a3e2cc))
+* **v1:** preserve compact continuation anchors ([c926428](https://github.com/icoretech/codex-pooler/commit/c92642883c56526ce64ecb5fb1750dc354d5cf71))
+
 ## [0.6.9](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.8...codex-pooler-v0.6.9) (2026-08-23)
 
 
