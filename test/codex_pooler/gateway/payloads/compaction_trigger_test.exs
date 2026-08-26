@@ -4,13 +4,13 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTriggerTest do
   alias CodexPooler.Gateway.Payloads.CompactionTrigger
 
   @fixture_path Path.expand(
-                  "../../../fixtures/codex/rust-v0.149.1-ff29a44391deccde0aba0f8390337d7f3c319ea4/remote_compaction_v2_request.json",
+                  "../../../fixtures/codex/rust-v0.150.0-3b3b4f8fb3f6403e72c2d0533ed0d2f309c59717/remote_compaction_v2_request.json",
                   __DIR__
                 )
   @external_resource @fixture_path
 
   @incremental_fixture_path Path.expand(
-                              "../../../fixtures/codex/rust-v0.149.1-ff29a44391deccde0aba0f8390337d7f3c319ea4/remote_compaction_v2_incremental_request.json",
+                              "../../../fixtures/codex/rust-v0.150.0-3b3b4f8fb3f6403e72c2d0533ed0d2f309c59717/remote_compaction_v2_incremental_request.json",
                               __DIR__
                             )
   @external_resource @incremental_fixture_path
@@ -20,40 +20,46 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTriggerTest do
       fixture = load_incremental_fixture!()
 
       assert fixture["fixture_source"] == %{
-               "tag" => "rust-v0.149.1",
-               "annotated_tag_object" => "980a6d12110b110d29ec13bdcbe14011100b3566",
-               "peeled_commit" => "ff29a44391deccde0aba0f8390337d7f3c319ea4",
+               "tag" => "rust-v0.150.0",
+               "annotated_tag_object" => "9bdd7a39c5034657dfbbb89381cd9364f61eee11",
+               "peeled_commit" => "3b3b4f8fb3f6403e72c2d0533ed0d2f309c59717",
                "source_paths" => [
                  "codex-rs/codex-api/src/common.rs",
                  "codex-rs/core/src/client.rs",
-                 "codex-rs/core/src/compact_remote_v2_attempt.rs"
+                 "codex-rs/core/src/compact_remote_v2_attempt.rs",
+                 "codex-rs/protocol/src/models.rs"
                ]
              }
 
       contract = fixture["contract"]
       assert contract["durability_boundary"] == "projection_relevant_incremental_frame_subset"
 
-      assert contract["v2_trigger_metadata"] == %{
-               "x-codex-turn-metadata" =>
-                 Jason.encode!(%{
-                   "compaction" => %{"implementation" => "responses_compaction_v2"}
-                 })
+      assert contract["v2_trigger_metadata"]
+             |> Map.fetch!("x-codex-turn-metadata")
+             |> Jason.decode!() == %{
+               "context_window_id" => "00000000-0000-4000-8000-000000000150",
+               "compaction" => %{"implementation" => "responses_compaction_v2"}
              }
 
       assert contract["provider_response_id"] == "resp_fixture_incremental_0001"
       assert Enum.map(contract["previous_request_input"], & &1["type"]) == ["message"]
 
       assert Enum.map(contract["provider_added_response_items"], & &1["type"]) == [
-               "custom_tool_call"
+               "function_call"
              ]
 
       anchored_output = incremental_scenario!("anchored_tool_output_and_trigger")
       anchored_trigger = incremental_scenario!("anchored_trigger_only")
 
       assert frame_types(anchored_output) == [
-               "custom_tool_call_output",
+               "function_call_output",
                "compaction_trigger"
              ]
+
+      assert anchored_output["input"] |> Enum.at(0) |> Map.take(["name", "namespace"]) == %{
+               "name" => "fixture_tool",
+               "namespace" => "fixture.tools"
+             }
 
       assert frame_types(anchored_trigger) == [
                "compaction_trigger"
@@ -84,8 +90,8 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTriggerTest do
 
       assert frame_types(full_history) == [
                "message",
-               "custom_tool_call",
-               "custom_tool_call_output",
+               "function_call",
+               "function_call_output",
                "compaction_trigger"
              ]
 
@@ -212,9 +218,9 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTriggerTest do
       fixture = load_fixture!()
 
       assert fixture["fixture_source"] == %{
-               "tag" => "rust-v0.149.1",
-               "annotated_tag_object" => "980a6d12110b110d29ec13bdcbe14011100b3566",
-               "peeled_commit" => "ff29a44391deccde0aba0f8390337d7f3c319ea4",
+               "tag" => "rust-v0.150.0",
+               "annotated_tag_object" => "9bdd7a39c5034657dfbbb89381cd9364f61eee11",
+               "peeled_commit" => "3b3b4f8fb3f6403e72c2d0533ed0d2f309c59717",
                "source_paths" => [
                  "codex-rs/core/src/compact_remote_v2_attempt.rs",
                  "codex-rs/core/src/client.rs",

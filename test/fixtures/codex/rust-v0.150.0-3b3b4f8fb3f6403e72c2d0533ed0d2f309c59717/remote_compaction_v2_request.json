@@ -1,0 +1,29 @@
+{
+  "fixture_source": {
+    "tag": "rust-v0.150.0",
+    "annotated_tag_object": "9bdd7a39c5034657dfbbb89381cd9364f61eee11",
+    "peeled_commit": "3b3b4f8fb3f6403e72c2d0533ed0d2f309c59717",
+    "source_paths": [
+      "codex-rs/core/src/compact_remote_v2_attempt.rs",
+      "codex-rs/core/src/client.rs",
+      "codex-rs/core/src/responses_metadata.rs",
+      "codex-rs/core/src/turn_metadata_tests.rs"
+    ]
+  },
+  "request": {
+    "stream": true,
+    "store": false,
+    "input": [
+      {
+        "type": "compaction_trigger"
+      }
+    ],
+    "client_metadata": {
+      "x-codex-installation-id": "fixture-installation",
+      "session_id": "fixture-session",
+      "thread_id": "fixture-thread",
+      "x-codex-window-id": "fixture-window",
+      "x-codex-turn-metadata": "{\"session_id\":\"fixture-session\",\"thread_id\":\"fixture-thread\",\"turn_id\":\"fixture-turn\",\"window_id\":\"fixture-window\",\"context_window_id\":\"00000000-0000-4000-8000-000000000150\",\"request_kind\":\"compaction\",\"codex_security_surface\":\"fixture\",\"compaction\":{\"trigger\":\"auto\",\"reason\":\"context_limit\",\"implementation\":\"responses_compaction_v2\",\"phase\":\"mid_turn\",\"strategy\":\"memento\"},\"additive_metadata\":{\"fixture_class\":\"remote_compaction_v2\",\"feature\":\"preserved\"}}"
+    }
+  }
+}
