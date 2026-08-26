@@ -1854,11 +1854,17 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
       assert responses_chat.contract =~ "/backend-api/codex/responses"
       assert responses_chat.contract =~ "/backend-api/codex/responses/compact"
-      assert responses_chat.contract =~ "buffered JSON"
+      assert responses_chat.contract =~ "semantic V2 SSE or buffered JSON"
       assert responses_chat.contract =~ "compact accounting"
 
       assert responses_chat.contract =~
-               "force store false, omit upstream stream, include, and prompt_cache_options fields"
+               "classify result transport only from request-side nested compaction.implementation=responses_compaction_v2"
+
+      assert responses_chat.contract =~ "ignoring unrelated additive metadata"
+      assert responses_chat.contract =~ "never inspecting returned compaction items"
+
+      assert responses_chat.contract =~
+               "set upstream stream true only for semantic V2 and omit it otherwise"
 
       assert responses_chat.contract =~ "direct compact aliases preserve their canonical legacy"
       assert responses_chat.contract =~ "while omitting store, stream, and the trigger"
@@ -1867,7 +1873,10 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                "native fallback provider unsupported requires an admitted failed"
 
       assert responses_chat.contract =~ "public /v1/responses/compact remains unsupported"
-      assert responses_chat.contract =~ "preserves only schema-backed string replay identity"
+
+      assert responses_chat.contract =~
+               "returned compaction-item normalization preserves only schema-backed string replay identity"
+
       assert responses_chat.contract =~ "drops other compact-result fields"
       assert responses_chat.contract =~ "malformed trigger placement is rejected before dispatch"
 
@@ -1908,14 +1917,20 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  malformed_trigger: %{status: 400, param: "input", upstream_dispatch: false},
                  retained: ["final_compaction_trigger"],
                  strips: ["include", "prompt_cache_options"],
+                 result_classification: %{
+                   source: "request_client_metadata.x-codex-turn-metadata",
+                   marker: "compaction.implementation=responses_compaction_v2",
+                   additive_metadata: "ignored",
+                   returned_compaction_items: "not_inspected"
+                 },
                  upstream_payload: %{
-                   mode: "omp_v2_sse_or_buffered_responses_json",
+                   mode: "semantic_v2_sse_or_buffered_responses_json",
                    terminal_trigger: "retained",
                    store: false,
-                   stream: "omp_v2_preserved_otherwise_omitted"
+                   stream: "semantic_v2_true_otherwise_omitted"
                  },
                  response_adaptation: %{
-                   upstream: "omp_v2_sse_or_buffered_responses_json",
+                   upstream: "semantic_v2_sse_or_buffered_responses_json",
                    downstream: "backend_responses_sse",
                    output_events: ["response.output_item.done", "response.completed", "[DONE]"]
                  },
@@ -1952,7 +1967,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                    },
                    result_transports: %{
                      buffered: "responses_json",
-                     v2: "responses_sse_exact_marker"
+                     v2: "responses_sse_semantic_nested_implementation_with_additive_metadata"
                    },
                    turn_state: %{
                      source: "client_metadata.x-codex-turn-state_or_upgrade_header",
@@ -1988,6 +2003,32 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                      store: "omitted",
                      stream: "omitted"
                    }
+                 }
+               },
+               harness_applicability: %{
+                 codex: %{
+                   version: "rust-v0.149.1",
+                   applicability: "native_v2",
+                   classifier_authority: true,
+                   verification: "commit_blocking"
+                 },
+                 omp: %{
+                   version: "18.0.4",
+                   applicability: "distinct_v2_and_configured_direct_fallback_adapter",
+                   classifier_authority: false
+                 },
+                 opencode: %{
+                   applicability: "http_and_websocket_replay_only",
+                   classifier_authority: false
+                 },
+                 hermes: %{
+                   applicability: "no_independent_native_classifier_authority",
+                   classifier_authority: false
+                 },
+                 pi: %{
+                   applicability: "native_remote_compaction_unverified",
+                   classifier_authority: false,
+                   verification: "not_applicable"
                  }
                },
                public_v1_compaction_trigger: %{
@@ -2133,6 +2174,30 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  generic_size_cap_added: false
                }
              }
+    end
+
+    @tag :compatibility_contract
+    test "exposes semantic compaction classification and bounded harness applicability" do
+      boundary =
+        CompatibilityMatrix.fixture!(:responses_chat).compaction_recovery_boundary
+
+      assert boundary.backend_compaction_trigger.result_classification.marker ==
+               "compaction.implementation=responses_compaction_v2"
+
+      assert boundary.backend_compaction_trigger.result_classification.additive_metadata ==
+               "ignored"
+
+      assert boundary.backend_compaction_trigger.result_classification.returned_compaction_items ==
+               "not_inspected"
+
+      assert boundary.harness_applicability.codex.verification == "commit_blocking"
+      assert boundary.harness_applicability.omp.version == "18.0.4"
+
+      assert boundary.harness_applicability.opencode.applicability ==
+               "http_and_websocket_replay_only"
+
+      refute boundary.harness_applicability.hermes.classifier_authority
+      assert boundary.harness_applicability.pi.verification == "not_applicable"
     end
 
     test "documents backend websocket request-scoped turn-state carrier" do

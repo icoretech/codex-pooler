@@ -1,8 +1,14 @@
 defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
   use ExUnit.Case, async: true
 
-  alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
   alias CodexPooler.Gateway.Transports.Streaming.{StreamProtocol, WebsocketCodec}
+
+  @remote_compaction_v2_fixture_path Path.expand(
+                                       "../../../fixtures/codex/rust-v0.149.1-ff29a44391deccde0aba0f8390337d7f3c319ea4/remote_compaction_v2_request.json",
+                                       __DIR__
+                                     )
+  @external_resource @remote_compaction_v2_fixture_path
 
   describe "decode_payload/1" do
     test "accepts response.create through the generic object contract" do
@@ -51,13 +57,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
             {v2_client_metadata(), :sse},
             {%{"x-codex-turn-metadata" => "not-json"}, :buffered},
             {%{"x-codex-turn-metadata" => Jason.encode!(%{"compaction" => %{}})}, :buffered},
-            {%{
-               "x-codex-turn-metadata" =>
-                 Jason.encode!(%{
-                   "compaction" => %{"implementation" => "responses_compaction_v2"},
-                   "extra" => true
-                 })
-             }, :buffered},
+            {remote_compaction_v2_client_metadata(), :sse},
             {nil, :buffered}
           ] do
         payload = native_compaction_trigger_payload(client_metadata)
@@ -104,6 +104,26 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
         assert coerced.request_options.payload_context.compaction_result_mode ==
                  :native_websocket
       end
+    end
+
+    test "projects the pinned rich Codex compact request identically to the HTTP contract" do
+      payload = native_compaction_trigger_payload(remote_compaction_v2_client_metadata())
+
+      assert {:ok, coerced} =
+               WebsocketCodec.coerce_request(
+                 payload,
+                 native_responses_options(payload),
+                 fn _frame -> :ok end
+               )
+
+      assert {:ok, compact_payload} =
+               CompactionTrigger.prepare_bridge("/backend-api/codex/responses", payload)
+
+      http_projection = CompactionTrigger.project_responses_payload(compact_payload, :sse)
+
+      assert coerced.request_options.payload_context.compaction_result_transport == :sse
+      assert coerced.payload == http_projection
+      assert Jason.encode!(coerced.payload) == Jason.encode!(http_projection)
     end
 
     test "bridges a singleton native compaction trigger" do
@@ -734,6 +754,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
       "x-codex-turn-metadata" =>
         Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
     }
+  end
+
+  defp remote_compaction_v2_client_metadata do
+    @remote_compaction_v2_fixture_path
+    |> File.read!()
+    |> Jason.decode!()
+    |> get_in(["request", "client_metadata"])
   end
 
   defp contains_stream_id?(%{__struct__: _} = value),

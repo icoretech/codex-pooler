@@ -20,6 +20,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
   @turn_state_param "client_metadata.x-codex-turn-state"
   @detection_timeout_ms 15_000
   @stale_native_content "stale-native-content-must-not-succeed"
+  @remote_compaction_v2_fixture_path Path.expand(
+                                       "../../../fixtures/codex/rust-v0.149.1-ff29a44391deccde0aba0f8390337d7f3c319ea4/remote_compaction_v2_request.json",
+                                       __DIR__
+                                     )
+  @external_resource @remote_compaction_v2_fixture_path
 
   for {path, transport, optional_metadata} <- [
         {"/backend-api/codex/responses", :buffered, :valid},
@@ -27,6 +32,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         {"/backend-api/codex/responses", :sse, :valid},
         {"/backend-api/codex/v1/responses", :sse, :malformed}
       ] do
+    if transport == :sse do
+      @tag :codex_remote_compaction_v2
+    end
+
     test "#{path} completes #{transport} native compaction and reuses the downstream socket" do
       path = unquote(path)
       transport = unquote(transport)
@@ -115,6 +124,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         assert request.transport == "http_compact_json"
         assert request.status == "succeeded"
         assert request.request_metadata["codex_session_id"]
+
+        assert request.request_metadata["compaction_bridge"] == %{
+                 "applied" => true,
+                 "result_transport" => Atom.to_string(transport)
+               }
 
         assert get_in(request.request_metadata, ["reservation_snapshot_inputs", "route_class"]) ==
                  "proxy_compact"
@@ -614,11 +628,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
     client_metadata =
       if transport == :sse do
-        Map.put(
-          client_metadata,
-          "x-codex-turn-metadata",
-          Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
-        )
+        remote_compaction_v2_client_metadata()
+        |> Map.merge(client_metadata)
       else
         client_metadata
       end
@@ -634,6 +645,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       "generate" => true,
       "client_metadata" => client_metadata
     })
+  end
+
+  defp remote_compaction_v2_client_metadata do
+    @remote_compaction_v2_fixture_path
+    |> File.read!()
+    |> Jason.decode!()
+    |> get_in(["request", "client_metadata"])
   end
 
   defp ordinary_payload(setup, extra \\ %{}) do

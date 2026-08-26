@@ -2005,8 +2005,11 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
               "encrypted_content" => "synthetic-websocket-trigger-encrypted",
               "id" => nil,
               "internal_chat_message_metadata_passthrough" => %{
-                "turn_id" => "native-websocket-turn-must-drop"
+                "turn_id" => "native-websocket-turn-must-drop",
+                "compaction" => %{"implementation" => "responses_compaction_v2"},
+                "instruction" => "returned metadata must not select request transport"
               },
+              "compaction" => %{"implementation" => "responses_compaction_v2"},
               "summary" => "plaintext-websocket-summary-must-drop"
             }
           ],
@@ -2096,6 +2099,7 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       refute persisted =~ "synthetic-websocket-trigger-encrypted"
       refute persisted =~ "native-websocket-turn-must-drop"
       refute persisted =~ "plaintext-websocket-summary-must-drop"
+      refute persisted =~ "returned metadata must not select request transport"
     after
       Mint.HTTP.close(conn)
     end

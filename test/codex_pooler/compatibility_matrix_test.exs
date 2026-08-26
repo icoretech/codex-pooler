@@ -51,10 +51,10 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       boundary = fixture.compaction_recovery_boundary
 
       assert boundary.backend_compaction_trigger.upstream_payload == %{
-               mode: "omp_v2_sse_or_buffered_responses_json",
+               mode: "semantic_v2_sse_or_buffered_responses_json",
                terminal_trigger: "retained",
                store: false,
-               stream: "omp_v2_preserved_otherwise_omitted"
+               stream: "semantic_v2_true_otherwise_omitted"
              }
 
       assert boundary.backend_compaction_trigger.direct_compact_preservation.upstream_payload ==
@@ -82,6 +82,46 @@ defmodule CodexPooler.CompatibilityMatrixTest do
 
       assert boundary.native_fallback.omp_terminal ==
                "configured_local_fallback_from_pinned_configuration"
+    end
+
+    @tag :compatibility_contract
+    test "pins semantic V2 classification and honest harness applicability" do
+      boundary =
+        CompatibilityMatrix.fixture!(:responses_chat).compaction_recovery_boundary
+
+      assert boundary.backend_compaction_trigger.result_classification == %{
+               source: "request_client_metadata.x-codex-turn-metadata",
+               marker: "compaction.implementation=responses_compaction_v2",
+               additive_metadata: "ignored",
+               returned_compaction_items: "not_inspected"
+             }
+
+      assert boundary.harness_applicability == %{
+               codex: %{
+                 version: "rust-v0.149.1",
+                 applicability: "native_v2",
+                 classifier_authority: true,
+                 verification: "commit_blocking"
+               },
+               omp: %{
+                 version: "18.0.4",
+                 applicability: "distinct_v2_and_configured_direct_fallback_adapter",
+                 classifier_authority: false
+               },
+               opencode: %{
+                 applicability: "http_and_websocket_replay_only",
+                 classifier_authority: false
+               },
+               hermes: %{
+                 applicability: "no_independent_native_classifier_authority",
+                 classifier_authority: false
+               },
+               pi: %{
+                 applicability: "native_remote_compaction_unverified",
+                 classifier_authority: false,
+                 verification: "not_applicable"
+               }
+             }
     end
 
     test "pins the native websocket compaction bridge as a closed machine contract" do
@@ -1096,7 +1136,7 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       },
       result_transports: %{
         buffered: "responses_json",
-        v2: "responses_sse_exact_marker"
+        v2: "responses_sse_semantic_nested_implementation_with_additive_metadata"
       },
       turn_state: %{
         source: "client_metadata.x-codex-turn-state_or_upgrade_header",

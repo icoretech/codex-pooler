@@ -2907,8 +2907,11 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
                 "encrypted_content" => "synthetic-public-trigger-encrypted-#{stream?}",
                 "id" => nil,
                 "internal_chat_message_metadata_passthrough" => %{
-                  "turn_id" => "native-public-turn-must-drop"
+                  "turn_id" => "native-public-turn-must-drop",
+                  "compaction" => %{"implementation" => "responses_compaction_v2"},
+                  "instruction" => "returned metadata must not select request transport"
                 },
+                "compaction" => %{"implementation" => "responses_compaction_v2"},
                 "summary" => "plaintext-public-summary-must-drop"
               }
             ],
@@ -3017,6 +3020,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       refute persisted =~ "synthetic-public-trigger-encrypted-#{stream?}"
       refute persisted =~ "native-public-turn-must-drop"
       refute persisted =~ "plaintext-public-summary-must-drop"
+      refute persisted =~ "returned metadata must not select request transport"
     end
   end
 

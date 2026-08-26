@@ -41,7 +41,7 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Models do
       supports_responses: attributes.supports_responses,
       supports_streaming: attributes.supports_streaming,
       supports_tools: attributes.supports_tools,
-      supports_reasoning: false,
+      supports_reasoning: attributes.supports_reasoning,
       source_assignment_count: 1,
       first_seen_at: now,
       last_seen_at: now,
@@ -69,6 +69,7 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Models do
       true,
       true,
       true,
+      true,
       assignment,
       ["text", "image"]
     )
@@ -78,6 +79,7 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Models do
     model_attributes(
       "gpt-4o-transcribe",
       "GPT-4o Transcribe",
+      false,
       false,
       false,
       false,
@@ -93,12 +95,22 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Models do
       true,
       true,
       true,
+      false,
       assignment,
       ["text", "image"]
     )
   end
 
-  defp model_attributes(id, display_name, responses?, streaming?, tools?, assignment, modalities) do
+  defp model_attributes(
+         id,
+         display_name,
+         responses?,
+         streaming?,
+         tools?,
+         reasoning?,
+         assignment,
+         modalities
+       ) do
     %{
       exposed_model_id: id,
       upstream_model_id: "provider-#{id}",
@@ -106,19 +118,37 @@ defmodule CodexPooler.Dev.OpenAIV1Fixture.Models do
       supports_responses: responses?,
       supports_streaming: streaming?,
       supports_tools: tools?,
-      metadata: %{
-        "manual_smoke_provisioned" => true,
-        "source_assignment_models" => %{
-          assignment.id => %{
-            "slug" => id,
-            "input_modalities" => modalities,
-            "supports_tools" => tools?
-          }
-        },
-        "input_modalities" => modalities
-      }
+      supports_reasoning: reasoning?,
+      metadata:
+        %{
+          "manual_smoke_provisioned" => true,
+          "source_assignment_models" => %{
+            assignment.id => source_model_metadata(id, modalities, tools?, reasoning?)
+          },
+          "input_modalities" => modalities
+        }
+        |> maybe_put_reasoning_metadata(reasoning?)
     }
   end
+
+  defp source_model_metadata(id, modalities, tools?, reasoning?) do
+    %{
+      "slug" => id,
+      "input_modalities" => modalities,
+      "supports_tools" => tools?
+    }
+    |> maybe_put_reasoning_metadata(reasoning?)
+  end
+
+  defp maybe_put_reasoning_metadata(metadata, true) do
+    Map.merge(metadata, %{
+      "capabilities" => %{"reasoning" => true},
+      "supported_reasoning_levels" => ["none"],
+      "default_reasoning_level" => "none"
+    })
+  end
+
+  defp maybe_put_reasoning_metadata(metadata, false), do: metadata
 
   defp ensure_quota_windows!(identity, models) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)

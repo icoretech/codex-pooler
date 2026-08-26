@@ -7,6 +7,9 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
   alias CodexPooler.Access.APIKey
   alias CodexPooler.Catalog.Model
   alias CodexPooler.Dev.OpenAIV1Fixture
+  alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Routing.{CandidateEligibility, ModelMetadata}
+  alias CodexPooler.Gateway.Routing.CandidateEligibility.FilterInput
   alias CodexPooler.Pools.{Pool, RoutingSettings}
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Quota.AccountQuotaWindow
@@ -66,13 +69,33 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
 
     assert Repo.aggregate(from(model in Model, where: model.pool_id == ^pool_id), :count) == 3
 
-    assert %Model{metadata: text_metadata} =
+    assert %Model{
+             supports_responses: true,
+             supports_streaming: true,
+             supports_tools: true,
+             supports_reasoning: true,
+             metadata: text_metadata
+           } =
              Repo.get_by(Model, pool_id: pool_id, exposed_model_id: "gpt-5.5")
 
     assert %{"source_assignment_models" => source_models} = text_metadata
 
     assert %{"input_modalities" => ["text", "image"], "supports_tools" => true} =
              source_models[setup["created"]["assignment_id"]]
+
+    assert %Model{
+             supports_responses: true,
+             supports_streaming: true,
+             supports_tools: true,
+             supports_reasoning: false
+           } = Repo.get_by(Model, pool_id: pool_id, exposed_model_id: "gpt-image-1")
+
+    assert %Model{
+             supports_responses: false,
+             supports_streaming: false,
+             supports_tools: false,
+             supports_reasoning: false
+           } = Repo.get_by(Model, pool_id: pool_id, exposed_model_id: "gpt-4o-transcribe")
 
     assert Repo.aggregate(from(key in APIKey, where: key.pool_id == ^pool_id), :count) == 1
 
@@ -97,6 +120,57 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
     refute File.exists?(context.receipt_path)
     refute Repo.get_by(Pool, slug: @pool_slug)
     refute Repo.get_by(UpstreamIdentity, chatgpt_account_id: @account_id)
+  end
+
+  test "fixture reasoning metadata admits the exact Codex none request only when the assignment advertises it",
+       context do
+    assert {:ok, %{status: "ready"}} = OpenAIV1Fixture.acquire(context.options)
+
+    setup = context.receipt_path |> File.read!() |> Jason.decode!()
+
+    assert %Pool{} = pool = Repo.get_by(Pool, slug: @pool_slug)
+
+    model = Repo.get_by(Model, pool_id: pool.id, exposed_model_id: "gpt-5.5")
+    assert %Model{} = model
+
+    assignment = Repo.get(PoolUpstreamAssignment, setup["created"]["assignment_id"])
+    assert %PoolUpstreamAssignment{} = assignment
+
+    identity = Repo.get(UpstreamIdentity, assignment.upstream_identity_id)
+    assert %UpstreamIdentity{} = identity
+
+    assert {:ok, [{%PoolUpstreamAssignment{id: assignment_id}, %UpstreamIdentity{}}]} =
+             exact_codex_reasoning_result(model, assignment, identity)
+
+    assert assignment_id == assignment.id
+    assert model.supports_reasoning
+    assert model |> ModelMetadata.metadata() |> ModelMetadata.supports_reasoning?()
+    assert ModelMetadata.reasoning_levels_and_default(model) == {["none"], "none"}
+
+    source_metadata = ModelMetadata.selected_assignment_metadata(model, assignment.id)
+
+    assert ModelMetadata.supports_reasoning?(source_metadata)
+    assert source_metadata["supported_reasoning_levels"] == ["none"]
+
+    prechange_model =
+      model |> prechange_fixture_model(assignment.id) |> Map.put(:supports_reasoning, false)
+
+    assert_reasoning_rejected(prechange_model, assignment, identity)
+
+    for assignment_reasoning <- [nil, false, "invalid", []] do
+      top_level_only_model =
+        model
+        |> Map.put(:supports_reasoning, true)
+        |> put_assignment_reasoning(assignment.id, assignment_reasoning)
+
+      refute ModelMetadata.supports_reasoning?(
+               ModelMetadata.selected_assignment_metadata(top_level_only_model, assignment.id)
+             )
+
+      assert_reasoning_rejected(top_level_only_model, assignment, identity)
+    end
+
+    assert {:ok, %{status: "released"}} = OpenAIV1Fixture.release(context.options)
   end
 
   test "rejects a non-loopback upstream before receipt or database mutation", context do
@@ -171,6 +245,58 @@ defmodule CodexPooler.Dev.OpenAIV1FixtureTest do
   defp assert_private_mode(path, expected) do
     assert {:ok, %File.Stat{mode: mode}} = File.stat(path)
     assert Bitwise.band(mode, 0o777) == expected
+  end
+
+  defp exact_codex_reasoning_result(model, assignment, identity) do
+    payload = %{"model" => model.exposed_model_id, "reasoning" => %{"effort" => "none"}}
+    request_options = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+
+    FilterInput.new(%{
+      model: model,
+      endpoint: "/backend-api/codex/responses",
+      payload: payload,
+      request_options: request_options,
+      candidates: [{assignment, identity}]
+    })
+    |> CandidateEligibility.filter_runtime_compatible_candidates()
+  end
+
+  defp assert_reasoning_rejected(model, assignment, identity) do
+    assert {:error,
+            %{
+              status: 503,
+              code: "no_compatible_backend",
+              message: "no backend currently supports the requested model capabilities"
+            }} = exact_codex_reasoning_result(model, assignment, identity)
+  end
+
+  defp prechange_fixture_model(model, assignment_id) do
+    model
+    |> Map.update!(:metadata, fn metadata ->
+      metadata
+      |> Map.delete("capabilities")
+      |> Map.delete("supported_reasoning_levels")
+      |> Map.delete("default_reasoning_level")
+      |> put_assignment_reasoning_metadata(assignment_id, nil)
+    end)
+  end
+
+  defp put_assignment_reasoning(model, assignment_id, value) do
+    Map.update!(model, :metadata, &put_assignment_reasoning_metadata(&1, assignment_id, value))
+  end
+
+  defp put_assignment_reasoning_metadata(metadata, assignment_id, value) do
+    update_in(metadata["source_assignment_models"][assignment_id], fn metadata ->
+      metadata =
+        metadata
+        |> Map.delete("supported_reasoning_levels")
+        |> Map.delete("default_reasoning_level")
+
+      case value do
+        nil -> Map.delete(metadata, "capabilities")
+        _value -> put_in(metadata, ["capabilities", "reasoning"], value)
+      end
+    end)
   end
 
   defp random_hex(bytes) do

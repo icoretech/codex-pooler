@@ -317,7 +317,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   end
 
   defp prepare_native_compaction_bridge(%{payload: payload} = coerced) do
-    result_transport = if CompactionTrigger.v2_streaming?(payload), do: :sse, else: :buffered
+    result_transport = CompactionTrigger.compaction_result_transport(payload)
 
     with {:ok, turn_state} <- validated_native_compaction_turn_state(payload) do
       prepare_native_compaction_bridge(coerced, result_transport, turn_state)

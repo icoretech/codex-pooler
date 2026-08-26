@@ -34,17 +34,27 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
 
   @type payload :: %{optional(String.t()) => term()}
   @type bridge_decision :: :passthrough | {:ok, payload()} | {:error, Contracts.gateway_error()}
+  @type compaction_result_transport :: :buffered | :sse
 
-  @spec v2_streaming?(payload()) :: boolean()
-  def v2_streaming?(%{"client_metadata" => %{} = metadata}) do
-    turn_metadata = metadata["x-codex-turn-metadata"]
+  @spec compaction_result_transport(payload()) :: compaction_result_transport()
+  def compaction_result_transport(%{"client_metadata" => %{} = metadata}) do
+    case metadata["x-codex-turn-metadata"] do
+      turn_metadata when is_binary(turn_metadata) ->
+        case Jason.decode(turn_metadata) do
+          {:ok, %{"compaction" => %{"implementation" => "responses_compaction_v2"}}} -> :sse
+          _result -> :buffered
+        end
 
-    is_binary(turn_metadata) and
-      Jason.decode(turn_metadata) ==
-        {:ok, %{"compaction" => %{"implementation" => "responses_compaction_v2"}}}
+      _value ->
+        :buffered
+    end
   end
 
-  def v2_streaming?(%{}), do: false
+  def compaction_result_transport(%{}), do: :buffered
+
+  @spec v2_streaming?(payload()) :: boolean()
+  def v2_streaming?(payload), do: compaction_result_transport(payload) == :sse
+
   @type result_mode :: :sse | :public_sse | :response | :websocket | :native_websocket
 
   @spec prepare_bridge(String.t(), payload()) :: bridge_decision()

@@ -170,7 +170,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
           auth,
           compact_payload,
           opts,
-          CompactionTrigger.v2_streaming?(payload)
+          CompactionTrigger.compaction_result_transport(payload)
         )
 
       {:error, reason} ->
@@ -184,7 +184,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
          auth,
          compact_payload,
          opts,
-         v2_streaming?
+         result_transport
        ) do
     compact_endpoint = "/backend-api/codex/responses/compact"
 
@@ -199,7 +199,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
       request_opts:
         opts
         |> Map.put(:compaction_trigger_bridge?, true)
-        |> Map.put(:compaction_result_transport, if(v2_streaming?, do: :sse, else: :buffered))
+        |> Map.put(:compaction_result_transport, result_transport)
     )
     |> CompactionTrigger.adapt_gateway_result()
   end

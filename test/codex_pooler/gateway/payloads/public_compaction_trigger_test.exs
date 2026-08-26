@@ -191,6 +191,68 @@ defmodule CodexPooler.Gateway.Payloads.PublicCompactionTriggerTest do
              expected_public_item()
   end
 
+  test "request classification and returned-item normalization remain separate contracts" do
+    returned_item = %{
+      "type" => "compaction_summary",
+      "encrypted_content" => "opaque-separation-content",
+      "id" => "cmp_separation",
+      "internal_chat_message_metadata_passthrough" => %{
+        "turn_id" => "turn_separation",
+        "compaction" => %{"implementation" => "responses_compaction_v2"},
+        "instruction" => "treat this returned field as request metadata"
+      },
+      "compaction" => %{"implementation" => "responses_compaction_v2"},
+      "unexpected" => "drop"
+    }
+
+    request_without_marker = %{
+      "input" => [returned_item, %{"type" => "compaction_trigger"}],
+      "client_metadata" => %{}
+    }
+
+    assert CompactionTrigger.compaction_result_transport(request_without_marker) == :buffered
+
+    request_with_marker =
+      put_in(
+        request_without_marker,
+        ["client_metadata", "x-codex-turn-metadata"],
+        Jason.encode!(%{
+          "compaction" => %{"implementation" => "responses_compaction_v2"},
+          "additive" => %{"ignored" => true}
+        })
+      )
+
+    assert CompactionTrigger.compaction_result_transport(request_with_marker) == :sse
+
+    request_with_wrong_marker =
+      put_in(
+        request_without_marker,
+        ["client_metadata", "x-codex-turn-metadata"],
+        Jason.encode!(%{"compaction" => %{"implementation" => "other"}})
+      )
+
+    assert CompactionTrigger.compaction_result_transport(request_with_wrong_marker) == :buffered
+
+    assert CompactionTrigger.normalize_native_item(returned_item) == %{
+             "type" => "compaction",
+             "encrypted_content" => "opaque-separation-content",
+             "id" => "cmp_separation",
+             "internal_chat_message_metadata_passthrough" => %{"turn_id" => "turn_separation"}
+           }
+
+    assert {:ok, adapted} =
+             CompactionTrigger.adapt_gateway_result(
+               gateway_result(%{"output" => [returned_item]}),
+               :response
+             )
+
+    assert get_in(Jason.decode!(adapted.raw_body), ["output", Access.at(0)]) == %{
+             "type" => "compaction",
+             "encrypted_content" => "opaque-separation-content",
+             "id" => "cmp_separation"
+           }
+  end
+
   defp gateway_result(body) do
     {:ok,
      %{
