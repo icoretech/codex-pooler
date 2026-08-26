@@ -2,7 +2,7 @@ defmodule CodexPooler.Platform.DNSClusterResolver do
   @moduledoc false
 
   @type dns_record :: :inet.ip_address()
-  @type dns_record_type :: :a | :aaaa
+  @type dns_record_type :: :a | :aaaa | :srv
 
   @spec basename(node()) :: String.t()
   def basename(node_name), do: DNSCluster.Resolver.basename(node_name)
