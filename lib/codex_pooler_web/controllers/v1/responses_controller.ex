@@ -3,6 +3,7 @@ defmodule CodexPoolerWeb.V1.ResponsesController do
 
   alias CodexPooler.Gateway.OpenAICompatibility.Responses
   alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
+  alias CodexPooler.Gateway.Payloads.RequestOptions.CompactionProjectionContext
   alias CodexPooler.RouteClass
   alias CodexPoolerWeb.GatewayControllerHelpers, as: GatewayHelpers
   alias CodexPoolerWeb.PublicGatewayDispatch
@@ -53,7 +54,11 @@ defmodule CodexPoolerWeb.V1.ResponsesController do
             upstream_endpoint: @backend_responses_endpoint,
             route_class: RouteClass.proxy_compact()
           )
-          |> RequestOptions.put_payload_context(compaction_trigger_bridge?: true)
+          |> RequestOptions.put_payload_context(
+            compaction_trigger_bridge?: true,
+            compaction_projection_context:
+              CompactionProjectionContext.new(payload, compact_payload)
+          )
 
         PublicGatewayDispatch.dispatch_coerced(
           conn,

@@ -1994,6 +1994,8 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
   end
 
   test "GET /v1/responses websocket bridges a terminal compaction trigger over compact HTTP" do
+    previous_response_id = "resp_v1_websocket_compaction_previous"
+
     upstream =
       start_upstream(
         FakeUpstream.json_response(%{
@@ -2030,7 +2032,9 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     try do
       {conn, websocket} =
         send_response_create!(conn, websocket, ref, setup, %{
-          "input" => websocket_compaction_trigger_input("synthetic websocket compact"),
+          "previous_response_id" => previous_response_id,
+          "input" =>
+            websocket_tool_output_compaction_trigger_input("synthetic websocket compact"),
           "stream" => false,
           "stream_id" => "compaction-trigger-stream"
         })
@@ -2069,6 +2073,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       assert captured.path == "/backend-api/codex/responses"
       refute Map.has_key?(captured.json, "stream")
       assert captured.json["store"] == false
+      assert captured.json["previous_response_id"] == previous_response_id
+
+      assert Enum.map(captured.json["input"], & &1["type"]) == [
+               "function_call_output",
+               "compaction_trigger"
+             ]
+
       assert Enum.count(captured.json["input"], &(&1 == %{"type" => "compaction_trigger"})) == 1
       assert List.last(captured.json["input"]) == %{"type" => "compaction_trigger"}
 
@@ -2100,6 +2111,49 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
       refute persisted =~ "native-websocket-turn-must-drop"
       refute persisted =~ "plaintext-websocket-summary-must-drop"
       refute persisted =~ "returned metadata must not select request transport"
+    after
+      Mint.HTTP.close(conn)
+    end
+  end
+
+  test "GET /v1/responses websocket rejects a compaction anchor without tool output before dispatch" do
+    upstream = start_upstream(completed_websocket_response("should_not_dispatch_anchor"))
+    setup = gateway_setup(upstream, compact?: true)
+    port = start_public_endpoint!()
+
+    {conn, websocket, ref} =
+      public_v1_websocket_connect!(
+        port,
+        setup,
+        "invalid-compaction-anchor-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      post_upgrade_baseline = settled_post_upgrade_counts!(upstream)
+
+      {conn, websocket} =
+        send_response_create!(conn, websocket, ref, setup, %{
+          "previous_response_id" => "resp_v1_websocket_compaction_without_tool_output",
+          "input" => websocket_compaction_trigger_input("synthetic invalid anchored compact"),
+          "stream" => false
+        })
+
+      {conn, websocket, frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert Jason.decode!(frame) == %{
+               "type" => "error",
+               "status" => 400,
+               "error" => %{
+                 "type" => "invalid_request_error",
+                 "code" => "invalid_request",
+                 "message" => "previous_response_id requires a tool-output continuation",
+                 "param" => "previous_response_id"
+               }
+             }
+
+      assert lifecycle_counts(upstream) == post_upgrade_baseline
+      assert FakeUpstream.count(upstream) == 0
+      {conn, websocket}
     after
       Mint.HTTP.close(conn)
     end
@@ -3301,6 +3355,17 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
         "type" => "message",
         "role" => "user",
         "content" => [%{"type" => "input_text", "text" => text}]
+      },
+      %{"type" => "compaction_trigger"}
+    ]
+  end
+
+  defp websocket_tool_output_compaction_trigger_input(output) do
+    [
+      %{
+        "type" => "function_call_output",
+        "call_id" => "call_public_websocket_compaction_trigger",
+        "output" => output
       },
       %{"type" => "compaction_trigger"}
     ]

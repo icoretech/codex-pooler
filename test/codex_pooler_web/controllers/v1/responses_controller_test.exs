@@ -2895,6 +2895,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
   } do
     for stream? <- [false, true] do
       response_id = "resp_v1_compaction_trigger_#{stream?}"
+      previous_response_id = "resp_v1_compaction_previous_#{stream?}"
 
       upstream =
         start_upstream(
@@ -2927,7 +2928,9 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         |> auth(setup)
         |> post("/v1/responses", %{
           "model" => setup.model.exposed_model_id,
-          "input" => public_compaction_trigger_input("synthetic public compact #{stream?}"),
+          "previous_response_id" => previous_response_id,
+          "input" =>
+            public_tool_output_compaction_trigger_input("synthetic public compact #{stream?}"),
           "stream" => stream?,
           "include" => ["reasoning.encrypted_content"],
           "store" => false,
@@ -2988,6 +2991,13 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       assert captured.json["store"] == false
       refute Map.has_key?(captured.json, "prompt_cache_options")
       assert captured.json["prompt_cache_key"] == "public-compaction-cache-#{stream?}"
+      assert captured.json["previous_response_id"] == previous_response_id
+
+      assert Enum.map(captured.json["input"], & &1["type"]) == [
+               "function_call_output",
+               "compaction_trigger"
+             ]
+
       assert Enum.count(captured.json["input"], &(&1 == %{"type" => "compaction_trigger"})) == 1
       assert List.last(captured.json["input"]) == %{"type" => "compaction_trigger"}
 
@@ -10161,6 +10171,17 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
         "type" => "message",
         "role" => "user",
         "content" => [%{"type" => "input_text", "text" => text}]
+      },
+      %{"type" => "compaction_trigger"}
+    ]
+  end
+
+  defp public_tool_output_compaction_trigger_input(output) do
+    [
+      %{
+        "type" => "function_call_output",
+        "call_id" => "call_public_compaction_trigger",
+        "output" => output
       },
       %{"type" => "compaction_trigger"}
     ]
