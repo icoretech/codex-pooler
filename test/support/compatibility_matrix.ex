@@ -1452,7 +1452,7 @@ defmodule CodexPooler.CompatibilityMatrix do
         },
         harness_applicability: %{
           codex: %{
-            version: "rust-v0.149.1",
+            version: "rust-v0.150.0",
             applicability: "native_v2",
             classifier_authority: true,
             verification: "commit_blocking"
