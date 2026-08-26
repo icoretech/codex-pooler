@@ -10,6 +10,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
                                      )
   @external_resource @remote_compaction_v2_fixture_path
 
+  @remote_compaction_v2_incremental_fixture_path Path.expand(
+                                                   "../../../fixtures/codex/rust-v0.149.1-ff29a44391deccde0aba0f8390337d7f3c319ea4/remote_compaction_v2_incremental_request.json",
+                                                   __DIR__
+                                                 )
+  @external_resource @remote_compaction_v2_incremental_fixture_path
+
   describe "decode_payload/1" do
     test "accepts response.create through the generic object contract" do
       payload = Jason.encode!(%{"type" => "response.create", "model" => "gpt-example"})
@@ -124,6 +130,98 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
       assert coerced.request_options.payload_context.compaction_result_transport == :sse
       assert coerced.payload == http_projection
       assert Jason.encode!(coerced.payload) == Jason.encode!(http_projection)
+    end
+
+    test "retains source-derived incremental anchors before compact continuity routing" do
+      for scenario <- ["anchored_tool_output_and_trigger", "anchored_trigger_only"] do
+        payload = remote_compaction_v2_incremental_subset!(scenario)
+
+        assert {:ok, coerced} =
+                 WebsocketCodec.coerce_request(
+                   payload,
+                   native_responses_options(payload),
+                   fn _frame -> :ok end
+                 )
+
+        first_projection = CompactionTrigger.project_responses_payload(payload, :sse)
+        second_projection = CompactionTrigger.project_responses_payload(first_projection, :sse)
+        third_projection = CompactionTrigger.project_responses_payload(second_projection, :sse)
+
+        assert coerced.endpoint == "/backend-api/codex/responses/compact"
+        assert coerced.payload == first_projection
+        assert second_projection == first_projection
+        assert third_projection == first_projection
+        assert coerced.payload["previous_response_id"] == payload["previous_response_id"]
+
+        assert coerced.request_options.payload_context.compaction_trigger_bridge?
+        assert coerced.request_options.payload_context.compaction_result_transport == :sse
+        assert coerced.request_options.transport.route_class == "proxy_compact"
+      end
+    end
+
+    test "keeps source-derived full-history compaction unanchored" do
+      payload = remote_compaction_v2_incremental_subset!("full_history_without_anchor")
+
+      assert {:ok, coerced} =
+               WebsocketCodec.coerce_request(
+                 payload,
+                 native_responses_options(payload),
+                 fn _frame -> :ok end
+               )
+
+      refute Map.has_key?(coerced.payload, "previous_response_id")
+      assert coerced.payload["input"] == payload["input"]
+    end
+
+    test "does not widen public admission for anchors without tool output" do
+      payload = %{
+        "type" => "response.create",
+        "model" => "gpt-fixture",
+        "previous_response_id" => "resp_fixture_public_0001",
+        "input" => [
+          %{"type" => "message", "role" => "user", "content" => "visible public input"},
+          %{"type" => "compaction_trigger"}
+        ]
+      }
+
+      assert {:error, error} =
+               WebsocketCodec.coerce_request(
+                 payload,
+                 public_responses_options(payload),
+                 fn _frame -> :ok end
+               )
+
+      assert error.status == 400
+      assert error.code == "invalid_request"
+      assert error.param == "previous_response_id"
+    end
+
+    test "retains an anchor with an unknown future output suffix" do
+      payload = %{
+        "type" => "response.create",
+        "model" => "gpt-fixture",
+        "previous_response_id" => "resp_fixture_future_0001",
+        "input" => [
+          %{
+            "type" => "future_tool_output_v9",
+            "call_id" => "call_fixture_future",
+            "output" => "fixture future output"
+          },
+          %{"type" => "compaction_trigger"}
+        ],
+        "store" => false,
+        "stream" => true
+      }
+
+      assert {:ok, coerced} =
+               WebsocketCodec.coerce_request(
+                 payload,
+                 native_responses_options(payload),
+                 fn _frame -> :ok end
+               )
+
+      assert coerced.payload["previous_response_id"] == payload["previous_response_id"]
+      assert coerced.payload["input"] == payload["input"]
     end
 
     test "bridges a singleton native compaction trigger" do
@@ -761,6 +859,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
     |> File.read!()
     |> Jason.decode!()
     |> get_in(["request", "client_metadata"])
+  end
+
+  defp remote_compaction_v2_incremental_subset!(scenario) do
+    @remote_compaction_v2_incremental_fixture_path
+    |> File.read!()
+    |> Jason.decode!()
+    |> get_in(["contract", "scenarios", scenario, "projection_relevant_frame_subset"])
   end
 
   defp contains_stream_id?(%{__struct__: _} = value),

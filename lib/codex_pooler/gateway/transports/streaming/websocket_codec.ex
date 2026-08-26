@@ -9,6 +9,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   alias CodexPooler.Gateway.Payloads.CompactionTrigger
   alias CodexPooler.Gateway.Payloads.PayloadNormalizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.RequestOptions.CompactionProjectionContext
   alias CodexPooler.Gateway.Payloads.ToolResultShape
   alias CodexPooler.Gateway.Routing.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
@@ -330,6 +331,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
         {:ok, coerced}
 
       {:ok, compact_payload} ->
+        downstream_payload = coerced.payload
+
         compact_payload =
           CompactionTrigger.project_responses_payload(compact_payload, result_transport)
 
@@ -345,7 +348,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
           |> RequestOptions.put_payload_context(
             compaction_trigger_bridge?: true,
             compaction_result_transport: result_transport,
-            compaction_result_mode: :native_websocket
+            compaction_result_mode: :native_websocket,
+            compaction_projection_context:
+              CompactionProjectionContext.new(downstream_payload, compact_payload)
           )
           |> put_validated_native_compaction_turn_state(turn_state)
 
@@ -393,6 +398,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
         {:ok, coerced}
 
       {:ok, compact_payload} ->
+        downstream_payload = coerced.payload
+
         request_options =
           coerced.request_options
           |> RequestOptions.retarget("/backend-api/codex/responses/compact", compact_payload)
@@ -402,7 +409,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
             route_class: RouteClass.proxy_compact(),
             websocket_writer: nil
           )
-          |> RequestOptions.put_payload_context(compaction_trigger_bridge?: true)
+          |> RequestOptions.put_payload_context(
+            compaction_trigger_bridge?: true,
+            compaction_projection_context:
+              CompactionProjectionContext.new(downstream_payload, compact_payload)
+          )
 
         {:ok,
          %{
