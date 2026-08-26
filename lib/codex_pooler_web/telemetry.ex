@@ -179,6 +179,8 @@ defmodule CodexPoolerWeb.Telemetry do
 
   @spec prometheus_metrics() :: [metric()]
   def prometheus_metrics do
+    # Prometheus Core 1.2.1 enumerates metric.tags and invokes metric.tag_values.
+    # Keep this split until the reporter supports Telemetry.Metrics 1.2 function-valued tags.
     [
       counter("phoenix.endpoint.stop.count",
         event_name: [:phoenix, :endpoint, :stop],

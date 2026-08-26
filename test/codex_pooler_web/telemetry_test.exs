@@ -104,6 +104,22 @@ defmodule CodexPoolerWeb.TelemetryTest do
     end
   end
 
+  test "keeps transformed tags compatible with the Prometheus core reporter" do
+    metrics = CodexPoolerWeb.Telemetry.prometheus_metrics()
+
+    for metric <- metrics do
+      assert is_list(metric.tags)
+      assert is_function(metric.tag_values, 1)
+    end
+
+    metric = metric_by_name(metrics, "codex_pooler.repo.query.count")
+
+    assert Map.take(metric.tag_values.(%{}), metric.tags) == %{
+             source: "unknown",
+             command: "unknown"
+           }
+  end
+
   test "normalizes Ecto source tags without exposing SQL text" do
     metric =
       CodexPoolerWeb.Telemetry.prometheus_metrics()
