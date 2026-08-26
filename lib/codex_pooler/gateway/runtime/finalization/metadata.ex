@@ -114,6 +114,13 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
 
   def upstream_status_error_code(_status, _request_options), do: "upstream_status"
 
+  @spec rejection_error(Req.Response.t()) :: map()
+  def rejection_error(%Req.Response{} = response) do
+    response
+    |> rejection_body()
+    |> decode_rejection_error()
+  end
+
   defp upstream_websocket_bridge_attempt_metadata(%RequestOptions{
          transport: %{upstream_websocket_bridge?: true}
        }) do
@@ -158,6 +165,21 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Metadata do
   end
 
   defp decode_rejection_metadata(_body), do: %{}
+
+  defp decode_rejection_error(body)
+       when is_binary(body) and byte_size(body) <= @rejection_body_max_bytes do
+    case Jason.decode(body) do
+      {:ok, %{"error" => error}} when is_map(error) ->
+        %{}
+        |> maybe_put_rejection_value(:code, valid_rejection_token(error["code"]))
+        |> maybe_put_rejection_value(:param, valid_rejection_param(error["param"]))
+
+      _other ->
+        %{}
+    end
+  end
+
+  defp decode_rejection_error(_body), do: %{}
 
   defp maybe_put_rejection_value(metadata, _key, nil), do: metadata
   defp maybe_put_rejection_value(metadata, key, value), do: Map.put(metadata, key, value)

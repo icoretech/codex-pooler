@@ -524,18 +524,64 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         headers =
           Metadata.response_headers(response, RouteClass.streaming?(payload), request_options)
 
-        result = failure_result(status, headers, body, request_options, payload, error_code, opts)
+        result =
+          failure_result(
+            status,
+            headers,
+            body,
+            request_options,
+            payload,
+            error_code,
+            opts,
+            Metadata.rejection_error(response)
+          )
 
-        {:ok, result}
+        case result do
+          {:error, error} -> {:error, error}
+          result -> {:ok, result}
+        end
 
       {:error, gateway_error} ->
         {:error, gateway_error}
     end
   end
 
-  defp failure_result(status, headers, body, request_options, payload, error_code, opts) do
+  defp failure_result(
+         status,
+         headers,
+         body,
+         request_options,
+         payload,
+         error_code,
+         opts,
+         rejection_error
+       ) do
     marker = public_input_file_upstream_404?(status, request_options, payload)
 
+    if native_compaction_websocket?(request_options) do
+      {:error, native_compaction_rejection(status, error_code, rejection_error)}
+    else
+      project_failure_result(
+        status,
+        headers,
+        body,
+        request_options,
+        error_code,
+        opts,
+        marker
+      )
+    end
+  end
+
+  defp project_failure_result(
+         status,
+         headers,
+         body,
+         request_options,
+         error_code,
+         opts,
+         marker
+       ) do
     case {Keyword.get(opts, :failure_projection, :mode_scoped),
           Metadata.explicit_full_ordinary_responses?(request_options)} do
       {{:misalignment_policy_violation, summary}, _explicit_full?} ->
@@ -569,6 +615,27 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
           public_input_file_upstream_404?: marker
         }
     end
+  end
+
+  defp native_compaction_websocket?(%RequestOptions{
+         payload_context: %{
+           compaction_trigger_bridge?: true,
+           compaction_result_mode: :native_websocket
+         }
+       }),
+       do: true
+
+  defp native_compaction_websocket?(%RequestOptions{}), do: false
+
+  defp native_compaction_rejection(status, fallback_code, rejection_error) do
+    code = Map.get(rejection_error, :code) || fallback_code
+
+    %{
+      status: status,
+      code: code,
+      message: "upstream rejected the compact request",
+      param: Map.get(rejection_error, :param)
+    }
   end
 
   defp public_input_file_upstream_404?(404, %RequestOptions{} = request_options, payload)
