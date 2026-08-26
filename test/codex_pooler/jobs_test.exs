@@ -83,6 +83,38 @@ defmodule CodexPooler.JobsTest do
              }
     end
 
+    test "uses Oban 2.24 relative scheduling without the legacy option" do
+      before_schedule = DateTime.utc_now()
+
+      assert {:ok, job} = Jobs.enqueue_pricing_import(scheduled_in: {5, :minutes})
+
+      assert job.state == "scheduled"
+      assert DateTime.diff(job.scheduled_at, before_schedule, :second) in 299..301
+    end
+
+    test "preserves attempts and records metadata when Oban 2.24 snoozes a job" do
+      assert {:ok, job} = PricingImportWorker.new(%{}) |> Oban.insert()
+
+      {1, _rows} =
+        from(row in Oban.Job, where: row.id == ^job.id)
+        |> Repo.update_all(set: [state: "executing", attempt: 1])
+
+      job = Repo.get!(Oban.Job, job.id)
+
+      assert :ok = Oban.Engine.snooze_job(Oban.config(), job, 60)
+
+      snoozed_job = Repo.get!(Oban.Job, job.id)
+      assert snoozed_job.state == "scheduled"
+      assert snoozed_job.attempt == 0
+      assert snoozed_job.meta == %{"snoozed" => 1}
+    end
+
+    test "keeps the installed Oban schema at the required migration version" do
+      assert Oban.Migration.current_version(repo: Repo) == 14
+      assert Oban.Migration.migrated_version(repo: Repo) == 14
+      assert :ok = Oban.Migration.verify_migrated!(repo: Repo)
+    end
+
     test "bounds retries and execution time according to job cadence" do
       assert worker_max_attempts(AccountReconciliationWorker, %{
                "pool_id" => Ecto.UUID.generate(),

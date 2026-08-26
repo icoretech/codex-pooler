@@ -153,14 +153,14 @@ defmodule CodexPooler.Jobs do
       end
 
     args
-    |> RuntimeStateCleanupWorker.new(Keyword.take(opts, [:scheduled_at, :schedule_in, :unique]))
+    |> RuntimeStateCleanupWorker.new(Keyword.take(opts, [:scheduled_at, :scheduled_in, :unique]))
     |> Oban.insert()
   end
 
   @spec enqueue_pricing_import(keyword()) :: job_insert_result()
   def enqueue_pricing_import(opts \\ []) do
     %{}
-    |> PricingImportWorker.new(Keyword.take(opts, [:scheduled_at, :schedule_in, :unique]))
+    |> PricingImportWorker.new(Keyword.take(opts, [:scheduled_at, :scheduled_in, :unique]))
     |> Oban.insert()
   end
 

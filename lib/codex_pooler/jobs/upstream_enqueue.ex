@@ -335,7 +335,7 @@ defmodule CodexPooler.Jobs.UpstreamEnqueue do
       end
 
     opts
-    |> Keyword.take([:scheduled_at, :schedule_in])
+    |> Keyword.take([:scheduled_at, :scheduled_in])
     |> Keyword.put(:unique, unique)
   end
 

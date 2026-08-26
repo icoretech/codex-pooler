@@ -4,7 +4,7 @@ defmodule CodexPooler.Jobs.Options do
   @spec job_options(keyword(), unique_keys: [atom()]) :: keyword()
   def job_options(opts, unique_keys: keys) do
     opts
-    |> Keyword.take([:scheduled_at, :schedule_in])
+    |> Keyword.take([:scheduled_at, :scheduled_in])
     |> Keyword.put(
       :unique,
       Keyword.get(opts, :unique,
