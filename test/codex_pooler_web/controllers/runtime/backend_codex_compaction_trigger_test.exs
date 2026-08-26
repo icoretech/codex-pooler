@@ -19,6 +19,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
                                           "../../../fixtures/codex/rust-v0.149.1-ff29a44391deccde0aba0f8390337d7f3c319ea4/remote_compaction_v2_request.json",
                                           __DIR__
                                         )
+  @codex_incremental_compaction_fixture_path Path.expand(
+                                               "../../../fixtures/codex/rust-v0.149.1-ff29a44391deccde0aba0f8390337d7f3c319ea4/remote_compaction_v2_incremental_request.json",
+                                               __DIR__
+                                             )
+  @external_resource @codex_incremental_compaction_fixture_path
 
   @codex_response_aliases [
     {"responses", "/backend-api/codex/responses"},
@@ -272,6 +277,180 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "succeeded"
+  end
+
+  test "V2 compaction accepts released compaction_summary alias", %{conn: conn} do
+    alias_item = %{
+      "type" => "compaction_summary",
+      "encrypted_content" => "synthetic-aliased-compaction"
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.output_item.done",
+           %{"type" => "response.output_item.done", "item" => alias_item}},
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_aliased_compaction",
+               "status" => "completed",
+               "output" => [alias_item]
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", v2_compaction_payload(setup, "alias success"))
+
+    assert response.status == 200
+    assert [done_event, completed_event] = backend_sse_events(response(response, 200))
+    assert done_event["data"]["item"]["type"] == "compaction"
+
+    assert done_event["data"]["item"]["encrypted_content"] ==
+             alias_item["encrypted_content"]
+
+    assert completed_event["data"]["response"]["output"] == [done_event["data"]["item"]]
+  end
+
+  test "V2 compaction rejects canonical and alias pair as duplicate exact-one output", %{
+    conn: conn
+  } do
+    canonical = %{"type" => "compaction", "encrypted_content" => "canonical"}
+    alias_item = %{"type" => "compaction_summary", "encrypted_content" => "alias"}
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.output_item.done",
+           %{"type" => "response.output_item.done", "item" => canonical}},
+          {"response.output_item.done",
+           %{"type" => "response.output_item.done", "item" => alias_item}},
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_duplicate_alias_compaction",
+               "status" => "completed",
+               "output" => [canonical, alias_item]
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", v2_compaction_payload(setup, "alias duplicate"))
+
+    assert %{"error" => %{"code" => "invalid_compaction_response"}} =
+             json_response(response, 502)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.network_error_code == "invalid_compaction_response"
+  end
+
+  test "backend HTTP preserves source-derived incremental compaction lineage and ordering", %{
+    conn: conn
+  } do
+    fixture = codex_incremental_compaction_fixture!()
+
+    for scenario_name <- [
+          "anchored_tool_output_and_trigger",
+          "anchored_trigger_only",
+          "full_history_without_anchor"
+        ] do
+      compact_item = %{
+        "type" => "compaction",
+        "encrypted_content" => "synthetic-http-incremental-#{scenario_name}"
+      }
+
+      upstream =
+        start_upstream(
+          FakeUpstream.sse_stream([
+            {"response.output_item.done",
+             %{"type" => "response.output_item.done", "item" => compact_item}},
+            {"response.completed",
+             %{
+               "type" => "response.completed",
+               "response" => %{
+                 "id" => "resp_http_incremental_#{scenario_name}",
+                 "status" => "completed",
+                 "output" => [compact_item]
+               }
+             }}
+          ])
+        )
+
+      setup = gateway_setup(upstream, compact?: true)
+
+      source_frame =
+        get_in(fixture, ["scenarios", scenario_name, "projection_relevant_frame_subset"])
+
+      payload =
+        source_frame
+        |> Map.put("model", setup.model.exposed_model_id)
+        |> Map.put("generate", true)
+
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post("/backend-api/codex/responses", payload)
+
+      assert response.status == 200, scenario_name
+      assert [done_event, completed_event] = backend_sse_events(response(response, 200))
+      assert done_event["data"]["item"] == compact_item
+      assert completed_event["data"]["response"]["output"] == [compact_item]
+
+      assert [captured] = FakeUpstream.requests(upstream)
+      assert captured.method == "POST", scenario_name
+      assert captured.path == "/backend-api/codex/responses", scenario_name
+      assert captured.json["input"] == source_frame["input"], scenario_name
+      assert captured.json["store"] == false, scenario_name
+      assert captured.json["stream"] == true, scenario_name
+
+      assert Map.get(captured.json, "previous_response_id") ==
+               Map.get(source_frame, "previous_response_id"),
+             scenario_name
+
+      assert get_in(payload, ["client_metadata", "x-codex-turn-metadata"]) ==
+               get_in(fixture, ["v2_trigger_metadata", "x-codex-turn-metadata"]),
+             scenario_name
+
+      assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+      assert request.endpoint == "/backend-api/codex/responses/compact", scenario_name
+      assert request.transport == "http_compact_json", scenario_name
+      assert request.status == "succeeded", scenario_name
+      assert request.retry_count == 0, scenario_name
+
+      assert request.request_metadata["compaction_bridge"] == %{
+               "applied" => true,
+               "result_transport" => "sse"
+             }
+
+      assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+      assert attempt.status == "succeeded", scenario_name
+      refute attempt.retryable, scenario_name
+
+      assert Repo.aggregate(
+               from(l in LedgerEntry,
+                 where: l.request_id == ^request.id and l.entry_kind == "settlement"
+               ),
+               :count
+             ) == 1,
+             scenario_name
+    end
   end
 
   for {alias_name, path} <- @codex_response_aliases do
@@ -2189,10 +2368,29 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     )
   end
 
+  defp codex_incremental_compaction_fixture! do
+    @codex_incremental_compaction_fixture_path
+    |> File.read!()
+    |> Jason.decode!()
+    |> Map.fetch!("contract")
+  end
+
   defp maybe_put_client_metadata(payload, nil), do: payload
 
   defp maybe_put_client_metadata(payload, client_metadata) do
     Map.put(payload, "client_metadata", client_metadata)
+  end
+
+  defp v2_compaction_payload(setup, label) do
+    %{
+      "model" => setup.model.exposed_model_id,
+      "input" => visible_input(label) ++ [compaction_trigger()],
+      "stream" => true,
+      "client_metadata" => %{
+        "x-codex-turn-metadata" =>
+          Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
+      }
+    }
   end
 
   defp assert_v2_compaction_terminal_failure!(

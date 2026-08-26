@@ -5,6 +5,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
   alias CodexPooler.Gateway.Metadata
   alias CodexPooler.Gateway.OpenAICompatibility.{Chat, ChatCompletions}
   alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
+  alias CodexPooler.Gateway.Payloads.RequestOptions.CompactionProjectionContext
   alias CodexPooler.RouteClass
   alias CodexPoolerWeb.GatewayControllerHelpers, as: GatewayHelpers
   alias CodexPoolerWeb.PublicGatewayDispatch
@@ -168,6 +169,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
           conn,
           local_endpoint,
           auth,
+          payload,
           compact_payload,
           opts,
           CompactionTrigger.compaction_result_transport(payload)
@@ -182,6 +184,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
          conn,
          local_endpoint,
          auth,
+         downstream_payload,
          compact_payload,
          opts,
          result_transport
@@ -200,6 +203,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexController do
         opts
         |> Map.put(:compaction_trigger_bridge?, true)
         |> Map.put(:compaction_result_transport, result_transport)
+        |> Map.put(
+          :compaction_projection_context,
+          CompactionProjectionContext.new(downstream_payload, compact_payload)
+        )
     )
     |> CompactionTrigger.adapt_gateway_result()
   end
