@@ -122,7 +122,6 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
     |> maybe_put_prompt_cache_key(payload)
     |> Map.put("store", false)
     |> maybe_put_stream(result_transport)
-    |> maybe_preserve_previous_response_id(payload)
   end
 
   @spec streaming_result?(RequestOptions.t()) :: boolean()
@@ -301,35 +300,6 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   end
 
   defp maybe_put_prompt_cache_key(compact_payload, _payload), do: compact_payload
-
-  defp maybe_preserve_previous_response_id(compact_payload, payload) do
-    if semantic_tool_result_continuation?(payload) do
-      Map.put(compact_payload, "previous_response_id", payload["previous_response_id"])
-    else
-      compact_payload
-    end
-  end
-
-  defp semantic_tool_result_continuation?(%{
-         "previous_response_id" => response_id,
-         "input" => input
-       })
-       when is_binary(response_id) and is_list(input) do
-    String.trim(response_id) != "" and
-      Enum.any?(input, &semantic_tool_result?/1)
-  end
-
-  defp semantic_tool_result_continuation?(_payload), do: false
-
-  defp semantic_tool_result?(%{"type" => "custom_tool_call_output", "call_id" => call_id})
-       when is_binary(call_id),
-       do: String.trim(call_id) != ""
-
-  defp semantic_tool_result?(%{"type" => "function_call_output", "call_id" => call_id})
-       when is_binary(call_id),
-       do: String.trim(call_id) != ""
-
-  defp semantic_tool_result?(_item), do: false
 
   defp maybe_put_stream(payload, :sse), do: Map.put(payload, "stream", true)
   defp maybe_put_stream(payload, :buffered), do: Map.delete(payload, "stream")
