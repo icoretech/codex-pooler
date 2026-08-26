@@ -29,10 +29,11 @@ defmodule CodexPooler.Gateway.Transports.AISDKResponsesContractTest do
     assert pre_output_state.public_openai_responses.sequence.max_seen == 0
 
     post_output_prefix =
-      sse_event("response.created", %{
-        "type" => "response.created",
+      sse_event("response.output_item.added", %{
+        "type" => "response.output_item.added",
         "sequence_number" => 0,
-        "response" => %{"id" => "resp_post_output", "status" => "in_progress"}
+        "output_index" => 0,
+        "item" => %{"type" => "message", "id" => "msg_post_output"}
       }) <>
         sse_event("response.output_text.delta", %{
           "type" => "response.output_text.delta",

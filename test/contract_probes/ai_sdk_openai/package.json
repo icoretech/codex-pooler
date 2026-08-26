@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@ai-sdk/openai": "4.0.42",
-    "ai": "7.0.63",
-    "effect": "4.0.0-rc.108",
+    "@ai-sdk/openai": "4.0.49",
+    "ai": "7.0.82",
+    "effect": "4.0.0-rc.112",
     "zod": "4.4.3"
   },
   "devDependencies": {
