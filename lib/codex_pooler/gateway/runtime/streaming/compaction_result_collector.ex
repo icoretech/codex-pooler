@@ -243,9 +243,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
 
   defp collect_summarized_event(
          %{data_type: "response.output_item.done"},
-         %{"item" => %{"type" => "compaction"} = item},
+         %{"item" => %{"type" => type} = item},
          %{item: nil} = state
-       ) do
+       )
+       when type in ["compaction", "compaction_summary"] do
     case compact_item(item) do
       {:ok, item} -> {:ok, %{state | item: item}}
       {:error, _reason} = error -> error
@@ -254,9 +255,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
 
   defp collect_summarized_event(
          %{data_type: "response.output_item.done"},
-         %{"item" => %{"type" => "compaction"}},
+         %{"item" => %{"type" => type}},
          _state
-       ),
+       )
+       when type in ["compaction", "compaction_summary"],
        do: {:error, :duplicate_compaction}
 
   defp collect_summarized_event(
@@ -295,8 +297,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
 
   defp collect_summarized_event(_event_summary, _event, state), do: {:ok, state}
 
-  defp compact_item(%{"type" => "compaction", "encrypted_content" => content} = item)
-       when is_binary(content) do
+  defp compact_item(%{"type" => type, "encrypted_content" => content} = item)
+       when type in ["compaction", "compaction_summary"] and is_binary(content) do
     if String.trim(content) == "" do
       {:error, :invalid_compaction}
     else
