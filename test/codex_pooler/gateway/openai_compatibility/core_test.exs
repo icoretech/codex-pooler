@@ -2451,6 +2451,33 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
                Responses.coerce(%{"model" => "gpt-fixture-text", "input" => input})
     end
 
+    test "idless OMP compaction replay drops unbound turn metadata" do
+      payload = %{
+        "model" => "gpt-fixture-text",
+        "input" => [
+          %{
+            "type" => "compaction",
+            "encrypted_content" => "synthetic-omp-compaction-private",
+            "internal_chat_message_metadata_passthrough" => %{
+              "turn_id" => "turn_fixture_omp"
+            }
+          },
+          %{
+            "role" => "user",
+            "content" => [%{"type" => "input_text", "text" => "synthetic follow-up"}]
+          }
+        ]
+      }
+
+      assert {:ok, %{payload: %{"input" => [compaction, %{"type" => "message"}]}}} =
+               Responses.coerce(payload)
+
+      assert compaction == %{
+               "type" => "compaction",
+               "encrypted_content" => "synthetic-omp-compaction-private"
+             }
+    end
+
     test "compaction replay rejects malformed and unverified variants without value leakage" do
       passthrough_key = "internal_chat_message_metadata_passthrough"
       opaque_values = ["opaque-encrypted-fixture", "cmp_opaque_fixture", "turn_opaque_fixture"]
@@ -2530,11 +2557,6 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityTest do
           "type" => "compaction_summary",
           "encrypted_content" => "opaque-encrypted-fixture",
           "id" => "cmp_opaque_fixture"
-        },
-        %{
-          "type" => "compaction",
-          "encrypted_content" => "opaque-encrypted-fixture",
-          passthrough_key => %{"turn_id" => "turn_opaque_fixture"}
         },
         %{
           "type" => "compaction",

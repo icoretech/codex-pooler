@@ -3239,6 +3239,14 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
          "internal_chat_message_metadata_passthrough" => %{
            "turn_id" => "turn_v1_native_private"
          }
+       }},
+      {"omp_idless_native",
+       %{
+         "type" => "compaction",
+         "encrypted_content" => "synthetic-omp-idless-compaction-private",
+         "internal_chat_message_metadata_passthrough" => %{
+           "turn_id" => "turn_v1_omp_private"
+         }
        }}
     ]
 
@@ -3314,7 +3322,13 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       refute Map.has_key?(captured.json, "previous_response_id")
 
       assert [captured_compaction, captured_user] = captured.json["input"]
-      assert captured_compaction == compaction_item
+
+      if variant_name == "omp_idless_native" do
+        assert captured_compaction ==
+                 Map.delete(compaction_item, "internal_chat_message_metadata_passthrough")
+      else
+        assert captured_compaction == compaction_item
+      end
 
       if variant_name == "public_with_null_id" do
         assert Map.has_key?(captured_compaction, "id")

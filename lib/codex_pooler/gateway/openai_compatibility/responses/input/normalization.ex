@@ -246,6 +246,20 @@ defmodule CodexPooler.Gateway.OpenAICompatibility.Responses.Input.Normalization 
 
   defp normalize_input_item(%{"type" => "reasoning"} = item), do: {:ok, item}
 
+  defp normalize_input_item(
+         %{
+           "type" => "compaction",
+           @metadata_passthrough_key => %{"turn_id" => turn_id}
+         } = item
+       )
+       when is_binary(turn_id) do
+    if Map.has_key?(item, "id") do
+      {:ok, item}
+    else
+      {:ok, Map.delete(item, @metadata_passthrough_key)}
+    end
+  end
+
   defp normalize_input_item(%{"type" => "compaction"} = item), do: {:ok, item}
   defp normalize_input_item(%{"type" => "compaction_trigger"} = item), do: {:ok, item}
 
