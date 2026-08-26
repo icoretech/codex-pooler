@@ -132,6 +132,42 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert bridge == native_websocket_compaction_bridge_contract()
     end
 
+    test "pins semantic opaque-anchor lineage and authentic smoke evidence" do
+      lineage =
+        CompatibilityMatrix.fixture!(:responses_chat).compaction_recovery_boundary.anchor_lineage_and_smoke
+
+      assert lineage == %{
+               explicit_anchor: "preserve_nonblank_opaque_top_level_anchor_semantically",
+               no_anchor: "send_full_history",
+               provenance: %{
+                 stages: ["downstream", "projection", "upstream"],
+                 durable_output: "bounded_safe_projection_only",
+                 client_proof: "post_projection_absence_is_not_client_proof"
+               },
+               routing: %{
+                 anchored_continuation: "assignment_hard_pin",
+                 unavailable_assignment: "fail_closed_without_fallback",
+                 recovery: "new_full_history_request_without_anchor"
+               },
+               authentic_smoke: %{
+                 client: "exact_released_codex_app_server",
+                 provider_modes: [
+                   "http_only_full_history_control",
+                   "websocket_anchored_compaction"
+                 ],
+                 required_lifecycle: [
+                   "tool_execution",
+                   "automatic_same_turn_compaction",
+                   "anchored_compact_request",
+                   "compact_terminal",
+                   "same_turn_final_response",
+                   "correlated_accounting_and_cleanup"
+                 ],
+                 insufficient_evidence: ["client_exit_zero", "receipt_without_lifecycle"]
+               }
+             }
+    end
+
     test "keeps the issue-75 policy exception narrow and generic redaction intact" do
       fixture = CompatibilityMatrix.fixture!(:misalignment_policy_violation)
 

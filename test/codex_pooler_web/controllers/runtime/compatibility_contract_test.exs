@@ -2067,6 +2067,36 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                  public_compact_route_supported: false,
                  hidden_replay: false
                },
+               anchor_lineage_and_smoke: %{
+                 explicit_anchor: "preserve_nonblank_opaque_top_level_anchor_semantically",
+                 no_anchor: "send_full_history",
+                 provenance: %{
+                   stages: ["downstream", "projection", "upstream"],
+                   durable_output: "bounded_safe_projection_only",
+                   client_proof: "post_projection_absence_is_not_client_proof"
+                 },
+                 routing: %{
+                   anchored_continuation: "assignment_hard_pin",
+                   unavailable_assignment: "fail_closed_without_fallback",
+                   recovery: "new_full_history_request_without_anchor"
+                 },
+                 authentic_smoke: %{
+                   client: "exact_released_codex_app_server",
+                   provider_modes: [
+                     "http_only_full_history_control",
+                     "websocket_anchored_compaction"
+                   ],
+                   required_lifecycle: [
+                     "tool_execution",
+                     "automatic_same_turn_compaction",
+                     "anchored_compact_request",
+                     "compact_terminal",
+                     "same_turn_final_response",
+                     "correlated_accounting_and_cleanup"
+                   ],
+                   insufficient_evidence: ["client_exit_zero", "receipt_without_lifecycle"]
+                 }
+               },
                native_fallback: %{
                  provider_unsupported: %{
                    request: %{
@@ -2198,6 +2228,22 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
 
       refute boundary.harness_applicability.hermes.classifier_authority
       assert boundary.harness_applicability.pi.verification == "not_applicable"
+
+      assert boundary.anchor_lineage_and_smoke.explicit_anchor ==
+               "preserve_nonblank_opaque_top_level_anchor_semantically"
+
+      assert boundary.anchor_lineage_and_smoke.no_anchor == "send_full_history"
+
+      assert boundary.anchor_lineage_and_smoke.provenance.client_proof ==
+               "post_projection_absence_is_not_client_proof"
+
+      assert boundary.anchor_lineage_and_smoke.routing.unavailable_assignment ==
+               "fail_closed_without_fallback"
+
+      assert boundary.anchor_lineage_and_smoke.authentic_smoke.insufficient_evidence == [
+               "client_exit_zero",
+               "receipt_without_lifecycle"
+             ]
     end
 
     test "documents backend websocket request-scoped turn-state carrier" do
