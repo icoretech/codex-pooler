@@ -65,7 +65,7 @@ defmodule CodexPooler.MixProject do
       {:phoenix_live_reload, "== 1.7.0", only: :dev},
       {:phoenix_live_view, "== 1.2.10"},
       {:lazy_html, "== 0.1.12", only: :test},
-      {:oban, "== 2.23.1"},
+      {:oban, "== 2.24.0"},
       {:phoenix_live_dashboard, "== 0.9.0", only: :dev},
       {:esbuild, "== 0.10.0", runtime: Mix.env() == :dev},
       {:tailwind, "== 0.5.1", runtime: Mix.env() == :dev},
