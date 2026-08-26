@@ -121,6 +121,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
 
   defp collect_terminal_buffer("", collection), do: {:ok, collection}
 
+  defp collect_terminal_buffer(_buffer, %{terminal?: true}), do: {:error, :invalid_compaction}
+
   defp collect_terminal_buffer(buffer, collection) do
     with {:ok, event_type, decoded} <- terminal_event(buffer) do
       collect_event(event_type, decoded, collection)

@@ -391,6 +391,59 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     end
   end
 
+  test "V2 compaction rejects an unterminated event after its completed terminal", %{conn: conn} do
+    compact_item = %{
+      "type" => "compaction",
+      "encrypted_content" => "synthetic-post-terminal-compaction"
+    }
+
+    completed = %{
+      "type" => "response.completed",
+      "response" => %{
+        "id" => "resp_synthetic_post_terminal",
+        "status" => "completed",
+        "output" => [compact_item]
+      }
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream(
+          [
+            {"response.output_item.done",
+             %{"type" => "response.output_item.done", "item" => compact_item}},
+            {"response.completed", completed},
+            "event: response.output_text.delta\ndata: #{Jason.encode!(%{"type" => "response.output_text.delta", "delta" => "synthetic-post-terminal"})}"
+          ],
+          done: false
+        )
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => visible_input("synthetic post-terminal compact") ++ [compaction_trigger()],
+        "stream" => true,
+        "client_metadata" => %{
+          "x-codex-turn-metadata" =>
+            Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
+        }
+      })
+
+    assert %{"error" => %{"code" => "invalid_compaction_response"}} = json_response(response, 502)
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "failed"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "failed"
+    assert attempt.network_error_code == "invalid_compaction_response"
+  end
+
   test "backend compaction aliases keep legacy and invalid V2 metadata buffered", %{conn: conn} do
     metadata_cases = [
       {"legacy_absent", nil},
