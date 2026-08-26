@@ -1958,6 +1958,58 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     end
   end
 
+  test "request logs retain only bounded compaction projection facts" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    sentinel = "raw-projection-anchor-and-output-must-not-leak"
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-compaction-projection-safe",
+        endpoint: "/backend-api/codex/responses/compact",
+        transport: "http_compact_json",
+        correlation_id: "compaction-projection-safe",
+        request_metadata: %{
+          "compaction_projection" => %{
+            "action" => "changed",
+            "downstream_frame" => %{
+              "state" => "valid",
+              "anchor_fingerprint" => "0123456789abcdef",
+              "item_count" => 2,
+              "count_capped" => false,
+              "item_classes" => %{"compaction_trigger" => 1, "tool_output" => 1}
+            },
+            "compact_projection" => %{
+              "state" => "valid",
+              "anchor_fingerprint" => "fedcba9876543210",
+              "item_count" => 2,
+              "count_capped" => false,
+              "item_classes" => %{"compaction_trigger" => 1, "tool_output" => 1}
+            },
+            "upstream_payload" => %{
+              "state" => "valid",
+              "anchor_fingerprint" => "fedcba9876543210",
+              "item_count" => 2,
+              "count_capped" => false,
+              "item_classes" => %{"compaction_trigger" => 1, "tool_output" => 1}
+            },
+            "previous_response_id" => sentinel,
+            "output" => sentinel
+          }
+        }
+      })
+
+    assert %{items: [log]} =
+             Accounting.list_request_logs(pool, filters: [model: "compaction-projection-safe"])
+
+    projection = log.metadata["compaction_projection"]
+    assert projection["action"] == "changed"
+    assert projection["downstream_frame"]["anchor_fingerprint"] == "0123456789abcdef"
+    refute Map.has_key?(projection, "previous_response_id")
+    refute Map.has_key?(projection, "output")
+    refute inspect(log) =~ sentinel
+    assert request.id == log.id
+  end
+
   test "request logs omit compaction bridge projection for ordinary and direct compact history" do
     %{pool: pool, api_key: api_key} = active_api_key_fixture()
 

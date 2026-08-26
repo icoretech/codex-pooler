@@ -1,6 +1,7 @@
 defmodule CodexPooler.MCP.PrivacyMatrixTest do
   use ExUnit.Case, async: true
 
+  alias CodexPooler.MCP.MetadataSanitizer
   alias CodexPooler.MCP.PrivacyMatrix
 
   @entity_families [
@@ -182,6 +183,37 @@ defmodule CodexPooler.MCP.PrivacyMatrixTest do
     refute inspect(projected) =~ "raw-header-token"
     refute inspect(projected) =~ "raw prompt"
     refute inspect(projected) =~ "private-upload-name"
+  end
+
+  test "request log projection omits raw compaction projection evidence" do
+    sentinel = "raw-compaction-projection-evidence"
+
+    projected =
+      PrivacyMatrix.project!(:request_logs, %{
+        id: "req_projection_safe",
+        metadata: %{
+          "compaction_projection" => %{
+            "action" => "changed",
+            "downstream_frame" => %{
+              "state" => "valid",
+              "anchor_fingerprint" => "0123456789abcdef"
+            },
+            "raw_evidence" => sentinel,
+            "previous_response_id" => sentinel,
+            "output" => sentinel
+          }
+        },
+        evidence: sentinel,
+        raw_evidence: sentinel,
+        provider_payload: %{"previous_response_id" => sentinel}
+      })
+
+    projected_metadata = MetadataSanitizer.safe_metadata(projected.metadata)
+
+    refute inspect(projected_metadata) =~ sentinel
+    refute Map.has_key?(projected, :evidence)
+    refute Map.has_key?(projected, :raw_evidence)
+    refute Map.has_key?(projected, :provider_payload)
   end
 
   test "quota projections keep DTO fields and omit raw upstream material" do

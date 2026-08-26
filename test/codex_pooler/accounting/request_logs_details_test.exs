@@ -411,6 +411,40 @@ defmodule CodexPooler.Accounting.RequestLogsDetailsTest do
            }
   end
 
+  test "request log details never render raw compaction projection evidence" do
+    reset_bootstrap_state_fixture!()
+    %{user: owner} = bootstrap_owner_fixture(%{"email" => unique_user_email()})
+    owner_scope = Scope.for_user(owner, [])
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+    sentinel = "raw-projection-evidence-sentinel"
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-projection-detail-safe",
+        request_metadata: %{
+          "compaction_projection" => %{
+            "action" => "preserved",
+            "downstream_frame" => %{
+              "state" => "valid",
+              "anchor_fingerprint" => "0123456789abcdef",
+              "item_count" => 1,
+              "count_capped" => false,
+              "item_classes" => %{"compaction_trigger" => 1}
+            },
+            "raw_evidence" => sentinel,
+            "payload" => %{"output" => sentinel}
+          }
+        }
+      })
+
+    log = Accounting.get_request_log_for_scope(owner_scope, request.id)
+
+    assert log.metadata["compaction_projection"]["action"] == "preserved"
+    refute Map.has_key?(log.metadata["compaction_projection"], "raw_evidence")
+    refute Map.has_key?(log.metadata["compaction_projection"], "payload")
+    refute inspect(log) =~ sentinel
+  end
+
   test "request log rows aggregate all sanitized denial attempt degraded and retryable errors" do
     %{pool: pool, api_key: api_key} = active_api_key_fixture()
     %{assignment: assignment} = upstream_assignment_fixture(pool)

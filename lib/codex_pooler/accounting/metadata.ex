@@ -333,6 +333,9 @@ defmodule CodexPooler.Accounting.Metadata do
       normalized == "transport_failure" ->
         sanitize_transport_failure_map(value)
 
+      normalized == "compaction_projection" ->
+        sanitize_compaction_projection_map(value)
+
       normalized == "routing" ->
         sanitize_routing_map(value)
 
@@ -415,6 +418,70 @@ defmodule CodexPooler.Accounting.Metadata do
         Map.put(sanitized, child_key, sanitize_value(child_value, child_key))
     end)
   end
+
+  defp sanitize_compaction_projection_map(value) do
+    value
+    |> Map.take(~w(action downstream_frame compact_projection upstream_payload))
+    |> Enum.reduce(%{}, fn
+      {"action", action}, sanitized
+      when action in ~w(invalid absent introduced dropped preserved changed) ->
+        Map.put(sanitized, "action", action)
+
+      {stage, stage_value}, sanitized
+      when stage in ~w(downstream_frame compact_projection upstream_payload) and
+             is_map(stage_value) ->
+        Map.put(sanitized, stage, sanitize_compaction_projection_stage(stage_value))
+
+      {_key, _value}, sanitized ->
+        sanitized
+    end)
+  end
+
+  defp sanitize_compaction_projection_stage(stage) do
+    %{}
+    |> maybe_put_projection_state(Map.get(stage, "state"))
+    |> maybe_put_projection_fingerprint(Map.get(stage, "anchor_fingerprint"))
+    |> maybe_put_projection_count(Map.get(stage, "item_count"))
+    |> maybe_put_projection_capped(Map.get(stage, "count_capped"))
+    |> maybe_put_projection_classes(Map.get(stage, "item_classes"))
+  end
+
+  defp maybe_put_projection_state(stage, state) when state in ~w(absent valid invalid),
+    do: Map.put(stage, "state", state)
+
+  defp maybe_put_projection_state(stage, _state), do: stage
+
+  defp maybe_put_projection_fingerprint(stage, fingerprint)
+       when is_binary(fingerprint) and byte_size(fingerprint) == 16 do
+    if fingerprint =~ ~r/\A[0-9a-f]{16}\z/,
+      do: Map.put(stage, "anchor_fingerprint", fingerprint),
+      else: stage
+  end
+
+  defp maybe_put_projection_fingerprint(stage, _fingerprint), do: stage
+
+  defp maybe_put_projection_count(stage, count)
+       when is_integer(count) and count in 0..1_000_000,
+       do: Map.put(stage, "item_count", count)
+
+  defp maybe_put_projection_count(stage, _count), do: stage
+
+  defp maybe_put_projection_capped(stage, capped?) when is_boolean(capped?),
+    do: Map.put(stage, "count_capped", capped?)
+
+  defp maybe_put_projection_capped(stage, _capped?), do: stage
+
+  defp maybe_put_projection_classes(stage, classes) when is_map(classes) do
+    safe_classes =
+      classes
+      |> Map.take(~w(compaction_trigger tool_call tool_output message reasoning other))
+      |> Enum.filter(fn {_class, count} -> is_integer(count) and count in 0..1_000_000 end)
+      |> Map.new()
+
+    Map.put(stage, "item_classes", safe_classes)
+  end
+
+  defp maybe_put_projection_classes(stage, _classes), do: stage
 
   defp sanitize_routing_map(value) do
     value

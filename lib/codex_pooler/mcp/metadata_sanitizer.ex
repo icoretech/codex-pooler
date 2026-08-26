@@ -14,6 +14,9 @@ defmodule CodexPooler.MCP.MetadataSanitizer do
   )
 
   @dangerous_exact_keys MapSet.new(~w(previous_response_id websocket_frame))
+  @projection_actions ~w(invalid absent introduced dropped preserved changed)
+  @projection_classes ~w(compaction_trigger tool_call tool_output message reasoning other)
+  @projection_stages ~w(downstream_frame compact_projection upstream_payload)
   @safe_content_keys MapSet.new(~w(content_type request_content_type response_content_type))
   @safe_dangerous_keys MapSet.new(~w(token_refresh_reason_code_preview))
 
@@ -38,12 +41,10 @@ defmodule CodexPooler.MCP.MetadataSanitizer do
   def safe_value(value), do: value
 
   defp scrub_value(value, key) when is_map(value) do
-    if dangerous_key?(key) do
-      nil
-    else
-      value
-      |> Enum.reduce(%{}, &scrub_map_entry/2)
-      |> limit_map()
+    cond do
+      normalize_key(key) == "compaction_projection" -> scrub_compaction_projection(value)
+      dangerous_key?(key) -> nil
+      true -> value |> Enum.reduce(%{}, &scrub_map_entry/2) |> limit_map()
     end
   end
 
@@ -123,5 +124,53 @@ defmodule CodexPooler.MCP.MetadataSanitizer do
     |> to_string()
     |> String.downcase()
     |> String.replace(~r/[^a-z0-9]+/, "_")
+  end
+
+  defp scrub_compaction_projection(value) do
+    value
+    |> Map.take(["action" | @projection_stages])
+    |> Enum.reduce(%{}, fn
+      {"action", action}, safe when action in @projection_actions ->
+        Map.put(safe, "action", action)
+
+      {stage, stage_value}, safe when stage in @projection_stages and is_map(stage_value) ->
+        Map.put(safe, stage, scrub_compaction_projection_stage(stage_value))
+
+      {_key, _value}, safe ->
+        safe
+    end)
+  end
+
+  defp scrub_compaction_projection_stage(stage) do
+    stage
+    |> Map.take(~w(state anchor_fingerprint item_count count_capped item_classes))
+    |> Enum.reduce(%{}, fn
+      {"state", state}, safe when state in ~w(absent valid invalid) ->
+        Map.put(safe, "state", state)
+
+      {"anchor_fingerprint", fingerprint}, safe
+      when is_binary(fingerprint) and byte_size(fingerprint) == 16 ->
+        if fingerprint =~ ~r/\A[0-9a-f]{16}\z/,
+          do: Map.put(safe, "anchor_fingerprint", fingerprint),
+          else: safe
+
+      {"item_count", count}, safe when is_integer(count) and count in 0..1_000_000 ->
+        Map.put(safe, "item_count", count)
+
+      {"count_capped", capped?}, safe when is_boolean(capped?) ->
+        Map.put(safe, "count_capped", capped?)
+
+      {"item_classes", classes}, safe when is_map(classes) ->
+        classes =
+          classes
+          |> Map.take(@projection_classes)
+          |> Enum.filter(fn {_class, count} -> is_integer(count) and count in 0..1_000_000 end)
+          |> Map.new()
+
+        Map.put(safe, "item_classes", classes)
+
+      {_key, _value}, safe ->
+        safe
+    end)
   end
 end
