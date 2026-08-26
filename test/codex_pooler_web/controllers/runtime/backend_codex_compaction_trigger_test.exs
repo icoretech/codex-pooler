@@ -444,6 +444,64 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     assert attempt.network_error_code == "invalid_compaction_response"
   end
 
+  test "V2 compaction preserves previous response context for a tool output trigger", %{
+    conn: conn
+  } do
+    compact_item = %{
+      "type" => "compaction",
+      "encrypted_content" => "synthetic-tool-continuation-compaction"
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.output_item.done",
+           %{"type" => "response.output_item.done", "item" => compact_item}},
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_synthetic_tool_continuation_compaction",
+               "status" => "completed",
+               "output" => [compact_item]
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "previous_response_id" => "resp_synthetic_tool_continuation",
+        "input" => [
+          %{
+            "type" => "custom_tool_call_output",
+            "call_id" => "call_synthetic_tool_continuation",
+            "output" => "synthetic tool output"
+          },
+          compaction_trigger()
+        ],
+        "stream" => true,
+        "client_metadata" => %{
+          "x-codex-turn-metadata" =>
+            Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
+        }
+      })
+
+    assert response.status == 200
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.json["previous_response_id"] == "resp_synthetic_tool_continuation"
+
+    assert Enum.map(captured.json["input"], & &1["type"]) == [
+             "custom_tool_call_output",
+             "compaction_trigger"
+           ]
+  end
+
   test "V2 compaction retains an output item larger than stream diagnostics", %{conn: conn} do
     encrypted_content = String.duplicate("synthetic-large-compaction-content", 3_000)
 
