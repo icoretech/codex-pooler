@@ -104,9 +104,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
     state = StreamProtocol.new_sse_block_state()
     {blocks, %{buffer: buffer}} = StreamProtocol.complete_sse_blocks(state, body, bounded?: true)
 
-    with true <- buffer == "",
-         {:ok, collection} <-
+    with {:ok, collection} <-
            collect_events(blocks, %{item: nil, response: nil, terminal?: false}),
+         {:ok, collection} <- collect_terminal_buffer(buffer, collection),
          %{item: item, response: response, terminal?: true} <- collection do
       {:ok,
        response
@@ -114,9 +114,33 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
        |> Map.put("status", "completed")
        |> Map.put("output", [item])}
     else
-      false -> {:error, :missing_terminal}
       %{terminal?: false} -> {:error, :missing_terminal}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp collect_terminal_buffer("", collection), do: {:ok, collection}
+
+  defp collect_terminal_buffer(buffer, collection) do
+    with {:ok, event_type, decoded} <- terminal_event(buffer) do
+      collect_event(event_type, decoded, collection)
+    end
+  end
+
+  defp terminal_event(buffer) do
+    event_type =
+      buffer
+      |> StreamProtocol.sse_field("event")
+      |> StreamProtocol.normalize_sse_event_label()
+
+    with data when is_binary(data) <- StreamProtocol.sse_field(buffer, "data"),
+         {:ok, %{} = decoded} <- Jason.decode(data),
+         data_type when is_binary(data_type) <- Map.get(decoded, "type"),
+         true <- event_type in [nil, data_type] do
+      {:ok, event_type, decoded}
+    else
+      false -> {:error, :invalid_compaction}
+      _result -> {:error, :missing_terminal}
     end
   end
 

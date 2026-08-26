@@ -55,6 +55,20 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocolTest do
     end
   end
 
+  describe "terminal SSE fragments" do
+    test "parses a completed terminal event without a final SSE separator" do
+      event = %{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_terminal_fragment", "status" => "completed"}
+      }
+
+      fragment = "event: response.completed\ndata: #{Jason.encode!(event)}"
+
+      assert StreamProtocol.sse_field(fragment, "event") == "response.completed"
+      assert StreamProtocol.sse_field(fragment, "data") == Jason.encode!(event)
+    end
+  end
+
   describe "normalize_sse_event_label/1" do
     test "treats absent, blank, and whitespace-only labels identically" do
       assert StreamProtocol.normalize_sse_event_label(nil) == nil

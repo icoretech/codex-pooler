@@ -288,26 +288,30 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
         "encrypted_content" => "synthetic-codex-remote-compaction-output"
       }
 
+      compact_completion = %{
+        "type" => "response.completed",
+        "response" => %{
+          "id" => "resp_synthetic_codex_remote_compaction",
+          "status" => "completed",
+          "output" => [compact_item],
+          "usage" => %{
+            "input_tokens" => 8,
+            "output_tokens" => 3,
+            "total_tokens" => 11
+          }
+        }
+      }
+
       upstream =
         start_upstream(
-          FakeUpstream.sse_stream([
-            {"response.output_item.done",
-             %{"type" => "response.output_item.done", "item" => compact_item}},
-            {"response.completed",
-             %{
-               "type" => "response.completed",
-               "response" => %{
-                 "id" => "resp_synthetic_codex_remote_compaction",
-                 "status" => "completed",
-                 "output" => [compact_item],
-                 "usage" => %{
-                   "input_tokens" => 8,
-                   "output_tokens" => 3,
-                   "total_tokens" => 11
-                 }
-               }
-             }}
-          ])
+          FakeUpstream.sse_stream(
+            [
+              {"response.output_item.done",
+               %{"type" => "response.output_item.done", "item" => compact_item}},
+              "event: response.completed\ndata: #{Jason.encode!(compact_completion)}"
+            ],
+            done: false
+          )
         )
 
       setup = gateway_setup(upstream, compact?: true)
