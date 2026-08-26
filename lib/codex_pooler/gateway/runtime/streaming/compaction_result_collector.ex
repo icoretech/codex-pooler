@@ -80,9 +80,9 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
         state = finalize_sse_state(state)
 
         case compact_result(state) do
-          {:ok, _compact_response} ->
+          {:ok, %{raw_body: compact_body}} ->
             Finalization.finalize_stream_success(
-              "",
+              compact_body,
               response_context,
               finalization_callbacks,
               state
