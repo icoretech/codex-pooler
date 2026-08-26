@@ -1587,6 +1587,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
                  json_response(rejected_conn, 400)
 
         assert FakeUpstream.count(upstream) == 0
+        assert Repo.aggregate(Request, :count) == 0
         assert Repo.aggregate(Attempt, :count) == 0
 
         assert Repo.aggregate(
@@ -1601,6 +1602,7 @@ defmodule CodexPooler.Gateway.OpenAICompatibilityContinuationTest do
       end)
 
       metadata = persisted_gateway_metadata(setup.pool.id)
+      assert %{items: [], total: 0} = RequestLogs.list(setup.pool)
       refute metadata =~ "synthetic ordinary continuation"
       refute metadata =~ "resp_v1_stale_ordinary"
       refute metadata =~ "resp_v1_stale_item_reference"

@@ -122,6 +122,7 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
     |> maybe_put_prompt_cache_key(payload)
     |> Map.put("store", false)
     |> maybe_put_stream(result_transport)
+    |> maybe_put_previous_response_id(payload)
   end
 
   @spec streaming_result?(RequestOptions.t()) :: boolean()
@@ -300,6 +301,17 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
   end
 
   defp maybe_put_prompt_cache_key(compact_payload, _payload), do: compact_payload
+
+  defp maybe_put_previous_response_id(compact_payload, %{"previous_response_id" => response_id})
+       when is_binary(response_id) do
+    if String.trim(response_id) == "" do
+      compact_payload
+    else
+      Map.put(compact_payload, "previous_response_id", response_id)
+    end
+  end
+
+  defp maybe_put_previous_response_id(compact_payload, _payload), do: compact_payload
 
   defp maybe_put_stream(payload, :sse), do: Map.put(payload, "stream", true)
   defp maybe_put_stream(payload, :buffered), do: Map.delete(payload, "stream")

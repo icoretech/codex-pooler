@@ -1,0 +1,184 @@
+{
+  "fixture_source": {
+    "tag": "rust-v0.149.1",
+    "annotated_tag_object": "980a6d12110b110d29ec13bdcbe14011100b3566",
+    "peeled_commit": "ff29a44391deccde0aba0f8390337d7f3c319ea4",
+    "source_paths": [
+      "codex-rs/codex-api/src/common.rs",
+      "codex-rs/core/src/client.rs",
+      "codex-rs/core/src/compact_remote_v2_attempt.rs"
+    ]
+  },
+  "contract": {
+    "durability_boundary": "projection_relevant_incremental_frame_subset",
+    "previous_request_input": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [
+          {
+            "type": "input_text",
+            "text": "fixture prior input"
+          }
+        ]
+      }
+    ],
+    "provider_added_response_items": [
+      {
+        "type": "custom_tool_call",
+        "call_id": "call_fixture_incremental",
+        "name": "fixture_tool",
+        "input": "{}"
+      }
+    ],
+    "provider_response_id": "resp_fixture_incremental_0001",
+    "v2_trigger_metadata": {
+      "x-codex-turn-metadata": "{\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
+    },
+    "scenarios": {
+      "anchored_tool_output_and_trigger": {
+        "current_logical_history": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "fixture prior input"
+              }
+            ]
+          },
+          {
+            "type": "custom_tool_call",
+            "call_id": "call_fixture_incremental",
+            "name": "fixture_tool",
+            "input": "{}"
+          },
+          {
+            "type": "custom_tool_call_output",
+            "call_id": "call_fixture_incremental",
+            "output": "fixture tool output"
+          },
+          {
+            "type": "compaction_trigger"
+          }
+        ],
+        "projection_relevant_frame_subset": {
+          "type": "response.create",
+          "previous_response_id": "resp_fixture_incremental_0001",
+          "input": [
+            {
+              "type": "custom_tool_call_output",
+              "call_id": "call_fixture_incremental",
+              "output": "fixture tool output"
+            },
+            {
+              "type": "compaction_trigger"
+            }
+          ],
+          "stream": true,
+          "client_metadata": {
+            "x-codex-turn-metadata": "{\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
+          }
+        }
+      },
+      "anchored_trigger_only": {
+        "current_logical_history": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "fixture prior input"
+              }
+            ]
+          },
+          {
+            "type": "custom_tool_call",
+            "call_id": "call_fixture_incremental",
+            "name": "fixture_tool",
+            "input": "{}"
+          },
+          {
+            "type": "compaction_trigger"
+          }
+        ],
+        "projection_relevant_frame_subset": {
+          "type": "response.create",
+          "previous_response_id": "resp_fixture_incremental_0001",
+          "input": [
+            {
+              "type": "compaction_trigger"
+            }
+          ],
+          "stream": true,
+          "client_metadata": {
+            "x-codex-turn-metadata": "{\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
+          }
+        }
+      },
+      "full_history_without_anchor": {
+        "current_logical_history": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "fixture prior input"
+              }
+            ]
+          },
+          {
+            "type": "custom_tool_call",
+            "call_id": "call_fixture_incremental",
+            "name": "fixture_tool",
+            "input": "{}"
+          },
+          {
+            "type": "custom_tool_call_output",
+            "call_id": "call_fixture_incremental",
+            "output": "fixture tool output"
+          },
+          {
+            "type": "compaction_trigger"
+          }
+        ],
+        "projection_relevant_frame_subset": {
+          "type": "response.create",
+          "input": [
+            {
+              "type": "message",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "fixture prior input"
+                }
+              ]
+            },
+            {
+              "type": "custom_tool_call",
+              "call_id": "call_fixture_incremental",
+              "name": "fixture_tool",
+              "input": "{}"
+            },
+            {
+              "type": "custom_tool_call_output",
+              "call_id": "call_fixture_incremental",
+              "output": "fixture tool output"
+            },
+            {
+              "type": "compaction_trigger"
+            }
+          ],
+          "stream": true,
+          "client_metadata": {
+            "x-codex-turn-metadata": "{\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
+          }
+        }
+      }
+    }
+  }
+}
