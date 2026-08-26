@@ -49,10 +49,10 @@ if config_env() == :prod do
 
   oban_mode = System.get_env("OBAN_MODE", "web")
 
-  oban_plugins = [
-    {Oban.Plugins.Cron, crontab: CodexPooler.Jobs.Schedule.oban_crontab()},
-    Oban.Plugins.Lifeline,
-    {Oban.Plugins.Pruner, max_age: 24 * 60 * 60}
+  oban_services = [
+    cron: [crontab: CodexPooler.Jobs.Schedule.oban_crontab()],
+    lifeline: [],
+    pruner: [max_age: {1, :day}]
   ]
 
   oban_queues = [jobs: String.to_integer(System.get_env("OBAN_JOBS_QUEUE_LIMIT", "8"))]
@@ -71,13 +71,17 @@ if config_env() == :prod do
         Keyword.merge(base_oban_runtime_config, queues: oban_queues, plugins: false)
 
       "scheduler" ->
-        Keyword.merge(base_oban_runtime_config, queues: false, plugins: oban_plugins)
+        Keyword.merge(base_oban_runtime_config, [queues: false, stager: false] ++ oban_services)
 
       "all" ->
-        Keyword.merge(base_oban_runtime_config, queues: oban_queues, plugins: oban_plugins)
+        Keyword.merge(base_oban_runtime_config, [queues: oban_queues] ++ oban_services)
 
       _web_or_unknown ->
-        Keyword.merge(base_oban_runtime_config, queues: false, plugins: false)
+        Keyword.merge(base_oban_runtime_config,
+          queues: false,
+          plugins: false,
+          stager: false
+        )
     end
 
   config :codex_pooler, Oban, oban_runtime_config

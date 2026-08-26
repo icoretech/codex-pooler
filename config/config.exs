@@ -117,11 +117,9 @@ config :codex_pooler, Oban,
   repo: CodexPooler.Repo,
   queues: [jobs: 8],
   shutdown_grace_period: :timer.seconds(55),
-  plugins: [
-    {Oban.Plugins.Cron, crontab: jobs_crontab},
-    Oban.Plugins.Lifeline,
-    {Oban.Plugins.Pruner, max_age: 24 * 60 * 60}
-  ]
+  cron: [crontab: jobs_crontab],
+  lifeline: [],
+  pruner: [max_age: {1, :day}]
 
 config :codex_pooler, CodexPooler.Accounts,
   session_ttl_seconds: 14 * 24 * 60 * 60,
