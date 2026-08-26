@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.Finalization
   alias CodexPooler.Gateway.Runtime.RateLimitObserver
+  alias CodexPooler.Gateway.Runtime.Streaming.StreamUsageObserver
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.UpstreamErrorParam
   alias CodexPooler.Gateway.Transports.Streaming.StreamRelay
@@ -22,28 +23,37 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
           {:ok, map()} | {:error, map()}
   def collect(response, %SelectedCandidateContext{} = context, finalization_callbacks) do
     response_context = %ResponseContext{context: context, response: response}
-    state = %{chunks: [], rate_limit: RateLimitObserver.event_state()}
+    state = new_state()
 
     case StreamRelay.run(state, response, handlers(response_context, finalization_callbacks)) do
-      {:ok, %{chunks: chunks}} ->
-        chunks
-        |> Enum.reverse()
-        |> IO.iodata_to_binary()
-        |> compact_result()
-
-      {:error, error} ->
-        {:error, error}
+      {:ok, state} -> state |> finalize_sse_state() |> compact_result()
+      {:error, error} -> {:error, error}
     end
   end
 
-  defp compact_result(body) do
-    case compact_response(body) do
-      {:ok, compact_response} ->
+  defp new_state do
+    %{
+      collection: %{
+        invalid_reason: nil,
+        item: nil,
+        response: nil,
+        terminal_failure: nil,
+        terminal?: false
+      },
+      rate_limit: RateLimitObserver.event_state(),
+      sse: StreamProtocol.new_sse_block_state(),
+      usage_observer: StreamUsageObserver.new()
+    }
+  end
+
+  defp compact_result(%{collection: %{invalid_reason: nil} = collection}) do
+    case compact_response(collection) do
+      {:ok, response} ->
         {:ok,
          %{
            status: 200,
            headers: [{"content-type", "application/json"}],
-           raw_body: Jason.encode!(compact_response)
+           raw_body: Jason.encode!(response)
          }}
 
       {:error, _reason} ->
@@ -51,35 +61,51 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
     end
   end
 
+  defp compact_result(_state), do: invalid_compaction_error()
+
+  defp compact_response(%{item: item, response: response, terminal?: true})
+       when is_map(item) and is_map(response) do
+    {:ok,
+     response
+     |> Map.take(["id", "usage"])
+     |> Map.put("status", "completed")
+     |> Map.put("output", [item])}
+  end
+
+  defp compact_response(_collection), do: {:error, :missing_terminal}
+
   defp handlers(response_context, finalization_callbacks) do
     %{
-      finalize_success: fn body ->
-        case compact_response(body) do
+      finalize_success: fn _body, state ->
+        state = finalize_sse_state(state)
+
+        case compact_result(state) do
           {:ok, _compact_response} ->
-            Finalization.finalize_stream_success(body, response_context, finalization_callbacks)
+            Finalization.finalize_stream_success(
+              "",
+              response_context,
+              finalization_callbacks,
+              state
+            )
 
-          {:error, reason} ->
-            failure =
-              case reason do
-                {:provider_failure, failure} -> failure
-                reason -> failure(reason)
-              end
-
+          {:error, _reason} ->
             case Finalization.finalize_stream_failure(
-                   body,
-                   {:terminal_stream_failure, failure},
-                   response_context
+                   "",
+                   {:terminal_stream_failure, saved_terminal_failure(state)},
+                   response_context,
+                   state
                  ) do
               {:ok, _finalized} -> invalid_compaction_error()
               {:error, gateway_error} -> {:error, gateway_error}
             end
         end
       end,
-      finalize_failure: fn body, reason ->
+      finalize_failure: fn _body, reason, state ->
         Finalization.finalize_stream_failure(
-          body,
+          "",
           compaction_failure_reason(reason),
-          response_context
+          response_context,
+          state
         )
       end,
       first_event_retry: fn _state, body, failure ->
@@ -93,31 +119,59 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
             rate_limit_state(state)
           )
 
-        {:ok, %{state | chunks: [data | state.chunks], rate_limit: rate_limit}}
+        with {:ok, state} <- collect_sse_data(state, data) do
+          {:ok, %{state | rate_limit: rate_limit}}
+        end
       end,
       write_keepalive: fn state -> {:ok, state} end,
       keepalive_interval_ms: 0
     }
   end
 
-  defp compact_response(body) when is_binary(body) do
-    state = StreamProtocol.new_sse_block_state()
-    {blocks, %{buffer: buffer}} = StreamProtocol.complete_sse_blocks(state, body, bounded?: true)
+  defp collect_sse_data(%{sse: sse, collection: collection} = state, data) do
+    {blocks, sse} = StreamProtocol.complete_sse_blocks(sse, data, bounded?: true)
 
-    with {:ok, collection} <-
-           collect_events(blocks, %{item: nil, response: nil, terminal?: false}),
-         {:ok, collection} <- collect_terminal_buffer(buffer, collection),
-         %{item: item, response: response, terminal?: true} <- collection do
-      {:ok,
-       response
-       |> Map.take(["id", "usage"])
-       |> Map.put("status", "completed")
-       |> Map.put("output", [item])}
-    else
-      %{terminal?: false} -> {:error, :missing_terminal}
-      {:error, reason} -> {:error, reason}
+    case collect_events(blocks, collection) do
+      {:ok, collection} ->
+        {:ok,
+         %{
+           state
+           | collection: collection,
+             sse: sse,
+             usage_observer: StreamUsageObserver.observe(state.usage_observer, data)
+         }}
+
+      {:error, reason} ->
+        {:ok,
+         state
+         |> Map.put(:sse, sse)
+         |> put_collection_error(reason)}
     end
   end
+
+  defp finalize_sse_state(%{sse: %{buffer: buffer}, collection: collection} = state) do
+    case collect_terminal_buffer(buffer, collection) do
+      {:ok, collection} -> %{state | collection: collection}
+      {:error, reason} -> put_collection_error(state, reason)
+    end
+  end
+
+  defp finalize_sse_state(state), do: state
+
+  defp put_collection_error(%{collection: %{invalid_reason: nil} = collection} = state, reason) do
+    collection =
+      case reason do
+        {:provider_failure, failure} -> %{collection | terminal_failure: failure}
+        _reason -> collection
+      end
+
+    %{state | collection: %{collection | invalid_reason: reason}}
+  end
+
+  defp put_collection_error(state, _reason), do: state
+
+  defp saved_terminal_failure(%{collection: %{terminal_failure: %{} = failure}}), do: failure
+  defp saved_terminal_failure(_state), do: failure(:invalid_compaction)
 
   defp collect_terminal_buffer("", collection), do: {:ok, collection}
 
@@ -179,6 +233,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
         {:ok, state}
     end
   end
+
+  defp collect_event(_event_type, _decoded, %{terminal?: true}), do: {:error, :invalid_compaction}
 
   defp collect_event(event_type, decoded, state) do
     event_summary = StreamProtocol.event_summary(event_type || Map.get(decoded, "type"), decoded)

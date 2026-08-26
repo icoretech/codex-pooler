@@ -444,6 +444,56 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
     assert attempt.network_error_code == "invalid_compaction_response"
   end
 
+  test "V2 compaction retains an output item larger than stream diagnostics", %{conn: conn} do
+    encrypted_content = String.duplicate("synthetic-large-compaction-content", 3_000)
+
+    compact_item = %{
+      "type" => "compaction",
+      "encrypted_content" => encrypted_content
+    }
+
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.output_item.done",
+           %{"type" => "response.output_item.done", "item" => compact_item}},
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_synthetic_large_compaction",
+               "status" => "completed",
+               "output" => [compact_item]
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+
+    response =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => visible_input("synthetic large compact") ++ [compaction_trigger()],
+        "stream" => true,
+        "client_metadata" => %{
+          "x-codex-turn-metadata" =>
+            Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
+        }
+      })
+
+    assert response.status == 200
+    assert response(response, 200) =~ encrypted_content
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "succeeded"
+
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+    assert attempt.status == "succeeded"
+  end
+
   test "backend compaction aliases keep legacy and invalid V2 metadata buffered", %{conn: conn} do
     metadata_cases = [
       {"legacy_absent", nil},

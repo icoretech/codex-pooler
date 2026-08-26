@@ -578,6 +578,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
     StreamUsageObserver.usage(stream_state_usage(stream_state)) || ResponseUsage.from_sse(body)
   end
 
+  defp stream_state_usage(%{usage_observer: %{} = usage_state}), do: usage_state
+  defp stream_state_usage(_stream_state), do: StreamUsageObserver.new()
+
   @doc false
   @spec emit_stream_finalization(map(), String.t(), String.t()) :: :ok
   def emit_stream_finalization(usage, downstream_transport, upstream_transport) do
@@ -626,7 +629,4 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Streaming do
   def upstream_transport(:websocket, _connection), do: "websocket"
   def upstream_transport(nil, nil), do: "http_sse"
   def upstream_transport(nil, _connection), do: "websocket"
-
-  defp stream_state_usage(%{usage_observer: %{} = usage_state}), do: usage_state
-  defp stream_state_usage(_stream_state), do: StreamUsageObserver.new()
 end
