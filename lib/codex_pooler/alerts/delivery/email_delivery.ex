@@ -21,6 +21,7 @@ defmodule CodexPooler.Alerts.Delivery.EmailDelivery do
   @retryable_failure_codes ~w(
     smtp_test_email_timeout
     smtp_test_email_connection_failed
+    smtp_test_email_tls_failed
     smtp_test_email_temporary_failure
   )
   @circuit_blocked_reasons ~w(open_cooldown open_no_probe probe_saturated)

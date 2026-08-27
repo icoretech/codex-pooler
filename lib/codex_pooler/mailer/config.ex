@@ -10,6 +10,8 @@ defmodule CodexPooler.Mailer.Config do
   }
 
   @probe_timeout_ms 5_000
+  @tls_versions [:"tlsv1.2", :"tlsv1.3"]
+  @tls_failure_message "SMTP TLS handshake failed; verify SSL/TLS mode and certificate settings"
 
   @spec from_settings(Settings.t() | map()) :: {:ok, map() | nil} | {:error, map()}
   def from_settings(%Settings{} = settings) do
@@ -95,16 +97,6 @@ defmodule CodexPooler.Mailer.Config do
     %{code: :smtp_test_email_timeout, message: "SMTP test email timed out"}
   end
 
-  def sanitize_delivery_error({:error, {:network_failure, {:error, _reason}}}) do
-    %{code: :smtp_test_email_connection_failed, message: "SMTP connection failed"}
-  end
-
-  def sanitize_delivery_error(
-        {:error, :no_more_hosts, {:network_failure, _host, {:error, _reason}}}
-      ) do
-    %{code: :smtp_test_email_connection_failed, message: "SMTP connection failed"}
-  end
-
   def sanitize_delivery_error({:error, {:permanent_failure, :auth_failed}}) do
     %{code: :smtp_test_email_auth_failed, message: "SMTP authentication failed"}
   end
@@ -127,20 +119,6 @@ defmodule CodexPooler.Mailer.Config do
     }
   end
 
-  def sanitize_delivery_error({:error, {:temporary_failure, _reason}}) do
-    %{
-      code: :smtp_test_email_temporary_failure,
-      message: "SMTP server temporarily rejected the test email"
-    }
-  end
-
-  def sanitize_delivery_error({:error, :no_more_hosts, {:temporary_failure, _host, _reason}}) do
-    %{
-      code: :smtp_test_email_temporary_failure,
-      message: "SMTP server temporarily rejected the test email"
-    }
-  end
-
   def sanitize_delivery_error({:error, {:permanent_failure, _reason}}) do
     %{code: :smtp_test_email_rejected, message: "SMTP server rejected the test email"}
   end
@@ -160,6 +138,9 @@ defmodule CodexPooler.Mailer.Config do
     cond do
       auth_failed_reason?(reason) ->
         %{code: :smtp_test_email_auth_failed, message: "SMTP authentication failed"}
+
+      tls_failure_reason?(reason) ->
+        %{code: :smtp_test_email_tls_failed, message: @tls_failure_message}
 
       timeout_reason?(reason) ->
         %{code: :smtp_test_email_timeout, message: "SMTP test email timed out"}
@@ -191,6 +172,20 @@ defmodule CodexPooler.Mailer.Config do
 
   defp timeout_reason?(term) when is_list(term), do: Enum.any?(term, &timeout_reason?/1)
   defp timeout_reason?(_term), do: false
+
+  defp tls_failure_reason?(:tls_failed), do: true
+  defp tls_failure_reason?({:tls_alert, _reason}), do: true
+
+  defp tls_failure_reason?(term) when is_tuple(term) do
+    term
+    |> Tuple.to_list()
+    |> Enum.any?(&tls_failure_reason?/1)
+  end
+
+  defp tls_failure_reason?(term) when is_list(term),
+    do: Enum.any?(term, &tls_failure_reason?/1)
+
+  defp tls_failure_reason?(_term), do: false
 
   defp network_failure_reason?({:network_failure, _reason}), do: true
   defp network_failure_reason?({:network_failure, _host, _reason}), do: true
@@ -260,14 +255,6 @@ defmodule CodexPooler.Mailer.Config do
     %{code: :smtp_probe_timeout, message: "SMTP probe timed out"}
   end
 
-  def sanitize_probe_error({:error, {:network_failure, {:error, _reason}}}) do
-    %{code: :smtp_probe_connection_failed, message: "SMTP connection failed"}
-  end
-
-  def sanitize_probe_error({:error, :no_more_hosts, {:network_failure, _host, {:error, _reason}}}) do
-    %{code: :smtp_probe_connection_failed, message: "SMTP connection failed"}
-  end
-
   def sanitize_probe_error({:error, {:permanent_failure, :auth_failed}}) do
     %{code: :smtp_probe_auth_failed, message: "SMTP authentication failed"}
   end
@@ -290,14 +277,6 @@ defmodule CodexPooler.Mailer.Config do
     }
   end
 
-  def sanitize_probe_error({:error, {:temporary_failure, _reason}}) do
-    %{code: :smtp_probe_temporary_failure, message: "SMTP server temporarily rejected the probe"}
-  end
-
-  def sanitize_probe_error({:error, :no_more_hosts, {:temporary_failure, _host, _reason}}) do
-    %{code: :smtp_probe_temporary_failure, message: "SMTP server temporarily rejected the probe"}
-  end
-
   def sanitize_probe_error({:error, {:permanent_failure, _reason}}) do
     %{code: :smtp_probe_rejected, message: "SMTP server rejected the probe"}
   end
@@ -317,6 +296,9 @@ defmodule CodexPooler.Mailer.Config do
     cond do
       auth_failed_reason?(reason) ->
         %{code: :smtp_probe_auth_failed, message: "SMTP authentication failed"}
+
+      tls_failure_reason?(reason) ->
+        %{code: :smtp_probe_tls_failed, message: @tls_failure_message}
 
       timeout_reason?(reason) ->
         %{code: :smtp_probe_timeout, message: "SMTP probe timed out"}
@@ -352,21 +334,45 @@ defmodule CodexPooler.Mailer.Config do
 
     validate_auth_fields!(username, password)
 
-    %{
-      adapter_config:
-        [
-          adapter: Swoosh.Adapters.SMTP,
-          relay: host,
-          port: port,
-          username: username,
-          password: password,
-          ssl: ssl,
-          tls: tls,
-          retries: retries
-        ]
-        |> Enum.reject(fn {_key, value} -> is_nil(value) end),
-      from: from
-    }
+    adapter_config =
+      [
+        adapter: Swoosh.Adapters.SMTP,
+        relay: host,
+        port: port,
+        username: username,
+        password: password,
+        ssl: ssl,
+        tls: tls,
+        retries: retries
+      ]
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> put_secure_tls_options(host, ssl, tls)
+
+    %{adapter_config: adapter_config, from: from}
+  end
+
+  defp put_secure_tls_options(config, host, true, _tls) do
+    Keyword.put(config, :sockopts, secure_tls_options(host))
+  end
+
+  defp put_secure_tls_options(config, _host, false, :never), do: config
+
+  defp put_secure_tls_options(config, host, false, _tls) do
+    Keyword.put(config, :tls_options, secure_tls_options(host))
+  end
+
+  @spec secure_tls_options(String.t()) :: keyword()
+  defp secure_tls_options(host) do
+    [
+      versions: @tls_versions,
+      verify: :verify_peer,
+      cacerts: :public_key.cacerts_get(),
+      server_name_indication: String.to_charlist(host),
+      depth: 99,
+      customize_hostname_check: [
+        match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+      ]
+    ]
   end
 
   defp validate_auth_fields!(nil, nil), do: :ok
