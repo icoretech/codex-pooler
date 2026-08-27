@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.11](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.10...codex-pooler-v0.6.11) (2026-08-27)
+
+
+### Features
+
+* **admin:** label Edu Plus and Pro plans ([c3c6936](https://github.com/icoretech/codex-pooler/commit/c3c6936d24b71ca679600d4a689a8ff5482dea1d))
+
 ## [0.6.10](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.9...codex-pooler-v0.6.10) (2026-08-26)
 
 
