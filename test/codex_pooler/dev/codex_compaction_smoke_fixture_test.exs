@@ -85,7 +85,15 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
 
     assert %Pool{status: "active"} = Repo.get(Pool, secret["pool_id"])
     assert %APIKey{status: "active"} = Repo.get(APIKey, secret["api_key_id"])
-    assert %Model{status: "active"} = Repo.get_by(Model, pool_id: secret["pool_id"])
+
+    assert %Model{status: "active", metadata: metadata} =
+             Repo.get_by(Model, pool_id: secret["pool_id"])
+
+    source_model = get_in(metadata, ["source_assignment_models", acquired.assignment_id])
+    assert source_model["input_modalities"] == ["text", "image"]
+    assert source_model["supports_image_detail_original"] == true
+    assert source_model["context_window"] == 128_000
+    assert source_model["auto_compact_token_limit"] == 200
 
     assert {:ok, released} = CodexCompactionSmokeFixture.release(options)
     assert released.status == "released"

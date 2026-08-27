@@ -167,12 +167,13 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
         "source_assignment_models" => %{
           assignment.id => %{
             "slug" => @model,
-            "input_modalities" => ["text"],
+            "input_modalities" => ["text", "image"],
+            "supports_image_detail_original" => true,
             "supports_tools" => true,
             "capabilities" => %{"reasoning" => true},
             "supported_reasoning_levels" => ["low"],
             "default_reasoning_level" => "low",
-            "context_window" => 400,
+            "context_window" => 128_000,
             "auto_compact_token_limit" => 200
           }
         }
