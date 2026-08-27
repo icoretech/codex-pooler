@@ -9,6 +9,8 @@ defmodule CodexPoolerWeb.Admin.BadgeComponentsTest do
     assert BadgeComponents.plan_badge_label("prolite") == "Pro Lite"
     assert BadgeComponents.plan_badge_label("ent26") == "Enterprise"
     assert BadgeComponents.plan_badge_label("hc") == "Enterprise"
+    assert BadgeComponents.plan_badge_label("edu_plus") == "Edu Plus"
+    assert BadgeComponents.plan_badge_label("edu-pro") == "Edu Pro"
 
     assert BadgeComponents.plan_badge_label("enterprise_cbp_automation") ==
              "Enterprise (Automation)"
@@ -34,6 +36,12 @@ defmodule CodexPoolerWeb.Admin.BadgeComponentsTest do
              BadgeComponents.plan_badge_class("business")
 
     assert BadgeComponents.plan_badge_class("ent26") ==
+             BadgeComponents.plan_badge_class("enterprise")
+
+    assert BadgeComponents.plan_badge_class("edu_plus") ==
+             BadgeComponents.plan_badge_class("enterprise")
+
+    assert BadgeComponents.plan_badge_class("edu-pro") ==
              BadgeComponents.plan_badge_class("enterprise")
   end
 end
