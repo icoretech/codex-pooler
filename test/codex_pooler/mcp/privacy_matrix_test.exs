@@ -216,6 +216,33 @@ defmodule CodexPooler.MCP.PrivacyMatrixTest do
     refute Map.has_key?(projected, :provider_payload)
   end
 
+  test "metadata sanitizer recursively omits raw compact transport and owner state" do
+    sentinel = "raw-compact-transport-state-must-not-leak"
+
+    projected =
+      PrivacyMatrix.project!(:request_logs, %{
+        id: "req_compact_runtime_safe",
+        metadata: %{
+          "compaction_runtime" => %{
+            "raw_anchor" => sentinel,
+            "connection_id" => sentinel,
+            "websocket_frame" => sentinel,
+            "tool_output" => sentinel,
+            "provider_message" => sentinel,
+            "typed_state" => %{"previous_response_id" => sentinel},
+            "websocket_owner_request_v2" => %{
+              "payload" => sentinel,
+              "headers" => %{"authorization" => "Bearer #{sentinel}"}
+            }
+          }
+        }
+      })
+
+    sanitized_metadata = MetadataSanitizer.safe_metadata(projected.metadata)
+
+    refute inspect(sanitized_metadata) =~ sentinel
+  end
+
   test "quota projections keep DTO fields and omit raw upstream material" do
     account =
       PrivacyMatrix.project!(:upstream_quotas, %{

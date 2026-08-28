@@ -319,10 +319,28 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   defp prepare_native_compaction_bridge(%{payload: payload} = coerced) do
     result_transport = CompactionTrigger.compaction_result_transport(payload)
+    coerced = put_native_compaction_input_mode(coerced)
 
     with {:ok, turn_state} <- validated_native_compaction_turn_state(payload) do
       prepare_native_compaction_bridge(coerced, result_transport, turn_state)
     end
+  end
+
+  defp put_native_compaction_input_mode(
+         %{
+           payload: payload,
+           request_options: %RequestOptions{payload_context: payload_context} = request_options
+         } = coerced
+       ) do
+    request_options = %{
+      request_options
+      | payload_context: %{
+          payload_context
+          | compaction_input_mode: CompactionTrigger.compaction_input_mode(payload)
+        }
+    }
+
+    %{coerced | request_options: request_options}
   end
 
   defp prepare_native_compaction_bridge(coerced, result_transport, turn_state) do
@@ -339,12 +357,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
         request_options =
           coerced.request_options
           |> RequestOptions.retarget("/backend-api/codex/responses/compact", compact_payload)
-          |> RequestOptions.put_transport(
-            transport: "http_compact_json",
-            upstream_endpoint: "/backend-api/codex/responses",
-            route_class: RouteClass.proxy_compact(),
-            websocket_writer: nil
-          )
+          |> put_native_compaction_transport()
           |> RequestOptions.put_payload_context(
             compaction_trigger_bridge?: true,
             compaction_result_transport: result_transport,
@@ -371,6 +384,29 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
     end
   end
 
+  defp put_native_compaction_transport(
+         %RequestOptions{
+           payload_context: %{compaction_input_mode: :incremental}
+         } = request_options
+       ) do
+    RequestOptions.put_transport(request_options,
+      transport: "websocket",
+      upstream_endpoint: "/backend-api/codex/responses",
+      route_class: RouteClass.proxy_compact(),
+      websocket_writer: nil,
+      websocket_delivery_mode: :collect_compaction
+    )
+  end
+
+  defp put_native_compaction_transport(%RequestOptions{} = request_options) do
+    RequestOptions.put_transport(request_options,
+      transport: "http_compact_json",
+      upstream_endpoint: "/backend-api/codex/responses",
+      route_class: RouteClass.proxy_compact(),
+      websocket_writer: nil
+    )
+  end
+
   defp validated_native_compaction_turn_state(payload) do
     case PayloadNormalizer.validate_backend_compaction_turn_state(payload) do
       :passthrough -> {:ok, nil}
@@ -393,24 +429,24 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   end
 
   defp prepare_public_compaction_bridge(%{payload: payload} = coerced) do
+    coerced = put_public_compaction_input_mode(coerced)
+
     case CompactionTrigger.prepare_bridge("/v1/responses", payload) do
       :passthrough ->
         {:ok, coerced}
 
       {:ok, compact_payload} ->
         downstream_payload = coerced.payload
+        compact_payload = project_public_compaction_payload(coerced, compact_payload)
 
         request_options =
           coerced.request_options
           |> RequestOptions.retarget("/backend-api/codex/responses/compact", compact_payload)
-          |> RequestOptions.put_transport(
-            transport: "http_compact_json",
-            upstream_endpoint: "/backend-api/codex/responses",
-            route_class: RouteClass.proxy_compact(),
-            websocket_writer: nil
-          )
+          |> put_public_compaction_transport()
           |> RequestOptions.put_payload_context(
             compaction_trigger_bridge?: true,
+            compaction_result_transport: public_compaction_result_transport(coerced),
+            compaction_result_mode: :public_websocket,
             compaction_projection_context:
               CompactionProjectionContext.new(downstream_payload, compact_payload)
           )
@@ -427,6 +463,65 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp put_public_compaction_input_mode(
+         %{
+           payload: payload,
+           request_options: %RequestOptions{payload_context: payload_context} = request_options
+         } = coerced
+       ) do
+    request_options = %{
+      request_options
+      | payload_context: %{
+          payload_context
+          | compaction_input_mode: CompactionTrigger.compaction_input_mode(payload)
+        }
+    }
+
+    %{coerced | request_options: request_options}
+  end
+
+  defp project_public_compaction_payload(
+         %{
+           request_options: %RequestOptions{
+             payload_context: %{compaction_input_mode: :incremental}
+           }
+         },
+         compact_payload
+       ) do
+    CompactionTrigger.project_responses_payload(compact_payload, :sse)
+  end
+
+  defp project_public_compaction_payload(_coerced, compact_payload), do: compact_payload
+
+  defp public_compaction_result_transport(%{
+         request_options: %RequestOptions{payload_context: %{compaction_input_mode: :incremental}}
+       }),
+       do: :sse
+
+  defp public_compaction_result_transport(_coerced), do: :buffered
+
+  defp put_public_compaction_transport(
+         %RequestOptions{payload_context: %{compaction_input_mode: :incremental}} =
+           request_options
+       ) do
+    RequestOptions.put_transport(request_options,
+      transport: "websocket",
+      upstream_endpoint: "/backend-api/codex/responses",
+      route_class: RouteClass.proxy_compact(),
+      websocket_writer: nil,
+      websocket_delivery_mode: :collect_compaction
+    )
+  end
+
+  defp put_public_compaction_transport(%RequestOptions{} = request_options) do
+    RequestOptions.put_transport(request_options,
+      transport: "http_compact_json",
+      upstream_endpoint: "/backend-api/codex/responses",
+      route_class: RouteClass.proxy_compact(),
+      websocket_writer: nil
+    )
   end
 
   defp maybe_put_backend_turn_state(
@@ -471,10 +566,23 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
            payload
        )
        when is_binary(previous_response_id) do
-    payload
-    |> Map.get("input")
-    |> ToolResultShape.items()
-    |> Enum.any?()
+    if String.trim(previous_response_id) == "" do
+      false
+    else
+      case CompactionTrigger.prepare_bridge("/backend-api/codex/responses", payload) do
+        {:ok, _compact_payload} ->
+          true
+
+        :passthrough ->
+          payload
+          |> Map.get("input")
+          |> ToolResultShape.items()
+          |> Enum.any?()
+
+        {:error, _reason} ->
+          false
+      end
+    end
   end
 
   defp continuity_ordered_payload(_payload), do: false

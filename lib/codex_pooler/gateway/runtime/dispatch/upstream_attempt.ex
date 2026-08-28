@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
   @moduledoc false
 
   alias CodexPooler.Gateway.Payloads.ContinuityPayload
+  alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Routing.ModelMetadata
   alias CodexPooler.Gateway.Runtime.Dispatch.PreparedContext
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
@@ -24,7 +25,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
   @spec dispatch(PreparedContext.t(), callbacks()) :: dispatch_result()
   def dispatch(%PreparedContext{context: context} = prepared_context, callbacks) do
     cond do
-      websocket_upstream?(context.payload, context.request_options.transport) ->
+      websocket_upstream?(context.payload, context.request_options) ->
         dispatch_websocket(prepared_context, callbacks)
 
       WebsocketBridge.eligible?(prepared_context) ->
@@ -146,9 +147,11 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt do
     end
   end
 
-  defp websocket_upstream?(payload, opts) do
-    opts.transport == "websocket" and RouteClass.streaming?(payload) and
-      is_function(opts.websocket_writer, 1)
+  defp websocket_upstream?(payload, %RequestOptions{transport: transport} = request_options) do
+    relay? = RouteClass.streaming?(payload) and is_function(transport.websocket_writer, 1)
+    collect_compaction? = RequestOptions.connection_bound_compaction?(request_options)
+
+    transport.transport == "websocket" and (relay? or collect_compaction?)
   end
 
   defp elapsed_ms(started), do: max(System.monotonic_time(:millisecond) - started, 0)

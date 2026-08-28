@@ -38,7 +38,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch do
     |> Enum.with_index()
     |> Enum.drop(start_index)
     |> Enum.reduce_while({:retry, nil}, fn {{assignment, identity}, index}, _last ->
-      allow_retry? = index < length(context.route_plan.candidates) - 1
+      allow_retry? =
+        index < length(context.route_plan.candidates) - 1 and
+          not RequestOptions.connection_bound_compaction?(context.request_options)
 
       case dispatch_candidate(
              context,

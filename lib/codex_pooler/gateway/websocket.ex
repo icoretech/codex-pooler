@@ -489,8 +489,31 @@ defmodule CodexPooler.Gateway.Websocket do
          %RequestOptions{} = retarget_opts
        ) do
     target_session
-    |> prepare_owner_websocket_session_with_recovery(retarget_opts, true)
+    |> prepare_retargeted_owner_websocket_session(retarget_opts)
     |> owner_runtime_retarget_result(target_session, retarget_opts)
+  end
+
+  defp prepare_retargeted_owner_websocket_session(
+         %CodexSession{} = session,
+         %RequestOptions{} = opts
+       ) do
+    if RequestOptions.connection_bound_compaction?(opts) do
+      attach_existing_owner_websocket_session(session, opts)
+    else
+      prepare_owner_websocket_session_with_recovery(session, opts, true)
+    end
+  end
+
+  defp attach_existing_owner_websocket_session(%CodexSession{} = session, opts) do
+    with {:ok, downstream} <- attach_owner_downstream(session, opts) do
+      {:ok,
+       %{
+         codex_session: session,
+         websocket_owner_lease_token: session.owner_lease_token,
+         websocket_owner_downstream: downstream,
+         websocket_owner_active_turn_reconnect?: active_turn_reconnect?(downstream)
+       }}
+    end
   end
 
   @spec owner_retarget_websocket_opts(opts(), websocket_runtime(), String.t()) ::

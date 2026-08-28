@@ -11,7 +11,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway, as: RuntimeGateway
   alias CodexPooler.Gateway.OperationalSettings
-  alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, BridgeSessionAlias, CodexSession}
   alias CodexPooler.Gateway.Transports.Admission
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
@@ -282,6 +282,62 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       assert is_boolean(retargeted_runtime.websocket_owner_active_turn_reconnect?)
       assert {:ok, _owner_pid} = WebsocketOwnerSession.lookup(target_session.id)
       assert {:ok, _owner_pid} = WebsocketOwnerSession.lookup(current_runtime.codex_session.id)
+    end
+
+    test "connection-bound compact does not start or take over a missing target owner", %{
+      api_key: api_key,
+      auth: auth
+    } do
+      {:ok, current_runtime} = owner_runtime(auth, "owner-runtime-bound-current")
+
+      {:ok, target_session} =
+        Gateway.start_codex_session(auth, owner_opts("owner-runtime-bound-target"))
+
+      target_session = Repo.get!(CodexSession, target_session.id)
+      previous_response_id = previous_response_id("bound-target")
+      register_previous_response_alias!(target_session, api_key, previous_response_id)
+      assert_owner_not_started!(target_session.id)
+
+      downstream_payload = %{
+        "model" => "gpt-example",
+        "previous_response_id" => previous_response_id,
+        "input" => [
+          %{"type" => "custom_tool_call_output", "output" => "synthetic"},
+          %{"type" => "compaction_trigger"}
+        ]
+      }
+
+      compact_payload = CompactionTrigger.project_responses_payload(downstream_payload)
+
+      request_options =
+        %{
+          request_id: "connection-bound-owner-retarget",
+          upstream_endpoint: "/backend-api/codex/responses",
+          compaction_trigger_bridge?: true
+        }
+        |> RequestOptions.build("/backend-api/codex/responses/compact", compact_payload)
+        |> RequestOptions.put_transport(
+          transport: "websocket",
+          websocket_delivery_mode: :collect_compaction
+        )
+
+      assert RequestOptions.connection_bound_compaction?(request_options)
+
+      assert {:error, :owner_unavailable} =
+               Gateway.retarget_websocket_owner_runtime(
+                 auth,
+                 current_runtime,
+                 %{
+                   "type" => "response.create",
+                   "previous_response_id" => previous_response_id
+                 },
+                 request_options
+               )
+
+      assert_owner_not_started!(target_session.id)
+
+      assert {:ok, _current_owner_pid} =
+               WebsocketOwnerSession.lookup(current_runtime.codex_session.id)
     end
 
     test "uses backend frame turn-state to attach a different-session owner runtime", %{

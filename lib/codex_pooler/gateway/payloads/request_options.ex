@@ -15,6 +15,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   alias __MODULE__.TimeoutConfig
   alias __MODULE__.Transport
   alias __MODULE__.UsageAuthentication
+  alias CodexPooler.Gateway.Payloads.CompactionTrigger
   alias CodexPooler.Gateway.RequestCompression.Metadata, as: RequestCompressionMetadata
 
   @enforce_keys [
@@ -80,6 +81,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :collect_openai_response_stream,
     :chatgpt_account_id,
     :compaction_trigger_bridge?,
+    :compaction_input_mode,
     :compaction_projection_context,
     :compaction_result_mode,
     :compaction_result_transport,
@@ -159,14 +161,17 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :websocket_owner_lease_token,
     :websocket_owner_proxy_instance_id,
     :websocket_owner_session,
+    :websocket_delivery_mode,
     :user_agent,
     :websocket_writer,
     "authorization_header",
     "chatgpt_account_id",
+    "compaction_input_mode",
     "prompt_cache_controls_downgraded",
     "prompt_cache_key",
     "request_method",
-    "transport"
+    "transport",
+    "websocket_delivery_mode"
   ]
 
   @spec build(t() | map() | keyword(), String.t(), map()) :: t()
@@ -183,7 +188,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
       continuity: Continuity.build(opts),
       routing: routing(opts, endpoint, payload),
       timeout_config: TimeoutConfig.build(opts),
-      payload_context: payload_context(opts),
+      payload_context: payload_context(opts, payload),
       runtime: RuntimeContext.build(opts),
       openai_compatibility: OpenAICompatibility.build(opts),
       usage_authentication: usage_authentication(opts),
@@ -322,6 +327,21 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     %{options | transport: Transport.update(options.transport, updates)}
   end
 
+  @spec connection_bound_compaction?(t()) :: boolean()
+  def connection_bound_compaction?(%__MODULE__{
+        payload_context: %{
+          compaction_trigger_bridge?: true,
+          compaction_input_mode: :incremental
+        },
+        transport: %{
+          transport: "websocket",
+          websocket_delivery_mode: :collect_compaction
+        }
+      }),
+      do: true
+
+  def connection_bound_compaction?(%__MODULE__{}), do: false
+
   @spec put_continuity(t(), keyword()) :: t()
   def put_continuity(%__MODULE__{} = options, updates) when is_list(updates) do
     %{options | continuity: Continuity.update(options.continuity, updates)}
@@ -350,7 +370,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
 
   @spec put_payload_context(t(), keyword()) :: t()
   def put_payload_context(%__MODULE__{} = options, updates) when is_list(updates) do
-    %{options | payload_context: struct!(options.payload_context, updates)}
+    %{options | payload_context: PayloadContext.update(options.payload_context, updates)}
   end
 
   @spec put_openai_compatibility(t(), keyword()) :: t()
@@ -518,8 +538,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     end
   end
 
-  defp payload_context(opts) do
-    PayloadContext.build(opts)
+  defp payload_context(opts, payload) do
+    PayloadContext.build(opts, CompactionTrigger.compaction_input_mode(payload))
   end
 
   defp usage_authentication(opts) do

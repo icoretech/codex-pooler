@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
 
   alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
+  alias CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector
 
   alias CodexPooler.Gateway.Runtime.Finalization.{
     AttemptSettlement,
@@ -21,13 +22,55 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
 
   @spec finalize_completed(SelectedCandidateContext.t(), map()) :: {:ok, map()} | {:error, map()}
   def finalize_completed(context, finalization) do
-    case validate_public_compaction_response(context, finalization) do
-      :ok ->
+    case prepare_completed_finalization(context, finalization) do
+      {:ok, finalization} ->
         finalize_completed_success(context, finalization)
 
+      {:provider_failure, failure} ->
+        finalize_collected_provider_failure(context, finalization, failure)
+
       {:error, error} ->
-        finalize_invalid_public_compaction(context, finalization, error)
+        finalize_invalid_compaction(context, finalization, error)
     end
+  end
+
+  defp prepare_completed_finalization(
+         %SelectedCandidateContext{
+           request_options:
+             %RequestOptions{
+               payload_context: %{compaction_result_mode: mode}
+             } = request_options
+         },
+         %{body: body} = finalization
+       )
+       when mode in [:native_websocket, :public_websocket] do
+    if RequestOptions.connection_bound_compaction?(request_options) do
+      item_mode = if mode == :public_websocket, do: :public, else: :native
+
+      case CompactionResultCollector.collect_websocket_body(body, item_mode) do
+        {:ok, %{status: status, headers: headers, raw_body: canonical_body}} ->
+          {:ok,
+           finalization
+           |> Map.put(:body, canonical_body)
+           |> Map.put(:status, status)
+           |> Map.put(:result_headers, headers)}
+
+        {:provider_failure, failure} ->
+          {:provider_failure, failure}
+
+        {:error, error} ->
+          {:error, error}
+      end
+    else
+      validate_public_compaction_response(request_options, finalization)
+    end
+  end
+
+  defp prepare_completed_finalization(
+         %SelectedCandidateContext{request_options: request_options},
+         finalization
+       ) do
+    validate_public_compaction_response(request_options, finalization)
   end
 
   defp finalize_completed_success(context, finalization) do
@@ -77,7 +120,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
         request_options = request_options_with_response_id(request_options, finalization)
         SideEffects.record_success(context, payload, body, request_options, callbacks)
 
-        {:ok, %{status: 200, headers: [], websocket_messages: []}}
+        completed_result(request_options, body, finalization)
 
       {:error, gateway_error} = error ->
         emit_settlement_failure(error, transports)
@@ -85,26 +128,42 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
     end
   end
 
+  @spec finalize_collected_provider_failure(
+          SelectedCandidateContext.t(),
+          map(),
+          StreamProtocol.terminal_failure()
+        ) :: {:ok, map()} | {:error, map()}
+  defp finalize_collected_provider_failure(context, finalization, failure) do
+    finalization =
+      finalization
+      |> Map.put(:terminal, failure.event_type || failure.data_type)
+      |> Map.put(:status, collected_provider_failure_status(failure))
+      |> Map.put(:upstream_error_code, failure.upstream_code)
+      |> Map.put(:upstream_error_param, failure.upstream_error_param)
+      |> Map.put(:collected_provider_failure, failure)
+
+    finalize_terminal_failure(context, finalization)
+  end
+
   defp validate_public_compaction_response(
-         %SelectedCandidateContext{
-           request_options: %RequestOptions{
-             payload_context: %{compaction_trigger_bridge?: true},
-             openai_compatibility: %{source_endpoint: "/v1/responses"}
-           }
+         %RequestOptions{
+           payload_context: %{compaction_trigger_bridge?: true},
+           openai_compatibility: %{source_endpoint: "/v1/responses"}
          },
-         %{body: body, status: status, headers: headers}
+         %{body: body, status: status, headers: headers} = finalization
        ) do
     result = {:ok, %{status: status, headers: headers, raw_body: body}}
 
     case CompactionTrigger.adapt_gateway_result(result, :websocket) do
-      {:ok, _adapted} -> :ok
+      {:ok, _adapted} -> {:ok, finalization}
       {:error, error} -> {:error, error}
     end
   end
 
-  defp validate_public_compaction_response(%SelectedCandidateContext{}, _finalization), do: :ok
+  defp validate_public_compaction_response(%RequestOptions{}, finalization),
+    do: {:ok, finalization}
 
-  defp finalize_invalid_public_compaction(context, finalization, error) do
+  defp finalize_invalid_compaction(context, finalization, error) do
     %{reserved: reserved, attempt: attempt, request_options: request_options} = context
     transports = resolved_transports(context)
 
@@ -127,13 +186,42 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
     case AttemptSettlement.finalize_failure(reserved.request, attempt, attrs) do
       {:ok, _finalized} = result ->
         emit_settlement_outcome(result, "failed", transports)
-        {:error, Map.put(error, :public_compaction_error?, true)}
+        {:error, maybe_mark_public_compaction_error(error, request_options)}
 
       {:error, gateway_error} = failure ->
         emit_settlement_failure(failure, transports)
         {:error, gateway_error}
     end
   end
+
+  defp completed_result(
+         %RequestOptions{payload_context: %{compaction_result_mode: mode}} = request_options,
+         body,
+         finalization
+       )
+       when mode in [:native_websocket, :public_websocket] do
+    if RequestOptions.connection_bound_compaction?(request_options) do
+      {:ok,
+       %{
+         status: 200,
+         headers: Map.get(finalization, :result_headers, []),
+         raw_body: body
+       }}
+    else
+      {:ok, %{status: 200, headers: [], websocket_messages: []}}
+    end
+  end
+
+  defp completed_result(%RequestOptions{}, _body, _finalization),
+    do: {:ok, %{status: 200, headers: [], websocket_messages: []}}
+
+  defp maybe_mark_public_compaction_error(
+         error,
+         %RequestOptions{openai_compatibility: %{source_endpoint: "/v1/responses"}}
+       ),
+       do: Map.put(error, :public_compaction_error?, true)
+
+  defp maybe_mark_public_compaction_error(error, %RequestOptions{}), do: error
 
   defp request_options_with_response_id(
          %RequestOptions{} = request_options,
@@ -152,14 +240,27 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   def finalize_terminal(context, finalization) do
     %{body: body, terminal: terminal} = finalization
 
-    case websocket_terminal_outcome(terminal, body) do
-      {:ok, %{kind: kind}} when kind in [:completed, :incomplete] ->
-        finalize_completed(context, finalization)
+    if collected_compaction?(context) do
+      finalize_completed(context, finalization)
+    else
+      case websocket_terminal_outcome(terminal, body) do
+        {:ok, %{kind: kind}} when kind in [:completed, :incomplete] ->
+          finalize_completed(context, finalization)
 
-      _outcome ->
-        finalize_terminal_failure(context, finalization)
+        _outcome ->
+          finalize_terminal_failure(context, finalization)
+      end
     end
   end
+
+  defp collected_compaction?(%SelectedCandidateContext{
+         request_options:
+           %RequestOptions{payload_context: %{compaction_result_mode: mode}} = request_options
+       })
+       when mode in [:native_websocket, :public_websocket],
+       do: RequestOptions.connection_bound_compaction?(request_options)
+
+  defp collected_compaction?(%SelectedCandidateContext{}), do: false
 
   defp finalize_terminal_failure(context, finalization) do
     %{body: body, terminal: terminal, headers: headers} = finalization
@@ -259,7 +360,7 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
          ) do
       {:ok, _finalized} = result ->
         emit_settlement_outcome(result, "failed", transports)
-        {:ok, %{status: 200, headers: [], websocket_messages: []}}
+        terminal_failure_result(finalization, code)
 
       {:error, gateway_error} = error ->
         emit_settlement_failure(error, transports)
@@ -274,6 +375,41 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
     if code == MisalignmentPolicyViolation.code(),
       do: MisalignmentPolicyViolation.fallback_message(),
       else: code
+  end
+
+  defp terminal_failure_result(
+         %{collected_provider_failure: failure, status: status},
+         code
+       ) do
+    {:error,
+     error(
+       status,
+       code,
+       collected_provider_failure_message(code),
+       failure.upstream_error_param
+     )}
+  end
+
+  defp terminal_failure_result(_finalization, _code),
+    do: {:ok, %{status: 200, headers: [], websocket_messages: []}}
+
+  defp collected_provider_failure_status(%{code: code, upstream_code: upstream_code})
+       when code in ["invalid_request", "invalid_request_error"] or
+              upstream_code in [
+                "misalignment_policy_violation",
+                "previous_response_not_found",
+                "invalid_previous_response_id"
+              ],
+       do: 400
+
+  defp collected_provider_failure_status(_failure), do: 502
+
+  defp collected_provider_failure_message(code) do
+    if code == "stream_incomplete" do
+      "upstream stream incomplete"
+    else
+      "upstream rejected the compact request"
+    end
   end
 
   @spec finalize_failed(SelectedCandidateContext.t(), map()) :: {:error, map()}
@@ -394,19 +530,29 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   defp maybe_put_transport_failure_metadata(metadata, _finalization), do: metadata
 
   defp finalize_failed_after_health(
-         %SelectedCandidateContext{allow_retry?: true, reserved: reserved, attempt: attempt},
+         %SelectedCandidateContext{allow_retry?: true, reserved: reserved, attempt: attempt} =
+           context,
          %{body: "", reason: reason, started: started},
          code,
          metadata
        ) do
-    case AttemptSettlement.record_retryable_failure(reserved.request, attempt, %{
-           last_error_code: code,
-           error_message: Metadata.safe_reason(reason),
-           latency_ms: elapsed_ms(started),
-           attempt_metadata: metadata
-         }) do
-      {:ok, _attempt} -> {:retry, code}
-      {:error, gateway_error} -> {:error, gateway_error}
+    if RequestOptions.connection_bound_compaction?(context.request_options) do
+      finalize_failed_after_health(
+        %{context | allow_retry?: false},
+        %{body: "", reason: reason, started: started},
+        code,
+        metadata
+      )
+    else
+      case AttemptSettlement.record_retryable_failure(reserved.request, attempt, %{
+             last_error_code: code,
+             error_message: Metadata.safe_reason(reason),
+             latency_ms: elapsed_ms(started),
+             attempt_metadata: metadata
+           }) do
+        {:ok, _attempt} -> {:retry, code}
+        {:error, gateway_error} -> {:error, gateway_error}
+      end
     end
   end
 

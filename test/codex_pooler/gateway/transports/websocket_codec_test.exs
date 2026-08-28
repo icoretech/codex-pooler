@@ -630,14 +630,66 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
              )
     end
 
-    test "does not order ordinary continuations, warmups, or malformed frames" do
-      refute WebsocketCodec.continuity_ordered_payload?(
-               Jason.encode!(%{
-                 "type" => "response.create",
-                 "previous_response_id" => "resp_previous",
-                 "input" => [%{"type" => "message", "content" => "placeholder"}]
-               })
-             )
+    test "orders anchored terminal compaction triggers with and without tool output" do
+      for scenario <- ["anchored_tool_output_and_trigger", "anchored_trigger_only"] do
+        payload = remote_compaction_v2_incremental_subset!(scenario)
+
+        assert WebsocketCodec.continuity_ordered_payload?(Jason.encode!(payload))
+      end
+    end
+
+    test "does not order ordinary, malformed, or unanchored compaction continuations" do
+      unordered_payloads = [
+        %{
+          "type" => "response.create",
+          "previous_response_id" => "resp_previous",
+          "input" => [%{"type" => "message", "content" => "placeholder"}]
+        },
+        %{
+          "type" => "response.create",
+          "previous_response_id" => "   ",
+          "input" => [
+            %{"type" => "message", "content" => "visible"},
+            %{"type" => "compaction_trigger"}
+          ]
+        },
+        %{
+          "type" => "response.create",
+          "previous_response_id" => 123,
+          "input" => [
+            %{"type" => "message", "content" => "visible"},
+            %{"type" => "compaction_trigger"}
+          ]
+        },
+        %{
+          "type" => "response.create",
+          "previous_response_id" => "resp_previous",
+          "input" => [
+            %{"type" => "compaction_trigger"},
+            %{"type" => "message", "content" => "visible"}
+          ]
+        },
+        %{
+          "type" => "response.create",
+          "previous_response_id" => "resp_previous",
+          "input" => [
+            %{"type" => "message", "content" => "visible"},
+            %{"type" => "compaction_trigger"},
+            %{"type" => "compaction_trigger"}
+          ]
+        },
+        %{
+          "type" => "response.create",
+          "input" => [
+            %{"type" => "message", "content" => "visible"},
+            %{"type" => "compaction_trigger"}
+          ]
+        }
+      ]
+
+      Enum.each(unordered_payloads, fn payload ->
+        refute WebsocketCodec.continuity_ordered_payload?(Jason.encode!(payload))
+      end)
 
       refute WebsocketCodec.continuity_ordered_payload?(Jason.encode!(%{"generate" => false}))
       refute WebsocketCodec.continuity_ordered_payload?("{invalid")

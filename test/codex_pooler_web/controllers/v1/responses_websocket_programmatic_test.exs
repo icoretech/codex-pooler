@@ -1993,126 +1993,165 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
     end
   end
 
-  test "GET /v1/responses websocket bridges a terminal compaction trigger over compact HTTP" do
-    previous_response_id = "resp_v1_websocket_compaction_previous"
+  test "direct and owner-forwarded GET /v1/responses collect anchored compaction on the lineage connection in Full and Lite" do
+    for {owner_forwarding?, mode} <- [
+          {false, "full"},
+          {false, "lite"},
+          {true, "full"},
+          {true, "lite"}
+        ] do
+      if owner_forwarding? and mode == "full", do: enable_owner_forwarding!()
 
-    upstream =
-      start_upstream(
-        FakeUpstream.json_response(%{
-          "id" => "resp_v1_websocket_compaction_trigger",
-          "object" => "response.compaction",
-          "output" => [
-            %{
-              "type" => "compaction",
-              "encrypted_content" => "synthetic-websocket-trigger-encrypted",
-              "id" => nil,
-              "internal_chat_message_metadata_passthrough" => %{
-                "turn_id" => "native-websocket-turn-must-drop",
-                "compaction" => %{"implementation" => "responses_compaction_v2"},
-                "instruction" => "returned metadata must not select request transport"
-              },
-              "compaction" => %{"implementation" => "responses_compaction_v2"},
-              "summary" => "plaintext-websocket-summary-must-drop"
-            }
-          ],
-          "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8}
-        })
-      )
+      lane = if owner_forwarding?, do: "owner", else: "direct"
+      previous_response_id = "resp_v1_websocket_compaction_previous_#{mode}"
+      stream_id = "compaction-trigger-stream-#{lane}-#{mode}"
 
-    setup = gateway_setup(upstream, compact?: true)
-    port = start_public_endpoint!()
+      compact_item = %{
+        "type" => "compaction",
+        "encrypted_content" => "synthetic-websocket-trigger-encrypted-#{mode}",
+        "id" => nil,
+        "internal_chat_message_metadata_passthrough" => %{
+          "turn_id" => "native-websocket-turn-must-drop",
+          "compaction" => %{"implementation" => "responses_compaction_v2"},
+          "instruction" => "returned metadata must not select request transport"
+        },
+        "compaction" => %{"implementation" => "responses_compaction_v2"},
+        "summary" => "plaintext-websocket-summary-must-drop"
+      }
 
-    {conn, websocket, ref} =
-      public_v1_websocket_connect!(
-        port,
-        setup,
-        "compaction-trigger-#{System.unique_integer([:positive])}"
-      )
+      upstream =
+        start_upstream(
+          {:sequence,
+           [
+             completed_websocket_response(previous_response_id),
+             public_compaction_websocket_response(
+               "resp_v1_websocket_compaction_trigger_#{mode}",
+               compact_item
+             )
+           ]}
+        )
 
-    try do
-      {conn, websocket} =
-        send_response_create!(conn, websocket, ref, setup, %{
-          "previous_response_id" => previous_response_id,
-          "input" =>
-            websocket_tool_output_compaction_trigger_input("synthetic websocket compact"),
-          "stream" => false,
-          "stream_id" => "compaction-trigger-stream"
-        })
+      setup = gateway_setup(upstream, compact?: true)
+      put_public_model_serving_mode!(setup, mode)
+      port = start_public_endpoint!()
 
-      {_conn, _websocket, frames} =
-        receive_websocket_until_terminal_or_error!(conn, websocket, ref, [])
+      {conn, websocket, ref} =
+        public_v1_websocket_connect!(
+          port,
+          setup,
+          "compaction-trigger-#{lane}-#{mode}-#{System.unique_integer([:positive])}"
+        )
 
-      assert Enum.map(frames, & &1["type"]) == [
-               "response.output_item.done",
-               "response.completed"
-             ]
+      try do
+        {conn, websocket} =
+          send_response_create!(conn, websocket, ref, setup, %{
+            "input" => "synthetic lineage request #{mode}"
+          })
 
-      done_item = get_in(List.first(frames), ["item"])
-      completed_item = get_in(List.last(frames), ["response", "output", Access.at(0)])
+        {conn, websocket, lineage_frames} =
+          receive_websocket_until_terminal!(conn, websocket, ref, [])
 
-      assert done_item == completed_item
+        assert [%{"type" => "response.completed", "response" => %{"id" => ^previous_response_id}}] =
+                 lineage_frames
 
-      assert done_item == %{
-               "type" => "compaction",
-               "encrypted_content" => "synthetic-websocket-trigger-encrypted",
-               "id" => nil
-             }
+        input = websocket_tool_output_compaction_trigger_input("synthetic websocket compact")
 
-      assert {:ok, %{payload: %{"input" => [^done_item]}}} =
-               ResponsesCompat.coerce(%{
-                 "model" => setup.model.exposed_model_id,
-                 "input" => [done_item]
-               })
+        {conn, websocket} =
+          send_response_create!(conn, websocket, ref, setup, %{
+            "previous_response_id" => previous_response_id,
+            "input" => input,
+            "stream" => false,
+            "stream_id" => stream_id
+          })
 
-      assert get_in(List.last(frames), ["response", "object"]) == "response"
+        {_conn, _websocket, frames} =
+          receive_websocket_until_terminal_or_error!(conn, websocket, ref, [])
 
-      assert Enum.all?(frames, &(&1["stream_id"] == "compaction-trigger-stream"))
+        assert Enum.map(frames, & &1["type"]) == [
+                 "response.output_item.done",
+                 "response.completed"
+               ]
 
-      assert [captured] = FakeUpstream.requests(upstream)
-      assert captured.method == "POST"
-      assert captured.path == "/backend-api/codex/responses"
-      refute Map.has_key?(captured.json, "stream")
-      assert captured.json["store"] == false
-      assert captured.json["previous_response_id"] == previous_response_id
+        assert Enum.map(frames, & &1["sequence_number"]) == [0, 1]
+        assert Enum.all?(frames, &(&1["stream_id"] == stream_id))
 
-      assert Enum.map(captured.json["input"], & &1["type"]) == [
-               "function_call_output",
-               "compaction_trigger"
-             ]
+        done_item = get_in(List.first(frames), ["item"])
+        completed_item = get_in(List.last(frames), ["response", "output", Access.at(0)])
 
-      assert Enum.count(captured.json["input"], &(&1 == %{"type" => "compaction_trigger"})) == 1
-      assert List.last(captured.json["input"]) == %{"type" => "compaction_trigger"}
+        assert done_item == completed_item
 
-      assert [request] =
-               Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
+        assert done_item == %{
+                 "type" => "compaction",
+                 "encrypted_content" => "synthetic-websocket-trigger-encrypted-#{mode}",
+                 "id" => nil
+               }
 
-      assert request.endpoint == "/backend-api/codex/responses/compact"
-      assert request.transport == "http_compact_json"
-      assert request.status == "succeeded"
+        assert {:ok, %{payload: %{"input" => [^done_item]}}} =
+                 ResponsesCompat.coerce(%{
+                   "model" => setup.model.exposed_model_id,
+                   "input" => [done_item]
+                 })
 
-      assert get_in(request.request_metadata, ["reservation_snapshot_inputs", "route_class"]) ==
-               "proxy_compact"
+        assert get_in(List.last(frames), ["response", "object"]) == "response"
 
-      assert [attempt] =
-               Repo.all(from(attempt in Attempt, where: attempt.request_id == ^request.id))
+        assert [lineage_request, compact_request] = FakeUpstream.requests(upstream)
+        assert lineage_request.method == "WEBSOCKET"
+        assert compact_request.method == "WEBSOCKET"
+        assert compact_request.path == "/backend-api/codex/responses"
+        assert compact_request.websocket_connection_id == lineage_request.websocket_connection_id
+        assert compact_request.json["store"] == false
+        assert compact_request.json["stream"] == true
+        assert compact_request.json["previous_response_id"] == previous_response_id
+        assert compact_request.json["input"] == input
+        assert FakeUpstream.http_request_count(upstream) == 0
+        assert FakeUpstream.websocket_connection_count(upstream) == 1
 
-      assert attempt.transport == "http_compact_json"
-      assert attempt.status == "succeeded"
+        request_logs =
+          Repo.all(
+            from(request in Request,
+              where: request.pool_id == ^setup.pool.id,
+              order_by: [asc: request.admitted_at, asc: request.id]
+            )
+          )
 
-      assert Repo.aggregate(
-               from(entry in LedgerEntry,
-                 where: entry.request_id == ^request.id and entry.entry_kind == "settlement"
-               ),
-               :count
-             ) == 1
+        assert [_lineage_request_log, compact_request_log] = request_logs
+        assert compact_request_log.endpoint == "/v1/responses"
 
-      persisted = inspect({request, attempt, RequestLogs.list(setup.pool)})
-      refute persisted =~ "synthetic-websocket-trigger-encrypted"
-      refute persisted =~ "native-websocket-turn-must-drop"
-      refute persisted =~ "plaintext-websocket-summary-must-drop"
-      refute persisted =~ "returned metadata must not select request transport"
-    after
-      Mint.HTTP.close(conn)
+        assert compact_request_log.transport == "websocket"
+        assert compact_request_log.status == "succeeded"
+
+        assert [attempt] =
+                 Repo.all(
+                   from(attempt in Attempt,
+                     where: attempt.request_id == ^compact_request_log.id
+                   )
+                 )
+
+        assert attempt.transport == "websocket"
+        assert attempt.status == "succeeded"
+
+        assert %{
+                 "reused" => true,
+                 "reconnected" => false
+               } = attempt.response_metadata["upstream_websocket_connection"]
+
+        assert Repo.aggregate(
+                 from(entry in LedgerEntry,
+                   where:
+                     entry.request_id == ^compact_request_log.id and
+                       entry.entry_kind == "settlement"
+                 ),
+                 :count
+               ) == 1
+
+        persisted = inspect({compact_request_log, attempt, RequestLogs.list(setup.pool)})
+        refute persisted =~ compact_item["encrypted_content"]
+        refute persisted =~ "native-websocket-turn-must-drop"
+        refute persisted =~ "plaintext-websocket-summary-must-drop"
+        refute persisted =~ "returned metadata must not select request transport"
+      after
+        Mint.HTTP.close(conn)
+      end
     end
   end
 
@@ -3396,6 +3435,29 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
              "status" => "completed",
              "output" => output,
              "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+           }
+         }}
+      ],
+      done: false
+    )
+  end
+
+  defp public_compaction_websocket_response(response_id, item) do
+    FakeUpstream.sse_stream(
+      [
+        {"response.output_item.done",
+         %{
+           "type" => "response.output_item.done",
+           "item" => item
+         }},
+        {"response.completed",
+         %{
+           "type" => "response.completed",
+           "response" => %{
+             "id" => response_id,
+             "status" => "completed",
+             "output" => [item],
+             "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8}
            }
          }}
       ],

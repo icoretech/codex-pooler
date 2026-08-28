@@ -68,6 +68,30 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRequestCallbacksTest do
              WebsocketRequestCallbacks.materialize(envelope, fn _text -> :written end)
   end
 
+  test "V1 materialization preserves the validated Full and Lite serving-mode witness" do
+    identity = active_upstream_identity_fixture()
+
+    for mode <- ["full", "lite"] do
+      attrs =
+        identity.id
+        |> valid_attrs()
+        |> put_in([:observation, :mode], mode)
+
+      assert {:ok, envelope} = WebsocketOwnerRequest.new(attrs)
+
+      assert {:ok, %Request{effective_serving_mode: ^mode}} =
+               WebsocketRequestCallbacks.materialize(envelope, fn _text -> :written end)
+    end
+
+    spoofed =
+      identity.id
+      |> valid_attrs()
+      |> put_in([:observation, :mode], "auto")
+
+    assert {:error, {:invalid_owner_request, {:invalid_field, :observation}}} =
+             WebsocketRequestCallbacks.materialize(spoofed, fn _text -> :written end)
+  end
+
   test "rejects malformed envelope before identity lookup" do
     malformed = %{valid_attrs(Ecto.UUID.generate()) | headers: [{"x-test", fn -> :bad end}]}
 

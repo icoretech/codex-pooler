@@ -17,6 +17,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV2
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
   alias CodexPooler.Gateway.Transports.WebsocketOwnerPreviousReleaseCaller
@@ -31,6 +32,34 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
   @peer_detection_timeout_ms 10_000
   @timeouts %{connect_timeout_ms: 1_000, receive_timeout_ms: 1_000}
 
+  defmodule V2FailureKindNodeClient do
+    @moduledoc false
+
+    def connected_app_nodes, do: Process.get({__MODULE__, :nodes}, [])
+    def app_node?(_node), do: true
+
+    def call_owner(node, _module, function, args, _timeout) do
+      send(self(), {:v2_failure_kind_call, node, function, length(args)})
+
+      case Process.get({__MODULE__, :action}) do
+        {:return, value} -> value
+        {:error, reason} -> :erlang.error(reason)
+        {:exit, reason} -> exit(reason)
+        {:throw, reason} -> throw(reason)
+      end
+    end
+
+    def configure(nodes, action) do
+      Process.put({__MODULE__, :nodes}, nodes)
+      Process.put({__MODULE__, :action}, action)
+    end
+
+    def reset do
+      Process.delete({__MODULE__, :nodes})
+      Process.delete({__MODULE__, :action})
+    end
+  end
+
   setup_all do
     ensure_epmd_started!()
     :ok
@@ -40,7 +69,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
     reset_bootstrap_state_fixture!()
     auth = auth_fixture()
     Process.put({__MODULE__, :upstream_identity}, active_upstream_identity_fixture())
-    on_exit(&cleanup_local_owner_sessions/0)
+
+    on_exit(fn ->
+      cleanup_local_owner_sessions()
+      V2FailureKindNodeClient.reset()
+    end)
+
     {:ok, auth: auth}
   end
 
@@ -774,6 +808,88 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
 
     assert_receive {:websocket_owner_harness_node_call,
                     %{node: ^remote_node, function: :remote_submit_request_v1, arity: 3}}
+  end
+
+  test "exact missing v2 RPC fails closed for returned error and every caught failure kind", %{
+    auth: auth
+  } do
+    remote_node = :"codex_pooler@old-collect-owner-app.example"
+    remote_node_string = Atom.to_string(remote_node)
+
+    %{session: session, token: token} =
+      owner_session_fixture(auth, remote_node_string, "collect-protocol-mismatch")
+
+    owner_request = owner_request_v2(request("collect-protocol-mismatch"))
+    downstream = downstream("corr-collect-protocol-mismatch")
+    args = [session.id, downstream, owner_request]
+
+    exact_undef =
+      {:exception, :undef, [{WebsocketOwnerForwarder, :remote_submit_request_v2, args, []}]}
+
+    original_session = Repo.get!(CodexSession, session.id)
+    original_lease = Repo.get_by!(BridgeOwnerLease, lease_token: token)
+
+    for action <- [
+          {:return, {:error, exact_undef}},
+          {:error, exact_undef},
+          {:exit, exact_undef},
+          {:throw, exact_undef}
+        ] do
+      V2FailureKindNodeClient.configure([remote_node], action)
+
+      assert {:error, :owner_unavailable} =
+               WebsocketOwnerForwarder.submit_request(
+                 session,
+                 token,
+                 downstream,
+                 owner_request,
+                 node_client: V2FailureKindNodeClient,
+                 app_node_names: [remote_node_string]
+               )
+
+      assert_receive {:v2_failure_kind_call, ^remote_node, :remote_submit_request_v2, 3}
+      refute_received {:v2_failure_kind_call, ^remote_node, :remote_submit_request_v1, _arity}
+      assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(session.id)
+
+      assert Repo.get!(CodexSession, session.id).owner_lease_token ==
+               original_session.owner_lease_token
+
+      assert Repo.get!(BridgeOwnerLease, original_lease.id).status == "active"
+    end
+
+    for unrelated <- [
+          {:exception, :undef,
+           [
+             {WebsocketOwnerRequestV2, :nested_missing, [], []},
+             {WebsocketOwnerForwarder, :remote_submit_request_v2, args, []}
+           ]},
+          {:exception, :undef,
+           [
+             {WebsocketOwnerForwarder, :remote_submit_request_v2,
+              [session.id, downstream, %{version: 2}], []}
+           ]}
+        ] do
+      V2FailureKindNodeClient.configure([remote_node], {:exit, unrelated})
+
+      assert {:error, :owner_crashed} =
+               WebsocketOwnerForwarder.submit_request(
+                 session,
+                 token,
+                 downstream,
+                 owner_request,
+                 node_client: V2FailureKindNodeClient,
+                 app_node_names: [remote_node_string]
+               )
+
+      assert_receive {:v2_failure_kind_call, ^remote_node, :remote_submit_request_v2, 3}
+      refute_received {:v2_failure_kind_call, ^remote_node, :remote_submit_request_v1, _arity}
+      assert {:error, :owner_unavailable} = WebsocketOwnerSession.lookup(session.id)
+
+      assert Repo.get!(CodexSession, session.id).owner_lease_token ==
+               original_session.owner_lease_token
+
+      assert Repo.get!(BridgeOwnerLease, original_lease.id).status == "active"
+    end
   end
 
   test "legacy remote request rejects before owner submission", %{auth: auth} do
@@ -2637,6 +2753,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarderTest d
         forward_error_body?: request.forward_error_body?,
         submission_notification?: Keyword.get(opts, :submission_notification?, false)
       })
+
+    owner_request
+  end
+
+  defp owner_request_v2(%UpstreamWebsocketSession.Request{} = request) do
+    attrs = owner_request(request) |> Map.from_struct()
+
+    {:ok, owner_request} =
+      WebsocketOwnerRequestV2.new(
+        attrs
+        |> Map.put(:version, 2)
+        |> Map.put(:websocket_delivery_mode, :collect_compaction)
+        |> Map.put(:effective_serving_mode, :full)
+      )
 
     owner_request
   end

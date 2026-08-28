@@ -205,6 +205,152 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end)
   end
 
+  test "owner-forwarded native anchored compact uses V2 collect on the current connection" do
+    compact_item = %{
+      "type" => "compaction",
+      "encrypted_content" => "synthetic-owner-collect-encrypted"
+    }
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.sse_stream([
+             {"response.created",
+              %{
+                "type" => "response.created",
+                "response" => %{
+                  "id" => "resp_owner_collect_anchor",
+                  "status" => "in_progress"
+                }
+              }},
+             {"response.completed",
+              %{
+                "type" => "response.completed",
+                "response" => %{
+                  "id" => "resp_owner_collect_anchor",
+                  "status" => "completed",
+                  "output" => []
+                }
+              }}
+           ]),
+           FakeUpstream.sse_stream([
+             {"response.output_item.done",
+              %{"type" => "response.output_item.done", "item" => compact_item}},
+             {"response.completed",
+              %{
+                "type" => "response.completed",
+                "response" => %{
+                  "id" => "resp_owner_collect_compact",
+                  "status" => "completed",
+                  "output" => [compact_item]
+                }
+              }}
+           ])
+         ]}
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    scope = model_serving_scope()
+    _revision = set_model_serving_mode!(scope, setup, "full")
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, state} = owner_socket(auth, "ws-owner-native-collect", "owner-native-collect")
+
+    try do
+      anchor_payload =
+        websocket_payload(setup, "synthetic owner collect anchor", %{
+          "request_id" => "ws-owner-native-collect-anchor"
+        })
+
+      assert {:ok, state} =
+               CodexResponsesSocket.handle_in({anchor_payload, [opcode: :text]}, state)
+
+      assert {:push, {:text, anchor_frame}, state} = receive_owner_socket_push(state)
+
+      assert %{"response" => %{"id" => "resp_owner_collect_anchor"}} =
+               Jason.decode!(anchor_frame)
+
+      assert {:push, {:text, anchor_terminal_frame}, state} = receive_owner_socket_push(state)
+      assert %{"type" => "response.completed"} = Jason.decode!(anchor_terminal_frame)
+      assert {:ok, state} = receive_socket_done(state)
+
+      compact_payload =
+        Jason.encode!(%{
+          "type" => "response.create",
+          "model" => setup.model.exposed_model_id,
+          "previous_response_id" => "resp_owner_collect_anchor",
+          "input" => [
+            %{
+              "type" => "custom_tool_call_output",
+              "call_id" => "call_owner_collect",
+              "output" => "synthetic owner tool output"
+            },
+            %{"type" => "compaction_trigger"}
+          ],
+          "stream" => true,
+          "generate" => true,
+          "request_id" => "ws-owner-native-collect-compact",
+          "client_metadata" => %{
+            "x-codex-turn-metadata" =>
+              Jason.encode!(%{
+                "compaction" => %{"implementation" => "responses_compaction_v2"}
+              })
+          }
+        })
+
+      assert {:ok, state} =
+               CodexResponsesSocket.handle_in({compact_payload, [opcode: :text]}, state)
+
+      assert {:push, {:text, done_frame}, state} = receive_native_collect_socket_push(state)
+
+      assert %{"type" => "response.output_item.done", "item" => ^compact_item} =
+               Jason.decode!(done_frame)
+
+      assert {:push, {:text, completed_frame}, state} = receive_native_collect_socket_push(state)
+      assert {:ok, _state} = receive_socket_done(state)
+
+      assert %{
+               "type" => "response.completed",
+               "response" => %{"output" => [^compact_item]}
+             } = Jason.decode!(completed_frame)
+
+      assert [anchor_request, compact_request] = FakeUpstream.requests(upstream)
+      assert anchor_request.method == "WEBSOCKET"
+      assert compact_request.method == "WEBSOCKET"
+      assert anchor_request.websocket_connection_id == compact_request.websocket_connection_id
+      assert FakeUpstream.http_request_count(upstream) == 0
+
+      assert [anchor_log, compact_log] = request_logs(setup.pool.id)
+      assert anchor_log.transport == "websocket"
+      assert compact_log.endpoint == "/backend-api/codex/responses/compact"
+      assert compact_log.transport == "websocket"
+      assert compact_log.retry_count == 0
+      assert compact_log.request_metadata["websocket_owner_forwarding"]["enabled"] == true
+
+      assert [compact_attempt] =
+               Repo.all(from(attempt in Attempt, where: attempt.request_id == ^compact_log.id))
+
+      assert compact_attempt.transport == "websocket"
+      assert compact_attempt.status == "succeeded"
+      assert compact_attempt.response_metadata["upstream_websocket_connection"]["reused"] == true
+
+      assert Repo.aggregate(
+               from(entry in LedgerEntry,
+                 where: entry.request_id == ^compact_log.id and entry.entry_kind == "settlement"
+               ),
+               :count
+             ) == 1
+
+      assert [compact_turn] =
+               Repo.all(from(turn in CodexTurn, where: turn.request_id == ^compact_log.id))
+
+      assert compact_turn.status == "succeeded"
+      assert compact_turn.final_attempt_id == compact_attempt.id
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
   @tag :owner_forwarding_catalog_token
   test "owner-forwarding-enabled Mint upgrades keep one catalog token across backend aliases",
        %{conn: conn} do
@@ -8640,6 +8786,38 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         handle_owner_socket_push_message(message, state)
     after
       1_000 -> flunk("expected owner websocket response frame")
+    end
+  end
+
+  defp receive_native_collect_socket_push(state) do
+    receive do
+      {:codex_response_chunk, _task_pid, _frame} = message ->
+        handle_native_collect_socket_push_message(message, state)
+
+      {:websocket_response_activity, _, _} = message ->
+        handle_native_collect_socket_push_message(message, state)
+
+      {:codex_response_done, _, _} = message ->
+        handle_native_collect_socket_push_message(message, state)
+
+      {:websocket_response_delivery_complete, _, _} = message ->
+        handle_native_collect_socket_push_message(message, state)
+    after
+      1_000 -> flunk("expected collected native websocket response frame")
+    end
+  end
+
+  defp handle_native_collect_socket_push_message(message, state) do
+    case CodexResponsesSocket.handle_info(message, state) do
+      {:push, {:text, frame}, state} = result ->
+        if StreamProtocol.internal_control_event?(frame) do
+          receive_native_collect_socket_push(state)
+        else
+          result
+        end
+
+      {:ok, state} ->
+        receive_native_collect_socket_push(state)
     end
   end
 

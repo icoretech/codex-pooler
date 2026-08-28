@@ -13,7 +13,15 @@ defmodule CodexPooler.MCP.MetadataSanitizer do
     session_token totp_secret recovery_secret temporary_password pii_sentinel
   )
 
-  @dangerous_exact_keys MapSet.new(~w(previous_response_id websocket_frame))
+  @dangerous_exact_keys MapSet.new(~w(
+    connection_id
+    previous_response_id
+    provider_message
+    raw_anchor
+    typed_state
+    websocket_frame
+    websocket_owner_request_v2
+  ))
   @projection_actions ~w(invalid absent introduced dropped preserved changed)
   @projection_classes ~w(compaction_trigger tool_call tool_output message reasoning other)
   @projection_stages ~w(downstream_frame compact_projection upstream_payload)

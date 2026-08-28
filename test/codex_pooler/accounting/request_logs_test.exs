@@ -1958,6 +1958,30 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
     end
   end
 
+  test "request logs reject an unsupported compaction result transport" do
+    %{pool: pool, api_key: api_key} = active_api_key_fixture()
+
+    request =
+      request_fixture(%{pool: pool, api_key: api_key}, %{
+        requested_model: "gpt-compaction-bridge-closed-transport",
+        endpoint: "/backend-api/codex/responses/compact",
+        transport: "websocket",
+        correlation_id: "compaction-bridge-closed-transport",
+        request_metadata: %{
+          "compaction_bridge" => %{
+            "applied" => true,
+            "result_transport" => "websocket"
+          }
+        }
+      })
+
+    assert %{items: [log], total: 1} =
+             Accounting.list_request_logs(pool, filters: [model: "closed-transport"])
+
+    assert log.id == request.id
+    assert is_nil(log.compaction_bridge)
+  end
+
   test "request logs retain only bounded compaction projection facts" do
     %{pool: pool, api_key: api_key} = active_api_key_fixture()
     sentinel = "raw-projection-anchor-and-output-must-not-leak"
@@ -1994,6 +2018,18 @@ defmodule CodexPooler.Accounting.RequestLogsTest do
             },
             "previous_response_id" => sentinel,
             "output" => sentinel
+          },
+          "compaction_runtime" => %{
+            "raw_anchor" => sentinel,
+            "connection_id" => sentinel,
+            "websocket_frame" => sentinel,
+            "tool_output" => sentinel,
+            "provider_message" => sentinel,
+            "typed_state" => %{"previous_response_id" => sentinel},
+            "websocket_owner_request_v2" => %{
+              "payload" => sentinel,
+              "headers" => %{"authorization" => "Bearer #{sentinel}"}
+            }
           }
         }
       })

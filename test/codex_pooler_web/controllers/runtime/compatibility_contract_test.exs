@@ -1962,8 +1962,21 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                    canonical_identity: %{
                      upstream_endpoint: "/backend-api/codex/responses",
                      accounting_endpoint: "/backend-api/codex/responses/compact",
-                     request_transport: "http_compact_json",
-                     attempt_transport: "http_compact_json"
+                     transport_contracts: %{
+                       incremental_websocket: %{
+                         input_mode: "nonblank_top_level_previous_response_id",
+                         request_transport: "websocket",
+                         attempt_transport: "websocket",
+                         connection: "current_live_matching_generation_reused_only",
+                         delivery: "collect_compaction_before_validation_settlement_and_adapter",
+                         retry_or_fallback: false
+                       },
+                       full_history_http: %{
+                         input_mode: "no_top_level_previous_response_id",
+                         request_transport: "http_compact_json",
+                         attempt_transport: "http_compact_json"
+                       }
+                     }
                    },
                    result_transports: %{
                      buffered: "responses_json",
@@ -2044,7 +2057,23 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
                    timing: "after_coercion_before_compact_execution",
                    completion: "local_websocket_completion"
                  },
-                 transport: "http_compact_json",
+                 transport_contracts: %{
+                   incremental_websocket: %{
+                     surface: "responses_websocket",
+                     input_mode: "nonblank_top_level_previous_response_id",
+                     request_transport: "websocket",
+                     attempt_transport: "websocket",
+                     connection: "current_live_matching_generation_reused_only",
+                     delivery: "collect_compaction_before_validation_settlement_and_adapter",
+                     retry_or_fallback: false
+                   },
+                   full_history_http: %{
+                     surfaces: ["http_json", "http_sse", "responses_websocket"],
+                     input_mode: "no_top_level_previous_response_id",
+                     request_transport: "http_compact_json",
+                     attempt_transport: "http_compact_json"
+                   }
+                 },
                  closed_item: %{"type" => "compaction_trigger"},
                  valid_trigger: "exactly_one_final_after_visible_input",
                  malformed_trigger: %{status: 400, param: "input", upstream_dispatch: false},

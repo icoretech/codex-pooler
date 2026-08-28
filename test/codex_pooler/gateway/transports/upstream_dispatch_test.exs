@@ -21,6 +21,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV2
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
   alias CodexPooler.Gateway.Websocket, as: Gateway
@@ -119,6 +120,178 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     end
   end
 
+  @tag :collect_compaction
+  test "direct collect compaction materializes a nil writer from anchored Full options regardless of output item names" do
+    compact_frames = fn suffix ->
+      [
+        Jason.encode!(%{
+          "type" => "response.output_item.done",
+          "item" => %{"type" => "compaction", "encrypted_content" => "opaque-#{suffix}"}
+        }),
+        Jason.encode!(%{
+          "type" => "response.completed",
+          "response" => %{"id" => "resp_collect_#{suffix}", "status" => "completed"}
+        })
+      ]
+    end
+
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        {:sequence,
+         [
+           websocket_success("collect-warmup"),
+           FakeUpstream.websocket_text_frames(compact_frames.("custom")),
+           FakeUpstream.websocket_text_frames(compact_frames.("future"))
+         ]}
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    full_snapshot = %{configured_mode: "full", effective_mode: "full", source: "override"}
+
+    warmup_options =
+      session
+      |> websocket_request_options()
+      |> RequestOptions.put_model_serving_mode(full_snapshot)
+
+    assert {:ok, %{terminal: "response.completed"}} =
+             upstream
+             |> websocket_dispatch_request(warmup_options)
+             |> UpstreamDispatch.websocket_request()
+
+    for {suffix, output_type} <- [
+          {"custom", "custom_tool_call_output"},
+          {"future", "future_tool_output"}
+        ] do
+      payload = %{
+        "previous_response_id" => "resp_synthetic_anchor",
+        "input" => [
+          %{"type" => output_type, "output" => "opaque-output"},
+          %{"type" => "compaction_trigger"}
+        ]
+      }
+
+      options =
+        %{
+          receive_timeout_ms: 1_000,
+          upstream_websocket_session: session,
+          model_serving_mode_configured: "full",
+          model_serving_mode: "full",
+          model_serving_mode_source: "override"
+        }
+        |> RequestOptions.build("/backend-api/codex/responses", payload)
+        |> RequestOptions.for_websocket(payload)
+        |> RequestOptions.put_payload_context(compaction_trigger_bridge?: true)
+        |> RequestOptions.put_transport(websocket_delivery_mode: :collect_compaction)
+
+      assert RequestOptions.connection_bound_compaction?(options)
+
+      request = %{
+        websocket_dispatch_request(upstream, options)
+        | writer: nil,
+          upstream_payload: Jason.encode!(payload),
+          original_payload: payload
+      }
+
+      assert {:ok, %{terminal: "response.completed", body: body}} =
+               UpstreamDispatch.websocket_request(request)
+
+      assert body =~ "opaque-#{suffix}"
+    end
+
+    assert [warmup, custom_collect, future_collect] = FakeUpstream.requests(upstream)
+    assert warmup.websocket_connection_id == custom_collect.websocket_connection_id
+    assert custom_collect.websocket_connection_id == future_collect.websocket_connection_id
+
+    assert Enum.map(Jason.decode!(custom_collect.body)["input"], & &1["type"]) == [
+             "custom_tool_call_output",
+             "compaction_trigger"
+           ]
+
+    assert Enum.map(Jason.decode!(future_collect.body)["input"], & &1["type"]) == [
+             "future_tool_output",
+             "compaction_trigger"
+           ]
+  end
+
+  @tag :collect_compaction
+  test "direct collect compaction reuses a matching Lite connection for function output" do
+    compact_item =
+      Jason.encode!(%{
+        "type" => "response.output_item.done",
+        "item" => %{"type" => "compaction", "encrypted_content" => "opaque-lite"}
+      })
+
+    terminal =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_collect_lite", "status" => "completed"}
+      })
+
+    {:ok, upstream} =
+      FakeUpstream.start_link(
+        {:sequence,
+         [
+           websocket_success("lite-warmup"),
+           FakeUpstream.websocket_text_frames([compact_item, terminal])
+         ]}
+      )
+
+    on_exit(fn -> FakeUpstream.stop(upstream) end)
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    payload = %{
+      "previous_response_id" => "resp_synthetic_lite_anchor",
+      "input" => [
+        %{"type" => "function_call_output", "call_id" => "call_fixture", "output" => "ok"},
+        %{"type" => "compaction_trigger"}
+      ]
+    }
+
+    base = %{
+      receive_timeout_ms: 1_000,
+      upstream_websocket_session: session,
+      model_serving_mode_configured: "lite",
+      model_serving_mode: "lite",
+      model_serving_mode_source: "override"
+    }
+
+    warmup_options = RequestOptions.for_websocket(base, %{"model" => "example-model"})
+
+    assert {:ok, %{terminal: "response.completed"}} =
+             upstream
+             |> websocket_dispatch_request(warmup_options)
+             |> UpstreamDispatch.websocket_request()
+
+    options =
+      base
+      |> RequestOptions.build("/backend-api/codex/responses", payload)
+      |> RequestOptions.for_websocket(payload)
+      |> RequestOptions.put_payload_context(compaction_trigger_bridge?: true)
+      |> RequestOptions.put_transport(websocket_delivery_mode: :collect_compaction)
+
+    request = %{
+      websocket_dispatch_request(upstream, options)
+      | writer: nil,
+        upstream_payload: Jason.encode!(payload),
+        original_payload: payload
+    }
+
+    assert RequestOptions.connection_bound_compaction?(options)
+    assert {:ok, %{terminal: "response.completed"}} = UpstreamDispatch.websocket_request(request)
+
+    assert [warmup, collect] = FakeUpstream.requests(upstream)
+    assert warmup.websocket_connection_id == collect.websocket_connection_id
+
+    assert Enum.map(Jason.decode!(collect.body)["input"], & &1["type"]) == [
+             "function_call_output",
+             "compaction_trigger"
+           ]
+  end
+
   test "remote owner dispatch sends only a validated v1 envelope and keeps submission observer local",
        %{auth: auth} do
     remote_node = :"codex_pooler@data-only-owner.example"
@@ -177,6 +350,84 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     assert WebsocketOwnerRequest.validate(envelope) == :ok
     refute contains_function?(envelope)
     assert is_function(observer, 0)
+  end
+
+  test "connection-bound collect dispatch selects only the v2 owner RPC", %{auth: auth} do
+    remote_node = :"codex_pooler@collect-owner.example"
+
+    %{session: session, lease_token: lease_token} =
+      owner_session_fixture(auth, Atom.to_string(remote_node))
+
+    OwnerEnvelopeNodeClient.configure(
+      [remote_node],
+      {:websocket_owner_submission_accepted, {:error, :owner_drained}}
+    )
+
+    downstream = %{pid: self(), epoch: 1, correlation_id: "corr-collect-owner"}
+
+    payload = %{
+      "previous_response_id" => "resp_synthetic_anchor",
+      "input" => [
+        %{"type" => "function_call_output", "call_id" => "synthetic", "output" => "opaque"},
+        %{"type" => "compaction_trigger"}
+      ]
+    }
+
+    request_options =
+      RequestOptions.for_websocket(
+        %{
+          codex_session: session,
+          receive_timeout_ms: @receive_timeout_ms,
+          websocket_owner_forwarding_enabled?: true,
+          websocket_owner_session: session,
+          websocket_owner_lease_token: lease_token,
+          websocket_owner_downstream: downstream,
+          websocket_owner_downstream_epoch: downstream.epoch,
+          websocket_owner_proxy_instance_id: Atom.to_string(node()),
+          websocket_owner_instance_id: session.owner_instance_id,
+          websocket_owner_forwarder_opts: [
+            node_client: OwnerEnvelopeNodeClient,
+            app_node_names: [Atom.to_string(remote_node)]
+          ],
+          compaction_trigger_bridge?: true
+        },
+        payload
+      )
+      |> RequestOptions.put_transport(websocket_delivery_mode: :collect_compaction)
+      |> RequestOptions.put_model_serving_mode(%{
+        configured_mode: "full",
+        effective_mode: "full",
+        source: "override"
+      })
+
+    assert RequestOptions.connection_bound_compaction?(request_options)
+    identity = active_upstream_identity_fixture()
+
+    request = %UpstreamDispatch.Request{
+      url: "https://upstream.example.test/backend-api/codex/responses",
+      token: "redacted",
+      upstream_payload: Jason.encode!(payload),
+      original_payload: payload,
+      identity: identity,
+      accounting_request: nil,
+      accounting_attempt: nil,
+      writer: nil,
+      assignment_advertised?: true,
+      request_options: request_options
+    }
+
+    assert {:error, %{reason: :owner_drained}} = UpstreamDispatch.websocket_request(request)
+
+    assert_received {:owner_envelope_call, ^remote_node, _module, :remote_submit_request_v2,
+                     [session_id, _downstream, %WebsocketOwnerRequestV2{} = envelope], _timeout}
+
+    assert session_id == session.id
+    assert envelope.version == 2
+    assert envelope.websocket_delivery_mode == :collect_compaction
+    assert envelope.effective_serving_mode == :full
+    assert WebsocketOwnerRequestV2.validate(envelope) == :ok
+    refute contains_function?(envelope)
+    refute_received {:owner_envelope_call, ^remote_node, _module, :remote_submit_request_v1, _, _}
   end
 
   test "invalid owner request data fails before remote submission" do

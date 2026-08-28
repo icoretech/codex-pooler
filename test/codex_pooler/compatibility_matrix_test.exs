@@ -21,7 +21,7 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                  timing: "after_coercion_before_compact_execution",
                  completion: "local_websocket_completion"
                },
-               transport: "http_compact_json",
+               transport_contracts: public_compaction_transport_contracts(),
                closed_item: %{"type" => "compaction_trigger"},
                valid_trigger: "exactly_one_final_after_visible_input",
                malformed_trigger: %{status: 400, param: "input", upstream_dispatch: false},
@@ -1167,8 +1167,21 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       canonical_identity: %{
         upstream_endpoint: "/backend-api/codex/responses",
         accounting_endpoint: "/backend-api/codex/responses/compact",
-        request_transport: "http_compact_json",
-        attempt_transport: "http_compact_json"
+        transport_contracts: %{
+          incremental_websocket: %{
+            input_mode: "nonblank_top_level_previous_response_id",
+            request_transport: "websocket",
+            attempt_transport: "websocket",
+            connection: "current_live_matching_generation_reused_only",
+            delivery: "collect_compaction_before_validation_settlement_and_adapter",
+            retry_or_fallback: false
+          },
+          full_history_http: %{
+            input_mode: "no_top_level_previous_response_id",
+            request_transport: "http_compact_json",
+            attempt_transport: "http_compact_json"
+          }
+        }
       },
       result_transports: %{
         buffered: "responses_json",
@@ -1193,6 +1206,26 @@ defmodule CodexPooler.CompatibilityMatrixTest do
         applied: true,
         result_transport: ["buffered", "sse"],
         raw_payload_or_frame: false
+      }
+    }
+  end
+
+  defp public_compaction_transport_contracts do
+    %{
+      incremental_websocket: %{
+        surface: "responses_websocket",
+        input_mode: "nonblank_top_level_previous_response_id",
+        request_transport: "websocket",
+        attempt_transport: "websocket",
+        connection: "current_live_matching_generation_reused_only",
+        delivery: "collect_compaction_before_validation_settlement_and_adapter",
+        retry_or_fallback: false
+      },
+      full_history_http: %{
+        surfaces: ["http_json", "http_sse", "responses_websocket"],
+        input_mode: "no_top_level_previous_response_id",
+        request_transport: "http_compact_json",
+        attempt_transport: "http_compact_json"
       }
     }
   end

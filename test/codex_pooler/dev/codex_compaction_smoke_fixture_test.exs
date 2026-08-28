@@ -90,6 +90,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
              Repo.get_by(Model, pool_id: secret["pool_id"])
 
     source_model = get_in(metadata, ["source_assignment_models", acquired.assignment_id])
+    assert source_model["use_responses_lite"] == true
     assert source_model["input_modalities"] == ["text", "image"]
     assert source_model["supports_image_detail_original"] == true
     assert source_model["context_window"] == 128_000

@@ -17,7 +17,13 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
           | :invalid_compaction
           | :missing_compaction
           | :missing_terminal
+          | {:provider_failure, StreamProtocol.terminal_failure(),
+             StreamProtocol.terminal_failure()}
+
+  @type websocket_collection_result ::
+          {:ok, map()}
           | {:provider_failure, StreamProtocol.terminal_failure()}
+          | {:error, map()}
 
   @spec collect(Req.Response.t(), SelectedCandidateContext.t(), map()) ::
           {:ok, map()} | {:error, map()}
@@ -31,11 +37,22 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
     end
   end
 
-  defp new_state do
+  @spec collect_websocket_body(binary(), :native | :public) :: websocket_collection_result()
+  def collect_websocket_body(body, item_mode \\ :native)
+
+  def collect_websocket_body(body, item_mode)
+      when is_binary(body) and item_mode in [:native, :public] do
+    {:ok, state} = collect_sse_data(new_state(item_mode), body)
+    state |> finalize_sse_state() |> websocket_compact_result()
+  end
+
+  defp new_state(item_mode \\ :native) do
     %{
       collection: %{
         invalid_reason: nil,
+        item_mode: item_mode,
         item: nil,
+        provider_failure: nil,
         response: nil,
         terminal_failure: nil,
         terminal?: false
@@ -62,6 +79,11 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
   end
 
   defp compact_result(_state), do: invalid_compaction_error()
+
+  defp websocket_compact_result(%{collection: %{provider_failure: %{} = failure}}),
+    do: {:provider_failure, failure}
+
+  defp websocket_compact_result(state), do: compact_result(state)
 
   defp compact_response(%{item: item, response: response, terminal?: true})
        when is_map(item) and is_map(response) do
@@ -150,9 +172,16 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
   end
 
   defp finalize_sse_state(%{sse: %{buffer: buffer}, collection: collection} = state) do
-    case collect_terminal_buffer(buffer, collection) do
-      {:ok, collection} -> %{state | collection: collection}
-      {:error, reason} -> put_collection_error(state, reason)
+    if buffer != "" and is_map(collection.provider_failure) do
+      %{
+        state
+        | collection: %{collection | invalid_reason: :invalid_compaction, provider_failure: nil}
+      }
+    else
+      case collect_terminal_buffer(buffer, collection) do
+        {:ok, collection} -> %{state | collection: collection}
+        {:error, reason} -> put_collection_error(state, reason)
+      end
     end
   end
 
@@ -161,8 +190,15 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
   defp put_collection_error(%{collection: %{invalid_reason: nil} = collection} = state, reason) do
     collection =
       case reason do
-        {:provider_failure, failure} -> %{collection | terminal_failure: failure}
-        _reason -> collection
+        {:provider_failure, terminal_failure, provider_failure} ->
+          %{
+            collection
+            | terminal_failure: terminal_failure,
+              provider_failure: provider_failure
+          }
+
+        _reason ->
+          collection
       end
 
     %{state | collection: %{collection | invalid_reason: reason}}
@@ -204,8 +240,14 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
 
   defp collect_events([block | blocks], state) do
     case collect_block(block, state) do
-      {:ok, state} -> collect_events(blocks, state)
-      {:error, _reason} = error -> error
+      {:ok, state} ->
+        collect_events(blocks, state)
+
+      {:error, {:provider_failure, _terminal_failure, _provider_failure}} when blocks != [] ->
+        {:error, :invalid_compaction}
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
@@ -244,10 +286,10 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
   defp collect_summarized_event(
          %{data_type: "response.output_item.done"},
          %{"item" => %{"type" => type} = item},
-         %{item: nil} = state
+         %{item: nil, item_mode: item_mode} = state
        )
        when type in ["compaction", "compaction_summary"] do
-    case compact_item(item) do
+    case compact_item(item, item_mode) do
       {:ok, item} -> {:ok, %{state | item: item}}
       {:error, _reason} = error -> error
     end
@@ -287,8 +329,17 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
   defp collect_summarized_event(%{event_type: type} = event_summary, _event, _state)
        when type in ["error", "response.failed", "response.incomplete"] do
     case StreamProtocol.terminal_outcome_event(event_summary) do
-      {:ok, %{kind: kind} = outcome} when kind in [:failed, :incomplete] ->
-        {:error, {:provider_failure, terminal_failure(outcome)}}
+      {:ok, %{kind: :failed} = outcome} ->
+        {:error,
+         {:provider_failure, terminal_failure(outcome), provider_terminal_failure(outcome)}}
+
+      {:ok, %{kind: :incomplete, incomplete_reason: reason} = outcome} when is_binary(reason) ->
+        if String.trim(reason) == "" do
+          {:error, :invalid_compaction}
+        else
+          {:error,
+           {:provider_failure, terminal_failure(outcome), provider_terminal_failure(outcome)}}
+        end
 
       _outcome ->
         {:error, :invalid_compaction}
@@ -297,16 +348,31 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
 
   defp collect_summarized_event(_event_summary, _event, state), do: {:ok, state}
 
-  defp compact_item(%{"type" => type, "encrypted_content" => content} = item)
+  defp compact_item(%{"type" => type, "encrypted_content" => content} = item, item_mode)
        when type in ["compaction", "compaction_summary"] and is_binary(content) do
     if String.trim(content) == "" do
       {:error, :invalid_compaction}
     else
-      {:ok, CompactionTrigger.normalize_native_item(item)}
+      {:ok, normalize_compaction_item(item, item_mode)}
     end
   end
 
-  defp compact_item(_item), do: {:error, :invalid_compaction}
+  defp compact_item(_item, _item_mode), do: {:error, :invalid_compaction}
+
+  defp normalize_compaction_item(item, :native),
+    do: CompactionTrigger.normalize_native_item(item)
+
+  defp normalize_compaction_item(item, :public) do
+    normalized = %{
+      "type" => "compaction",
+      "encrypted_content" => item["encrypted_content"]
+    }
+
+    case Map.fetch(item, "id") do
+      {:ok, id} when is_nil(id) or is_binary(id) -> Map.put(normalized, "id", id)
+      _result -> normalized
+    end
+  end
 
   defp compaction_failure_reason({:upstream_idle_timeout, _reason} = reason), do: reason
   defp compaction_failure_reason(reason), do: {:upstream_stream_interrupted, reason}
@@ -335,6 +401,33 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
   defp terminal_failure(%{kind: :incomplete} = outcome) do
     terminal_failure(outcome.event_type, outcome.incomplete_reason, nil)
   end
+
+  defp provider_terminal_failure(%{kind: :failed, failure: failure}) do
+    sanitize_provider_terminal_failure(failure)
+  end
+
+  defp provider_terminal_failure(%{kind: :incomplete} = outcome) do
+    sanitize_provider_terminal_failure(%{
+      code: outcome.incomplete_reason || outcome.event_type,
+      upstream_code: outcome.incomplete_reason,
+      upstream_error_param: nil,
+      event_type: outcome.event_type,
+      data_type: outcome.data_type
+    })
+  end
+
+  defp sanitize_provider_terminal_failure(failure) do
+    %{
+      code: DiagnosticTaxonomy.identifier(failure.code),
+      upstream_code: optional_identifier(failure.upstream_code),
+      upstream_error_param: UpstreamErrorParam.sanitize(failure.upstream_error_param),
+      event_type: optional_identifier(failure.event_type),
+      data_type: optional_identifier(failure.data_type)
+    }
+  end
+
+  defp optional_identifier(value) when is_binary(value), do: DiagnosticTaxonomy.identifier(value)
+  defp optional_identifier(_value), do: nil
 
   defp terminal_failure_from_summary(event_summary) do
     terminal_failure(

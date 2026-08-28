@@ -47,10 +47,15 @@ defmodule CodexPooler.Accounting.Metadata do
   @sensitive_exact_keys MapSet.new([
                           "analytics",
                           "arc",
+                          "connection_id",
                           "idempotency_key",
+                          "provider_message",
                           "previous_response_id",
+                          "raw_anchor",
                           "sdp",
                           "trace",
+                          "typed_state",
+                          "websocket_owner_request_v2",
                           "websocket_frame"
                         ])
   @safe_sensitive_exact_keys MapSet.new([

@@ -2569,6 +2569,160 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
     assert warmup_request.websocket_connection_id == continuation_request.websocket_connection_id
   end
 
+  @tag :collect_compaction
+  test "collect compaction retains frames without a writer on a reused matching-mode connection" do
+    item =
+      Jason.encode!(%{
+        "type" => "response.output_item.done",
+        "item" => %{"type" => "compaction", "encrypted_content" => "opaque-compact"}
+      })
+
+    terminal =
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{"id" => "resp_collect_matching", "status" => "completed"}
+      })
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           websocket_success_without_id(),
+           FakeUpstream.websocket_text_frames([item, terminal])
+         ]}
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = websocket_request(FakeUpstream.url(upstream))
+    warmup = struct(request, effective_serving_mode: "full")
+
+    collect =
+      struct(request,
+        writer: nil,
+        websocket_delivery_mode: :collect_compaction,
+        effective_serving_mode: "full"
+      )
+
+    assert {:ok, %{terminal: "response.completed"}} =
+             UpstreamWebsocketSession.request(session, warmup)
+
+    assert {:ok, result} = UpstreamWebsocketSession.request(session, collect)
+    assert result.upstream_websocket_connection.reused
+    assert result.body == "data: #{item}\n\ndata: #{terminal}\n\n"
+
+    assert [warmup_request, collect_request] = FakeUpstream.requests(upstream)
+    assert warmup_request.websocket_connection_id == collect_request.websocket_connection_id
+    assert collect_request.body == collect.payload
+  end
+
+  @tag :collect_compaction
+  test "collect compaction rejects fresh mode-mismatched and invalidated connections without send or reconnect" do
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           websocket_success_without_id(),
+           websocket_success_without_id()
+         ]}
+      )
+
+    request = websocket_request(FakeUpstream.url(upstream))
+
+    {:ok, fresh_session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(fresh_session) end)
+    fresh_lifecycle = lifecycle_state(fresh_session)
+
+    fresh_collect =
+      struct(request,
+        writer: nil,
+        websocket_delivery_mode: :collect_compaction,
+        effective_serving_mode: "full"
+      )
+
+    assert_collect_guard_result(
+      UpstreamWebsocketSession.request(fresh_session, fresh_collect),
+      :fresh
+    )
+
+    assert FakeUpstream.requests(upstream) == []
+    assert FakeUpstream.websocket_connection_count(upstream) == 0
+    assert_disconnected_lifecycle(fresh_session, fresh_lifecycle)
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    assert {:ok, _warmup} =
+             UpstreamWebsocketSession.request(
+               session,
+               struct(request, effective_serving_mode: "full")
+             )
+
+    lite_collect =
+      struct(request,
+        writer: nil,
+        websocket_delivery_mode: :collect_compaction,
+        effective_serving_mode: "lite"
+      )
+
+    assert_collect_guard_result(
+      UpstreamWebsocketSession.request(session, lite_collect),
+      :reused
+    )
+
+    assert [_warmup_request] = FakeUpstream.requests(upstream)
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+
+    assert :ok = UpstreamWebsocketSession.invalidate_connection(session)
+
+    assert_collect_guard_result(
+      UpstreamWebsocketSession.request(session, fresh_collect),
+      :reconnected
+    )
+
+    assert [_warmup_request] = FakeUpstream.requests(upstream)
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+  end
+
+  @tag :collect_compaction
+  test "collect compaction does not reconnect after a preterminal close" do
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           websocket_success_without_id(),
+           FakeUpstream.websocket_sse_then_close([]),
+           websocket_success_without_id()
+         ]}
+      )
+
+    {:ok, session} = UpstreamWebsocketSession.start_link([])
+    on_exit(fn -> UpstreamWebsocketSession.close(session) end)
+
+    request = websocket_request(FakeUpstream.url(upstream))
+
+    assert {:ok, _warmup} =
+             UpstreamWebsocketSession.request(
+               session,
+               struct(request, effective_serving_mode: "full")
+             )
+
+    collect =
+      struct(request,
+        writer: nil,
+        websocket_delivery_mode: :collect_compaction,
+        effective_serving_mode: "full"
+      )
+
+    assert {:error, %{reason: :upstream_websocket_closed_before_terminal}} =
+             UpstreamWebsocketSession.request(session, collect)
+
+    assert [_warmup_request, collect_request] = FakeUpstream.requests(upstream)
+    assert collect_request.body == collect.payload
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+  end
+
   @tag :continuation_generation_boundary
   test "marked continuation on a replacement connection writes one retry terminal and keeps it reusable" do
     upstream =
@@ -2841,6 +2995,27 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSessionTest 
         "message" => "Previous response was not found. Retrying the full request."
       }
     })
+  end
+
+  defp assert_collect_guard_result(result, connection_use) do
+    terminal = native_retry_terminal()
+
+    assert {:ok,
+            %{
+              body: "data: " <> ^terminal <> "\n\n",
+              terminal: "error",
+              status: 200,
+              upstream_error_code: "previous_response_not_found",
+              upstream_error_param: "previous_response_id",
+              transport_failure: transport_failure,
+              upstream_websocket_connection: connection
+            }} = result
+
+    assert transport_failure ==
+             TransportFailureReason.continuation_generation_guard_metadata(connection_use)
+
+    assert connection.reused == (connection_use == :reused)
+    assert connection.reconnected == (connection_use == :reconnected)
   end
 
   defp websocket_success_without_id do

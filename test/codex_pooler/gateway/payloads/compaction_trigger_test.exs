@@ -16,6 +16,92 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTriggerTest do
   @external_resource @incremental_fixture_path
 
   describe "Responses compact projection" do
+    @tag :compaction_state_baseline
+    test "characterizes anchor projection and the bounded result transport before typed state" do
+      anchored = incremental_scenario!("anchored_tool_output_and_trigger")
+      trigger_only = incremental_scenario!("anchored_trigger_only")
+
+      for payload <- [anchored, trigger_only] do
+        projected = CompactionTrigger.project_responses_payload(payload, :sse)
+
+        assert projected["previous_response_id"] == payload["previous_response_id"]
+        assert projected["input"] == payload["input"]
+        assert CompactionTrigger.compaction_result_transport(payload) == :sse
+      end
+
+      for anchor <- [:absent, nil, 7, false, [], %{}, "", " \t\r\n"] do
+        payload =
+          if anchor == :absent,
+            do: Map.delete(trigger_only, "previous_response_id"),
+            else: Map.put(trigger_only, "previous_response_id", anchor)
+
+        refute Map.has_key?(
+                 CompactionTrigger.project_responses_payload(payload, :sse),
+                 "previous_response_id"
+               )
+      end
+
+      assert CompactionTrigger.compaction_result_transport(%{}) == :buffered
+    end
+
+    @tag :compaction_state_contract
+    test "classifies compaction input mode only from a valid top-level anchor" do
+      anchored_output = incremental_scenario!("anchored_tool_output_and_trigger")
+      anchored_trigger = incremental_scenario!("anchored_trigger_only")
+      full_history = incremental_scenario!("full_history_without_anchor")
+
+      assert CompactionTrigger.compaction_input_mode(anchored_output) == :incremental
+      assert CompactionTrigger.compaction_input_mode(anchored_trigger) == :incremental
+      assert CompactionTrigger.compaction_input_mode(full_history) == :full_history
+
+      for anchor <- [nil, 7, false, [], %{}, "", " \t\r\n"] do
+        assert full_history
+               |> Map.put("previous_response_id", anchor)
+               |> CompactionTrigger.compaction_input_mode() == :full_history
+      end
+    end
+
+    @tag :compaction_state_contract
+    test "classifies anchored custom tool output solely from the top-level anchor" do
+      payload = %{
+        "previous_response_id" => "resp_fixture_custom_output_0001",
+        "input" => [
+          %{
+            "type" => "custom_tool_call_output",
+            "call_id" => "call_fixture_custom_output",
+            "output" => "synthetic output"
+          },
+          %{"type" => "compaction_trigger"}
+        ]
+      }
+
+      assert CompactionTrigger.compaction_input_mode(payload) == :incremental
+
+      assert payload
+             |> Map.put("input", [%{"type" => "future_item_without_tool_semantics"}])
+             |> CompactionTrigger.compaction_input_mode() == :incremental
+    end
+
+    @tag :compaction_state_contract
+    test "keeps source-derived mode stable across repeated compact projection" do
+      for {scenario, expected_mode} <- [
+            {"anchored_tool_output_and_trigger", :incremental},
+            {"anchored_trigger_only", :incremental},
+            {"full_history_without_anchor", :full_history}
+          ] do
+        payload = incremental_scenario!(scenario)
+        mode = CompactionTrigger.compaction_input_mode(payload)
+
+        first = CompactionTrigger.project_responses_payload(payload, :sse)
+        second = CompactionTrigger.project_responses_payload(first, :sse)
+
+        assert mode == expected_mode
+        assert CompactionTrigger.compaction_input_mode(first) == expected_mode
+        assert CompactionTrigger.compaction_input_mode(second) == expected_mode
+        assert second == first
+      end
+    end
+
     test "locks the released Codex projection-relevant incremental frame contract" do
       fixture = load_incremental_fixture!()
 

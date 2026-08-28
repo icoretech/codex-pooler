@@ -14,6 +14,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ConnectionUpgrade
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ReceiveState
+  alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ReceiveState.Delivery
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketFrameWriter
@@ -276,16 +277,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
     case request_once_on_connection(state, key, request, connection_usage, request_caller) do
       {:ok, result, state} ->
-        if reused_connection? and not reset_probe?(request) and
-             pre_response_reconnectable?(result) do
+        if reconnect_reused_connection?(reused_connection?, request, result) do
           {:retry, state, result_connection_metadata(result)}
         else
           {:ok, result, state}
         end
 
       {:error, reason, state} ->
-        if reused_connection? and not reset_probe?(request) and
-             pre_response_reconnectable?(reason) do
+        if reconnect_reused_connection?(reused_connection?, request, reason) do
           {:retry, state, nil}
         else
           result = request_error(reason, state)
@@ -297,6 +296,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp reset_probe?(%Request{reset_probe: %ResetProbe{} = probe}), do: ResetProbe.bound?(probe)
   defp reset_probe?(%Request{}), do: false
+
+  defp collect_compaction?(%Request{websocket_delivery_mode: :collect_compaction}), do: true
+  defp collect_compaction?(%Request{}), do: false
+
+  defp reconnect_reused_connection?(false, %Request{}, _result_or_reason), do: false
+
+  defp reconnect_reused_connection?(true, %Request{} = request, result_or_reason) do
+    not reset_probe?(request) and not collect_compaction?(request) and
+      pre_response_reconnectable?(result_or_reason)
+  end
 
   defp reusable_connection?(%{key: key, conn: _conn}, key), do: true
   defp reusable_connection?(_state, _key), do: false
@@ -340,6 +349,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       message_mapper: request.message_mapper,
       frame_observer: request.frame_observer,
       native_codex_response_control: Map.get(request, :native_codex_response_control),
+      delivery: %Delivery{
+        mode: request.websocket_delivery_mode,
+        effective_serving_mode: request.effective_serving_mode
+      },
       request_caller_pid: request_caller_pid,
       request_caller_monitor: request_caller_monitor,
       # Tolerant access: during a rolling deploy an owner-forwarded request may
@@ -362,6 +375,33 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   defp connect_and_send_request(
+         state,
+         key,
+         url,
+         headers,
+         timeouts,
+         request,
+         receive_state,
+         connection_usage
+       ) do
+    if collect_compaction?(request) and
+         not collect_connection_eligible?(state, key, request, connection_usage) do
+      guard_connection_bound_continuation(state, receive_state, connection_usage)
+    else
+      connect_and_send_eligible_request(
+        state,
+        key,
+        url,
+        headers,
+        timeouts,
+        request,
+        receive_state,
+        connection_usage
+      )
+    end
+  end
+
+  defp connect_and_send_eligible_request(
          state,
          key,
          url,
@@ -395,6 +435,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
         {:error, reason, state}
     end
+  end
+
+  defp collect_connection_eligible?(state, key, request, connection_usage) do
+    connection_use(connection_usage) == :reused and reusable_connection?(state, key) and
+      Map.get(state, :last_successful_effective_serving_mode) == request.effective_serving_mode and
+      request.effective_serving_mode in ["full", "lite"]
   end
 
   defp request_caller(%ReceiveState{
@@ -446,7 +492,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       case send_text(state, payload) do
         {:ok, state} ->
           {:ok, result, state} = await_sent_request(state, receive_state)
-          state = complete_connection_request(state)
+
+          state =
+            state
+            |> maybe_record_successful_serving_mode(result, receive_state)
+            |> complete_connection_request()
+
           {:ok, put_result_connection_metadata(result, state, connection_usage), state}
 
         {:error, reason, state} ->
@@ -459,6 +510,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       end
     end
   end
+
+  defp maybe_record_successful_serving_mode(
+         %{conn: _conn} = state,
+         {:ok, %{terminal: terminal}},
+         %ReceiveState{delivery: %Delivery{effective_serving_mode: mode}}
+       )
+       when terminal in ["response.completed", "response.done"] and mode in ["full", "lite"] do
+    Map.put(state, :last_successful_effective_serving_mode, mode)
+  end
+
+  defp maybe_record_successful_serving_mode(state, _result, %ReceiveState{}), do: state
 
   defp await_sent_request(state, receive_state) do
     :erlang.garbage_collect(self())
@@ -829,7 +891,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
             body: receive_body(receive_state),
             terminal: terminal,
             status: 200,
-            headers: state.headers,
+            headers: Map.get(state, :headers, []),
             upstream_error_code: receive_state.terminal_upstream_error_code,
             upstream_error_param: receive_state.terminal_upstream_error_param,
             websocket_frame_headers: receive_state.websocket_frame_headers
@@ -843,7 +905,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
           %{
             body: receive_body(receive_state),
             reason: reason,
-            headers: state.headers,
+            headers: Map.get(state, :headers, []),
             upstream_error_param: receive_state.terminal_upstream_error_param,
             websocket_frame_headers: receive_state.websocket_frame_headers,
             transport_failure:
@@ -1131,6 +1193,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
     end
   end
 
+  defp maybe_mark_downstream_output_started(
+         %ReceiveState{delivery: %Delivery{mode: :collect_compaction}} = receive_state,
+         _decoded
+       ),
+       do: receive_state
+
   defp maybe_mark_downstream_output_started(%ReceiveState{} = receive_state, decoded) do
     if StreamProtocol.internal_control_event?(decoded) do
       receive_state
@@ -1295,6 +1363,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp write_frame(writer, text, _terminal_discriminator) when is_function(writer, 1),
     do: writer.(text)
+
+  defp write_frame(nil, _text, _terminal_discriminator), do: :ok
 
   defp map_message(text, %{} = decoded, mapper) when is_function(mapper, 1) do
     cond do

@@ -14,7 +14,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Transport do
     :websocket_owner_submission_observer,
     :route_class,
     forwarded_metadata_headers: [],
-    upstream_websocket_bridge?: false
+    upstream_websocket_bridge?: false,
+    websocket_delivery_mode: :relay
   ]
 
   @type websocket_writer :: (binary() -> any()) | nil
@@ -28,7 +29,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Transport do
           websocket_owner: WebsocketOwnerContext.t(),
           websocket_owner_submission_observer: (-> any()) | nil,
           route_class: String.t() | nil,
-          upstream_websocket_bridge?: boolean()
+          upstream_websocket_bridge?: boolean(),
+          websocket_delivery_mode: :relay | :collect_compaction
         }
 
   @spec build(map() | keyword(), String.t(), map()) :: t()
@@ -68,6 +70,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Transport do
 
     transport =
       transport_updates
+      |> normalize_websocket_delivery_mode()
       |> Normalization.normalize_optional_update(
         :forwarded_metadata_headers,
         &Normalization.forwarded_headers_update/1
@@ -116,4 +119,12 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Transport do
        do: "http_compact_json"
 
   defp compact_transport(_endpoint), do: "http_json"
+
+  defp normalize_websocket_delivery_mode(updates) do
+    case Map.fetch(updates, :websocket_delivery_mode) do
+      {:ok, mode} when mode in [:relay, :collect_compaction] -> updates
+      {:ok, _invalid} -> Map.delete(updates, :websocket_delivery_mode)
+      :error -> updates
+    end
+  end
 end

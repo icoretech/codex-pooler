@@ -15,8 +15,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
     :submission_observer,
     :reset_probe,
     :native_codex_response_control,
+    :effective_serving_mode,
     assignment_advertised?: false,
     connection_bound_continuation?: false,
+    websocket_delivery_mode: :relay,
     forward_error_body?: true
   ]
 
@@ -25,6 +27,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
           | (binary(),
              CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator.t() ->
                any())
+          | nil
+  @type delivery_mode :: :relay | :collect_compaction
+  @type effective_serving_mode :: String.t() | nil
   @type frame_observer ::
           (binary() -> any())
           | (binary(),
@@ -44,8 +49,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
           submission_observer: (-> any()) | nil,
           reset_probe: ResetProbe.t() | nil,
           native_codex_response_control: TurnSnapshot.t() | nil,
+          effective_serving_mode: effective_serving_mode(),
           assignment_advertised?: boolean(),
           connection_bound_continuation?: boolean(),
+          websocket_delivery_mode: delivery_mode(),
           forward_error_body?: boolean()
         }
 end

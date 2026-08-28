@@ -547,6 +547,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
           terminal_delivery_timeout: nil,
           terminal_delivery_timer_ref: nil,
           output_commit_probe: nil,
+          collect?: collect_request?(upstream_payload),
           submission_observed?: submission_notification?
         }
 
@@ -564,10 +565,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   @impl GenServer
   def handle_info(
+        {:websocket_owner_upstream_frame, ref, _payload},
+        %{active_turn: %{ref: ref, collect?: true}} = state
+      ) do
+    {:noreply, state}
+  end
+
+  def handle_info(
         {:websocket_owner_upstream_frame, ref, payload},
         %{active_turn: %{ref: ref}} = state
       ) do
     handle_upstream_frame(state, payload, terminal_frame?(payload))
+  end
+
+  def handle_info(
+        {:websocket_owner_upstream_frame, ref, _payload,
+         %TerminalDiscriminator{} = _discriminator},
+        %{active_turn: %{ref: ref, collect?: true}} = state
+      ) do
+    {:noreply, state}
   end
 
   def handle_info(
@@ -589,15 +605,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     if Process.alive?(state.upstream_pid) do
       result = DownstreamState.effective_active_turn_result(state.active_turn, result)
 
-      if terminal_bearing_result?(result) and not state.active_turn.terminal_forwarded? do
-        state
-        |> retain_terminal_result(result)
-        |> continue_or_retire()
-      else
-        state
-        |> settle_active_turn(result)
-        |> continue_or_retire()
-      end
+      state
+      |> resolve_active_turn_result(result)
+      |> continue_or_retire()
     else
       retire_current_upstream(state, :owner_crashed)
     end
@@ -793,6 +803,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       ref: ref,
       upstream_pid: state.upstream_pid,
       upstream_sender: state.upstream_sender,
+      collect?: collect_request?(upstream_payload),
       forward_error_body?: forward_error_body?(upstream_payload)
     }
 
@@ -841,13 +852,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
            ref: ref,
            upstream_pid: upstream_pid,
            upstream_sender: sender,
+           collect?: collect?,
            forward_error_body?: forward_error_body?
          },
          upstream_payload
        ) do
-    writer = fn frame, discriminator ->
-      send(owner, {:websocket_owner_upstream_frame, ref, frame, discriminator})
-    end
+    writer =
+      if collect? do
+        nil
+      else
+        fn frame, discriminator ->
+          send(owner, {:websocket_owner_upstream_frame, ref, frame, discriminator})
+        end
+      end
 
     case sender.(upstream_pid, upstream_payload, writer) do
       {:error, response} when is_map(response) ->
@@ -962,6 +979,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     downstream = DownstreamState.active_turn_downstream(state)
     clear_active_turn_resources(state.active_turn)
 
+    if state.active_turn.collect? do
+      state
+      |> Map.put(:active_turn, nil)
+      |> DownstreamState.maybe_schedule_idle_shutdown()
+    else
+      finish_relay_active_turn(state, downstream, result)
+    end
+  end
+
+  defp finish_relay_active_turn(state, downstream, result) do
     case result do
       :ok ->
         :ok
@@ -1012,6 +1039,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     else
       reply_active_turn(state, result)
       finish_active_turn(state, result)
+    end
+  end
+
+  defp resolve_active_turn_result(%{active_turn: %{collect?: true}} = state, result),
+    do: settle_active_turn(state, result)
+
+  defp resolve_active_turn_result(state, result) do
+    if terminal_bearing_result?(result) and not state.active_turn.terminal_forwarded? do
+      retain_terminal_result(state, result)
+    else
+      settle_active_turn(state, result)
     end
   end
 
@@ -1163,6 +1201,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
        do: true
 
   defp output_commit_probe_required?(_state, _result), do: false
+
+  defp collect_request?(%UpstreamWebsocketSession.Request{
+         websocket_delivery_mode: :collect_compaction,
+         writer: nil
+       }),
+       do: true
+
+  defp collect_request?(_request), do: false
 
   defp maybe_complete_terminal_delivery(state, terminal?) do
     if terminal? do

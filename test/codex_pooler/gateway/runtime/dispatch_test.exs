@@ -387,6 +387,96 @@ defmodule CodexPooler.Gateway.Runtime.DispatchTest do
     assert FakeUpstream.count(upstream) == 0
   end
 
+  test "connection-bound compact disables candidate retry while ordinary dispatch reaches fallback" do
+    first_upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    second_upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    setup = gateway_setup(first_upstream)
+
+    %{assignment: second_assignment, identity: second_identity} =
+      active_upstream_assignment_fixture(setup.pool, %{
+        account_label: "Connection-bound retry control",
+        base_url: FakeUpstream.url(second_upstream)
+      })
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    candidates = [{setup.assignment, setup.identity}, {second_assignment, second_identity}]
+
+    for connection_bound? <- [true, false] do
+      downstream =
+        compact_downstream(
+          setup,
+          "resp_dispatch_retry_policy_#{connection_bound?}_#{System.unique_integer([:positive])}"
+        )
+
+      compact = CompactionTrigger.project_responses_payload(downstream)
+
+      request_options =
+        compact
+        |> compact_request_options(downstream)
+        |> maybe_connection_bound_compact(connection_bound?)
+
+      transport = if connection_bound?, do: "websocket", else: "http_compact_json"
+
+      assert {:ok, reserved} =
+               Accounting.reserve(auth, setup.model, compact, %{
+                 endpoint: "/backend-api/codex/responses/compact",
+                 transport: transport,
+                 correlation_id:
+                   "dispatch-retry-policy-#{connection_bound?}-#{System.unique_integer([:positive])}",
+                 request_metadata: %{
+                   "compaction_bridge" => %{
+                     "applied" => true,
+                     "result_transport" => "buffered"
+                   }
+                 }
+               })
+
+      assert {:ok, context} =
+               Context.new(%{
+                 auth: auth,
+                 endpoint: "/backend-api/codex/responses/compact",
+                 payload: compact,
+                 model: setup.model,
+                 reserved: reserved,
+                 candidates: candidates,
+                 request_options: request_options,
+                 route_state:
+                   RouteState.new(%{visible_model: setup.model, candidates: candidates})
+               })
+
+      planned_assignment_ids = Enum.map(context.route_plan.candidates, &elem(&1, 0).id)
+      parent = self()
+
+      result =
+        Dispatch.dispatch(context, fn selected_context ->
+          send(parent, {
+            :retry_policy_candidate,
+            connection_bound?,
+            selected_context.assignment.id,
+            selected_context.allow_retry?
+          })
+
+          if selected_context.allow_retry? do
+            {:retry, :synthetic_retryable_failure}
+          else
+            {:ok, %{status: 200}}
+          end
+        end)
+
+      assert {:ok, %{status: 200}} = result
+
+      if connection_bound? do
+        assert_receive {:retry_policy_candidate, true, selected_assignment_id, false}
+        assert selected_assignment_id == List.first(planned_assignment_ids)
+        refute_received {:retry_policy_candidate, true, _assignment_id, _allow_retry?}
+      else
+        assert_receive {:retry_policy_candidate, false, first_assignment_id, true}
+        assert_receive {:retry_policy_candidate, false, second_assignment_id, false}
+        assert [first_assignment_id, second_assignment_id] == planned_assignment_ids
+      end
+    end
+  end
+
   test "context construction returns sanitized gateway error when route plan metadata cannot be recorded" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
@@ -881,6 +971,15 @@ defmodule CodexPooler.Gateway.Runtime.DispatchTest do
     |> RequestOptions.build("/backend-api/codex/responses/compact", compact)
     |> RequestOptions.put_transport(route_class: "proxy_compact")
   end
+
+  defp maybe_connection_bound_compact(request_options, true) do
+    RequestOptions.put_transport(request_options,
+      transport: "websocket",
+      websocket_delivery_mode: :collect_compaction
+    )
+  end
+
+  defp maybe_connection_bound_compact(request_options, false), do: request_options
 
   defp reserve_compact(auth, setup, compact) do
     Accounting.reserve(auth, setup.model, compact, %{

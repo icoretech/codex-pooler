@@ -91,6 +91,69 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert fresh_upstream_pid != upstream_pid
   end
 
+  test "collect request returns retained result without owner frame or terminal lifecycle",
+       context do
+    parent = self()
+
+    upstream = %{
+      start: fn ->
+        pid =
+          spawn(fn ->
+            receive do
+              :stop -> :ok
+            end
+          end)
+
+        send(parent, {:collect_upstream_started, pid})
+        {:ok, pid}
+      end,
+      send: fn upstream_pid, request, writer ->
+        send(
+          parent,
+          {:collect_upstream_send, upstream_pid, request.websocket_delivery_mode,
+           request.effective_serving_mode, writer}
+        )
+
+        {:ok,
+         %{
+           status: 200,
+           headers: [],
+           terminal: "response.completed",
+           body: "retained-collect-result"
+         }}
+      end,
+      close: fn pid ->
+        send(pid, :stop)
+        :ok
+      end
+    }
+
+    assert {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:collect_upstream_started, upstream_pid}
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(owner, downstream_target("collect-owner"))
+
+    request = %UpstreamWebsocketSession.Request{
+      url: "https://example.com/backend-api/codex/responses",
+      headers: [],
+      payload: "collect-request",
+      timeouts: %{},
+      writer: nil,
+      websocket_delivery_mode: :collect_compaction,
+      effective_serving_mode: "full"
+    }
+
+    assert {:ok, %{body: "retained-collect-result", terminal: "response.completed"}} =
+             WebsocketOwnerSession.submit_request(owner, downstream, request, false)
+
+    assert_receive {:collect_upstream_send, ^upstream_pid, :collect_compaction, "full", nil}
+    refute_received {:websocket_owner_frame, _, _, _}
+    refute_received {:websocket_owner_output_commit_probe, _, _, _, _, _, _}
+
+    assert %{active_turn: nil} = :sys.get_state(owner)
+  end
+
   test "replaces a stale registered owner that retires after reporting its status", context do
     context = %{context | codex_session_id: Ecto.UUID.generate()}
     on_exit(fn -> cleanup_owner_session(context.codex_session_id) end)

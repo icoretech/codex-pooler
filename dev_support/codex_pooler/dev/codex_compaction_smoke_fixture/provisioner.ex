@@ -167,6 +167,7 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
         "source_assignment_models" => %{
           assignment.id => %{
             "slug" => @model,
+            "use_responses_lite" => true,
             "input_modalities" => ["text", "image"],
             "supports_image_detail_original" => true,
             "supports_tools" => true,

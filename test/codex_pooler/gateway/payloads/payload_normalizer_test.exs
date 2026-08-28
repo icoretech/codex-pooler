@@ -2238,6 +2238,62 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
       end
     end
 
+    test "ordinary Lite continuations retain the tools prefix when previous_response_id is nonblank" do
+      endpoint = "/backend-api/codex/responses"
+
+      payload = %{
+        "type" => "response.create",
+        "model" => "gpt-5.6-terra",
+        "previous_response_id" => "resp_ordinary_lite_continuation_0001",
+        "input" => [
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_ordinary_lite_continuation",
+            "output" => "synthetic output"
+          }
+        ],
+        "tools" => [
+          %{
+            "type" => "function",
+            "name" => "sample_lookup",
+            "parameters" => %{"type" => "object", "properties" => %{}}
+          }
+        ],
+        "stream" => true,
+        "generate" => true
+      }
+
+      http_options = RequestOptions.build(serving_mode_opts("lite"), endpoint, payload)
+
+      assert http_options.payload_context.compaction_input_mode == :incremental
+      refute http_options.payload_context.compaction_trigger_bridge?
+
+      for {transport, request_options} <- [
+            http: http_options,
+            websocket: RequestOptions.for_websocket(http_options, payload)
+          ] do
+        assert {:ok, encoded} =
+                 PayloadNormalizer.upstream_payload(
+                   payload,
+                   %Model{upstream_model_id: "provider-model"},
+                   endpoint,
+                   request_options
+                 )
+
+        upstream = Jason.decode!(encoded)
+
+        assert [
+                 %{
+                   "type" => "additional_tools",
+                   "role" => "developer",
+                   "tools" => [%{"name" => "sample_lookup"}]
+                 },
+                 %{"type" => "function_call_output"}
+               ] = upstream["input"],
+               "ordinary #{transport} continuation lost its tools prefix"
+      end
+    end
+
     test "preserves typed custom tool choice for full, rejects it for Lite, and keeps Lite scalar choices" do
       endpoint = "/backend-api/codex/responses"
       custom_tool = %{"type" => "custom", "name" => "custom_choice_fixture"}
@@ -2382,6 +2438,117 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
                )
 
       assert Jason.decode!(alias_encoded) == first
+    end
+
+    test "preserves incremental compact input exactly when projecting Responses Lite" do
+      function_output = %{
+        "type" => "function_call_output",
+        "call_id" => "call_incremental_fixture",
+        "output" => [
+          %{
+            "type" => "input_image",
+            "image_url" => "data:image/png;base64,AA==",
+            "detail" => "high"
+          },
+          %{"type" => "input_text", "text" => "synthetic-result", "detail" => "keep"}
+        ]
+      }
+
+      custom_output = %{
+        "type" => "custom_tool_call_output",
+        "call_id" => "call_custom_incremental_fixture",
+        "output" => %{
+          "content" => [
+            %{
+              "type" => "input_image",
+              "image_url" => "data:image/png;base64,AA==",
+              "detail" => "original"
+            }
+          ],
+          "detail" => "keep"
+        }
+      }
+
+      trigger = %{"type" => "compaction_trigger"}
+
+      for {name, input, expected_input} <- [
+            {"function output", [function_output, trigger],
+             [strip_image_detail(function_output), trigger]},
+            {"trigger only", [trigger], [trigger]},
+            {"future custom output", [custom_output, trigger],
+             [strip_image_detail(custom_output), trigger]}
+          ] do
+        source_payload = %{
+          "model" => "gpt-5.6-terra",
+          "previous_response_id" => "resp_incremental_projection_fixture",
+          "stream" => true,
+          "instructions" => "incremental instructions must not become input",
+          "tools" => [%{"type" => "custom", "name" => "incremental_tool_fixture"}],
+          "input" => input
+        }
+
+        {first, second, request_options} = prepare_incremental_lite_compact(source_payload)
+
+        assert request_options.payload_context.compaction_input_mode == :incremental, name
+        assert first["previous_response_id"] == source_payload["previous_response_id"], name
+        assert second == first, name
+        assert Enum.map(first["input"], & &1["type"]) == Enum.map(input, & &1["type"]), name
+        assert length(first["input"]) == length(input), name
+        assert first["input"] == expected_input, name
+        assert first["store"] == false, name
+        assert first["stream"] == true, name
+        assert first["parallel_tool_calls"] == false, name
+        assert get_in(first, ["reasoning", "context"]) == "all_turns", name
+        refute Map.has_key?(first, "tools"), name
+        refute Map.has_key?(first, "instructions"), name
+
+        refute Enum.any?(first["input"], fn item ->
+                 item["type"] == "additional_tools" or item["role"] == "developer"
+               end),
+               name
+      end
+    end
+
+    test "keeps already supplied incremental Lite items in place without duplicating prefixes" do
+      supplied_prefix = %{
+        "type" => "additional_tools",
+        "role" => "developer",
+        "tools" => [%{"type" => "custom", "name" => "supplied_fixture"}]
+      }
+
+      supplied_message = %{
+        "type" => "message",
+        "role" => "user",
+        "content" => [
+          %{
+            "type" => "input_image",
+            "image_url" => "data:image/png;base64,AA==",
+            "detail" => "high"
+          }
+        ]
+      }
+
+      trigger = %{"type" => "compaction_trigger"}
+
+      source_payload = %{
+        "model" => "gpt-5.6-terra",
+        "previous_response_id" => "resp_existing_input_fixture",
+        "stream" => true,
+        "instructions" => "nonblank incremental instructions",
+        "tools" => [%{"type" => "custom", "name" => "top_level_fixture"}],
+        "input" => [supplied_prefix, supplied_message, trigger]
+      }
+
+      {first, second, request_options} = prepare_incremental_lite_compact(source_payload)
+
+      assert request_options.payload_context.compaction_input_mode == :incremental
+      assert second == first
+
+      assert first["input"] == [supplied_prefix, strip_image_detail(supplied_message), trigger]
+      assert Enum.count(first["input"], &(&1["type"] == "additional_tools")) == 1
+      assert first["previous_response_id"] == source_payload["previous_response_id"]
+      refute Map.has_key?(first, "tools")
+      refute Map.has_key?(first, "instructions")
     end
 
     test "uses the pre-dispatch applied effort for compact payloads without re-deciding policy" do
@@ -3278,6 +3445,38 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizerTest do
              )
 
     Jason.decode!(encoded)
+  end
+
+  defp prepare_incremental_lite_compact(source_payload) do
+    compact_payload = CompactionTrigger.project_responses_payload(source_payload, :sse)
+
+    request_options =
+      "lite"
+      |> serving_mode_opts()
+      |> Map.merge(%{compaction_trigger_bridge?: true, compaction_result_transport: :sse})
+      |> RequestOptions.build("/backend-api/codex/responses/compact", source_payload)
+
+    model = %Model{upstream_model_id: "provider-model"}
+
+    assert {:ok, first_encoded} =
+             PayloadNormalizer.upstream_payload(
+               compact_payload,
+               model,
+               "/backend-api/codex/responses/compact",
+               request_options
+             )
+
+    first = Jason.decode!(first_encoded)
+
+    assert {:ok, second_encoded} =
+             PayloadNormalizer.upstream_payload(
+               first,
+               model,
+               "/backend-api/codex/responses/compact",
+               request_options
+             )
+
+    {first, Jason.decode!(second_encoded), request_options}
   end
 
   defp native_text_input(text) do

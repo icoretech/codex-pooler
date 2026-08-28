@@ -703,6 +703,38 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     cleanup_response_task(second_state, second_task_pid)
   end
 
+  test "anchored trigger-only native compact queues behind active lineage work" do
+    lineage_task_pid = owner_turn_pid()
+    on_exit(fn -> send(lineage_task_pid, :stop) end)
+
+    payload =
+      Jason.encode!(%{
+        "type" => "response.create",
+        "model" => "gpt-test",
+        "previous_response_id" => "resp_fixture_anchor",
+        "input" => [%{"type" => "compaction_trigger"}],
+        "stream" => true
+      })
+
+    state =
+      public_turn_state(lineage_task_pid, %{
+        opts: RequestOptions.for_websocket(%{}),
+        public_response_task_pid: nil
+      })
+
+    assert {:ok, queued_state} =
+             CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+
+    on_exit(fn ->
+      Enum.each(queued_state.tasks, fn task_pid ->
+        if Process.alive?(task_pid), do: Process.exit(task_pid, :kill)
+      end)
+    end)
+
+    assert queued_state.tasks == MapSet.new([lineage_task_pid])
+    assert :queue.to_list(queued_state.queued_response_payloads) == [payload]
+  end
+
   test "two creates sharing a stream id retain FIFO turn ownership" do
     first = public_create_payload("lane-shared", "first")
     second = public_create_payload("lane-shared", "second")

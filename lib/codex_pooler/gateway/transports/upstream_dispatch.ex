@@ -20,6 +20,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV2
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks
   alias CodexPooler.RouteClass
   alias CodexPooler.Upstreams.CloudflareCookies
@@ -68,6 +69,8 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
             CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot.t() | nil,
           required(:assignment_advertised?) => boolean(),
           required(:connection_bound_continuation?) => boolean(),
+          required(:websocket_delivery_mode) => :relay | :collect_compaction,
+          required(:effective_serving_mode) => String.t(),
           required(:forward_error_body?) => boolean()
         }
 
@@ -442,6 +445,12 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       native_codex_response_control: native_codex_response_control,
       assignment_advertised?: assignment_advertised? == true,
       connection_bound_continuation?: connection_bound_continuation?(request_options),
+      websocket_delivery_mode:
+        if(RequestOptions.connection_bound_compaction?(request_options),
+          do: :collect_compaction,
+          else: :relay
+        ),
+      effective_serving_mode: RequestOptions.model_serving_mode(request_options),
       forward_error_body?: false
     }
 
@@ -586,12 +595,13 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   end
 
   @spec owner_websocket_request(websocket_request_data(), RequestOptions.t()) ::
-          {:ok, WebsocketOwnerRequest.t()} | {:error, WebsocketOwnerRequest.validation_error()}
+          {:ok, WebsocketOwnerRequest.t() | WebsocketOwnerRequestV2.t()}
+          | {:error,
+             WebsocketOwnerRequest.validation_error() | WebsocketOwnerRequestV2.validation_error()}
   defp owner_websocket_request(request_data, request_options) do
     case request_data.identity.id do
       upstream_identity_id when is_binary(upstream_identity_id) ->
-        WebsocketOwnerRequest.new(%{
-          version: 1,
+        attrs = %{
           url: request_data.url,
           headers: request_data.headers,
           payload: request_data.payload,
@@ -606,7 +616,21 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           forward_error_body?: request_data.forward_error_body?,
           submission_notification?:
             is_function(request_options.transport.websocket_owner_submission_observer, 0)
-        })
+        }
+
+        if RequestOptions.connection_bound_compaction?(request_options) do
+          WebsocketOwnerRequestV2.new(
+            attrs
+            |> Map.put(:version, 2)
+            |> Map.put(:websocket_delivery_mode, :collect_compaction)
+            |> Map.put(
+              :effective_serving_mode,
+              String.to_existing_atom(request_data.effective_serving_mode)
+            )
+          )
+        else
+          WebsocketOwnerRequest.new(Map.put(attrs, :version, 1))
+        end
 
       _invalid_identity ->
         {:error, {:invalid_field, :upstream_identity_id}}

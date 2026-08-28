@@ -18,6 +18,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
   alias CodexPooler.Gateway.Runtime.Service
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.Repo
+  alias CodexPooler.Upstreams
 
   @raw_sentinel "synthetic-v2-terminal-private-message"
 
@@ -183,6 +184,287 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
     )
   end
 
+  test "connection-bound compact suppresses retryable first-event replay" do
+    anchor = "resp_connection_bound_retry_anchor"
+
+    first_upstream =
+      start_upstream(
+        {:sequence,
+         [
+           completed_websocket_response(anchor),
+           FakeUpstream.sse_stream(
+             [
+               {"error",
+                %{
+                  "type" => "error",
+                  "status" => 400,
+                  "code" => "websocket_connection_limit_reached",
+                  "param" => "reasoning.effort",
+                  "message" => @raw_sentinel
+                }}
+             ],
+             done: false
+           ),
+           successful_compaction_response("retry_must_not_run")
+         ]}
+      )
+
+    setup = gateway_setup(first_upstream, compact?: true)
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert {:ok,
+            %{
+              codex_session: session,
+              upstream_websocket_session: upstream_websocket_session
+            }} = Websocket.prepare_websocket_session(auth)
+
+    request_options =
+      Websocket.websocket_response_options(
+        %{request_id: "connection-bound-retry-policy"},
+        session,
+        upstream_websocket_session,
+        true
+      )
+
+    assert :ok =
+             Service.execute_websocket_response(
+               auth,
+               ordinary_payload(setup, anchor),
+               request_options,
+               fn _frame -> :ok end
+             )
+
+    result =
+      Service.execute_websocket_response(
+        auth,
+        compact_payload(setup, anchor),
+        request_options,
+        fn frame -> send(self(), {:unexpected_native_frame, frame}) end
+      )
+
+    assert FakeUpstream.count(first_upstream) == 2
+    assert FakeUpstream.http_request_count(first_upstream) == 0
+    assert FakeUpstream.websocket_connection_count(first_upstream) == 1
+
+    compact_request =
+      Repo.one!(
+        from(request in Request,
+          where:
+            request.pool_id == ^setup.pool.id and
+              request.endpoint == "/backend-api/codex/responses/compact"
+        )
+      )
+
+    assert compact_request.status == "failed"
+    assert compact_request.retry_count == 0
+
+    assert [compact_attempt] =
+             Repo.all(from(attempt in Attempt, where: attempt.request_id == ^compact_request.id))
+
+    assert compact_attempt.status == "failed"
+    refute compact_attempt.retryable
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where: entry.request_id == ^compact_request.id and entry.entry_kind == "settlement"
+             ),
+             :count
+           ) == 1
+
+    assert {:error, %{code: _code}} = result
+    refute_received {:unexpected_native_frame, _frame}
+  end
+
+  test "connection-bound compact suppresses websocket auth refresh and reconnect" do
+    anchor = "resp_connection_bound_auth_anchor"
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           completed_websocket_response(anchor),
+           FakeUpstream.sse_stream(
+             [
+               {"response.failed",
+                %{
+                  "type" => "response.failed",
+                  "response" => %{
+                    "status" => "failed",
+                    "error" => %{
+                      "code" => "invalid_api_key",
+                      "param" => "reasoning.effort",
+                      "message" => @raw_sentinel
+                    }
+                  }
+                }}
+             ],
+             done: false
+           ),
+           FakeUpstream.json_response(%{"access_token" => "refresh-must-not-run"}, 200),
+           successful_compaction_response("auth_retry_must_not_run")
+         ]}
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+
+    assert {:ok, _secret} =
+             Upstreams.store_encrypted_secret(setup.identity, %{
+               secret_kind: "refresh_token",
+               plaintext: "synthetic-compact-refresh-token"
+             })
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert {:ok,
+            %{
+              codex_session: session,
+              upstream_websocket_session: upstream_websocket_session
+            }} = Websocket.prepare_websocket_session(auth)
+
+    request_options =
+      Websocket.websocket_response_options(
+        %{request_id: "connection-bound-auth-policy"},
+        session,
+        upstream_websocket_session,
+        true
+      )
+
+    assert :ok =
+             Service.execute_websocket_response(
+               auth,
+               ordinary_payload(setup, anchor),
+               request_options,
+               fn _frame -> :ok end
+             )
+
+    result =
+      Service.execute_websocket_response(
+        auth,
+        compact_payload(setup, anchor),
+        request_options,
+        fn frame -> send(self(), {:unexpected_native_frame, frame}) end
+      )
+
+    assert FakeUpstream.count(upstream) == 2
+    refute Enum.any?(FakeUpstream.requests(upstream), &(&1.path == "/oauth/token"))
+    assert FakeUpstream.http_request_count(upstream) == 0
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+
+    compact_request =
+      Repo.one!(
+        from(request in Request,
+          where:
+            request.pool_id == ^setup.pool.id and
+              request.endpoint == "/backend-api/codex/responses/compact"
+        )
+      )
+
+    assert compact_request.status == "failed"
+    assert compact_request.retry_count == 0
+    refute Map.has_key?(compact_request.request_metadata || %{}, "auth_refresh")
+
+    assert [compact_attempt] =
+             Repo.all(from(attempt in Attempt, where: attempt.request_id == ^compact_request.id))
+
+    assert compact_attempt.status == "failed"
+    refute compact_attempt.retryable
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where: entry.request_id == ^compact_request.id and entry.entry_kind == "settlement"
+             ),
+             :count
+           ) == 1
+
+    assert {:error, %{code: _code}} = result
+    refute_received {:unexpected_native_frame, _frame}
+    refute inspect({compact_request, compact_attempt}) =~ @raw_sentinel
+    refute inspect({compact_request, compact_attempt}) =~ "synthetic-compact-refresh-token"
+  end
+
+  test "connection-bound compact suppresses pre-visible close reconnect" do
+    anchor = "resp_connection_bound_close_anchor"
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           completed_websocket_response(anchor),
+           FakeUpstream.websocket_sse_then_close([]),
+           FakeUpstream.json_response(%{
+             "id" => "resp_close_retry_must_not_run",
+             "object" => "response"
+           })
+         ]}
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    assert {:ok,
+            %{
+              codex_session: session,
+              upstream_websocket_session: upstream_websocket_session
+            }} = Websocket.prepare_websocket_session(auth)
+
+    request_options =
+      Websocket.websocket_response_options(
+        %{request_id: "connection-bound-close-policy"},
+        session,
+        upstream_websocket_session,
+        true
+      )
+
+    assert :ok =
+             Service.execute_websocket_response(
+               auth,
+               ordinary_payload(setup, anchor),
+               request_options,
+               fn _frame -> :ok end
+             )
+
+    assert {:error, %{code: _code}} =
+             Service.execute_websocket_response(
+               auth,
+               compact_payload(setup, anchor),
+               request_options,
+               fn frame -> send(self(), {:unexpected_native_frame, frame}) end
+             )
+
+    assert FakeUpstream.count(upstream) == 2
+    assert FakeUpstream.websocket_connection_count(upstream) == 1
+    assert FakeUpstream.http_request_count(upstream) == 0
+    refute_received {:unexpected_native_frame, _frame}
+
+    compact_request =
+      Repo.one!(
+        from(request in Request,
+          where:
+            request.pool_id == ^setup.pool.id and
+              request.endpoint == "/backend-api/codex/responses/compact"
+        )
+      )
+
+    assert compact_request.status == "failed"
+    assert compact_request.retry_count == 0
+
+    assert [compact_attempt] =
+             Repo.all(from(attempt in Attempt, where: attempt.request_id == ^compact_request.id))
+
+    assert compact_attempt.status == "failed"
+    refute compact_attempt.retryable
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry,
+               where: entry.request_id == ^compact_request.id and entry.entry_kind == "settlement"
+             ),
+             :count
+           ) == 1
+
+    assert_health(setup.assignment, compact_request, "upstream_stream_error", :failed)
+  end
+
   defp execute_failure(first_mode, opts \\ []) do
     first_upstream = start_upstream(first_mode)
 
@@ -335,20 +617,73 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionFailureTest do
   end
 
   defp compact_payload(setup) do
+    compact_payload(setup, nil)
+  end
+
+  defp compact_payload(setup, anchor) do
+    Jason.encode!(
+      %{
+        "type" => "response.create",
+        "model" => setup.model.exposed_model_id,
+        "input" => [
+          %{"type" => "message", "role" => "user", "content" => "synthetic compact input"},
+          %{"type" => "compaction_trigger"}
+        ],
+        "stream" => true,
+        "generate" => true,
+        "client_metadata" => %{
+          "x-codex-turn-metadata" =>
+            Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
+        }
+      }
+      |> maybe_put_previous_response_id(anchor)
+    )
+  end
+
+  defp ordinary_payload(setup, response_id) do
     Jason.encode!(%{
       "type" => "response.create",
       "model" => setup.model.exposed_model_id,
-      "input" => [
-        %{"type" => "message", "role" => "user", "content" => "synthetic compact input"},
-        %{"type" => "compaction_trigger"}
-      ],
+      "input" => [%{"type" => "message", "role" => "user", "content" => "synthetic lineage"}],
       "stream" => true,
       "generate" => true,
-      "client_metadata" => %{
-        "x-codex-turn-metadata" =>
-          Jason.encode!(%{"compaction" => %{"implementation" => "responses_compaction_v2"}})
-      }
+      "client_metadata" => %{"synthetic_response_id" => response_id}
     })
+  end
+
+  defp maybe_put_previous_response_id(payload, nil), do: payload
+
+  defp maybe_put_previous_response_id(payload, anchor),
+    do: Map.put(payload, "previous_response_id", anchor)
+
+  defp completed_websocket_response(response_id) do
+    FakeUpstream.sse_stream(
+      [
+        {"response.completed",
+         %{
+           "type" => "response.completed",
+           "response" => %{"id" => response_id, "status" => "completed", "output" => []}
+         }}
+      ],
+      done: false
+    )
+  end
+
+  defp successful_compaction_response(suffix) do
+    FakeUpstream.sse_stream(
+      [
+        native_compaction_item_event(%{
+          "type" => "compaction",
+          "encrypted_content" => "synthetic-native-encrypted-#{suffix}"
+        }),
+        {"response.completed",
+         %{
+           "type" => "response.completed",
+           "response" => %{"id" => "resp_#{suffix}", "status" => "completed"}
+         }}
+      ],
+      done: false
+    )
   end
 
   defp native_compaction_item_event(item \\ nil)

@@ -513,6 +513,28 @@ defmodule CodexPooler.Gateway.Payloads.PayloadNormalizer do
 
   defp normalize_backend_codex_responses_lite_input(
          payload,
+         %RequestOptions{
+           payload_context: %{
+             compaction_trigger_bridge?: true,
+             compaction_input_mode: :incremental
+           }
+         } =
+           request_options
+       ) do
+    if RequestOptions.use_responses_lite?(request_options) do
+      input = Map.get(payload, "input", [])
+      input = if is_list(input), do: input, else: []
+
+      payload
+      |> Map.drop(["tools", "instructions"])
+      |> Map.put("input", Enum.map(input, &strip_responses_lite_image_details/1))
+    else
+      payload
+    end
+  end
+
+  defp normalize_backend_codex_responses_lite_input(
+         payload,
          %RequestOptions{} = request_options
        ) do
     if RequestOptions.use_responses_lite?(request_options) do

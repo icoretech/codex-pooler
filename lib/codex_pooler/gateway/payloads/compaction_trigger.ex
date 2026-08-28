@@ -34,7 +34,16 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTrigger do
 
   @type payload :: %{optional(String.t()) => term()}
   @type bridge_decision :: :passthrough | {:ok, payload()} | {:error, Contracts.gateway_error()}
+  @type compaction_input_mode :: :incremental | :full_history
   @type compaction_result_transport :: :buffered | :sse
+
+  @spec compaction_input_mode(payload()) :: compaction_input_mode()
+  def compaction_input_mode(%{"previous_response_id" => response_id})
+      when is_binary(response_id) do
+    if String.trim(response_id) == "", do: :full_history, else: :incremental
+  end
+
+  def compaction_input_mode(%{}), do: :full_history
 
   @spec compaction_result_transport(payload()) :: compaction_result_transport()
   def compaction_result_transport(%{"client_metadata" => %{} = metadata}) do

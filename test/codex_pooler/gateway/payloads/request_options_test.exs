@@ -3,6 +3,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
 
   alias CodexPooler.Access.APIKeys.ReasoningEffortPolicy.Decision
   alias CodexPooler.Gateway.OperationalSettings
+  alias CodexPooler.Gateway.Payloads.CompactionTrigger
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.CompactionProjectionContext
   alias CodexPooler.Gateway.Payloads.RequestOptions.Continuity
@@ -31,6 +32,236 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   end
 
   describe "boundary constructors" do
+    @tag :compaction_state_baseline
+    test "characterizes ordinary option transforms and existing result transport state" do
+      payload = %{"model" => "example-model", "input" => [%{"type" => "message"}]}
+
+      options =
+        %{}
+        |> RequestOptions.build("/backend-api/codex/responses", payload)
+        |> RequestOptions.put_model_serving_mode(
+          configured_mode: "auto",
+          effective_mode: "lite",
+          source: "catalog"
+        )
+
+      transformed = [
+        RequestOptions.build(options, "/backend-api/codex/responses", payload),
+        RequestOptions.for_payload(options, "/backend-api/codex/responses", payload),
+        RequestOptions.for_websocket(options, payload),
+        RequestOptions.retarget(options, "/backend-api/codex/responses/compact", payload)
+      ]
+
+      assert Enum.all?(transformed, fn transformed_options ->
+               RequestOptions.model_serving_mode_snapshot(transformed_options) ==
+                 RequestOptions.model_serving_mode_snapshot(options)
+             end)
+
+      assert options.transport.transport == "http_json"
+      assert options.payload_context.compaction_result_transport == :buffered
+    end
+
+    @tag :compaction_state_contract
+    test "derives input mode from source payload and defaults delivery to relay" do
+      anchored_payload = %{
+        "previous_response_id" => "resp_fixture_typed_state_0001",
+        "input" => [%{"type" => "compaction_trigger"}]
+      }
+
+      full_history_payload = %{"input" => [%{"type" => "compaction_trigger"}]}
+
+      anchored =
+        RequestOptions.build(%{}, "/backend-api/codex/responses", anchored_payload)
+
+      full_history =
+        RequestOptions.build(%{}, "/backend-api/codex/responses", full_history_payload)
+
+      assert anchored.payload_context.compaction_input_mode == :incremental
+      assert full_history.payload_context.compaction_input_mode == :full_history
+      assert anchored.transport.websocket_delivery_mode == :relay
+      assert full_history.transport.websocket_delivery_mode == :relay
+      refute RequestOptions.connection_bound_compaction?(anchored)
+      refute RequestOptions.connection_bound_compaction?(full_history)
+    end
+
+    @tag :compaction_state_contract
+    @tag :compaction_input_mode_immutable
+    test "typed payload updates cannot rewrite source-derived compaction input mode" do
+      anchored =
+        RequestOptions.build(
+          %{},
+          "/backend-api/codex/responses",
+          %{
+            "previous_response_id" => "resp_fixture_immutable_mode_0001",
+            "input" => [%{"type" => "compaction_trigger"}]
+          }
+        )
+
+      full_history =
+        RequestOptions.build(
+          %{},
+          "/backend-api/codex/responses",
+          %{"input" => [%{"type" => "compaction_trigger"}]}
+        )
+
+      for {options, attempted_modes, expected_mode} <- [
+            {anchored, [:incremental, :full_history], :incremental},
+            {full_history, [:full_history, :incremental], :full_history}
+          ],
+          attempted_mode <- attempted_modes do
+        updated =
+          RequestOptions.put_payload_context(options,
+            compaction_input_mode: attempted_mode
+          )
+
+        assert updated.payload_context.compaction_input_mode == expected_mode
+      end
+    end
+
+    @tag :compaction_state_contract
+    test "accepts collect mode only through typed server updates" do
+      anchor = "resp_fixture_private_anchor_0001"
+
+      payload = %{
+        "previous_response_id" => anchor,
+        "compaction_input_mode" => "incremental",
+        "websocket_delivery_mode" => "collect_compaction",
+        "input" => [%{"type" => "compaction_trigger"}]
+      }
+
+      spoofed =
+        RequestOptions.build(
+          %{
+            "compaction_input_mode" => "incremental",
+            "websocket_delivery_mode" => "collect_compaction",
+            compaction_input_mode: :incremental,
+            websocket_delivery_mode: :collect_compaction
+          },
+          "/backend-api/codex/responses",
+          payload
+        )
+
+      assert spoofed.payload_context.compaction_input_mode == :incremental
+      assert spoofed.transport.websocket_delivery_mode == :relay
+      refute RequestOptions.connection_bound_compaction?(spoofed)
+      assert spoofed.extra == %{}
+
+      connection_bound =
+        spoofed
+        |> RequestOptions.for_websocket(payload)
+        |> RequestOptions.put_payload_context(compaction_trigger_bridge?: true)
+        |> RequestOptions.put_transport(websocket_delivery_mode: :collect_compaction)
+
+      assert RequestOptions.connection_bound_compaction?(connection_bound)
+
+      invalid =
+        connection_bound
+        |> RequestOptions.put_payload_context(compaction_input_mode: :full_history)
+        |> RequestOptions.put_transport(websocket_delivery_mode: :invalid)
+
+      assert invalid.payload_context.compaction_input_mode == :incremental
+      assert invalid.transport.websocket_delivery_mode == :collect_compaction
+      assert RequestOptions.connection_bound_compaction?(invalid)
+
+      refute inspect(connection_bound) =~ anchor
+      refute inspect(RequestOptions.openai_compatibility_metadata(connection_bound)) =~ anchor
+
+      refute Map.has_key?(
+               RequestOptions.openai_compatibility_metadata(connection_bound),
+               "websocket_delivery_mode"
+             )
+
+      refute Map.has_key?(
+               RequestOptions.client_request_metadata(connection_bound),
+               "websocket_delivery_mode"
+             )
+    end
+
+    @tag :compaction_state_contract
+    test "requires every typed connection-bound compaction condition" do
+      payload = %{
+        "previous_response_id" => "resp_fixture_predicate_0001",
+        "input" => [%{"type" => "compaction_trigger"}]
+      }
+
+      base = RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+
+      full_history_base =
+        RequestOptions.build(
+          %{},
+          "/backend-api/codex/responses",
+          %{"input" => [%{"type" => "compaction_trigger"}]}
+        )
+
+      cases = [
+        {:ordinary, base},
+        {:bridge_only,
+         RequestOptions.put_payload_context(base, compaction_trigger_bridge?: true)},
+        {:websocket_only, RequestOptions.for_websocket(base, payload)},
+        {:collect_only,
+         RequestOptions.put_transport(base, websocket_delivery_mode: :collect_compaction)},
+        {:full_history,
+         full_history_base
+         |> RequestOptions.for_websocket(%{"input" => [%{"type" => "compaction_trigger"}]})
+         |> RequestOptions.put_payload_context(compaction_trigger_bridge?: true)
+         |> RequestOptions.put_transport(websocket_delivery_mode: :collect_compaction)},
+        {:incremental_websocket_collect,
+         base
+         |> RequestOptions.for_websocket(payload)
+         |> RequestOptions.put_payload_context(compaction_trigger_bridge?: true)
+         |> RequestOptions.put_transport(websocket_delivery_mode: :collect_compaction)}
+      ]
+
+      for {name, options} <- cases do
+        assert RequestOptions.connection_bound_compaction?(options) ==
+                 (name == :incremental_websocket_collect)
+      end
+    end
+
+    @tag :compaction_state_contract
+    test "preserves typed compaction state through rebuild websocket retarget and reprojection" do
+      source_payload = %{
+        "previous_response_id" => "resp_fixture_transform_0001",
+        "input" => [%{"type" => "compaction_trigger"}],
+        "client_metadata" => %{
+          "x-codex-turn-metadata" =>
+            Jason.encode!(%{
+              "compaction" => %{"implementation" => "responses_compaction_v2"}
+            })
+        }
+      }
+
+      projected = CompactionTrigger.project_responses_payload(source_payload, :sse)
+
+      options =
+        %{}
+        |> RequestOptions.build("/backend-api/codex/responses", source_payload)
+        |> RequestOptions.for_websocket(source_payload)
+        |> RequestOptions.put_payload_context(
+          compaction_trigger_bridge?: true,
+          compaction_result_transport: :sse
+        )
+        |> RequestOptions.put_transport(websocket_delivery_mode: :collect_compaction)
+
+      transformed = [
+        RequestOptions.build(options, "/backend-api/codex/responses/compact", projected),
+        RequestOptions.for_websocket(options, projected),
+        RequestOptions.retarget(options, "/backend-api/codex/responses/compact", projected),
+        options
+        |> RequestOptions.retarget("/backend-api/codex/responses/compact", projected)
+        |> RequestOptions.retarget("/backend-api/codex/responses/compact", projected)
+      ]
+
+      assert Enum.all?(transformed, fn transformed_options ->
+               transformed_options.payload_context.compaction_input_mode == :incremental and
+                 transformed_options.transport.websocket_delivery_mode == :collect_compaction and
+                 transformed_options.payload_context.compaction_result_transport == :sse and
+                 RequestOptions.connection_bound_compaction?(transformed_options)
+             end)
+
+      assert CompactionTrigger.project_responses_payload(projected, :sse) == projected
+    end
+
     test "keeps compaction projection provenance typed, transient, redacted, and non-serializable" do
       downstream = %{
         "previous_response_id" => "resp_projection_raw_anchor_a",

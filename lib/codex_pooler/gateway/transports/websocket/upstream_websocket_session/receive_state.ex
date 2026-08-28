@@ -1,6 +1,20 @@
+defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ReceiveState.Delivery do
+  @moduledoc false
+
+  defstruct mode: :relay, effective_serving_mode: nil
+
+  @type t :: %__MODULE__{
+          mode:
+            CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.delivery_mode(),
+          effective_serving_mode:
+            CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.effective_serving_mode()
+        }
+end
+
 defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ReceiveState do
   @moduledoc false
 
+  alias __MODULE__.Delivery
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.Streaming.RetainedBody
 
@@ -21,6 +35,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
     :connection_idle_bucket,
     :request_caller_pid,
     :request_caller_monitor,
+    delivery: %Delivery{},
     assignment_advertised?: false,
     native_metadata_emitted?: false,
     downstream_output_started?: false,
@@ -46,6 +61,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Rece
           frame_observer:
             CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request.frame_observer(),
           native_codex_response_control: TurnSnapshot.t() | nil,
+          delivery: Delivery.t(),
           response_id: String.t() | nil,
           terminal_upstream_error_code: String.t() | nil,
           terminal_upstream_error_param: String.t() | nil,

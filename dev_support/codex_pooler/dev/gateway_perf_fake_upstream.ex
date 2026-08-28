@@ -477,19 +477,69 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
   @spec request_observations() :: [map()]
   def request_observations do
     ensure_observation_store()
-    Agent.get(@observation_store, & &1)
+    Agent.get(@observation_store, & &1.observations)
   end
 
   @spec reset_request_observations() :: :ok
   def reset_request_observations do
     ensure_observation_store()
-    Agent.update(@observation_store, fn _observations -> [] end)
+    Agent.update(@observation_store, fn _state -> new_observation_store() end)
+  end
+
+  @doc false
+  @spec open_websocket_connection(String.t()) :: %{id: String.t(), ordinal: pos_integer()}
+  def open_websocket_connection(run_id) when is_binary(run_id) do
+    ensure_observation_store()
+
+    Agent.get_and_update(@observation_store, fn state ->
+      ordinal = state.next_connection_ordinal + 1
+      connection = %{id: opaque_connection_id(run_id, ordinal), ordinal: ordinal}
+
+      {connection,
+       %{
+         state
+         | next_connection_ordinal: ordinal,
+           frame_ordinals: Map.put(state.frame_ordinals, connection.id, 0)
+       }}
+    end)
+  end
+
+  @doc false
+  @spec record_websocket_request_observation(
+          %{id: String.t(), ordinal: pos_integer()},
+          map()
+        ) :: :ok
+  def record_websocket_request_observation(
+        %{id: connection_id, ordinal: connection_ordinal},
+        payload
+      )
+      when is_binary(connection_id) and is_integer(connection_ordinal) and is_map(payload) do
+    ensure_observation_store()
+
+    Agent.get_and_update(@observation_store, fn state ->
+      frame_ordinal = Map.fetch!(state.frame_ordinals, connection_id) + 1
+
+      observation =
+        request_observation(
+          "websocket",
+          payload,
+          %{id: connection_id, ordinal: connection_ordinal},
+          frame_ordinal
+        )
+
+      {:ok,
+       %{
+         state
+         | observations: append_observation(state.observations, observation),
+           frame_ordinals: Map.put(state.frame_ordinals, connection_id, frame_ordinal)
+       }}
+    end)
   end
 
   defp ensure_observation_store do
     case Process.whereis(@observation_store) do
       nil ->
-        case Agent.start(fn -> [] end, name: @observation_store) do
+        case Agent.start(&new_observation_store/0, name: @observation_store) do
           {:ok, _pid} -> :ok
           {:error, {:already_started, _pid}} -> :ok
         end
@@ -499,24 +549,78 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
     end
   end
 
-  defp record_request_observation(
-         %Plug.Conn{body_params: body_params, request_path: endpoint} = conn
-       )
+  defp record_request_observation(%Plug.Conn{body_params: body_params} = conn)
        when is_map(body_params) do
-    input = Map.get(body_params, "input")
-
-    observation = %{
-      "endpoint" => endpoint,
-      "inputCount" => if(is_list(input), do: length(input), else: 0),
-      "terminalCompactionTrigger" =>
-        is_list(input) and List.last(input) == %{"type" => "compaction_trigger"},
-      "store" => Map.get(body_params, "store"),
-      "stream" => Map.get(body_params, "stream")
-    }
-
     ensure_observation_store()
-    Agent.update(@observation_store, &Enum.take(&1 ++ [observation], -@observation_max_entries))
+
+    observation = request_observation("http", body_params, nil, nil)
+
+    Agent.update(@observation_store, fn state ->
+      %{state | observations: append_observation(state.observations, observation)}
+    end)
+
     conn
+  end
+
+  defp new_observation_store do
+    %{observations: [], next_connection_ordinal: 0, frame_ordinals: %{}}
+  end
+
+  defp append_observation(observations, observation),
+    do: Enum.take(observations ++ [observation], -@observation_max_entries)
+
+  defp request_observation(request_class, payload, connection, frame_ordinal) do
+    input = Map.get(payload, "input")
+    input_types = observation_input_types(input)
+
+    %{
+      "requestClass" => request_class,
+      "connectionId" => connection_id(connection),
+      "connectionOrdinal" => connection_ordinal(connection),
+      "frameOrdinal" => frame_ordinal,
+      "inputTypes" => input_types,
+      "inputCount" => if(is_list(input), do: length(input), else: 0),
+      "anchorPresent" => nonblank_binary?(Map.get(payload, "previous_response_id")),
+      "terminalCompactionTrigger" => List.last(input_types) == "compaction_trigger",
+      "store" => Map.get(payload, "store") == true,
+      "stream" => Map.get(payload, "stream") == true,
+      "compactPhase" => compact_phase(input_types)
+    }
+  end
+
+  defp connection_id(nil), do: nil
+  defp connection_id(%{id: id}), do: id
+
+  defp connection_ordinal(nil), do: nil
+  defp connection_ordinal(%{ordinal: ordinal}), do: ordinal
+
+  defp observation_input_types(input) when is_list(input) do
+    Enum.map(input, fn
+      %{"type" => type} when is_binary(type) and byte_size(type) <= 80 -> type
+      _item -> "unknown"
+    end)
+  end
+
+  defp observation_input_types(_input), do: []
+
+  defp compact_phase(input_types) do
+    cond do
+      List.last(input_types) == "compaction_trigger" ->
+        "compact"
+
+      Enum.any?(input_types, &(&1 in ["compaction", "compaction_summary", "context_compaction"])) ->
+        "final"
+
+      true ->
+        "lineage"
+    end
+  end
+
+  defp nonblank_binary?(value), do: is_binary(value) and String.trim(value) != ""
+
+  defp opaque_connection_id(run_id, ordinal) do
+    digest = :crypto.hash(:sha256, [run_id, ":", Integer.to_string(ordinal)])
+    "ws_" <> (digest |> Base.encode16(case: :lower) |> binary_part(0, 12))
   end
 
   @doc """
@@ -681,13 +785,18 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
     # The synthetic upstream request id travels on the 101 upgrade response header and
     # its fingerprint keys the entry so the later frame metadata joins the same entry.
     {conn, fingerprint} = with_upstream_request_id(conn, :http)
+    connection = open_websocket_connection(conn.private.gateway_perf_fake_upstream_opts.run_id)
 
     case selected_profile(conn) do
       {:ok, profile} ->
         conn
         |> WebSockAdapter.upgrade(
           Websocket,
-          %{profile: profile, wire_key: wire_capture_key(conn, fingerprint)},
+          %{
+            profile: profile,
+            wire_key: wire_capture_key(conn, fingerprint),
+            connection: connection
+          },
           []
         )
         |> halt()
@@ -1090,11 +1199,13 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
 
     @impl WebSock
     def handle_in({payload, [opcode: :text]}, %{profile: profile} = state) do
-      # Websocket client metadata travels in the frame payload, not the handshake.
-      # Only its keys are recorded.
-      record_client_metadata(state, payload)
-
       with {:ok, decoded} <- Jason.decode(payload) do
+        :ok = record_request_observation(state, decoded)
+
+        # Websocket client metadata travels in the frame payload, not the handshake.
+        # Only its keys are recorded.
+        record_client_metadata(state, decoded)
+
         case profile["http_status"] do
           200 ->
             push_profile(profile, decoded, state)
@@ -1115,18 +1226,12 @@ defmodule CodexPooler.Dev.GatewayPerfFakeUpstream do
 
     def handle_in({_payload, [opcode: :binary]}, state), do: {:stop, :unsupported_binary, state}
 
-    defp record_client_metadata(%{wire_key: wire_key}, payload) when is_binary(wire_key) do
-      case Jason.decode(payload) do
-        {:ok, decoded} ->
-          CodexPooler.Dev.GatewayPerfFakeUpstream.record_websocket_client_metadata(
-            wire_key,
-            decoded
-          )
-
-        {:error, _reason} ->
-          :ok
-      end
+    defp record_request_observation(%{connection: connection}, payload) do
+      GatewayPerfFakeUpstream.record_websocket_request_observation(connection, payload)
     end
+
+    defp record_client_metadata(%{wire_key: wire_key}, payload) when is_binary(wire_key),
+      do: GatewayPerfFakeUpstream.record_websocket_client_metadata(wire_key, payload)
 
     defp record_client_metadata(_state, _payload), do: :ok
 

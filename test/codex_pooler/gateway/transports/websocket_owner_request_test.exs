@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRequestTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions.{ResetProbe, TimeoutConfig}
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV2
 
   @allowed_keys MapSet.new([
                   :__struct__,
@@ -158,6 +159,39 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRequestTest do
     refute inspected =~ attrs.payload
     refute inspected =~ elem(hd(attrs.headers), 1)
     refute inspected =~ attrs.upstream_identity_id
+  end
+
+  test "constructs a strict function-free v2 collect envelope" do
+    attrs =
+      valid_attrs()
+      |> Map.put(:version, 2)
+      |> Map.put(:websocket_delivery_mode, :collect_compaction)
+      |> Map.put(:effective_serving_mode, :full)
+
+    assert {:ok, request} = WebsocketOwnerRequestV2.new(attrs)
+    assert request.version == 2
+    assert request.websocket_delivery_mode == :collect_compaction
+    assert request.effective_serving_mode == :full
+    refute contains_function?(request)
+    assert inspect(request) == "#WebsocketOwnerRequestV2<version: 2>"
+
+    for {field, value} <- [
+          {:version, 1},
+          {:websocket_delivery_mode, :relay},
+          {:effective_serving_mode, :auto},
+          {:effective_serving_mode, "full"}
+        ] do
+      assert {:error, {:invalid_field, ^field}} =
+               attrs |> Map.put(field, value) |> WebsocketOwnerRequestV2.new()
+    end
+
+    assert {:error, {:unknown_fields, [:unexpected]}} =
+             attrs |> Map.put(:unexpected, true) |> WebsocketOwnerRequestV2.new()
+
+    assert {:error, {:invalid_field, :effective_serving_mode}} =
+             attrs |> Map.delete(:effective_serving_mode) |> WebsocketOwnerRequestV2.new()
+
+    assert {:error, {:invalid_field, :envelope}} = WebsocketOwnerRequestV2.new(request)
   end
 
   defp valid_attrs do
