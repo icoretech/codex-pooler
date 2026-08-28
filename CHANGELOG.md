@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.12](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.11...codex-pooler-v0.6.12) (2026-08-28)
+
+
+### Bug Fixes
+
+* **gateway:** preserve connection-bound compact continuations ([ad2e073](https://github.com/icoretech/codex-pooler/commit/ad2e073a023607dc28c14b50a07bd313241bc3fd))
+* **mailer:** verify and classify SMTP TLS handshakes ([b616a7e](https://github.com/icoretech/codex-pooler/commit/b616a7eeb0c12dab30e02c514381abe5a204683d))
+
 ## [0.6.11](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.10...codex-pooler-v0.6.11) (2026-08-27)
 
 
