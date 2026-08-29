@@ -2368,7 +2368,7 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
   test "smtp test button renders sanitized failure status without leaking secrets", %{
     conn: conn
   } do
-    port = free_port()
+    port = start_closing_tcp_server!()
 
     {:ok, view, _html} = live(conn, ~p"/admin/system?#{%{"tab" => "metrics"}}")
 
@@ -2388,13 +2388,13 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
       "instance_settings" => %{
         "smtp" => %{
           "enabled" => "true",
-          "host" => "localhost",
+          "host" => "127.0.0.1",
           "port" => Integer.to_string(port),
           "username" => "username",
           "from" => "probe@example.com",
           "ssl" => "false",
           "tls" => "never",
-          "retries" => "2",
+          "retries" => "1",
           "password" => "super-secret-smtp-password"
         }
       }
@@ -2508,6 +2508,32 @@ defmodule CodexPoolerWeb.Admin.SystemLiveTest do
     {:ok, upstream} = FakeUpstream.start_link(mode)
     on_exit(fn -> FakeUpstream.stop(upstream) end)
     upstream
+  end
+
+  defp start_closing_tcp_server! do
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+    {:ok, port} = :inet.port(listener)
+    test_pid = self()
+
+    pid =
+      spawn_link(fn ->
+        send(test_pid, {:closing_tcp_server_ready, self()})
+
+        with {:ok, socket} <- :gen_tcp.accept(listener) do
+          :gen_tcp.close(socket)
+        end
+
+        :gen_tcp.close(listener)
+      end)
+
+    assert_receive {:closing_tcp_server_ready, ^pid}
+
+    on_exit(fn ->
+      Process.exit(pid, :shutdown)
+      :gen_tcp.close(listener)
+    end)
+
+    port
   end
 
   defp free_port do
