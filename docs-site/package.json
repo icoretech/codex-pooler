@@ -12,7 +12,7 @@
     "check:llms": "node scripts/check-llms-inventory.mjs"
   },
   "dependencies": {
-    "@astrojs/starlight": "0.41.9",
+    "@astrojs/starlight": "0.41.10",
     "astro": "7.2.9",
     "starlight-page-actions": "0.7.1"
   },
