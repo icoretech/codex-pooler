@@ -233,6 +233,8 @@ Eligible families are backend and public Responses, translated chat completions,
 
 Within eligible tool outputs, valid JSON objects or arrays can be minified even when they are surrounded by ordinary explanatory text. Every surrounding byte stays unchanged. Quoted JSON-looking text, malformed or over-limit spans, and protected exact-output tool results remain pass-through.
 
+Recognized same-frame command-backed file reads remain byte-for-byte pass-through before output-range lookup, content detection, or any compression strategy. The bounded read grammar permits direct `cat`, `nl`, `head`, `tail`, and print-only `sed` reads, plus one `nl`-to-print-only-`sed` pipeline. Function-call outputs match `call_id`; native local-shell outputs match `call_id` or `id`. Duplicate, cross-kind, or conflicting identifiers protect the original output, while malformed or unrecognized commands retain existing behavior.
+
 Request compression is fail-open. If scanning, token counting, rewriting, or limits fail, the original request body is sent upstream and request logs record a safe `payload_compression` status and reason. JSON bodies over 1 MiB skip before scanning, and a dispatch processes at most 50 output candidates. Token counting is local and in-process using tokenizer data shipped with the application; it does not call OpenAI or load a local model.
 
 Request logs may show compression savings when safe aggregate data exists. The UI prefers saved token count and token savings percent, then falls back to saved bytes and byte savings percent when token counts are unavailable.

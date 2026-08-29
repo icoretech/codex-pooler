@@ -627,7 +627,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :request_compression,
       contract:
-        "Request compression is Pool-gated by request_compression_enabled, request-side only, fail-open to the original upstream request when scanning, token counting, rewriting, or limits fail, and metadata-only through safe payload_compression request-log metadata; eligible routes are backend Responses, backend /v1 Responses/chat aliases, public /v1 Responses/chat translations, backend compact routes, and backend or narrow public websocket response.create dispatches; protected exact-output function tool outputs for Read, Glob, Grep, Write, Edit, WebSearch, WebFetch, web_search, web_fetch, and external retrieval are skipped before rewriting with aggregate-only skip counts; output-only function tool results fail closed as protected when their tool name is unavailable; search-result compression covers classic path-line matches, grouped heading matches, and portable NUL-delimited matches, diff compression covers hunk-based additions-only, deletions-only, replacement, minimal unified diffs, combined unified diffs, and long-preamble diffs, log-output compression preserves every failure block when a summary reports failure/error counts, and valid JSON object or array spans embedded in ordinary prose are minified losslessly while surrounding bytes, quoted JSON-looking text, malformed spans, and over-limit span sets remain unchanged; ordinary prose without eligible embedded JSON remains outside diff/search/log compression shapes; public /v1/responses/compact remains unsupported with no upstream compact dispatch or compression eligibility"
+        "Request compression is Pool-gated by request_compression_enabled, request-side only, fail-open to the original upstream request when scanning, token counting, rewriting, or limits fail, and metadata-only through safe payload_compression request-log metadata; eligible routes are backend Responses, backend /v1 Responses/chat aliases, public /v1 Responses/chat translations, backend compact routes, and backend or narrow public websocket response.create dispatches; protected exact-output function tool outputs for Read, Glob, Grep, Write, Edit, WebSearch, WebFetch, web_search, web_fetch, and external retrieval are skipped before rewriting with aggregate-only skip counts; output-only function tool results fail closed as protected when their tool name is unavailable; recognized same-frame command-backed file reads use bounded cat, nl, head, tail, sed-print-only, or nl-to-sed-print-only grammar and remain byte-exact before output range lookup or content detection; function and native local-shell producers and outputs resolve only through their declared same-frame identifiers, and duplicate, cross-kind, or conflicting identifiers preserve the original output; malformed or unrecognized commands retain existing behavior; search-result compression covers classic path-line matches, grouped heading matches, and portable NUL-delimited matches, diff compression covers hunk-based additions-only, deletions-only, replacement, minimal unified diffs, combined unified diffs, and long-preamble diffs, log-output compression preserves every failure block when a summary reports failure/error counts, and valid JSON object or array spans embedded in ordinary prose are minified losslessly while surrounding bytes, quoted JSON-looking text, malformed spans, and over-limit span sets remain unchanged; ordinary prose without eligible embedded JSON remains outside diff/search/log compression shapes; public /v1/responses/compact remains unsupported with no upstream compact dispatch or compression eligibility"
     },
     %{
       slug: :upstream_websocket_bridge,
@@ -2245,6 +2245,34 @@ defmodule CodexPooler.CompatibilityMatrix do
         lowercase_variants: true,
         external_retrieval: true,
         unknown_function_output_behavior: "protected_original_output_preserved",
+        command_backed_reads: %{
+          arguments: ["cmd", "command"],
+          native_action: %{type: "exec", command: "argv"},
+          direct_commands: ["cat", "nl", "head", "tail", "sed_print_only"],
+          pipeline: "nl_to_sed_print_only",
+          producer_aliases: %{
+            function_call: ["call_id"],
+            local_shell_call: ["call_id", "id"]
+          },
+          output_aliases: %{
+            function_call_output: ["call_id"],
+            local_shell_call_output: ["call_id", "id"]
+          },
+          output_compatibility: %{
+            function_call_output: ["function_call", "local_shell_call"],
+            local_shell_call_output: ["local_shell_call"]
+          },
+          owner_identity: "positional_producer_path",
+          unresolved_function_output: "protected_legacy",
+          unresolved_local_shell_output: "existing_behavior",
+          duplicate_aliases: "protected_original_output_preserved",
+          cross_kind_collisions: "protected_original_output_preserved",
+          conflicting_output_aliases: "protected_original_output_preserved",
+          recognized_owner_stage: "before_output_range_lookup_and_content_detection",
+          malformed_or_unrecognized: "existing_behavior",
+          output_behavior: "byte_exact",
+          metadata: "aggregate_counts_only"
+        },
         output_behavior: "original_output_preserved",
         metadata: "aggregate_counts_only"
       },

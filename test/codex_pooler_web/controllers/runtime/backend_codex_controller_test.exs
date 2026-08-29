@@ -593,7 +593,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     refute unauthorized.resp_body =~ hidden_model.exposed_model_id
     refute unauthorized.resp_body =~ "gpt-stale-serving-mode"
 
-    requests = Repo.all(from request in Request, where: request.pool_id == ^setup.pool.id)
+    requests = Repo.all(from(request in Request, where: request.pool_id == ^setup.pool.id))
     assert length(requests) == 5
     assert Enum.all?(requests, &(&1.upstream_account_label == setup.identity.account_label))
     assert FakeUpstream.count(upstream) == 0
@@ -1481,11 +1481,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     requests =
       Repo.all(
-        from request in Request,
+        from(request in Request,
           where:
             request.pool_id == ^setup.pool.id and
               request.endpoint == "/backend-api/codex/models",
           order_by: [asc: request.admitted_at]
+        )
       )
 
     assert length(requests) == 2
@@ -1532,11 +1533,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     requests =
       Repo.all(
-        from request in Request,
+        from(request in Request,
           where:
             request.pool_id == ^setup.pool.id and
               request.endpoint == "/backend-api/codex/responses",
           order_by: [asc: request.admitted_at]
+        )
       )
 
     assert length(requests) == 2
@@ -2939,6 +2941,83 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
     assert attempt.status == "succeeded"
+  end
+
+  @tag :command_read_protection
+  test "POST /backend-api/codex/responses forwards id-keyed native file-read JSON byte-exact",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_backend_command_read_protection",
+          "object" => "response",
+          "status" => "completed",
+          "output" => [],
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream, supported_compression_model_opts())
+    enable_request_compression!(setup.pool)
+    native_id = "shell_backend_private_json_read"
+    private_path = "src/private-example.json"
+
+    original_output =
+      %{
+        "private_marker" => "backend private json output sentinel",
+        "rows" => Enum.map(1..64, &%{"id" => &1, "state" => "synthetic"})
+      }
+      |> Jason.encode!(pretty: true)
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/backend-api/codex/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "input" => [
+          %{
+            "type" => "local_shell_call",
+            "id" => native_id,
+            "action" => %{"type" => "exec", "command" => ["cat", private_path]}
+          },
+          %{
+            "type" => "local_shell_call_output",
+            "id" => native_id,
+            "output" => original_output
+          }
+        ]
+      })
+
+    assert %{"id" => "resp_backend_command_read_protection"} = json_response(conn, 200)
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+
+    forwarded_output =
+      captured.json["input"]
+      |> Enum.find(&(&1["type"] == "local_shell_call_output"))
+      |> Map.fetch!("output")
+
+    assert forwarded_output == original_output
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+    assert %{
+             "status" => "skipped",
+             "reason" => "protected_tool_outputs",
+             "route_class" => "proxy_http",
+             "transport" => "http_json",
+             "candidate_count" => 0,
+             "compressed_count" => 0,
+             "skipped_count" => 0,
+             "protected_tool_output_skipped_count" => 1
+           } = metadata = attempt.response_metadata["payload_compression"]
+
+    metadata_text = inspect(metadata)
+    refute metadata_text =~ native_id
+    refute metadata_text =~ private_path
+    refute metadata_text =~ "backend private json output sentinel"
+    refute Map.has_key?(metadata, "strategies")
   end
 
   test "POST /backend-api/codex/responses keeps disabled request compression as passthrough",
@@ -4981,9 +5060,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     requests =
       Repo.all(
-        from r in Request,
+        from(r in Request,
           where: r.pool_id == ^setup.pool.id,
           order_by: [asc: r.admitted_at]
+        )
       )
 
     assert length(requests) == 2
@@ -5043,9 +5123,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     requests =
       Repo.all(
-        from r in Request,
+        from(r in Request,
           where: r.pool_id == ^setup.pool.id,
           order_by: [asc: r.admitted_at]
+        )
       )
 
     assert length(requests) == 2
@@ -5103,9 +5184,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     requests =
       Repo.all(
-        from r in Request,
+        from(r in Request,
           where: r.pool_id == ^setup.pool.id,
           order_by: [asc: r.admitted_at]
+        )
       )
 
     assert length(requests) == 2
@@ -7260,12 +7342,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert %Request{} =
              request =
              Repo.one!(
-               from request in Request,
+               from(request in Request,
                  where:
                    request.pool_id == ^setup.pool.id and
                      request.endpoint == "/backend-api/codex/responses",
                  order_by: [desc: request.admitted_at],
                  limit: 1
+               )
              )
 
     assert request.request_metadata["pricing"]["status"] == "priced"
@@ -7338,9 +7421,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     [first_request] =
       Repo.all(
-        from request in Request,
+        from(request in Request,
           where: request.pool_id == ^setup.pool.id,
           order_by: [asc: request.admitted_at, asc: request.id]
+        )
       )
 
     assert first_request.request_metadata["routing"]["strategy"] == "bridge_ring"
@@ -7381,9 +7465,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     [first_request, second_request] =
       Repo.all(
-        from request in Request,
+        from(request in Request,
           where: request.pool_id == ^setup.pool.id,
           order_by: [asc: request.admitted_at, asc: request.id]
+        )
       )
 
     assert first_request.request_metadata["routing"]["strategy"] == "bridge_ring"
@@ -10783,9 +10868,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     assert [models_request, inference_request] =
              Repo.all(
-               from request in Request,
+               from(request in Request,
                  where: request.pool_id == ^setup.pool.id,
                  order_by: [asc: request.admitted_at, asc: request.id]
+               )
              )
 
     assert models_request.status == "succeeded"
@@ -11759,9 +11845,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
 
     requests =
       Repo.all(
-        from r in Request,
+        from(r in Request,
           where: r.pool_id == ^setup.pool.id,
           order_by: [asc: r.admitted_at]
+        )
       )
 
     assert Enum.map(requests, & &1.request_metadata["codex_session_id"]) == [

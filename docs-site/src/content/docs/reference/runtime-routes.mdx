@@ -724,6 +724,15 @@ rewriting. This includes default function tools `Read`, `Glob`, `Grep`, `Write`,
 retrieval outputs. Output-only function tool results fail closed as protected
 when the tool name is unavailable. Metadata records aggregate skip counts only.
 
+Recognized same-frame command-backed file reads are also protected byte-for-byte
+before output-range lookup, content detection, or any compression strategy. The
+bounded read grammar accepts direct `cat`, `nl`, `head`, `tail`, and print-only
+`sed` reads, plus one `nl`-to-print-only-`sed` pipeline. Function calls publish
+`call_id`; native local-shell calls publish `call_id` and `id`; matching outputs
+must resolve through those same-frame identifiers. Duplicate, cross-kind, or
+conflicting identifiers preserve the original output. Malformed or unrecognized
+commands retain existing behavior.
+
 Eligible route families are exact:
 
 <table>

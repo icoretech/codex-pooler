@@ -13,6 +13,124 @@ defmodule CodexPooler.Gateway.RequestCompression.MaybeCompressTest do
   @supported_model "gpt-4o"
 
   describe "maybe_compress/3" do
+    @tag :command_read_protection
+    test "preserves recognized function build output before log compression" do
+      command = "nl -ba src/private-example.ex | sed -n '1,75p'"
+      call_id = "call_private_build_read"
+      original_output = oversized_log_fixture("read", "private build output sentinel")
+
+      body =
+        Jason.encode!(%{
+          "model" => @supported_model,
+          "input" => [
+            %{
+              "type" => "function_call",
+              "call_id" => call_id,
+              "name" => "arbitrary_command_tool",
+              "arguments" => Jason.encode!(%{"cmd" => command})
+            },
+            %{
+              "type" => "function_call_output",
+              "call_id" => call_id,
+              "output" => original_output
+            }
+          ]
+        })
+
+      {context, request_options} = request_context(body)
+
+      assert {^body, compressed_options} =
+               RequestCompression.maybe_compress(body, context, request_options)
+
+      assert first_output(body) == original_output
+
+      assert %{
+               "status" => "skipped",
+               "reason" => "protected_tool_outputs",
+               "candidate_count" => 0,
+               "compressed_count" => 0,
+               "skipped_count" => 0,
+               "protected_tool_output_skipped_count" => 1
+             } = metadata = compressed_options.runtime.payload_compression
+
+      metadata_text = inspect(metadata)
+      refute metadata_text =~ command
+      refute metadata_text =~ call_id
+      refute metadata_text =~ "private build output sentinel"
+      refute Map.has_key?(metadata, "strategies")
+    end
+
+    @tag :command_read_protection
+    test "preserves native id-keyed pretty JSON while compressing an ordinary mixed control" do
+      native_id = "shell_private_json_read"
+      private_path = "src/private-example.json"
+
+      original_json =
+        %{
+          "private_marker" => "private json output sentinel",
+          "rows" => Enum.map(1..64, &%{"id" => &1, "state" => "synthetic"})
+        }
+        |> Jason.encode!(pretty: true)
+
+      ordinary_sentinel = "ordinary mixed output sentinel"
+      ordinary_output = oversized_log_fixture("ordinary", ordinary_sentinel)
+
+      body =
+        Jason.encode!(%{
+          "model" => @supported_model,
+          "input" => [
+            %{
+              "type" => "local_shell_call",
+              "id" => native_id,
+              "action" => %{"type" => "exec", "command" => ["cat", private_path]}
+            },
+            %{
+              "type" => "local_shell_call_output",
+              "id" => native_id,
+              "output" => original_json
+            },
+            %{
+              "type" => "function_call",
+              "call_id" => "call_ordinary_mixed_control",
+              "name" => "arbitrary_command_tool",
+              "arguments" => %{"command" => "mix compile"}
+            },
+            %{
+              "type" => "function_call_output",
+              "call_id" => "call_ordinary_mixed_control",
+              "output" => ordinary_output
+            }
+          ]
+        })
+
+      {context, request_options} = request_context(body)
+
+      assert {compressed_body, compressed_options} =
+               RequestCompression.maybe_compress(body, context, request_options)
+
+      assert compressed_body != body
+      [preserved_json, compressed_control] = outputs(compressed_body)
+      assert preserved_json == original_json
+      assert compressed_control != ordinary_output
+      assert compressed_control =~ "[compressed log output: omitted"
+      refute compressed_control =~ ordinary_sentinel
+
+      assert %{
+               "status" => "compressed",
+               "candidate_count" => 1,
+               "compressed_count" => 1,
+               "skipped_count" => 0,
+               "protected_tool_output_skipped_count" => 1
+             } = metadata = compressed_options.runtime.payload_compression
+
+      assert "log_output" in metadata["strategies"]
+      metadata_text = inspect(metadata)
+      refute metadata_text =~ native_id
+      refute metadata_text =~ private_path
+      refute metadata_text =~ "private json output sentinel"
+      refute metadata_text =~ ordinary_sentinel
+    end
+
     test "preserves schema-bound JSON output while compressing an unbound function output" do
       schema_bound_output =
         Jason.encode!(%{"rows" => Enum.map(1..160, &%{"id" => &1})}, pretty: true)

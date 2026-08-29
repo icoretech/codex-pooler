@@ -4076,6 +4076,90 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
     end)
   end
 
+  @tag :command_read_protection
+  test "POST /v1/responses forwards generic function file-read build output byte-exact",
+       %{conn: conn} do
+    upstream =
+      start_upstream(
+        FakeUpstream.sse_stream([
+          {"response.completed",
+           %{
+             "type" => "response.completed",
+             "response" => %{
+               "id" => "resp_v1_command_read_protection",
+               "status" => "completed",
+               "output" => [],
+               "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+             }
+           }}
+        ])
+      )
+
+    setup = gateway_setup(upstream, exposed_model_id: "gpt-4o", upstream_model_id: "gpt-4o")
+    enable_request_compression!(setup.pool)
+    command = "nl -ba src/private-example.ex | sed -n '1,75p'"
+    call_id = "call_v1_private_file_read"
+    original_output = compression_log_fixture("v1 private build output sentinel")
+
+    conn =
+      conn
+      |> auth(setup)
+      |> post("/v1/responses", %{
+        "model" => setup.model.exposed_model_id,
+        "tools" => [
+          %{
+            "type" => "function",
+            "name" => "arbitrary_command_tool",
+            "parameters" => %{"type" => "object", "properties" => %{}}
+          }
+        ],
+        "input" => [
+          %{
+            "type" => "function_call",
+            "call_id" => call_id,
+            "name" => "arbitrary_command_tool",
+            "arguments" => Jason.encode!(%{"cmd" => command})
+          },
+          %{
+            "type" => "function_call_output",
+            "call_id" => call_id,
+            "output" => original_output
+          }
+        ]
+      })
+
+    assert %{"id" => "resp_v1_command_read_protection"} = json_response(conn, 200)
+    assert [captured] = FakeUpstream.requests(upstream)
+    assert captured.path == "/backend-api/codex/responses"
+
+    forwarded_output =
+      captured.json["input"]
+      |> Enum.find(&(&1["type"] == "function_call_output"))
+      |> Map.fetch!("output")
+
+    assert forwarded_output == original_output
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert [attempt] = Repo.all(from(a in Attempt, where: a.request_id == ^request.id))
+
+    assert %{
+             "status" => "skipped",
+             "reason" => "protected_tool_outputs",
+             "route_class" => "proxy_stream",
+             "transport" => "http_sse",
+             "candidate_count" => 0,
+             "compressed_count" => 0,
+             "skipped_count" => 0,
+             "protected_tool_output_skipped_count" => 1
+           } = metadata = attempt.response_metadata["payload_compression"]
+
+    metadata_text = inspect(metadata)
+    refute metadata_text =~ command
+    refute metadata_text =~ call_id
+    refute metadata_text =~ "v1 private build output sentinel"
+    refute Map.has_key?(metadata, "strategies")
+  end
+
   test "POST /v1/responses preserves schema-bound tool output while compressing an unbound output",
        %{conn: conn} do
     upstream =
@@ -11228,6 +11312,29 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
       releases: Map.get(ledger_counts, "release", 0),
       settlements: Map.get(ledger_counts, "settlement", 0)
     }
+  end
+
+  defp compression_log_fixture(omitted_sentinel) do
+    middle =
+      1..96
+      |> Enum.map(fn
+        48 -> "ordinary build line 48 #{omitted_sentinel}"
+        index -> "ordinary build line #{index}"
+      end)
+
+    [
+      "command started",
+      "context before first",
+      "error: first failure",
+      "context after first"
+    ]
+    |> Kernel.++(middle)
+    |> Kernel.++([
+      "context before final",
+      "fatal: final failure",
+      "context after final"
+    ])
+    |> Enum.join("\n")
   end
 
   defp public_sse_events(body) do

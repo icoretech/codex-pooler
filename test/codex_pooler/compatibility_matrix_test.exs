@@ -791,6 +791,9 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert feature.contract =~ "fail-open"
       assert feature.contract =~ "metadata-only"
       assert feature.contract =~ "payload_compression"
+      assert feature.contract =~ "command-backed file reads"
+      assert feature.contract =~ "remain byte-exact before output range lookup or content detection"
+      assert feature.contract =~ "malformed or unrecognized commands retain existing behavior"
       assert feature.contract =~ "valid JSON object or array spans embedded in ordinary prose"
 
       assert Map.fetch!(fixture, :pool_gate) == %{
@@ -801,6 +804,35 @@ defmodule CodexPooler.CompatibilityMatrixTest do
 
       assert Map.fetch!(fixture, :direction) == "request_side_only"
       assert Map.fetch!(fixture, :failure_mode) == "fail_open_original_request"
+
+      assert get_in(fixture, [:protected_tool_outputs, :command_backed_reads]) == %{
+               arguments: ["cmd", "command"],
+               native_action: %{type: "exec", command: "argv"},
+               direct_commands: ["cat", "nl", "head", "tail", "sed_print_only"],
+               pipeline: "nl_to_sed_print_only",
+               producer_aliases: %{
+                 function_call: ["call_id"],
+                 local_shell_call: ["call_id", "id"]
+               },
+               output_aliases: %{
+                 function_call_output: ["call_id"],
+                 local_shell_call_output: ["call_id", "id"]
+               },
+               output_compatibility: %{
+                 function_call_output: ["function_call", "local_shell_call"],
+                 local_shell_call_output: ["local_shell_call"]
+               },
+               owner_identity: "positional_producer_path",
+               unresolved_function_output: "protected_legacy",
+               unresolved_local_shell_output: "existing_behavior",
+               duplicate_aliases: "protected_original_output_preserved",
+               cross_kind_collisions: "protected_original_output_preserved",
+               conflicting_output_aliases: "protected_original_output_preserved",
+               recognized_owner_stage: "before_output_range_lookup_and_content_detection",
+               malformed_or_unrecognized: "existing_behavior",
+               output_behavior: "byte_exact",
+               metadata: "aggregate_counts_only"
+             }
 
       assert get_in(fixture, [:supported_input_shapes, :embedded_json]) == %{
                container_kinds: ["object", "array"],
