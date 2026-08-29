@@ -7,6 +7,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
+  alias CodexPooler.Accounting.Request
+
   alias CodexPooler.Gateway.Persistence.{
     BridgeOwnerLease,
     BridgeSessionAlias,
@@ -28,6 +30,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
   @direction_iterations 10
   @start_first_direction "session_lease_start_first"
   @renewal_first_direction "session_lease_renewal_first"
+  @deadlock_context {__MODULE__, :replacement_deadlock_context}
+  @deadlock_paused {__MODULE__, :replacement_deadlock_paused}
 
   describe "session continuity baseline characterization" do
     @tag :session_continuity_pin
@@ -358,6 +362,22 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
     end
   end
 
+  describe "replacement turn and predecessor interruption lock order" do
+    @tag :session_continuity_deadlock
+    @tag timeout: 120_000
+    test "replacement start locks the session before its claimed request" do
+      fixture = unboxed_replacement_deadlock_fixture()
+
+      try do
+        with_replacement_deadlock_query_handler(fn ->
+          run_replacement_deadlock_schedule(fixture)
+        end)
+      after
+        cleanup_unboxed_fixture!()
+      end
+    end
+  end
+
   describe "session continuity expired-session frozen boundary" do
     @tag :session_continuity_frozen
     test "close_for_key freezes the old id while a replacement blocks on the partial unique index" do
@@ -519,6 +539,232 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
       shutdown_task(task_a)
       shutdown_task(task_b)
       shutdown_task(observer)
+    end
+  end
+
+  defp run_replacement_deadlock_schedule(fixture) do
+    parent = self()
+    ref = make_ref()
+    observer = start_observer(parent, ref)
+
+    replacement =
+      start_deadlock_operation(parent, ref, :replacement, fn ->
+        Repo.transaction(fn ->
+          request =
+            Repo.one!(
+              from request in Request,
+                where: request.id == ^fixture.replacement_request.id,
+                lock: "FOR UPDATE"
+            )
+
+          SessionContinuity.start_codex_turn(
+            fixture.session,
+            request,
+            request_options(pool_upstream_assignment_id: fixture.assignment.id)
+          )
+        end)
+      end)
+
+    predecessor =
+      start_deadlock_operation(parent, ref, :predecessor, fn ->
+        Repo.transaction(fn ->
+          session =
+            Repo.one!(
+              from session in CodexSession,
+                where: session.id == ^fixture.session.id,
+                lock: "FOR UPDATE"
+            )
+
+          request =
+            Repo.one!(
+              from request in Request,
+                where: request.id == ^fixture.predecessor_request.id,
+                lock: "FOR UPDATE"
+            )
+
+          {session, request}
+        end)
+      end)
+
+    try do
+      {_observer_pid, observer_backend_pid} = await_observer_ready!(ref)
+      {_replacement_pid, replacement_backend_pid} = await_deadlock_ready!(ref, :replacement)
+      {_predecessor_pid, predecessor_backend_pid} = await_deadlock_ready!(ref, :predecessor)
+
+      assert MapSet.size(
+               MapSet.new([
+                 observer_backend_pid,
+                 replacement_backend_pid,
+                 predecessor_backend_pid
+               ])
+             ) == 3
+
+      send(replacement.pid, {:replacement_deadlock_run, ref})
+      await_deadlock_barrier!(ref, :replacement, :request)
+
+      send(predecessor.pid, {:replacement_deadlock_run, ref})
+      await_deadlock_barrier!(ref, :predecessor, :session)
+
+      send(replacement.pid, {:replacement_deadlock_release, ref, :replacement, :request})
+
+      replacement_block =
+        observe_relation_block!(
+          observer,
+          ref,
+          replacement_backend_pid,
+          predecessor_backend_pid,
+          "codex_sessions"
+        )
+
+      send(predecessor.pid, {:replacement_deadlock_release, ref, :predecessor, :session})
+
+      assert {:ok, {:ok, {session, request}}} = Task.await(predecessor, 15_000)
+      assert session.id == fixture.session.id
+      assert request.id == fixture.predecessor_request.id
+
+      assert {:ok, {:ok, {:ok, %CodexPooler.Gateway.Persistence.CodexTurn{} = turn}}} =
+               Task.await(replacement, 15_000)
+
+      assert turn.request_id == fixture.replacement_request.id
+      assert replacement_block.wait_event_type == "Lock"
+      assert replacement_block.relation == "codex_sessions"
+
+      assert Sandbox.unboxed_run(Repo, fn ->
+               Repo.aggregate(
+                 from(turn in CodexPooler.Gateway.Persistence.CodexTurn,
+                   where: turn.request_id == ^fixture.replacement_request.id
+                 ),
+                 :count
+               )
+             end) == 1
+
+      send(observer.pid, {:session_continuity_stop_observer, ref})
+      assert :ok = Task.await(observer, 5_000)
+    after
+      send(replacement.pid, {:replacement_deadlock_release, ref, :replacement, :request})
+      send(predecessor.pid, {:replacement_deadlock_release, ref, :predecessor, :session})
+
+      if Process.alive?(observer.pid) do
+        send(observer.pid, {:session_continuity_stop_observer, ref})
+      end
+
+      shutdown_task(replacement)
+      shutdown_task(predecessor)
+      shutdown_task(observer)
+    end
+  end
+
+  defp start_deadlock_operation(parent, ref, role, operation) do
+    Task.async(fn ->
+      Sandbox.unboxed_run(Repo, fn ->
+        backend_pid = backend_pid!()
+        Process.put(@deadlock_context, %{parent: parent, ref: ref, role: role})
+        send(parent, {:replacement_deadlock_ready, ref, role, self(), backend_pid})
+
+        try do
+          receive do
+            {:replacement_deadlock_run, ^ref} -> safely_run(operation)
+          after
+            10_000 -> {:error, :replacement_deadlock_start_timeout}
+          end
+        after
+          Process.delete(@deadlock_context)
+          Process.delete({@deadlock_paused, :request})
+          Process.delete({@deadlock_paused, :session})
+        end
+      end)
+    end)
+  end
+
+  defp with_replacement_deadlock_query_handler(fun) when is_function(fun, 0) do
+    handler_id =
+      {__MODULE__, :replacement_deadlock, System.unique_integer([:positive, :monotonic])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          handle_replacement_deadlock_query(metadata)
+        end,
+        nil
+      )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp handle_replacement_deadlock_query(metadata) do
+    case Process.get(@deadlock_context) do
+      %{parent: parent, ref: ref, role: role} = context ->
+        event = contention_event(metadata, 0)
+
+        family = replacement_deadlock_family(role, event)
+
+        if family && not Process.get({@deadlock_paused, family}, false) do
+          Process.put({@deadlock_paused, family}, true)
+          send(parent, {:replacement_deadlock_barrier, ref, role, family, event})
+
+          receive do
+            {:replacement_deadlock_release, ^ref, ^role, ^family} -> :ok
+          after
+            10_000 -> raise "replacement deadlock #{family} barrier was not released"
+          end
+        end
+
+        context
+
+      _context ->
+        :ok
+    end
+  end
+
+  defp replacement_deadlock_family(:replacement, %{source: "requests", for_update?: true}),
+    do: :request
+
+  defp replacement_deadlock_family(:predecessor, event) do
+    if session_lock_event?(event), do: :session
+  end
+
+  defp replacement_deadlock_family(_role, _event), do: nil
+
+  defp await_deadlock_ready!(ref, role) do
+    receive do
+      {:replacement_deadlock_ready, ^ref, ^role, pid, backend_pid} -> {pid, backend_pid}
+    after
+      5_000 -> flunk("replacement deadlock #{role} connection did not become ready")
+    end
+  end
+
+  defp await_deadlock_barrier!(ref, role, family) do
+    receive do
+      {:replacement_deadlock_barrier, ^ref, ^role, ^family, event} -> event
+    after
+      10_000 -> flunk("replacement deadlock #{role} #{family} barrier was not observed")
+    end
+  end
+
+  defp observe_relation_block!(observer, ref, waiter_pid, blocker_pid, relation) do
+    request_ref = make_ref()
+
+    send(
+      observer.pid,
+      {:session_continuity_observe_block, ref, request_ref, waiter_pid, blocker_pid, "SELECT"}
+    )
+
+    receive do
+      {:session_continuity_block_observed, ^ref, ^request_ref, observation}
+      when is_map(observation) ->
+        assert String.contains?(observation.query, relation)
+        Map.put(observation, :relation, relation)
+
+      {:session_continuity_block_observed, ^ref, ^request_ref, {:error, reason}} ->
+        flunk("PostgreSQL observer failed before positive lock evidence: #{inspect(reason)}")
+    after
+      6_000 -> flunk("PostgreSQL observer did not return a #{relation} blocker observation")
     end
   end
 
@@ -1514,6 +1760,44 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuityLockingTest do
 
       request = request_fixture(auth, %{status: "in_progress", completed_at: nil})
       %{request_id: request.id, session_id: session.id}
+    end)
+  end
+
+  defp unboxed_replacement_deadlock_fixture do
+    Sandbox.unboxed_run(Repo, fn ->
+      reset_bootstrap_state_fixture!()
+      auth = auth_fixture()
+      %{assignment: assignment} = upstream_assignment_fixture(auth.pool)
+
+      assert {:ok, %CodexSession{} = session} =
+               Gateway.start_codex_session(auth, %{
+                 accepted_turn_state:
+                   "replacement-deadlock-#{System.unique_integer([:positive, :monotonic])}",
+                 owner_instance_id: "node-a"
+               })
+
+      predecessor_request =
+        request_fixture(auth, %{
+          status: "in_progress",
+          completed_at: nil,
+          transport: "websocket",
+          usage_status: "usage_pending"
+        })
+
+      replacement_request =
+        request_fixture(auth, %{
+          status: "in_progress",
+          completed_at: nil,
+          transport: "websocket",
+          usage_status: "usage_pending"
+        })
+
+      %{
+        assignment: assignment,
+        predecessor_request: predecessor_request,
+        replacement_request: replacement_request,
+        session: Repo.get!(CodexSession, session.id)
+      }
     end)
   end
 

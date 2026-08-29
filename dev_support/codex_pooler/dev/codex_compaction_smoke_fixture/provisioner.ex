@@ -167,11 +167,20 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture.Provisioner do
         "source_assignment_models" => %{
           assignment.id => %{
             "slug" => @model,
+            "supports_responses" => true,
+            "supports_streaming" => true,
+            "supports_tools" => true,
+            "supports_reasoning" => true,
+            "prefer_websockets" => true,
+            "capabilities" => %{
+              "responses" => true,
+              "streaming" => true,
+              "tools" => true,
+              "reasoning" => true
+            },
             "use_responses_lite" => true,
             "input_modalities" => ["text", "image"],
             "supports_image_detail_original" => true,
-            "supports_tools" => true,
-            "capabilities" => %{"reasoning" => true},
             "supported_reasoning_levels" => ["low"],
             "default_reasoning_level" => "low",
             "context_window" => 128_000,

@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
   use ExUnit.Case, async: true
 
   alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
+  alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame
   alias CodexPooler.Gateway.Transports.Streaming.{StreamProtocol, WebsocketCodec}
 
   @remote_compaction_v2_fixture_path Path.expand(
@@ -30,7 +31,238 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
     end
   end
 
+  describe "prepare_frame/3" do
+    test "returns typed native, public, prewarm, and response.processed variants" do
+      session_id = Ecto.UUID.generate()
+      turn_id = Ecto.UUID.generate()
+      writer = fn _frame -> :ok end
+
+      native = %{
+        "type" => "response.create",
+        "model" => "gpt-example",
+        "input" => [],
+        "turn_id" => turn_id
+      }
+
+      assert {:ok, %PreparedWebsocketFrame{variant: :native_response_create} = prepared_native} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(native),
+                 native_responses_options(native, session_id),
+                 writer
+               )
+
+      assert %RequestOptions{} = prepared_native.request_options
+      assert is_binary(prepared_native.semantic_turn_key)
+      assert is_binary(prepared_native.turn_claim_key)
+
+      assert prepared_native.semantic_turn_key ==
+               prepared_native.request_options.continuity.semantic_turn_key
+
+      assert prepared_native.turn_claim_key ==
+               prepared_native.request_options.continuity.turn_claim_key
+
+      refute Map.has_key?(Map.from_struct(prepared_native), :turn_id)
+      refute inspect(prepared_native) =~ turn_id
+      refute Map.has_key?(prepared_native.payload, "turn_id")
+
+      canonical_turn_id = "canonical-#{System.unique_integer([:positive])}"
+
+      canonical = %{
+        "type" => "response.create",
+        "model" => "gpt-example",
+        "input" => [],
+        "client_metadata" => %{
+          "x-codex-turn-metadata" =>
+            Jason.encode!(%{"turn_id" => canonical_turn_id, "request_kind" => "turn"})
+        }
+      }
+
+      assert {:ok, %PreparedWebsocketFrame{} = prepared_canonical} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(canonical),
+                 native_responses_options(canonical, session_id),
+                 writer
+               )
+
+      refute inspect(prepared_canonical) =~ canonical_turn_id
+
+      assert %{"request_kind" => "turn"} =
+               prepared_canonical.payload
+               |> get_in(["client_metadata", "x-codex-turn-metadata"])
+               |> Jason.decode!()
+
+      public = %{"type" => "response.create", "model" => "gpt-example", "input" => "example"}
+
+      assert {:ok, %PreparedWebsocketFrame{variant: :public_response_create}} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(public),
+                 public_responses_options(public),
+                 writer
+               )
+
+      prewarm = %{"generate" => false, "model" => "gpt-example"}
+
+      assert {:ok, %PreparedWebsocketFrame{variant: :prewarm}} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(prewarm),
+                 native_responses_options(prewarm),
+                 writer
+               )
+
+      processed = %{"type" => "response.processed", "response_id" => "resp_example"}
+
+      assert {:ok, %PreparedWebsocketFrame{variant: :response_processed}} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(processed),
+                 native_responses_options(processed),
+                 writer
+               )
+    end
+
+    test "defaults an omitted native response type without relaxing the public websocket contract" do
+      native = %{"model" => "gpt-example", "input" => []}
+
+      assert {:ok, %PreparedWebsocketFrame{variant: :native_response_create}} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(native),
+                 native_responses_options(native),
+                 fn _frame -> :ok end
+               )
+
+      public = %{"model" => "gpt-example", "input" => "public input"}
+
+      assert {:error,
+              %{
+                status: 400,
+                code: "invalid_request",
+                message: "websocket message type is not supported",
+                param: "type"
+              }} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(public),
+                 public_responses_options(public),
+                 fn _frame -> :ok end
+               )
+    end
+
+    test "rejects malformed frames before invoking the preparation observer" do
+      observer = fn -> send(self(), :prepared_request_options) end
+
+      opts =
+        %{"type" => "response.create", "model" => "gpt-example"}
+        |> native_responses_options()
+        |> then(&%{&1 | extra: Map.put(&1.extra, :websocket_preparation_observer, observer)})
+
+      invalid_frames = [
+        {"{invalid", nil},
+        {Jason.encode!(["not-object"]), nil},
+        {Jason.encode!(%{"type" => "response.create", "model" => 123}), "model"},
+        {Jason.encode!(%{
+           "type" => "response.create",
+           "model" => "gpt-example",
+           "turn_id" => "bad/id"
+         }), "turn_id"},
+        {Jason.encode!(%{"type" => "response.processed"}), nil}
+      ]
+
+      for {frame, param} <- invalid_frames do
+        assert {:error, %{status: 400, code: "invalid_request", param: ^param}} =
+                 WebsocketCodec.prepare_frame(frame, opts, fn _frame -> :ok end)
+
+        refute_received :prepared_request_options
+      end
+    end
+
+    test "rejects unsupported compaction placement during preparation" do
+      payload = %{
+        "type" => "response.create",
+        "model" => "gpt-example",
+        "input" => [
+          %{"type" => "compaction_trigger"},
+          %{"type" => "message", "content" => "visible"}
+        ]
+      }
+
+      assert {:error, %{status: 400, code: "invalid_request"}} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(payload),
+                 native_responses_options(payload),
+                 fn _frame -> :ok end
+               )
+    end
+  end
+
   describe "coerce_request/3" do
+    test "uses the current native top-level turn id for websocket correlations" do
+      turn_id = Ecto.UUID.generate()
+      session_id = Ecto.UUID.generate()
+
+      payload = %{
+        "type" => "response.create",
+        "model" => "gpt-example",
+        "input" => [],
+        "turn_id" => turn_id
+      }
+
+      assert {:ok, coerced} =
+               WebsocketCodec.coerce_request(
+                 payload,
+                 native_responses_options(payload, session_id),
+                 fn _frame -> :ok end
+               )
+
+      expected = :crypto.hash(:sha256, session_id <> <<0>> <> turn_id)
+      claim_key = "codex-turn:" <> Base.url_encode64(expected, padding: false)
+
+      assert coerced.request_options.continuity.semantic_turn_key == expected
+      assert coerced.request_options.continuity.turn_claim_key == claim_key
+      assert RequestOptions.server_correlation_id(coerced.request_options) == claim_key
+      assert RequestOptions.websocket_request_correlation_id(coerced.request_options) == claim_key
+      refute inspect(coerced.request_options) =~ turn_id
+    end
+
+    test "rejects malformed higher-priority native identity without fallback" do
+      payload = %{
+        "type" => "response.create",
+        "model" => "gpt-example",
+        "input" => [],
+        "client_metadata" => %{"turn_id" => "invalid/value"},
+        "turn_id" => Ecto.UUID.generate()
+      }
+
+      assert {:error,
+              %{
+                status: 400,
+                code: "invalid_request",
+                message: "native websocket turn identity is invalid",
+                param: "client_metadata.turn_id"
+              }} =
+               WebsocketCodec.coerce_request(
+                 payload,
+                 native_responses_options(payload, Ecto.UUID.generate()),
+                 fn _frame -> :ok end
+               )
+    end
+
+    test "does not consume native identity metadata for public websocket requests" do
+      payload = %{
+        "type" => "response.create",
+        "model" => "gpt-example",
+        "input" => "public input",
+        "client_metadata" => %{"turn_id" => "invalid/value"}
+      }
+
+      assert {:ok, coerced} =
+               WebsocketCodec.coerce_request(
+                 payload,
+                 public_responses_options(payload),
+                 fn _frame -> :ok end
+               )
+
+      assert is_nil(coerced.request_options.continuity.semantic_turn_key)
+      assert is_nil(coerced.request_options.continuity.turn_claim_key)
+    end
+
     test "keeps ordinary native Responses websocket creates on passthrough" do
       payload = %{
         "type" => "response.create",
@@ -61,7 +293,6 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
     test "bridges valid terminal native compaction triggers through canonical compact HTTP" do
       for {client_metadata, result_transport} <- [
             {v2_client_metadata(), :sse},
-            {%{"x-codex-turn-metadata" => "not-json"}, :buffered},
             {%{"x-codex-turn-metadata" => Jason.encode!(%{"compaction" => %{}})}, :buffered},
             {remote_compaction_v2_client_metadata(), :sse},
             {nil, :buffered}
@@ -110,6 +341,24 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
         assert coerced.request_options.payload_context.compaction_result_mode ==
                  :native_websocket
       end
+    end
+
+    test "rejects malformed canonical native turn metadata before compaction routing" do
+      payload =
+        native_compaction_trigger_payload(%{"x-codex-turn-metadata" => "not-json"})
+
+      assert {:error,
+              %{
+                status: 400,
+                code: "invalid_request",
+                message: "native websocket turn identity is invalid",
+                param: "client_metadata.x-codex-turn-metadata"
+              }} =
+               WebsocketCodec.coerce_request(
+                 payload,
+                 native_responses_options(payload),
+                 fn _frame -> :ok end
+               )
     end
 
     test "projects the pinned rich Codex compact request identically to the HTTP contract" do
@@ -879,8 +1128,12 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
     )
   end
 
-  defp native_responses_options(payload) do
-    RequestOptions.build(%{}, "/backend-api/codex/responses", payload)
+  defp native_responses_options(payload, session_id \\ Ecto.UUID.generate()) do
+    RequestOptions.build(
+      %{codex_session: %{id: session_id}},
+      "/backend-api/codex/responses",
+      payload
+    )
   end
 
   defp native_compaction_trigger_payload(client_metadata) do

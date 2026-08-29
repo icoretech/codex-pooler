@@ -24,6 +24,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
   alias CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt
   alias CodexPooler.Gateway.Transports.Admission
+  alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Gateway.Transports.Websocket.ResponseProcessed
   alias CodexPooler.Pools.Routing, as: PoolRouting
@@ -41,6 +42,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   @type opts :: RequestOptions.t()
   @type gateway_error :: Contracts.gateway_error()
   @type gateway_result :: Contracts.gateway_result()
+  @typep validation_authority :: :validate | {:prepared_websocket, binary()}
   @typedoc false
   @type session_routable_context :: %{
           required(:auth) => auth(),
@@ -145,6 +147,14 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   @spec execute(auth(), String.t(), payload(), opts()) ::
           {:ok, gateway_result()} | {:error, gateway_error()}
   def execute(auth, endpoint, payload, %RequestOptions{} = opts) when is_map(payload) do
+    execute_with_validation(auth, endpoint, payload, opts, :validate)
+  end
+
+  def execute(_auth, _endpoint, _payload, %RequestOptions{}),
+    do: {:error, error(400, "invalid_request", "request body must be a JSON object")}
+
+  defp execute_with_validation(auth, endpoint, payload, %RequestOptions{} = opts, validation)
+       when is_map(payload) do
     opts = RequestOptions.capture_api_key_runtime_epoch(opts, auth)
 
     if image_generation_permission_denied?(auth, opts) do
@@ -158,16 +168,21 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       case requested_model(payload) do
         {:ok, model_name} ->
           request_options = execute_request_options(opts, endpoint, payload, model_name)
-          execute_requested_model(auth, endpoint, payload, request_options, model_name)
+
+          execute_requested_model(
+            auth,
+            endpoint,
+            payload,
+            request_options,
+            model_name,
+            validation
+          )
 
         {:error, %{code: _code} = reason} ->
           {:error, reason}
       end
     end
   end
-
-  def execute(_auth, _endpoint, _payload, %RequestOptions{}),
-    do: {:error, error(400, "invalid_request", "request body must be a JSON object")}
 
   defp image_generation_permission_denied?(
          %{pool: pool},
@@ -180,7 +195,14 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
   defp image_generation_permission_denied?(_auth, %RequestOptions{}), do: false
 
-  defp execute_requested_model(auth, endpoint, payload, request_options, model_name) do
+  defp execute_requested_model(
+         auth,
+         endpoint,
+         payload,
+         request_options,
+         model_name,
+         validation
+       ) do
     case normalize_policy_or_log(auth, endpoint, payload, request_options) do
       {:ok, policy} ->
         case effective_model_name(policy, model_name, endpoint, request_options) do
@@ -193,7 +215,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
               endpoint,
               payload,
               request_options,
-              effective_model_name
+              effective_model_name,
+              validation
             )
 
           {:error, reason} ->
@@ -207,9 +230,23 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     end
   end
 
-  @spec execute_effective_model(auth(), String.t(), payload(), opts(), String.t()) ::
+  @spec execute_effective_model(
+          auth(),
+          String.t(),
+          payload(),
+          opts(),
+          String.t(),
+          validation_authority()
+        ) ::
           {:ok, gateway_result()} | {:error, gateway_error()}
-  defp execute_effective_model(auth, endpoint, payload, request_options, effective_model_name) do
+  defp execute_effective_model(
+         auth,
+         endpoint,
+         payload,
+         request_options,
+         effective_model_name,
+         validation
+       ) do
     case visible_model_context(auth.pool, effective_model_name, endpoint, request_options) do
       %{visible_model: %Model{} = model} = visible_model_data ->
         execute_visible_model(
@@ -218,7 +255,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
           payload,
           request_options,
           model,
-          visible_model_data
+          visible_model_data,
+          validation
         )
 
       nil ->
@@ -228,8 +266,24 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     end
   end
 
-  defp execute_visible_model(auth, endpoint, payload, request_options, model, visible_model_data) do
-    case PreDispatch.prepare(auth, endpoint, payload, request_options, model, visible_model_data) do
+  defp execute_visible_model(
+         auth,
+         endpoint,
+         payload,
+         request_options,
+         model,
+         visible_model_data,
+         validation
+       ) do
+    case PreDispatch.prepare(
+           auth,
+           endpoint,
+           payload,
+           request_options,
+           model,
+           visible_model_data,
+           validation
+         ) do
       {:ok, prepared} ->
         case claim_explicit_websocket_turn(
                auth,
@@ -473,9 +527,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
           :ok | {:error, gateway_error()}
   def execute_websocket_response(auth, raw_payload, %RequestOptions{} = opts, push_frame)
       when is_binary(raw_payload) and is_function(push_frame, 1) do
-    with {:ok, payload} <- decode_websocket_payload(raw_payload),
-         {:ok, result} <-
-           execute_websocket_payload(auth, payload, opts, push_frame, true) do
+    with {:ok, prepared} <- prepare_websocket_response(raw_payload, opts, push_frame),
+         {:ok, result} <- execute_prepared_websocket_response(auth, prepared, true) do
       WebsocketCodec.deliver_result(result, push_frame)
     end
   end
@@ -485,6 +538,85 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   end
 
   @type socket_completion_source :: :local_complete | :owner_completion_pending
+
+  @spec prepare_websocket_response(binary(), opts(), (binary() -> any())) ::
+          {:ok, PreparedWebsocketFrame.t()} | {:error, gateway_error()}
+  def prepare_websocket_response(raw_payload, %RequestOptions{} = opts, push_frame),
+    do: WebsocketCodec.prepare_frame(raw_payload, opts, push_frame)
+
+  @spec execute_prepared_websocket_response(
+          auth(),
+          PreparedWebsocketFrame.t(),
+          boolean()
+        ) :: {:ok, gateway_result()} | {:error, gateway_error()}
+  def execute_prepared_websocket_response(
+        auth,
+        prepared,
+        compact_admission? \\ true
+      )
+
+  def execute_prepared_websocket_response(
+        auth,
+        %PreparedWebsocketFrame{} = prepared,
+        compact_admission?
+      ) do
+    execute_prepared_websocket_response(auth, prepared, compact_admission?, & &1.())
+  end
+
+  @spec execute_prepared_websocket_response(
+          auth(),
+          PreparedWebsocketFrame.t(),
+          boolean(),
+          ((-> {:ok, gateway_result()} | {:error, gateway_error()}) ->
+             {:ok, gateway_result()} | {:error, gateway_error()})
+        ) :: {:ok, gateway_result()} | {:error, gateway_error()}
+  def execute_prepared_websocket_response(
+        auth,
+        %PreparedWebsocketFrame{} = prepared,
+        compact_admission?,
+        execution_wrapper
+      )
+      when is_function(execution_wrapper, 1) do
+    case WebsocketCodec.consume_prepared_frame(prepared) do
+      :ok ->
+        execution_wrapper.(fn ->
+          do_execute_prepared_websocket_response(auth, prepared, compact_admission?)
+        end)
+
+      {:error, :consumed} ->
+        {:error,
+         error(409, "prepared_frame_consumed", "prepared websocket frame was already consumed")}
+
+      {:error, :invalid} ->
+        {:error, error(400, "invalid_request", "prepared websocket frame provenance is invalid")}
+    end
+  end
+
+  defp do_execute_prepared_websocket_response(
+         auth,
+         %PreparedWebsocketFrame{variant: :response_processed} = prepared,
+         _compact_admission?
+       ) do
+    ResponseProcessed.handle_prepared(auth, prepared.payload, prepared.request_options)
+  end
+
+  defp do_execute_prepared_websocket_response(
+         _auth,
+         %PreparedWebsocketFrame{variant: :prewarm},
+         _compact_admission?
+       ),
+       do: {:ok, WebsocketCodec.warmup_result()}
+
+  defp do_execute_prepared_websocket_response(
+         auth,
+         %PreparedWebsocketFrame{variant: variant} = prepared,
+         compact_admission?
+       )
+       when variant in [:native_response_create, :public_response_create] do
+    prepared
+    |> execute_prepared_response_create(auth, compact_admission?)
+    |> adapt_websocket_result(prepared)
+  end
 
   @spec execute_websocket_response_for_socket(
           auth(),
@@ -500,20 +632,67 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         push_frame
       )
       when is_binary(raw_payload) and is_function(push_frame, 1) do
+    case prepare_websocket_response(raw_payload, opts, push_frame) do
+      {:ok, prepared} ->
+        execute_prepared_websocket_response_for_socket(auth, prepared, push_frame)
+
+      {:error, reason} ->
+        {:socket_response_result, :local_complete, {:error, reason}}
+    end
+  end
+
+  def execute_websocket_response_for_socket(_auth, _raw_payload, _opts, _push_frame) do
+    {:socket_response_result, :local_complete,
+     {:error, error(400, "invalid_request", "websocket message must be a text JSON frame")}}
+  end
+
+  @spec execute_prepared_websocket_response_for_socket(
+          auth(),
+          PreparedWebsocketFrame.t(),
+          (binary() -> any())
+        ) ::
+          {:socket_response_result, socket_completion_source(), :ok | {:error, gateway_error()}}
+  def execute_prepared_websocket_response_for_socket(
+        auth,
+        %PreparedWebsocketFrame{} = prepared,
+        push_frame
+      )
+      when is_function(push_frame, 1) do
+    execute_prepared_websocket_response_for_socket(auth, prepared, push_frame, & &1.())
+  end
+
+  @spec execute_prepared_websocket_response_for_socket(
+          auth(),
+          PreparedWebsocketFrame.t(),
+          (binary() -> any()),
+          ((-> {:ok, gateway_result()} | {:error, gateway_error()}) ->
+             {:ok, gateway_result()} | {:error, gateway_error()})
+        ) ::
+          {:socket_response_result, socket_completion_source(), :ok | {:error, gateway_error()}}
+  def execute_prepared_websocket_response_for_socket(
+        auth,
+        %PreparedWebsocketFrame{} = prepared,
+        push_frame,
+        execution_wrapper
+      )
+      when is_function(push_frame, 1) and is_function(execution_wrapper, 1) do
     submission_ref = make_ref()
     caller = self()
 
-    opts =
-      RequestOptions.put_transport(opts,
-        websocket_owner_submission_observer: fn ->
-          send(caller, {:websocket_owner_request_submitted, submission_ref})
-        end
-      )
+    prepared =
+      update_prepared_request_options(prepared, fn request_options ->
+        RequestOptions.put_transport(
+          request_options,
+          websocket_writer: WebsocketCodec.response_writer(request_options, push_frame),
+          websocket_owner_submission_observer: fn ->
+            send(caller, {:websocket_owner_request_submitted, submission_ref})
+          end
+        )
+      end)
 
     result =
-      with {:ok, payload} <- decode_websocket_payload(raw_payload),
-           {:ok, result} <-
-             execute_websocket_payload(auth, payload, opts, push_frame, true) do
+      with {:ok, result} <-
+             execute_prepared_websocket_response(auth, prepared, true, execution_wrapper) do
         WebsocketCodec.deliver_result(result, push_frame)
       end
 
@@ -527,27 +706,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     {:socket_response_result, completion_source, result}
   end
 
-  def execute_websocket_response_for_socket(_auth, _raw_payload, _opts, _push_frame) do
-    {:socket_response_result, :local_complete,
-     {:error, error(400, "invalid_request", "websocket message must be a text JSON frame")}}
-  end
-
-  defp execute_websocket_payload(auth, payload, opts, push_frame, compact_admission?) do
-    cond do
-      WebsocketCodec.response_processed_payload?(payload) ->
-        ResponseProcessed.handle(auth, payload, opts)
-
-      WebsocketCodec.warmup_payload?(payload) ->
-        {:ok, WebsocketCodec.warmup_result()}
-
-      true ->
-        with {:ok, coerced} <- WebsocketCodec.coerce_request(payload, opts, push_frame) do
-          coerced
-          |> execute_coerced_websocket_payload(auth, compact_admission?)
-          |> adapt_websocket_result(coerced)
-        end
-    end
-  end
+  defp update_prepared_request_options(%PreparedWebsocketFrame{} = prepared, update)
+       when is_function(update, 1),
+       do: %{prepared | request_options: update.(prepared.request_options)}
 
   defp adapt_websocket_result(result, %{result_adapter: result_adapter})
        when is_function(result_adapter, 1),
@@ -555,22 +716,34 @@ defmodule CodexPooler.Gateway.Runtime.Service do
 
   defp adapt_websocket_result(result, _coerced), do: result
 
-  defp execute_coerced_websocket_payload(
-         %{request_options: %{transport: %{route_class: route_class}}} = coerced,
+  defp execute_prepared_response_create(
+         %PreparedWebsocketFrame{
+           request_options: %{transport: %{route_class: route_class}}
+         } = prepared,
          auth,
          true
        ) do
     if route_class == RouteClass.proxy_compact() do
-      Admission.run(route_class, websocket_admission_metadata(coerced), fn ->
-        execute(auth, coerced.endpoint, coerced.payload, coerced.request_options)
+      Admission.run(route_class, websocket_admission_metadata(prepared), fn ->
+        execute_prevalidated(auth, prepared)
       end)
     else
-      execute(auth, coerced.endpoint, coerced.payload, coerced.request_options)
+      execute_prevalidated(auth, prepared)
     end
   end
 
-  defp execute_coerced_websocket_payload(coerced, auth, _compact_admission?) do
-    execute(auth, coerced.endpoint, coerced.payload, coerced.request_options)
+  defp execute_prepared_response_create(prepared, auth, _compact_admission?) do
+    execute_prevalidated(auth, prepared)
+  end
+
+  defp execute_prevalidated(auth, %PreparedWebsocketFrame{} = prepared) do
+    execute_with_validation(
+      auth,
+      prepared.endpoint,
+      prepared.payload,
+      prepared.request_options,
+      :validate
+    )
   end
 
   defp websocket_admission_metadata(%{endpoint: endpoint, request_options: request_options}) do
@@ -668,11 +841,11 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          endpoint,
          %RequestOptions{
            transport: %{transport: "websocket"},
-           continuity: %{codex_turn_id: turn_id}
+           continuity: %{turn_claim_key: turn_claim_key}
          } = request_options,
          %RouteState{} = route_state
        )
-       when is_binary(turn_id) do
+       when is_binary(turn_claim_key) do
     attrs = AccountingReservation.attrs(auth, payload, endpoint, request_options, route_state)
 
     case Accounting.claim_websocket_turn(auth, model, attrs) do
@@ -726,6 +899,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     maybe_test_runtime_authorization_barrier(:reserve, :before)
 
     Repo.transaction(fn ->
+      request_options = lock_codex_session_before_reservation(request_options)
+
       with {:ok, reserved} <-
              reserve(auth, model, payload, endpoint, request_options, route_state, turn_claim),
            {:ok, reserved} <- SessionContinuity.start_turn(reserved, request_options) do
@@ -747,14 +922,25 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       end
   end
 
+  defp lock_codex_session_before_reservation(
+         %RequestOptions{continuity: %{codex_session: %CodexSession{} = session}} =
+           request_options
+       ) do
+    locked_session = PersistenceSessionContinuity.lock_codex_session_for_turn(session)
+    RequestOptions.put_continuity(request_options, codex_session: locked_session)
+  end
+
+  defp lock_codex_session_before_reservation(%RequestOptions{} = request_options),
+    do: request_options
+
   defp duplicate_turn_reservation_constraint?(
          %Ecto.ConstraintError{constraint: "requests_correlation_id_uq"},
          %RequestOptions{
            transport: %{transport: "websocket"},
-           continuity: %{codex_turn_id: turn_id}
+           continuity: %{turn_claim_key: turn_claim_key}
          }
        )
-       when is_binary(turn_id),
+       when is_binary(turn_claim_key),
        do: true
 
   defp duplicate_turn_reservation_constraint?(_error, _opts), do: false
@@ -899,19 +1085,6 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   end
 
   defp register_codex_continuity(_opts, _payload, _body), do: :ok
-
-  defp decode_websocket_payload(payload) do
-    case WebsocketCodec.decode_payload(payload) do
-      {:ok, decoded} ->
-        {:ok, decoded}
-
-      {:error, :not_object} ->
-        {:error, error(400, "invalid_request", "websocket message must be a JSON object")}
-
-      {:error, :invalid_json} ->
-        {:error, error(400, "invalid_request", "websocket message must be valid JSON")}
-    end
-  end
 
   defp error(status, code, message, param \\ nil, metadata \\ %{}),
     do: Map.merge(%{status: status, code: code, message: message, param: param}, metadata)

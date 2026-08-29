@@ -997,13 +997,12 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     try do
       state =
         Enum.reduce(invalid_turn_states(), state, fn turn_state, state ->
-          assert {:ok, state} =
+          assert {:push, {:text, error_frame}, next_state} =
                    CodexResponsesSocket.handle_in(
                      {compact_payload(setup, turn_state), [opcode: :text]},
                      state
                    )
 
-          assert {:push, {:text, error_frame}, next_state} = receive_socket_message(state)
           assert_invalid_turn_state_error(error_frame)
           assert FakeUpstream.count(upstream) == 0
           assert Repo.aggregate(Request, :count) == 0
@@ -1068,15 +1067,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
           target_session_id = target_state.codex_session.id
 
           try do
-            assert {:ok, state} =
+            assert {:push, {:text, error_frame}, next_state} =
                      CodexResponsesSocket.handle_in(
                        {compact_payload(setup, turn_state), [opcode: :text]},
                        state
                      )
 
-            assert state.codex_session.id == original_session_id
-            refute state.codex_session.id == target_session_id
-            assert {:push, {:text, error_frame}, next_state} = receive_socket_message(state)
+            assert next_state.codex_session.id == original_session_id
+            refute next_state.codex_session.id == target_session_id
             assert_invalid_turn_state_error(error_frame)
             assert next_state.codex_session.id == original_session_id
             refute next_state.codex_session.id == target_session_id

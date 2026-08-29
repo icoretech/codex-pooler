@@ -368,7 +368,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :websocket_turn,
       contract:
-        "backend websocket continuity persists sessions and turns with sticky routing affinity, uses response.create.client_metadata x-codex-turn-state as per-frame request-scoped turn state with the upgrade/header value only as fallback, and is excluded from prompt-cache routing locality; an unresolved previous-response alias retains the current authenticated runtime and emits no owner-outage error; successful native turns register hashed previous-response aliases independent of retained-body completeness; a native websocket continuation marked from its final upstream payload may use only its reused upstream connection, while a fresh or reconnected connection emits the exact previous_response_not_found client retry signal before upstream payload send so only a later explicit full request may use that replacement connection; a mid-stream upstream death after visible output authors exactly one native type:error frame with status 502, wire code upstream_request_failed, and the pinned message upstream request failed, carrying no terminal event, no sequence_number, and no socket close so the same socket serves later turns; every frame authored through the shared websocket error envelope carries error type invalid_request_error, defaulting independently to status 500 when its reason has no status and to wire code websocket_request_failed when its reason has no code and message; public /v1 terminal masking and shape remain unchanged"
+        "backend websocket continuity persists sessions and turns with sticky routing affinity, uses response.create.client_metadata x-codex-turn-state as per-frame request-scoped turn state with the upgrade/header value only as fallback, and is excluded from prompt-cache routing locality; strict native turn-identity precedence validates client_metadata.turn_id, canonical client metadata, turn_id, then request_id without falling through a present invalid source, retaining only an opaque session-scoped SHA-256 semantic key and full claim key; a same active non-cancelled replay is suppressed without new work, while a cancelled predecessor with a different valid native identity can enter one bounded cancellation handoff with a one-second soft boundary and five-second absolute boundary, then starts only after matching fenced readiness; cancelled equal, noncancelled different, missing, public, non-native, and response.processed reconnect candidates fail bounded busy, while generate:false prewarm stays local, row-free, and neutral; predecessor, replacement, and later turn each settle exactly once, replacement uses a new connection generation, and the later turn reuses it; mixed-release behavior is identity-aware only when both current proxy and owner support the control path, a current proxy fails before accounting against a previous owner, and older callers retain their legacy behavior; no hidden automatic replay occurs; an unresolved previous-response alias retains the current authenticated runtime and emits no owner-outage error; successful native turns register hashed previous-response aliases independent of retained-body completeness; a native websocket continuation marked from its final upstream payload may use only its reused upstream connection, while a fresh or reconnected connection emits the exact previous_response_not_found client retry signal before upstream payload send so only a later explicit full request may use that replacement connection; a mid-stream upstream death after visible output authors exactly one native type:error frame with status 502, wire code upstream_request_failed, and the pinned message upstream request failed, carrying no terminal event, no sequence_number, and no socket close so the same socket serves later turns; every frame authored through the shared websocket error envelope carries error type invalid_request_error, defaulting independently to status 500 when its reason has no status and to wire code websocket_request_failed when its reason has no code and message; public /v1 terminal masking and shape remain unchanged"
     },
     %{
       slug: :reasoning_minimal,
@@ -1753,6 +1753,69 @@ defmodule CodexPooler.CompatibilityMatrix do
       response_create_client_metadata: %{"x-codex-turn-state" => "fixture-frame-turn-state"},
       turn_state_precedence: "response.create.client_metadata_over_upgrade_header",
       privacy: "raw_value_not_persisted",
+      native_turn_identity: %{
+        source_precedence: [
+          "client_metadata.turn_id",
+          "client_metadata.x-codex-turn-metadata.turn_id",
+          "turn_id",
+          "request_id"
+        ],
+        validation: %{
+          accepted: "1_to_256_byte_ascii_[A-Za-z0-9_.:-]+",
+          present_invalid: "source_specific_invalid_request_without_fallback",
+          missing: "no_native_turn_identity"
+        },
+        semantic_key: "opaque_session_scoped_sha256_32_bytes",
+        claim_key: "opaque_session_scoped_full_base64url_sha256_claim"
+      },
+      active_reconnect: %{
+        same_active_non_cancelled: %{
+          disposition: "same_turn_replay",
+          result: "suppressed_without_new_task_or_accounting_rows",
+          terminal: "predecessor_terminal_only"
+        },
+        bounded_busy: %{
+          cancelled_equal_identity: "owner_busy",
+          noncancelled_different_identity: "owner_busy",
+          missing_identity: "owner_busy",
+          public_response_create: "owner_busy",
+          non_native_active_descriptor: "owner_busy",
+          response_processed: "owner_busy"
+        }
+      },
+      prewarm: %{
+        generate_false: "local_created_completed",
+        accounting_rows: "none",
+        active_reconnect: "neutral",
+        pending_handoff: "neutral",
+        reconnect_events: "none",
+        owner_cancellation: "none"
+      },
+      edited_replacement_handoff: %{
+        eligibility: "cancelled_predecessor_with_different_native_identity",
+        admission: "matching_fenced_ready_only",
+        before_ready_accounting_rows: "none",
+        soft_cancellation_bound_ms: 1_000,
+        absolute_handoff_bound_ms: 5_000,
+        absolute_failure: "owner_forward_timeout",
+        duplicate_pending_identity: "suppressed_without_second_task_or_rows",
+        third_identity: "owner_busy"
+      },
+      exactly_once: %{
+        predecessor: "client_disconnected_once",
+        replacement: "success_once_after_ready",
+        later_turn: "success_once",
+        accounting: "one_request_attempt_turn_and_settlement_per_turn",
+        replacement_connection: "new_generation",
+        later_connection: "reuse_replacement_connection",
+        automatic_replay: false
+      },
+      mixed_release: %{
+        new_new: "identity_aware_handoff",
+        new_old: "identity_aware_handoff_fails_owner_unavailable_before_accounting",
+        old_new: "legacy_submission_behavior_without_new_handoff_protection",
+        old_old: "legacy_behavior_unchanged"
+      },
       native_continuation_generation_guard: %{
         scope: "native_backend_websocket_exact_previous_response_not_found",
         marked_continuation_connection_use: "reused_only",

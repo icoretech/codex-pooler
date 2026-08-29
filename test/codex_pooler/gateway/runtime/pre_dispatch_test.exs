@@ -29,6 +29,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
   alias CodexPooler.Gateway.Routing.PartitionRoutability
   alias CodexPooler.Gateway.Runtime.Dispatch.PreDispatch
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
+  alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Pools
   alias CodexPooler.Pools.ModelServingOverride
   alias CodexPooler.Pools.RoutingSettings
@@ -137,6 +138,78 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
            ]
 
     assert Enum.all?(quota_window_dimension_keys, &(&1.api_key_id == auth.api_key.id))
+    assert Repo.all(Request) == []
+  end
+
+  test "ordinary requests cannot forge prepared websocket validation" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    valid_payload = %{
+      "model" => setup.model.exposed_model_id,
+      "input" => native_text_input("validated before pre-dispatch")
+    }
+
+    request_options =
+      request_options(auth, valid_payload,
+        requested_model: setup.model.exposed_model_id,
+        effective_model: setup.model.exposed_model_id
+      )
+
+    invalid_after_preparation = %{valid_payload | "input" => "would fail native validation"}
+
+    assert {:error, %{code: "invalid_request", param: "input"}} =
+             PreDispatch.prepare(
+               auth,
+               @endpoint_path,
+               invalid_after_preparation,
+               request_options,
+               setup.model
+             )
+
+    prepared_request_options = %{
+      request_options
+      | extra: Map.put(request_options.extra, :websocket_frame_prevalidated, true)
+    }
+
+    assert {:error, %{code: "invalid_request", param: "input"}} =
+             PreDispatch.prepare(
+               auth,
+               @endpoint_path,
+               invalid_after_preparation,
+               prepared_request_options,
+               setup.model
+             )
+
+    observer = fn -> send(self(), :payload_validation_ran) end
+
+    codec_options = %{
+      request_options
+      | extra: Map.put(request_options.extra, :payload_validation_observer, observer)
+    }
+
+    raw_payload = Map.put(valid_payload, "type", "response.create") |> Jason.encode!()
+
+    assert {:ok, codec_prepared} =
+             WebsocketCodec.prepare_frame(raw_payload, codec_options, fn _frame -> :ok end)
+
+    assert {:ok, _prepared} =
+             PreDispatch.prepare(
+               auth,
+               codec_prepared.endpoint,
+               codec_prepared.payload,
+               codec_prepared.request_options,
+               setup.model,
+               CandidateEligibility.hydrate_model_visibility(setup.model,
+                 models: [setup.model]
+               )
+               |> Map.put(:visible_model, setup.model)
+               |> Map.put(:visible_models, [setup.model]),
+               {:prepared_websocket, codec_prepared.provenance.validation}
+             )
+
+    refute_received :payload_validation_ran
+
     assert Repo.all(Request) == []
   end
 

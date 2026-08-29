@@ -4,6 +4,66 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContractTest do
   alias CodexPooler.Gateway.Transports.Websocket.OwnerDefaults
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
 
+  describe "reconnect handoff controls" do
+    test "accepts only the matching downstream, owner turn, and opaque control ref" do
+      owner_turn_id =
+        spawn(fn ->
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      downstream_pid = self()
+      control_ref = make_ref()
+
+      ready =
+        {:websocket_owner_handoff_ready, "corr-control", 3, owner_turn_id, downstream_pid,
+         control_ref}
+
+      failed =
+        {:websocket_owner_handoff_failed, "corr-control", 3, owner_turn_id, downstream_pid,
+         control_ref, :owner_drained}
+
+      assert WebsocketOwnerContract.accept_handoff_message(
+               ready,
+               downstream_pid,
+               3,
+               "corr-control",
+               owner_turn_id,
+               control_ref
+             ) == {:ok, :ready}
+
+      assert WebsocketOwnerContract.accept_handoff_message(
+               failed,
+               downstream_pid,
+               3,
+               "corr-control",
+               owner_turn_id,
+               control_ref
+             ) == {:ok, {:failed, :owner_drained}}
+
+      for stale <- [
+            put_elem(ready, 1, "stale-correlation"),
+            put_elem(ready, 2, 4),
+            put_elem(ready, 3, self()),
+            put_elem(ready, 4, owner_turn_id),
+            put_elem(ready, 5, make_ref())
+          ] do
+        assert WebsocketOwnerContract.accept_handoff_message(
+                 stale,
+                 downstream_pid,
+                 3,
+                 "corr-control",
+                 owner_turn_id,
+                 control_ref
+               ) == :drop
+      end
+
+      refute inspect(ready) =~ "semantic"
+      send(owner_turn_id, :stop)
+    end
+  end
+
   @sentinel "SECRET_SENTINEL_DO_NOT_STORE_123"
   @required_errors [
     :owner_unavailable,

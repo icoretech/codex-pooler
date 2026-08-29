@@ -18,6 +18,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   alias CodexPooler.Gateway.Routing.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
+  alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Pools
   alias CodexPooler.Pools.ModelServingMode
   alias CodexPooler.Pools.ModelServingOverride
@@ -31,6 +32,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
           required(:candidates) => [candidate()],
           required(:route_state) => RouteState.t()
         }
+  @type validation_authority :: :validate | {:prepared_websocket, binary()}
 
   @spec prepare(
           CodexPooler.Access.auth_context(),
@@ -54,7 +56,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
         visible_model: model,
         visible_models: [model],
         candidate_snapshots: Map.get(hydration.candidates_by_model_id, model.id, [])
-      })
+      }),
+      :validate
     )
   end
 
@@ -72,8 +75,30 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
         payload,
         %RequestOptions{} = request_options,
         %Model{} = model,
+        %{visible_model: %Model{}, visible_models: visible_models} = visible_model_context
+      )
+      when is_list(visible_models) do
+    prepare(auth, endpoint, payload, request_options, model, visible_model_context, :validate)
+  end
+
+  @spec prepare(
+          CodexPooler.Access.auth_context(),
+          String.t(),
+          map(),
+          RequestOptions.t(),
+          Model.t(),
+          visible_model_context(),
+          validation_authority()
+        ) :: {:ok, prepared()} | {:error, GatewayContracts.gateway_error()}
+  def prepare(
+        auth,
+        endpoint,
+        payload,
+        %RequestOptions{} = request_options,
+        %Model{} = model,
         %{visible_model: %Model{} = visible_model, visible_models: visible_models} =
-          visible_model_context
+          visible_model_context,
+        validation_authority
       )
       when is_list(visible_models) do
     visible_models = visible_models(visible_models)
@@ -91,8 +116,8 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
          {:ok, request_options} <-
            SessionContinuity.attach_file_affinity(auth, endpoint, payload, request_options),
          :ok <- ensure_model_supports(model, endpoint, payload, request_options, has_input_image?),
-         :ok <- validate_strict_schema(payload, request_options),
-         :ok <- InputShape.validate(payload),
+         :ok <- validate_strict_schema_once(payload, request_options, validation_authority),
+         :ok <- validate_input_shape_once(payload, request_options, validation_authority),
          {:ok, request_options, effective_model_serving_modes} <-
            resolve_model_serving_modes(
              auth,
@@ -101,7 +126,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
              visible_models,
              request_options
            ),
-         :ok <- PayloadNormalizer.validate(payload, request_options),
+         :ok <- validate_payload_once(payload, request_options, validation_authority),
          {:ok, candidate_snapshots} <-
            CandidateEligibility.routable_candidates(visible_model_context, model),
          {quota_window_snapshots, quota_snapshot_at} =
@@ -193,6 +218,56 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
     if OpenAICompatibility.translated_responses_surface?(compatibility),
       do: StrictSchema.validate_public(payload),
       else: StrictSchema.validate(payload)
+  end
+
+  defp validate_strict_schema_once(payload, request_options, validation_authority) do
+    validate_once(payload, request_options, validation_authority, fn ->
+      validate_strict_schema(payload, request_options)
+    end)
+  end
+
+  defp validate_input_shape_once(payload, request_options, validation_authority) do
+    validate_once(payload, request_options, validation_authority, fn ->
+      InputShape.validate(payload)
+    end)
+  end
+
+  defp validate_payload_once(payload, request_options, validation_authority) do
+    validate_once(payload, request_options, validation_authority, fn ->
+      PayloadNormalizer.validate(payload, request_options)
+    end)
+  end
+
+  defp validate_once(payload, request_options, validation_authority, validation)
+       when is_function(validation, 0) do
+    if valid_prepared_authority?(payload, request_options, validation_authority) do
+      :ok
+    else
+      notify_validation_observer(request_options)
+      validation.()
+    end
+  end
+
+  defp valid_prepared_authority?(
+         payload,
+         request_options,
+         {:prepared_websocket, token}
+       ),
+       do: WebsocketCodec.prevalidated_request?(payload, request_options, token)
+
+  defp valid_prepared_authority?(_payload, _request_options, :validate), do: false
+  defp valid_prepared_authority?(_payload, _request_options, _invalid), do: false
+
+  if Mix.env() == :test do
+    defp notify_validation_observer(%RequestOptions{
+           extra: %{payload_validation_observer: observer}
+         })
+         when is_function(observer, 0),
+         do: observer.()
+
+    defp notify_validation_observer(%RequestOptions{}), do: :ok
+  else
+    defp notify_validation_observer(%RequestOptions{}), do: :ok
   end
 
   defp put_valid_canonical_assignment_ids(visible_model_context, %Model{} = model) do

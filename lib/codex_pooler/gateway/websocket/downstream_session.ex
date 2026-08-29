@@ -174,6 +174,130 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSession do
 
   def accept_downstream_message(_message, _state), do: :drop
 
+  @spec accept_handoff_message(term(), socket_state()) ::
+          {:ok, WebsocketOwnerContract.handoff_outcome()}
+          | {:ok, {:ready, pid()}}
+          | {:ok, {{:failed, :owner_forward_timeout | :owner_drained}, pid()}}
+          | :drop
+  def accept_handoff_message(
+        message,
+        %{
+          websocket_owner_downstream: %{
+            pid: downstream_pid,
+            epoch: epoch,
+            correlation_id: correlation_id
+          },
+          websocket_owner_pending_handoff: %{
+            owner_turn_id: owner_turn_id,
+            control_ref: control_ref
+          }
+        }
+      )
+      when is_pid(downstream_pid) and is_integer(epoch) and epoch > 0 and
+             is_binary(correlation_id) and is_pid(owner_turn_id) and is_reference(control_ref) do
+    case WebsocketOwnerContract.accept_handoff_message(
+           message,
+           downstream_pid,
+           epoch,
+           correlation_id,
+           owner_turn_id,
+           control_ref
+         ) do
+      {:error, :invalid_handoff_message} -> :drop
+      result -> result
+    end
+  end
+
+  def accept_handoff_message(
+        {:websocket_owner_handoff_ready, correlation_id, epoch, owner_turn_id, downstream_pid,
+         control_ref} = message,
+        %{
+          websocket_owner_downstream: %{
+            pid: downstream_pid,
+            epoch: epoch,
+            correlation_id: correlation_id
+          },
+          websocket_owner_pending_handoff: %{
+            owner_turn_id: nil,
+            control_ref: control_ref
+          }
+        }
+      )
+      when is_pid(owner_turn_id) do
+    case WebsocketOwnerContract.accept_handoff_message(
+           message,
+           downstream_pid,
+           epoch,
+           correlation_id,
+           owner_turn_id,
+           control_ref
+         ) do
+      {:ok, :ready} -> {:ok, {:ready, owner_turn_id}}
+      _other -> :drop
+    end
+  end
+
+  def accept_handoff_message(
+        {:websocket_owner_handoff_failed, correlation_id, epoch, owner_turn_id, downstream_pid,
+         control_ref, reason} = message,
+        %{
+          websocket_owner_downstream: %{
+            pid: downstream_pid,
+            epoch: epoch,
+            correlation_id: correlation_id
+          },
+          websocket_owner_pending_handoff: %{
+            owner_turn_id: nil,
+            control_ref: control_ref
+          }
+        }
+      )
+      when is_pid(owner_turn_id) do
+    case WebsocketOwnerContract.accept_handoff_message(
+           message,
+           downstream_pid,
+           epoch,
+           correlation_id,
+           owner_turn_id,
+           control_ref
+         ) do
+      {:ok, {:failed, ^reason}} -> {:ok, {{:failed, reason}, owner_turn_id}}
+      _other -> :drop
+    end
+  end
+
+  def accept_handoff_message(_message, _state), do: :drop
+
+  @spec preflight_reconnect(socket_state(), <<_::256>>, reference()) ::
+          WebsocketOwnerSession.reconnect_preflight_result()
+  def preflight_reconnect(state, semantic_turn_key, control_ref)
+      when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and
+             is_reference(control_ref) do
+    Websocket.preflight_websocket_owner_reconnect(
+      Map.get(state, :codex_session),
+      Map.get(state, :websocket_owner_lease_token),
+      Map.get(state, :websocket_owner_downstream),
+      semantic_turn_key,
+      control_ref,
+      Map.get(state, :opts, %{})
+    )
+  end
+
+  @spec cancel_reconnect(socket_state(), <<_::256>>, reference()) ::
+          :ok | {:error, WebsocketOwnerContract.owner_error()}
+  def cancel_reconnect(state, semantic_turn_key, control_ref)
+      when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and
+             is_reference(control_ref) do
+    Websocket.cancel_websocket_owner_reconnect(
+      Map.get(state, :codex_session),
+      Map.get(state, :websocket_owner_lease_token),
+      Map.get(state, :websocket_owner_downstream),
+      semantic_turn_key,
+      control_ref,
+      Map.get(state, :opts, %{})
+    )
+  end
+
   defp reconnect_owner_turn?(state, owner_turn_id) do
     Map.get(state, :websocket_owner_active_turn_reconnect?, false) and
       Map.get(state, :websocket_owner_reconnect_turn_pid) == owner_turn_id

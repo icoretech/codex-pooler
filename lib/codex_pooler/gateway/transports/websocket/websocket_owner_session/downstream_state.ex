@@ -17,8 +17,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.Downstr
   def downstream_status(_current, _downstream), do: {:error, :stale_downstream}
 
   @spec active_turn_downstream(map()) :: map() | nil
-  def active_turn_downstream(%{active_turn: %{downstream: downstream}}) when is_map(downstream),
-    do: downstream
+  def active_turn_downstream(%{active_turn: %{downstream: downstream}}), do: downstream
 
   def active_turn_downstream(state), do: state.downstream
 

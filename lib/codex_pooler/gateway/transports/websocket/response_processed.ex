@@ -30,6 +30,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.ResponseProcessed do
         route_class: RouteClass.proxy_websocket()
       )
 
+    handle_prepared(auth, payload, request_options)
+  end
+
+  @spec handle_prepared(auth(), map(), RequestOptions.t()) ::
+          {:ok, gateway_result()} | {:error, gateway_error()}
+  def handle_prepared(auth, payload, %RequestOptions{} = request_options)
+      when is_map(payload) do
     case UpstreamDispatch.forward_response_processed(payload, request_options) do
       :ok ->
         with :ok <- record_processed_ack(auth, payload, request_options) do

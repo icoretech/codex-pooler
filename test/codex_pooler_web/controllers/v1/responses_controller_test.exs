@@ -1167,7 +1167,7 @@ defmodule CodexPoolerWeb.V1.ResponsesControllerTest do
 
       assert %{"type" => "error", "status" => 400, "error" => error} = Jason.decode!(frame)
       assert error["code"] == "invalid_request"
-      assert error["param"] == "model"
+      assert error["param"] == "type"
 
       refute frame =~ "synthetic realtime text"
       assert FakeUpstream.requests(upstream) == []

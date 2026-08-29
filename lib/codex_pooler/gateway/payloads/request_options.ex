@@ -77,6 +77,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :client_ip,
     :codex_session,
     :codex_turn_id,
+    :semantic_turn_key,
+    :turn_claim_key,
     :collect_openai_image_stream,
     :collect_openai_response_stream,
     :chatgpt_account_id,
@@ -256,12 +258,12 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     %{options | request_metadata: struct!(options.request_metadata, updates)}
   end
 
-  @spec server_correlation_id(t()) :: Ecto.UUID.t()
+  @spec server_correlation_id(t()) :: String.t()
   def server_correlation_id(%__MODULE__{
         transport: %{transport: "websocket"},
-        continuity: %{codex_turn_id: turn_id}
+        continuity: %{turn_claim_key: turn_claim_key}
       }) do
-    turn_id || Ecto.UUID.generate()
+    turn_claim_key || Ecto.UUID.generate()
   end
 
   def server_correlation_id(%__MODULE__{}), do: Ecto.UUID.generate()
@@ -270,9 +272,9 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   def websocket_request_correlation_id(%__MODULE__{
         request_metadata: %{request_id: request_id},
         transport: %{transport: "websocket"},
-        continuity: %{codex_turn_id: turn_id}
+        continuity: %{turn_claim_key: turn_claim_key}
       }) do
-    turn_id || request_id || Ecto.UUID.generate()
+    turn_claim_key || request_id || Ecto.UUID.generate()
   end
 
   def websocket_request_correlation_id(%__MODULE__{} = options),

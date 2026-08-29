@@ -11,12 +11,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession}
+  alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.DownstreamState
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.Gateway.Websocket, as: Gateway
@@ -2399,6 +2401,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert WebsocketOwnerSession.submit_frame(owner, second_downstream, "overlap-frame") ==
              {:error, :owner_busy}
 
+    assert WebsocketOwnerSession.preflight_reconnect(
+             owner,
+             second_downstream,
+             semantic_turn_key(context.codex_session_id, "unknown-active"),
+             make_ref()
+           ) == {:error, :owner_busy}
+
     send(barrier_pid, {:websocket_owner_harness_release, block_ref})
     assert :ok = Task.await(submit_task, 1_000)
 
@@ -2413,6 +2422,419 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
 
     owner_state = :sys.get_state(owner)
     refute inspect(owner_state) =~ @sentinel
+  end
+
+  test "an explicit cancelled active-turn downstream never falls back to the replacement" do
+    replacement = %{pid: self(), epoch: 2, correlation_id: "replacement"}
+
+    assert DownstreamState.active_turn_downstream(%{
+             active_turn: %{downstream: nil},
+             downstream: replacement
+           }) == nil
+
+    assert WebsocketOwnerSession.preflight_reconnect(self(), replacement, <<1>>, make_ref()) ==
+             {:error, :owner_busy}
+  end
+
+  test "classifies native reconnects and releases one edited replacement after safe quiescence",
+       context do
+    parent = self()
+
+    upstream = reconnect_handoff_upstream(parent)
+
+    {:ok, owner} =
+      start_owner(context,
+        upstream: upstream,
+        handoff_soft_timeout_ms: 50,
+        handoff_absolute_timeout_ms: 1_000
+      )
+
+    assert_receive {:reconnect_handoff_upstream_started, _upstream_pid}
+
+    {:ok, first_downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("handoff-a"))
+
+    key_a = semantic_turn_key(context.codex_session_id, "turn-a")
+    key_b = semantic_turn_key(context.codex_session_id, "turn-b")
+    ref = make_ref()
+
+    assert {:ok, :dispatch} =
+             WebsocketOwnerSession.preflight_reconnect(owner, first_downstream, key_a, make_ref())
+
+    submitter =
+      spawn(fn ->
+        result =
+          WebsocketOwnerSession.submit_request(
+            owner,
+            first_downstream,
+            native_websocket_request("turn-a")
+          )
+
+        send(parent, {:handoff_old_result, result})
+
+        receive do
+          :release_handoff_submitter -> :ok
+        end
+      end)
+
+    assert_receive {:reconnect_handoff_first_send, first_task_pid}
+    first_task_ref = Process.monitor(first_task_pid)
+    %{active_turn: predecessor} = :sys.get_state(owner)
+
+    assert {:ok, :same_turn_replay} =
+             WebsocketOwnerSession.preflight_reconnect(
+               owner,
+               first_downstream,
+               key_a,
+               make_ref()
+             )
+
+    assert {:error, :owner_busy} =
+             WebsocketOwnerSession.preflight_reconnect(
+               owner,
+               first_downstream,
+               key_b,
+               make_ref()
+             )
+
+    assert :ok = WebsocketOwnerSession.detach_downstream(owner, first_downstream)
+
+    assert {:ok, replacement_downstream} =
+             WebsocketOwnerSession.attach_downstream(owner, downstream_target("handoff-b"))
+
+    assert {:error, :owner_busy} =
+             WebsocketOwnerSession.preflight_reconnect(
+               owner,
+               replacement_downstream,
+               key_a,
+               make_ref()
+             )
+
+    assert {:ok, :replacement_handoff, ^ref} =
+             WebsocketOwnerSession.preflight_reconnect(
+               owner,
+               replacement_downstream,
+               key_b,
+               ref
+             )
+
+    assert {:ok, :duplicate_replacement, ^ref} =
+             WebsocketOwnerSession.preflight_reconnect(
+               owner,
+               replacement_downstream,
+               key_b,
+               make_ref()
+             )
+
+    assert {:error, :owner_busy} =
+             WebsocketOwnerSession.preflight_reconnect(
+               owner,
+               replacement_downstream,
+               semantic_turn_key(context.codex_session_id, "turn-c"),
+               make_ref()
+             )
+
+    assert_receive {:reconnect_handoff_invalidated, 1}
+    assert_receive {:DOWN, ^first_task_ref, :process, ^first_task_pid, :killed}
+    assert_receive {:handoff_old_result, {:error, :client_disconnected}}
+    refute_received {:websocket_owner_handoff_ready, _, _, _, _, _}
+
+    send(submitter, :release_handoff_submitter)
+
+    assert_receive {:websocket_owner_handoff_ready, "handoff-b", 1, _, _, ^ref}
+
+    assert :ok =
+             WebsocketOwnerSession.submit_request(
+               owner,
+               replacement_downstream,
+               native_websocket_request("turn-b")
+             )
+
+    assert_receive {:reconnect_handoff_replacement_send, 2}
+    assert_receive {:websocket_owner_frame, "handoff-b", 1, :complete}
+
+    send(owner, {predecessor.task_ref, :ok})
+    send(owner, {:DOWN, predecessor.task_ref, :process, predecessor.task_pid, :shutdown})
+    send(owner, {:websocket_owner_upstream_frame, predecessor.ref, "stale-frame"})
+    send(owner, {:websocket_owner_terminal_delivery_timeout, predecessor.ref, make_ref()})
+
+    assert %{pending_handoff: nil, active_turn: nil} = :sys.get_state(owner)
+    refute_received {:websocket_owner_frame, "handoff-b", 1, {:data, "stale-frame"}}
+  end
+
+  test "absolute reconnect handoff deadline fails once and retires without replacement work",
+       context do
+    parent = self()
+    upstream = reconnect_handoff_upstream(parent)
+
+    {:ok, owner} =
+      start_owner(context,
+        upstream: upstream,
+        handoff_soft_timeout_ms: 25,
+        handoff_absolute_timeout_ms: 100
+      )
+
+    assert_receive {:reconnect_handoff_upstream_started, _upstream_pid}
+
+    {:ok, first_downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("timeout-a"))
+
+    submitter =
+      spawn(fn ->
+        result =
+          WebsocketOwnerSession.submit_request(
+            owner,
+            first_downstream,
+            native_websocket_request("turn-a")
+          )
+
+        send(parent, {:timeout_old_result, result})
+
+        receive do
+          :release_timeout_submitter -> :ok
+        end
+      end)
+
+    assert_receive {:reconnect_handoff_first_send, first_task_pid}
+    first_task_ref = Process.monitor(first_task_pid)
+    assert :ok = WebsocketOwnerSession.detach_downstream(owner, first_downstream)
+
+    {:ok, replacement_downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("timeout-b"))
+
+    ref = make_ref()
+
+    assert {:ok, :replacement_handoff, ^ref} =
+             WebsocketOwnerSession.preflight_reconnect(
+               owner,
+               replacement_downstream,
+               semantic_turn_key(context.codex_session_id, "turn-b"),
+               ref
+             )
+
+    owner_monitor = Process.monitor(owner)
+    assert_receive {:reconnect_handoff_invalidated, 1}
+    assert_receive {:DOWN, ^first_task_ref, :process, ^first_task_pid, :killed}
+    assert_receive {:timeout_old_result, {:error, :client_disconnected}}
+
+    assert_receive {:websocket_owner_handoff_failed, "timeout-b", 1, _, _, ^ref,
+                    :owner_forward_timeout}
+
+    assert_receive {:DOWN, ^owner_monitor, :process, ^owner, :normal}
+    refute_received {:reconnect_handoff_replacement_send, _count}
+    send(submitter, :release_timeout_submitter)
+  end
+
+  test "pending replacement socket close before and after ready clears the handoff", context do
+    waiting = start_waiting_handoff(context, "socket-close-before")
+    pending = waiting.pending
+    task_monitor = waiting.task_monitor
+    task_pid = waiting.task_pid
+
+    assert :ok = WebsocketOwnerSession.detach_downstream(waiting.owner, waiting.replacement)
+    assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, :killed}
+
+    assert_receive {:handoff_fixture_old_result, "socket-close-before",
+                    {:error, :client_disconnected}}
+
+    send(
+      waiting.owner,
+      {:websocket_owner_handoff_soft_timeout, pending.control_ref, pending.soft_token}
+    )
+
+    send(
+      waiting.owner,
+      {:websocket_owner_handoff_absolute_timeout, pending.control_ref, pending.absolute_token}
+    )
+
+    assert %{pending_handoff: nil, active_turn: nil} = :sys.get_state(waiting.owner)
+    refute_received {:websocket_owner_handoff_ready, _, _, _, _, _}
+    refute_received {:websocket_owner_handoff_failed, _, _, _, _, _, _}
+    refute_received {:reconnect_handoff_replacement_send, _count}
+    send(waiting.submitter, :release_handoff_fixture_submitter)
+
+    ready_context = unique_owner_context(context, "socket-close-after")
+    ready = start_ready_handoff(ready_context, "socket-close-after")
+    ready_pending = ready.pending
+
+    assert :ok = WebsocketOwnerSession.detach_downstream(ready.owner, ready.replacement)
+
+    send(
+      ready.owner,
+      {:websocket_owner_handoff_absolute_timeout, ready_pending.control_ref,
+       ready_pending.absolute_token}
+    )
+
+    assert %{pending_handoff: nil, active_turn: nil} = :sys.get_state(ready.owner)
+    refute_received {:websocket_owner_handoff_failed, _, _, _, _, _, _}
+    refute_received {:reconnect_handoff_replacement_send, _count}
+  end
+
+  test "lease revocation clears a waiting handoff and terminates its predecessor", context do
+    parent = self()
+
+    persistence = %{
+      renew_owner_token: fn _session_id, _owner_lease_token, %RequestOptions{} ->
+        send(parent, :handoff_renewal_revoked)
+        {:error, :stale_owner}
+      end,
+      release_owner_lease: fn _session_id, _owner_lease_token, _reason -> :ok end,
+      interrupt_codex_session: fn _session_id, _opts -> :ok end
+    }
+
+    waiting = start_waiting_handoff(context, "lease-revocation", persistence: persistence)
+    owner_monitor = Process.monitor(waiting.owner)
+    owner = waiting.owner
+    task_monitor = waiting.task_monitor
+    task_pid = waiting.task_pid
+
+    send(waiting.owner, :renew_owner_lease)
+
+    assert_receive :handoff_renewal_revoked
+    assert_receive {:DOWN, ^owner_monitor, :process, ^owner, {:shutdown, :stale_owner}}
+    assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, :killed}
+    refute_received {:websocket_owner_handoff_ready, _, _, _, _, _}
+    refute_received {:reconnect_handoff_replacement_send, _count}
+    Process.exit(waiting.submitter, :kill)
+  end
+
+  test "rollout drain fails a waiting handoff once and stale timers cannot make it ready",
+       context do
+    waiting = start_waiting_handoff(context, "rollout-drain")
+    pending = waiting.pending
+    control_ref = pending.control_ref
+
+    assert :ok = WebsocketOwnerSession.begin_drain(waiting.owner)
+
+    assert_receive {:websocket_owner_handoff_failed, "rollout-drain-b", 1, _, _, ^control_ref,
+                    :owner_drained}
+
+    send(
+      waiting.owner,
+      {:websocket_owner_handoff_soft_timeout, pending.control_ref, pending.soft_token}
+    )
+
+    send(
+      waiting.owner,
+      {:websocket_owner_handoff_absolute_timeout, pending.control_ref, pending.absolute_token}
+    )
+
+    assert %{pending_handoff: nil, draining?: true} = :sys.get_state(waiting.owner)
+    refute_received {:websocket_owner_handoff_failed, _, _, _, _, _, :owner_drained}
+    refute_received {:websocket_owner_handoff_ready, _, _, _, _, _}
+
+    Process.exit(waiting.task_pid, :kill)
+    Process.exit(waiting.submitter, :kill)
+  end
+
+  test "stale predecessor errors completion and probe artifacts cannot reach the replacement",
+       context do
+    ready = start_ready_handoff(context, "stale-artifacts")
+    predecessor = ready.predecessor
+
+    assert :ok =
+             WebsocketOwnerSession.submit_request(
+               ready.owner,
+               ready.replacement,
+               native_websocket_request("stale-artifacts-b")
+             )
+
+    assert_receive {:reconnect_handoff_replacement_send, 2}
+    assert_receive {:websocket_owner_frame, "stale-artifacts-b", 1, :complete}
+
+    stale_error = Jason.encode!(%{"type" => "error", "error" => %{"code" => "stale"}})
+    stale_complete = terminal_frame("response.completed", "resp_stale_artifacts")
+    probe_ref = make_ref()
+
+    send(ready.owner, {:websocket_owner_upstream_frame, predecessor.ref, stale_error})
+    send(ready.owner, {:websocket_owner_upstream_frame, predecessor.ref, stale_complete})
+
+    send(
+      ready.owner,
+      {:websocket_owner_output_commit_ack, "stale-artifacts-a", 1, self(), predecessor.ref,
+       probe_ref, true}
+    )
+
+    send(
+      ready.owner,
+      {:websocket_owner_output_commit_timeout, predecessor.ref, probe_ref}
+    )
+
+    assert %{active_turn: nil, pending_handoff: nil} = :sys.get_state(ready.owner)
+    refute_received {:websocket_owner_frame, "stale-artifacts-b", 1, _payload}
+  end
+
+  test "duplicate and stale handoff timer tokens have exactly one effect", context do
+    waiting = start_waiting_handoff(context, "timer-fencing")
+    pending = waiting.pending
+    control_ref = pending.control_ref
+    task_monitor = waiting.task_monitor
+    task_pid = waiting.task_pid
+
+    send(waiting.owner, {:websocket_owner_handoff_soft_timeout, pending.control_ref, make_ref()})
+
+    send(
+      waiting.owner,
+      {:websocket_owner_handoff_absolute_timeout, pending.control_ref, make_ref()}
+    )
+
+    assert %{pending_handoff: %{status: :waiting}} = :sys.get_state(waiting.owner)
+    refute_received {:reconnect_handoff_invalidated, _count}
+
+    send(
+      waiting.owner,
+      {:websocket_owner_handoff_soft_timeout, pending.control_ref, pending.soft_token}
+    )
+
+    send(
+      waiting.owner,
+      {:websocket_owner_handoff_soft_timeout, pending.control_ref, pending.soft_token}
+    )
+
+    assert_receive {:reconnect_handoff_invalidated, 1}
+    assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, :killed}
+    assert_receive {:handoff_fixture_old_result, "timer-fencing", {:error, :client_disconnected}}
+    refute_received {:reconnect_handoff_invalidated, _count}
+
+    send(waiting.submitter, :release_handoff_fixture_submitter)
+    assert_receive {:websocket_owner_handoff_ready, "timer-fencing-b", 1, _, _, ^control_ref}
+
+    assert :ok =
+             WebsocketOwnerSession.submit_request(
+               waiting.owner,
+               waiting.replacement,
+               native_websocket_request("timer-fencing-b")
+             )
+
+    assert_receive {:reconnect_handoff_replacement_send, 2}
+
+    send(
+      waiting.owner,
+      {:websocket_owner_handoff_absolute_timeout, pending.control_ref, pending.absolute_token}
+    )
+
+    assert %{active_turn: nil, pending_handoff: nil} = :sys.get_state(waiting.owner)
+    refute_received {:websocket_owner_handoff_failed, _, _, _, _, _, _}
+  end
+
+  test "ready replacement expires through the owner API without submitting replacement work",
+       context do
+    ready = start_ready_handoff(context, "submission-expiry")
+    pending = ready.pending
+    owner_monitor = Process.monitor(ready.owner)
+    owner = ready.owner
+    control_ref = pending.control_ref
+
+    send(
+      ready.owner,
+      {:websocket_owner_handoff_absolute_timeout, pending.control_ref, pending.absolute_token}
+    )
+
+    assert_receive {:websocket_owner_handoff_failed, "submission-expiry-b", 1, _, _, ^control_ref,
+                    :owner_forward_timeout}
+
+    assert_receive {:DOWN, ^owner_monitor, :process, ^owner, :normal}
+    refute_received {:reconnect_handoff_replacement_send, _count}
   end
 
   test "submitter exit while upstream worker is blocked clears active turn", context do
@@ -3248,6 +3670,156 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       timeouts: %{},
       writer: fn _frame -> :ok end
     }
+  end
+
+  defp native_websocket_request(turn_id) do
+    %{
+      websocket_request()
+      | payload: Jason.encode!(%{"type" => "response.create", "turn_id" => turn_id}),
+        message_mapper: &StreamProtocol.canonicalize_native_codex_responses_json_message/1
+    }
+  end
+
+  defp semantic_turn_key(codex_session_id, turn_id) do
+    :crypto.hash(:sha256, codex_session_id <> <<0>> <> turn_id)
+  end
+
+  defp reconnect_handoff_upstream(parent) do
+    counter = :counters.new(1, [:atomics])
+
+    %{
+      start: fn ->
+        pid =
+          spawn(fn ->
+            receive do
+              :stop -> :ok
+            end
+          end)
+
+        send(parent, {:reconnect_handoff_upstream_started, pid})
+        {:ok, pid}
+      end,
+      send: fn _upstream_pid, _request, _writer ->
+        :ok = :counters.add(counter, 1, 1)
+        count = :counters.get(counter, 1)
+
+        if count == 1 do
+          Process.flag(:trap_exit, true)
+          send(parent, {:reconnect_handoff_first_send, self()})
+
+          receive do
+            {:EXIT, _from, :shutdown} ->
+              receive do
+                :never -> :ok
+              end
+          end
+        else
+          send(parent, {:reconnect_handoff_replacement_send, count})
+          :ok
+        end
+      end,
+      invalidate: fn _upstream_pid ->
+        send(parent, {:reconnect_handoff_invalidated, :counters.get(counter, 1)})
+        :ok
+      end,
+      close: fn pid ->
+        send(pid, :stop)
+        :ok
+      end
+    }
+  end
+
+  defp start_waiting_handoff(context, label, owner_opts \\ []) do
+    parent = self()
+    upstream = reconnect_handoff_upstream(parent)
+
+    {:ok, owner} =
+      start_owner(
+        context,
+        Keyword.merge(owner_opts,
+          upstream: upstream,
+          handoff_soft_timeout_ms: 10_000,
+          handoff_absolute_timeout_ms: 20_000
+        )
+      )
+
+    assert_receive {:reconnect_handoff_upstream_started, _upstream_pid}
+
+    {:ok, first_downstream} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("#{label}-a"))
+
+    submitter =
+      spawn(fn ->
+        result =
+          WebsocketOwnerSession.submit_request(
+            owner,
+            first_downstream,
+            native_websocket_request("#{label}-a")
+          )
+
+        send(parent, {:handoff_fixture_old_result, label, result})
+
+        receive do
+          :release_handoff_fixture_submitter -> :ok
+        end
+      end)
+
+    assert_receive {:reconnect_handoff_first_send, task_pid}
+    task_monitor = Process.monitor(task_pid)
+    %{active_turn: predecessor} = :sys.get_state(owner)
+    assert :ok = WebsocketOwnerSession.detach_downstream(owner, first_downstream)
+
+    {:ok, replacement} =
+      WebsocketOwnerSession.attach_downstream(owner, downstream_target("#{label}-b"))
+
+    control_ref = make_ref()
+
+    assert {:ok, :replacement_handoff, ^control_ref} =
+             WebsocketOwnerSession.preflight_reconnect(
+               owner,
+               replacement,
+               semantic_turn_key(context.codex_session_id, "#{label}-b"),
+               control_ref
+             )
+
+    %{pending_handoff: pending} = :sys.get_state(owner)
+
+    %{
+      owner: owner,
+      pending: pending,
+      predecessor: predecessor,
+      replacement: replacement,
+      submitter: submitter,
+      task_monitor: task_monitor,
+      task_pid: task_pid
+    }
+  end
+
+  defp start_ready_handoff(context, label, owner_opts \\ []) do
+    waiting = start_waiting_handoff(context, label, owner_opts)
+    pending = waiting.pending
+
+    send(
+      waiting.owner,
+      {:websocket_owner_handoff_soft_timeout, pending.control_ref, pending.soft_token}
+    )
+
+    assert_receive {:reconnect_handoff_invalidated, 1}
+
+    task_monitor = waiting.task_monitor
+    task_pid = waiting.task_pid
+    assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, :killed}
+    assert_receive {:handoff_fixture_old_result, ^label, {:error, :client_disconnected}}
+
+    send(waiting.submitter, :release_handoff_fixture_submitter)
+
+    assert_receive {:websocket_owner_handoff_ready, correlation_id, epoch, _owner_turn_id,
+                    _downstream_pid, control_ref}
+
+    assert correlation_id == waiting.replacement.correlation_id
+    assert epoch == waiting.replacement.epoch
+    assert control_ref == pending.control_ref
+    %{waiting | pending: :sys.get_state(waiting.owner).pending_handoff}
   end
 
   defp terminal_frame(type, response_id) do

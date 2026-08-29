@@ -553,8 +553,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       assert pushed == frame
       assert next_state.native_turn_output_task_pids == MapSet.new([task_pid])
 
-      assert Map.delete(next_state, :native_turn_output_task_pids) ==
-               Map.delete(state, :native_turn_output_task_pids)
+      assert Map.drop(next_state, [
+               :native_turn_output_task_pids,
+               :response_task_terminals_accepted
+             ]) ==
+               Map.drop(state, [
+                 :native_turn_output_task_pids,
+                 :response_task_terminals_accepted
+               ])
     end
   end
 
@@ -645,21 +651,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
 
     state = public_socket_state()
 
-    assert {:ok, pending_state} =
-             CodexResponsesSocket.handle_in({invalid_payload, [opcode: :text]}, state)
-
-    assert MapSet.size(pending_state.tasks) == 0
-    assert pending_state.public_response_task_pid == nil
-    assert pending_state.public_response_stream_id == nil
-    assert is_reference(pending_state.public_response_start_error_ref)
-
-    assert_receive {:public_response_start_error, ref, reason}
-
     assert {:push, {:text, payload}, settled_state} =
-             CodexResponsesSocket.handle_info(
-               {:public_response_start_error, ref, reason},
-               pending_state
-             )
+             CodexResponsesSocket.handle_in({invalid_payload, [opcode: :text]}, state)
 
     decoded = Jason.decode!(payload)
     assert decoded["status"] == 400
@@ -684,7 +677,10 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert {:ok, queued_state} =
              CodexResponsesSocket.handle_in({second, [opcode: :text]}, first_state)
 
-    assert :queue.to_list(queued_state.queued_response_payloads) == [second]
+    assert [%{variant: :public_response_create, payload: %{"input" => [queued_input]}}] =
+             :queue.to_list(queued_state.queued_response_payloads)
+
+    assert queued_input["content"] |> Enum.at(0) |> Map.fetch!("text") == "second"
     assert queued_state.public_response_stream_id == "lane-first"
     cleanup_response_task(queued_state, first_task_pid)
 
@@ -732,7 +728,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     end)
 
     assert queued_state.tasks == MapSet.new([lineage_task_pid])
-    assert :queue.to_list(queued_state.queued_response_payloads) == [payload]
+
+    assert [%{variant: :native_response_create, endpoint: "/backend-api/codex/responses/compact"}] =
+             :queue.to_list(queued_state.queued_response_payloads)
   end
 
   test "two creates sharing a stream id retain FIFO turn ownership" do
@@ -747,7 +745,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
              CodexResponsesSocket.handle_in({second, [opcode: :text]}, first_state)
 
     assert queued_state.public_response_stream_id == "lane-shared"
-    assert :queue.to_list(queued_state.queued_response_payloads) == [second]
+
+    assert [%{variant: :public_response_create, payload: %{"input" => [queued_input]}}] =
+             :queue.to_list(queued_state.queued_response_payloads)
+
+    assert queued_input["content"] |> Enum.at(0) |> Map.fetch!("text") == "second"
     cleanup_response_task(queued_state, first_task_pid)
 
     assert {:ok, second_state} =
@@ -792,7 +794,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert_native_turn_logs(logs, 2, "synthetic_failure")
   end
 
-  test "an attributable retarget error echoes once and clears before queued work" do
+  test "prepared validation rejects an invalid previous response before owner retarget" do
     payload =
       %{
         "type" => "response.create",
@@ -813,38 +815,15 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
         }
       })
 
-    assert {:ok, active_state} =
+    assert {:push, {:text, error_payload}, settled_state} =
              CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
 
-    task_pid = active_state.public_response_task_pid
-    assert is_pid(task_pid)
-    assert active_state.public_response_stream_id == "lane-retarget"
+    assert %{"status" => 400, "error" => %{"param" => "previous_response_id"}} =
+             Jason.decode!(error_payload)
 
-    assert {:ok, queued_state} =
-             CodexResponsesSocket.handle_in(
-               {public_create_payload(nil, "next-without-id"), [opcode: :text]},
-               active_state
-             )
-
-    assert_receive {:codex_response_done, ^task_pid, {:error, error}}
-
-    {_result, logs} =
-      with_native_turn_log(:info, fn ->
-        assert {:push, {:text, payload}, next_state} =
-                 CodexResponsesSocket.handle_info(
-                   {:codex_response_done, task_pid, {:error, error}},
-                   queued_state
-                 )
-
-        assert Jason.decode!(payload)["stream_id"] == "lane-retarget"
-        assert next_state.public_response_stream_id == nil
-        assert is_pid(next_state.public_response_task_pid)
-        assert next_state.public_response_task_pid != task_pid
-        refute Map.has_key?(next_state.public_responses_websocket_state, :stream_id)
-        cleanup_response_task(next_state, next_state.public_response_task_pid)
-      end)
-
-    assert_native_turn_logs(logs, 1, "owner_unavailable")
+    assert settled_state.public_response_task_pid == nil
+    assert settled_state.public_response_stream_id == nil
+    assert MapSet.size(settled_state.tasks) == 0
   end
 
   @tag :socket_lifecycle_regression
@@ -2135,8 +2114,15 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
       response_task_activities: %{task_pid => activity_token}
     }
 
+    assert {_epoch, [%{token: ^activity_token, pid: ^task_pid}]} =
+             ActivityRegistry.begin_drain(name: harness.activity_registry)
+
     assert :ok = CodexResponsesSocket.terminate(:normal, state)
     assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, :normal}
+
+    assert {:finished, :aborted} =
+             ActivityRegistry.status(activity_token, name: harness.activity_registry)
+
     assert ActivityRegistry.activities(name: harness.activity_registry) == []
   end
 

@@ -435,6 +435,27 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
       assert %Request{connection_bound_continuation?: false} = %Request{}
     end
 
+    test "keeps transient semantic identity separate from the durable websocket claim" do
+      semantic_turn_key = :crypto.strong_rand_bytes(32)
+      turn_claim_key = "codex-turn:" <> Base.url_encode64(semantic_turn_key, padding: false)
+
+      options =
+        RequestOptions.build(
+          %{
+            transport: "websocket",
+            semantic_turn_key: semantic_turn_key,
+            turn_claim_key: turn_claim_key
+          },
+          "/backend-api/codex/responses",
+          %{"model" => "example-model"}
+        )
+
+      assert options.continuity.semantic_turn_key == semantic_turn_key
+      assert options.continuity.turn_claim_key == turn_claim_key
+      assert RequestOptions.server_correlation_id(options) == turn_claim_key
+      assert RequestOptions.websocket_request_correlation_id(options) == turn_claim_key
+    end
+
     test "defaults unresolved legacy inputs to Full without manufacturing a resolved snapshot" do
       options =
         RequestOptions.build(%{}, "/backend-api/codex/responses", %{"model" => "example-model"})

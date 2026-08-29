@@ -8,6 +8,8 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
   @init_failed_message "websocket init failed before request reservation"
   @closed_message "websocket closed before request reservation"
   @failed_native_websocket_turn_message "websocket native turn failed"
+  @reconnect_disposition_message "websocket reconnect disposition"
+  @handoff_outcome_message "websocket handoff outcome"
   @bandit_oversize_fragmented_message_reason "Received oversize fragmented message"
 
   @metadata_keys [
@@ -26,6 +28,8 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
     :proxy_instance_id,
     :downstream_epoch
   ]
+  @reconnect_event_keys [:reconnect_disposition, :handoff_outcome]
+  @reconnect_metadata_keys @metadata_keys ++ @reconnect_event_keys
 
   @type event_metadata :: keyword() | map()
 
@@ -37,6 +41,12 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
 
   @spec failed_native_websocket_turn_message() :: String.t()
   def failed_native_websocket_turn_message, do: @failed_native_websocket_turn_message
+
+  @spec reconnect_disposition_message() :: String.t()
+  def reconnect_disposition_message, do: @reconnect_disposition_message
+
+  @spec handoff_outcome_message() :: String.t()
+  def handoff_outcome_message, do: @handoff_outcome_message
 
   @spec log_init_failed_before_request_reservation(event_metadata(), term()) :: :ok
   def log_init_failed_before_request_reservation(metadata, reason) do
@@ -60,6 +70,26 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
       @failed_native_websocket_turn_message,
       failure_log_metadata(metadata),
       reason
+    )
+  end
+
+  @spec log_reconnect_disposition(event_metadata(), term()) :: :ok
+  def log_reconnect_disposition(metadata, disposition) do
+    log_fixed_reconnect_event(
+      @reconnect_disposition_message,
+      metadata,
+      :reconnect_disposition,
+      DiagnosticTaxonomy.reconnect_disposition(disposition)
+    )
+  end
+
+  @spec log_handoff_outcome(event_metadata(), term()) :: :ok
+  def log_handoff_outcome(metadata, outcome) do
+    log_fixed_reconnect_event(
+      @handoff_outcome_message,
+      metadata,
+      :handoff_outcome,
+      DiagnosticTaxonomy.handoff_outcome(outcome)
     )
   end
 
@@ -91,12 +121,27 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
   def reason_class(%module{}) when is_atom(module), do: safe_log_value(inspect(module))
   def reason_class(_reason), do: "non_atom_reason"
 
-  defp log_event(level, message, metadata, reason) do
+  defp log_fixed_reconnect_event(_message, _metadata, _key, nil), do: :ok
+
+  defp log_fixed_reconnect_event(message, metadata, key, value) do
+    metadata =
+      metadata
+      |> normalize_metadata()
+      |> drop_reconnect_event_values()
+      |> Map.put(key, value)
+
+    log_event(:info, message, metadata, nil, @reconnect_metadata_keys)
+  end
+
+  defp log_event(level, message, metadata, reason),
+    do: log_event(level, message, metadata, reason, @metadata_keys)
+
+  defp log_event(level, message, metadata, reason, metadata_keys) do
     log_metadata =
       metadata
       |> normalize_metadata()
-      |> Map.put(:reason_class, reason_class(reason))
-      |> allowed_metadata()
+      |> maybe_put_reason_class(reason)
+      |> allowed_metadata(metadata_keys)
       |> Enum.map_join(" ", fn {key, value} -> "#{key}=#{safe_log_value(key, value)}" end)
 
     Logger.log(level, fn -> message <> metadata_suffix(log_metadata) end)
@@ -111,10 +156,23 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
   defp normalize_metadata(metadata) when is_map(metadata), do: metadata
   defp normalize_metadata(_metadata), do: %{}
 
-  defp allowed_metadata(metadata) do
-    @metadata_keys
+  defp drop_reconnect_event_values(metadata) do
+    Enum.reduce(@reconnect_event_keys, metadata, fn key, metadata ->
+      metadata
+      |> Map.delete(key)
+      |> Map.delete(Atom.to_string(key))
+    end)
+  end
+
+  defp maybe_put_reason_class(metadata, nil), do: metadata
+
+  defp maybe_put_reason_class(metadata, reason),
+    do: Map.put(metadata, :reason_class, reason_class(reason))
+
+  defp allowed_metadata(metadata, metadata_keys) do
+    metadata_keys
     |> Enum.reduce([], fn key, acc ->
-      value = metadata_value(metadata, key)
+      value = allowed_metadata_value(key, metadata_value(metadata, key))
 
       if is_nil(value) do
         acc
@@ -124,6 +182,14 @@ defmodule CodexPoolerWeb.WebsocketConnectionLogger do
     end)
     |> Enum.reverse()
   end
+
+  defp allowed_metadata_value(:reconnect_disposition, value),
+    do: DiagnosticTaxonomy.reconnect_disposition(value)
+
+  defp allowed_metadata_value(:handoff_outcome, value),
+    do: DiagnosticTaxonomy.handoff_outcome(value)
+
+  defp allowed_metadata_value(_key, value), do: value
 
   defp metadata_value(metadata, key) do
     Map.get(metadata, key) || Map.get(metadata, Atom.to_string(key))

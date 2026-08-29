@@ -59,6 +59,8 @@ requires_openai_auth = true
 
 With a local Codex Pooler instance, change `base_url` to `http://localhost:4000/backend-api/codex`.
 
+When an interrupted Codex websocket turn reconnects, Pooler uses the current Codex turn identity to distinguish an exact retry from an edited replacement. An exact retry reconnects to the existing turn; an edited replacement waits only for a bounded safe cancellation handoff before it starts, rather than sitting until the client's idle watchdog expires.
+
 ## HTTP/SSE provider
 
 Keep an HTTP/SSE provider when you need to force non-websocket behavior for a client check or when a Codex runtime cannot open backend websocket streams.

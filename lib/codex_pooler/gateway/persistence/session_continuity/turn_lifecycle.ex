@@ -62,6 +62,12 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
     |> unwrap_transaction()
   end
 
+  @doc false
+  @spec lock_codex_session_for_turn(CodexSession.t()) :: CodexSession.t()
+  def lock_codex_session_for_turn(%CodexSession{id: session_id}) do
+    codex_session_for_update!(session_id)
+  end
+
   @spec complete_codex_turn(
           {:ok, %{required(:request) => Request.t(), optional(:attempt) => Attempt.t() | nil}}
           | term(),
@@ -152,7 +158,7 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity.TurnLifecycle do
 
   defp turn_opts(%RequestOptions{continuity: continuity, file_bridge: file_bridge}) do
     %{
-      codex_turn_id: continuity.codex_turn_id,
+      turn_claim_key: continuity.turn_claim_key,
       pool_upstream_assignment_id: file_bridge.pool_upstream_assignment_id
     }
     |> drop_nil_values()

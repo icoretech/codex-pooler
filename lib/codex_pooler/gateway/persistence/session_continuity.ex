@@ -226,6 +226,8 @@ defmodule CodexPooler.Gateway.Persistence.SessionContinuity do
 
   @spec start_codex_turn(CodexSession.t(), Request.t(), opts()) :: turn_result()
   defdelegate start_codex_turn(session, request, opts), to: TurnLifecycle
+  @spec lock_codex_session_for_turn(CodexSession.t()) :: CodexSession.t()
+  defdelegate lock_codex_session_for_turn(session), to: TurnLifecycle
   @spec complete_codex_turn(complete_turn_result(), String.t(), term()) :: term()
   defdelegate complete_codex_turn(result, status, error_code), to: TurnLifecycle
   @spec mark_codex_turn_visible(request_ref()) :: :ok

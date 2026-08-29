@@ -76,6 +76,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
   alias CodexPooler.Gateway.Websocket, as: Gateway
   alias CodexPooler.Gateway.Websocket.Adapter
+  alias CodexPooler.Gateway.Websocket.ResponseTask
   alias CodexPooler.Pools
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams
@@ -89,6 +90,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   @blocking_owner_receive_timeout_ms 1_000
   @queued_owner_upstream_start_timeout_ms 1_000
   @response_task_stop_timeout_ms 1_000
+  @handoff_detection_timeout_ms 15_000
   @epmd_ready_timeout_ms 2_000
   @epmd_ready_poll_ms 10
   @reasoning_denial_message "reasoning effort is not available for this API key"
@@ -2029,6 +2031,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert_owner_continuation_generation_boundary(:direct)
   end
 
+  @tag receiver_delivery_gap: :pin
+  test "direct receiver accepts provider frames before response delivery cleanup" do
+    assert_receiver_delivery_gap(:frames_first)
+  end
+
+  @tag receiver_delivery_gap: :cleanup_first
+  test "direct receiver keeps terminal delivery coupled to provider frame acceptance" do
+    assert_receiver_delivery_gap(:cleanup_first)
+  end
+
   @tag :continuation_generation_boundary
   test "proxy-to-owner guards a replacement generation and settles once before full retry" do
     assert_owner_continuation_generation_boundary(:proxy)
@@ -3271,7 +3283,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         assert [anchor_log, retargeted_log] = request_logs(setup.pool.id)
         assert anchor_log.status == "succeeded"
         assert retargeted_log.status == "succeeded"
-        assert retargeted_log.correlation_id == "ws-owner-retarget-continuation"
+        assert_native_turn_correlation!(retargeted_log.correlation_id)
 
         owner_metadata = retargeted_log.request_metadata["websocket_owner_forwarding"]
         assert owner_metadata["enabled"] == true
@@ -3374,7 +3386,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         assert [anchor_log, retargeted_log] = request_logs(setup.pool.id)
         assert anchor_log.status == "succeeded"
         assert retargeted_log.status == "succeeded"
-        assert retargeted_log.correlation_id == "ws-owner-turn-state-retarget-continuation"
+        assert_native_turn_correlation!(retargeted_log.correlation_id)
         assert retargeted_log.request_metadata["codex_session_id"] == target_session.id
 
         owner_metadata = retargeted_log.request_metadata["websocket_owner_forwarding"]
@@ -3512,7 +3524,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert [anchor_log, retargeted_log] = request_logs(setup.pool.id)
     assert anchor_log.status == "succeeded"
     assert retargeted_log.status == "succeeded"
-    assert retargeted_log.correlation_id == "ws-owner-retarget-cleanup-continuation"
+    assert_native_turn_correlation!(retargeted_log.correlation_id)
     refute inspect(request_logs(setup.pool.id)) =~ "owner_unavailable"
     refute inspect(request_logs(setup.pool.id)) =~ "owner_drained"
   end
@@ -4261,11 +4273,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     assert [first_log, processed_log, tool_log] = request_logs(setup.pool.id)
 
-    assert Enum.map([first_log, processed_log, tool_log], & &1.correlation_id) == [
-             "ws-owner-chain-first",
-             "ws-owner-chain-processed",
-             "ws-owner-chain-tool"
-           ]
+    assert_native_turn_correlation!(first_log.correlation_id)
+    assert processed_log.correlation_id == "ws-owner-chain-processed"
+    assert_native_turn_correlation!(tool_log.correlation_id)
 
     assert Enum.all?([first_log, processed_log, tool_log], &(&1.status == "succeeded"))
     assert Enum.all?([first_log, processed_log, tool_log], &(&1.transport == "websocket"))
@@ -4369,11 +4379,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     assert [first_log, processed_log, tool_log] = request_logs(setup.pool.id)
 
-    assert Enum.map([first_log, processed_log, tool_log], & &1.correlation_id) == [
-             "ws-owner-queue-first",
-             "ws-owner-queue-processed",
-             "ws-owner-queue-tool"
-           ]
+    assert_native_turn_correlation!(first_log.correlation_id)
+    assert processed_log.correlation_id == "ws-owner-queue-processed"
+    assert_native_turn_correlation!(tool_log.correlation_id)
 
     assert Enum.all?([first_log, processed_log, tool_log], &(&1.status == "succeeded"))
     assert Enum.all?([first_log, processed_log, tool_log], &(&1.response_status_code == 200))
@@ -4571,16 +4579,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert [anchor_a_log, anchor_b_log, active_log, queued_a_log, queued_b_log] =
              request_logs(setup.pool.id)
 
-    assert Enum.map(
-             [anchor_a_log, anchor_b_log, active_log, queued_a_log, queued_b_log],
-             & &1.correlation_id
-           ) == [
-             "ws-owner-queue-alias-anchor-a",
-             "ws-owner-queue-alias-anchor-b",
-             "ws-owner-queue-alias-active",
-             "ws-owner-queue-alias-a",
-             "ws-owner-queue-alias-b"
-           ]
+    Enum.each([anchor_a_log, anchor_b_log, active_log, queued_a_log, queued_b_log], fn log ->
+      assert_native_turn_correlation!(log.correlation_id)
+    end)
 
     assert Enum.all?(
              [anchor_a_log, anchor_b_log, active_log, queued_a_log, queued_b_log],
@@ -4636,6 +4637,36 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert processed_state.request_response_work_started?
     assert_receive {:chained_owner_upstream_processed_blocked, processed_pid, ^release_ref}
 
+    {:ok, reconnect_state} =
+      owner_socket(auth, "ws-owner-processed-close-reconnect", turn_state)
+
+    assert reconnect_state.websocket_owner_active_turn_reconnect?
+    row_count = length(request_logs(setup.pool.id))
+
+    native_payload =
+      websocket_payload(setup, "unknown active descriptor replacement", %{
+        "request_id" => "ws-owner-processed-close-native",
+        "client_metadata" => %{"turn_id" => "ws-owner-processed-close-native"}
+      })
+
+    assert {:push, {:text, native_error}, ^reconnect_state} =
+             CodexResponsesSocket.handle_in(
+               {native_payload, [opcode: :text]},
+               reconnect_state
+             )
+
+    assert Jason.decode!(native_error)["error"]["code"] == "owner_busy"
+
+    assert {:push, {:text, processed_error}, ^reconnect_state} =
+             CodexResponsesSocket.handle_in(
+               {processed_payload, [opcode: :text]},
+               reconnect_state
+             )
+
+    assert Jason.decode!(processed_error)["error"]["code"] == "owner_busy"
+    assert length(request_logs(setup.pool.id)) == row_count
+    CodexResponsesSocket.terminate(:closed, reconnect_state)
+
     try do
       logs =
         capture_websocket_lifecycle_log(fn ->
@@ -4653,7 +4684,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
 
     assert [first_log | _rest] = request_logs(setup.pool.id)
-    assert first_log.correlation_id == "ws-owner-processed-close-first"
+    assert_native_turn_correlation!(first_log.correlation_id)
     assert first_log.status == "succeeded"
   end
 
@@ -4672,7 +4703,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     first_payload =
       websocket_payload(setup, "first owner active reconnect turn", %{
-        "request_id" => "ws-owner-active-reconnect-first"
+        "request_id" => "ws-owner-active-reconnect-first",
+        "client_metadata" => %{"turn_id" => "ws-owner-active-reconnect-first"}
       })
 
     assert {:ok, first_state} =
@@ -4684,28 +4716,49 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     assert second_state.websocket_owner_downstream.epoch == 2
     assert second_state.websocket_owner_active_turn_reconnect? == true
 
-    try do
-      assert :ok = CodexResponsesSocket.terminate(:closed, first_state)
+    assert %{active_turn: %{descriptor: %{kind: :native} = active_descriptor}} =
+             :sys.get_state(second_state.websocket_owner_pid)
 
+    assert active_descriptor.semantic_turn_key ==
+             :crypto.hash(
+               :sha256,
+               second_state.codex_session.id <> <<0>> <> "ws-owner-active-reconnect-first"
+             )
+
+    try do
       assert [in_progress_request] = request_logs(setup.pool.id)
-      assert in_progress_request.correlation_id == "ws-owner-active-reconnect-first"
+      assert in_progress_request.correlation_id =~ ~r/\Acodex-turn:[A-Za-z0-9_-]{43}\z/
       assert in_progress_request.status == "in_progress"
 
-      assert {:ok, second_state} =
-               CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, second_state)
+      {replay_result, replay_log} =
+        with_info_log(fn ->
+          CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, second_state)
+        end)
+
+      assert {:ok, second_state} = replay_result
+
+      assert event_count(replay_log, WebsocketConnectionLogger.reconnect_disposition_message()) ==
+               1
+
+      assert replay_log =~ "reconnect_disposition=same_turn_replay"
 
       assert second_state.websocket_owner_active_turn_reconnect? == true
       assert MapSet.size(second_state.tasks) == 0
       assert length(request_logs(setup.pool.id)) == 1
 
+      assert :ok = CodexResponsesSocket.terminate(:closed, first_state)
+
       send(owner_worker_pid, {:blocking_owner_upstream_release, release_ref})
 
       assert {:ok, second_state} = receive_owner_socket_complete(second_state)
       assert second_state.websocket_owner_active_turn_reconnect? == false
-      assert_receive {:codex_response_done, _pid, :ok}, @response_task_stop_timeout_ms
+
+      assert_receive {:codex_response_done, _pid,
+                      {:socket_response_result, :owner_completion_pending, :ok}},
+                     @response_task_stop_timeout_ms
 
       assert [request_log] = request_logs(setup.pool.id)
-      assert request_log.correlation_id == "ws-owner-active-reconnect-first"
+      assert request_log.correlation_id == in_progress_request.correlation_id
       assert request_log.status == "succeeded"
       assert request_log.response_status_code == 200
       assert request_log.last_error_code == nil
@@ -4717,6 +4770,429 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert_response_task_stopped!(first_state)
       CodexResponsesSocket.terminate(:closed, second_state)
     end
+  end
+
+  test "active owner reconnect rejects ambiguous frames while prewarm remains local and neutral" do
+    for route <- [:direct, :proxy] do
+      assert_active_reconnect_frame_matrix(route)
+    end
+  end
+
+  test "pending replacement prewarm stays local and preserves the handoff in both topologies" do
+    for route <- [:direct, :proxy] do
+      assert_pending_replacement_prewarm_neutral(route)
+    end
+  end
+
+  test "cancelled owner reconnect admits one edited replacement only after fenced readiness" do
+    upstream_boundary = reconnect_handoff_owner_upstream_boundary(self())
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    turn_state = "stable-ws-owner-edited-replacement"
+
+    {:ok, first_state} =
+      owner_socket(auth, "ws-owner-edited-replacement-a", turn_state,
+        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
+      )
+
+    first_payload =
+      websocket_payload(setup, "edited replacement predecessor", %{
+        "request_id" => "ws-owner-edited-replacement-a",
+        "client_metadata" => %{"turn_id" => "ws-owner-edited-replacement-a"}
+      })
+
+    assert {:ok, first_state} =
+             CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, first_state)
+
+    assert_receive {:controller_handoff_predecessor_started, first_worker_pid},
+                   @blocking_owner_receive_timeout_ms
+
+    {:ok, owner_pid} = WebsocketOwnerSession.lookup(first_state.codex_session.id)
+    owner_upstream_pid = :sys.get_state(owner_pid).upstream_pid
+
+    assert :ok =
+             WebsocketOwnerSession.detach_downstream(
+               owner_pid,
+               first_state.websocket_owner_downstream
+             )
+
+    assert %{
+             active_turn: %{
+               descriptor: %{kind: :native},
+               canceled_result: _canceled_result
+             }
+           } = :sys.get_state(owner_pid)
+
+    {:ok, replacement_state} =
+      owner_socket(auth, "ws-owner-edited-replacement-b", turn_state,
+        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
+      )
+
+    cancelled_equal_payload =
+      websocket_payload(setup, "cancelled equal predecessor replay", %{
+        "request_id" => "ws-owner-edited-replacement-a",
+        "client_metadata" => %{"turn_id" => "ws-owner-edited-replacement-a"}
+      })
+
+    {cancelled_equal_result, cancelled_equal_log} =
+      with_info_log(fn ->
+        CodexResponsesSocket.handle_in(
+          {cancelled_equal_payload, [opcode: :text]},
+          replacement_state
+        )
+      end)
+
+    assert {:push, {:text, cancelled_equal_error}, ^replacement_state} =
+             cancelled_equal_result
+
+    assert Jason.decode!(cancelled_equal_error)["error"]["code"] == "owner_busy"
+
+    assert event_count(
+             cancelled_equal_log,
+             WebsocketConnectionLogger.reconnect_disposition_message()
+           ) == 1
+
+    assert cancelled_equal_log =~ "reconnect_disposition=owner_busy"
+    assert length(request_logs(setup.pool.id)) == 1
+
+    replacement_payload =
+      websocket_payload(setup, "edited replacement successor", %{
+        "request_id" => "ws-owner-edited-replacement-b",
+        "client_metadata" => %{"turn_id" => "ws-owner-edited-replacement-b"}
+      })
+
+    assert {:ok, pending_state} =
+             CodexResponsesSocket.handle_in(
+               {replacement_payload, [opcode: :text]},
+               replacement_state
+             )
+
+    assert is_map(pending_state.websocket_owner_pending_handoff)
+    assert MapSet.size(pending_state.tasks) == 0
+    assert length(request_logs(setup.pool.id)) == 1
+
+    assert {:ok, ^pending_state} =
+             CodexResponsesSocket.handle_in(
+               {replacement_payload, [opcode: :text]},
+               pending_state
+             )
+
+    third_payload =
+      websocket_payload(setup, "third pending replacement", %{
+        "request_id" => "ws-owner-edited-replacement-d",
+        "client_metadata" => %{"turn_id" => "ws-owner-edited-replacement-d"}
+      })
+
+    {third_result, third_log} =
+      with_info_log(fn ->
+        CodexResponsesSocket.handle_in(
+          {third_payload, [opcode: :text]},
+          pending_state
+        )
+      end)
+
+    assert {:push, {:text, third_error}, ^pending_state} = third_result
+
+    assert Jason.decode!(third_error)["error"]["code"] == "owner_busy"
+    assert event_count(third_log, WebsocketConnectionLogger.reconnect_disposition_message()) == 1
+    assert third_log =~ "reconnect_disposition=owner_busy"
+    assert length(request_logs(setup.pool.id)) == 1
+
+    assert_receive {:websocket_owner_handoff_ready, _, _, _, _, _} = ready,
+                   @handoff_detection_timeout_ms
+
+    assert {:ok, admitted_state} = CodexResponsesSocket.handle_info(ready, pending_state)
+    assert admitted_state.websocket_owner_pending_handoff == nil
+    assert MapSet.size(admitted_state.tasks) == 1
+
+    assert_receive {:controller_handoff_replacement_started, 2},
+                   @handoff_detection_timeout_ms
+
+    assert length(request_logs(setup.pool.id)) == 2
+
+    assert {:ok, admitted_state} = receive_owner_socket_complete(admitted_state)
+    assert {:ok, admitted_state} = receive_socket_done(admitted_state)
+
+    assert [predecessor, replacement] = request_logs(setup.pool.id)
+    assert predecessor.last_error_code == "client_disconnected"
+    assert replacement.status == "succeeded"
+    assert predecessor.correlation_id != replacement.correlation_id
+
+    following_payload =
+      websocket_payload(setup, "following replacement turn", %{
+        "request_id" => "ws-owner-edited-replacement-c",
+        "client_metadata" => %{"turn_id" => "ws-owner-edited-replacement-c"}
+      })
+
+    assert {:ok, following_state} =
+             CodexResponsesSocket.handle_in(
+               {following_payload, [opcode: :text]},
+               admitted_state
+             )
+
+    assert_receive {:controller_handoff_replacement_started, 3},
+                   @handoff_detection_timeout_ms
+
+    assert {:ok, following_state} = receive_owner_socket_complete(following_state)
+    assert {:ok, following_state} = receive_socket_done(following_state)
+
+    assert [_predecessor, _replacement, following] = request_logs(setup.pool.id)
+    assert following.status == "succeeded"
+
+    assert {:ok, ^owner_pid} = WebsocketOwnerSession.lookup(first_state.codex_session.id)
+    assert :sys.get_state(owner_pid).upstream_pid == owner_upstream_pid
+    refute inspect(request_logs(setup.pool.id)) =~ "previous_response_generation_mismatch"
+
+    assert Repo.aggregate(
+             from(attempt in Attempt,
+               join: request in Request,
+               on: request.id == attempt.request_id,
+               where: request.pool_id == ^setup.pool.id
+             ),
+             :count
+           ) ==
+             3
+
+    assert Repo.aggregate(
+             from(turn in CodexTurn,
+               where: turn.codex_session_id == ^first_state.codex_session.id
+             ),
+             :count
+           ) == 3
+
+    refute Process.alive?(first_worker_pid)
+    CodexResponsesSocket.terminate(:closed, first_state)
+    CodexResponsesSocket.terminate(:closed, following_state)
+  end
+
+  test "pending edited replacement socket close cancels once without replacement rows or leaks" do
+    private_sentinel = "TASK8_PRIVATE_PENDING_CLOSE_SENTINEL"
+    upstream_boundary = reconnect_handoff_owner_upstream_boundary(self())
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    turn_state = "stable-ws-owner-pending-close"
+
+    {:ok, first_state} =
+      owner_socket(auth, "ws-owner-pending-close-a", turn_state,
+        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
+      )
+
+    first_payload =
+      websocket_payload(setup, "pending close predecessor", %{
+        "request_id" => "ws-owner-pending-close-a",
+        "client_metadata" => %{"turn_id" => "ws-owner-pending-close-a"}
+      })
+
+    assert {:ok, first_state} =
+             CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, first_state)
+
+    assert_receive {:controller_handoff_predecessor_started, predecessor_pid},
+                   @blocking_owner_receive_timeout_ms
+
+    {:ok, owner_pid} = WebsocketOwnerSession.lookup(first_state.codex_session.id)
+
+    assert :ok =
+             WebsocketOwnerSession.detach_downstream(
+               owner_pid,
+               first_state.websocket_owner_downstream
+             )
+
+    parent = self()
+
+    socket_pid =
+      spawn(fn ->
+        receive do
+          :start ->
+            {:ok, state} =
+              owner_socket(auth, "ws-owner-pending-close-b", turn_state,
+                websocket_owner_forwarder_opts: [upstream: upstream_boundary]
+              )
+
+            receive do
+              {:frame, payload} ->
+                {:ok, pending_state} =
+                  CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state)
+
+                pending = pending_state.websocket_owner_pending_handoff
+                capability_pid = pending.prepared.provenance.capability.server
+                send(parent, {:pending_close_socket_ready, self(), capability_pid})
+
+                receive do
+                  :terminate ->
+                    :ok = CodexResponsesSocket.terminate(:closed, pending_state)
+                end
+            end
+        end
+      end)
+
+    Sandbox.allow(Repo, self(), socket_pid)
+    socket_monitor = Process.monitor(socket_pid)
+    send(socket_pid, :start)
+
+    replacement_payload =
+      websocket_payload(setup, private_sentinel, %{
+        "request_id" => "ws-owner-pending-close-b",
+        "client_metadata" => %{"turn_id" => "ws-owner-pending-close-b"}
+      })
+
+    classification_log =
+      capture_info_log(fn ->
+        send(socket_pid, {:frame, replacement_payload})
+
+        assert_receive {:pending_close_socket_ready, ^socket_pid, capability_pid},
+                       @handoff_detection_timeout_ms
+
+        Process.put(:pending_close_capability_pid, capability_pid)
+      end)
+
+    capability_pid = Process.delete(:pending_close_capability_pid)
+    capability_monitor = Process.monitor(capability_pid)
+    owner_pending = :sys.get_state(owner_pid).pending_handoff
+
+    assert length(request_logs(setup.pool.id)) == 1
+
+    assert event_count(
+             classification_log,
+             WebsocketConnectionLogger.reconnect_disposition_message()
+           ) == 1
+
+    assert classification_log =~ "reconnect_disposition=replacement_handoff"
+    refute classification_log =~ private_sentinel
+
+    close_log =
+      capture_info_log(fn ->
+        send(socket_pid, :terminate)
+
+        assert_receive {:DOWN, ^socket_monitor, :process, ^socket_pid, :normal},
+                       @handoff_detection_timeout_ms
+      end)
+
+    assert_receive {:DOWN, ^capability_monitor, :process, ^capability_pid, :normal},
+                   @handoff_detection_timeout_ms
+
+    assert event_count(close_log, WebsocketConnectionLogger.handoff_outcome_message()) == 1
+    assert close_log =~ "handoff_outcome=socket_closed"
+    refute close_log =~ private_sentinel
+    assert %{pending_handoff: nil} = :sys.get_state(owner_pid)
+
+    send(
+      owner_pid,
+      {:websocket_owner_handoff_soft_timeout, owner_pending.control_ref, owner_pending.soft_token}
+    )
+
+    send(
+      owner_pid,
+      {:websocket_owner_handoff_absolute_timeout, owner_pending.control_ref,
+       owner_pending.absolute_token}
+    )
+
+    send(
+      socket_pid,
+      {:websocket_owner_handoff_ready, "stale", 99, self(), socket_pid, make_ref()}
+    )
+
+    assert %{pending_handoff: nil} = :sys.get_state(owner_pid)
+
+    assert [predecessor] = request_logs(setup.pool.id)
+
+    assert Repo.aggregate(
+             from(attempt in Attempt, where: attempt.request_id == ^predecessor.id),
+             :count
+           ) == 1
+
+    assert Repo.aggregate(
+             from(turn in CodexTurn, where: turn.request_id == ^predecessor.id),
+             :count
+           ) == 1
+
+    assert Enum.all?(
+             Repo.all(from(entry in LedgerEntry, where: entry.pool_id == ^setup.pool.id)),
+             fn entry ->
+               entry.request_id == predecessor.id
+             end
+           )
+
+    refute Process.alive?(predecessor_pid)
+    CodexResponsesSocket.terminate(:closed, first_state)
+  end
+
+  test "stuck edited replacement times out once without replacement rows" do
+    private_sentinel = "TASK8_PRIVATE_TIMEOUT_SENTINEL"
+    upstream_boundary = reconnect_handoff_owner_upstream_boundary(self())
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    turn_state = "stable-ws-owner-handoff-timeout"
+
+    {:ok, first_state} =
+      owner_socket(auth, "ws-owner-handoff-timeout-a", turn_state,
+        websocket_owner_forwarder_opts: [
+          upstream: upstream_boundary,
+          handoff_soft_timeout_ms: 25,
+          handoff_absolute_timeout_ms: 100
+        ]
+      )
+
+    first_payload =
+      websocket_payload(setup, "timeout predecessor", %{
+        "request_id" => "ws-owner-handoff-timeout-a",
+        "client_metadata" => %{"turn_id" => "ws-owner-handoff-timeout-a"}
+      })
+
+    assert {:ok, first_state} =
+             CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, first_state)
+
+    assert_receive {:controller_handoff_predecessor_started, _predecessor_pid},
+                   @blocking_owner_receive_timeout_ms
+
+    {:ok, owner_pid} = WebsocketOwnerSession.lookup(first_state.codex_session.id)
+
+    assert :ok =
+             WebsocketOwnerSession.detach_downstream(
+               owner_pid,
+               first_state.websocket_owner_downstream
+             )
+
+    {:ok, replacement_state} =
+      owner_socket(auth, "ws-owner-handoff-timeout-b", turn_state,
+        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
+      )
+
+    replacement_payload =
+      websocket_payload(setup, private_sentinel, %{
+        "request_id" => "ws-owner-handoff-timeout-b",
+        "client_metadata" => %{"turn_id" => "ws-owner-handoff-timeout-b"}
+      })
+
+    assert {:ok, pending_state} =
+             CodexResponsesSocket.handle_in(
+               {replacement_payload, [opcode: :text]},
+               replacement_state
+             )
+
+    assert length(request_logs(setup.pool.id)) == 1
+    assert_receive {:websocket_owner_handoff_ready, _, _, _, _, _}, @handoff_detection_timeout_ms
+
+    {timeout_result, timeout_log} =
+      with_info_log(fn ->
+        assert_receive {:websocket_owner_handoff_failed, _, _, _, _, _, :owner_forward_timeout} =
+                         failed,
+                       @handoff_detection_timeout_ms
+
+        CodexResponsesSocket.handle_info(failed, pending_state)
+      end)
+
+    assert {:push, {:text, timeout_error}, timeout_state} = timeout_result
+    assert Jason.decode!(timeout_error)["error"]["code"] == "owner_forward_timeout"
+    assert timeout_state.websocket_owner_pending_handoff == nil
+    assert event_count(timeout_log, WebsocketConnectionLogger.handoff_outcome_message()) == 1
+    assert timeout_log =~ "handoff_outcome=timeout"
+    refute timeout_log =~ private_sentinel
+    assert length(request_logs(setup.pool.id)) == 1
+    CodexResponsesSocket.terminate(:closed, first_state)
+    CodexResponsesSocket.terminate(:closed, timeout_state)
   end
 
   test "owner forwarding does not acquire a second proxy websocket admission slot" do
@@ -7351,8 +7827,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     interrupted_request =
       Repo.one!(
         from r in Request,
-          where: r.pool_id == ^setup.pool.id and r.correlation_id == ^interrupted_request_id
+          where: r.pool_id == ^setup.pool.id
       )
+
+    assert_native_turn_correlation!(interrupted_request.correlation_id)
 
     interrupted_attempt =
       Repo.one!(from a in Attempt, where: a.request_id == ^interrupted_request.id)
@@ -7443,8 +7921,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     recovered_request =
       Repo.one!(
         from r in Request,
-          where: r.pool_id == ^setup.pool.id and r.correlation_id == ^recovered_request_id
+          where: r.pool_id == ^setup.pool.id and r.id != ^interrupted_request.id
       )
+
+    assert_native_turn_correlation!(recovered_request.correlation_id)
 
     recovered_attempt = Repo.one!(from a in Attempt, where: a.request_id == ^recovered_request.id)
     recovered_turn = Repo.one!(from t in CodexTurn, where: t.request_id == ^recovered_request.id)
@@ -8038,8 +8518,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         state.codex_session.id
       )
 
-      assert Enum.map([first_request, second_request, third_request], & &1.correlation_id) ==
-               Enum.map(1..3, &"ws-owner-three-turn-#{route}-#{&1}")
+      correlations = Enum.map([first_request, second_request, third_request], & &1.correlation_id)
+      Enum.each(correlations, &assert_native_turn_correlation!/1)
+      assert length(Enum.uniq(correlations)) == 3
 
       assert_no_leak_in_persistence!(setup.pool.id)
     after
@@ -8258,6 +8739,211 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     end
   end
 
+  defp assert_receiver_delivery_gap(order) when order in [:frames_first, :cleanup_first] do
+    response_id = "resp_receiver_delivery_gap_#{order}_#{System.unique_integer([:positive])}"
+
+    frames = [
+      Jason.encode!(%{
+        "type" => "response.created",
+        "response" => %{"id" => response_id, "status" => "in_progress"}
+      }),
+      Jason.encode!(%{
+        "type" => "response.output_item.done",
+        "item" => %{"id" => "item_receiver_delivery_gap", "type" => "message"}
+      }),
+      Jason.encode!(%{
+        "type" => "response.completed",
+        "response" => %{
+          "id" => response_id,
+          "status" => "completed",
+          "output" => [],
+          "usage" => %{"input_tokens" => 2, "output_tokens" => 1, "total_tokens" => 3}
+        }
+      })
+    ]
+
+    upstream = start_upstream(FakeUpstream.websocket_text_frames(frames))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    previous = Application.fetch_env!(:codex_pooler, :websocket_owner_forwarding_enabled)
+    Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, false)
+    parent = self()
+
+    receiver = spawn(fn -> receiver_delivery_gap_process(parent, order, auth, setup) end)
+
+    receiver_monitor = Process.monitor(receiver)
+
+    try do
+      send(receiver, {:receiver_delivery_gap_start, order})
+
+      assert_receive {:receiver_delivery_gap_result, ^order, events, cleanup_snapshot},
+                     @handoff_detection_timeout_ms
+
+      assert events == ["response.created", "response.output_item.done", "response.completed"]
+      refute_received {:stale_prepared_writer, _data}
+      assert cleanup_snapshot == %{monitor_tracked?: false, task_tracked?: false}
+      assert_receive {:DOWN, ^receiver_monitor, :process, ^receiver, :normal}
+
+      assert [request] = request_logs(setup.pool.id)
+      assert request.status == "succeeded"
+      assert_forwarding_cardinality!(request, nil, "succeeded")
+    after
+      if Process.alive?(receiver), do: Process.exit(receiver, :kill)
+      Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, previous)
+    end
+  end
+
+  defp receiver_delivery_gap_process(parent, order, auth, setup) do
+    receive do
+      {:receiver_delivery_gap_start, ^order} ->
+        {:ok, state} =
+          CodexResponsesSocket.init(%{
+            auth: auth,
+            opts: %{
+              request_id: "ws-receiver-delivery-gap-#{order}",
+              accepted_turn_state: "receiver-delivery-gap-#{order}",
+              client_ip: "127.0.0.1"
+            }
+          })
+
+        payload = websocket_payload(setup, "receiver delivery gap #{order}")
+
+        opts =
+          Gateway.websocket_response_options(
+            state.opts,
+            state.codex_session,
+            state.upstream_websocket_session,
+            true
+          )
+
+        receiver_pid = self()
+        stale_writer = fn data -> send(receiver_pid, {:stale_prepared_writer, data}) end
+        {:ok, prepared} = Gateway.prepare_websocket_response(payload, opts, stale_writer)
+
+        {:ok, task_pid} =
+          ResponseTask.start(
+            receiver_pid,
+            :direct,
+            fn task_pid ->
+              Gateway.run_prepared_websocket_response_for_socket(
+                auth,
+                prepared,
+                fn data -> send(receiver_pid, {:codex_response_chunk, task_pid, data}) end
+              )
+            end,
+            fn _task_pid, :owner_drained -> :ok end
+          )
+
+        monitor = Process.monitor(task_pid)
+
+        state = %{
+          state
+          | tasks: MapSet.new([task_pid]),
+            task_monitors: %{task_pid => monitor},
+            request_response_work_started?: true
+        }
+
+        run_receiver_delivery_gap(parent, order, task_pid, state)
+    end
+  end
+
+  defp run_receiver_delivery_gap(parent, :frames_first, task_pid, state) do
+    {state, events} = receive_receiver_delivery_gap_frames(task_pid, state)
+    state = receive_receiver_delivery_gap_result(task_pid, state)
+    {:completed, state} = receive_receiver_delivery_gap_completion(task_pid, state)
+
+    send(parent, {
+      :receiver_delivery_gap_result,
+      :frames_first,
+      events,
+      receiver_delivery_gap_snapshot(state)
+    })
+
+    CodexResponsesSocket.terminate(:closed, state)
+  end
+
+  defp run_receiver_delivery_gap(parent, :cleanup_first, task_pid, state) do
+    state = receive_receiver_delivery_gap_result(task_pid, state)
+
+    state =
+      case receive_receiver_delivery_gap_completion(task_pid, state, 0) do
+        {:completed, state} -> state
+        {:pending, state} -> state
+      end
+
+    {state, events} = receive_receiver_delivery_gap_frames(task_pid, state)
+    {:completed, state} = receive_receiver_delivery_gap_completion(task_pid, state)
+
+    send(
+      parent,
+      {:receiver_delivery_gap_result, :cleanup_first, events,
+       receiver_delivery_gap_snapshot(state)}
+    )
+  end
+
+  defp receive_receiver_delivery_gap_frames(task_pid, state) do
+    receive_receiver_delivery_gap_frames(task_pid, state, [])
+  end
+
+  defp receive_receiver_delivery_gap_frames(_task_pid, state, events)
+       when length(events) == 3,
+       do: {state, events}
+
+  defp receive_receiver_delivery_gap_frames(task_pid, state, events) do
+    receive do
+      {:codex_response_chunk, ^task_pid, data} = message ->
+        assert {:push, {:text, pushed}, state} = CodexResponsesSocket.handle_info(message, state)
+        assert Jason.decode!(pushed) == Jason.decode!(data)
+        event = Jason.decode!(pushed)["type"]
+
+        events =
+          if event in ["response.created", "response.output_item.done", "response.completed"],
+            do: events ++ [event],
+            else: events
+
+        receive_receiver_delivery_gap_frames(task_pid, state, events)
+    after
+      @handoff_detection_timeout_ms ->
+        flunk("expected queued provider frame at the direct receiver")
+    end
+  end
+
+  defp receive_receiver_delivery_gap_result(task_pid, state) do
+    receive do
+      {:websocket_response_activity, ^task_pid, _activity_token} = message ->
+        assert {:ok, state} = CodexResponsesSocket.handle_info(message, state)
+        receive_receiver_delivery_gap_result(task_pid, state)
+
+      {:codex_response_done, ^task_pid, _result} = message ->
+        assert {:ok, state} = CodexResponsesSocket.handle_info(message, state)
+        state
+    after
+      @handoff_detection_timeout_ms ->
+        flunk("expected response-task result handoff")
+    end
+  end
+
+  defp receive_receiver_delivery_gap_completion(
+         task_pid,
+         state,
+         timeout \\ @handoff_detection_timeout_ms
+       ) do
+    receive do
+      {:websocket_response_delivery_complete, ^task_pid, _activity_token} = message ->
+        assert {:ok, state} = CodexResponsesSocket.handle_info(message, state)
+        {:completed, state}
+    after
+      timeout -> {:pending, state}
+    end
+  end
+
+  defp receiver_delivery_gap_snapshot(state) do
+    %{
+      task_tracked?: MapSet.size(state.tasks) > 0,
+      monitor_tracked?: map_size(state.task_monitors) > 0
+    }
+  end
+
   defp maybe_proxy_owner_state(state, :direct), do: state
 
   defp maybe_proxy_owner_state(state, :proxy) do
@@ -8270,6 +8956,240 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         calls: %{remote_node => :success}
       )
     )
+  end
+
+  defp assert_active_reconnect_frame_matrix(route) when route in [:direct, :proxy] do
+    private_sentinel = "TASK8_ACTIVE_MATRIX_PRIVATE_SENTINEL"
+    release_ref = make_ref()
+    upstream_boundary = blocking_owner_upstream_boundary(self(), release_ref)
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    turn_state = "stable-active-matrix-#{route}"
+
+    {:ok, first_state} =
+      owner_socket(auth, "ws-active-matrix-#{route}-a", turn_state,
+        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
+      )
+
+    first_payload =
+      websocket_payload(setup, "active matrix predecessor", %{
+        "request_id" => "ws-active-matrix-#{route}-a",
+        "client_metadata" => %{"turn_id" => "ws-active-matrix-#{route}-a"}
+      })
+
+    assert {:ok, first_state} =
+             CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, first_state)
+
+    worker_pid = assert_blocking_owner_upstream_received!(release_ref)
+    {:ok, reconnect_state} = owner_socket(auth, "ws-active-matrix-#{route}-b", turn_state)
+    reconnect_state = maybe_proxy_owner_state(reconnect_state, route)
+    owner_pid = reconnect_state.websocket_owner_pid
+    before_owner = :sys.get_state(owner_pid)
+
+    prewarm = Jason.encode!(%{"generate" => false, "model" => setup.model.exposed_model_id})
+
+    {prewarm_result, prewarm_log} =
+      with_info_log(fn ->
+        CodexResponsesSocket.handle_in({prewarm, [opcode: :text]}, reconnect_state)
+      end)
+
+    assert {:ok, prewarm_state} = prewarm_result
+    assert prewarm_log == ""
+    assert length(request_logs(setup.pool.id)) == 1
+    assert :sys.get_state(owner_pid).active_turn.descriptor == before_owner.active_turn.descriptor
+    assert :sys.get_state(owner_pid).pending_handoff == before_owner.pending_handoff
+
+    assert {:push, {:text, created}, prewarm_state} =
+             receive_native_collect_socket_push(prewarm_state)
+
+    assert Jason.decode!(created)["type"] == "response.created"
+
+    assert {:push, {:text, completed}, prewarm_state} =
+             receive_native_collect_socket_push(prewarm_state)
+
+    assert Jason.decode!(completed)["type"] == "response.completed"
+    assert {:ok, prewarm_state} = receive_socket_done(prewarm_state)
+
+    missing = websocket_payload(setup, private_sentinel)
+
+    {missing_result, missing_log} =
+      with_info_log(fn ->
+        CodexResponsesSocket.handle_in({missing, [opcode: :text]}, prewarm_state)
+      end)
+
+    assert {:push, {:text, missing_error}, ^prewarm_state} = missing_result
+    assert Jason.decode!(missing_error)["error"]["code"] == "owner_busy"
+
+    assert event_count(missing_log, WebsocketConnectionLogger.reconnect_disposition_message()) ==
+             1
+
+    assert missing_log =~ "reconnect_disposition=owner_busy"
+    refute missing_log =~ private_sentinel
+
+    different =
+      websocket_payload(setup, private_sentinel, %{
+        "request_id" => "ws-active-matrix-#{route}-different",
+        "client_metadata" => %{"turn_id" => "ws-active-matrix-#{route}-different"}
+      })
+
+    {different_result, different_log} =
+      with_info_log(fn ->
+        CodexResponsesSocket.handle_in({different, [opcode: :text]}, prewarm_state)
+      end)
+
+    assert {:push, {:text, different_error}, ^prewarm_state} = different_result
+
+    assert Jason.decode!(different_error)["error"]["code"] == "owner_busy"
+
+    assert event_count(different_log, WebsocketConnectionLogger.reconnect_disposition_message()) ==
+             1
+
+    assert different_log =~ "reconnect_disposition=owner_busy"
+    refute different_log =~ private_sentinel
+    refute Map.has_key?(:sys.get_state(owner_pid).active_turn, :canceled_result)
+
+    malformed =
+      websocket_payload(setup, private_sentinel, %{
+        "request_id" => "fallback-must-not-win",
+        "client_metadata" => %{"turn_id" => "invalid/identity"}
+      })
+
+    {malformed_result, malformed_log} =
+      with_info_log(fn ->
+        CodexResponsesSocket.handle_in({malformed, [opcode: :text]}, prewarm_state)
+      end)
+
+    assert {:push, {:text, malformed_error}, ^prewarm_state} = malformed_result
+
+    assert %{"status" => 400, "error" => %{"code" => "invalid_request", "param" => param}} =
+             Jason.decode!(malformed_error)
+
+    assert param == "client_metadata.turn_id"
+
+    assert event_count(malformed_log, WebsocketConnectionLogger.reconnect_disposition_message()) ==
+             1
+
+    assert malformed_log =~ "reconnect_disposition=identity_rejected"
+    refute malformed_log =~ private_sentinel
+
+    processed =
+      Jason.encode!(%{"type" => "response.processed", "response_id" => "resp_active_matrix"})
+
+    assert {:push, {:text, processed_error}, ^prewarm_state} =
+             CodexResponsesSocket.handle_in({processed, [opcode: :text]}, prewarm_state)
+
+    assert Jason.decode!(processed_error)["error"]["code"] == "owner_busy"
+
+    public_opts =
+      reconnect_state.opts
+      |> RequestOptions.for_websocket()
+      |> RequestOptions.put_openai_compatibility(public_openai_responses_stream: true)
+
+    public_state = %{prewarm_state | opts: public_opts}
+
+    public_payload =
+      Jason.encode!(%{
+        "type" => "response.create",
+        "model" => setup.model.exposed_model_id,
+        "input" => private_sentinel
+      })
+
+    assert {:push, {:text, public_error}, ^public_state} =
+             CodexResponsesSocket.handle_in({public_payload, [opcode: :text]}, public_state)
+
+    assert Jason.decode!(public_error)["error"]["code"] == "owner_busy"
+    assert length(request_logs(setup.pool.id)) == 1
+
+    send(worker_pid, {:blocking_owner_upstream_release, release_ref})
+    assert {:ok, _state} = receive_owner_socket_complete(prewarm_state)
+    CodexResponsesSocket.terminate(:closed, first_state)
+    CodexResponsesSocket.terminate(:closed, prewarm_state)
+  end
+
+  defp assert_pending_replacement_prewarm_neutral(route) when route in [:direct, :proxy] do
+    upstream_boundary = reconnect_handoff_owner_upstream_boundary(self())
+    upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    turn_state = "stable-pending-prewarm-#{route}"
+
+    {:ok, first_state} =
+      owner_socket(auth, "ws-pending-prewarm-#{route}-a", turn_state,
+        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
+      )
+
+    first_payload =
+      websocket_payload(setup, "pending prewarm predecessor", %{
+        "request_id" => "ws-pending-prewarm-#{route}-a",
+        "client_metadata" => %{"turn_id" => "ws-pending-prewarm-#{route}-a"}
+      })
+
+    assert {:ok, first_state} =
+             CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, first_state)
+
+    assert_receive {:controller_handoff_predecessor_started, _pid},
+                   @blocking_owner_receive_timeout_ms
+
+    {:ok, owner_pid} = WebsocketOwnerSession.lookup(first_state.codex_session.id)
+
+    assert :ok =
+             WebsocketOwnerSession.detach_downstream(
+               owner_pid,
+               first_state.websocket_owner_downstream
+             )
+
+    {:ok, replacement_state} =
+      owner_socket(auth, "ws-pending-prewarm-#{route}-b", turn_state,
+        websocket_owner_forwarder_opts: [upstream: upstream_boundary]
+      )
+
+    replacement_state = maybe_proxy_owner_state(replacement_state, route)
+
+    replacement_payload =
+      websocket_payload(setup, "pending prewarm replacement", %{
+        "request_id" => "ws-pending-prewarm-#{route}-b",
+        "client_metadata" => %{"turn_id" => "ws-pending-prewarm-#{route}-b"}
+      })
+
+    assert {:ok, pending_state} =
+             CodexResponsesSocket.handle_in(
+               {replacement_payload, [opcode: :text]},
+               replacement_state
+             )
+
+    pending_before = pending_state.websocket_owner_pending_handoff
+    owner_pending_before = :sys.get_state(owner_pid).pending_handoff
+    prewarm = Jason.encode!(%{"generate" => false, "model" => setup.model.exposed_model_id})
+
+    {prewarm_result, prewarm_log} =
+      with_info_log(fn ->
+        CodexResponsesSocket.handle_in({prewarm, [opcode: :text]}, pending_state)
+      end)
+
+    assert {:ok, prewarm_state} = prewarm_result
+    assert prewarm_log == ""
+    assert prewarm_state.websocket_owner_pending_handoff == pending_before
+
+    assert :sys.get_state(owner_pid).pending_handoff.control_ref ==
+             owner_pending_before.control_ref
+
+    assert length(request_logs(setup.pool.id)) == 1
+
+    assert {:push, {:text, created}, prewarm_state} =
+             receive_native_collect_socket_push(prewarm_state)
+
+    assert Jason.decode!(created)["type"] == "response.created"
+
+    assert {:push, {:text, completed}, prewarm_state} =
+             receive_native_collect_socket_push(prewarm_state)
+
+    assert Jason.decode!(completed)["type"] == "response.completed"
+    assert {:ok, prewarm_state} = receive_socket_done(prewarm_state)
+    assert prewarm_state.websocket_owner_pending_handoff == pending_before
+    assert length(request_logs(setup.pool.id)) == 1
+    CodexResponsesSocket.terminate(:closed, prewarm_state)
+    CodexResponsesSocket.terminate(:closed, first_state)
   end
 
   defp owner_node_opts(_state, :direct), do: []
@@ -8969,6 +9889,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     )
   end
 
+  defp assert_native_turn_correlation!(correlation_id) when is_binary(correlation_id) do
+    assert correlation_id =~ ~r/\Acodex-turn:[A-Za-z0-9_-]{43}\z/
+  end
+
+  defp event_count(log, message) when is_binary(log) and is_binary(message) do
+    log
+    |> String.split(message)
+    |> length()
+    |> Kernel.-(1)
+  end
+
   defp capture_stream_outcome_telemetry(fun) do
     handler_id = "owner-stream-outcome-#{System.unique_integer([:positive])}"
     parent = self()
@@ -9500,6 +10431,35 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
         Agent.update(upstream_pid, fn state -> %{state | closed?: true} end)
         Agent.stop(upstream_pid)
       end
+    }
+  end
+
+  defp reconnect_handoff_owner_upstream_boundary(test_pid) do
+    counter = :counters.new(1, [:atomics])
+
+    %{
+      start: fn -> Agent.start_link(fn -> :ready end) end,
+      send: fn _upstream_pid, _request, _writer ->
+        :ok = :counters.add(counter, 1, 1)
+        count = :counters.get(counter, 1)
+
+        if count == 1 do
+          Process.flag(:trap_exit, true)
+          send(test_pid, {:controller_handoff_predecessor_started, self()})
+
+          receive do
+            {:EXIT, _from, :shutdown} ->
+              receive do
+                :controller_handoff_never -> :ok
+              end
+          end
+        else
+          send(test_pid, {:controller_handoff_replacement_started, count})
+          :ok
+        end
+      end,
+      invalidate: fn _upstream_pid -> :ok end,
+      close: fn upstream_pid -> Agent.stop(upstream_pid) end
     }
   end
 

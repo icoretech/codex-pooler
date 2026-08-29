@@ -71,6 +71,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
   @type output_commit_ack ::
           {:websocket_owner_output_commit_ack, correlation_id(), downstream_epoch(),
            owner_turn_id(), reference(), reference(), boolean()}
+  @type handoff_outcome :: :ready | {:failed, :owner_forward_timeout | :owner_drained}
+  @type handoff_message ::
+          {:websocket_owner_handoff_ready, correlation_id(), downstream_epoch(), owner_turn_id(),
+           pid(), reference()}
+          | {:websocket_owner_handoff_failed, correlation_id(), downstream_epoch(),
+             owner_turn_id(), pid(), reference(), :owner_forward_timeout | :owner_drained}
 
   @owner_errors CodexPooler.Gateway.Transports.Websocket.OwnerErrorVocabulary.owner_errors()
 
@@ -348,6 +354,64 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract do
       ) do
     if output_commit_ack?(message), do: :drop, else: {:error, :invalid_ack}
   end
+
+  @spec accept_handoff_message(
+          term(),
+          pid(),
+          downstream_epoch(),
+          correlation_id(),
+          owner_turn_id(),
+          reference()
+        ) :: {:ok, handoff_outcome()} | :drop | {:error, :invalid_handoff_message}
+  def accept_handoff_message(
+        {:websocket_owner_handoff_ready, correlation_id, epoch, owner_turn_id, downstream_pid,
+         control_ref},
+        downstream_pid,
+        epoch,
+        correlation_id,
+        owner_turn_id,
+        control_ref
+      )
+      when is_pid(downstream_pid) and is_integer(epoch) and epoch > 0 and
+             is_binary(correlation_id) and is_pid(owner_turn_id) and is_reference(control_ref),
+      do: {:ok, :ready}
+
+  def accept_handoff_message(
+        {:websocket_owner_handoff_failed, correlation_id, epoch, owner_turn_id, downstream_pid,
+         control_ref, reason},
+        downstream_pid,
+        epoch,
+        correlation_id,
+        owner_turn_id,
+        control_ref
+      )
+      when is_pid(downstream_pid) and is_integer(epoch) and epoch > 0 and
+             is_binary(correlation_id) and is_pid(owner_turn_id) and is_reference(control_ref) and
+             reason in [:owner_forward_timeout, :owner_drained],
+      do: {:ok, {:failed, reason}}
+
+  def accept_handoff_message(message, _pid, _epoch, _correlation_id, _owner_turn_id, _control_ref) do
+    if handoff_message?(message), do: :drop, else: {:error, :invalid_handoff_message}
+  end
+
+  defp handoff_message?(
+         {:websocket_owner_handoff_ready, correlation_id, epoch, owner_turn_id, downstream_pid,
+          control_ref}
+       ),
+       do:
+         is_binary(correlation_id) and is_integer(epoch) and epoch > 0 and
+           is_pid(owner_turn_id) and is_pid(downstream_pid) and is_reference(control_ref)
+
+  defp handoff_message?(
+         {:websocket_owner_handoff_failed, correlation_id, epoch, owner_turn_id, downstream_pid,
+          control_ref, reason}
+       ),
+       do:
+         is_binary(correlation_id) and is_integer(epoch) and epoch > 0 and
+           is_pid(owner_turn_id) and is_pid(downstream_pid) and is_reference(control_ref) and
+           reason in [:owner_forward_timeout, :owner_drained]
+
+  defp handoff_message?(_message), do: false
 
   defp downstream_payload?({:data, encoded_text_frame}) when is_binary(encoded_text_frame),
     do: true

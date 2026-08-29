@@ -57,6 +57,51 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
     assert FakeUpstream.count(upstream) == 1
   end
 
+  @tag :replacement_turn_lock_order
+  test "replacement reservation locks its session before API key authorization" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_lock_order123456789"}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = websocket_payload(setup.model.exposed_model_id, "replacement lock order")
+
+    opts =
+      auth
+      |> request_options(payload, setup.model.exposed_model_id, "replacement-lock-order")
+      |> RequestOptions.put_continuity(
+        accepted_turn_state:
+          "replacement-lock-order-#{System.unique_integer([:positive, :monotonic])}"
+      )
+
+    assert {:ok, %CodexSession{} = session} = Websocket.start_codex_session(auth, opts)
+    opts = RequestOptions.put_continuity(opts, codex_session: session)
+
+    {result, events} =
+      capture_query_order(fn -> Service.execute(auth, @endpoint, payload, opts) end)
+
+    assert {:ok, %{status: 200}} = result
+
+    session_lock_index =
+      Enum.find_index(events, fn event ->
+        event.source == "codex_sessions" and event.operation == "SELECT" and
+          event.for_update?
+      end)
+
+    api_key_lock_index =
+      events
+      |> Enum.with_index()
+      |> Enum.filter(fn {event, _index} ->
+        event.source == "api_keys" and event.operation == "SELECT" and event.for_update?
+      end)
+      |> List.last()
+      |> then(fn {_, index} -> index end)
+
+    assert is_integer(session_lock_index)
+    assert is_integer(api_key_lock_index)
+    assert session_lock_index < api_key_lock_index
+    assert Repo.aggregate(Request, :count) == 1
+    assert Repo.aggregate(CodexTurn, :count) == 1
+  end
+
   test "pause before websocket claim creates no runtime or accounting work" do
     upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
     setup = gateway_setup(upstream)
@@ -330,7 +375,9 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
       request_id: request_id,
       upstream_endpoint: @endpoint,
       transport: "websocket",
-      codex_turn_id: request_id
+      turn_claim_key:
+        "codex-turn:" <>
+          (:crypto.hash(:sha256, request_id) |> Base.url_encode64(padding: false))
     }
     |> RequestOptions.build(@endpoint, payload)
     |> RequestOptions.put_routing(
@@ -373,6 +420,56 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
 
     Sandbox.allow(Repo, self(), task.pid)
     task
+  end
+
+  defp capture_query_order(fun) when is_function(fun, 0) do
+    parent = self()
+    handler_id = {__MODULE__, :query_order, System.unique_integer([:positive, :monotonic])}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :repo, :query],
+        fn _event, _measurements, metadata, _config ->
+          if metadata[:repo] == Repo and self() == parent do
+            query = Map.get(metadata, :query, "")
+
+            send(parent, {
+              handler_id,
+              %{
+                source: metadata[:source],
+                operation: query_operation(query),
+                for_update?: String.contains?(String.upcase(query), "FOR UPDATE")
+              }
+            })
+          end
+        end,
+        nil
+      )
+
+    try do
+      result = fun.()
+      {result, drain_query_order(handler_id, [])}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_query_order(handler_id, events) do
+    receive do
+      {^handler_id, event} -> drain_query_order(handler_id, events ++ [event])
+    after
+      0 -> events
+    end
+  end
+
+  defp query_operation(query) do
+    query
+    |> String.trim_leading()
+    |> String.split(~r/\s+/, parts: 2)
+    |> List.first()
+    |> to_string()
+    |> String.upcase()
   end
 
   defp instance_owner_scope do

@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   use GenServer
 
   alias CodexPooler.Gateway.{OperationalSettings, OperationalStatus}
+  alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
   alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
@@ -24,6 +25,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   @stable_downstream_keys [:active_turn_reconnect? | @restore_downstream_keys]
   @public_per_call_downstream_keys [:owner_turn_id | @stable_downstream_keys]
   @terminal_delivery_timeout_ms 1_000
+  @handoff_soft_timeout_ms 1_000
+  @handoff_absolute_timeout_ms 5_000
   @terminal_result_types ["response.completed", "response.failed", "response.incomplete", "error"]
 
   defstruct [
@@ -32,12 +35,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     :owner_instance_id,
     :downstream,
     :downstream_monitor,
+    :next_turn_descriptor,
     :upstream_pid,
     :upstream_sender,
     :upstream_closer,
     :upstream_invalidator,
     :downstream_sender,
     :active_turn,
+    :pending_handoff,
     :persistence,
     :request_id,
     :draining?,
@@ -47,7 +52,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     :idle_shutdown_ref,
     :owner_renewal_ms,
     :owner_renewal_delay,
-    :owner_renewal_ref
+    :owner_renewal_ref,
+    :handoff_soft_timeout_ms,
+    :handoff_absolute_timeout_ms
   ]
 
   @type downstream :: %{
@@ -235,6 +242,35 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     )
   end
 
+  @type reconnect_preflight_result ::
+          {:ok, :dispatch | :same_turn_replay}
+          | {:ok, :replacement_handoff | :duplicate_replacement, reference()}
+          | {:error, WebsocketOwnerContract.owner_error()}
+
+  @spec preflight_reconnect(GenServer.server(), downstream(), <<_::256>>, reference()) ::
+          reconnect_preflight_result()
+  def preflight_reconnect(owner, downstream, semantic_turn_key, control_ref)
+      when is_map(downstream) and is_binary(semantic_turn_key) and
+             byte_size(semantic_turn_key) == 32 and is_reference(control_ref) do
+    GenServer.call(
+      owner,
+      {:preflight_reconnect, downstream, semantic_turn_key, control_ref},
+      owner_call_timeout()
+    )
+  end
+
+  def preflight_reconnect(_owner, _downstream, _semantic_turn_key, _control_ref),
+    do: {:error, :owner_busy}
+
+  @spec cancel_reconnect(GenServer.server(), downstream(), reference()) ::
+          :ok | {:error, WebsocketOwnerContract.owner_error()}
+  def cancel_reconnect(owner, downstream, control_ref)
+      when is_map(downstream) and is_reference(control_ref) do
+    GenServer.call(owner, {:cancel_reconnect, downstream, control_ref}, owner_call_timeout())
+  end
+
+  def cancel_reconnect(_owner, _downstream, _control_ref), do: {:error, :stale_downstream}
+
   @spec submit_frame(GenServer.server(), downstream(), binary()) ::
           :ok | {:error, WebsocketOwnerContract.owner_error() | term()}
   def submit_frame(owner, downstream, payload)
@@ -292,6 +328,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     idle_shutdown_ms = Keyword.get(opts, :idle_shutdown_ms, 300_000)
     owner_renewal_ms = Keyword.get(opts, :owner_renewal_ms, owner_renewal_ms())
 
+    handoff_soft_timeout_ms =
+      Keyword.get(opts, :handoff_soft_timeout_ms, @handoff_soft_timeout_ms)
+
+    handoff_absolute_timeout_ms =
+      Keyword.get(opts, :handoff_absolute_timeout_ms, @handoff_absolute_timeout_ms)
+
     owner_renewal_delay =
       Keyword.get(opts, :owner_renewal_delay, &jittered_owner_renewal_delay/1)
 
@@ -314,6 +356,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          idle_shutdown_ms: idle_shutdown_ms,
          owner_renewal_ms: owner_renewal_ms,
          owner_renewal_delay: owner_renewal_delay,
+         handoff_soft_timeout_ms: handoff_soft_timeout_ms,
+         handoff_absolute_timeout_ms: handoff_absolute_timeout_ms,
          draining?: false,
          retire_after_active_turn?: false
        }
@@ -346,6 +390,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   def handle_call(:drain, _from, state) do
+    state = fail_pending_handoff(state, :owner_drained)
+
     state =
       if DownstreamState.active_turn?(state) do
         finish_active_turn(state, {:error, :owner_drained})
@@ -363,6 +409,28 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         %{draining?: true} = state
       ) do
     {:reply, {:error, :owner_drained}, state}
+  end
+
+  def handle_call(
+        {:preflight_reconnect, _downstream, _semantic_turn_key, _control_ref},
+        _from,
+        %{draining?: true} = state
+      ) do
+    {:reply, {:error, :owner_drained}, state}
+  end
+
+  def handle_call(
+        {:preflight_reconnect, downstream, semantic_turn_key, control_ref},
+        _from,
+        state
+      ) do
+    case preflight_reconnect_now(state, downstream, semantic_turn_key, control_ref) do
+      {:reply, reply, next_state} -> {:reply, reply, next_state}
+    end
+  end
+
+  def handle_call({:cancel_reconnect, downstream, control_ref}, _from, state) do
+    {:reply, :ok, cancel_pending_handoff_by_ref(state, downstream, control_ref)}
   end
 
   # A bridged HTTP turn must never steal another turn's downstream. Each bridge
@@ -404,8 +472,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
            correlation_id: correlation_id
          }) do
       :active ->
+        requested_downstream = %{pid: pid, epoch: epoch, correlation_id: correlation_id}
+
         state =
           state
+          |> cancel_pending_handoff(requested_downstream, :socket_closed)
           |> DownstreamState.demonitor_downstream()
           |> DownstreamState.schedule_idle_shutdown()
           |> DownstreamState.cancel_active_turn_downstream(%{
@@ -415,20 +486,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
           })
           |> Map.put(:downstream, nil)
 
-        state =
-          case state.active_turn do
-            %{output_commit_probe: probe} when is_map(probe) ->
-              settle_active_turn_without_downstream_delivery(
-                state,
-                {:error, :client_disconnected}
-              )
-
-            %{pending_result: pending_result} when not is_nil(pending_result) ->
-              settle_active_turn(state, {:error, :client_disconnected})
-
-            _active_turn ->
-              state
-          end
+        state = maybe_settle_cancelled_without_pending_handoff(state, :client_disconnected)
 
         reply_or_retire(state, :ok)
 
@@ -497,7 +555,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   def handle_call({:submit_upstream, downstream, upstream_payload}, from, state) do
-    accept_upstream_submission(state, from, downstream, upstream_payload, false)
+    accept_or_consume_upstream_submission(state, from, downstream, upstream_payload, false)
   end
 
   def handle_call(
@@ -506,7 +564,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         state
       )
       when is_boolean(submission_notification?) do
-    accept_upstream_submission(
+    accept_or_consume_upstream_submission(
       state,
       from,
       downstream,
@@ -535,6 +593,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         task = start_upstream_task(state, ref, upstream_payload)
         {submitter_pid, _tag} = from
 
+        {descriptor, state} =
+          take_next_turn_descriptor(state, active_turn_downstream, upstream_payload)
+
         active_turn = %{
           ref: ref,
           task_pid: task.pid,
@@ -548,7 +609,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
           terminal_delivery_timer_ref: nil,
           output_commit_probe: nil,
           collect?: collect_request?(upstream_payload),
-          submission_observed?: submission_notification?
+          submission_observed?: submission_notification?,
+          descriptor: descriptor,
+          task_settled?: false,
+          submitter_exited?: false,
+          reply_sent?: false
         }
 
         {:noreply, %{state | active_turn: active_turn}}
@@ -558,9 +623,149 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     end
   end
 
+  defp accept_or_consume_upstream_submission(
+         %{pending_handoff: %{status: :ready} = pending} = state,
+         from,
+         downstream,
+         upstream_payload,
+         submission_notification?
+       ) do
+    descriptor = pending_submission_descriptor(state, pending, downstream, upstream_payload)
+
+    if handoff_downstream?(pending, downstream) and
+         descriptor == %{kind: :native, semantic_turn_key: pending.semantic_turn_key} do
+      state =
+        state
+        |> put_next_turn_descriptor(downstream, pending.semantic_turn_key)
+        |> clear_pending_handoff()
+
+      accept_upstream_submission(
+        state,
+        from,
+        downstream,
+        upstream_payload,
+        submission_notification?
+      )
+    else
+      {:reply, {:error, :owner_busy}, state}
+    end
+  end
+
+  defp accept_or_consume_upstream_submission(
+         state,
+         from,
+         downstream,
+         upstream_payload,
+         submission_notification?
+       ) do
+    accept_upstream_submission(
+      state,
+      from,
+      downstream,
+      upstream_payload,
+      submission_notification?
+    )
+  end
+
+  defp preflight_reconnect_now(
+         %{active_turn: nil, pending_handoff: nil} = state,
+         downstream,
+         semantic_turn_key,
+         _ref
+       ) do
+    case DownstreamState.downstream_status(state.downstream, downstream) do
+      :active ->
+        {:reply, {:ok, :dispatch}, put_next_turn_descriptor(state, downstream, semantic_turn_key)}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp preflight_reconnect_now(
+         %{pending_handoff: pending} = state,
+         downstream,
+         semantic_turn_key,
+         _control_ref
+       )
+       when is_map(pending) do
+    cond do
+      not handoff_downstream?(pending, downstream) ->
+        {:reply, {:error, :owner_busy}, state}
+
+      pending.semantic_turn_key == semantic_turn_key ->
+        {:reply, {:ok, :duplicate_replacement, pending.control_ref}, state}
+
+      true ->
+        {:reply, {:error, :owner_busy}, state}
+    end
+  end
+
+  defp preflight_reconnect_now(
+         %{active_turn: active_turn} = state,
+         downstream,
+         semantic_turn_key,
+         control_ref
+       )
+       when is_map(active_turn) do
+    descriptor = Map.get(active_turn, :descriptor, :unknown)
+    cancelled? = Map.has_key?(active_turn, :canceled_result)
+
+    case descriptor do
+      %{kind: :native, semantic_turn_key: ^semantic_turn_key} when not cancelled? ->
+        {:reply, {:ok, :same_turn_replay}, state}
+
+      %{kind: :native, semantic_turn_key: active_key}
+      when cancelled? and active_key != semantic_turn_key ->
+        begin_pending_handoff(state, downstream, semantic_turn_key, control_ref)
+
+      _descriptor ->
+        {:reply, {:error, :owner_busy}, state}
+    end
+  end
+
+  defp begin_pending_handoff(state, downstream, semantic_turn_key, control_ref) do
+    case DownstreamState.downstream_status(state.downstream, downstream) do
+      :active ->
+        soft_token = make_ref()
+        absolute_token = make_ref()
+
+        pending = %{
+          pid: downstream.pid,
+          epoch: downstream.epoch,
+          correlation_id: downstream.correlation_id,
+          control_ref: control_ref,
+          semantic_turn_key: semantic_turn_key,
+          owner_turn_id: active_turn_owner_turn_id(state.active_turn),
+          status: :waiting,
+          soft_token: soft_token,
+          soft_timer_ref:
+            Process.send_after(
+              self(),
+              {:websocket_owner_handoff_soft_timeout, control_ref, soft_token},
+              state.handoff_soft_timeout_ms
+            ),
+          absolute_token: absolute_token,
+          absolute_timer_ref:
+            Process.send_after(
+              self(),
+              {:websocket_owner_handoff_absolute_timeout, control_ref, absolute_token},
+              state.handoff_absolute_timeout_ms
+            )
+        }
+
+        state = %{state | pending_handoff: pending}
+        state = put_next_turn_descriptor(state, downstream, semantic_turn_key)
+        {:reply, {:ok, :replacement_handoff, control_ref}, maybe_ready_pending_handoff(state)}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
   @impl GenServer
   def handle_cast(:begin_drain, state) do
-    {:noreply, %{state | draining?: true}}
+    {:noreply, state |> fail_pending_handoff(:owner_drained) |> Map.put(:draining?, true)}
   end
 
   @impl GenServer
@@ -605,9 +810,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     if Process.alive?(state.upstream_pid) do
       result = DownstreamState.effective_active_turn_result(state.active_turn, result)
 
-      state
-      |> resolve_active_turn_result(result)
-      |> continue_or_retire()
+      if is_map(state.pending_handoff) do
+        state
+        |> settle_predecessor_task(result)
+        |> maybe_ready_pending_handoff()
+        |> continue_or_retire()
+      else
+        state
+        |> resolve_active_turn_result(result)
+        |> continue_or_retire()
+      end
     else
       retire_current_upstream(state, :owner_crashed)
     end
@@ -665,9 +877,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
           {:error, owner_error(reason)}
         )
 
-      state
-      |> settle_active_turn(result)
-      |> continue_or_retire()
+      if is_map(state.pending_handoff) do
+        state
+        |> put_in([Access.key(:active_turn), Access.key(:task_ref)], nil)
+        |> settle_predecessor_task(result)
+        |> maybe_ready_pending_handoff()
+        |> continue_or_retire()
+      else
+        state
+        |> settle_active_turn(result)
+        |> continue_or_retire()
+      end
     else
       retire_current_upstream(state, :owner_crashed)
     end
@@ -677,11 +897,45 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         {:DOWN, ref, :process, _pid, _reason},
         %{active_turn: %{submitter_monitor: ref} = active_turn} = state
       ) do
-    DownstreamState.cancel_active_turn_task(active_turn)
+    if is_map(state.pending_handoff) do
+      state
+      |> put_in([Access.key(:active_turn), Access.key(:submitter_monitor)], nil)
+      |> put_in([Access.key(:active_turn), Access.key(:submitter_exited?)], true)
+      |> maybe_ready_pending_handoff()
+      |> continue_or_retire()
+    else
+      DownstreamState.cancel_active_turn_task(active_turn)
 
-    state
-    |> finish_active_turn({:error, :client_disconnected})
-    |> continue_or_retire()
+      state
+      |> finish_active_turn({:error, :client_disconnected})
+      |> continue_or_retire()
+    end
+  end
+
+  def handle_info(
+        {:websocket_owner_handoff_soft_timeout, control_ref, soft_token},
+        %{
+          pending_handoff: %{control_ref: control_ref, soft_token: soft_token, status: :waiting}
+        } = state
+      ) do
+    pending = %{state.pending_handoff | soft_timer_ref: nil, soft_token: nil}
+    _result = invalidate_upstream(state)
+    terminate_predecessor_task(state.active_turn)
+    {:noreply, %{state | pending_handoff: pending}}
+  end
+
+  def handle_info(
+        {:websocket_owner_handoff_absolute_timeout, control_ref, absolute_token},
+        %{
+          pending_handoff: %{
+            control_ref: control_ref,
+            absolute_token: absolute_token
+          }
+        } = state
+      ) do
+    state = fail_pending_handoff(state, :owner_forward_timeout)
+    state = settle_predecessor_before_retire(state)
+    {:stop, :normal, %{state | draining?: true}}
   end
 
   def handle_info(
@@ -710,6 +964,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{downstream_monitor: ref} = state) do
     state =
       state
+      |> cancel_pending_handoff(state.downstream, :socket_closed)
       |> Map.put(:downstream, nil)
       |> Map.put(:downstream_monitor, nil)
       |> DownstreamState.maybe_schedule_idle_shutdown()
@@ -760,6 +1015,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   @impl GenServer
   def terminate(reason, state) do
     state = cancel_owner_renewal(state)
+    terminate_predecessor_task(state.active_turn)
+    _state = clear_pending_handoff(state)
     owner_exit_reason = owner_exit_reason(reason, state)
     owner_exit_cause = owner_exit_cause(reason, state)
     Logger.owner_terminated(reason, owner_exit_reason, owner_exit_cause, state)
@@ -1033,6 +1290,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     end
   end
 
+  defp maybe_settle_cancelled_without_pending_handoff(
+         %{pending_handoff: pending} = state,
+         _reason
+       )
+       when is_map(pending),
+       do: state
+
+  defp maybe_settle_cancelled_without_pending_handoff(state, reason),
+    do: settle_cancelled_active_turn(state, reason)
+
   defp settle_active_turn(state, result) do
     if output_commit_probe_required?(state, result) do
       retain_output_commit_probe(state, result)
@@ -1190,6 +1457,210 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     cancel_terminal_delivery_timer(active_turn)
     cancel_output_commit_probe_timer(active_turn)
     DownstreamState.clear_active_turn_monitors(active_turn)
+  end
+
+  defp settle_predecessor_task(state, result) do
+    active_turn =
+      state.active_turn
+      |> cancel_predecessor_delivery_timers()
+      |> Map.put(:task_settled?, true)
+      |> Map.put(:pending_result, nil)
+      |> Map.put(:output_commit_probe, nil)
+
+    state = %{state | active_turn: active_turn}
+    reply_predecessor_once(state, result)
+  end
+
+  defp reply_predecessor_once(%{active_turn: %{reply_sent?: true}} = state, _result), do: state
+
+  defp reply_predecessor_once(state, result) do
+    reply_active_turn(state, result)
+    put_in(state.active_turn.reply_sent?, true)
+  end
+
+  defp cancel_predecessor_delivery_timers(active_turn) do
+    cancel_terminal_delivery_timer(active_turn)
+    cancel_output_commit_probe_timer(active_turn)
+
+    active_turn
+    |> Map.put(:terminal_delivery_timeout, nil)
+    |> Map.put(:terminal_delivery_timer_ref, nil)
+  end
+
+  defp maybe_ready_pending_handoff(
+         %{
+           pending_handoff: %{status: :waiting} = pending,
+           active_turn: %{
+             task_settled?: true,
+             submitter_exited?: true,
+             downstream: nil,
+             terminal_delivery_timer_ref: nil,
+             output_commit_probe: nil
+           }
+         } = state
+       ) do
+    DownstreamState.clear_active_turn_monitors(state.active_turn)
+    pending = %{pending | status: :ready}
+
+    message =
+      {:websocket_owner_handoff_ready, pending.correlation_id, pending.epoch,
+       pending.owner_turn_id, pending.pid, pending.control_ref}
+
+    _result = state.downstream_sender.(pending.pid, message)
+    %{state | active_turn: nil, pending_handoff: pending}
+  end
+
+  defp maybe_ready_pending_handoff(state), do: state
+
+  defp handoff_downstream?(pending, downstream) do
+    Map.take(pending, @restore_downstream_keys) == Map.take(downstream, @restore_downstream_keys)
+  end
+
+  defp cancel_pending_handoff(%{pending_handoff: nil} = state, _downstream, _reason), do: state
+
+  defp cancel_pending_handoff(%{pending_handoff: pending} = state, downstream, _reason) do
+    if is_map(downstream) and handoff_downstream?(pending, downstream) do
+      state
+      |> abort_pending_predecessor()
+      |> clear_pending_handoff()
+    else
+      state
+    end
+  end
+
+  defp cancel_pending_handoff_by_ref(
+         %{pending_handoff: %{control_ref: control_ref} = pending} = state,
+         downstream,
+         control_ref
+       ) do
+    if is_map(downstream) and handoff_downstream?(pending, downstream) do
+      state
+      |> abort_pending_predecessor()
+      |> clear_pending_handoff()
+    else
+      state
+    end
+  end
+
+  defp cancel_pending_handoff_by_ref(state, _downstream, _control_ref), do: state
+
+  defp abort_pending_predecessor(%{active_turn: active_turn} = state) when is_map(active_turn) do
+    terminate_predecessor_task(active_turn)
+
+    state
+    |> reply_predecessor_once({:error, :client_disconnected})
+    |> clear_active_turn()
+  end
+
+  defp abort_pending_predecessor(state), do: state
+
+  defp fail_pending_handoff(%{pending_handoff: nil} = state, _reason), do: state
+
+  defp fail_pending_handoff(%{pending_handoff: pending} = state, reason) do
+    message =
+      {:websocket_owner_handoff_failed, pending.correlation_id, pending.epoch,
+       pending.owner_turn_id, pending.pid, pending.control_ref, reason}
+
+    _result = state.downstream_sender.(pending.pid, message)
+    clear_pending_handoff(state)
+  end
+
+  defp clear_pending_handoff(%{pending_handoff: pending} = state) when is_map(pending) do
+    Enum.each([pending.soft_timer_ref, pending.absolute_timer_ref], fn
+      ref when is_reference(ref) -> Process.cancel_timer(ref)
+      _ref -> :ok
+    end)
+
+    %{state | pending_handoff: nil}
+  end
+
+  defp clear_pending_handoff(state), do: state
+
+  defp terminate_predecessor_task(%{task_pid: task_pid}) when is_pid(task_pid) do
+    if Process.alive?(task_pid), do: Process.exit(task_pid, :kill)
+    :ok
+  end
+
+  defp terminate_predecessor_task(_active_turn), do: :ok
+
+  defp active_turn_owner_turn_id(%{task_pid: task_pid}) when is_pid(task_pid), do: task_pid
+
+  defp settle_predecessor_before_retire(%{active_turn: active_turn} = state)
+       when is_map(active_turn) do
+    state
+    |> reply_predecessor_once({:error, :client_disconnected})
+    |> clear_active_turn()
+  end
+
+  defp settle_predecessor_before_retire(state), do: state
+
+  defp upstream_turn_descriptor(state, %UpstreamWebsocketSession.Request{
+         payload: payload,
+         message_mapper: mapper
+       }) do
+    if native_message_mapper?(mapper) do
+      with {:ok, decoded} when is_map(decoded) <- Jason.decode(payload),
+           {:ok, %{semantic_turn_key: semantic_turn_key}} <-
+             WebsocketTurnIdentity.resolve(decoded, state.codex_session_id) do
+        %{kind: :native, semantic_turn_key: semantic_turn_key}
+      else
+        _missing_or_invalid -> :unknown
+      end
+    else
+      %{kind: :public}
+    end
+  end
+
+  defp upstream_turn_descriptor(_state, _payload), do: :unknown
+
+  defp put_next_turn_descriptor(state, downstream, semantic_turn_key)
+       when is_map(downstream) and is_binary(semantic_turn_key) and
+              byte_size(semantic_turn_key) == 32 do
+    next_turn_descriptor = %{
+      downstream: Map.take(downstream, @restore_downstream_keys),
+      semantic_turn_key: semantic_turn_key
+    }
+
+    %{state | next_turn_descriptor: next_turn_descriptor}
+  end
+
+  defp take_next_turn_descriptor(
+         %{next_turn_descriptor: %{downstream: expected, semantic_turn_key: semantic_turn_key}} =
+           state,
+         downstream,
+         upstream_payload
+       ) do
+    if expected == Map.take(downstream, @restore_downstream_keys) do
+      {%{kind: :native, semantic_turn_key: semantic_turn_key},
+       %{state | next_turn_descriptor: nil}}
+    else
+      {upstream_turn_descriptor(state, upstream_payload), state}
+    end
+  end
+
+  defp take_next_turn_descriptor(state, _downstream, upstream_payload),
+    do: {upstream_turn_descriptor(state, upstream_payload), state}
+
+  defp pending_submission_descriptor(
+         %{next_turn_descriptor: %{downstream: expected, semantic_turn_key: semantic_turn_key}},
+         pending,
+         downstream,
+         _upstream_payload
+       ) do
+    if expected == Map.take(downstream, @restore_downstream_keys) and
+         pending.semantic_turn_key == semantic_turn_key do
+      %{kind: :native, semantic_turn_key: semantic_turn_key}
+    else
+      :unknown
+    end
+  end
+
+  defp pending_submission_descriptor(state, _pending, _downstream, upstream_payload),
+    do: upstream_turn_descriptor(state, upstream_payload)
+
+  defp native_message_mapper?(mapper) do
+    mapper == (&StreamProtocol.canonicalize_native_codex_responses_json_message/1) or
+      mapper == (&StreamProtocol.canonicalize_codex_responses_json_message/1)
   end
 
   defp output_commit_probe_required?(

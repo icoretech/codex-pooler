@@ -58,6 +58,34 @@ defmodule CodexPooler.Gateway.Metadata.CodexCatalogTest do
     assert result == CodexCatalog.build(models(), unrestricted_policy(), %{})
   end
 
+  test "canonical fixture source preserves released-client capability booleans" do
+    source = %{
+      "slug" => "gpt-5.5",
+      "supports_responses" => true,
+      "supports_streaming" => true,
+      "supports_tools" => true,
+      "supports_reasoning" => true,
+      "prefer_websockets" => true,
+      "capabilities" => %{
+        "responses" => true,
+        "streaming" => true,
+        "tools" => true,
+        "reasoning" => true
+      }
+    }
+
+    result =
+      "gpt-5.5"
+      |> model(source)
+      |> put_source_models(%{"assignment-fixture" => source})
+      |> then(&CodexCatalog.build([&1], unrestricted_policy(), %{}))
+
+    assert [projected] = result.body["models"]
+    assert projected["supports_responses"]
+    assert projected["supports_streaming"]
+    assert projected["supports_tools"]
+  end
+
   test "canonicalizes equivalent JSON object forms and preserves list semantics" do
     atom_body = %{models: [%{slug: "gpt-a", nested: %{enabled: true}, values: [1, 1.0, nil]}]}
 

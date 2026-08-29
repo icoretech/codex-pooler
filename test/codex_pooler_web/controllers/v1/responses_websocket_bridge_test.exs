@@ -33,7 +33,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn}
   alias CodexPooler.Gateway.Runtime.Finalization.ResponseUsage
-  alias CodexPooler.Gateway.Transports.Streaming.{RetainedBody, WebsocketBridgeStream}
+
+  alias CodexPooler.Gateway.Transports.Streaming.{
+    PreparedWebsocketFrame,
+    RetainedBody,
+    WebsocketBridgeStream
+  }
+
   alias CodexPooler.Gateway.Transports.Websocket.{RolloutDrain, WebsocketOwnerContract}
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketRolloutDrainSupport
@@ -640,7 +646,13 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
       Jason.encode!(%{
         "type" => "response.create",
         "model" => "gpt-test",
-        "input" => "synthetic stale retarget",
+        "input" => [
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_missing_owner",
+            "output" => "synthetic stale retarget"
+          }
+        ],
         "previous_response_id" => "resp_missing_owner",
         "stream_id" => "lane-owner-retarget"
       })
@@ -664,7 +676,10 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketBridgeTest do
     assert {:ok, queued_state} =
              CodexResponsesSocket.handle_in({next_payload, [opcode: :text]}, active_state)
 
-    assert :queue.to_list(queued_state.queued_response_payloads) == [next_payload]
+    assert [%PreparedWebsocketFrame{payload: queued_payload}] =
+             :queue.to_list(queued_state.queued_response_payloads)
+
+    assert queued_payload["model"] == "gpt-test"
     assert_receive {:codex_response_done, ^retarget_task_pid, {:error, reason}}, 1_000
 
     {_result, log} =

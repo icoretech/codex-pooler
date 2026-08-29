@@ -43,6 +43,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   @type request_result :: :ok | {:ok, term()} | {:error, submit_error()}
   @type submitted_request_result ::
           request_result() | {:websocket_owner_submission_accepted, request_result()}
+  @type reconnect_action :: :preflight | :cancel
+  @type reconnect_control :: %{
+          required(:version) => 1,
+          required(:action) => reconnect_action(),
+          required(:codex_session_id) => binary(),
+          required(:downstream) => WebsocketOwnerSession.downstream(),
+          required(:semantic_turn_key) => <<_::256>>,
+          required(:control_ref) => reference()
+        }
 
   @spec submit_frame(
           CodexSession.t(),
@@ -86,6 +95,95 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     with :ok <- SessionContinuity.validate_owner_token(session, owner_lease_token),
          {:ok, owner} <- resolve_owner(session, opts) do
       dispatch_submit_request(owner, session.id, downstream, request, opts)
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @spec reconnect_control(
+          reconnect_action(),
+          binary(),
+          WebsocketOwnerSession.downstream(),
+          <<_::256>>,
+          reference()
+        ) :: reconnect_control()
+  def reconnect_control(action, codex_session_id, downstream, semantic_turn_key, control_ref)
+      when action in [:preflight, :cancel] and is_binary(codex_session_id) and
+             is_map(downstream) and is_binary(semantic_turn_key) and
+             byte_size(semantic_turn_key) == 32 and is_reference(control_ref) do
+    %{
+      version: 1,
+      action: action,
+      codex_session_id: codex_session_id,
+      downstream: Map.take(downstream, @restore_downstream_keys),
+      semantic_turn_key: semantic_turn_key,
+      control_ref: control_ref
+    }
+  end
+
+  @spec preflight_reconnect(
+          CodexSession.t(),
+          binary(),
+          WebsocketOwnerSession.downstream(),
+          <<_::256>>,
+          reference(),
+          submit_opts()
+        ) :: WebsocketOwnerSession.reconnect_preflight_result()
+  def preflight_reconnect(
+        %CodexSession{} = session,
+        owner_lease_token,
+        downstream,
+        semantic_turn_key,
+        control_ref,
+        opts \\ []
+      )
+      when is_binary(owner_lease_token) and is_map(downstream) and
+             is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and
+             is_reference(control_ref) do
+    with :ok <- SessionContinuity.validate_owner_token(session, owner_lease_token),
+         {:ok, owner} <- resolve_owner(session, opts) do
+      dispatch_reconnect_control(
+        owner,
+        reconnect_control(
+          :preflight,
+          session.id,
+          downstream,
+          semantic_turn_key,
+          control_ref
+        ),
+        opts
+      )
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @spec cancel_reconnect(
+          CodexSession.t(),
+          binary(),
+          WebsocketOwnerSession.downstream(),
+          <<_::256>>,
+          reference(),
+          submit_opts()
+        ) :: :ok | {:error, WebsocketOwnerContract.owner_error()}
+  def cancel_reconnect(
+        %CodexSession{} = session,
+        owner_lease_token,
+        downstream,
+        semantic_turn_key,
+        control_ref,
+        opts \\ []
+      )
+      when is_binary(owner_lease_token) and is_map(downstream) and
+             is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and
+             is_reference(control_ref) do
+    with :ok <- SessionContinuity.validate_owner_token(session, owner_lease_token),
+         {:ok, owner} <- resolve_owner(session, opts) do
+      dispatch_reconnect_control(
+        owner,
+        reconnect_control(:cancel, session.id, downstream, semantic_turn_key, control_ref),
+        opts
+      )
     else
       {:error, reason} -> {:error, reason}
     end
@@ -155,6 +253,41 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
 
   def remote_attach_args(codex_session_id, downstream, opts) when is_list(opts),
     do: [codex_session_id, downstream, opts]
+
+  @doc false
+  @spec remote_reconnect_control_v1(reconnect_control()) ::
+          WebsocketOwnerSession.reconnect_preflight_result() | :ok
+  def remote_reconnect_control_v1(
+        %{
+          version: 1,
+          action: action,
+          codex_session_id: codex_session_id,
+          downstream: downstream,
+          semantic_turn_key: semantic_turn_key,
+          control_ref: control_ref
+        } = control
+      )
+      when action in [:preflight, :cancel] and is_binary(codex_session_id) and
+             is_map(downstream) and is_binary(semantic_turn_key) and
+             byte_size(semantic_turn_key) == 32 and is_reference(control_ref) and
+             map_size(control) == 6 do
+    with {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
+      case action do
+        :preflight ->
+          WebsocketOwnerSession.preflight_reconnect(
+            owner_pid,
+            downstream,
+            semantic_turn_key,
+            control_ref
+          )
+
+        :cancel ->
+          WebsocketOwnerSession.cancel_reconnect(owner_pid, downstream, control_ref)
+      end
+    end
+  end
+
+  def remote_reconnect_control_v1(_control), do: {:error, :owner_unavailable}
 
   @doc false
   @spec remote_submit_frame(
@@ -329,6 +462,27 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
 
     if result == {:error, :owner_forward_timeout} do
       best_effort_cancel_downstream(node, codex_session_id, downstream, opts)
+    end
+
+    result
+  end
+
+  defp dispatch_reconnect_control({:local, _owner_instance_id}, control, _opts) do
+    remote_reconnect_control_v1(control)
+  end
+
+  defp dispatch_reconnect_control({:remote, node, _owner_instance_id}, control, opts) do
+    result = call_remote_control(node, control, opts)
+
+    if control.action == :preflight and result == {:error, :owner_forward_timeout} do
+      cancel_control = %{control | action: :cancel}
+
+      _cancel_result =
+        call_remote_control(
+          node,
+          cancel_control,
+          Keyword.put(opts, :timeout, WebsocketOwnerContract.default_downstream_send_timeout_ms())
+        )
     end
 
     result
@@ -878,6 +1032,32 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     |> normalize_submitted_request_result()
   end
 
+  defp call_remote_control(node, control, opts) do
+    timeout = Keyword.get(opts, :timeout, WebsocketOwnerContract.default_forward_timeout_ms())
+
+    opts
+    |> node_client()
+    |> safe_remote_call(node, __MODULE__, :remote_reconnect_control_v1, [control], timeout)
+    |> normalize_reconnect_control_result()
+  end
+
+  defp normalize_reconnect_control_result(result)
+       when result in [{:ok, :dispatch}, {:ok, :same_turn_replay}, :ok],
+       do: result
+
+  defp normalize_reconnect_control_result({:ok, disposition, control_ref} = result)
+       when disposition in [:replacement_handoff, :duplicate_replacement] and
+              is_reference(control_ref),
+       do: result
+
+  defp normalize_reconnect_control_result({:error, reason}) do
+    if WebsocketOwnerContract.owner_error?(reason),
+      do: {:error, reason},
+      else: {:error, :owner_crashed}
+  end
+
+  defp normalize_reconnect_control_result(_unsafe_result), do: {:error, :owner_crashed}
+
   defp safe_remote_call(node_client, node, module, function, args, timeout) do
     node_client.call_owner(node, module, function, args, timeout)
     |> normalize_returned_remote_failure(module, function, args)
@@ -901,6 +1081,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
 
       missing_remote_cancel_v1?(reason, module, function, args) ->
         {:error, :remote_cancel_v1_unsupported}
+
+      missing_remote_reconnect_control_v1?(reason, module, function, args) ->
+        log_control_protocol_incompatibility()
+        {:error, :owner_unavailable}
+
+      remote_transport_failure?(reason) ->
+        {:error, normalize_remote_transport_failure(reason)}
 
       true ->
         {:error, reason}
@@ -962,24 +1149,45 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     end
   end
 
-  defp normalize_protocol_failure(kind, reason, module, function, args) do
+  defp normalize_protocol_failure(:error, reason, module, function, args) do
     cond do
-      kind == :error and missing_remote_submit_v1?(reason, module, function, args) ->
+      missing_remote_submit_v1?(reason, module, function, args) ->
         log_protocol_incompatibility(:v1)
         :owner_unavailable
 
-      kind in [:error, :exit, :throw] and
-          missing_remote_submit_v2?(reason, module, function, args) ->
+      missing_remote_submit_v2?(reason, module, function, args) ->
         log_protocol_incompatibility(:v2)
         :owner_unavailable
 
-      kind == :error and missing_remote_cancel_v1?(reason, module, function, args) ->
+      missing_remote_cancel_v1?(reason, module, function, args) ->
         :remote_cancel_v1_unsupported
+
+      missing_remote_reconnect_control_v1?(reason, module, function, args) ->
+        log_control_protocol_incompatibility()
+        :owner_unavailable
 
       true ->
         nil
     end
   end
+
+  defp normalize_protocol_failure(kind, reason, module, function, args)
+       when kind in [:exit, :throw] do
+    cond do
+      missing_remote_submit_v2?(reason, module, function, args) ->
+        log_protocol_incompatibility(:v2)
+        :owner_unavailable
+
+      missing_remote_reconnect_control_v1?(reason, module, function, args) ->
+        log_control_protocol_incompatibility()
+        :owner_unavailable
+
+      true ->
+        nil
+    end
+  end
+
+  defp normalize_protocol_failure(_kind, _reason, _module, _function, _args), do: nil
 
   defp normalize_remote_transport_failure(reason) do
     cond do
@@ -995,6 +1203,18 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
       true ->
         :owner_crashed
     end
+  end
+
+  defp remote_transport_failure?(reason) do
+    reason in [
+      :timeout,
+      {:erpc, :timeout},
+      :owner_forward_timeout,
+      :noconnection,
+      {:erpc, :noconnection},
+      :noproc,
+      :owner_unavailable
+    ] or match?({:nodedown, _node}, reason) or match?({:noproc, _details}, reason)
   end
 
   defp missing_remote_submit_v1?(
@@ -1029,6 +1249,26 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
        do: remote_args == args and length(remote_args) == 3
 
   defp missing_remote_cancel_v1?(_reason, _module, _function, _args), do: false
+
+  defp missing_remote_reconnect_control_v1?(
+         {:exception, :undef,
+          [{module, :remote_reconnect_control_v1, remote_args, _location} | _stack]},
+         module,
+         :remote_reconnect_control_v1,
+         args
+       ),
+       do: remote_args == args and length(remote_args) == 1
+
+  defp missing_remote_reconnect_control_v1?(_reason, _module, _function, _args), do: false
+
+  defp log_control_protocol_incompatibility do
+    require Logger
+
+    Logger.warning(
+      "websocket owner protocol incompatible event=owner_protocol_incompatible " <>
+        "boundary=reconnect_control protocol=v1 canonical_error=owner_unavailable"
+    )
+  end
 
   defp log_protocol_incompatibility(version) when version in [:v1, :v2] do
     require Logger

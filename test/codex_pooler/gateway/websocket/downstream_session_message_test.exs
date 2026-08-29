@@ -58,6 +58,47 @@ defmodule CodexPooler.Gateway.Websocket.DownstreamSessionMessageTest do
     stop_task(stale_task)
   end
 
+  test "accepts only a fully fenced reconnect handoff outcome" do
+    owner_turn_id = task_pid()
+    control_ref = make_ref()
+
+    state = %{
+      websocket_owner_downstream: %{
+        pid: self(),
+        correlation_id: "corr-native-task",
+        epoch: 3
+      },
+      websocket_owner_pending_handoff: %{
+        owner_turn_id: owner_turn_id,
+        control_ref: control_ref
+      }
+    }
+
+    ready =
+      {:websocket_owner_handoff_ready, "corr-native-task", 3, owner_turn_id, self(), control_ref}
+
+    assert DownstreamSession.accept_handoff_message(ready, state) == {:ok, :ready}
+
+    for stale <- [
+          put_elem(ready, 1, "stale"),
+          put_elem(ready, 2, 4),
+          put_elem(ready, 3, self()),
+          put_elem(ready, 4, owner_turn_id),
+          put_elem(ready, 5, make_ref())
+        ] do
+      assert DownstreamSession.accept_handoff_message(stale, state) == :drop
+    end
+
+    failed =
+      {:websocket_owner_handoff_failed, "corr-native-task", 3, owner_turn_id, self(), control_ref,
+       :owner_drained}
+
+    assert DownstreamSession.accept_handoff_message(failed, state) ==
+             {:ok, {:failed, :owner_drained}}
+
+    stop_task(owner_turn_id)
+  end
+
   defp state_with_tasks(tasks) do
     %{
       tasks: MapSet.new(tasks),

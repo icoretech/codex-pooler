@@ -12,9 +12,11 @@ defmodule CodexPoolerWeb.WebsocketConnectionLoggerTest do
     elapsed_ms
     endpoint
     error_code
+    handoff_outcome
     owner_instance_id
     phase
     proxy_instance_id
+    reconnect_disposition
     reason_class
     reason_code
     request_id
@@ -30,8 +32,13 @@ defmodule CodexPoolerWeb.WebsocketConnectionLoggerTest do
     cookie
     headers
     idempotency
+    model
+    owner_pid
     payload
     prompt
+    raw_turn_id
+    response_id
+    turn_claim_key
     upstream_body
     websocket_frame
   )
@@ -97,6 +104,58 @@ defmodule CodexPoolerWeb.WebsocketConnectionLoggerTest do
                "max_fragmented_message_size_exceeded"
 
       assert WebsocketConnectionLogger.reason_class(:closed) == "closed"
+    end
+
+    test "characterizes close and native failure event identifiers and fields" do
+      close_log =
+        capture_lifecycle_log(fn ->
+          assert :ok =
+                   WebsocketConnectionLogger.log_closed_before_request_reservation(
+                     Map.merge(
+                       lifecycle_metadata("close-request", "close-session", "terminate"),
+                       %{reconnect_disposition: :owner_busy, handoff_outcome: :ready}
+                     ),
+                     :closed
+                   )
+        end)
+
+      failure_log =
+        capture_lifecycle_log(fn ->
+          assert :ok =
+                   WebsocketConnectionLogger.log_failed_native_websocket_turn(
+                     %{
+                       request_id: "failure-request",
+                       codex_session_id: "failure-session",
+                       error_code: :owner_busy,
+                       transport: "websocket",
+                       reconnect_disposition: :owner_busy,
+                       handoff_outcome: :ready
+                     },
+                     :owner_busy
+                   )
+        end)
+
+      close_line =
+        assert_lifecycle_line!(
+          close_log,
+          WebsocketConnectionLogger.closed_message(),
+          ~w(codex_session_id elapsed_ms endpoint phase reason_class request_id route_class transport)
+        )
+
+      failure_line =
+        assert_lifecycle_line!(
+          failure_log,
+          WebsocketConnectionLogger.failed_native_websocket_turn_message(),
+          ~w(codex_session_id error_code reason_class reason_code request_id transport)
+        )
+
+      assert close_line =~ "reason_class=closed"
+      assert failure_line =~ "error_code=owner_busy"
+      assert failure_line =~ "reason_code=owner_busy"
+      refute close_line =~ "reconnect_disposition="
+      refute close_line =~ "handoff_outcome="
+      refute failure_line =~ "reconnect_disposition="
+      refute failure_line =~ "handoff_outcome="
     end
 
     test "redacts sensitive correlators and drops non-allowlisted keys" do
@@ -290,6 +349,121 @@ defmodule CodexPoolerWeb.WebsocketConnectionLoggerTest do
     end
   end
 
+  describe "reconnect lifecycle events" do
+    test "emits every fixed reconnect disposition with safe correlators only" do
+      sentinel = "TASK2_PRIVATE_RECONNECT_SENTINEL"
+
+      for disposition <- ~w(same_turn_replay replacement_handoff identity_rejected owner_busy) do
+        log =
+          capture_lifecycle_log(fn ->
+            assert :ok =
+                     WebsocketConnectionLogger.log_reconnect_disposition(
+                       reconnect_metadata(sentinel),
+                       disposition
+                     )
+          end)
+
+        line =
+          assert_lifecycle_line!(
+            log,
+            WebsocketConnectionLogger.reconnect_disposition_message(),
+            ~w(
+              codex_session_id
+              downstream_epoch
+              elapsed_ms
+              owner_instance_id
+              phase
+              proxy_instance_id
+              reconnect_disposition
+              request_id
+            )
+          )
+
+        assert line =~ "reconnect_disposition=#{disposition}"
+        refute line =~ "handoff_outcome="
+        refute log =~ sentinel
+      end
+    end
+
+    test "emits every fixed terminal handoff outcome with safe correlators only" do
+      sentinel = "TASK2_PRIVATE_OUTCOME_SENTINEL"
+
+      for outcome <- ~w(ready timeout owner_drained socket_closed submission_expired) do
+        log =
+          capture_lifecycle_log(fn ->
+            assert :ok =
+                     WebsocketConnectionLogger.log_handoff_outcome(
+                       reconnect_metadata(sentinel),
+                       outcome
+                     )
+          end)
+
+        line =
+          assert_lifecycle_line!(
+            log,
+            WebsocketConnectionLogger.handoff_outcome_message(),
+            ~w(
+              codex_session_id
+              downstream_epoch
+              elapsed_ms
+              handoff_outcome
+              owner_instance_id
+              phase
+              proxy_instance_id
+              request_id
+            )
+          )
+
+        assert line =~ "handoff_outcome=#{outcome}"
+        refute line =~ "reconnect_disposition="
+        refute log =~ sentinel
+      end
+    end
+
+    test "emits one classification and one terminal outcome for a synthetic handoff" do
+      log =
+        capture_lifecycle_log(fn ->
+          assert :ok =
+                   WebsocketConnectionLogger.log_reconnect_disposition(
+                     reconnect_metadata("TASK2_PRIVATE_HANDOFF_SENTINEL"),
+                     :replacement_handoff
+                   )
+
+          assert :ok =
+                   WebsocketConnectionLogger.log_handoff_outcome(
+                     reconnect_metadata("TASK2_PRIVATE_HANDOFF_SENTINEL"),
+                     :ready
+                   )
+        end)
+
+      assert 1 == event_count(log, WebsocketConnectionLogger.reconnect_disposition_message())
+      assert 1 == event_count(log, WebsocketConnectionLogger.handoff_outcome_message())
+      refute log =~ "TASK2_PRIVATE_HANDOFF_SENTINEL"
+    end
+
+    test "omits unknown reconnect enums and arbitrary metadata" do
+      sentinel = "TASK2_PRIVATE_UNKNOWN_SENTINEL"
+
+      log =
+        capture_lifecycle_log(fn ->
+          assert :ok =
+                   WebsocketConnectionLogger.log_reconnect_disposition(
+                     reconnect_metadata(sentinel),
+                     "unbounded-private-disposition"
+                   )
+
+          assert :ok =
+                   WebsocketConnectionLogger.log_handoff_outcome(
+                     reconnect_metadata(sentinel),
+                     :unbounded_private_outcome
+                   )
+        end)
+
+      assert log == ""
+      refute log =~ sentinel
+    end
+  end
+
   defp lifecycle_metadata(request_id, session_id, phase) do
     %{
       request_id: request_id,
@@ -300,6 +474,28 @@ defmodule CodexPoolerWeb.WebsocketConnectionLoggerTest do
       elapsed_ms: 17,
       codex_session_id: session_id,
       ignored_key: "not-logged"
+    }
+  end
+
+  defp reconnect_metadata(sentinel) do
+    %{
+      request_id: "request/reconnect",
+      codex_session_id: "session/reconnect",
+      owner_instance_id: "owner/reconnect",
+      proxy_instance_id: "proxy/reconnect",
+      downstream_epoch: 7,
+      phase: "handoff",
+      elapsed_ms: 19,
+      raw_turn_id: sentinel,
+      turn_claim_key: sentinel,
+      prompt: sentinel,
+      request_body: sentinel,
+      websocket_frame: sentinel,
+      model: sentinel,
+      response_id: sentinel,
+      idempotency_key: sentinel,
+      owner_pid: self(),
+      arbitrary_metadata: sentinel
     }
   end
 
@@ -339,5 +535,11 @@ defmodule CodexPoolerWeb.WebsocketConnectionLoggerTest do
     end
 
     line
+  end
+
+  defp event_count(logs, message) do
+    logs
+    |> String.split("\n", trim: true)
+    |> Enum.count(&String.contains?(&1, message))
   end
 end

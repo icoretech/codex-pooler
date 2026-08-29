@@ -33,6 +33,27 @@ defmodule CodexPooler.Gateway.Websocket.Adapter do
     DownstreamSession.accept_downstream_message(message, state)
   end
 
+  @spec accept_handoff_message(term(), socket_state()) ::
+          {:ok, WebsocketOwnerContract.handoff_outcome()}
+          | {:ok, {:ready, pid()}}
+          | {:ok, {{:failed, :owner_forward_timeout | :owner_drained}, pid()}}
+          | :drop
+  def accept_handoff_message(message, state) do
+    DownstreamSession.accept_handoff_message(message, state)
+  end
+
+  @spec preflight_reconnect(socket_state(), <<_::256>>, reference()) ::
+          CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.reconnect_preflight_result()
+  def preflight_reconnect(state, semantic_turn_key, control_ref) do
+    DownstreamSession.preflight_reconnect(state, semantic_turn_key, control_ref)
+  end
+
+  @spec cancel_reconnect(socket_state(), <<_::256>>, reference()) ::
+          :ok | {:error, WebsocketOwnerContract.owner_error()}
+  def cancel_reconnect(state, semantic_turn_key, control_ref) do
+    DownstreamSession.cancel_reconnect(state, semantic_turn_key, control_ref)
+  end
+
   @spec accept_recovered_runtime(term(), socket_state()) :: {:ok, socket_state()} | :drop
   def accept_recovered_runtime(message, state) do
     DownstreamSession.accept_recovered_runtime(message, state)

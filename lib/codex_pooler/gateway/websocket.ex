@@ -9,7 +9,9 @@ defmodule CodexPooler.Gateway.Websocket do
   alias CodexPooler.Gateway.Payloads.{ContinuityPayload, PayloadNormalizer, RequestOptions}
   alias CodexPooler.Gateway.Persistence.{CodexSession, CodexTurn, SessionContinuity}
   alias CodexPooler.Gateway.Runtime.Finalization.Interruption
+  alias CodexPooler.Gateway.Runtime.Service
   alias CodexPooler.Gateway.Transports.Admission
+  alias CodexPooler.Gateway.Transports.Streaming.{PreparedWebsocketFrame, WebsocketCodec}
 
   alias CodexPooler.Gateway.Transports.Websocket.{
     OwnerErrorDiagnostics,
@@ -660,9 +662,37 @@ defmodule CodexPooler.Gateway.Websocket do
           :ok | {:error, Contracts.gateway_error()}
   def run_websocket_response(auth, payload, opts, push_frame)
       when is_binary(payload) and is_function(push_frame, 1) do
-    Admission.run(RouteClass.proxy_websocket(), websocket_metadata(opts), fn ->
-      CodexPooler.Gateway.execute_websocket_response(auth, payload, opts, push_frame)
-    end)
+    opts = websocket_request_options(opts)
+
+    with {:ok, prepared} <- prepare_websocket_response(payload, opts, push_frame) do
+      run_prepared_websocket_response(auth, prepared, push_frame)
+    end
+  end
+
+  @spec prepare_websocket_response(binary(), RequestOptions.t(), (binary() -> any())) ::
+          {:ok, PreparedWebsocketFrame.t()} | {:error, Contracts.gateway_error()}
+  def prepare_websocket_response(payload, %RequestOptions{} = opts, push_frame)
+      when is_binary(payload) and is_function(push_frame, 1),
+      do: Service.prepare_websocket_response(payload, opts, push_frame)
+
+  @spec run_prepared_websocket_response(
+          auth(),
+          PreparedWebsocketFrame.t(),
+          (binary() -> any())
+        ) :: :ok | {:error, Contracts.gateway_error()}
+  def run_prepared_websocket_response(auth, %PreparedWebsocketFrame{} = prepared, push_frame)
+      when is_function(push_frame, 1) do
+    if prepared.variant == :prewarm do
+      deliver_prepared_websocket_response(auth, prepared, push_frame)
+    else
+      deliver_prepared_websocket_response(auth, prepared, push_frame, fn execute ->
+        Admission.run(
+          RouteClass.proxy_websocket(),
+          websocket_metadata(prepared.request_options),
+          execute
+        )
+      end)
+    end
   end
 
   @doc false
@@ -672,20 +702,65 @@ defmodule CodexPooler.Gateway.Websocket do
            :ok | {:error, Contracts.gateway_error()}}
   def run_websocket_response_for_socket(auth, payload, opts, push_frame)
       when is_binary(payload) and is_function(push_frame, 1) do
-    result =
-      Admission.run(RouteClass.proxy_websocket(), websocket_metadata(opts), fn ->
-        CodexPooler.Gateway.execute_websocket_response_for_socket(
-          auth,
-          payload,
-          opts,
-          push_frame
-        )
-      end)
+    opts = websocket_request_options(opts)
 
-    case result do
-      {:socket_response_result, _completion_source, _result} = socket_result -> socket_result
-      {:error, _reason} = error -> {:socket_response_result, :local_complete, error}
+    case prepare_websocket_response(payload, opts, push_frame) do
+      {:ok, prepared} ->
+        run_prepared_websocket_response_for_socket(auth, prepared, push_frame)
+
+      {:error, reason} ->
+        {:socket_response_result, :local_complete, {:error, reason}}
     end
+  end
+
+  @doc false
+  @spec run_prepared_websocket_response_for_socket(
+          auth(),
+          PreparedWebsocketFrame.t(),
+          (binary() -> any())
+        ) ::
+          {:socket_response_result,
+           CodexPooler.Gateway.Runtime.Service.socket_completion_source(),
+           :ok | {:error, Contracts.gateway_error()}}
+  def run_prepared_websocket_response_for_socket(
+        auth,
+        %PreparedWebsocketFrame{} = prepared,
+        push_frame
+      )
+      when is_function(push_frame, 1) do
+    run_prepared_for_socket(auth, prepared, push_frame)
+  end
+
+  defp deliver_prepared_websocket_response(auth, prepared, push_frame),
+    do: deliver_prepared_websocket_response(auth, prepared, push_frame, & &1.())
+
+  defp deliver_prepared_websocket_response(auth, prepared, push_frame, execution_wrapper) do
+    with {:ok, result} <-
+           Service.execute_prepared_websocket_response(auth, prepared, true, execution_wrapper) do
+      WebsocketCodec.deliver_result(result, push_frame)
+    end
+  end
+
+  defp run_prepared_for_socket(
+         auth,
+         %PreparedWebsocketFrame{variant: :prewarm} = prepared,
+         push_frame
+       ),
+       do: Service.execute_prepared_websocket_response_for_socket(auth, prepared, push_frame)
+
+  defp run_prepared_for_socket(auth, prepared, push_frame) do
+    Service.execute_prepared_websocket_response_for_socket(
+      auth,
+      prepared,
+      push_frame,
+      fn execute ->
+        Admission.run(
+          RouteClass.proxy_websocket(),
+          websocket_metadata(prepared.request_options),
+          execute
+        )
+      end
+    )
   end
 
   @spec detach_websocket_owner_downstream(
@@ -743,6 +818,58 @@ defmodule CodexPooler.Gateway.Websocket do
   end
 
   def cancel_websocket_owner_turn(_session, _token, _downstream, _reason, _opts), do: :ok
+
+  @spec preflight_websocket_owner_reconnect(
+          CodexSession.t(),
+          binary(),
+          WebsocketOwnerSession.downstream(),
+          <<_::256>>,
+          reference(),
+          opts()
+        ) :: WebsocketOwnerSession.reconnect_preflight_result()
+  def preflight_websocket_owner_reconnect(
+        %CodexSession{} = session,
+        owner_lease_token,
+        downstream,
+        semantic_turn_key,
+        control_ref,
+        opts \\ %{}
+      ) do
+    WebsocketOwnerForwarder.preflight_reconnect(
+      session,
+      owner_lease_token,
+      downstream,
+      semantic_turn_key,
+      control_ref,
+      owner_forwarder_opts(opts)
+    )
+  end
+
+  @spec cancel_websocket_owner_reconnect(
+          CodexSession.t(),
+          binary(),
+          WebsocketOwnerSession.downstream(),
+          <<_::256>>,
+          reference(),
+          opts()
+        ) :: :ok | {:error, WebsocketOwnerContract.owner_error()}
+  def cancel_websocket_owner_reconnect(
+        %CodexSession{} = session,
+        owner_lease_token,
+        downstream,
+        semantic_turn_key,
+        control_ref,
+        opts \\ %{}
+      ) do
+    WebsocketOwnerForwarder.cancel_reconnect(
+      session,
+      owner_lease_token,
+      downstream,
+      semantic_turn_key,
+      control_ref,
+      owner_forwarder_opts(opts)
+    )
+  end
 
   defp owner_detach_error(reason, session, opts),
     do: OwnerErrorDiagnostics.normalize(reason, :detach, owner_error_context(session, opts))

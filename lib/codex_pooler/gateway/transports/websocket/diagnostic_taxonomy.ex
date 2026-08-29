@@ -11,9 +11,20 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy do
   # clients/openai-compatible.mdx); anything else keeps the fingerprint.
   @unknown_code_allowlist ~r/\A[A-Za-z0-9_.-]+\z/
   @max_unknown_code_bytes 80
-  @known_error_codes MapSet.new(
-                       OwnerErrorVocabulary.owner_error_codes() ++ ErrorCodes.known_error_codes()
-                     )
+  @known_error_codes OwnerErrorVocabulary.owner_error_codes() ++ ErrorCodes.known_error_codes()
+  @reconnect_dispositions ~w(
+                             same_turn_replay
+                             replacement_handoff
+                             identity_rejected
+                             owner_busy
+                           )
+  @handoff_outcomes ~w(
+                        ready
+                        timeout
+                        owner_drained
+                        socket_closed
+                        submission_expired
+                      )
   @sensitive_value_patterns [
     "auth.json",
     "authorization",
@@ -48,6 +59,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy do
   def reason_code(code) when is_atom(code) or is_binary(code), do: identifier(code)
   def reason_code(_reason), do: nil
 
+  @spec reconnect_disposition(term()) :: String.t() | nil
+  def reconnect_disposition(value), do: fixed_vocabulary(value, @reconnect_dispositions)
+
+  @spec handoff_outcome(term()) :: String.t() | nil
+  def handoff_outcome(value), do: fixed_vocabulary(value, @handoff_outcomes)
+
   @spec safe_correlator(term()) :: String.t()
   def safe_correlator(value) when is_binary(value) do
     cond do
@@ -70,7 +87,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy do
 
   def safe_correlator(_value), do: "none"
 
-  defp known_error_code?(value), do: MapSet.member?(@known_error_codes, value)
+  defp known_error_code?(value), do: value in @known_error_codes
+
+  defp fixed_vocabulary(value, vocabulary) when is_atom(value) do
+    value
+    |> Atom.to_string()
+    |> fixed_vocabulary(vocabulary)
+  end
+
+  defp fixed_vocabulary(value, vocabulary) when is_binary(value) do
+    if value in vocabulary, do: value
+  end
+
+  defp fixed_vocabulary(_value, _vocabulary), do: nil
 
   defp relayable_unknown_code?(value) do
     byte_size(value) <= @max_unknown_code_bytes and

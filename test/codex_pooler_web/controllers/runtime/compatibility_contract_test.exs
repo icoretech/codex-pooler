@@ -2338,6 +2338,85 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
              }
     end
 
+    test "locks native websocket reconnect identity, handoff, and release boundaries" do
+      feature = CompatibilityMatrix.by_slug!(:websocket_continuity)
+      fixture = CompatibilityMatrix.fixture!(:websocket_turn)
+
+      assert feature.contract =~ "strict native turn-identity precedence"
+      assert feature.contract =~ "same active non-cancelled replay"
+      assert feature.contract =~ "bounded cancellation handoff"
+      assert feature.contract =~ "no hidden automatic replay"
+
+      assert fixture.native_turn_identity == %{
+               source_precedence: [
+                 "client_metadata.turn_id",
+                 "client_metadata.x-codex-turn-metadata.turn_id",
+                 "turn_id",
+                 "request_id"
+               ],
+               validation: %{
+                 accepted: "1_to_256_byte_ascii_[A-Za-z0-9_.:-]+",
+                 present_invalid: "source_specific_invalid_request_without_fallback",
+                 missing: "no_native_turn_identity"
+               },
+               semantic_key: "opaque_session_scoped_sha256_32_bytes",
+               claim_key: "opaque_session_scoped_full_base64url_sha256_claim"
+             }
+
+      assert fixture.active_reconnect == %{
+               same_active_non_cancelled: %{
+                 disposition: "same_turn_replay",
+                 result: "suppressed_without_new_task_or_accounting_rows",
+                 terminal: "predecessor_terminal_only"
+               },
+               bounded_busy: %{
+                 cancelled_equal_identity: "owner_busy",
+                 noncancelled_different_identity: "owner_busy",
+                 missing_identity: "owner_busy",
+                 public_response_create: "owner_busy",
+                 non_native_active_descriptor: "owner_busy",
+                 response_processed: "owner_busy"
+               }
+             }
+
+      assert fixture.prewarm == %{
+               generate_false: "local_created_completed",
+               accounting_rows: "none",
+               active_reconnect: "neutral",
+               pending_handoff: "neutral",
+               reconnect_events: "none",
+               owner_cancellation: "none"
+             }
+
+      assert fixture.edited_replacement_handoff == %{
+               eligibility: "cancelled_predecessor_with_different_native_identity",
+               admission: "matching_fenced_ready_only",
+               before_ready_accounting_rows: "none",
+               soft_cancellation_bound_ms: 1_000,
+               absolute_handoff_bound_ms: 5_000,
+               absolute_failure: "owner_forward_timeout",
+               duplicate_pending_identity: "suppressed_without_second_task_or_rows",
+               third_identity: "owner_busy"
+             }
+
+      assert fixture.exactly_once == %{
+               predecessor: "client_disconnected_once",
+               replacement: "success_once_after_ready",
+               later_turn: "success_once",
+               accounting: "one_request_attempt_turn_and_settlement_per_turn",
+               replacement_connection: "new_generation",
+               later_connection: "reuse_replacement_connection",
+               automatic_replay: false
+             }
+
+      assert fixture.mixed_release == %{
+               new_new: "identity_aware_handoff",
+               new_old: "identity_aware_handoff_fails_owner_unavailable_before_accounting",
+               old_new: "legacy_submission_behavior_without_new_handoff_protection",
+               old_old: "legacy_behavior_unchanged"
+             }
+    end
+
     test "documents v1 supported surface as authenticated OpenAI compatibility" do
       feature = CompatibilityMatrix.by_slug!(:v1_supported_surface)
       fixture = CompatibilityMatrix.fixture!(:v1_supported_surface)

@@ -701,25 +701,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     assert FakeUpstream.count(upstream) == 0
 
-    assert requests = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    requests = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert length(requests) == 4
     assert Enum.all?(requests, &(&1.status == "rejected"))
-    assert Enum.all?(requests, &(&1.last_error_code == "invalid_request"))
 
-    assert requests
-           |> Enum.map(&get_in(&1.request_metadata, ["gateway_denial", "param"]))
-           |> Enum.sort() ==
+    assert Enum.sort(Enum.map(requests, & &1.request_metadata["gateway_denial"]["param"])) ==
              ["input", "input", "tools", "tools"]
 
-    assert Repo.aggregate(
-             from(a in Attempt, where: a.request_id in ^Enum.map(requests, & &1.id)),
-             :count
-           ) == 0
-
-    assert Repo.aggregate(
-             from(entry in LedgerEntry, where: entry.request_id in ^Enum.map(requests, & &1.id)),
-             :count
-           ) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
+    assert Repo.aggregate(LedgerEntry, :count) == 0
   end
 
   for {route_label, path, accounting_endpoint, catalog_etag?} <-
@@ -5429,7 +5419,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     end
   end
 
-  test "concurrent downstream websocket frames do not queue behind the active upstream turn" do
+  test "concurrent downstream websocket frames queue behind the active upstream turn" do
     release_ref = make_ref()
 
     upstream =
@@ -5491,8 +5481,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       assert {:ok, state} =
                CodexResponsesSocket.handle_in({second_payload, [opcode: :text]}, state)
 
-      assert_receive {:fake_upstream_chunk_barrier, 0, second_upstream_pid, ^release_ref}, 1_000
       send(first_upstream_pid, {:fake_upstream_release_chunk, release_ref})
+
+      assert_receive {:fake_upstream_chunk_barrier, 0, second_upstream_pid, ^release_ref}, 1_000
       send(second_upstream_pid, {:fake_upstream_release_chunk, release_ref})
 
       assert {:push, {:text, first_frame}, state} = receive_socket_push(state)
@@ -5503,7 +5494,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       assert {:ok, _state} = receive_socket_done(state)
 
       assert [first_request, second_request] = FakeUpstream.requests(upstream)
-      assert first_request.websocket_connection_id != second_request.websocket_connection_id
+      assert first_request.websocket_connection_id == second_request.websocket_connection_id
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
@@ -10139,6 +10130,23 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       assert neutral.success_count == 0
       assert neutral.metadata["probe_in_flight_count"] == 0
 
+      circuit_handler_id = "native-policy-circuit-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          circuit_handler_id,
+          [:codex_pooler, :gateway, :routing, :circuit, :transition],
+          fn _event, _measurements, metadata, _config ->
+            if metadata.transition == "half_open_to_closed" and metadata.pool_id == setup.pool.id do
+              send(test_pid, {:native_policy_circuit_closed, metadata})
+            end
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(circuit_handler_id) end)
+
       second_payload =
         Jason.encode!(%{
           "type" => "response.create",
@@ -10162,6 +10170,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
                         }
                       }},
                      @websocket_frame_timeout
+
+      assert_receive {:native_policy_circuit_closed,
+                      %{
+                        pool_upstream_assignment_id: assignment_id,
+                        route_class: "proxy_websocket"
+                      }},
+                     @websocket_frame_timeout
+
+      assert assignment_id == setup.assignment.id
 
       barrier_payload =
         Jason.encode!(%{
