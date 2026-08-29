@@ -253,12 +253,44 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     }
   end
 
+  @spec native_compaction_continuation?(t(), map()) :: boolean()
+  def native_compaction_continuation?(
+        %__MODULE__{
+          transport: %{transport: "websocket"},
+          openai_compatibility: %{public_openai_responses_stream: false}
+        },
+        %{"type" => "response.create", "input" => input}
+      )
+      when is_list(input) do
+    Enum.any?(input, &match?(%{"type" => "compaction"}, &1))
+  end
+
+  def native_compaction_continuation?(%__MODULE__{}, _payload), do: false
+
   @spec put_request_metadata(t(), keyword()) :: t()
   def put_request_metadata(%__MODULE__{} = options, updates) when is_list(updates) do
     %{options | request_metadata: struct!(options.request_metadata, updates)}
   end
 
   @spec server_correlation_id(t()) :: String.t()
+  @spec server_correlation_id(t(), map()) :: String.t()
+  def server_correlation_id(%__MODULE__{} = options, payload) when is_map(payload) do
+    if native_compaction_continuation?(options, payload) do
+      Ecto.UUID.generate()
+    else
+      server_correlation_id(options)
+    end
+  end
+
+  def server_correlation_id(%__MODULE__{
+        transport: %{transport: "websocket", websocket_delivery_mode: :collect_compaction},
+        payload_context: %{
+          compaction_trigger_bridge?: true,
+          compaction_input_mode: :incremental
+        }
+      }),
+      do: Ecto.UUID.generate()
+
   def server_correlation_id(%__MODULE__{
         transport: %{transport: "websocket"},
         continuity: %{turn_claim_key: turn_claim_key}

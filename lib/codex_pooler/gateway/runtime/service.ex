@@ -835,6 +835,23 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   end
 
   defp claim_explicit_websocket_turn(
+         _auth,
+         _model,
+         _payload,
+         _endpoint,
+         %RequestOptions{
+           transport: %{transport: "websocket", websocket_delivery_mode: :collect_compaction},
+           payload_context: %{
+             compaction_trigger_bridge?: true,
+             compaction_input_mode: :incremental,
+             compaction_result_mode: :native_websocket
+           }
+         },
+         %RouteState{}
+       ),
+       do: {:ok, nil}
+
+  defp claim_explicit_websocket_turn(
          auth,
          model,
          payload,
@@ -846,11 +863,15 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          %RouteState{} = route_state
        )
        when is_binary(turn_claim_key) do
-    attrs = AccountingReservation.attrs(auth, payload, endpoint, request_options, route_state)
+    if RequestOptions.native_compaction_continuation?(request_options, payload) do
+      {:ok, nil}
+    else
+      attrs = AccountingReservation.attrs(auth, payload, endpoint, request_options, route_state)
 
-    case Accounting.claim_websocket_turn(auth, model, attrs) do
-      {:ok, %{request: request}} -> {:ok, request}
-      {:error, reason} -> {:error, reason}
+      case Accounting.claim_websocket_turn(auth, model, attrs) do
+        {:ok, %{request: request}} -> {:ok, request}
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 

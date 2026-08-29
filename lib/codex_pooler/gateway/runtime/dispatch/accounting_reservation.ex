@@ -99,7 +99,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
     %{
       endpoint: accounting_endpoint,
       transport: transport.transport,
-      correlation_id: RequestOptions.server_correlation_id(request_options),
+      correlation_id: RequestOptions.server_correlation_id(request_options, payload),
       idempotency_key: request_metadata.idempotency_key,
       client_ip: request_metadata.client_ip,
       user_agent: request_metadata.user_agent,

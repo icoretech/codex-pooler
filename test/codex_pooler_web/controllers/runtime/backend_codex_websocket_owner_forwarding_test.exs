@@ -248,6 +248,25 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                   "output" => [compact_item]
                 }
               }}
+           ]),
+           FakeUpstream.sse_stream([
+             {"response.created",
+              %{
+                "type" => "response.created",
+                "response" => %{
+                  "id" => "resp_owner_collect_final",
+                  "status" => "in_progress"
+                }
+              }},
+             {"response.completed",
+              %{
+                "type" => "response.completed",
+                "response" => %{
+                  "id" => "resp_owner_collect_final",
+                  "status" => "completed",
+                  "output" => []
+                }
+              }}
            ])
          ]}
       )
@@ -257,11 +276,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     _revision = set_model_serving_mode!(scope, setup, "full")
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
     {:ok, state} = owner_socket(auth, "ws-owner-native-collect", "owner-native-collect")
+    native_turn_id = "owner-native-collect-turn"
 
     try do
       anchor_payload =
         websocket_payload(setup, "synthetic owner collect anchor", %{
-          "request_id" => "ws-owner-native-collect-anchor"
+          "request_id" => "ws-owner-native-collect-anchor",
+          "client_metadata" => %{"turn_id" => native_turn_id}
         })
 
       assert {:ok, state} =
@@ -293,6 +314,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           "generate" => true,
           "request_id" => "ws-owner-native-collect-compact",
           "client_metadata" => %{
+            "turn_id" => native_turn_id,
             "x-codex-turn-metadata" =>
               Jason.encode!(%{
                 "compaction" => %{"implementation" => "responses_compaction_v2"}
@@ -309,20 +331,45 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                Jason.decode!(done_frame)
 
       assert {:push, {:text, completed_frame}, state} = receive_native_collect_socket_push(state)
-      assert {:ok, _state} = receive_socket_done(state)
+      assert {:ok, state} = receive_socket_done(state)
 
       assert %{
                "type" => "response.completed",
                "response" => %{"output" => [^compact_item]}
              } = Jason.decode!(completed_frame)
 
-      assert [anchor_request, compact_request] = FakeUpstream.requests(upstream)
+      final_payload =
+        websocket_payload(setup, "synthetic owner collect final", %{
+          "request_id" => "ws-owner-native-collect-final",
+          "client_metadata" => %{"turn_id" => native_turn_id},
+          "input" => [
+            %{"type" => "compaction", "encrypted_content" => compact_item["encrypted_content"]},
+            %{
+              "type" => "message",
+              "role" => "user",
+              "content" => "synthetic owner collect final"
+            }
+          ]
+        })
+
+      assert {:ok, state} =
+               CodexResponsesSocket.handle_in({final_payload, [opcode: :text]}, state)
+
+      assert {:push, {:text, final_frame}, state} = receive_owner_socket_push(state)
+      assert %{"response" => %{"id" => "resp_owner_collect_final"}} = Jason.decode!(final_frame)
+      assert {:push, {:text, final_terminal_frame}, state} = receive_owner_socket_push(state)
+      assert %{"type" => "response.completed"} = Jason.decode!(final_terminal_frame)
+      assert {:ok, _state} = receive_socket_done(state)
+
+      assert [anchor_request, compact_request, final_request] = FakeUpstream.requests(upstream)
       assert anchor_request.method == "WEBSOCKET"
       assert compact_request.method == "WEBSOCKET"
+      assert final_request.method == "WEBSOCKET"
       assert anchor_request.websocket_connection_id == compact_request.websocket_connection_id
+      assert compact_request.websocket_connection_id == final_request.websocket_connection_id
       assert FakeUpstream.http_request_count(upstream) == 0
 
-      assert [anchor_log, compact_log] = request_logs(setup.pool.id)
+      assert [anchor_log, compact_log, final_log] = request_logs(setup.pool.id)
       assert anchor_log.transport == "websocket"
       assert compact_log.endpoint == "/backend-api/codex/responses/compact"
       assert compact_log.transport == "websocket"
@@ -335,6 +382,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert compact_attempt.transport == "websocket"
       assert compact_attempt.status == "succeeded"
       assert compact_attempt.response_metadata["upstream_websocket_connection"]["reused"] == true
+
+      assert [final_attempt] =
+               Repo.all(from(attempt in Attempt, where: attempt.request_id == ^final_log.id))
+
+      assert final_attempt.transport == "websocket"
+      assert final_attempt.status == "succeeded"
+      assert final_attempt.response_metadata["upstream_websocket_connection"]["reused"] == true
 
       assert Repo.aggregate(
                from(entry in LedgerEntry,
