@@ -15,9 +15,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   alias CodexPooler.Gateway.Persistence.SessionContinuity
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerAdmissionControlV1
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV2
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV3
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks
   alias CodexPooler.Repo
@@ -77,7 +79,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
           WebsocketOwnerSession.downstream(),
           UpstreamWebsocketSession.Request.t()
           | WebsocketOwnerRequest.t()
-          | WebsocketOwnerRequestV2.t(),
+          | WebsocketOwnerRequestV2.t()
+          | WebsocketOwnerRequestV3.t(),
           submit_opts()
         ) ::
           submitted_request_result()
@@ -91,7 +94,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
       when is_binary(owner_lease_token) and is_map(downstream) and
              (is_struct(request, UpstreamWebsocketSession.Request) or
                 is_struct(request, WebsocketOwnerRequest) or
-                is_struct(request, WebsocketOwnerRequestV2)) do
+                is_struct(request, WebsocketOwnerRequestV2) or
+                is_struct(request, WebsocketOwnerRequestV3)) do
     with :ok <- SessionContinuity.validate_owner_token(session, owner_lease_token),
          {:ok, owner} <- resolve_owner(session, opts) do
       dispatch_submit_request(owner, session.id, downstream, request, opts)
@@ -186,6 +190,28 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
       )
     else
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @spec admission_control(
+          CodexSession.t(),
+          binary(),
+          WebsocketOwnerAdmissionControlV1.t(),
+          submit_opts()
+        ) :: WebsocketOwnerSession.admission_result()
+  def admission_control(
+        %CodexSession{} = session,
+        owner_lease_token,
+        %WebsocketOwnerAdmissionControlV1{} = control,
+        opts \\ []
+      )
+      when is_binary(owner_lease_token) and is_list(opts) do
+    with :ok <- SessionContinuity.validate_owner_token(session, owner_lease_token),
+         :ok <- validate_admission_control(control),
+         {:ok, owner} <- resolve_owner(session, opts) do
+      dispatch_admission_control(owner, session.id, control, opts)
+    else
+      {:error, _reason} -> {:error, :owner_unavailable}
     end
   end
 
@@ -290,6 +316,19 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   def remote_reconnect_control_v1(_control), do: {:error, :owner_unavailable}
 
   @doc false
+  @spec remote_admission_control_v1(binary(), WebsocketOwnerAdmissionControlV1.t()) ::
+          WebsocketOwnerSession.admission_result()
+  def remote_admission_control_v1(codex_session_id, control)
+      when is_binary(codex_session_id) do
+    with :ok <- validate_admission_control(control),
+         {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id) do
+      WebsocketOwnerSession.admission_control(owner_pid, control)
+    else
+      {:error, _reason} -> {:error, :owner_unavailable}
+    end
+  end
+
+  @doc false
   @spec remote_submit_frame(
           binary(),
           WebsocketOwnerSession.downstream(),
@@ -356,6 +395,30 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   def remote_submit_request_v2(codex_session_id, downstream, owner_request)
       when is_binary(codex_session_id) and is_map(downstream) do
     with :ok <- validate_owner_request_v2(owner_request),
+         {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id),
+         {:ok, request} <- WebsocketRequestCallbacks.materialize(owner_request, nil) do
+      submit_collect_owner_request(
+        owner_pid,
+        downstream,
+        request,
+        owner_request.submission_notification?
+      )
+    else
+      {:error, {:invalid_owner_request, _reason}} -> {:error, :owner_unavailable}
+      {:error, :upstream_identity_not_found} -> {:error, :owner_unavailable}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @doc false
+  @spec remote_submit_request_v3(
+          binary(),
+          WebsocketOwnerSession.downstream(),
+          WebsocketOwnerRequestV3.t()
+        ) :: submitted_request_result()
+  def remote_submit_request_v3(codex_session_id, downstream, owner_request)
+      when is_binary(codex_session_id) and is_map(downstream) do
+    with :ok <- validate_owner_request_v3(owner_request),
          {:ok, owner_pid} <- WebsocketOwnerSession.lookup(codex_session_id),
          {:ok, request} <- WebsocketRequestCallbacks.materialize(owner_request, nil) do
       submit_collect_owner_request(
@@ -488,6 +551,34 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     result
   end
 
+  defp dispatch_admission_control(
+         {:local, _owner_instance_id},
+         codex_session_id,
+         control,
+         _opts
+       ) do
+    remote_admission_control_v1(codex_session_id, control)
+  end
+
+  defp dispatch_admission_control(
+         {:remote, node, _owner_instance_id},
+         codex_session_id,
+         control,
+         opts
+       ) do
+    call_remote(node, :remote_admission_control_v1, [codex_session_id, control], opts)
+  end
+
+  defp dispatch_submit_request(
+         {:local, _owner_instance_id},
+         codex_session_id,
+         downstream,
+         %WebsocketOwnerRequestV3{} = owner_request,
+         _opts
+       ) do
+    remote_submit_request_v3(codex_session_id, downstream, owner_request)
+  end
+
   defp dispatch_submit_request(
          {:local, _owner_instance_id},
          codex_session_id,
@@ -526,6 +617,35 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
         opts
       )
     end
+  end
+
+  defp dispatch_submit_request(
+         {:remote, node, _owner_instance_id},
+         codex_session_id,
+         downstream,
+         %WebsocketOwnerRequestV3{} = owner_request,
+         opts
+       ) do
+    submitter = self()
+
+    cancellation_watcher =
+      start_remote_cancellation_watcher(submitter, node, codex_session_id, downstream, opts)
+
+    result =
+      call_remote_submission(
+        node,
+        :remote_submit_request_v3,
+        [codex_session_id, downstream, owner_request],
+        opts
+      )
+
+    stop_remote_cancellation_watcher(cancellation_watcher, submitter)
+
+    if result == {:error, :owner_forward_timeout} do
+      best_effort_cancel_downstream(node, codex_session_id, downstream, opts)
+    end
+
+    result
   end
 
   defp dispatch_submit_request(
@@ -825,6 +945,25 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
   defp validate_owner_request_v2(_owner_request),
     do: {:error, {:invalid_owner_request, {:invalid_field, :envelope}}}
 
+  defp validate_owner_request_v3(%WebsocketOwnerRequestV3{} = owner_request) do
+    case WebsocketOwnerRequestV3.validate(owner_request) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:invalid_owner_request, reason}}
+    end
+  end
+
+  defp validate_owner_request_v3(_owner_request),
+    do: {:error, {:invalid_owner_request, {:invalid_field, :envelope}}}
+
+  defp validate_admission_control(%WebsocketOwnerAdmissionControlV1{} = control) do
+    case WebsocketOwnerAdmissionControlV1.validate(control) do
+      :ok -> :ok
+      {:error, _reason} -> {:error, :owner_unavailable}
+    end
+  end
+
+  defp validate_admission_control(_control), do: {:error, :owner_unavailable}
+
   defp request_recovery_opts(%WebsocketOwnerRequest{observation: observation}) do
     case Map.get(observation, :request_id) do
       request_id when is_binary(request_id) -> [request_id: request_id]
@@ -1079,6 +1218,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
         log_protocol_incompatibility(:v2)
         {:error, :owner_unavailable}
 
+      missing_remote_submit_v3?(reason, module, function, args) ->
+        log_protocol_incompatibility(:v3)
+        {:error, :owner_unavailable}
+
       missing_remote_cancel_v1?(reason, module, function, args) ->
         {:error, :remote_cancel_v1_unsupported}
 
@@ -1159,6 +1302,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
         log_protocol_incompatibility(:v2)
         :owner_unavailable
 
+      missing_remote_submit_v3?(reason, module, function, args) ->
+        log_protocol_incompatibility(:v3)
+        :owner_unavailable
+
       missing_remote_cancel_v1?(reason, module, function, args) ->
         :remote_cancel_v1_unsupported
 
@@ -1176,6 +1323,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     cond do
       missing_remote_submit_v2?(reason, module, function, args) ->
         log_protocol_incompatibility(:v2)
+        :owner_unavailable
+
+      missing_remote_submit_v3?(reason, module, function, args) ->
+        log_protocol_incompatibility(:v3)
         :owner_unavailable
 
       missing_remote_reconnect_control_v1?(reason, module, function, args) ->
@@ -1239,6 +1390,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
 
   defp missing_remote_submit_v2?(_reason, _module, _function, _args), do: false
 
+  defp missing_remote_submit_v3?(
+         {:exception, :undef,
+          [{module, :remote_submit_request_v3, remote_args, _location} | _stack]},
+         module,
+         :remote_submit_request_v3,
+         args
+       ),
+       do: remote_args == args and length(remote_args) == 3
+
+  defp missing_remote_submit_v3?(_reason, _module, _function, _args), do: false
+
   defp missing_remote_cancel_v1?(
          {:exception, :undef,
           [{module, :remote_cancel_downstream_v1, remote_args, _location} | _stack]},
@@ -1270,7 +1432,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder do
     )
   end
 
-  defp log_protocol_incompatibility(version) when version in [:v1, :v2] do
+  defp log_protocol_incompatibility(version) when version in [:v1, :v2, :v3] do
     require Logger
 
     Logger.warning(

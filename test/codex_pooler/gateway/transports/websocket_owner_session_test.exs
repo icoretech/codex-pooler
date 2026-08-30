@@ -13,9 +13,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession}
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponsesSequence
+  alias CodexPooler.Gateway.Transports.Websocket.ForwardedOwnerRequestHandoff
+  alias CodexPooler.Gateway.Transports.Websocket.ForwardedSendWitnessV1
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
   alias CodexPooler.Gateway.Transports.Websocket.RolloutDrain
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerAdmissionControlV1
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.DownstreamState
@@ -91,6 +95,461 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
     assert fresh_owner != owner
     assert_receive {:websocket_owner_harness_upstream_started, fresh_upstream_pid}
     assert fresh_upstream_pid != upstream_pid
+  end
+
+  test "forwarded admission controls serialize one owner-issued reservation and clear on detach",
+       context do
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+    assert {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(owner, downstream_target("admission-owner"))
+
+    now = System.system_time(:millisecond)
+    binding = forwarded_binding(context, downstream)
+
+    assert {:ok, pending} =
+             WebsocketOwnerSession.admission_control(
+               owner,
+               admission_control(:record_ordinary_success, downstream,
+                 binding: binding,
+                 expires_at_ms: now + 30_000
+               )
+             )
+
+    assert NativeCompactionAdmission.phase(pending) == :pending_compact
+
+    controls = [make_ref(), make_ref()]
+
+    reservations =
+      controls
+      |> Enum.map(fn control_ref ->
+        Task.async(fn ->
+          WebsocketOwnerSession.admission_control(
+            owner,
+            admission_control(:reserve, downstream,
+              binding: binding,
+              phase: :compact,
+              control_ref: control_ref,
+              now_ms: now
+            )
+          )
+        end)
+      end)
+      |> Enum.map(&Task.await/1)
+
+    assert Enum.count(reservations, &match?({:ok, %NativeCompactionAdmission.Capability{}}, &1)) ==
+             1
+
+    assert Enum.count(reservations, &(&1 == {:error, :invalid_transition})) == 1
+
+    state = :sys.get_state(owner)
+    refute inspect(state.native_compaction_admission) =~ context.owner_lease_token
+    refute inspect(state.native_compaction_admission) =~ context.owner_instance_id
+
+    assert :ok = WebsocketOwnerSession.detach_downstream(owner, downstream)
+    state = :sys.get_state(owner)
+    assert state.native_compaction_admission == nil
+    assert state.native_compaction_admission_downstream == nil
+  end
+
+  test "forwarded admission follows one socket across per-turn correlation ids", context do
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+    assert {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(
+               owner,
+               downstream_target("admission-lineage")
+             )
+
+    now_ms = System.system_time(:millisecond)
+    binding = forwarded_binding(context, downstream)
+
+    assert {:ok, _pending} =
+             WebsocketOwnerSession.admission_control(
+               owner,
+               admission_control(:record_ordinary_success, downstream,
+                 binding: binding,
+                 expires_at_ms: now_ms + 30_000
+               )
+             )
+
+    next_turn_downstream = %{downstream | correlation_id: "admission-lineage-next-turn"}
+
+    assert {:ok, %NativeCompactionAdmission.Capability{}} =
+             WebsocketOwnerSession.admission_control(
+               owner,
+               admission_control(:reserve, next_turn_downstream,
+                 binding: binding,
+                 phase: :compact,
+                 control_ref: make_ref(),
+                 now_ms: now_ms
+               )
+             )
+
+    wrong_socket = %{next_turn_downstream | pid: spawn(fn -> receive do: (:stop -> :ok) end)}
+    on_exit(fn -> send(wrong_socket.pid, :stop) end)
+
+    assert {:error, :stale_downstream} =
+             WebsocketOwnerSession.admission_control(
+               owner,
+               admission_control(:snapshot, wrong_socket, [])
+             )
+  end
+
+  test "forwarded admission controls reject stale epoch lease and instance bindings", context do
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+    assert {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(owner, downstream_target("admission-fence"))
+
+    now = System.system_time(:millisecond)
+
+    for binding <- [
+          forwarded_binding(context, %{downstream | epoch: downstream.epoch + 1}),
+          forwarded_binding(%{context | owner_lease_token: "wrong-lease"}, downstream),
+          forwarded_binding(%{context | owner_instance_id: "wrong-instance"}, downstream)
+        ] do
+      assert {:error, :binding_mismatch} =
+               WebsocketOwnerSession.admission_control(
+                 owner,
+                 admission_control(:record_ordinary_success, downstream,
+                   binding: binding,
+                   expires_at_ms: now + 30_000
+                 )
+               )
+
+      assert :sys.get_state(owner).native_compaction_admission == nil
+    end
+  end
+
+  test "forwarded admission clears a reserved capability after a stale reserve control",
+       context do
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+    assert {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(owner, downstream_target("stale-reserve"))
+
+    now_ms = System.system_time(:millisecond)
+    binding = forwarded_binding(context, downstream)
+
+    assert {:ok, _pending} =
+             WebsocketOwnerSession.admission_control(
+               owner,
+               admission_control(:record_ordinary_success, downstream,
+                 binding: binding,
+                 expires_at_ms: now_ms + 30_000
+               )
+             )
+
+    assert {:ok, capability} =
+             WebsocketOwnerSession.admission_control(
+               owner,
+               admission_control(:reserve, downstream,
+                 binding: binding,
+                 phase: :compact,
+                 control_ref: make_ref(),
+                 now_ms: now_ms
+               )
+             )
+
+    stale_binding = %{binding | generation: binding.generation + 1}
+
+    assert {:error, :invalid_transition} =
+             WebsocketOwnerSession.admission_control(
+               owner,
+               admission_control(:reserve, downstream,
+                 binding: stale_binding,
+                 phase: :compact,
+                 control_ref: make_ref(),
+                 now_ms: now_ms
+               )
+             )
+
+    assert :sys.get_state(owner).native_compaction_admission == nil
+
+    assert {:error, :invalid_transition} =
+             WebsocketOwnerSession.issue_forwarded_send_witness(
+               owner,
+               downstream,
+               capability,
+               now_ms
+             )
+
+    refute_received {:websocket_owner_harness_request, _request}
+  end
+
+  test "soft reconnect handoff timeout clears owner admission before replacement readiness",
+       context do
+    waiting = start_waiting_handoff(context, "admission-soft-timeout")
+    now_ms = System.system_time(:millisecond)
+    binding = forwarded_binding(context, waiting.replacement)
+
+    assert {:ok, _pending} =
+             WebsocketOwnerSession.admission_control(
+               waiting.owner,
+               admission_control(:record_ordinary_success, waiting.replacement,
+                 binding: binding,
+                 expires_at_ms: now_ms + 30_000
+               )
+             )
+
+    pending = waiting.pending
+
+    send(
+      waiting.owner,
+      {:websocket_owner_handoff_soft_timeout, pending.control_ref, pending.soft_token}
+    )
+
+    assert_receive {:reconnect_handoff_invalidated, 1}
+    assert :sys.get_state(waiting.owner).native_compaction_admission == nil
+
+    Process.exit(waiting.task_pid, :kill)
+    Process.exit(waiting.submitter, :kill)
+  end
+
+  test "forwarded admission controls authorize and record one trusted first compact collection",
+       context do
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+    assert {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(owner, downstream_target("first-compact"))
+
+    binding = forwarded_binding(context, downstream)
+
+    assert {:ok, provenance} =
+             WebsocketOwnerSession.admission_control(
+               owner,
+               admission_control(:authorize_first_compact_collection, downstream,
+                 binding: binding,
+                 control_ref: make_ref()
+               )
+             )
+
+    assert {:ok, collected} =
+             WebsocketOwnerSession.admission_control(
+               owner,
+               admission_control(:record_first_compact_collected, downstream,
+                 first_compact_collection: provenance
+               )
+             )
+
+    assert NativeCompactionAdmission.phase(collected) == :collected_unconfirmed
+
+    assert {:error, :invalid_transition} =
+             WebsocketOwnerSession.admission_control(
+               owner,
+               admission_control(:record_first_compact_collected, downstream,
+                 first_compact_collection: provenance
+               )
+             )
+  end
+
+  test "owner issues and atomically redeems one forwarded send witness", context do
+    observer = attach_native_compaction_observer()
+    upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+    assert {:ok, owner} = start_owner(context, upstream: upstream)
+    assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(owner, downstream_target("witness-owner"))
+
+    now = System.system_time(:millisecond)
+    binding = forwarded_binding(context, downstream)
+
+    assert {:ok, _pending} =
+             WebsocketOwnerSession.admission_control(
+               owner,
+               admission_control(:record_ordinary_success, downstream,
+                 binding: binding,
+                 expires_at_ms: now + 30_000
+               )
+             )
+
+    assert {:ok, capability} =
+             WebsocketOwnerSession.admission_control(
+               owner,
+               admission_control(:reserve, downstream,
+                 binding: binding,
+                 phase: :compact,
+                 control_ref: make_ref(),
+                 now_ms: now
+               )
+             )
+
+    assert {:ok, _accounting} =
+             WebsocketOwnerSession.admission_control(
+               owner,
+               admission_control(:mark_accounting_started, downstream,
+                 capability: capability,
+                 now_ms: now
+               )
+             )
+
+    assert {:ok, %ForwardedSendWitnessV1{} = witness} =
+             WebsocketOwnerSession.issue_forwarded_send_witness(
+               owner,
+               downstream,
+               capability,
+               now
+             )
+
+    state = :sys.get_state(owner)
+    assert state.forwarded_send_witness.status == :issued
+    assert byte_size(state.forwarded_send_witness.digest) == 32
+    refute inspect(state.native_compaction_admission) =~ context.owner_lease_token
+
+    assert :ok =
+             WebsocketOwnerSession.redeem_forwarded_send(
+               owner,
+               witness,
+               %{lifecycle_id: binding.lifecycle_id, generation: binding.generation},
+               :full
+             )
+
+    assert :sys.get_state(owner).forwarded_send_witness.status == :redeemed
+
+    assert observer.() == %{
+             compact_owner_issued: 1,
+             compact_reserved: 1,
+             compact_accounting_started: 1,
+             compact_consumed: 1
+           }
+
+    assert {:error, :forwarded_send_witness_rejected} =
+             WebsocketOwnerSession.redeem_forwarded_send(
+               owner,
+               witness,
+               %{lifecycle_id: binding.lifecycle_id, generation: binding.generation},
+               :full
+             )
+
+    assert :sys.get_state(owner).native_compaction_admission == nil
+  end
+
+  test "owner rejects stale lifecycle mode and epoch witnesses and clears permanently", context do
+    for {label, mutate} <- [
+          {:generation,
+           fn binding, downstream ->
+             {%{lifecycle_id: binding.lifecycle_id, generation: binding.generation + 1}, :full,
+              downstream}
+           end},
+          {:mode,
+           fn binding, downstream ->
+             {%{lifecycle_id: binding.lifecycle_id, generation: binding.generation}, :lite,
+              downstream}
+           end},
+          {:epoch,
+           fn binding, downstream ->
+             {%{lifecycle_id: binding.lifecycle_id, generation: binding.generation}, :full,
+              %{downstream | epoch: downstream.epoch + 1}}
+           end}
+        ] do
+      local_context = unique_owner_context(context, "witness-#{label}")
+      upstream = WebsocketOwnerNodeHarness.fake_upstream_boundary(self())
+      assert {:ok, owner} = start_owner(local_context, upstream: upstream)
+      assert_receive {:websocket_owner_harness_upstream_started, _upstream_pid}
+
+      assert {:ok, downstream} =
+               WebsocketOwnerSession.attach_downstream(
+                 owner,
+                 downstream_target("witness-#{label}")
+               )
+
+      now = System.system_time(:millisecond)
+      binding = forwarded_binding(local_context, downstream)
+      capability = reserve_accounted_capability(owner, downstream, binding, now)
+
+      assert {:ok, witness} =
+               WebsocketOwnerSession.issue_forwarded_send_witness(
+                 owner,
+                 downstream,
+                 capability,
+                 now
+               )
+
+      {lifecycle, mode, redemption_downstream} = mutate.(binding, downstream)
+
+      witness =
+        if label == :epoch do
+          %{witness | downstream_epoch: redemption_downstream.epoch}
+        else
+          witness
+        end
+
+      assert {:error, :forwarded_send_witness_rejected} =
+               WebsocketOwnerSession.redeem_forwarded_send(owner, witness, lifecycle, mode)
+
+      assert :sys.get_state(owner).native_compaction_admission == nil
+      refute_received {:websocket_owner_harness_request, _request}
+    end
+  end
+
+  test "capability owner submission carries one opaque physical-send handoff",
+       context do
+    observer = attach_native_compaction_observer()
+    parent = self()
+
+    upstream = %{
+      start: fn -> Agent.start_link(fn -> :ready end) end,
+      send: fn _upstream_pid, request, _writer ->
+        send(parent, {:forwarded_handoff_request, request})
+        :ok
+      end,
+      close: fn pid -> if Process.alive?(pid), do: Agent.stop(pid) end
+    }
+
+    assert {:ok, owner} = start_owner(context, upstream: upstream)
+
+    assert {:ok, downstream} =
+             WebsocketOwnerSession.attach_downstream(
+               owner,
+               downstream_target("witness-fail-closed")
+             )
+
+    now = System.system_time(:millisecond)
+    binding = forwarded_binding(context, downstream)
+    capability = reserve_accounted_capability(owner, downstream, binding, now)
+
+    request = %UpstreamWebsocketSession.Request{
+      websocket_request()
+      | native_compaction_capability: capability,
+        expected_connection_lifecycle: %{
+          lifecycle_id: binding.lifecycle_id,
+          generation: binding.generation
+        },
+        effective_serving_mode: "full"
+    }
+
+    assert :ok = WebsocketOwnerSession.submit_request(owner, downstream, request)
+
+    assert_receive {:forwarded_handoff_request, forwarded_request}
+    assert %ForwardedOwnerRequestHandoff{} = forwarded_request.forwarded_owner_send_handoff
+    assert forwarded_request.native_compaction_capability == nil
+    assert forwarded_request.expected_connection_lifecycle == nil
+
+    refute inspect(forwarded_request.forwarded_owner_send_handoff) =~ context.owner_lease_token
+    refute inspect(forwarded_request.forwarded_owner_send_handoff) =~ context.owner_instance_id
+    assert :sys.get_state(owner).forwarded_send_witness.status == :issued
+
+    assert NativeCompactionAdmission.phase(:sys.get_state(owner).native_compaction_admission) ==
+             :collected_unconfirmed
+
+    assert observer.() == %{
+             compact_owner_issued: 1,
+             compact_reserved: 1,
+             compact_accounting_started: 1,
+             compact_consumed: 1
+           }
   end
 
   test "collect request returns retained result without owner frame or terminal lifecycle",
@@ -3670,6 +4129,112 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSessionTest do
       timeouts: %{},
       writer: fn _frame -> :ok end
     }
+  end
+
+  defp forwarded_binding(context, downstream) do
+    %NativeCompactionAdmission.Binding{
+      semantic_turn_key: <<1::256>>,
+      window_digest: <<2::256>>,
+      context_digest: <<3::256>>,
+      window_number: 1,
+      previous_response_digest: nil,
+      serving_mode: :full,
+      topology:
+        WebsocketOwnerAdmissionControlV1.forwarded_topology(
+          context.owner_instance_id,
+          context.owner_lease_token,
+          downstream.epoch
+        ),
+      lifecycle_id: Ecto.UUID.generate(),
+      generation: 1
+    }
+  end
+
+  defp admission_control(action, downstream, attrs) do
+    defaults = %{
+      version: 1,
+      action: action,
+      downstream: Map.take(downstream, [:pid, :epoch, :correlation_id]),
+      binding: nil,
+      phase: nil,
+      control_ref: nil,
+      capability: nil,
+      disposition: nil,
+      success?: nil,
+      compaction_item_digest: nil,
+      confirmation: nil,
+      first_compact_collection: nil,
+      expires_at_ms: nil,
+      now_ms: nil
+    }
+
+    {:ok, control} =
+      defaults
+      |> Map.merge(Map.new(attrs))
+      |> WebsocketOwnerAdmissionControlV1.new()
+
+    control
+  end
+
+  defp attach_native_compaction_observer do
+    handler_id = "forwarded-native-compaction-#{System.unique_integer([:positive])}"
+    test_pid = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:codex_pooler, :gateway, :native_compaction, :authorization_transition],
+        fn _event, _measurements, metadata, _config ->
+          send(test_pid, {:native_event, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    fn -> drain_native_compaction_events(%{}) end
+  end
+
+  defp drain_native_compaction_events(counts) do
+    receive do
+      {:native_event, %{transition: transition, topology: :forwarded}} ->
+        drain_native_compaction_events(Map.update(counts, transition, 1, &(&1 + 1)))
+    after
+      0 -> counts
+    end
+  end
+
+  defp reserve_accounted_capability(owner, downstream, binding, now) do
+    assert {:ok, _pending} =
+             WebsocketOwnerSession.admission_control(
+               owner,
+               admission_control(:record_ordinary_success, downstream,
+                 binding: binding,
+                 expires_at_ms: now + 30_000
+               )
+             )
+
+    assert {:ok, capability} =
+             WebsocketOwnerSession.admission_control(
+               owner,
+               admission_control(:reserve, downstream,
+                 binding: binding,
+                 phase: :compact,
+                 control_ref: make_ref(),
+                 now_ms: now
+               )
+             )
+
+    assert {:ok, _accounting} =
+             WebsocketOwnerSession.admission_control(
+               owner,
+               admission_control(:mark_accounting_started, downstream,
+                 capability: capability,
+                 now_ms: now
+               )
+             )
+
+    capability
   end
 
   defp native_websocket_request(turn_id) do

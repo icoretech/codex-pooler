@@ -6,6 +6,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks do
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV2
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV3
   alias CodexPooler.Upstreams
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
 
@@ -14,7 +15,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks do
           :upstream_identity_not_found
           | :invalid_writer
           | {:invalid_owner_request,
-             WebsocketOwnerRequest.validation_error() | WebsocketOwnerRequestV2.validation_error()}
+             WebsocketOwnerRequest.validation_error()
+             | WebsocketOwnerRequestV2.validation_error()
+             | WebsocketOwnerRequestV3.validation_error()}
 
   @spec mapper(WebsocketOwnerRequest.mapper() | term()) ::
           {:ok, (binary() -> binary())} | {:error, :invalid_mapper}
@@ -29,8 +32,56 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks do
 
   def mapper(_mapper), do: {:error, :invalid_mapper}
 
-  @spec materialize(WebsocketOwnerRequest.t() | WebsocketOwnerRequestV2.t() | map(), writer()) ::
+  @spec materialize(
+          WebsocketOwnerRequest.t()
+          | WebsocketOwnerRequestV2.t()
+          | WebsocketOwnerRequestV3.t()
+          | map(),
+          writer()
+        ) ::
           {:ok, Request.t()} | {:error, materialize_error()}
+  def materialize(%WebsocketOwnerRequestV3{} = owner_request, nil) do
+    with :ok <- validate_v3(owner_request),
+         %UpstreamIdentity{} = identity <-
+           Upstreams.get_upstream_identity(owner_request.upstream_identity_id),
+         {:ok, message_mapper} <- mapper(owner_request.mapper) do
+      capability = owner_request.owner_admission_capability
+      first_compact_collection = owner_request.first_compact_collection
+      binding = if capability, do: capability.binding, else: first_compact_collection.binding
+
+      {:ok,
+       %Request{
+         url: owner_request.url,
+         headers: owner_request.headers,
+         payload: owner_request.payload,
+         timeouts: owner_request.timeouts,
+         writer: nil,
+         message_mapper: message_mapper,
+         frame_observer: frame_observer(identity, owner_request.observation),
+         submission_observer: nil,
+         reset_probe: owner_request.reset_probe,
+         native_codex_response_control: owner_request.native_codex_response_control,
+         native_compaction_capability: capability,
+         first_compact_collection: first_compact_collection,
+         expected_connection_lifecycle: %{
+           lifecycle_id: binding.lifecycle_id,
+           generation: binding.generation
+         },
+         assignment_advertised?: owner_request.assignment_advertised?,
+         connection_bound_continuation?: owner_request.connection_bound_continuation?,
+         websocket_delivery_mode: owner_request.websocket_delivery_mode,
+         effective_serving_mode: Atom.to_string(owner_request.effective_serving_mode),
+         forward_error_body?: owner_request.forward_error_body?
+       }}
+    else
+      nil -> {:error, :upstream_identity_not_found}
+      {:error, :invalid_mapper} -> {:error, {:invalid_owner_request, {:invalid_field, :mapper}}}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  def materialize(%WebsocketOwnerRequestV3{}, _writer), do: {:error, :invalid_writer}
+
   def materialize(%WebsocketOwnerRequestV2{} = owner_request, nil) do
     with :ok <- validate_v2(owner_request),
          %UpstreamIdentity{} = identity <-
@@ -95,6 +146,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks do
 
   defp validate_v2(request) do
     case WebsocketOwnerRequestV2.validate(request) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:invalid_owner_request, reason}}
+    end
+  end
+
+  defp validate_v3(request) do
+    case WebsocketOwnerRequestV3.validate(request) do
       :ok -> :ok
       {:error, reason} -> {:error, {:invalid_owner_request, reason}}
     end

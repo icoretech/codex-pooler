@@ -3,6 +3,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
 
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
+  alias CodexPooler.Gateway.Transports.Websocket.ForwardedOwnerRequestHandoff
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Capability
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.FirstCompactCollection
 
   defstruct [
     :url,
@@ -15,6 +18,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
     :submission_observer,
     :reset_probe,
     :native_codex_response_control,
+    :native_compaction_capability,
+    :first_compact_collection,
+    :expected_connection_lifecycle,
+    :forwarded_owner_send_handoff,
     :effective_serving_mode,
     assignment_advertised?: false,
     connection_bound_continuation?: false,
@@ -49,6 +56,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Requ
           submission_observer: (-> any()) | nil,
           reset_probe: ResetProbe.t() | nil,
           native_codex_response_control: TurnSnapshot.t() | nil,
+          native_compaction_capability: Capability.t() | nil,
+          first_compact_collection: FirstCompactCollection.t() | nil,
+          expected_connection_lifecycle:
+            CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.connection_lifecycle_state()
+            | nil,
+          forwarded_owner_send_handoff: ForwardedOwnerRequestHandoff.t() | nil,
           effective_serving_mode: effective_serving_mode(),
           assignment_advertised?: boolean(),
           connection_bound_continuation?: boolean(),

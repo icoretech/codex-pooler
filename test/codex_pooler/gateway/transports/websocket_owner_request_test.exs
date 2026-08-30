@@ -3,8 +3,10 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRequestTest do
 
   alias CodexPooler.Gateway.Payloads.RequestOptions.{ResetProbe, TimeoutConfig}
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV2
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV3
 
   @allowed_keys MapSet.new([
                   :__struct__,
@@ -194,6 +196,50 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRequestTest do
     assert {:error, {:invalid_field, :envelope}} = WebsocketOwnerRequestV2.new(request)
   end
 
+  test "keeps v1 and v2 closed while accepting a separate capability-bearing v3 envelope" do
+    v2_attrs =
+      valid_attrs()
+      |> Map.put(:version, 2)
+      |> Map.put(:websocket_delivery_mode, :collect_compaction)
+      |> Map.put(:effective_serving_mode, :full)
+
+    capability = capability()
+
+    v3_attrs =
+      Map.merge(v2_attrs, %{
+        version: 3,
+        owner_admission_capability: capability,
+        first_compact_collection: nil
+      })
+
+    assert {:ok, request} = WebsocketOwnerRequestV3.new(v3_attrs)
+    assert request.owner_admission_capability == capability
+    assert inspect(request) == "#WebsocketOwnerRequestV3<version: 3, capability: redacted>"
+
+    assert {:ok, relay_request} =
+             v3_attrs
+             |> Map.put(:websocket_delivery_mode, :relay)
+             |> WebsocketOwnerRequestV3.new()
+
+    assert relay_request.websocket_delivery_mode == :relay
+    assert relay_request.owner_admission_capability == capability
+
+    assert {:error, {:unknown_fields, [:owner_admission_capability]}} =
+             v2_attrs
+             |> Map.put(:owner_admission_capability, capability)
+             |> WebsocketOwnerRequestV2.new()
+
+    assert {:error, {:unknown_fields, [:owner_admission_capability]}} =
+             valid_attrs()
+             |> Map.put(:owner_admission_capability, capability)
+             |> WebsocketOwnerRequest.new()
+
+    assert {:error, {:invalid_field, :owner_admission_capability}} =
+             v3_attrs
+             |> Map.put(:owner_admission_capability, nil)
+             |> WebsocketOwnerRequestV3.new()
+  end
+
   defp valid_attrs do
     upstream_identity_id = Ecto.UUID.generate()
 
@@ -233,6 +279,32 @@ defmodule CodexPooler.Gateway.Transports.WebsocketOwnerRequestTest do
       attempt_id: Ecto.UUID.generate(),
       mode: "full"
     }
+  end
+
+  defp capability do
+    binding = %NativeCompactionAdmission.Binding{
+      semantic_turn_key: <<1::256>>,
+      window_digest: <<2::256>>,
+      context_digest: <<3::256>>,
+      window_number: nil,
+      previous_response_digest: nil,
+      serving_mode: :full,
+      topology: %NativeCompactionAdmission.Topology.Forwarded{
+        owner_instance_digest: <<4::256>>,
+        downstream_epoch: 1,
+        owner_lease_digest: <<5::256>>
+      },
+      lifecycle_id: Ecto.UUID.generate(),
+      generation: 1
+    }
+
+    {:ok, ordinary} = NativeCompactionAdmission.ordinary_success(binding)
+    {:ok, pending} = NativeCompactionAdmission.arm_compact(ordinary, 100)
+
+    {:ok, _reserved, capability} =
+      NativeCompactionAdmission.reserve(pending, :compact, binding, make_ref(), 0)
+
+    capability
   end
 
   defp contains_function?(value) when is_function(value), do: true

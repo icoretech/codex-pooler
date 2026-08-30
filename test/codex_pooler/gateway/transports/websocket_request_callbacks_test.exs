@@ -6,8 +6,10 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRequestCallbacksTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions.{ResetProbe, TimeoutConfig}
   alias CodexPooler.Gateway.Transports.NativeCodexResponseControl.TurnSnapshot
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV3
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Schemas.UpstreamIdentity
@@ -90,6 +92,37 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRequestCallbacksTest do
 
     assert {:error, {:invalid_owner_request, {:invalid_field, :observation}}} =
              WebsocketRequestCallbacks.materialize(spoofed, fn _text -> :written end)
+  end
+
+  test "V3 materializes one opaque owner capability into the direct request boundary" do
+    identity = active_upstream_identity_fixture()
+    capability = capability()
+
+    attrs =
+      identity.id
+      |> valid_attrs()
+      |> Map.merge(%{
+        version: 3,
+        websocket_delivery_mode: :collect_compaction,
+        effective_serving_mode: :full,
+        owner_admission_capability: capability,
+        first_compact_collection: nil
+      })
+
+    assert {:ok, envelope} = WebsocketOwnerRequestV3.new(attrs)
+    assert {:ok, request} = WebsocketRequestCallbacks.materialize(envelope, nil)
+
+    assert request.native_compaction_capability == capability
+
+    assert request.expected_connection_lifecycle == %{
+             lifecycle_id: capability.binding.lifecycle_id,
+             generation: capability.binding.generation
+           }
+
+    assert request.writer == nil
+    assert request.websocket_delivery_mode == :collect_compaction
+    assert request.effective_serving_mode == "full"
+    refute inspect(request) =~ Base.encode16(capability.token)
   end
 
   test "rejects malformed envelope before identity lookup" do
@@ -207,5 +240,31 @@ defmodule CodexPooler.Gateway.Transports.WebsocketRequestCallbacksTest do
       forward_error_body?: false,
       submission_notification?: false
     }
+  end
+
+  defp capability do
+    binding = %NativeCompactionAdmission.Binding{
+      semantic_turn_key: <<1::256>>,
+      window_digest: <<2::256>>,
+      context_digest: <<3::256>>,
+      window_number: nil,
+      previous_response_digest: nil,
+      serving_mode: :full,
+      topology: %NativeCompactionAdmission.Topology.Forwarded{
+        owner_instance_digest: <<4::256>>,
+        downstream_epoch: 1,
+        owner_lease_digest: <<5::256>>
+      },
+      lifecycle_id: Ecto.UUID.generate(),
+      generation: 1
+    }
+
+    {:ok, ordinary} = NativeCompactionAdmission.ordinary_success(binding)
+    {:ok, pending} = NativeCompactionAdmission.arm_compact(ordinary, 100)
+
+    {:ok, _reserved, capability} =
+      NativeCompactionAdmission.reserve(pending, :compact, binding, make_ref(), 0)
+
+    capability
   end
 end

@@ -6,6 +6,33 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentityTest do
   @session_id "018f60df-713f-7ca8-b9a0-0d12c508a123"
 
   describe "resolve/2" do
+    test "pins canonical turn id acceptance and rejection for metadata consumers" do
+      for accepted <- ["a", "turn_1", "turn.1", "turn:1", String.duplicate("z", 256)] do
+        assert {:ok, %{semantic_turn_key: key}} =
+                 WebsocketTurnIdentity.resolve(
+                   %{
+                     "client_metadata" => %{
+                       "x-codex-turn-metadata" => %{"turn_id" => accepted}
+                     }
+                   },
+                   @session_id
+                 )
+
+        assert byte_size(key) == 32
+      end
+
+      for rejected <- ["", "turn/1", "turn 1", String.duplicate("z", 257), nil, 1] do
+        assert_invalid(
+          %{
+            "client_metadata" => %{
+              "x-codex-turn-metadata" => %{"turn_id" => rejected}
+            }
+          },
+          "client_metadata.x-codex-turn-metadata.turn_id"
+        )
+      end
+    end
+
     test "uses the strict identity source precedence" do
       assert_identity(
         %{
