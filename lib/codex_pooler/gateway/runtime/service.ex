@@ -25,7 +25,14 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Runtime.Dispatch.UpstreamAttempt
   alias CodexPooler.Gateway.Transports.Admission
   alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame
+  alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.ValidationClaim
+
+  alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.Capability,
+    as: PreparedFrameCapability
+
+  alias CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAuthorizationObservation
   alias CodexPooler.Gateway.Transports.Websocket.ResponseProcessed
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPooler.Repo
@@ -42,7 +49,10 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   @type opts :: RequestOptions.t()
   @type gateway_error :: Contracts.gateway_error()
   @type gateway_result :: Contracts.gateway_result()
-  @typep validation_authority :: :validate | {:prepared_websocket, binary()}
+  @typep validation_authority ::
+           :validate
+           | {:prepared_websocket, ValidationClaim.t() | term()}
+           | {:prepared_websocket, ValidationClaim.t() | term(), RuntimeAdmissionProof.t() | nil}
   @typedoc false
   @type session_routable_context :: %{
           required(:auth) => auth(),
@@ -52,7 +62,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
           required(:model) => Model.t(),
           required(:candidates) => list(),
           required(:route_state) => RouteState.t(),
-          required(:turn_claim) => CodexPooler.Accounting.Request.t() | nil
+          required(:turn_claim) => CodexPooler.Accounting.Request.t() | nil,
+          optional(:authorized_correlation_id) => Ecto.UUID.t() | nil
         }
   @typep session_routable_result ::
            {:ok, map(), list(), opts(), RouteState.t()} | {:error, term()}
@@ -65,6 +76,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
            opts(),
            RouteState.t(),
            CodexPooler.Accounting.Request.t()
+           | nil,
+           Ecto.UUID.t()
            | nil ->
              {:ok, map()} | {:error, term()})
 
@@ -291,19 +304,21 @@ defmodule CodexPooler.Gateway.Runtime.Service do
                payload,
                endpoint,
                prepared.request_options,
-               prepared.route_state
+               prepared.route_state,
+               runtime_admission_proof(validation)
              ) do
-          {:ok, turn_claim} ->
-            execute_session_routable_model(
-              auth,
-              endpoint,
-              payload,
-              prepared.request_options,
-              model,
-              prepared.candidates,
-              prepared.route_state,
-              turn_claim
-            )
+          {:ok, turn_claim, authorized_correlation_id} ->
+            execute_session_routable_model(%{
+              auth: auth,
+              endpoint: endpoint,
+              payload: payload,
+              request_options: prepared.request_options,
+              model: model,
+              candidates: prepared.candidates,
+              route_state: prepared.route_state,
+              turn_claim: turn_claim,
+              authorized_correlation_id: authorized_correlation_id
+            })
 
           {:error, %{code: :duplicate_request}} ->
             {:error, duplicate_turn_error()}
@@ -322,28 +337,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
     end
   end
 
-  defp execute_session_routable_model(
-         auth,
-         endpoint,
-         payload,
-         request_options,
-         model,
-         candidates,
-         %RouteState{} = route_state,
-         turn_claim
-       ) do
-    %{
-      auth: auth,
-      endpoint: endpoint,
-      payload: payload,
-      request_options: request_options,
-      model: model,
-      candidates: candidates,
-      route_state: route_state,
-      turn_claim: turn_claim
-    }
-    |> execute_session_routable_model(&reserve_and_start_turn/7)
-  end
+  defp execute_session_routable_model(context),
+    do: execute_session_routable_model(context, &reserve_and_start_turn/8)
 
   @doc false
   @spec execute_session_routable_model(
@@ -363,7 +358,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         } = context,
         reserve_and_start_turn
       )
-      when is_list(candidates) and is_function(reserve_and_start_turn, 7) do
+      when is_list(candidates) and is_function(reserve_and_start_turn, 8) do
     do_execute_session_routable_model(context, reserve_and_start_turn)
   end
 
@@ -377,10 +372,10 @@ defmodule CodexPooler.Gateway.Runtime.Service do
            candidates: candidates,
            route_state: %RouteState{} = route_state,
            turn_claim: turn_claim
-         },
+         } = context,
          reserve_and_start_turn
        )
-       when is_list(candidates) and is_function(reserve_and_start_turn, 7) do
+       when is_list(candidates) and is_function(reserve_and_start_turn, 8) do
     request_options =
       RequestOptions.put_routing(request_options, reset_probe: ResetProbe.new())
 
@@ -409,7 +404,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
                endpoint,
                request_options,
                route_state,
-               turn_claim
+               turn_claim,
+               Map.get(context, :authorized_correlation_id)
              ) do
         {:ok, reserved, candidates, request_options, route_state}
       end
@@ -453,9 +449,12 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         )
 
       {:error, %{code: "duplicate_turn"} = reason} ->
+        clear_native_compaction_admission(request_options)
         {:error, reason}
 
       {:error, {:reset_probe_scope_mismatch, reason}} ->
+        clear_native_compaction_admission(request_options)
+
         reject_claimed_turn(
           auth,
           model,
@@ -467,12 +466,15 @@ defmodule CodexPooler.Gateway.Runtime.Service do
         )
 
       {:error, %{code: _code} = reason} ->
+        clear_native_compaction_admission(request_options)
+
         Denials.log_gateway(
           denial_context(auth, model, reason, endpoint, payload, request_options),
           turn_claim
         )
 
       {:error, reason} ->
+        clear_native_compaction_admission(request_options)
         reason = AccountingReservation.pre_attempt_failure(reason, request_options)
 
         reject_claimed_turn(
@@ -485,6 +487,11 @@ defmodule CodexPooler.Gateway.Runtime.Service do
           turn_claim
         )
     end
+  end
+
+  defp clear_native_compaction_admission(%RequestOptions{} = request_options) do
+    _result = RequestOptions.clear_native_compaction_admission(request_options)
+    :ok
   end
 
   defp route_filter_input(auth, model, endpoint, payload, request_options, candidates) do
@@ -578,9 +585,14 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       )
       when is_function(execution_wrapper, 1) do
     case WebsocketCodec.consume_prepared_frame(prepared) do
-      :ok ->
+      {:ok, runtime_admission_proof} ->
         execution_wrapper.(fn ->
-          do_execute_prepared_websocket_response(auth, prepared, compact_admission?)
+          do_execute_prepared_websocket_response(
+            auth,
+            prepared,
+            compact_admission?,
+            runtime_admission_proof
+          )
         end)
 
       {:error, :consumed} ->
@@ -595,7 +607,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   defp do_execute_prepared_websocket_response(
          auth,
          %PreparedWebsocketFrame{variant: :response_processed} = prepared,
-         _compact_admission?
+         _compact_admission?,
+         _runtime_admission_proof
        ) do
     ResponseProcessed.handle_prepared(auth, prepared.payload, prepared.request_options)
   end
@@ -603,18 +616,20 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   defp do_execute_prepared_websocket_response(
          _auth,
          %PreparedWebsocketFrame{variant: :prewarm},
-         _compact_admission?
+         _compact_admission?,
+         _runtime_admission_proof
        ),
        do: {:ok, WebsocketCodec.warmup_result()}
 
   defp do_execute_prepared_websocket_response(
          auth,
          %PreparedWebsocketFrame{variant: variant} = prepared,
-         compact_admission?
+         compact_admission?,
+         runtime_admission_proof
        )
        when variant in [:native_response_create, :public_response_create] do
     prepared
-    |> execute_prepared_response_create(auth, compact_admission?)
+    |> execute_prepared_response_create(auth, compact_admission?, runtime_admission_proof)
     |> adapt_websocket_result(prepared)
   end
 
@@ -721,28 +736,29 @@ defmodule CodexPooler.Gateway.Runtime.Service do
            request_options: %{transport: %{route_class: route_class}}
          } = prepared,
          auth,
-         true
+         true,
+         runtime_admission_proof
        ) do
     if route_class == RouteClass.proxy_compact() do
       Admission.run(route_class, websocket_admission_metadata(prepared), fn ->
-        execute_prevalidated(auth, prepared)
+        execute_prevalidated(auth, prepared, runtime_admission_proof)
       end)
     else
-      execute_prevalidated(auth, prepared)
+      execute_prevalidated(auth, prepared, runtime_admission_proof)
     end
   end
 
-  defp execute_prepared_response_create(prepared, auth, _compact_admission?) do
-    execute_prevalidated(auth, prepared)
+  defp execute_prepared_response_create(prepared, auth, _compact_admission?, runtime_proof) do
+    execute_prevalidated(auth, prepared, runtime_proof)
   end
 
-  defp execute_prevalidated(auth, %PreparedWebsocketFrame{} = prepared) do
+  defp execute_prevalidated(auth, %PreparedWebsocketFrame{} = prepared, runtime_proof) do
     execute_with_validation(
       auth,
       prepared.endpoint,
       prepared.payload,
       prepared.request_options,
-      :validate
+      {:prepared_websocket, prepared.provenance.validation, runtime_proof}
     )
   end
 
@@ -839,17 +855,36 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          _model,
          _payload,
          _endpoint,
+         %RequestOptions{} = request_options,
+         %RouteState{},
+         %RuntimeAdmissionProof{} = proof
+       ) do
+    with {:ok, expected_digest} <-
+           RequestOptions.native_compaction_admission_digest(
+             request_options,
+             :native_response_create
+           ),
+         {:ok, correlation_id} <-
+           PreparedFrameCapability.redeem_runtime_admission(proof, expected_digest) do
+      :ok = emit_runtime_proof_redeemed(request_options)
+      {:ok, nil, correlation_id}
+    else
+      _invalid -> {:error, invalid_runtime_admission_error()}
+    end
+  end
+
+  defp claim_explicit_websocket_turn(
+         _auth,
+         _model,
+         _payload,
+         _endpoint,
          %RequestOptions{
-           transport: %{transport: "websocket", websocket_delivery_mode: :collect_compaction},
-           payload_context: %{
-             compaction_trigger_bridge?: true,
-             compaction_input_mode: :incremental,
-             compaction_result_mode: :native_websocket
-           }
+           native_compaction_admission: %RequestOptions.NativeCompactionAdmission{}
          },
-         %RouteState{}
+         %RouteState{},
+         nil
        ),
-       do: {:ok, nil}
+       do: {:error, invalid_runtime_admission_error()}
 
   defp claim_explicit_websocket_turn(
          auth,
@@ -860,18 +895,15 @@ defmodule CodexPooler.Gateway.Runtime.Service do
            transport: %{transport: "websocket"},
            continuity: %{turn_claim_key: turn_claim_key}
          } = request_options,
-         %RouteState{} = route_state
+         %RouteState{} = route_state,
+         nil
        )
        when is_binary(turn_claim_key) do
-    if RequestOptions.native_compaction_continuation?(request_options, payload) do
-      {:ok, nil}
-    else
-      attrs = AccountingReservation.attrs(auth, payload, endpoint, request_options, route_state)
+    attrs = AccountingReservation.attrs(auth, payload, endpoint, request_options, route_state)
 
-      case Accounting.claim_websocket_turn(auth, model, attrs) do
-        {:ok, %{request: request}} -> {:ok, request}
-        {:error, reason} -> {:error, reason}
-      end
+    case Accounting.claim_websocket_turn(auth, model, attrs) do
+      {:ok, %{request: request}} -> {:ok, request, nil}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -881,9 +913,32 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          _payload,
          _endpoint,
          %RequestOptions{},
-         %RouteState{}
+         %RouteState{},
+         nil
        ),
-       do: {:ok, nil}
+       do: {:ok, nil, nil}
+
+  defp runtime_admission_proof({:prepared_websocket, _token, runtime_admission_proof}),
+    do: runtime_admission_proof
+
+  defp runtime_admission_proof(_validation), do: nil
+
+  defp invalid_runtime_admission_error do
+    error(409, "invalid_runtime_admission", "websocket runtime admission proof is invalid")
+  end
+
+  defp emit_runtime_proof_redeemed(%RequestOptions{} = request_options) do
+    case RequestOptions.native_compaction_admission(request_options) do
+      {:ok, capability, _owner, _lifecycle} ->
+        NativeCompactionAuthorizationObservation.emit_capability(
+          capability,
+          :runtime_proof_redeemed
+        )
+
+      :none ->
+        :ok
+    end
+  end
 
   defp reserve(
          auth,
@@ -892,11 +947,18 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          endpoint,
          %RequestOptions{} = request_options,
          %RouteState{} = route_state,
-         turn_claim
+         turn_claim,
+         authorized_correlation_id
        ) do
     attrs =
       auth
-      |> AccountingReservation.attrs(payload, endpoint, request_options, route_state)
+      |> AccountingReservation.attrs(
+        payload,
+        endpoint,
+        request_options,
+        route_state,
+        authorized_correlation_id
+      )
       |> Map.put(:reservation_estimate, AccountingReservation.reservation_estimate(route_state))
       |> Map.put(:turn_claim, turn_claim)
 
@@ -915,7 +977,8 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          endpoint,
          %RequestOptions{} = request_options,
          %RouteState{} = route_state,
-         turn_claim
+         turn_claim,
+         authorized_correlation_id
        ) do
     maybe_test_runtime_authorization_barrier(:reserve, :before)
 
@@ -923,8 +986,22 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       request_options = lock_codex_session_before_reservation(request_options)
 
       with {:ok, reserved} <-
-             reserve(auth, model, payload, endpoint, request_options, route_state, turn_claim),
-           {:ok, reserved} <- SessionContinuity.start_turn(reserved, request_options) do
+             reserve(
+               auth,
+               model,
+               payload,
+               endpoint,
+               request_options,
+               route_state,
+               turn_claim,
+               authorized_correlation_id
+             ),
+           {:ok, reserved} <- SessionContinuity.start_turn(reserved, request_options),
+           :ok <-
+             RequestOptions.mark_native_compaction_accounting_started(
+               request_options,
+               System.system_time(:millisecond)
+             ) do
         reserved
       else
         {:error, reason} -> Repo.rollback(reason)

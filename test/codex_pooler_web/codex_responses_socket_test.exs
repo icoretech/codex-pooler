@@ -1906,6 +1906,203 @@ defmodule CodexPoolerWeb.CodexResponsesSocketTest do
     assert MapSet.size(final_state.tasks) == 0
   end
 
+  test "native owner terminal waits for gateway finalization before releasing the next queued turn" do
+    task_pid = owner_turn_pid()
+    on_exit(fn -> send(task_pid, :stop) end)
+    activity_token = make_ref()
+
+    state = %{
+      opts: RequestOptions.for_websocket(%{}),
+      tasks: MapSet.new([task_pid]),
+      task_monitors: %{},
+      response_task_activities: %{task_pid => activity_token},
+      response_task_results_ready: MapSet.new(),
+      response_task_terminals_accepted: MapSet.new(),
+      queued_response_payloads: :queue.from_list(["queued-final-turn"]),
+      websocket_owner_downstream: %{
+        pid: self(),
+        epoch: 24,
+        correlation_id: "corr-owner-terminal-before-finalization",
+        active_turn_reconnect?: false
+      },
+      native_turn_output_task_pids: MapSet.new()
+    }
+
+    terminal = ~s({"type":"response.completed","response":{"id":"resp_compact_terminal"}})
+
+    assert {:push, {:text, ^terminal}, terminal_state} =
+             CodexResponsesSocket.handle_info(
+               {:websocket_owner_frame, "corr-owner-terminal-before-finalization", 24, task_pid,
+                {:data, terminal}},
+               state
+             )
+
+    assert {:ok, owner_complete_state} =
+             CodexResponsesSocket.handle_info(
+               {:websocket_owner_frame, "corr-owner-terminal-before-finalization", 24, task_pid,
+                :complete},
+               terminal_state
+             )
+
+    refute_received {:websocket_response_delivery_complete, ^task_pid, ^activity_token}
+    assert owner_complete_state.tasks == MapSet.new([task_pid])
+    assert :queue.len(owner_complete_state.queued_response_payloads) == 1
+
+    assert {:ok, finalized_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_done, task_pid,
+                {:socket_response_result, :owner_completion_pending, :ok}},
+               owner_complete_state
+             )
+
+    assert_receive {:websocket_response_delivery_complete, ^task_pid, ^activity_token}
+    assert finalized_state.tasks == MapSet.new([task_pid])
+    assert :queue.len(finalized_state.queued_response_payloads) == 1
+  end
+
+  test "local native owner releases a finalized terminal without forwarded owner completion" do
+    task_pid = owner_turn_pid()
+    on_exit(fn -> send(task_pid, :stop) end)
+    activity_token = make_ref()
+
+    state = %{
+      opts: RequestOptions.for_websocket(%{}),
+      codex_session: %{owner_instance_id: Atom.to_string(node())},
+      tasks: MapSet.new([task_pid]),
+      task_monitors: %{},
+      response_task_activities: %{task_pid => activity_token},
+      response_task_results_ready: MapSet.new(),
+      response_task_terminals_accepted: MapSet.new([task_pid]),
+      queued_response_payloads: :queue.new(),
+      websocket_owner_downstream: %{
+        pid: self(),
+        epoch: 25,
+        correlation_id: "corr-local-owner-finalized-terminal",
+        active_turn_reconnect?: false
+      },
+      native_turn_output_task_pids: MapSet.new()
+    }
+
+    assert {:ok, finalized_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_done, task_pid,
+                {:socket_response_result, :owner_completion_pending, :ok}},
+               state
+             )
+
+    assert_receive {:websocket_response_delivery_complete, ^task_pid, ^activity_token}
+    assert finalized_state.tasks == MapSet.new([task_pid])
+  end
+
+  test "local native owner releases when the activity token arrives after terminal and finalization" do
+    task_pid = owner_turn_pid()
+    on_exit(fn -> send(task_pid, :stop) end)
+    activity_token = make_ref()
+
+    state = %{
+      opts: RequestOptions.for_websocket(%{}),
+      codex_session: %{owner_instance_id: Atom.to_string(node())},
+      tasks: MapSet.new([task_pid]),
+      task_monitors: %{},
+      response_task_activities: %{},
+      response_task_results_ready: MapSet.new(),
+      response_task_terminals_accepted: MapSet.new(),
+      queued_response_payloads: :queue.new(),
+      websocket_owner_downstream: %{
+        pid: self(),
+        epoch: 26,
+        correlation_id: "corr-local-owner-late-activity",
+        active_turn_reconnect?: false
+      },
+      native_turn_output_task_pids: MapSet.new()
+    }
+
+    terminal = ~s({"type":"response.completed","response":{"id":"resp_late_activity"}})
+
+    assert {:push, {:text, ^terminal}, terminal_state} =
+             CodexResponsesSocket.handle_info(
+               {:websocket_owner_frame, "corr-local-owner-late-activity", 26, task_pid,
+                {:data, terminal}},
+               state
+             )
+
+    assert {:ok, finalized_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_done, task_pid,
+                {:socket_response_result, :owner_completion_pending, :ok}},
+               terminal_state
+             )
+
+    assert MapSet.member?(finalized_state.response_task_results_ready, task_pid)
+    assert MapSet.member?(finalized_state.response_task_terminals_accepted, task_pid)
+
+    assert {:ok, activity_state} =
+             CodexResponsesSocket.handle_info(
+               {:websocket_response_activity, task_pid, activity_token},
+               finalized_state
+             )
+
+    assert_receive {:websocket_response_delivery_complete, ^task_pid, ^activity_token}
+    assert activity_state.tasks == MapSet.new()
+    assert :queue.is_empty(activity_state.queued_response_payloads)
+  end
+
+  test "reconnected socket joins the inherited owner terminal and task result before delivery" do
+    task_pid = owner_turn_pid()
+    on_exit(fn -> send(task_pid, :stop) end)
+    activity_token = make_ref()
+
+    state = %{
+      opts: RequestOptions.for_websocket(%{}),
+      tasks: MapSet.new(),
+      task_monitors: %{},
+      response_task_activities: %{task_pid => activity_token},
+      response_task_results_ready: MapSet.new(),
+      response_task_terminals_accepted: MapSet.new(),
+      queued_response_payloads: :queue.new(),
+      websocket_owner_active_turn_reconnect?: true,
+      websocket_owner_reconnect_turn_pid: nil,
+      websocket_owner_downstream: %{
+        pid: self(),
+        epoch: 27,
+        correlation_id: "corr-reconnected-owner-barrier",
+        active_turn_reconnect?: true
+      },
+      native_turn_output_task_pids: MapSet.new()
+    }
+
+    terminal = ~s({"type":"response.completed","response":{"id":"resp_reconnected"}})
+
+    assert {:push, {:text, ^terminal}, terminal_state} =
+             CodexResponsesSocket.handle_info(
+               {:websocket_owner_frame, "corr-reconnected-owner-barrier", 27, task_pid,
+                {:data, terminal}},
+               state
+             )
+
+    assert terminal_state.websocket_owner_reconnect_turn_pid == task_pid
+    assert MapSet.member?(terminal_state.response_task_terminals_accepted, task_pid)
+
+    assert {:ok, finalized_state} =
+             CodexResponsesSocket.handle_info(
+               {:codex_response_done, task_pid,
+                {:socket_response_result, :owner_completion_pending, :ok}},
+               terminal_state
+             )
+
+    assert MapSet.member?(finalized_state.response_task_results_ready, task_pid)
+
+    assert {:ok, owner_complete_state} =
+             CodexResponsesSocket.handle_info(
+               {:websocket_owner_frame, "corr-reconnected-owner-barrier", 27, task_pid,
+                :complete},
+               finalized_state
+             )
+
+    assert_receive {:websocket_response_delivery_complete, ^task_pid, ^activity_token}
+    refute owner_complete_state.websocket_owner_active_turn_reconnect?
+  end
+
   test "natural proxy terminal already scheduled for delivery wins a concurrent drain cancellation" do
     harness = WebsocketRolloutDrainSupport.start_rollout_drain_harness(self())
     parent = self()

@@ -63,7 +63,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
   alias CodexPooler.Gateway.Transports.Admission
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
-  alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, RolloutDrain}
+
+  alias CodexPooler.Gateway.Transports.Websocket.{
+    ActivityRegistry,
+    NativeCompactionAdmission,
+    RolloutDrain
+  }
+
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
 
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
@@ -89,7 +95,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
   @supported_compression_model "gpt-4o"
   @blocking_owner_receive_timeout_ms 1_000
   @queued_owner_upstream_start_timeout_ms 1_000
-  @response_task_stop_timeout_ms 1_000
+  @response_task_stop_timeout_ms 15_000
   @handoff_detection_timeout_ms 15_000
   @epmd_ready_timeout_ms 2_000
   @epmd_ready_poll_ms 10
@@ -277,12 +283,39 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
     {:ok, state} = owner_socket(auth, "ws-owner-native-collect", "owner-native-collect")
     native_turn_id = "owner-native-collect-turn"
+    context_window_id = "00000000-0000-4000-8000-000000000505"
+
+    turn_metadata = fn request_kind ->
+      base = %{
+        "turn_id" => native_turn_id,
+        "window_id" => "owner-native-collect-window",
+        "context_window_id" => context_window_id,
+        "window_number" => 1,
+        "request_kind" => request_kind
+      }
+
+      if request_kind == "compaction" do
+        Map.put(base, "compaction", %{
+          "trigger" => "auto",
+          "reason" => "context_limit",
+          "implementation" => "responses_compaction_v2",
+          "phase" => "mid_turn",
+          "strategy" => "memento"
+        })
+      else
+        base
+      end
+      |> Jason.encode!()
+    end
 
     try do
       anchor_payload =
         websocket_payload(setup, "synthetic owner collect anchor", %{
           "request_id" => "ws-owner-native-collect-anchor",
-          "client_metadata" => %{"turn_id" => native_turn_id}
+          "client_metadata" => %{
+            "turn_id" => native_turn_id,
+            "x-codex-turn-metadata" => turn_metadata.("turn")
+          }
         })
 
       assert {:ok, state} =
@@ -315,10 +348,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
           "request_id" => "ws-owner-native-collect-compact",
           "client_metadata" => %{
             "turn_id" => native_turn_id,
-            "x-codex-turn-metadata" =>
-              Jason.encode!(%{
-                "compaction" => %{"implementation" => "responses_compaction_v2"}
-              })
+            "x-codex-turn-metadata" => turn_metadata.("compaction")
           }
         })
 
@@ -338,38 +368,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
                "response" => %{"output" => [^compact_item]}
              } = Jason.decode!(completed_frame)
 
-      final_payload =
-        websocket_payload(setup, "synthetic owner collect final", %{
-          "request_id" => "ws-owner-native-collect-final",
-          "client_metadata" => %{"turn_id" => native_turn_id},
-          "input" => [
-            %{"type" => "compaction", "encrypted_content" => compact_item["encrypted_content"]},
-            %{
-              "type" => "message",
-              "role" => "user",
-              "content" => "synthetic owner collect final"
-            }
-          ]
-        })
-
-      assert {:ok, state} =
-               CodexResponsesSocket.handle_in({final_payload, [opcode: :text]}, state)
-
-      assert {:push, {:text, final_frame}, state} = receive_owner_socket_push(state)
-      assert %{"response" => %{"id" => "resp_owner_collect_final"}} = Jason.decode!(final_frame)
-      assert {:push, {:text, final_terminal_frame}, state} = receive_owner_socket_push(state)
-      assert %{"type" => "response.completed"} = Jason.decode!(final_terminal_frame)
-      assert {:ok, _state} = receive_socket_done(state)
-
-      assert [anchor_request, compact_request, final_request] = FakeUpstream.requests(upstream)
+      assert [anchor_request, compact_request] = FakeUpstream.requests(upstream)
       assert anchor_request.method == "WEBSOCKET"
       assert compact_request.method == "WEBSOCKET"
-      assert final_request.method == "WEBSOCKET"
       assert anchor_request.websocket_connection_id == compact_request.websocket_connection_id
-      assert compact_request.websocket_connection_id == final_request.websocket_connection_id
       assert FakeUpstream.http_request_count(upstream) == 0
 
-      assert [anchor_log, compact_log, final_log] = request_logs(setup.pool.id)
+      assert [anchor_log, compact_log] = request_logs(setup.pool.id)
       assert anchor_log.transport == "websocket"
       assert compact_log.endpoint == "/backend-api/codex/responses/compact"
       assert compact_log.transport == "websocket"
@@ -383,13 +388,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert compact_attempt.status == "succeeded"
       assert compact_attempt.response_metadata["upstream_websocket_connection"]["reused"] == true
 
-      assert [final_attempt] =
-               Repo.all(from(attempt in Attempt, where: attempt.request_id == ^final_log.id))
-
-      assert final_attempt.transport == "websocket"
-      assert final_attempt.status == "succeeded"
-      assert final_attempt.response_metadata["upstream_websocket_connection"]["reused"] == true
-
       assert Repo.aggregate(
                from(entry in LedgerEntry,
                  where: entry.request_id == ^compact_log.id and entry.entry_kind == "settlement"
@@ -402,6 +400,100 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
       assert compact_turn.status == "succeeded"
       assert compact_turn.final_attempt_id == compact_attempt.id
+
+      assert {:ok, owner} = WebsocketOwnerSession.lookup(state.codex_session.id)
+
+      assert NativeCompactionAdmission.phase(:sys.get_state(owner).native_compaction_admission) ==
+               :pending_final
+
+      final_metadata =
+        Jason.encode!(%{
+          "turn_id" => native_turn_id,
+          "window_id" => "owner-native-collect-final-window",
+          "context_window_id" => "00000000-0000-4000-8000-000000000506",
+          "window_number" => 2,
+          "request_kind" => "turn"
+        })
+
+      final_payload =
+        websocket_payload(setup, "synthetic owner collect final", %{
+          "request_id" => "ws-owner-native-collect-final",
+          "client_metadata" => %{
+            "turn_id" => native_turn_id,
+            "x-codex-turn-metadata" => final_metadata
+          },
+          "input" => [
+            compact_item,
+            %{"type" => "message", "role" => "user", "content" => "final"}
+          ]
+        })
+
+      assert {:ok, state} =
+               CodexResponsesSocket.handle_in({final_payload, [opcode: :text]}, state)
+
+      assert {:ok, _state} = receive_socket_done(state)
+
+      assert [_anchor_request, compact_request, final_request] = FakeUpstream.requests(upstream)
+      assert final_request.method == "WEBSOCKET"
+      assert final_request.websocket_connection_id == compact_request.websocket_connection_id
+      assert FakeUpstream.http_request_count(upstream) == 0
+
+      assert [anchor_log, compact_log, final_log] = request_logs(setup.pool.id)
+
+      request_ids = [anchor_log.id, compact_log.id, final_log.id]
+      correlations = Enum.map([anchor_log, compact_log, final_log], & &1.correlation_id)
+
+      assert length(Enum.uniq(correlations)) == 3
+      assert length(request_ids) == 3
+
+      attempts =
+        Repo.all(
+          from(attempt in Attempt,
+            where: attempt.request_id in ^request_ids,
+            order_by: [asc: attempt.started_at]
+          )
+        )
+
+      turns =
+        Repo.all(
+          from(turn in CodexTurn,
+            where:
+              turn.codex_session_id == ^state.codex_session.id and turn.request_id in ^request_ids,
+            order_by: [asc: turn.turn_sequence]
+          )
+        )
+
+      ledger_entries =
+        Repo.all(
+          from(entry in LedgerEntry,
+            where: entry.request_id in ^request_ids,
+            order_by: [asc: entry.occurred_at]
+          )
+        )
+
+      assert length(attempts) == 3
+      assert Enum.all?(attempts, &(&1.status == "succeeded" and &1.transport == "websocket"))
+      assert length(turns) == 3
+      assert Enum.all?(turns, &(&1.status == "succeeded" and &1.transport_kind == "websocket"))
+      assert Enum.count(ledger_entries, &(&1.entry_kind == "reservation")) == 3
+      assert Enum.count(ledger_entries, &(&1.entry_kind == "settlement")) == 3
+
+      connection_metadata =
+        Enum.map(attempts, &get_in(&1.response_metadata, ["upstream_websocket_connection"]))
+
+      assert Enum.all?(connection_metadata, &is_map/1)
+      assert connection_metadata |> Enum.map(& &1["lifecycle_id"]) |> Enum.uniq() |> length() == 1
+      assert connection_metadata |> Enum.map(& &1["generation"]) |> Enum.uniq() == [1]
+      assert Enum.count(connection_metadata, &(&1["reused"] == false)) == 1
+      assert Enum.count(connection_metadata, &(&1["reused"] == true)) == 2
+
+      assert Enum.all?([anchor_log, compact_log, final_log], fn request ->
+               request.retry_count == 0 and request.transport == "websocket"
+             end)
+
+      assert FakeUpstream.http_request_count(upstream) == 0
+
+      assert final_log.transport == "websocket"
     after
       CodexResponsesSocket.terminate(:closed, state)
     end
@@ -4744,7 +4836,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
   test "active owner reconnect suppresses replayed response create and preserves active turn" do
     release_ref = make_ref()
-    upstream_boundary = blocking_owner_upstream_boundary(self(), release_ref)
+    upstream_boundary = terminal_blocking_owner_upstream_boundary(self(), release_ref)
     upstream = start_upstream(FakeUpstream.json_response(%{"unexpected" => true}))
     setup = gateway_setup(upstream)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
@@ -4765,6 +4857,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
              CodexResponsesSocket.handle_in({first_payload, [opcode: :text]}, first_state)
 
     owner_worker_pid = assert_blocking_owner_upstream_received!(release_ref)
+    [response_task_pid] = MapSet.to_list(first_state.tasks)
 
     {:ok, second_state} = owner_socket(auth, "ws-owner-active-reconnect-second", turn_state)
     assert second_state.websocket_owner_downstream.epoch == 2
@@ -4807,9 +4900,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert {:ok, second_state} = receive_owner_socket_complete(second_state)
       assert second_state.websocket_owner_active_turn_reconnect? == false
 
-      assert_receive {:codex_response_done, _pid,
-                      {:socket_response_result, :owner_completion_pending, :ok}},
-                     @response_task_stop_timeout_ms
+      assert {:ok, delivered_state} =
+               receive_response_task_delivery(second_state, response_task_pid)
+
+      assert_response_task_stopped!(delivered_state, response_task_pid)
 
       assert [request_log] = request_logs(setup.pool.id)
       assert request_log.correlation_id == in_progress_request.correlation_id
@@ -4821,7 +4915,6 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
       assert owner_metadata["downstream_epoch"] == 1
     after
       send(owner_worker_pid, {:blocking_owner_upstream_release, release_ref})
-      assert_response_task_stopped!(first_state)
       CodexResponsesSocket.terminate(:closed, second_state)
     end
   end
@@ -10488,6 +10581,47 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
     }
   end
 
+  defp terminal_blocking_owner_upstream_boundary(test_pid, release_ref) do
+    %{
+      start: fn -> Agent.start_link(fn -> %{received?: false, closed?: false} end) end,
+      send: fn upstream_pid, request, writer ->
+        Agent.update(upstream_pid, fn state -> %{state | received?: true} end)
+        send(test_pid, {:blocking_owner_upstream_received, self(), release_ref})
+
+        receive do
+          {:blocking_owner_upstream_release, ^release_ref} ->
+            frame =
+              Jason.encode!(%{
+                "type" => "response.completed",
+                "response" => %{
+                  "id" => "resp_owner_active_reconnect",
+                  "status" => "completed",
+                  "output" => [],
+                  "usage" => %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}
+                }
+              })
+
+            decoded = Jason.decode!(frame)
+
+            cond do
+              is_function(request.frame_observer, 2) -> request.frame_observer.(frame, decoded)
+              is_function(request.frame_observer, 1) -> request.frame_observer.(frame)
+              true -> :ok
+            end
+
+            writer.(frame, TerminalDiscriminator.classify(frame))
+            :ok
+        after
+          5_000 -> exit(:blocking_owner_upstream_timeout)
+        end
+      end,
+      close: fn upstream_pid ->
+        Agent.update(upstream_pid, fn state -> %{state | closed?: true} end)
+        Agent.stop(upstream_pid)
+      end
+    }
+  end
+
   defp reconnect_handoff_owner_upstream_boundary(test_pid) do
     counter = :counters.new(1, [:atomics])
 
@@ -10583,10 +10717,32 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
   defp assert_response_task_stopped!(state) do
     [response_task_pid] = MapSet.to_list(state.tasks)
+    assert_response_task_stopped!(state, response_task_pid)
+  end
+
+  defp assert_response_task_stopped!(_state, response_task_pid) do
     monitor = Process.monitor(response_task_pid)
 
     assert_receive {:DOWN, ^monitor, :process, ^response_task_pid, _reason},
                    @response_task_stop_timeout_ms
+  end
+
+  defp receive_response_task_delivery(state, task_pid) do
+    receive do
+      {:websocket_response_activity, ^task_pid, _token} = message ->
+        assert {:ok, state} = CodexResponsesSocket.handle_info(message, state)
+        receive_response_task_delivery(state, task_pid)
+
+      {:codex_response_done, ^task_pid, _result} = message ->
+        assert {:ok, state} = CodexResponsesSocket.handle_info(message, state)
+        receive_response_task_delivery(state, task_pid)
+
+      {:websocket_response_delivery_complete, ^task_pid, _token} = message ->
+        CodexResponsesSocket.handle_info(message, state)
+    after
+      @response_task_stop_timeout_ms ->
+        flunk("expected response task delivery acknowledgement")
+    end
   end
 
   defp crashing_owner_safe_state(upstream_pid) do

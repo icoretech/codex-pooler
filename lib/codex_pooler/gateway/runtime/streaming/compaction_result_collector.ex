@@ -70,7 +70,8 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector do
          %{
            status: 200,
            headers: [{"content-type", "application/json"}],
-           raw_body: Jason.encode!(response)
+           raw_body: Jason.encode!(response),
+           compaction_item: collection.item
          }}
 
       {:error, _reason} ->

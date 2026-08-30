@@ -4,6 +4,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
   alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
   alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame
   alias CodexPooler.Gateway.Transports.Streaming.{StreamProtocol, WebsocketCodec}
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerAdmissionControlV1
 
   @remote_compaction_v2_fixture_path Path.expand(
                                        "../../../fixtures/codex/rust-v0.150.0-3b3b4f8fb3f6403e72c2d0533ed0d2f309c59717/remote_compaction_v2_request.json",
@@ -32,6 +34,298 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
   end
 
   describe "prepare_frame/3" do
+    test "rejects malformed native input and tools before sealing" do
+      for {updates, param} <- [
+            {%{"input" => "synthetic scalar input"}, "input"},
+            {%{"input" => [], "tools" => "synthetic non-list tools"}, "tools"}
+          ] do
+        payload =
+          Map.merge(
+            %{"type" => "response.create", "model" => "gpt-example"},
+            updates
+          )
+
+        assert {:error, %{status: 400, code: "invalid_request", param: ^param}} =
+                 WebsocketCodec.prepare_frame(
+                   Jason.encode!(payload),
+                   native_responses_options(payload),
+                   fn _frame -> :ok end
+                 )
+      end
+    end
+
+    test "native validation claims are exact and survive admission resealing" do
+      payload = %{
+        "type" => "response.create",
+        "model" => "gpt-example",
+        "input" => [],
+        "turn_id" => Ecto.UUID.generate()
+      }
+
+      assert {:ok, prepared} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(payload),
+                 direct_responses_options(payload),
+                 fn _frame -> :ok end
+               )
+
+      assert prepared.provenance.validation.completed == [
+               :strict_schema,
+               :input_shape,
+               :payload
+             ]
+
+      admission = direct_admission(prepared)
+
+      assert {:ok, replacement} =
+               WebsocketCodec.attach_native_compaction_admission(prepared, admission)
+
+      assert replacement.provenance.validation.completed ==
+               prepared.provenance.validation.completed
+
+      assert replacement.provenance.validation.version == prepared.provenance.validation.version
+    end
+
+    test "admission resealing rejects a source frame with mutated validation claims" do
+      payload = %{
+        "type" => "response.create",
+        "model" => "gpt-example",
+        "input" => [],
+        "turn_id" => Ecto.UUID.generate()
+      }
+
+      assert {:ok, prepared} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(payload),
+                 direct_responses_options(payload),
+                 fn _frame -> :ok end
+               )
+
+      admission = direct_admission(prepared)
+
+      forged =
+        put_in(prepared.provenance.validation.completed, [])
+
+      assert {:error, :invalid} =
+               WebsocketCodec.attach_native_compaction_admission(forged, admission)
+
+      assert {:ok, nil} = WebsocketCodec.consume_prepared_frame(prepared)
+    end
+
+    test "admission attachment cross-checks actual owner topology and serving mode" do
+      for {prepared_topology, prepared_mode, capability_topology, capability_mode, expected} <- [
+            {:direct, :full, :direct, :full, :ok},
+            {:direct, :lite, :direct, :lite, :ok},
+            {:forwarded, :full, :forwarded, :full, :ok},
+            {:forwarded, :lite, :forwarded, :lite, :ok},
+            {:direct, :full, :forwarded, :full, :binding_mismatch},
+            {:forwarded, :full, :direct, :full, :binding_mismatch},
+            {:direct, :full, :direct, :lite, :binding_mismatch},
+            {:forwarded, :lite, :forwarded, :full, :binding_mismatch}
+          ] do
+        {prepared, owner} = prepared_admission_frame(prepared_topology, prepared_mode)
+        admission = admission_for(prepared, owner, capability_topology, capability_mode)
+
+        case expected do
+          :ok ->
+            assert {:ok, replacement} =
+                     WebsocketCodec.attach_native_compaction_admission(prepared, admission)
+
+            assert {:ok, %CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof{}} =
+                     WebsocketCodec.consume_prepared_frame(replacement)
+
+          :binding_mismatch ->
+            assert {:error, :binding_mismatch} =
+                     WebsocketCodec.attach_native_compaction_admission(prepared, admission)
+
+            assert {:error, :consumed} = WebsocketCodec.consume_prepared_frame(prepared)
+        end
+      end
+    end
+
+    test "deferred Lite admission seals before routing resolution and still rejects a resolved Full mismatch" do
+      {prepared, owner} = prepared_admission_frame(:forwarded, nil)
+      admission = admission_for(prepared, owner, :forwarded, :lite)
+
+      assert {:ok, replacement} =
+               WebsocketCodec.attach_native_compaction_admission(prepared, admission)
+
+      assert RequestOptions.model_serving_mode_snapshot(replacement.request_options) == nil
+
+      assert {:ok, %CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof{}} =
+               WebsocketCodec.consume_prepared_frame(replacement)
+
+      {resolved_full, resolved_owner} = prepared_admission_frame(:forwarded, :full)
+      lite_admission = admission_for(resolved_full, resolved_owner, :forwarded, :lite)
+
+      assert {:error, :binding_mismatch} =
+               WebsocketCodec.attach_native_compaction_admission(resolved_full, lite_admission)
+    end
+
+    test "post-compaction summary is a native final input variant" do
+      payload = %{
+        "type" => "response.create",
+        "model" => "gpt-example",
+        "input" => [
+          %{"type" => "message", "content" => "synthetic follow-up"},
+          %{"type" => "compaction_summary", "encrypted_content" => "synthetic-summary"}
+        ],
+        "turn_id" => Ecto.UUID.generate()
+      }
+
+      assert {:ok, prepared} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(payload),
+                 direct_responses_options(payload),
+                 fn _frame -> :ok end
+               )
+
+      assert Enum.any?(
+               prepared.payload["input"],
+               &match?(%{"type" => "compaction_summary"}, &1)
+             )
+    end
+
+    test "one typed admission attachment consumes the original and seals one replacement" do
+      payload = %{
+        "type" => "response.create",
+        "model" => "gpt-example",
+        "input" => [],
+        "turn_id" => Ecto.UUID.generate()
+      }
+
+      assert {:ok, prepared} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(payload),
+                 direct_responses_options(payload),
+                 fn _frame -> :ok end
+               )
+
+      admission = direct_admission(prepared)
+
+      assert {:ok, replacement} =
+               WebsocketCodec.attach_native_compaction_admission(prepared, admission)
+
+      assert replacement.request_options.runtime == prepared.request_options.runtime
+      assert replacement.request_options.native_compaction_admission == admission
+      assert {:error, :consumed} = WebsocketCodec.consume_prepared_frame(prepared)
+
+      assert {:ok, %CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof{}} =
+               WebsocketCodec.consume_prepared_frame(replacement)
+
+      assert {:error, :consumed} = WebsocketCodec.consume_prepared_frame(replacement)
+
+      assert {:error, :consumed} =
+               WebsocketCodec.attach_native_compaction_admission(prepared, admission)
+
+      assert {:error, :already_attached} =
+               WebsocketCodec.attach_native_compaction_admission(replacement, admission)
+    end
+
+    test "runtime admission proof redeems once and rejects copied or mismatched bindings" do
+      payload = %{
+        "type" => "response.create",
+        "model" => "gpt-example",
+        "input" => [],
+        "turn_id" => Ecto.UUID.generate()
+      }
+
+      {:ok, prepared} =
+        WebsocketCodec.prepare_frame(
+          Jason.encode!(payload),
+          direct_responses_options(payload),
+          fn _frame -> :ok end
+        )
+
+      admission = direct_admission(prepared)
+      {:ok, replacement} = WebsocketCodec.attach_native_compaction_admission(prepared, admission)
+      {:ok, proof} = WebsocketCodec.consume_prepared_frame(replacement)
+
+      {:ok, digest} =
+        RequestOptions.native_compaction_admission_digest(
+          replacement.request_options,
+          replacement.variant
+        )
+
+      assert {:error, :invalid} =
+               PreparedWebsocketFrame.Capability.redeem_runtime_admission(
+                 proof,
+                 :crypto.hash(:sha256, "mismatch")
+               )
+
+      assert {:error, :replayed} =
+               PreparedWebsocketFrame.Capability.redeem_runtime_admission(proof, digest)
+
+      {:ok, prepared2} =
+        WebsocketCodec.prepare_frame(
+          Jason.encode!(payload),
+          direct_responses_options(payload),
+          fn _frame -> :ok end
+        )
+
+      admission2 = direct_admission(prepared2)
+
+      {:ok, replacement2} =
+        WebsocketCodec.attach_native_compaction_admission(prepared2, admission2)
+
+      {:ok, proof2} = WebsocketCodec.consume_prepared_frame(replacement2)
+
+      {:ok, digest2} =
+        RequestOptions.native_compaction_admission_digest(
+          replacement2.request_options,
+          replacement2.variant
+        )
+
+      results =
+        1..2
+        |> Task.async_stream(
+          fn _ ->
+            PreparedWebsocketFrame.Capability.redeem_runtime_admission(proof2, digest2)
+          end,
+          max_concurrency: 2,
+          ordered: false
+        )
+        |> Enum.map(fn {:ok, result} -> result end)
+
+      assert Enum.count(results, &match?({:ok, _uuid}, &1)) == 1
+      assert Enum.count(results, &match?({:error, :replayed}, &1)) == 1
+    end
+
+    test "admission attachment rejects mismatched binding and consumes the source frame" do
+      payload = %{
+        "type" => "response.create",
+        "model" => "gpt-example",
+        "input" => [],
+        "turn_id" => Ecto.UUID.generate()
+      }
+
+      {:ok, prepared} =
+        WebsocketCodec.prepare_frame(
+          Jason.encode!(payload),
+          direct_responses_options(payload),
+          fn _frame -> :ok end
+        )
+
+      admission = direct_admission(prepared)
+      capability = admission.capability
+      mismatched_binding = %{capability.binding | semantic_turn_key: <<9::256>>}
+      mismatched_capability = %{capability | binding: mismatched_binding}
+
+      mismatched_admission = %{
+        admission
+        | capability: mismatched_capability,
+          expected_connection_lifecycle: %{
+            lifecycle_id: mismatched_binding.lifecycle_id,
+            generation: mismatched_binding.generation
+          }
+      }
+
+      assert {:error, :binding_mismatch} =
+               WebsocketCodec.attach_native_compaction_admission(prepared, mismatched_admission)
+
+      assert {:error, :consumed} = WebsocketCodec.consume_prepared_frame(prepared)
+    end
+
     test "returns typed native, public, prewarm, and response.processed variants" do
       session_id = Ecto.UUID.generate()
       turn_id = Ecto.UUID.generate()
@@ -52,6 +346,13 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
                )
 
       assert %RequestOptions{} = prepared_native.request_options
+
+      assert prepared_native.provenance.validation.completed == [
+               :strict_schema,
+               :input_shape,
+               :payload
+             ]
+
       assert is_binary(prepared_native.semantic_turn_key)
       assert is_binary(prepared_native.turn_claim_key)
 
@@ -93,12 +394,14 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
 
       public = %{"type" => "response.create", "model" => "gpt-example", "input" => "example"}
 
-      assert {:ok, %PreparedWebsocketFrame{variant: :public_response_create}} =
+      assert {:ok, %PreparedWebsocketFrame{variant: :public_response_create} = prepared_public} =
                WebsocketCodec.prepare_frame(
                  Jason.encode!(public),
                  public_responses_options(public),
                  writer
                )
+
+      assert prepared_public.provenance.validation.completed == []
 
       prewarm = %{"generate" => false, "model" => "gpt-example"}
 
@@ -1136,6 +1439,20 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
     )
   end
 
+  defp direct_responses_options(payload) do
+    %{
+      transport: "websocket",
+      upstream_websocket_session: self(),
+      codex_session: %{id: Ecto.UUID.generate()}
+    }
+    |> RequestOptions.build("/backend-api/codex/responses", payload)
+    |> RequestOptions.put_model_serving_mode(%{
+      configured_mode: "full",
+      effective_mode: "full",
+      source: "override"
+    })
+  end
+
   defp native_compaction_trigger_payload(client_metadata) do
     %{
       "type" => "response.create",
@@ -1150,6 +1467,142 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
       "include" => ["reasoning.encrypted_content"],
       "tool_choice" => "auto"
     }
+  end
+
+  defp direct_admission(%PreparedWebsocketFrame{} = prepared) do
+    binding = %NativeCompactionAdmission.Binding{
+      semantic_turn_key: prepared.semantic_turn_key,
+      window_digest: <<2::256>>,
+      context_digest: <<3::256>>,
+      window_number: 1,
+      previous_response_digest: nil,
+      serving_mode: :full,
+      topology: %NativeCompactionAdmission.Topology.Direct{},
+      lifecycle_id: Ecto.UUID.generate(),
+      generation: 1
+    }
+
+    {:ok, ordinary} = NativeCompactionAdmission.ordinary_success(binding)
+    {:ok, pending} = NativeCompactionAdmission.arm_compact(ordinary, 100)
+
+    {:ok, _reserved, capability} =
+      NativeCompactionAdmission.reserve(pending, :compact, binding, make_ref(), 0)
+
+    {:ok, admission} =
+      RequestOptions.NativeCompactionAdmission.new(
+        capability,
+        {:direct, self()},
+        %{lifecycle_id: binding.lifecycle_id, generation: binding.generation}
+      )
+
+    admission
+  end
+
+  defp prepared_admission_frame(topology, mode) do
+    payload = %{
+      "type" => "response.create",
+      "model" => "gpt-example",
+      "input" => [],
+      "turn_id" => Ecto.UUID.generate()
+    }
+
+    {owner_opts, owner} = owner_fixture(topology)
+
+    options =
+      owner_opts
+      |> Map.put(:codex_session, owner_session(owner))
+      |> RequestOptions.build("/backend-api/codex/responses", payload)
+      |> maybe_put_test_serving_mode(mode)
+
+    {:ok, prepared} =
+      WebsocketCodec.prepare_frame(Jason.encode!(payload), options, fn _frame -> :ok end)
+
+    {prepared, owner}
+  end
+
+  defp maybe_put_test_serving_mode(options, nil), do: options
+
+  defp maybe_put_test_serving_mode(options, mode) do
+    RequestOptions.put_model_serving_mode(options, %{
+      configured_mode: Atom.to_string(mode),
+      effective_mode: Atom.to_string(mode),
+      source: "override"
+    })
+  end
+
+  defp owner_fixture(:direct) do
+    owner = self()
+    {%{transport: "websocket", upstream_websocket_session: owner}, {:direct, owner}}
+  end
+
+  defp owner_fixture(:forwarded) do
+    session = %CodexPooler.Gateway.Persistence.CodexSession{id: Ecto.UUID.generate()}
+    lease_token = Ecto.UUID.generate()
+    downstream = %{pid: self(), epoch: 1, correlation_id: Ecto.UUID.generate()}
+    opts = []
+
+    {%{
+       transport: "websocket",
+       websocket_owner_forwarding_enabled?: true,
+       websocket_owner_session: session,
+       websocket_owner_lease_token: lease_token,
+       websocket_owner_downstream: downstream,
+       websocket_owner_downstream_epoch: 1,
+       websocket_owner_instance_id: "owner@example",
+       websocket_owner_forwarder_opts: opts
+     }, {:forwarded, session, lease_token, downstream, opts}}
+  end
+
+  defp owner_session({:direct, _pid}), do: %{id: Ecto.UUID.generate()}
+  defp owner_session({:forwarded, session, _lease, _downstream, _opts}), do: session
+
+  defp admission_for(prepared, owner, topology, mode) do
+    binding_topology =
+      case {topology, owner} do
+        {:direct, _owner} ->
+          %NativeCompactionAdmission.Topology.Direct{}
+
+        {:forwarded, {:forwarded, _session, lease, downstream, _opts}} ->
+          WebsocketOwnerAdmissionControlV1.forwarded_topology(
+            "owner@example",
+            lease,
+            downstream.epoch
+          )
+
+        {:forwarded, {:direct, _pid}} ->
+          WebsocketOwnerAdmissionControlV1.forwarded_topology(
+            "owner@example",
+            Ecto.UUID.generate(),
+            1
+          )
+      end
+
+    binding = %NativeCompactionAdmission.Binding{
+      semantic_turn_key: prepared.semantic_turn_key,
+      window_digest: <<2::256>>,
+      context_digest: <<3::256>>,
+      window_number: 1,
+      previous_response_digest: nil,
+      serving_mode: mode,
+      topology: binding_topology,
+      lifecycle_id: Ecto.UUID.generate(),
+      generation: 1
+    }
+
+    {:ok, ordinary} = NativeCompactionAdmission.ordinary_success(binding)
+    {:ok, pending} = NativeCompactionAdmission.arm_compact(ordinary, 100)
+
+    {:ok, _reserved, capability} =
+      NativeCompactionAdmission.reserve(pending, :compact, binding, make_ref(), 0)
+
+    {:ok, admission} =
+      RequestOptions.NativeCompactionAdmission.new(
+        capability,
+        owner,
+        %{lifecycle_id: binding.lifecycle_id, generation: binding.generation}
+      )
+
+    admission
   end
 
   defp v2_client_metadata do

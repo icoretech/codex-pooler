@@ -1,7 +1,7 @@
 defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   @moduledoc false
 
-  alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
+  alias CodexPooler.Gateway.Payloads.{CompactionTrigger, NativeCodexTurnMetadata, RequestOptions}
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector
 
@@ -18,7 +18,16 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCodes
   alias CodexPooler.Gateway.Transports.TransportFailureReason
-  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
+
+  alias CodexPooler.Gateway.Transports.Websocket.{
+    NativeCompactionAdmission,
+    UpstreamWebsocketSession,
+    WebsocketOwnerAdmissionControlV1,
+    WebsocketOwnerContract,
+    WebsocketOwnerForwarder
+  }
+
+  @compact_reservation_ttl_ms 60_000
 
   @spec finalize_completed(SelectedCandidateContext.t(), map()) :: {:ok, map()} | {:error, map()}
   def finalize_completed(context, finalization) do
@@ -48,12 +57,19 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
       item_mode = if mode == :public_websocket, do: :public, else: :native
 
       case CompactionResultCollector.collect_websocket_body(body, item_mode) do
-        {:ok, %{status: status, headers: headers, raw_body: canonical_body}} ->
+        {:ok,
+         %{
+           status: status,
+           headers: headers,
+           raw_body: canonical_body,
+           compaction_item: compaction_item
+         }} ->
           {:ok,
            finalization
            |> Map.put(:body, canonical_body)
            |> Map.put(:status, status)
-           |> Map.put(:result_headers, headers)}
+           |> Map.put(:result_headers, headers)
+           |> Map.put(:normalized_compaction_item, compaction_item)}
 
         {:provider_failure, failure} ->
           {:provider_failure, failure}
@@ -120,7 +136,9 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
         request_options = request_options_with_response_id(request_options, finalization)
         SideEffects.record_success(context, payload, body, request_options, callbacks)
 
-        completed_result(request_options, body, finalization)
+        with :ok <- acknowledge_native_completed_success(context, request_options, finalization) do
+          completed_result(request_options, body, finalization)
+        end
 
       {:error, gateway_error} = error ->
         emit_settlement_failure(error, transports)
@@ -235,6 +253,197 @@ defmodule CodexPooler.Gateway.Runtime.Finalization.Websocket do
   end
 
   defp request_options_with_response_id(request_options, _finalization), do: request_options
+
+  defp acknowledge_native_ordinary_success(
+         %SelectedCandidateContext{request_options: request_options},
+         %RequestOptions{
+           payload_context: %{
+             compaction_trigger_bridge?: false,
+             native_codex_turn_metadata: %NativeCodexTurnMetadata{request_kind: :turn} = metadata
+           }
+         },
+         %{response_id: response_id, upstream_websocket_connection: connection}
+       )
+       when is_binary(response_id) and is_map(connection) do
+    with {:ok, lifecycle} <- connection_lifecycle(connection),
+         {:ok, topology, owner} <- admission_owner(request_options),
+         binding <-
+           ordinary_success_binding(request_options, metadata, response_id, lifecycle, topology) do
+      _result = record_ordinary_success(owner, binding)
+      :ok
+    else
+      _invalid_or_unavailable -> :ok
+    end
+  end
+
+  defp acknowledge_native_ordinary_success(_context, _request_options, _finalization), do: :ok
+
+  defp acknowledge_native_completed_success(context, request_options, finalization) do
+    case request_options.payload_context.compaction_result_mode do
+      :native_websocket -> acknowledge_native_compact_success(request_options, finalization)
+      _other -> acknowledge_native_ordinary_success(context, request_options, finalization)
+    end
+  end
+
+  defp acknowledge_native_compact_success(
+         %RequestOptions{
+           payload_context: %{native_codex_turn_metadata: %NativeCodexTurnMetadata{} = metadata}
+         } = request_options,
+         %{normalized_compaction_item: item}
+       )
+       when is_map(item) do
+    digest = NativeCodexTurnMetadata.compaction_item_digest(item)
+
+    binding = %NativeCompactionAdmission.Binding{
+      semantic_turn_key: metadata.semantic_turn_key,
+      window_digest: metadata.window_id_digest,
+      context_digest: metadata.context_window_id_digest,
+      window_number: metadata.window_number,
+      compaction_item_digest: digest,
+      previous_response_digest: previous_response_digest(request_options),
+      serving_mode: serving_mode(request_options),
+      topology: compact_confirmation_topology(request_options),
+      lifecycle_id: compact_confirmation_lifecycle(request_options).lifecycle_id,
+      generation: compact_confirmation_lifecycle(request_options).generation
+    }
+
+    case RequestOptions.acknowledge_native_compact_finalization(
+           request_options,
+           digest,
+           binding,
+           System.system_time(:millisecond) + @compact_reservation_ttl_ms
+         ) do
+      :ok -> :ok
+      {:error, _reason} -> {:error, compact_ack_error()}
+    end
+  end
+
+  defp acknowledge_native_compact_success(_request_options, _finalization),
+    do: {:error, compact_ack_error()}
+
+  defp compact_confirmation_lifecycle(%RequestOptions{} = request_options) do
+    case RequestOptions.native_compaction_admission(request_options) do
+      {:ok, _capability, _owner, lifecycle} -> lifecycle
+      :none -> request_options.first_compact_collection.binding
+    end
+  end
+
+  defp compact_confirmation_topology(%RequestOptions{} = request_options) do
+    case RequestOptions.native_compaction_admission(request_options) do
+      {:ok, capability, _owner, _lifecycle} -> capability.binding.topology
+      :none -> request_options.first_compact_collection.binding.topology
+    end
+  end
+
+  defp previous_response_digest(%RequestOptions{continuity: %{previous_response_id: value}})
+       when is_binary(value),
+       do: NativeCodexTurnMetadata.response_id_digest(value)
+
+  defp previous_response_digest(%RequestOptions{}), do: nil
+
+  defp compact_ack_error do
+    %{
+      status: 502,
+      code: "invalid_compaction_response",
+      message: "upstream compact stream was invalid"
+    }
+  end
+
+  defp connection_lifecycle(%{lifecycle_id: lifecycle_id, generation: generation})
+       when is_integer(generation) and generation > 0 do
+    if match?({:ok, _uuid}, Ecto.UUID.cast(lifecycle_id)) do
+      {:ok, %{lifecycle_id: lifecycle_id, generation: generation}}
+    else
+      {:error, :invalid_lifecycle}
+    end
+  end
+
+  defp connection_lifecycle(_connection), do: {:error, :invalid_lifecycle}
+
+  defp admission_owner(%RequestOptions{
+         transport: %{
+           upstream_websocket_session: owner,
+           websocket_owner: %{enabled?: false}
+         }
+       })
+       when is_pid(owner),
+       do: {:ok, %NativeCompactionAdmission.Topology.Direct{}, {:direct, owner}}
+
+  defp admission_owner(%RequestOptions{
+         transport: %{
+           upstream_websocket_session: nil,
+           websocket_owner: owner
+         }
+       })
+       when is_map(owner) and owner.enabled? == true do
+    downstream = Map.take(owner.downstream, [:pid, :epoch, :correlation_id])
+
+    topology =
+      WebsocketOwnerAdmissionControlV1.forwarded_topology(
+        owner.owner_instance_id,
+        owner.lease_token,
+        owner.downstream_epoch
+      )
+
+    {:ok, topology,
+     {:forwarded, owner.session, owner.lease_token, downstream, owner.forwarder_opts}}
+  end
+
+  defp admission_owner(%RequestOptions{}), do: {:error, :owner_unavailable}
+
+  defp ordinary_success_binding(request_options, metadata, response_id, lifecycle, topology) do
+    %NativeCompactionAdmission.Binding{
+      semantic_turn_key: metadata.semantic_turn_key,
+      window_digest: metadata.window_id_digest,
+      context_digest: metadata.context_window_id_digest,
+      window_number: metadata.window_number,
+      previous_response_digest: NativeCodexTurnMetadata.response_id_digest(response_id),
+      serving_mode: serving_mode(request_options),
+      topology: topology,
+      lifecycle_id: lifecycle.lifecycle_id,
+      generation: lifecycle.generation
+    }
+  end
+
+  defp serving_mode(%RequestOptions{} = request_options) do
+    case RequestOptions.model_serving_mode(request_options) do
+      "lite" -> :lite
+      _other -> :full
+    end
+  end
+
+  defp record_ordinary_success({:direct, owner}, binding) do
+    UpstreamWebsocketSession.arm_compact(
+      owner,
+      binding,
+      System.system_time(:millisecond) + @compact_reservation_ttl_ms
+    )
+  end
+
+  defp record_ordinary_success(
+         {:forwarded, session, lease_token, downstream, opts},
+         binding
+       ) do
+    with {:ok, control} <-
+           WebsocketOwnerAdmissionControlV1.new(%{
+             version: 1,
+             action: :record_ordinary_success,
+             downstream: downstream,
+             binding: binding,
+             phase: nil,
+             control_ref: nil,
+             capability: nil,
+             disposition: nil,
+             success?: nil,
+             compaction_item_digest: nil,
+             confirmation: nil,
+             first_compact_collection: nil,
+             expires_at_ms: System.system_time(:millisecond) + @compact_reservation_ttl_ms,
+             now_ms: nil
+           }) do
+      WebsocketOwnerForwarder.admission_control(session, lease_token, control, opts)
+    end
+  end
 
   @spec finalize_terminal(SelectedCandidateContext.t(), map()) :: {:ok, map()} | {:error, map()}
   def finalize_terminal(context, finalization) do

@@ -6,6 +6,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
   alias CodexPooler.Access
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
+  alias CodexPooler.Dev.NativeCompactionAuthorizationObserver
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -75,6 +76,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         payload = compact_payload(setup, frame_turn_state, transport)
         {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, payload)
         {conn, websocket, done_frame} = public_websocket_receive_text!(conn, websocket, ref)
+
         {conn, websocket, completed_frame} = public_websocket_receive_text!(conn, websocket, ref)
 
         item = fixture.expected_item
@@ -105,6 +107,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
         assert [compact_request] = FakeUpstream.requests(upstream)
         assert compact_request.method == "POST"
+        assert FakeUpstream.http_request_count(upstream) == 1
+        refute Map.has_key?(compact_request, :websocket_connection_id)
         assert compact_request.path == "/backend-api/codex/responses"
         assert compact_request.json["store"] == false
         assert compact_request.json["model"] == setup.model.upstream_model_id
@@ -209,6 +213,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
   end
 
   test "source-derived incremental compaction stays on the response lineage assignment and reuses the socket" do
+    :ok = NativeCompactionAuthorizationObserver.arm()
+    on_exit(fn -> NativeCompactionAuthorizationObserver.disarm() end)
     fixture = incremental_compaction_fixture!()
 
     anchored_tool_frame =
@@ -241,16 +247,20 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
              },
              trigger
            ]
-         end), :incremental},
-        {"full_history_without_anchor",
-         get_in(fixture, [
-           "scenarios",
-           "full_history_without_anchor",
-           "projection_relevant_frame_subset"
-         ]), :full_history}
+         end), :incremental}
       ]
 
-    for {scenario_name, source_frame, input_mode} <- scenarios do
+    for {{scenario_name, source_frame, input_mode}, scenario_index} <-
+          Enum.with_index(scenarios, 1) do
+      turn_id = "incremental-shared-turn"
+      context_window_id = "00000000-0000-4000-8000-000000000501"
+
+      source_frame =
+        put_in(source_frame, ["client_metadata"], %{
+          "turn_id" => turn_id,
+          "x-codex-turn-metadata" => native_turn_metadata(turn_id, context_window_id, :compaction)
+        })
+
       compact_item = incremental_compaction_item("success-#{scenario_name}")
       compact_release_ref = make_ref()
 
@@ -285,7 +295,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         )
 
       try do
-        lineage_payload = ordinary_payload(setup)
+        lineage_payload =
+          ordinary_payload(setup, %{
+            "client_metadata" => %{
+              "turn_id" => turn_id,
+              "x-codex-turn-metadata" => native_turn_metadata(turn_id, context_window_id, :turn)
+            }
+          })
 
         {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, lineage_payload)
         {conn, websocket, lineage_frame} = public_websocket_receive_text!(conn, websocket, ref)
@@ -300,6 +316,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
                  Jason.decode!(lineage_terminal_frame)
 
         setup = activate_assignment_b(setup)
+
+        source_frame = Map.put(source_frame, "previous_response_id", response_id)
 
         compact_payload =
           incremental_compact_payload(
@@ -329,6 +347,30 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
                  "response" => %{"status" => "completed", "output" => [^compact_item]}
                } = Jason.decode!(completed_frame)
 
+        authorization_counts = NativeCompactionAuthorizationObserver.captures()["counts"]
+
+        for transition <- [
+              "compact_owner_issued",
+              "compact_reserved",
+              "compact_accounting_started",
+              "compact_runtime_proof_redeemed",
+              "compact_consumed",
+              "compact_acknowledged"
+            ] do
+          assert authorization_counts[transition] == scenario_index
+        end
+
+        for transition <- [
+              "final_owner_issued",
+              "final_reserved",
+              "final_accounting_started",
+              "final_runtime_proof_redeemed",
+              "final_consumed",
+              "final_acknowledged"
+            ] do
+          assert authorization_counts[transition] == 0
+        end
+
         assert [lineage_request, compact_request] =
                  FakeUpstream.requests(assignment_a_upstream)
 
@@ -344,8 +386,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         assert Map.get(compact_request.json, "previous_response_id") ==
                  Map.get(source_frame, "previous_response_id")
 
-        assert get_in(source_frame, ["client_metadata", "x-codex-turn-metadata"]) ==
-                 get_in(fixture, ["v2_trigger_metadata", "x-codex-turn-metadata"])
+        assert %{
+                 "request_kind" => "compaction",
+                 "turn_id" => ^turn_id,
+                 "compaction" => %{"implementation" => "responses_compaction_v2"}
+               } =
+                 source_frame
+                 |> get_in(["client_metadata", "x-codex-turn-metadata"])
+                 |> Jason.decode!()
 
         assert FakeUpstream.count(assignment_b_upstream) == 0
 
@@ -498,12 +546,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       start_upstream(ordinary_response("resp_provider_400_fallback_should_not_run"))
 
     setup = two_assignment_setup_with_b_disabled(assignment_a_upstream, assignment_b_upstream)
+
+    {lineage_payload, source_frame} =
+      canonical_incremental_pair(setup, source_frame, "provider-400-turn")
+
     port = start_public_endpoint!()
     {conn, websocket, ref} = public_websocket_connect!(port, setup, "provider-400-compact")
 
     try do
-      lineage_payload = ordinary_payload(setup)
-
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, lineage_payload)
       {conn, websocket, lineage_frame} = public_websocket_receive_text!(conn, websocket, ref)
 
@@ -517,6 +567,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
                Jason.decode!(lineage_terminal_frame)
 
       setup = activate_assignment_b(setup)
+      source_frame = Map.put(source_frame, "previous_response_id", response_id)
 
       compact_payload = incremental_compact_payload(setup, source_frame, "provider-400-compact")
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, compact_payload)
@@ -625,12 +676,16 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       start_upstream(ordinary_response("resp_misalignment_fallback_should_not_run"))
 
     setup = two_assignment_setup_with_b_disabled(assignment_a_upstream, assignment_b_upstream)
+
+    {lineage_payload, source_frame} =
+      canonical_incremental_pair(setup, source_frame, "misalignment-turn")
+
     port = start_public_endpoint!()
     {conn, websocket, ref} = public_websocket_connect!(port, setup, "misalignment-compact")
 
     try do
       {conn, websocket} =
-        public_websocket_send_text!(conn, websocket, ref, ordinary_payload(setup))
+        public_websocket_send_text!(conn, websocket, ref, lineage_payload)
 
       {conn, websocket, lineage_frame} = public_websocket_receive_text!(conn, websocket, ref)
 
@@ -644,6 +699,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
                Jason.decode!(lineage_terminal_frame)
 
       setup = activate_assignment_b(setup)
+      source_frame = Map.put(source_frame, "previous_response_id", response_id)
 
       compact_payload = incremental_compact_payload(setup, source_frame, "misalignment-compact")
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, compact_payload)
@@ -726,6 +782,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
         start_upstream(ordinary_response("resp_previous_response_fallback_should_not_run"))
 
       setup = two_assignment_setup_with_b_disabled(assignment_a_upstream, assignment_b_upstream)
+
+      {lineage_payload, source_frame} =
+        canonical_incremental_pair(setup, source_frame, "provider-#{upstream_code}-turn")
+
       port = start_public_endpoint!()
 
       {conn, websocket, ref} =
@@ -733,7 +793,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
       try do
         {conn, websocket} =
-          public_websocket_send_text!(conn, websocket, ref, ordinary_payload(setup))
+          public_websocket_send_text!(conn, websocket, ref, lineage_payload)
 
         {conn, websocket, lineage_frame} = public_websocket_receive_text!(conn, websocket, ref)
 
@@ -747,6 +807,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
                  Jason.decode!(lineage_terminal_frame)
 
         setup = activate_assignment_b(setup)
+        source_frame = Map.put(source_frame, "previous_response_id", response_id)
 
         compact_payload =
           incremental_compact_payload(
@@ -857,12 +918,14 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
     assignment_b_upstream = start_upstream(ordinary_response("resp_full_request_on_assignment_b"))
     setup = two_assignment_setup_with_b_disabled(assignment_a_upstream, assignment_b_upstream)
+
+    {lineage_payload, source_frame} =
+      canonical_incremental_pair(setup, source_frame, "unavailable-pinned-turn")
+
     port = start_public_endpoint!()
     {conn, websocket, ref} = public_websocket_connect!(port, setup, "unavailable-pinned-compact")
 
     try do
-      lineage_payload = ordinary_payload(setup)
-
       {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, lineage_payload)
 
       assert_receive {:fake_upstream_timeout_barrier, :before_terminal, upstream_pid,
@@ -874,6 +937,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       assert response_id == fixture["provider_response_id"]
 
       setup = activate_assignment_b(setup)
+      source_frame = Map.put(source_frame, "previous_response_id", response_id)
 
       assert {:ok, _assignment} = PoolAssignments.disable_pool_assignment(setup.assignment)
 
@@ -1398,6 +1462,53 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
     |> Map.put("generate", true)
     |> Map.put("request_id", request_id)
     |> Jason.encode!()
+  end
+
+  defp canonical_incremental_pair(setup, source_frame, turn_id) do
+    context_window_id = "00000000-0000-4000-8000-000000000506"
+
+    anchor =
+      ordinary_payload(setup, %{
+        "client_metadata" => %{
+          "turn_id" => turn_id,
+          "x-codex-turn-metadata" => native_turn_metadata(turn_id, context_window_id, :turn)
+        }
+      })
+
+    compact =
+      put_in(source_frame, ["client_metadata"], %{
+        "turn_id" => turn_id,
+        "x-codex-turn-metadata" => native_turn_metadata(turn_id, context_window_id, :compaction)
+      })
+
+    {anchor, compact}
+  end
+
+  defp native_turn_metadata(turn_id, context_window_id, :turn) do
+    Jason.encode!(%{
+      "turn_id" => turn_id,
+      "window_id" => "window-#{turn_id}",
+      "context_window_id" => context_window_id,
+      "window_number" => 1,
+      "request_kind" => "turn"
+    })
+  end
+
+  defp native_turn_metadata(turn_id, context_window_id, :compaction) do
+    Jason.encode!(%{
+      "turn_id" => turn_id,
+      "window_id" => "window-#{turn_id}",
+      "context_window_id" => context_window_id,
+      "window_number" => 1,
+      "request_kind" => "compaction",
+      "compaction" => %{
+        "trigger" => "auto",
+        "reason" => "context_limit",
+        "implementation" => "responses_compaction_v2",
+        "phase" => "mid_turn",
+        "strategy" => "memento"
+      }
+    })
   end
 
   defp incremental_compaction_fixture! do

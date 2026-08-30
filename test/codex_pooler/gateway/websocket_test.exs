@@ -213,7 +213,7 @@ defmodule CodexPooler.Gateway.WebsocketTest do
       })
 
     assert {:socket_response_result, :local_complete,
-            {:error, %{code: "server_is_overloaded", accounting_disposition: :zero_work}}} =
+            {:error, %{code: "invalid_request", param: "input"}}} =
              Gateway.run_websocket_response_for_socket(%{}, malformed_schema, opts, fn _frame ->
                :ok
              end)

@@ -9,7 +9,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   alias CodexPooler.Accounting.Attempt
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
-  alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.{NativeCodexTurnMetadata, RequestOptions}
   alias CodexPooler.Gateway.Persistence.{BridgeSessionAlias, CodexSession}
   alias CodexPooler.Gateway.Runtime.Finalization.Metadata
   alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
@@ -22,6 +22,7 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV2
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV3
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Transports.WebsocketOwnerNodeHarness
   alias CodexPooler.Gateway.Websocket, as: Gateway
@@ -393,6 +394,10 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
         },
         payload
       )
+      |> RequestOptions.put_payload_context(
+        compaction_result_mode: :native_websocket,
+        native_codex_turn_metadata: native_turn_metadata(:compaction)
+      )
       |> RequestOptions.put_transport(websocket_delivery_mode: :collect_compaction)
       |> RequestOptions.put_model_serving_mode(%{
         configured_mode: "full",
@@ -428,6 +433,101 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     assert WebsocketOwnerRequestV2.validate(envelope) == :ok
     refute contains_function?(envelope)
     refute_received {:owner_envelope_call, ^remote_node, _module, :remote_submit_request_v1, _, _}
+  end
+
+  test "connection-bound final turn keeps capability authorization and relay delivery through v3",
+       %{auth: auth} do
+    remote_node = :"codex_pooler@relay-owner.example"
+
+    %{session: session, lease_token: lease_token} =
+      owner_session_fixture(auth, Atom.to_string(remote_node))
+
+    OwnerEnvelopeNodeClient.configure(
+      [remote_node],
+      {:websocket_owner_submission_accepted, {:error, :owner_drained}}
+    )
+
+    downstream = %{pid: self(), epoch: 1, correlation_id: "corr-relay-owner"}
+
+    payload = %{
+      "previous_response_id" => "resp_synthetic_compaction_anchor",
+      "input" => [%{"type" => "message", "role" => "user", "content" => []}]
+    }
+
+    request_options =
+      RequestOptions.for_websocket(
+        %{
+          codex_session: session,
+          receive_timeout_ms: @receive_timeout_ms,
+          websocket_owner_forwarding_enabled?: true,
+          websocket_owner_session: session,
+          websocket_owner_lease_token: lease_token,
+          websocket_owner_downstream: downstream,
+          websocket_owner_downstream_epoch: downstream.epoch,
+          websocket_owner_proxy_instance_id: Atom.to_string(node()),
+          websocket_owner_instance_id: session.owner_instance_id,
+          websocket_owner_forwarder_opts: [
+            node_client: OwnerEnvelopeNodeClient,
+            app_node_names: [Atom.to_string(remote_node)]
+          ],
+          compaction_trigger_bridge?: true
+        },
+        payload
+      )
+      |> RequestOptions.put_payload_context(
+        native_codex_turn_metadata: native_turn_metadata(:turn)
+      )
+      |> RequestOptions.put_transport(websocket_delivery_mode: :collect_compaction)
+      |> RequestOptions.put_model_serving_mode(%{
+        configured_mode: "full",
+        effective_mode: "full",
+        source: "override"
+      })
+
+    capability = forwarded_native_compaction_capability(session, lease_token, downstream, :final)
+
+    request_options =
+      RequestOptions.put_native_compaction_admission(
+        request_options,
+        capability,
+        {:forwarded, session, lease_token, downstream,
+         [
+           node_client: OwnerEnvelopeNodeClient,
+           app_node_names: [Atom.to_string(remote_node)]
+         ]},
+        %{
+          lifecycle_id: capability.binding.lifecycle_id,
+          generation: capability.binding.generation
+        }
+      )
+
+    assert RequestOptions.connection_bound_compaction?(request_options)
+    identity = active_upstream_identity_fixture()
+
+    request = %UpstreamDispatch.Request{
+      url: "https://upstream.example.test/backend-api/codex/responses",
+      token: "redacted",
+      upstream_payload: Jason.encode!(payload),
+      original_payload: payload,
+      identity: identity,
+      accounting_request: nil,
+      accounting_attempt: nil,
+      writer: fn _message -> :ok end,
+      assignment_advertised?: true,
+      request_options: request_options
+    }
+
+    assert {:error, %{reason: :owner_drained}} = UpstreamDispatch.websocket_request(request)
+
+    assert_received {:owner_envelope_call, ^remote_node, _module, :remote_submit_request_v3,
+                     [session_id, _downstream, %WebsocketOwnerRequestV3{} = envelope], _timeout}
+
+    assert session_id == session.id
+    assert envelope.version == 3
+    assert envelope.websocket_delivery_mode == :relay
+    assert envelope.owner_admission_capability != nil
+    assert WebsocketOwnerRequestV3.validate(envelope) == :ok
+    refute_received {:owner_envelope_call, ^remote_node, _module, :remote_submit_request_v2, _, _}
   end
 
   test "invalid owner request data fails before remote submission" do
@@ -1750,6 +1850,45 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatchTest do
     opts = %{receive_timeout_ms: 1_000}
     opts = if is_pid(session), do: Map.put(opts, :upstream_websocket_session, session), else: opts
     RequestOptions.for_websocket(opts, %{"model" => "example-model"})
+  end
+
+  defp native_turn_metadata(request_kind) when request_kind in [:turn, :compaction] do
+    %NativeCodexTurnMetadata{
+      semantic_turn_key: :crypto.strong_rand_bytes(32),
+      window_id_digest: :crypto.strong_rand_bytes(32),
+      context_window_id_digest: :crypto.strong_rand_bytes(32),
+      window_number: 1,
+      request_kind: request_kind,
+      compaction: nil
+    }
+  end
+
+  defp forwarded_native_compaction_capability(session, lease_token, downstream, phase) do
+    binding = %CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Binding{
+      semantic_turn_key: :crypto.strong_rand_bytes(32),
+      window_digest: :crypto.strong_rand_bytes(32),
+      context_digest: :crypto.strong_rand_bytes(32),
+      window_number: 2,
+      compaction_item_digest: :crypto.strong_rand_bytes(32),
+      previous_response_digest: nil,
+      serving_mode: :full,
+      topology:
+        %CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Topology.Forwarded{
+          owner_instance_digest: :crypto.hash(:sha256, session.owner_instance_id),
+          downstream_epoch: downstream.epoch,
+          owner_lease_digest: :crypto.hash(:sha256, lease_token)
+        },
+      lifecycle_id: Ecto.UUID.generate(),
+      generation: 1
+    }
+
+    %CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Capability{
+      phase: phase,
+      binding: binding,
+      control_ref: make_ref(),
+      token: :crypto.strong_rand_bytes(32),
+      expires_at_ms: System.system_time(:millisecond) + 30_000
+    }
   end
 
   defp collect_multi_agent_round_observations(observations) do

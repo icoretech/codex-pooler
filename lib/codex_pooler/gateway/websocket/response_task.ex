@@ -20,7 +20,7 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
         :local_owner ->
           result = run_callback.(self())
           run_before_local_completion_handoff(Keyword.get(opts, :before_local_completion_handoff))
-          send(parent, {:codex_response_done, self(), result})
+          complete_local_owner(parent, result)
 
         tracked_kind ->
           run_tracked(parent, tracked_kind, run_callback, cancel_callback, opts)
@@ -168,6 +168,27 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
     do: callback.()
 
   defp run_before_local_completion_handoff(_callback), do: :ok
+
+  defp complete_local_owner(
+         parent,
+         {:socket_response_result, :owner_completion_pending, :ok} = result
+       ) do
+    token = make_ref()
+    send(parent, {:websocket_response_activity, self(), token})
+    send(parent, {:codex_response_done, self(), result})
+
+    receive do
+      {:websocket_response_delivery_ack, ^token, outcome}
+      when outcome in [:completed, :aborted] ->
+        :ok
+
+      {:websocket_response_delivery_ack, ^token} ->
+        :ok
+    end
+  end
+
+  defp complete_local_owner(parent, result),
+    do: send(parent, {:codex_response_done, self(), result})
 
   defp run_callback_result(run_callback, coordinator) do
     {:completed, run_callback.(coordinator)}

@@ -16,6 +16,20 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame do
   alias CodexPooler.Gateway.Contracts
   alias CodexPooler.Gateway.Payloads.RequestOptions
 
+  defmodule ValidationClaim do
+    @moduledoc false
+
+    @enforce_keys [:version, :completed, :token]
+    defstruct [:version, :completed, :token]
+
+    @type family :: :strict_schema | :input_shape | :payload
+    @type t :: %__MODULE__{
+            version: pos_integer(),
+            completed: [family()],
+            token: binary()
+          }
+  end
+
   @type variant ::
           :native_response_create
           | :public_response_create
@@ -48,7 +62,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame do
           provenance:
             %{
               required(:frame) => binary(),
-              required(:validation) => binary(),
+              required(:validation) => ValidationClaim.t(),
               required(:capability) => Capability.t()
             }
             | nil

@@ -1,6 +1,7 @@
 defmodule CodexPooler.Gateway.Payloads.RequestOptions.PayloadContext do
   @moduledoc false
 
+  alias CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata
   alias CodexPooler.Gateway.Payloads.RequestOptions.CompactionProjectionContext
 
   defstruct media_upload: nil,
@@ -12,7 +13,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.PayloadContext do
             compaction_result_transport: :buffered,
             compaction_result_mode: nil,
             compaction_projection_context: nil,
-            compaction_projection: nil
+            compaction_projection: nil,
+            native_codex_turn_metadata: nil
 
   @type t :: %__MODULE__{
           media_upload: map() | nil,
@@ -24,7 +26,8 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.PayloadContext do
           compaction_result_transport: :buffered | :sse,
           compaction_result_mode: :native_websocket | :public_websocket | nil,
           compaction_projection_context: CompactionProjectionContext.t() | nil,
-          compaction_projection: CompactionProjectionContext.safe_projection() | nil
+          compaction_projection: CompactionProjectionContext.safe_projection() | nil,
+          native_codex_turn_metadata: NativeCodexTurnMetadata.t() | nil
         }
 
   @spec build(map() | keyword(), :incremental | :full_history) :: t()

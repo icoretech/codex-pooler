@@ -10,6 +10,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
   alias CodexPooler.Gateway.Payloads.RequestOptions.OpenAICompatibility
   alias CodexPooler.Gateway.Payloads.RequestOptions.ResetProbe
   alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.Request
   alias CodexPooler.Gateway.Websocket
   alias CodexPooler.RouteClass
@@ -454,6 +455,84 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
       assert options.continuity.turn_claim_key == turn_claim_key
       assert RequestOptions.server_correlation_id(options) == turn_claim_key
       assert RequestOptions.websocket_request_correlation_id(options) == turn_claim_key
+    end
+
+    test "compaction-shaped native frames keep the durable claim correlation without capability" do
+      turn_claim_key =
+        "codex-turn:" <>
+          (:crypto.hash(:sha256, "shape-only-correlation")
+           |> Base.url_encode64(padding: false))
+
+      options =
+        RequestOptions.build(
+          %{transport: "websocket", turn_claim_key: turn_claim_key},
+          "/backend-api/codex/responses",
+          %{"model" => "example-model"}
+        )
+
+      payload = %{
+        "type" => "response.create",
+        "model" => "example-model",
+        "input" => [%{"type" => "compaction"}]
+      }
+
+      assert RequestOptions.server_correlation_id(options, payload) == turn_claim_key
+    end
+
+    test "an attached owner capability does not mint a correlation without runtime proof" do
+      turn_claim_key =
+        "codex-turn:" <>
+          (:crypto.hash(:sha256, "capability-correlation")
+           |> Base.url_encode64(padding: false))
+
+      options =
+        RequestOptions.build(
+          %{transport: "websocket", turn_claim_key: turn_claim_key},
+          "/backend-api/codex/responses",
+          %{"model" => "example-model"}
+        )
+
+      capability = native_compaction_capability()
+
+      options =
+        RequestOptions.put_native_compaction_admission(
+          options,
+          capability,
+          {:direct, self()},
+          %{lifecycle_id: capability.binding.lifecycle_id, generation: 1}
+        )
+
+      assert {:ok, ^capability, {:direct, owner}, %{generation: 1}} =
+               RequestOptions.native_compaction_admission(options)
+
+      assert owner == self()
+      assert RequestOptions.server_correlation_id(options) == turn_claim_key
+      refute inspect(options) =~ Base.encode16(capability.token)
+    end
+
+    test "a manually constructed admission carrier cannot mint a privileged correlation" do
+      turn_claim_key =
+        "codex-turn:" <>
+          (:crypto.hash(:sha256, "forged-admission-correlation")
+           |> Base.url_encode64(padding: false))
+
+      options =
+        RequestOptions.build(
+          %{transport: "websocket", turn_claim_key: turn_claim_key},
+          "/backend-api/codex/responses",
+          %{"model" => "example-model"}
+        )
+
+      forged = %RequestOptions.NativeCompactionAdmission{
+        capability: :not_a_capability,
+        owner: :not_an_owner,
+        expected_connection_lifecycle: :not_a_lifecycle
+      }
+
+      options = %{options | native_compaction_admission: forged}
+
+      assert RequestOptions.native_compaction_admission(options) == {:error, :invalid_input}
+      assert RequestOptions.server_correlation_id(options) == turn_claim_key
     end
 
     test "defaults unresolved legacy inputs to Full without manufacturing a resolved snapshot" do
@@ -915,6 +994,28 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
       assert options.file_bridge.route_metadata == %{"routing_strategy" => "affinity"}
       assert options.file_bridge.forwarded_headers == [{"x-codex-client", "fixture"}]
     end
+  end
+
+  defp native_compaction_capability do
+    binding = %NativeCompactionAdmission.Binding{
+      semantic_turn_key: <<1::256>>,
+      window_digest: <<2::256>>,
+      context_digest: <<3::256>>,
+      window_number: 1,
+      previous_response_digest: nil,
+      serving_mode: :full,
+      topology: %NativeCompactionAdmission.Topology.Direct{},
+      lifecycle_id: Ecto.UUID.generate(),
+      generation: 1
+    }
+
+    {:ok, ordinary} = NativeCompactionAdmission.ordinary_success(binding)
+    {:ok, pending} = NativeCompactionAdmission.arm_compact(ordinary, 100)
+
+    {:ok, _reserved, capability} =
+      NativeCompactionAdmission.reserve(pending, :compact, binding, make_ref(), 0)
+
+    capability
   end
 
   describe "reset probe runtime context" do

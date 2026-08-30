@@ -18,6 +18,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   alias CodexPooler.Gateway.Routing.SessionContinuity
   alias CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation
   alias CodexPooler.Gateway.Runtime.Dispatch.RouteState
+  alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.ValidationClaim
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Pools
   alias CodexPooler.Pools.ModelServingMode
@@ -32,7 +33,10 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
           required(:candidates) => [candidate()],
           required(:route_state) => RouteState.t()
         }
-  @type validation_authority :: :validate | {:prepared_websocket, binary()}
+  @type validation_authority ::
+          :validate
+          | {:prepared_websocket, ValidationClaim.t() | term()}
+          | {:prepared_websocket, ValidationClaim.t() | term(), term()}
 
   @spec prepare(
           CodexPooler.Access.auth_context(),
@@ -221,26 +225,26 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   end
 
   defp validate_strict_schema_once(payload, request_options, validation_authority) do
-    validate_once(payload, request_options, validation_authority, fn ->
+    validate_once(:strict_schema, payload, request_options, validation_authority, fn ->
       validate_strict_schema(payload, request_options)
     end)
   end
 
   defp validate_input_shape_once(payload, request_options, validation_authority) do
-    validate_once(payload, request_options, validation_authority, fn ->
+    validate_once(:input_shape, payload, request_options, validation_authority, fn ->
       InputShape.validate(payload)
     end)
   end
 
   defp validate_payload_once(payload, request_options, validation_authority) do
-    validate_once(payload, request_options, validation_authority, fn ->
+    validate_once(:payload, payload, request_options, validation_authority, fn ->
       PayloadNormalizer.validate(payload, request_options)
     end)
   end
 
-  defp validate_once(payload, request_options, validation_authority, validation)
+  defp validate_once(family, payload, request_options, validation_authority, validation)
        when is_function(validation, 0) do
-    if valid_prepared_authority?(payload, request_options, validation_authority) do
+    if valid_prepared_authority?(family, payload, request_options, validation_authority) do
       :ok
     else
       notify_validation_observer(request_options)
@@ -249,14 +253,23 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatch do
   end
 
   defp valid_prepared_authority?(
+         family,
          payload,
          request_options,
-         {:prepared_websocket, token}
+         {:prepared_websocket, claim}
        ),
-       do: WebsocketCodec.prevalidated_request?(payload, request_options, token)
+       do: WebsocketCodec.prevalidated_request?(payload, request_options, claim, family)
 
-  defp valid_prepared_authority?(_payload, _request_options, :validate), do: false
-  defp valid_prepared_authority?(_payload, _request_options, _invalid), do: false
+  defp valid_prepared_authority?(
+         family,
+         payload,
+         request_options,
+         {:prepared_websocket, claim, _runtime_admission_proof}
+       ),
+       do: WebsocketCodec.prevalidated_request?(payload, request_options, claim, family)
+
+  defp valid_prepared_authority?(_family, _payload, _request_options, :validate), do: false
+  defp valid_prepared_authority?(_family, _payload, _request_options, _invalid), do: false
 
   if Mix.env() == :test do
     defp notify_validation_observer(%RequestOptions{

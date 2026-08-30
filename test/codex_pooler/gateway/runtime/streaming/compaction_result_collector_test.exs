@@ -12,12 +12,16 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollectorTest do
       assert {:ok, %{status: 200, headers: [{"content-type", "application/json"}], raw_body: raw}} =
                CompactionResultCollector.collect_websocket_body(body)
 
+      assert {:ok, %{compaction_item: compaction_item}} =
+               CompactionResultCollector.collect_websocket_body(body)
+
       assert %{
                "status" => "completed",
                "output" => [%{"type" => "compaction", "encrypted_content" => content}]
              } = Jason.decode!(raw)
 
       assert content == "opaque-#{type}"
+      assert compaction_item == %{"type" => "compaction", "encrypted_content" => content}
     end
   end
 

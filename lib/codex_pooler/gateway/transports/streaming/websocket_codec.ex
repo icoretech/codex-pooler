@@ -7,14 +7,18 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   alias CodexPooler.Gateway.OpenAICompatibility.Error
   alias CodexPooler.Gateway.OpenAICompatibility.Responses
   alias CodexPooler.Gateway.Payloads.CompactionTrigger
+  alias CodexPooler.Gateway.Payloads.InputShape
   alias CodexPooler.Gateway.Payloads.PayloadNormalizer
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Payloads.RequestOptions.CompactionProjectionContext
+  alias CodexPooler.Gateway.Payloads.StrictSchema
   alias CodexPooler.Gateway.Payloads.ToolResultShape
   alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
   alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame
   alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.Capability
+  alias CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.ValidationClaim
+  alias CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.RouteClass
 
@@ -34,6 +38,8 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   @stream_id_pattern ~r/\A[A-Za-z0-9_.-]+\z/
   @prepared_frame_salt "gateway websocket prepared frame v1"
   @prepared_validation_salt "gateway websocket payload validation v1"
+  @validation_claim_version 1
+  @native_validation_families [:strict_schema, :input_shape, :payload]
 
   @spec decode_payload(binary()) :: {:ok, map()} | {:error, decode_error()}
   def decode_payload(payload) when is_binary(payload) do
@@ -53,8 +59,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
   def prepare_frame(raw_payload, %RequestOptions{} = opts, push_frame)
       when is_binary(raw_payload) and is_function(push_frame, 1) do
     with {:ok, payload} <- decode_prepared_payload(raw_payload),
-         {:ok, prepared} <- prepare_decoded_frame(payload, opts, push_frame) do
-      prepared = seal_prepared_frame(prepared)
+         {:ok, prepared} <- prepare_decoded_frame(payload, opts, push_frame),
+         {:ok, completed_validations} <- validate_before_seal(prepared) do
+      prepared = seal_prepared_frame(prepared, completed_validations)
       notify_preparation_observer(prepared.request_options)
       {:ok, prepared}
     end
@@ -200,35 +207,49 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   defp validate_native_compaction_placement(_payload, %RequestOptions{}), do: :ok
 
+  defp validate_before_seal(%PreparedWebsocketFrame{
+         variant: :native_response_create,
+         payload: payload,
+         request_options: request_options
+       }) do
+    with :ok <- StrictSchema.validate(payload),
+         :ok <- InputShape.validate(payload),
+         :ok <- PayloadNormalizer.validate(payload, request_options) do
+      {:ok, @native_validation_families}
+    end
+  end
+
+  defp validate_before_seal(%PreparedWebsocketFrame{}), do: {:ok, []}
+
   @spec valid_prepared_frame?(PreparedWebsocketFrame.t()) :: boolean()
   def valid_prepared_frame?(
         %PreparedWebsocketFrame{
           provenance: %{
             frame: token,
-            validation: validation_token,
+            validation: %ValidationClaim{} = validation_claim,
             capability: capability
           }
         } = prepared
       )
-      when is_binary(token) and is_binary(validation_token) do
+      when is_binary(token) do
     valid_signed_digest?(
       @prepared_frame_salt,
       token,
-      prepared_frame_digest(prepared, validation_token, capability)
+      prepared_frame_digest(prepared, validation_claim, capability)
     )
   end
 
   def valid_prepared_frame?(_prepared), do: false
 
   @spec consume_prepared_frame(PreparedWebsocketFrame.t()) ::
-          :ok | {:error, :consumed | :invalid}
+          {:ok, RuntimeAdmissionProof.t() | nil} | {:error, :consumed | :invalid}
   def consume_prepared_frame(
         %PreparedWebsocketFrame{
           provenance: %{frame: frame_token, capability: capability}
         } = prepared
       ) do
     if valid_prepared_frame?(prepared) do
-      Capability.consume(capability, frame_token)
+      Capability.consume_for_dispatch(capability, frame_token)
     else
       {:error, :invalid}
     end
@@ -236,48 +257,115 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
 
   def consume_prepared_frame(_prepared), do: {:error, :invalid}
 
-  @spec prevalidated_request?(map(), RequestOptions.t(), binary()) :: boolean()
+  @doc false
+  @spec attach_native_compaction_admission(
+          PreparedWebsocketFrame.t(),
+          RequestOptions.NativeCompactionAdmission.t()
+        ) ::
+          {:ok, PreparedWebsocketFrame.t()}
+          | {:error, :already_attached | :consumed | :invalid | :binding_mismatch}
+  def attach_native_compaction_admission(
+        %PreparedWebsocketFrame{
+          request_options: %RequestOptions{native_compaction_admission: nil}
+        } = prepared,
+        %RequestOptions.NativeCompactionAdmission{} = admission
+      ) do
+    request_options = %{prepared.request_options | native_compaction_admission: admission}
+
+    with true <- valid_prepared_frame?(prepared),
+         {:ok, _digest} <-
+           RequestOptions.native_compaction_admission_digest(request_options, prepared.variant),
+         :ok <- Capability.consume(prepared.provenance.capability, prepared.provenance.frame) do
+      {:ok,
+       seal_prepared_frame(
+         %{prepared | request_options: request_options},
+         prepared.provenance.validation.completed
+       )}
+    else
+      {:error, :invalid_input} ->
+        _consumed = Capability.consume(prepared.provenance.capability, prepared.provenance.frame)
+        {:error, :binding_mismatch}
+
+      {:error, reason} ->
+        {:error, reason}
+
+      false ->
+        {:error, :invalid}
+    end
+  end
+
+  def attach_native_compaction_admission(
+        %PreparedWebsocketFrame{request_options: %RequestOptions{}},
+        %RequestOptions.NativeCompactionAdmission{}
+      ),
+      do: {:error, :already_attached}
+
+  def attach_native_compaction_admission(_prepared, _admission), do: {:error, :invalid}
+
+  @spec prevalidated_request?(
+          map(),
+          RequestOptions.t(),
+          ValidationClaim.t() | term(),
+          ValidationClaim.family()
+        ) :: boolean()
   def prevalidated_request?(
         payload,
         %RequestOptions{} = request_options,
-        token
+        %ValidationClaim{
+          version: @validation_claim_version,
+          completed: completed,
+          token: token
+        },
+        family
       )
-      when is_map(payload) and is_binary(token) do
-    valid_signed_digest?(
-      @prepared_validation_salt,
-      token,
-      validation_digest(payload, request_options)
-    )
+      when is_map(payload) and is_list(completed) and is_binary(token) and
+             family in @native_validation_families do
+    completed == @native_validation_families and family in completed and
+      valid_signed_digest?(
+        @prepared_validation_salt,
+        token,
+        validation_claim_digest(payload, request_options, completed)
+      )
   end
 
-  def prevalidated_request?(_payload, %RequestOptions{}, _token), do: false
+  def prevalidated_request?(_payload, %RequestOptions{}, _claim, _family), do: false
 
-  defp seal_prepared_frame(%PreparedWebsocketFrame{} = prepared) do
-    validation_token =
-      sign_digest(
-        @prepared_validation_salt,
-        validation_digest(prepared.payload, prepared.request_options)
-      )
+  defp seal_prepared_frame(%PreparedWebsocketFrame{} = prepared, completed_validations)
+       when completed_validations in [[], @native_validation_families] do
+    validation_claim = %ValidationClaim{
+      version: @validation_claim_version,
+      completed: completed_validations,
+      token:
+        sign_digest(
+          @prepared_validation_salt,
+          validation_claim_digest(
+            prepared.payload,
+            prepared.request_options,
+            completed_validations
+          )
+        )
+    }
 
     capability = Capability.issue()
 
     frame_token =
       sign_digest(
         @prepared_frame_salt,
-        prepared_frame_digest(prepared, validation_token, capability)
+        prepared_frame_digest(prepared, validation_claim, capability)
       )
 
-    :ok = Capability.seal(capability, frame_token)
+    binding_digest = runtime_admission_binding_digest(prepared)
+    :ok = Capability.seal(capability, frame_token, binding_digest)
 
     %{
       prepared
-      | provenance: %{frame: frame_token, validation: validation_token, capability: capability}
+      | provenance: %{frame: frame_token, validation: validation_claim, capability: capability}
     }
   end
 
   defp prepared_frame_digest(
          %PreparedWebsocketFrame{} = prepared,
-         validation_token,
+         validation_claim,
          capability
        ) do
     {capability_server, capability_reference} = Capability.digest_identity(capability)
@@ -288,24 +376,42 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
       prepared.payload,
       prepared.semantic_turn_key,
       prepared.turn_claim_key,
-      validation_token,
+      prepared.request_options.native_compaction_admission,
+      prepared.request_options.native_compaction_reservation,
+      validation_claim,
       capability_server,
       capability_reference,
       is_function(prepared.result_adapter, 1)
     })
   end
 
-  defp validation_digest(payload, %RequestOptions{} = request_options) do
+  defp validation_claim_digest(payload, %RequestOptions{} = request_options, completed) do
     digest_term({
+      @validation_claim_version,
+      completed,
       payload,
       request_options.transport.transport,
       request_options.transport.upstream_endpoint,
       request_options.payload_context,
+      request_options.native_compaction_admission,
+      request_options.native_compaction_reservation,
       RequestOptions.use_responses_lite?(request_options),
       RequestOptions.OpenAICompatibility.translated_responses_surface?(
         request_options.openai_compatibility
       )
     })
+  end
+
+  @spec runtime_admission_binding_digest(PreparedWebsocketFrame.t()) :: <<_::256>> | nil
+  def runtime_admission_binding_digest(%PreparedWebsocketFrame{} = prepared) do
+    case RequestOptions.native_compaction_admission_digest(
+           prepared.request_options,
+           prepared.variant
+         ) do
+      {:ok, digest} -> digest
+      :none -> nil
+      {:error, :invalid_input} -> :crypto.hash(:sha256, "invalid_native_compaction_admission")
+    end
   end
 
   defp digest_term(term) do

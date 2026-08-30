@@ -141,7 +141,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
     assert Repo.all(Request) == []
   end
 
-  test "ordinary requests cannot forge prepared websocket validation" do
+  test "ordinary and incomplete authorities cannot forge prepared websocket validation" do
     setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
 
@@ -192,6 +192,48 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.PreDispatchTest do
 
     assert {:ok, codec_prepared} =
              WebsocketCodec.prepare_frame(raw_payload, codec_options, fn _frame -> :ok end)
+
+    legacy_token = codec_prepared.provenance.validation.token
+
+    assert {:ok, _prepared} =
+             PreDispatch.prepare(
+               auth,
+               codec_prepared.endpoint,
+               codec_prepared.payload,
+               codec_prepared.request_options,
+               setup.model,
+               CandidateEligibility.hydrate_model_visibility(setup.model,
+                 models: [setup.model]
+               )
+               |> Map.put(:visible_model, setup.model)
+               |> Map.put(:visible_models, [setup.model]),
+               {:prepared_websocket, legacy_token}
+             )
+
+    assert_received :payload_validation_ran
+    assert_received :payload_validation_ran
+    assert_received :payload_validation_ran
+
+    incomplete_claim = %{codec_prepared.provenance.validation | completed: []}
+
+    assert {:ok, _prepared} =
+             PreDispatch.prepare(
+               auth,
+               codec_prepared.endpoint,
+               codec_prepared.payload,
+               codec_prepared.request_options,
+               setup.model,
+               CandidateEligibility.hydrate_model_visibility(setup.model,
+                 models: [setup.model]
+               )
+               |> Map.put(:visible_model, setup.model)
+               |> Map.put(:visible_models, [setup.model]),
+               {:prepared_websocket, incomplete_claim}
+             )
+
+    assert_received :payload_validation_ran
+    assert_received :payload_validation_ran
+    assert_received :payload_validation_ran
 
     assert {:ok, _prepared} =
              PreDispatch.prepare(

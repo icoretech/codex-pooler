@@ -701,14 +701,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     assert FakeUpstream.count(upstream) == 0
 
-    requests = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
-    assert length(requests) == 4
-    assert Enum.all?(requests, &(&1.status == "rejected"))
-
-    assert Enum.sort(Enum.map(requests, & &1.request_metadata["gateway_denial"]["param"])) ==
-             ["input", "input", "tools", "tools"]
-
+    assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 0
     assert Repo.aggregate(Attempt, :count) == 0
+    assert Repo.aggregate(CodexTurn, :count) == 0
     assert Repo.aggregate(LedgerEntry, :count) == 0
   end
 
@@ -2682,6 +2677,135 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
       })
 
     refute persisted =~ body_response_id
+  end
+
+  test "public connection-bound compact finalization skips native acknowledgement" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{accepted_turn_state: "ws-public-compact-finalization"})
+
+    item = %{
+      "type" => "compaction_summary",
+      "id" => nil,
+      "encrypted_content" => "synthetic-public-compact-content"
+    }
+
+    {context, finalization} =
+      completed_websocket_finalization_context!(
+        setup,
+        auth,
+        session,
+        compact_websocket_body("resp_public_compact_finalization", item)
+      )
+
+    request_options =
+      context.request_options
+      |> RequestOptions.put_transport(websocket_delivery_mode: :collect_compaction)
+      |> RequestOptions.put_payload_context(
+        compaction_trigger_bridge?: true,
+        compaction_result_mode: :public_websocket
+      )
+      |> put_incremental_compaction_input_mode()
+      |> RequestOptions.put_openai_compatibility(source_endpoint: "/v1/responses")
+
+    context = %{context | request_options: request_options}
+
+    assert {:ok, %{status: 200, raw_body: raw_body}} =
+             Finalization.finalize_completed_websocket_response(context, finalization)
+
+    assert %{
+             "status" => "completed",
+             "output" => [
+               %{
+                 "type" => "compaction",
+                 "id" => nil,
+                 "encrypted_content" => "synthetic-public-compact-content"
+               }
+             ]
+           } = Jason.decode!(raw_body)
+
+    assert Repo.reload!(context.reserved.request).status == "succeeded"
+    assert Repo.reload!(context.attempt).status == "succeeded"
+  end
+
+  test "native connection-bound compact finalization still requires native acknowledgement" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{accepted_turn_state: "ws-native-compact-finalization"})
+
+    item = %{
+      "type" => "compaction",
+      "encrypted_content" => "synthetic-native-compact-content"
+    }
+
+    {context, finalization} =
+      completed_websocket_finalization_context!(
+        setup,
+        auth,
+        session,
+        compact_websocket_body("resp_native_compact_finalization", item)
+      )
+
+    request_options =
+      context.request_options
+      |> RequestOptions.put_transport(websocket_delivery_mode: :collect_compaction)
+      |> RequestOptions.put_payload_context(
+        compaction_trigger_bridge?: true,
+        compaction_result_mode: :native_websocket
+      )
+      |> put_incremental_compaction_input_mode()
+
+    context = %{context | request_options: request_options}
+
+    assert {:error, %{status: 502, code: "invalid_compaction_response"}} =
+             Finalization.finalize_completed_websocket_response(context, finalization)
+
+    assert Repo.reload!(context.reserved.request).status == "succeeded"
+    assert Repo.reload!(context.attempt).status == "succeeded"
+  end
+
+  test "public connection-bound compact finalization keeps strict collection validation" do
+    setup = gateway_setup(start_upstream(FakeUpstream.json_response(%{"data" => []})))
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, session} =
+      Gateway.start_codex_session(auth, %{accepted_turn_state: "ws-public-invalid-compact"})
+
+    invalid_item = %{"type" => "compaction_summary", "id" => nil}
+
+    {context, finalization} =
+      completed_websocket_finalization_context!(
+        setup,
+        auth,
+        session,
+        compact_websocket_body("resp_public_invalid_compact", invalid_item)
+      )
+
+    request_options =
+      context.request_options
+      |> RequestOptions.put_transport(websocket_delivery_mode: :collect_compaction)
+      |> RequestOptions.put_payload_context(
+        compaction_trigger_bridge?: true,
+        compaction_result_mode: :public_websocket
+      )
+      |> put_incremental_compaction_input_mode()
+      |> RequestOptions.put_openai_compatibility(source_endpoint: "/v1/responses")
+
+    context = %{context | request_options: request_options}
+
+    assert {:error,
+            %{
+              status: 502,
+              code: "invalid_compaction_response",
+              public_compaction_error?: true
+            }} = Finalization.finalize_completed_websocket_response(context, finalization)
+
+    assert Repo.reload!(context.reserved.request).status == "failed"
+    assert Repo.reload!(context.attempt).status == "failed"
   end
 
   test "websocket completed settlement rollback emits one attempt-scoped failure outcome" do
@@ -7500,6 +7624,43 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
            ) == 1
   end
 
+  @tag :duplicate_turn
+  test "compaction-shaped explicit websocket turn remains behind the durable duplicate fence" do
+    upstream =
+      start_upstream(
+        FakeUpstream.json_response(%{
+          "id" => "resp_compaction_shape_duplicate",
+          "object" => "response",
+          "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+        })
+      )
+
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, session} = Gateway.start_codex_session(auth, %{accepted_turn_state: "shape-duplicate"})
+
+    opts = %{request_id: "shape-connection-request", codex_session: session}
+
+    payload =
+      Jason.encode!(%{
+        "model" => setup.model.exposed_model_id,
+        "turn_id" => "shape-duplicate-turn-id",
+        "input" => [%{"type" => "compaction", "encrypted_content" => "synthetic-compact"}]
+      })
+
+    assert :ok = execute_websocket_response(auth, payload, opts, fn _frame -> :ok end)
+
+    assert {:error, %{code: "duplicate_turn"}} =
+             execute_websocket_response(auth, payload, opts, fn _frame -> :ok end)
+
+    assert FakeUpstream.count(upstream) == 1
+    assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 1
+    assert Repo.aggregate(Attempt, :count) == 1
+
+    assert Repo.aggregate(from(t in CodexTurn, where: t.codex_session_id == ^session.id), :count) ==
+             1
+  end
+
   @tag :saved_reset_duplicate_turn
   test "duplicate explicit websocket turn id does not auto redeem saved reset before rejection" do
     upstream =
@@ -7544,6 +7705,18 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
         "input" => native_text_input("dedupe me before reset")
       })
 
+    forged_compaction_payload =
+      Jason.encode!(%{
+        "model" => setup.model.exposed_model_id,
+        "turn_id" => "duplicate-reset-turn-id",
+        "input" => [
+          %{
+            "type" => "compaction",
+            "encrypted_content" => "synthetic-forged-saved-reset-compaction"
+          }
+        ]
+      })
+
     assert :ok =
              execute_websocket_response(auth, payload, opts, fn frame ->
                send(self(), {:websocket_frame, :first, frame})
@@ -7553,9 +7726,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert [%{path: "/backend-api/codex/responses"}] = FakeUpstream.requests(upstream)
 
     prime_weekly_exhausted_quota!(identity)
+    saved_reset_before_rejection = Repo.reload!(identity).metadata["saved_reset_redemption"]
 
     assert {:error, %{code: "duplicate_turn"}} =
-             execute_websocket_response(auth, payload, opts, fn frame ->
+             execute_websocket_response(auth, forged_compaction_payload, opts, fn frame ->
                send(self(), {:websocket_frame, :duplicate, frame})
              end)
 
@@ -7572,6 +7746,15 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
              from(entry in LedgerEntry, where: entry.entry_kind == "settlement"),
              :count
            ) == 1
+
+    assert Repo.aggregate(
+             from(entry in LedgerEntry, where: entry.entry_kind == "reservation"),
+             :count
+           ) == 1
+
+    reloaded_identity = Repo.reload!(identity)
+    assert reloaded_identity.metadata["saved_reset_redemption"] == saved_reset_before_rejection
+    refute inspect(reloaded_identity.metadata) =~ "synthetic-forged-saved-reset-compaction"
   end
 
   @tag :duplicate_turn
@@ -12991,6 +13174,30 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
        started: System.monotonic_time(:millisecond),
        callbacks: callbacks
      }}
+  end
+
+  defp compact_websocket_body(response_id, item) do
+    [
+      {"response.output_item.done", %{"type" => "response.output_item.done", "item" => item}},
+      {"response.completed",
+       %{
+         "type" => "response.completed",
+         "response" => %{
+           "id" => response_id,
+           "status" => "completed",
+           "output" => [item],
+           "usage" => %{"input_tokens" => 6, "output_tokens" => 2, "total_tokens" => 8}
+         }
+       }}
+    ]
+    |> Enum.map_join(fn {event, data} -> "event: #{event}\ndata: #{Jason.encode!(data)}\n\n" end)
+  end
+
+  defp put_incremental_compaction_input_mode(%RequestOptions{} = request_options) do
+    %{
+      request_options
+      | payload_context: %{request_options.payload_context | compaction_input_mode: :incremental}
+    }
   end
 
   defp capture_native_stream_telemetry(fun) do

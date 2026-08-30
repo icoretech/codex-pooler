@@ -82,12 +82,31 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
   end
 
   @spec attrs(auth(), map(), String.t(), RequestOptions.t()) :: map()
-  def attrs(auth, payload, endpoint, %RequestOptions{} = request_options) when is_map(payload) do
-    attrs(auth, payload, endpoint, request_options, nil)
-  end
+  def attrs(auth, payload, endpoint, %RequestOptions{} = request_options) when is_map(payload),
+    do: attrs(auth, payload, endpoint, request_options, nil, nil)
 
   @spec attrs(auth(), map(), String.t(), RequestOptions.t(), RouteState.t() | nil) :: map()
   def attrs(auth, payload, endpoint, %RequestOptions{} = request_options, route_state)
+      when is_map(payload) do
+    attrs(auth, payload, endpoint, request_options, route_state, nil)
+  end
+
+  @spec attrs(
+          auth(),
+          map(),
+          String.t(),
+          RequestOptions.t(),
+          RouteState.t() | nil,
+          Ecto.UUID.t() | nil
+        ) :: map()
+  def attrs(
+        auth,
+        payload,
+        endpoint,
+        %RequestOptions{} = request_options,
+        route_state,
+        authorized_correlation_id
+      )
       when is_map(payload) do
     %RequestOptions{
       request_metadata: request_metadata,
@@ -99,7 +118,9 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
     %{
       endpoint: accounting_endpoint,
       transport: transport.transport,
-      correlation_id: RequestOptions.server_correlation_id(request_options, payload),
+      correlation_id:
+        authorized_correlation_id ||
+          RequestOptions.server_correlation_id(request_options, payload),
       idempotency_key: request_metadata.idempotency_key,
       client_ip: request_metadata.client_ip,
       user_agent: request_metadata.user_agent,

@@ -4,7 +4,12 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   require Logger
 
   alias CodexPooler.Gateway.OperationalSettings
-  alias CodexPooler.Gateway.Payloads.{CompactionTrigger, RequestOptions}
+
+  alias CodexPooler.Gateway.Payloads.{
+    CompactionTrigger,
+    RequestOptions
+  }
+
   alias CodexPooler.Gateway.Payloads.RequestOptions.{ResetProbe, TimeoutConfig}
   alias CodexPooler.Gateway.Payloads.TransportEnvelope
   alias CodexPooler.Gateway.Persistence.CodexSession
@@ -16,11 +21,13 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.TransportFailureReason
   alias CodexPooler.Gateway.Transports.Websocket.DiagnosticTaxonomy
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerContract
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequest
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV2
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerRequestV3
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketRequestCallbacks
   alias CodexPooler.RouteClass
   alias CodexPooler.Upstreams.CloudflareCookies
@@ -71,6 +78,12 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
           required(:connection_bound_continuation?) => boolean(),
           required(:websocket_delivery_mode) => :relay | :collect_compaction,
           required(:effective_serving_mode) => String.t(),
+          required(:native_compaction_capability) =>
+            CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Capability.t()
+            | nil,
+          required(:first_compact_collection) =>
+            NativeCompactionAdmission.FirstCompactCollection.t() | nil,
+          required(:expected_connection_lifecycle) => map() | nil,
           required(:forward_error_body?) => boolean()
         }
 
@@ -446,11 +459,14 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
       assignment_advertised?: assignment_advertised? == true,
       connection_bound_continuation?: connection_bound_continuation?(request_options),
       websocket_delivery_mode:
-        if(RequestOptions.connection_bound_compaction?(request_options),
+        if(collect_compaction_result?(request_options),
           do: :collect_compaction,
           else: :relay
         ),
       effective_serving_mode: RequestOptions.model_serving_mode(request_options),
+      native_compaction_capability: native_compaction_capability(request_options),
+      first_compact_collection: request_options.first_compact_collection,
+      expected_connection_lifecycle: native_compaction_lifecycle(request_options),
       forward_error_body?: false
     }
 
@@ -618,22 +634,103 @@ defmodule CodexPooler.Gateway.Transports.UpstreamDispatch do
             is_function(request_options.transport.websocket_owner_submission_observer, 0)
         }
 
-        if RequestOptions.connection_bound_compaction?(request_options) do
-          WebsocketOwnerRequestV2.new(
-            attrs
-            |> Map.put(:version, 2)
-            |> Map.put(:websocket_delivery_mode, :collect_compaction)
-            |> Map.put(
-              :effective_serving_mode,
-              String.to_existing_atom(request_data.effective_serving_mode)
-            )
-          )
-        else
-          WebsocketOwnerRequest.new(Map.put(attrs, :version, 1))
-        end
+        owner_request_envelope(attrs, request_data, request_options)
 
       _invalid_identity ->
         {:error, {:invalid_field, :upstream_identity_id}}
+    end
+  end
+
+  defp owner_request_envelope(attrs, request_data, request_options) do
+    admission = RequestOptions.native_compaction_admission(request_options)
+
+    case {request_data.websocket_delivery_mode, admission} do
+      {delivery_mode,
+       {:ok, capability, {:forwarded, _session, _lease, _downstream, _opts}, _lifecycle}}
+      when delivery_mode in [:relay, :collect_compaction] ->
+        owner_request_v3(
+          attrs,
+          delivery_mode,
+          request_data.effective_serving_mode,
+          capability,
+          nil
+        )
+
+      {:collect_compaction, _no_owner_capability} ->
+        owner_collect_envelope(attrs, request_data, request_options)
+
+      {:relay, _admission} ->
+        WebsocketOwnerRequest.new(Map.put(attrs, :version, 1))
+    end
+  end
+
+  defp owner_collect_envelope(attrs, request_data, request_options) do
+    case request_options.first_compact_collection do
+      %NativeCompactionAdmission.FirstCompactCollection{} = collection ->
+        owner_request_v3(
+          attrs,
+          :collect_compaction,
+          request_data.effective_serving_mode,
+          nil,
+          collection
+        )
+
+      _no_collection ->
+        if collect_compaction_result?(request_options) do
+          attrs
+          |> Map.put(:version, 2)
+          |> Map.put(:websocket_delivery_mode, :collect_compaction)
+          |> Map.put(
+            :effective_serving_mode,
+            String.to_existing_atom(request_data.effective_serving_mode)
+          )
+          |> WebsocketOwnerRequestV2.new()
+        else
+          WebsocketOwnerRequest.new(Map.put(attrs, :version, 1))
+        end
+    end
+  end
+
+  defp owner_request_v3(attrs, delivery_mode, serving_mode, capability, collection) do
+    attrs
+    |> Map.put(:version, 3)
+    |> Map.put(:websocket_delivery_mode, delivery_mode)
+    |> Map.put(:effective_serving_mode, String.to_existing_atom(serving_mode))
+    |> Map.put(:owner_admission_capability, capability)
+    |> Map.put(:first_compact_collection, collection)
+    |> WebsocketOwnerRequestV3.new()
+  end
+
+  defp native_compaction_capability(%RequestOptions{} = request_options) do
+    case RequestOptions.native_compaction_admission(request_options) do
+      {:ok, capability, {:direct, _owner}, _lifecycle} -> capability
+      _other -> nil
+    end
+  end
+
+  defp collect_compaction_result?(
+         %RequestOptions{
+           payload_context: %{compaction_result_mode: mode}
+         } = request_options
+       )
+       when mode in [:native_websocket, :public_websocket],
+       do: RequestOptions.connection_bound_compaction?(request_options)
+
+  defp collect_compaction_result?(%RequestOptions{}), do: false
+
+  defp native_compaction_lifecycle(%RequestOptions{} = request_options) do
+    case RequestOptions.native_compaction_admission(request_options) do
+      {:ok, _capability, {:direct, _owner}, lifecycle} ->
+        lifecycle
+
+      _other ->
+        case request_options.first_compact_collection do
+          %NativeCompactionAdmission.FirstCompactCollection{binding: binding} ->
+            %{lifecycle_id: binding.lifecycle_id, generation: binding.generation}
+
+          nil ->
+            nil
+        end
     end
   end
 

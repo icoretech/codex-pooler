@@ -57,6 +57,33 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
     assert FakeUpstream.count(upstream) == 1
   end
 
+  test "manually forged admission carrier fails before claim reservation or upstream work" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_forged_admission"}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = websocket_payload(setup.model.exposed_model_id, "forged admission")
+
+    options =
+      auth
+      |> request_options(payload, setup.model.exposed_model_id, "forged-admission-turn")
+      |> then(fn options ->
+        %{
+          options
+          | native_compaction_admission: %RequestOptions.NativeCompactionAdmission{
+              capability: :forged,
+              owner: :forged,
+              expected_connection_lifecycle: :forged
+            }
+        }
+      end)
+
+    assert {:error, %{code: "invalid_runtime_admission"}} =
+             Service.execute(auth, @endpoint, payload, options)
+
+    assert_runtime_counts(%{requests: 0, attempts: 0, ledger: 0, turns: 0, sessions: 0})
+    assert FakeUpstream.count(upstream) == 0
+  end
+
   @tag :replacement_turn_lock_order
   test "replacement reservation locks its session before API key authorization" do
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "resp_lock_order123456789"}))
@@ -275,7 +302,8 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
       received_endpoint,
       received_request_options,
       received_route_state,
-      received_turn_claim ->
+      received_turn_claim,
+      received_authorized_correlation_id ->
         assert received_auth == auth
         assert received_model.id == setup.model.id
         assert received_payload == payload
@@ -283,6 +311,7 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
         assert received_request_options.transport.transport == "websocket"
         assert received_route_state == prepared.route_state
         assert received_turn_claim.id == turn_claim.id
+        assert received_authorized_correlation_id == nil
 
         Repo.transaction(fn -> Repo.rollback(:rollback) end)
     end

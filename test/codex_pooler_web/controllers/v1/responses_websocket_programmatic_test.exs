@@ -1739,6 +1739,12 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
         assert List.last(FakeUpstream.requests(upstream)).json["input"] == input,
                "compaction replay variant #{index} changed before upstream dispatch"
 
+        public_capture = List.last(FakeUpstream.requests(upstream))
+
+        refute inspect(public_capture.json) =~ "native_compaction_admission"
+        refute inspect(public_capture.json) =~ "owner_admission_capability"
+        refute inspect(public_capture.json) =~ "runtime_admission_proof"
+
         for opaque_value <- compaction_replay_opaque_values() do
           refute log =~ opaque_value
         end
@@ -1795,6 +1801,10 @@ defmodule CodexPoolerWeb.V1.ResponsesWebsocketProgrammaticTest do
         Enum.map(attempts, & &1.response_metadata),
         RequestLogs.list(setup.pool)
       })
+
+    refute persistence_text =~ "native_compaction_admission"
+    refute persistence_text =~ "owner_admission_capability"
+    refute persistence_text =~ "runtime_admission_proof"
 
     for opaque_value <- compaction_replay_opaque_values() do
       refute persistence_text =~ opaque_value
