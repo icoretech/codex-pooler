@@ -1,6 +1,8 @@
 defmodule CodexPooler.Gateway.DenialsTest do
   use CodexPoolerWeb.ConnCase, async: false
 
+  import Ecto.Query
+
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [gateway_setup: 1, start_upstream: 1]
 
@@ -99,5 +101,98 @@ defmodule CodexPooler.Gateway.DenialsTest do
            ] == "unknown"
 
     refute inspect(request.request_metadata) =~ raw_effort
+  end
+
+  test "websocket denial inserts a separate rejected row with current frame correlation" do
+    fake = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    setup = gateway_setup(fake)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    payload = %{"model" => setup.model.exposed_model_id, "input" => "synthetic"}
+
+    anchor_correlation =
+      "codex-turn:" <>
+        Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+
+    frame_correlation = "frame-#{System.unique_integer([:positive])}"
+
+    assert {:ok, %{request: anchor}} =
+             CodexPooler.Accounting.record_denied_request(auth, setup.model, %{
+               endpoint: @endpoint_path,
+               transport: "websocket",
+               correlation_id: anchor_correlation,
+               requested_model: setup.model.exposed_model_id,
+               response_status_code: 400,
+               last_error_code: "anchor"
+             })
+
+    opts =
+      RequestOptions.build(
+        %{
+          transport: "websocket",
+          request_id: frame_correlation
+        },
+        @endpoint_path,
+        payload
+      )
+      |> RequestOptions.put_continuity(turn_claim_key: anchor_correlation)
+
+    assert anchor.correlation_id == anchor_correlation
+    assert opts.continuity.turn_claim_key == anchor_correlation
+    assert opts.request_metadata.request_id == frame_correlation
+
+    reason = %{
+      status: 503,
+      code: "pinned_continuation_unavailable",
+      message: "pinned continuation is unavailable"
+    }
+
+    assert {:error, ^reason} =
+             Denials.log_gateway(%Denials.Context{
+               auth: auth,
+               model: setup.model,
+               reason: reason,
+               endpoint: "/backend-api/codex/responses/compact",
+               payload: payload,
+               opts: opts
+             })
+
+    assert [^anchor, rejected] = Repo.all(from request in Request, order_by: request.admitted_at)
+    assert rejected.correlation_id == frame_correlation
+    assert rejected.status == "rejected"
+
+    assert {:error, ^reason} =
+             Denials.log_gateway(
+               %Denials.Context{
+                 auth: auth,
+                 model: setup.model,
+                 reason: reason,
+                 endpoint: @endpoint_path,
+                 payload: payload,
+                 opts: opts
+               },
+               anchor
+             )
+
+    assert Repo.aggregate(Request, :count) == 2
+    assert Repo.get!(Request, anchor.id).status == "rejected"
+
+    ordinary_opts =
+      RequestOptions.build(
+        %{transport: "websocket", request_id: "ordinary-denial-frame"},
+        @endpoint_path,
+        payload
+      )
+
+    assert {:error, ^reason} =
+             Denials.log_gateway(%Denials.Context{
+               auth: auth,
+               model: setup.model,
+               reason: reason,
+               endpoint: @endpoint_path,
+               payload: payload,
+               opts: ordinary_opts
+             })
+
+    assert Repo.get_by!(Request, correlation_id: "ordinary-denial-frame").status == "rejected"
   end
 end

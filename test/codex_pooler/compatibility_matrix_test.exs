@@ -1078,6 +1078,63 @@ defmodule CodexPooler.CompatibilityMatrixTest do
                }
              }
     end
+
+    test "pins owner-authorized native compaction accounting and public exclusion" do
+      feature = CompatibilityMatrix.by_slug!(:websocket_continuity)
+      fixture = CompatibilityMatrix.fixture!(:websocket_turn)
+
+      assert feature.contract =~ "share one semantic client turn"
+      assert feature.contract =~ "three distinct accounting lifecycles"
+      assert feature.contract =~ "first full-history compact uses the ordinary durable turn claim"
+      assert feature.contract =~ "owner capability plus sealed runtime proof"
+      assert feature.contract =~ "saved-reset probe or redeem activity"
+      assert feature.contract =~ "public /v1 never inherits the native owner capability or proof"
+
+      assert fixture.native_compaction_admission == %{
+               semantic_sequence: ["anchor", "compact", "final"],
+               first_compact: %{
+                 authority: "ordinary_durable_turn_claim",
+                 capability_required: false,
+                 replay: "duplicate_turn_without_new_side_effects"
+               },
+               mid_turn_transitions: %{
+                 compact: "owner_capability_plus_sealed_runtime_proof",
+                 final: "owner_capability_plus_sealed_runtime_proof",
+                 payload_shape_or_client_metadata_alone: "never_authoritative"
+               },
+               binding: [
+                 "phase",
+                 "semantic_turn",
+                 "prepared_frame_control",
+                 "owner_epoch_and_lease",
+                 "serving_mode",
+                 "physical_websocket_lifecycle_and_generation"
+               ],
+               legitimate_accounting: %{
+                 distinct_correlations: 3,
+                 requests: 3,
+                 attempts: 3,
+                 codex_turns: 3,
+                 reservations: 3,
+                 settlements: 3,
+                 semantic_client_turns: 1,
+                 websocket_lifecycles: 1,
+                 websocket_generations: 1,
+                 http_fallbacks: 0
+               },
+               rejected_frames: %{
+                 new_rows: 0,
+                 upstream_calls: 0,
+                 saved_reset_probe_or_redeem: false,
+                 hidden_replay_retry_or_fallback: false
+               },
+               public_v1: %{
+                 inherits_owner_capability_or_proof: false,
+                 replay_and_bridge_semantics: "unchanged",
+                 relayed_bytes_and_terminal_shape: "unchanged"
+               }
+             }
+    end
   end
 
   describe "image generation compatibility contract" do

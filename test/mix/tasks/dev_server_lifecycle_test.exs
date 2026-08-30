@@ -31,6 +31,7 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
     [pid_string] = Regex.run(~r/^pid\t([1-9][0-9]*)$/m, receipt, capture: :all_but_first)
     pid = String.to_integer(pid_string)
     assert process_alive?(pid)
+    assert process_group(pid) == pid
 
     assert {status_output, 0} =
              lifecycle("status", fixture, [
@@ -513,6 +514,13 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
     {_output, code} = signal_os_pid(pid, "-0")
 
     code == 0
+  end
+
+  defp process_group(pid) do
+    {output, 0} =
+      System.cmd("ps", ["-o", "pgid=", "-p", Integer.to_string(pid)], stderr_to_stdout: true)
+
+    output |> String.trim() |> String.to_integer()
   end
 
   defp stop_os_pid(pid) do

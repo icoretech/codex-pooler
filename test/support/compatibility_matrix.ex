@@ -368,7 +368,7 @@ defmodule CodexPooler.CompatibilityMatrix do
       future_routes: [],
       fixture: :websocket_turn,
       contract:
-        "backend websocket continuity persists sessions and turns with sticky routing affinity, uses response.create.client_metadata x-codex-turn-state as per-frame request-scoped turn state with the upgrade/header value only as fallback, and is excluded from prompt-cache routing locality; strict native turn-identity precedence validates client_metadata.turn_id, canonical client metadata, turn_id, then request_id without falling through a present invalid source, retaining only an opaque session-scoped SHA-256 semantic key and full claim key; a same active non-cancelled replay is suppressed without new work, while a cancelled predecessor with a different valid native identity can enter one bounded cancellation handoff with a one-second soft boundary and five-second absolute boundary, then starts only after matching fenced readiness; cancelled equal, noncancelled different, missing, public, non-native, and response.processed reconnect candidates fail bounded busy, while generate:false prewarm stays local, row-free, and neutral; predecessor, replacement, and later turn each settle exactly once, replacement uses a new connection generation, and the later turn reuses it; mixed-release behavior is identity-aware only when both current proxy and owner support the control path, a current proxy fails before accounting against a previous owner, and older callers retain their legacy behavior; no hidden automatic replay occurs; an unresolved previous-response alias retains the current authenticated runtime and emits no owner-outage error; successful native turns register hashed previous-response aliases independent of retained-body completeness; a native websocket continuation marked from its final upstream payload may use only its reused upstream connection, while a fresh or reconnected connection emits the exact previous_response_not_found client retry signal before upstream payload send so only a later explicit full request may use that replacement connection; a mid-stream upstream death after visible output authors exactly one native type:error frame with status 502, wire code upstream_request_failed, and the pinned message upstream request failed, carrying no terminal event, no sequence_number, and no socket close so the same socket serves later turns; every frame authored through the shared websocket error envelope carries error type invalid_request_error, defaulting independently to status 500 when its reason has no status and to wire code websocket_request_failed when its reason has no code and message; public /v1 terminal masking and shape remain unchanged"
+        "backend websocket continuity persists sessions and turns with sticky routing affinity, uses response.create.client_metadata x-codex-turn-state as per-frame request-scoped turn state with the upgrade/header value only as fallback, and is excluded from prompt-cache routing locality; strict native turn-identity precedence validates client_metadata.turn_id, canonical client metadata, turn_id, then request_id without falling through a present invalid source, retaining only an opaque session-scoped SHA-256 semantic key and full claim key; a same active non-cancelled replay is suppressed without new work, while a cancelled predecessor with a different valid native identity can enter one bounded cancellation handoff with a one-second soft boundary and five-second absolute boundary, then starts only after matching fenced readiness; cancelled equal, noncancelled different, missing, public, non-native, and response.processed reconnect candidates fail bounded busy, while generate:false prewarm stays local, row-free, and neutral; predecessor, replacement, and later turn each settle exactly once, replacement uses a new connection generation, and the later turn reuses it; mixed-release behavior is identity-aware only when both current proxy and owner support the control path, a current proxy fails before accounting against a previous owner, and older callers retain their legacy behavior; no hidden automatic replay occurs; native anchor, compact, and final frames share one semantic client turn but create three distinct accounting lifecycles on one physical websocket generation; a first full-history compact uses the ordinary durable turn claim, while mid-turn compact and final transitions require a one-shot owner capability plus sealed runtime proof and can never be authorized by payload shape or client metadata alone; rejected capability frames create no rows, upstream calls, saved-reset probe or redeem activity, retry, replay, or fallback; public /v1 never inherits the native owner capability or proof and retains its existing replay, bridge, byte, and terminal-shape semantics; an unresolved previous-response alias retains the current authenticated runtime and emits no owner-outage error; successful native turns register hashed previous-response aliases independent of retained-body completeness; a native websocket continuation marked from its final upstream payload may use only its reused upstream connection, while a fresh or reconnected connection emits the exact previous_response_not_found client retry signal before upstream payload send so only a later explicit full request may use that replacement connection; a mid-stream upstream death after visible output authors exactly one native type:error frame with status 502, wire code upstream_request_failed, and the pinned message upstream request failed, carrying no terminal event, no sequence_number, and no socket close so the same socket serves later turns; every frame authored through the shared websocket error envelope carries error type invalid_request_error, defaulting independently to status 500 when its reason has no status and to wire code websocket_request_failed when its reason has no code and message; public /v1 terminal masking and shape remain unchanged"
     },
     %{
       slug: :reasoning_minimal,
@@ -1834,6 +1834,50 @@ defmodule CodexPooler.CompatibilityMatrix do
           reason_class: "previous_response_generation_mismatch",
           termination_source: "continuation_generation_guard",
           raw_payloads_or_response_values: false
+        }
+      },
+      native_compaction_admission: %{
+        semantic_sequence: ["anchor", "compact", "final"],
+        first_compact: %{
+          authority: "ordinary_durable_turn_claim",
+          capability_required: false,
+          replay: "duplicate_turn_without_new_side_effects"
+        },
+        mid_turn_transitions: %{
+          compact: "owner_capability_plus_sealed_runtime_proof",
+          final: "owner_capability_plus_sealed_runtime_proof",
+          payload_shape_or_client_metadata_alone: "never_authoritative"
+        },
+        binding: [
+          "phase",
+          "semantic_turn",
+          "prepared_frame_control",
+          "owner_epoch_and_lease",
+          "serving_mode",
+          "physical_websocket_lifecycle_and_generation"
+        ],
+        legitimate_accounting: %{
+          distinct_correlations: 3,
+          requests: 3,
+          attempts: 3,
+          codex_turns: 3,
+          reservations: 3,
+          settlements: 3,
+          semantic_client_turns: 1,
+          websocket_lifecycles: 1,
+          websocket_generations: 1,
+          http_fallbacks: 0
+        },
+        rejected_frames: %{
+          new_rows: 0,
+          upstream_calls: 0,
+          saved_reset_probe_or_redeem: false,
+          hidden_replay_retry_or_fallback: false
+        },
+        public_v1: %{
+          inherits_owner_capability_or_proof: false,
+          replay_and_bridge_semantics: "unchanged",
+          relayed_bytes_and_terminal_shape: "unchanged"
         }
       },
       json: %{"model" => "gpt-fixture-text", "input" => "synthetic websocket turn"}

@@ -47,6 +47,16 @@ process_cwd() {
   lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1
 }
 
+detached_launcher() {
+  if command -v setsid >/dev/null 2>&1; then
+    printf '%s\n' "setsid"
+  elif command -v perl >/dev/null 2>&1 && perl -MPOSIX -e 'exit(POSIX->can("setsid") ? 0 : 1)'; then
+    printf '%s\n' "perl"
+  else
+    fail "missing process-session launcher; install setsid or Perl with POSIX support"
+  fi
+}
+
 canonical_checkout_path() {
   local checkout_path="$1"
   [ -d "$checkout_path" ] || return 1
@@ -270,7 +280,8 @@ start_server() {
 
   [ -z "$(listener_pids)" ] || fail "refusing occupied port ${port}; no process was stopped"
 
-  local run_id receipt_path pid current_start current_command current_cwd
+  local run_id receipt_path pid current_start current_command current_cwd launcher
+  launcher="$(detached_launcher)"
   run_id="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
   [[ "$run_id" =~ ^[0-9a-f]{24}$ ]] || fail "could not generate run id"
   receipt_path="${state_dir}/${run_id}.receipt"
@@ -281,7 +292,12 @@ start_server() {
 
   (
     cd "$server_cwd"
-    nohup /bin/bash -c "exec /usr/bin/env ${server_command}" > "$log_path" 2>&1 < /dev/null &
+    if [ "$launcher" = "setsid" ]; then
+      nohup setsid /bin/bash -c "exec /usr/bin/env ${server_command}" > "$log_path" 2>&1 < /dev/null &
+    else
+      nohup perl -MPOSIX -e 'POSIX::setsid() >= 0 or die "setsid failed: $!"; exec @ARGV' \
+        /bin/bash -c "exec /usr/bin/env ${server_command}" > "$log_path" 2>&1 < /dev/null &
+    fi
     printf '%s\n' "$!" > "${receipt_path}.pid"
   )
   pid="$(cat "${receipt_path}.pid")"

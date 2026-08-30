@@ -37,7 +37,7 @@ defmodule CodexPooler.AccountingTestSupport do
     pricing =
       %PricingSnapshot{
         model_identifier: "provider-gpt-accounting-mini",
-        price_version: "test-v1",
+        price_version: Map.get(pricing_attrs, :price_version, "test-v1"),
         currency_code: "USD",
         billing_unit: "token",
         input_token_micros: Map.get(pricing_attrs, :input_token_micros, Decimal.new(10)),
@@ -54,7 +54,13 @@ defmodule CodexPooler.AccountingTestSupport do
       |> Repo.insert!()
 
     Map.merge(key, %{
-      auth: %{pool: pool, api_key: api_key, key_prefix: api_key.key_prefix},
+      auth: %{
+        pool: pool,
+        api_key: api_key,
+        pool_id: pool.id,
+        api_key_id: api_key.id,
+        key_prefix: api_key.key_prefix
+      },
       model: model,
       identity: identity,
       assignment: assignment,

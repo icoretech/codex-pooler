@@ -45,9 +45,15 @@ defmodule CodexPooler.Gateway.Denials do
       Accounting.record_denied_request(
         auth,
         model,
-        request_attrs(auth, model, endpoint, payload, opts, status, reason_code, %{
-          "policy_denial" => %{"code" => reason_code, "message" => message}
-        })
+        request_attrs(
+          auth,
+          model,
+          endpoint,
+          payload,
+          opts,
+          {status, reason_code},
+          %{"policy_denial" => %{"code" => reason_code, "message" => message}}
+        )
       )
 
     {:error, error(status, reason_code, message)}
@@ -81,9 +87,9 @@ defmodule CodexPooler.Gateway.Denials do
           endpoint,
           payload,
           opts,
-          status,
-          reason_code,
-          %{"gateway_denial" => gateway_metadata(reason_code, message, reason)}
+          {status, reason_code},
+          %{"gateway_denial" => gateway_metadata(reason_code, message, reason)},
+          turn_claim
         )
         |> maybe_put_turn_claim(turn_claim)
         |> update_in([:request_metadata], fn metadata ->
@@ -113,13 +119,22 @@ defmodule CodexPooler.Gateway.Denials do
 
   def enforced_model_metadata(_opts), do: nil
 
-  defp request_attrs(auth, model, endpoint, payload, opts, status, reason_code, metadata) do
+  defp request_attrs(
+         auth,
+         model,
+         endpoint,
+         payload,
+         opts,
+         {status, reason_code},
+         metadata,
+         turn_claim \\ nil
+       ) do
     request_options = request_options(opts, endpoint, payload)
 
     %{
       endpoint: endpoint,
       transport: request_options.transport.transport,
-      correlation_id: RequestOptions.websocket_request_correlation_id(request_options),
+      correlation_id: RequestOptions.websocket_denial_correlation_id(request_options, turn_claim),
       idempotency_key: request_options.request_metadata.idempotency_key,
       client_ip: request_options.request_metadata.client_ip,
       user_agent: request_options.request_metadata.user_agent,
