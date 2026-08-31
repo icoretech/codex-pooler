@@ -36,6 +36,20 @@ defmodule CodexPooler.RuntimeConfigTest do
     end)
   end
 
+  test "production native compaction tracing remains off for every environment value" do
+    for value <- ["off", "safe", "1", "true", "full", "unexpected"] do
+      env = Map.put(@required_env, "CODEX_POOLER_NATIVE_COMPACTION_TRACE", value)
+
+      with_env(env, fn ->
+        config = Config.Reader.read!("config/runtime.exs", env: :prod)
+
+        assert config[:codex_pooler][
+                 CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace
+               ][:mode] == :off
+      end)
+    end
+  end
+
   test "prod runtime config rejects invalid upstream secret keys safely" do
     invalid_key = "too-short"
     env = Map.put(@required_env, "CODEX_POOLER_UPSTREAM_SECRET_KEY", invalid_key)

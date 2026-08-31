@@ -102,7 +102,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace do
   def full_allowed?, do: @full_build_enabled
 
   @spec runtime_mode(String.t() | nil, atom()) :: mode()
-  def runtime_mode(value, environment) do
+  def runtime_mode(_value, environment) when environment not in [:dev, :test], do: :off
+
+  def runtime_mode(value, environment) when environment in [:dev, :test] do
     case value do
       value when value in ~w(1 true safe) -> :safe
       "full" -> full_runtime_mode(environment)
@@ -112,7 +114,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace do
 
   if @full_build_enabled do
     defp full_runtime_mode(environment) when environment in [:dev, :test], do: :full
-    defp full_runtime_mode(_environment), do: :off
   else
     defp full_runtime_mode(_environment), do: :off
   end
@@ -127,8 +128,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace do
   else
     def activate_mode(:full), do: {:error, :full_trace_unavailable}
 
-    def activate_mode(mode) when mode in [:off, :safe] do
-      :persistent_term.put(@active_mode_key, mode)
+    def activate_mode(_mode) do
+      :persistent_term.put(@active_mode_key, :off)
       :ok
     end
   end

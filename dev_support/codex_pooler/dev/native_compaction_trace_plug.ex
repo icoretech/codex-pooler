@@ -58,6 +58,9 @@ defmodule CodexPooler.Dev.NativeCompactionTrace.Plug do
           "maximum" => error.maximum
         })
 
+      {:error, :invalid_trace_run_label} ->
+        json(conn, 400, %{"error" => "invalid_trace_run_label"})
+
       _invalid ->
         json(conn, 400, %{"error" => "invalid_trace_scope"})
     end

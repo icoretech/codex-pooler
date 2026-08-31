@@ -1,10 +1,14 @@
 import Config
 
 native_compaction_trace_mode =
-  CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace.runtime_mode(
-    System.get_env("CODEX_POOLER_NATIVE_COMPACTION_TRACE", "off"),
-    config_env()
-  )
+  if config_env() in [:dev, :test] do
+    CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace.runtime_mode(
+      System.get_env("CODEX_POOLER_NATIVE_COMPACTION_TRACE", "off"),
+      config_env()
+    )
+  else
+    :off
+  end
 
 config :codex_pooler,
        CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace,

@@ -259,6 +259,75 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
     assert File.rename(path, path <> ".closed") == :ok
   end
 
+  test "run labels are fingerprint-only across state path export and JSONL" do
+    root = private_root("run-label-security")
+
+    labels = [
+      "Bearer sk-secret-run-label",
+      "ordinary opaque run label",
+      "unicode-è-日本語",
+      "control-\n-\t-\u0000-end"
+    ]
+
+    for {label, index} <- Enum.with_index(labels) do
+      fingerprint = TraceEvent.fingerprint(label)
+
+      assert {:ok, status} =
+               NativeCompactionTrace.start_scope(label,
+                 mode: :full,
+                 root: root,
+                 include_modules: [NativeAdmission]
+               )
+
+      assert status["runFingerprint"] == fingerprint
+      assert Path.basename(status["path"]) =~ fingerprint
+      refute inspect(status) =~ label
+      refute status["path"] =~ label
+
+      assert :ok = TraceEvent.emit_full(:label_probe, %{index: index})
+      _event = await_event(&(&1["event"] == "label_probe"))
+      export = NativeCompactionTrace.export()
+      collector_state = :sys.get_state(NativeCompactionTrace)
+      refute inspect(export) =~ label
+      refute inspect(collector_state) =~ label
+      assert export["runFingerprint"] == fingerprint
+      assert :ok = NativeCompactionTrace.flush()
+      assert :ok = NativeCompactionTrace.stop_scope()
+
+      content = File.read!(status["path"])
+      assert content =~ fingerprint
+      refute content =~ label
+      refute Path.basename(status["path"]) =~ "Bearer"
+      refute Path.basename(status["path"]) =~ "ordinary"
+      refute Path.basename(status["path"]) =~ "unicode"
+      refute Path.basename(status["path"]) =~ "control"
+    end
+  end
+
+  test "invalid run label types and sizes fail before startup" do
+    root = private_root("invalid-run-label")
+
+    for invalid <- [nil, 123, %{}, [], "", String.duplicate("x", 513), <<255>>] do
+      assert {:error, :invalid_trace_run_label} =
+               NativeCompactionTrace.start_scope(invalid,
+                 mode: :full,
+                 root: root,
+                 include_modules: [NativeAdmission]
+               )
+
+      assert Process.whereis(NativeCompactionTrace) == nil
+      assert Process.whereis(NativeCompactionTrace.SensitivityRestorer) == nil
+      assert TraceEvent.mode() == :off
+      assert Path.wildcard(Path.join(root, "*.jsonl")) == []
+    end
+
+    for invalid <- [123, %{}, [], "", String.duplicate("x", 513)] do
+      response = trace_start(%{"run" => invalid, "mode" => "full"})
+      assert response.status == 400
+      assert Jason.decode!(response.resp_body) == %{"error" => "invalid_trace_run_label"}
+    end
+  end
+
   test "full trace enables every critical module with local public and private function patterns" do
     root = private_root("critical-coverage")
 
@@ -1284,9 +1353,19 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
              NativeCompactionTrace.validate_requested_mode(:full, false)
 
     assert :ok = NativeCompactionTrace.validate_requested_mode(:safe, false)
-    assert TraceEvent.runtime_mode("full", :prod) == :off
-    assert TraceEvent.runtime_mode("full", :dev) == :full
-    assert TraceEvent.runtime_mode("safe", :prod) == :safe
+
+    for environment <- [:prod, :staging, :release],
+        value <- [nil, "off", "safe", "1", "true", "full"] do
+      assert TraceEvent.runtime_mode(value, environment) == :off
+    end
+
+    for environment <- [:dev, :test] do
+      assert TraceEvent.runtime_mode("safe", environment) == :safe
+      assert TraceEvent.runtime_mode("1", environment) == :safe
+      assert TraceEvent.runtime_mode("true", environment) == :safe
+      assert TraceEvent.runtime_mode("full", environment) == :full
+      assert TraceEvent.runtime_mode("off", environment) == :off
+    end
   end
 
   test "full trace reconstructs reserve accounting consume send terminal and finalize in order" do

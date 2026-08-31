@@ -27,6 +27,7 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
   @f3_happy_max_events 250_000
   @f3_happy_max_bytes 128 * 1024 * 1024
   @sensitivity_fail_safe_ms 1_000
+  @max_run_label_bytes 512
   @roles [:socket, :response_task, :owner_session, :upstream_session]
   @full_beam_flags [:call, :procs, :send, :receive, :set_on_spawn, :monotonic_timestamp]
   @safe_beam_flags [:call, :procs, :send, :receive, :set_on_spawn, :monotonic_timestamp]
@@ -133,13 +134,15 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
 
   @spec start_scope(term(), [start_option()]) :: {:ok, map()} | {:error, term()}
   def start_scope(run_label, opts \\ []) do
-    case stop_scope() do
-      :ok -> do_start_scope(run_label, opts)
-      {:error, reason} -> {:error, {:previous_scope_restore_failed, reason}}
+    with {:ok, run_fingerprint} <- validate_run_label(run_label),
+         :ok <- stop_scope() do
+      do_start_scope(run_fingerprint, opts)
+    else
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  defp do_start_scope(run_label, opts) do
+  defp do_start_scope(run_fingerprint, opts) do
     supplied_opts = opts
     opts = apply_preset(opts)
     mode = Keyword.get(opts, :mode, :safe)
@@ -157,7 +160,7 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
            {:ok, pid} <-
              GenServer.start(
                __MODULE__,
-               {run_label, generation, sensitivity_authorization, restorer, limit, mode,
+               {run_fingerprint, generation, sensitivity_authorization, restorer, limit, mode,
                 trace_plan, opts},
                name: @name
              ),
@@ -274,16 +277,15 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
 
   @impl true
   def init(
-        {run_label, generation, sensitivity_authorization, restorer, limit, mode, trace_plan,
-         opts}
+        {run_fingerprint, generation, sensitivity_authorization, restorer, limit, mode,
+         trace_plan, opts}
       ) do
-    with {:ok, file} <- open_output(mode, run_label, Keyword.get(opts, :root)) do
+    with {:ok, file} <- open_output(mode, run_fingerprint, Keyword.get(opts, :root)) do
       now_system = System.system_time(:microsecond)
       now_mono = System.monotonic_time(:microsecond)
 
       state = %{
-        run_label: to_string(run_label),
-        run_fingerprint: TraceEvent.fingerprint(run_label),
+        run_fingerprint: run_fingerprint,
         generation: generation,
         sensitivity_authorization: sensitivity_authorization,
         sensitivity_restorer: restorer,
@@ -658,7 +660,7 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
 
     full_entry = %{
       "schemaVersion" => 2,
-      "run" => state.run_label,
+      "runFingerprint" => state.run_fingerprint,
       "sequence" => sequence,
       "source" => to_string(source),
       "event" => to_string(event),
@@ -719,7 +721,7 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
   defp write_truncation(state, reason) do
     entry = %{
       "schemaVersion" => 2,
-      "run" => state.run_label,
+      "runFingerprint" => state.run_fingerprint,
       "sequence" => state.sequence + 1,
       "source" => "control",
       "event" => "trace_truncated",
@@ -1159,23 +1161,17 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
   defp split_list([head | tail], acc), do: split_list(tail, [head | acc])
   defp split_list(tail, acc), do: {:improper, Enum.reverse(acc), tail}
 
-  defp open_output(:safe, _run_label, _root), do: {:ok, nil}
+  defp open_output(:safe, _run_fingerprint, _root), do: {:ok, nil}
 
-  defp open_output(:full, run_label, root) do
+  defp open_output(:full, run_fingerprint, root) do
     root = root || Path.join(System.tmp_dir!(), "codex-pooler-native-compaction-traces")
     File.mkdir_p!(root)
     File.chmod!(root, 0o700)
 
-    label =
-      run_label
-      |> to_string()
-      |> String.replace(~r/[^A-Za-z0-9_.-]/, "_")
-      |> String.slice(0, 80)
-
     path =
       Path.join(
         root,
-        "#{System.system_time(:millisecond)}-#{label}-#{System.unique_integer([:positive])}.jsonl"
+        "#{System.system_time(:millisecond)}-#{run_fingerprint}-#{System.unique_integer([:positive])}.jsonl"
       )
 
     with {:ok, io} <- File.open(path, [:write, :binary, :exclusive]) do
@@ -1197,7 +1193,7 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
 
     entry = %{
       "schemaVersion" => 2,
-      "run" => state.run_label,
+      "runFingerprint" => state.run_fingerprint,
       "sequence" => sequence,
       "source" => "control",
       "event" => to_string(event),
@@ -1350,6 +1346,16 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
 
   defp encode_optional(nil), do: nil
   defp encode_optional(value), do: to_string(value)
+
+  defp validate_run_label(label)
+       when is_binary(label) and byte_size(label) > 0 and
+              byte_size(label) <= @max_run_label_bytes do
+    if String.valid?(label),
+      do: {:ok, TraceEvent.fingerprint(label)},
+      else: {:error, :invalid_trace_run_label}
+  end
+
+  defp validate_run_label(_label), do: {:error, :invalid_trace_run_label}
 
   defp maybe_start_sensitivity_restorer(:safe, _generation, _authorization), do: {:ok, nil}
 
