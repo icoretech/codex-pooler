@@ -82,8 +82,8 @@ defmodule CodexPooler.RuntimeConfigTest do
         oban_config = Oban.Config.new(config[:codex_pooler][Oban])
         plugin_modules = MapSet.new(oban_config.plugins, &elem(&1, 0))
 
-        assert (oban_config.queues != []) == queues?
-        assert (oban_config.stager != false) == stager?
+        assert oban_config.queues != [] == queues?
+        assert oban_config.stager != false == stager?
 
         for service <- [Oban.Cron, Oban.Lifeline, Oban.Pruner] do
           assert MapSet.member?(plugin_modules, service) == services?
