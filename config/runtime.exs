@@ -85,7 +85,7 @@ if config_env() == :prod do
         Keyword.merge(base_oban_runtime_config, queues: oban_queues, plugins: false)
 
       "scheduler" ->
-        Keyword.merge(base_oban_runtime_config, [queues: false, stager: false] ++ oban_services)
+        Keyword.merge(base_oban_runtime_config, [queues: false] ++ oban_services)
 
       "all" ->
         Keyword.merge(base_oban_runtime_config, [queues: oban_queues] ++ oban_services)

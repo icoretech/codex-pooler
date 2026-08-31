@@ -67,12 +67,12 @@ defmodule CodexPooler.RuntimeConfigTest do
     end)
   end
 
-  test "Oban release roles normalize queues, stager, and maintenance services" do
+  test "scheduler release keeps the leader Stager active while queues stay disabled" do
     for {mode, queues?, stager?, services?} <- [
           {"web", false, false, false},
           {"unknown", false, false, false},
           {"worker", true, true, false},
-          {"scheduler", false, false, true},
+          {"scheduler", false, true, true},
           {"all", true, true, true}
         ] do
       env = Map.put(@required_env, "OBAN_MODE", mode)
@@ -82,8 +82,8 @@ defmodule CodexPooler.RuntimeConfigTest do
         oban_config = Oban.Config.new(config[:codex_pooler][Oban])
         plugin_modules = MapSet.new(oban_config.plugins, &elem(&1, 0))
 
-        assert oban_config.queues != [] == queues?
-        assert oban_config.stager != false == stager?
+        assert (oban_config.queues != []) == queues?
+        assert (oban_config.stager != false) == stager?
 
         for service <- [Oban.Cron, Oban.Lifeline, Oban.Pruner] do
           assert MapSet.member?(plugin_modules, service) == services?
