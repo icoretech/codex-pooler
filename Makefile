@@ -12,16 +12,23 @@ DEV_SERVER_STATE_DIR ?= tmp/dev-server
 DEV_SERVER_LIFECYCLE := dev_support/bin/dev-server-lifecycle
 DEV_COMPOSE := POSTGRES_PORT=$(POSTGRES_PORT) docker compose -f docker-compose.dev.yml
 DEV_DB_ENV := POSTGRES_HOST=localhost POSTGRES_PORT=$(POSTGRES_PORT) POSTGRES_DB=$(DEV_POSTGRES_DB) POSTGRES_USER=$(DEV_POSTGRES_USER) POSTGRES_PASSWORD=$(DEV_POSTGRES_PASSWORD)
-DEV_SECRET_ENV := if [ -f .env ]; then while IFS= read -r line; do case "$$line" in CODEX_POOLER_UPSTREAM_SECRET_KEY=*|CODEX_POOLER_UPSTREAM_SECRET_KEY_VERSION=*) export "$$line";; esac; done < .env; fi;
+DEV_SECRET_ENV := if [ -f .env ]; then while IFS= read -r line; do case "$$line" in CODEX_POOLER_UPSTREAM_SECRET_KEY=*|CODEX_POOLER_UPSTREAM_SECRET_KEY_VERSION=*|CODEX_POOLER_WEBSOCKET_OWNER_FORWARDING=*) export "$$line";; esac; done < .env; fi;
 N ?= 4
 # Test-only shell acceptance overrides. Normal runs must use the default commands.
 TEST_FAST_COMMAND ?= mix test
 TEST_FAST_DROP_COMMAND ?= mix ecto.drop --quiet
 
-.PHONY: dev dev-db dev-compile dev-migrate dev-pricing dev-stop dev-status dev-logs precommit smoke test-fast
+.PHONY: dev dev-prepare dev-db dev-compile dev-migrate dev-pricing dev-stop dev-status dev-logs precommit smoke test-fast
 
-dev: dev-db dev-compile dev-migrate dev-pricing
+dev: dev-prepare
 	@$(DEV_SECRET_ENV) $(DEV_DB_ENV) DEV_SERVER_PORT=$(PORT) DEV_SERVER_STATE_DIR=$(DEV_SERVER_STATE_DIR) DEV_SERVER_LOG=$(DEV_LOG) DEV_SERVER_CWD=$(CURDIR) DEV_SERVER_COMMAND='PORT=$(PORT) mix phx.server' $(DEV_SERVER_LIFECYCLE) start
+
+dev-prepare:
+	@$(MAKE) --no-print-directory dev-stop
+	@$(MAKE) --no-print-directory dev-db
+	@$(MAKE) --no-print-directory dev-compile
+	@$(MAKE) --no-print-directory dev-migrate
+	@$(MAKE) --no-print-directory dev-pricing
 
 dev-db:
 	@$(DEV_COMPOSE) up -d --wait --wait-timeout $(POSTGRES_WAIT_TIMEOUT) db

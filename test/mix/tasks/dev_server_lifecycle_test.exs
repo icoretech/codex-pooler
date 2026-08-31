@@ -3,6 +3,62 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
 
   @script Path.expand("../../../dev_support/bin/dev-server-lifecycle", __DIR__)
 
+  test "make -j dev serializes owned stop, preparation, and replacement start" do
+    fixture = parallel_make_fixture!()
+
+    {output, code} =
+      System.cmd(
+        "make",
+        ["-j4", "DEV_SERVER_LIFECYCLE=#{fixture.lifecycle_path}", "dev"],
+        cd: fixture.root,
+        env: [
+          {"PATH", "#{fixture.bin_dir}:#{System.fetch_env!("PATH")}"},
+          {"DEV_SERVER_STATE_DIR", fixture.state_dir},
+          {"DEV_SERVER_LOG", fixture.log_path},
+          {"DEV_SERVER_EVENT_LOG", fixture.event_log}
+        ],
+        stderr_to_stdout: true
+      )
+
+    assert code == 0, output
+
+    assert File.read!(fixture.event_log) |> String.split("\n", trim: true) == [
+             "stop_started",
+             "stop_completed",
+             "db_up",
+             "db_exec",
+             "compile",
+             "create",
+             "migrate",
+             "pricing",
+             "start_owner_forwarding=absent"
+           ]
+  end
+
+  test "make dev imports websocket owner forwarding from the repository environment" do
+    fixture = parallel_make_fixture!()
+    File.write!(Path.join(fixture.root, ".env"), "CODEX_POOLER_WEBSOCKET_OWNER_FORWARDING=true\n")
+
+    {output, code} =
+      System.cmd(
+        "make",
+        ["-j4", "DEV_SERVER_LIFECYCLE=#{fixture.lifecycle_path}", "dev"],
+        cd: fixture.root,
+        env: [
+          {"PATH", "#{fixture.bin_dir}:#{System.fetch_env!("PATH")}"},
+          {"DEV_SERVER_STATE_DIR", fixture.state_dir},
+          {"DEV_SERVER_LOG", fixture.log_path},
+          {"DEV_SERVER_EVENT_LOG", fixture.event_log}
+        ],
+        stderr_to_stdout: true
+      )
+
+    assert code == 0, output
+
+    assert File.read!(fixture.event_log) |> String.split("\n", trim: true) |> List.last() ==
+             "start_owner_forwarding=true"
+  end
+
   test "start accepts the Makefile PORT assignment command and records the owned process" do
     fixture = mix_server_fixture!()
     login_home = temp_dir!("login-home")
@@ -387,6 +443,72 @@ defmodule CodexPooler.MixTasks.DevServerLifecycleTest do
 
     File.write!(Path.join(fixture.state_dir, "active"), "#{run_id}\n")
     %{receipt_path: receipt_path, run_id: run_id}
+  end
+
+  defp parallel_make_fixture! do
+    root = temp_dir!("parallel-make")
+    File.cp!(Path.expand("../../../Makefile", __DIR__), Path.join(root, "Makefile"))
+    bin_dir = Path.join(root, "bin")
+    event_log = Path.join(root, "events.log")
+    lifecycle_path = Path.join(root, "lifecycle")
+    state_dir = Path.join(root, "state")
+    log_path = Path.join(root, "server.log")
+    File.mkdir_p!(bin_dir)
+
+    File.write!(lifecycle_path, """
+    #!/bin/bash
+    set -euo pipefail
+    case "$1" in
+      stop)
+        printf 'stop_started\n' >> "$DEV_SERVER_EVENT_LOG"
+        sleep 0.4
+        printf 'stop_completed\n' >> "$DEV_SERVER_EVENT_LOG"
+        ;;
+      start)
+        grep -qx 'pricing' "$DEV_SERVER_EVENT_LOG"
+        printf 'start_owner_forwarding=%s\n' "${CODEX_POOLER_WEBSOCKET_OWNER_FORWARDING:-absent}" >> "$DEV_SERVER_EVENT_LOG"
+        ;;
+      *) exit 2 ;;
+    esac
+    """)
+
+    File.write!(Path.join(bin_dir, "docker"), """
+    #!/bin/bash
+    set -euo pipefail
+    grep -qx 'stop_completed' "$DEV_SERVER_EVENT_LOG"
+    case " $* " in
+      *' up '*) printf 'db_up\n' >> "$DEV_SERVER_EVENT_LOG" ;;
+      *' exec '*) printf 'db_exec\n' >> "$DEV_SERVER_EVENT_LOG" ;;
+    esac
+    """)
+
+    File.write!(Path.join(bin_dir, "mix"), """
+    #!/bin/bash
+    set -euo pipefail
+    grep -qx 'stop_completed' "$DEV_SERVER_EVENT_LOG"
+    case "$1 ${2:-}" in
+      'compile --force') grep -qx 'db_exec' "$DEV_SERVER_EVENT_LOG"; event=compile ;;
+      'ecto.create --quiet') grep -qx 'compile' "$DEV_SERVER_EVENT_LOG"; event=create ;;
+      'ecto.migrate ') grep -qx 'create' "$DEV_SERVER_EVENT_LOG"; event=migrate ;;
+      'pricing.import_openai ') grep -qx 'migrate' "$DEV_SERVER_EVENT_LOG"; event=pricing ;;
+      *) exit 2 ;;
+    esac
+    printf '%s\n' "$event" >> "$DEV_SERVER_EVENT_LOG"
+    """)
+
+    Enum.each(
+      [lifecycle_path, Path.join(bin_dir, "docker"), Path.join(bin_dir, "mix")],
+      &File.chmod!(&1, 0o700)
+    )
+
+    %{
+      root: root,
+      bin_dir: bin_dir,
+      event_log: event_log,
+      lifecycle_path: lifecycle_path,
+      state_dir: state_dir,
+      log_path: log_path
+    }
   end
 
   defp lifecycle(action, fixture, extra_env \\ []) do
