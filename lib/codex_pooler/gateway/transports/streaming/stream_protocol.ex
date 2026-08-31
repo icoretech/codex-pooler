@@ -85,6 +85,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol do
   def normalize_codex_responses_sse_block(block, separator \\ "\n\n"),
     do: ErrorCanonicalization.normalize_block(block, separator)
 
+  @spec normalize_private_native_misalignment_sse_block(binary(), binary()) :: iodata()
+  def normalize_private_native_misalignment_sse_block(block, separator \\ "\n\n"),
+    do: ErrorCanonicalization.normalize_private_native_misalignment_block(block, separator)
+
   @spec normalize_terminal_event(String.t() | nil, map()) :: {String.t() | nil, map()}
   defdelegate normalize_terminal_event(event_type, decoded), to: ErrorCanonicalization
 

@@ -585,13 +585,14 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
     case {Keyword.get(opts, :failure_projection, :mode_scoped),
           Metadata.explicit_full_ordinary_responses?(request_options)} do
       {{:misalignment_policy_violation, summary}, _explicit_full?} ->
+        error =
+          %{"code" => summary.code, "message" => summary.message}
+          |> maybe_put_misalignment(summary)
+
         %{
           status: status,
           headers: headers,
-          raw_body:
-            Jason.encode!(%{
-              "error" => %{"code" => summary.code, "message" => summary.message}
-            })
+          raw_body: Jason.encode!(%{"error" => error})
         }
 
       {:canonical_full, _explicit_full?} ->
@@ -616,6 +617,11 @@ defmodule CodexPooler.Gateway.Runtime.Finalization do
         }
     end
   end
+
+  defp maybe_put_misalignment(error, %{misalignment: misalignment}),
+    do: Map.put(error, "misalignment", misalignment)
+
+  defp maybe_put_misalignment(error, _summary), do: error
 
   defp native_compaction_websocket?(%RequestOptions{
          payload_context: %{

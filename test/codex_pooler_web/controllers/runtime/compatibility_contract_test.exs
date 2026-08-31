@@ -2423,6 +2423,7 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "saved-reset probe or redeem activity"
       assert feature.contract =~ "public /v1 never inherits the native owner capability or proof"
       assert fixture.native_compaction_admission == @native_compaction_admission_contract
+
       assert fixture.native_tool_continuation == %{
                logical_turn: %{
                  identity: "semantic_turn_key_and_turn_claim_key",
@@ -3799,16 +3800,27 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
     })
   end
 
-  test "documents the narrow issue-75 exception beside generic redaction" do
+  test "documents the narrow issue-101 private-native detail projections beside generic redaction" do
     fixture = CompatibilityMatrix.fixture!(:misalignment_policy_violation)
 
     assert fixture.code == "misalignment_policy_violation"
 
     assert fixture.eligibility == %{
-             direct_http_statuses: [400, 403],
-             terminal_transports: ["sse", "websocket"],
-             route_scope: "eligible_direct_or_translated_responses_and_chat_routes_only",
-             exact_error_envelope: true
+             immediate_pre_stream_http_json: %{
+               routes: ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"],
+               statuses: [400, 403],
+               exact_error_code: "misalignment_policy_violation",
+               stream_true_rejected_before_sse_starts: true,
+               optional_fields: ["error_type", "detailed_explanation", "steer.message"]
+             },
+             private_native_app_server_response_failed_sse: %{
+               routes: ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"],
+               statuses: [400, 403],
+               exact_error_code: "misalignment_policy_violation",
+               stream_true: true,
+               terminal_event: "response.failed",
+               optional_fields: ["error_type", "detailed_explanation", "steer.message"]
+             }
            }
 
     assert fixture.lifecycle == %{
@@ -3834,6 +3846,20 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
              bounded_facts_only: true,
              raw_provider_message: false,
              raw_provider_body: false
+           }
+
+    assert fixture.redaction == %{
+             native_websocket: false,
+             native_compact: false,
+             public_v1_responses_chat_sse_websocket: false,
+             generic_errors: false,
+             logs: false,
+             request_or_attempt_metadata: false,
+             audit: false,
+             telemetry: false,
+             receipts: false,
+             stored_errors: false,
+             durable_event_history: false
            }
 
     assert fixture.generic_provider_errors == %{

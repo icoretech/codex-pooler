@@ -227,8 +227,47 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
     end
   end
 
-  test "backend POST SSE preserves misalignment terminal bytes exactly", %{conn: conn} do
-    source = misalignment_terminal_sse("Synthetic provider wording")
+  test "backend POST SSE relays only bounded misalignment details", %{conn: conn} do
+    source = misalignment_terminal_sse("Synthetic provider wording", valid_misalignment())
+
+    setup =
+      source
+      |> then(&FakeUpstream.sse_stream([&1], done: false))
+      |> start_upstream()
+      |> gateway_setup()
+
+    for path <- ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"] do
+      response =
+        conn
+        |> recycle()
+        |> auth(setup)
+        |> post(path, stream_payload(setup, :misalignment))
+
+      assert response.status == 200
+      assert [terminal] = decoded_sse_payloads(response.resp_body)
+
+      assert terminal["response"]["status"] == "failed"
+
+      assert terminal["response"]["error"]["misalignment"] == %{
+               "error_type" => "synthetic_error_type",
+               "detailed_explanation" => "synthetic detailed explanation",
+               "steer" => %{"message" => "synthetic steer message"}
+             }
+
+      refute response.resp_body =~ "unknown-misalignment-sibling"
+      refute response.resp_body =~ "unknown-steer-sibling"
+    end
+  end
+
+  test "backend POST SSE omits all misalignment details when one known field is malformed", %{
+    conn: conn
+  } do
+    source =
+      misalignment_terminal_sse("Synthetic provider wording", %{
+        "error_type" => "synthetic_error_type",
+        "detailed_explanation" => 17,
+        "steer" => %{"message" => "synthetic steer message"}
+      })
 
     setup =
       source
@@ -242,7 +281,8 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
       |> post("/backend-api/codex/responses", stream_payload(setup, :misalignment))
 
     assert response.status == 200
-    assert response.resp_body == source
+    assert [terminal] = decoded_sse_payloads(response.resp_body)
+    refute Map.has_key?(terminal["response"]["error"], "misalignment")
   end
 
   test "public POST SSE safely projects misalignment messages", %{conn: conn} do
@@ -252,7 +292,7 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
         ] do
       setup =
         provider_message
-        |> misalignment_terminal_sse()
+        |> misalignment_terminal_sse(valid_misalignment())
         |> then(&FakeUpstream.sse_stream([&1], done: false))
         |> start_upstream()
         |> gateway_setup()
@@ -277,6 +317,7 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
              }
 
       refute Map.has_key?(terminal["response"]["error"], "param")
+      refute Map.has_key?(terminal["response"]["error"], "misalignment")
     end
   end
 
@@ -373,16 +414,33 @@ defmodule CodexPoolerWeb.ResponsesTerminalCompatibilityTest do
     end)
   end
 
-  defp misalignment_terminal_sse(message) do
-    error = %{
-      "code" => MisalignmentPolicyViolation.code(),
-      "message" => message,
-      "param" => "private.param",
-      "provider_sibling" => "private-sibling"
-    }
+  defp misalignment_terminal_sse(message, misalignment) do
+    error =
+      %{
+        "code" => MisalignmentPolicyViolation.code(),
+        "message" => message,
+        "param" => "private.param",
+        "provider_sibling" => "private-sibling"
+      }
+      |> maybe_put_misalignment(misalignment)
 
     ~s(event: response.failed\ndata: #{Jason.encode!(%{"type" => "response.failed", "error" => error, "response" => %{"status" => "failed", "error" => error}})}\n\n)
   end
+
+  defp valid_misalignment do
+    %{
+      "error_type" => "synthetic_error_type",
+      "detailed_explanation" => "synthetic detailed explanation",
+      "steer" => %{
+        "message" => "synthetic steer message",
+        "unknown" => "unknown-steer-sibling"
+      },
+      "unknown" => "unknown-misalignment-sibling"
+    }
+  end
+
+  defp maybe_put_misalignment(error, nil), do: error
+  defp maybe_put_misalignment(error, details), do: Map.put(error, "misalignment", details)
 
   defp assert_public_completed(payload, shape) do
     expected_id = if shape == :done, do: "resp_terminal_done", else: "resp_terminal_legacy"

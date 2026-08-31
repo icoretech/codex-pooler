@@ -3311,10 +3311,21 @@ defmodule CodexPooler.CompatibilityMatrix do
     misalignment_policy_violation: %{
       code: "misalignment_policy_violation",
       eligibility: %{
-        direct_http_statuses: [400, 403],
-        terminal_transports: ["sse", "websocket"],
-        route_scope: "eligible_direct_or_translated_responses_and_chat_routes_only",
-        exact_error_envelope: true
+        immediate_pre_stream_http_json: %{
+          routes: ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"],
+          statuses: [400, 403],
+          exact_error_code: "misalignment_policy_violation",
+          stream_true_rejected_before_sse_starts: true,
+          optional_fields: ["error_type", "detailed_explanation", "steer.message"]
+        },
+        private_native_app_server_response_failed_sse: %{
+          routes: ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"],
+          statuses: [400, 403],
+          exact_error_code: "misalignment_policy_violation",
+          stream_true: true,
+          terminal_event: "response.failed",
+          optional_fields: ["error_type", "detailed_explanation", "steer.message"]
+        }
       },
       lifecycle: %{
         retryable: false,
@@ -3337,6 +3348,19 @@ defmodule CodexPooler.CompatibilityMatrix do
         bounded_facts_only: true,
         raw_provider_message: false,
         raw_provider_body: false
+      },
+      redaction: %{
+        native_websocket: false,
+        native_compact: false,
+        public_v1_responses_chat_sse_websocket: false,
+        generic_errors: false,
+        logs: false,
+        request_or_attempt_metadata: false,
+        audit: false,
+        telemetry: false,
+        receipts: false,
+        stored_errors: false,
+        durable_event_history: false
       },
       generic_provider_errors: %{
         message: "upstream request failed",

@@ -295,6 +295,93 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStreamTest do
                )
     end
 
+    test "relays bounded misalignment details only to private native HTTP SSE" do
+      details = %{
+        "error_type" => "synthetic_error_type",
+        "detailed_explanation" => "synthetic detailed explanation",
+        "steer" => %{
+          "message" => "synthetic steer message",
+          "unknown" => "unknown-steer-sibling"
+        },
+        "unknown" => "unknown-detail-sibling"
+      }
+
+      event =
+        sse_event("response.failed", %{
+          "type" => "response.failed",
+          "response" => %{
+            "status" => "failed",
+            "error" => %{
+              "code" => "misalignment_policy_violation",
+              "message" => "synthetic policy wording",
+              "misalignment" => details
+            }
+          }
+        })
+
+      opts = RequestOptions.build(%{}, "/backend-api/codex/responses", %{"stream" => true})
+
+      for target <- [:relay, :websocket] do
+        state = DownstreamStream.initial_state(target, opts)
+
+        assert {chunk, _state} =
+                 DownstreamStream.normalize_data(
+                   event,
+                   "/backend-api/codex/responses",
+                   opts,
+                   state
+                 )
+
+        assert [%{"data" => terminal}] = public_sse_events(chunk)
+
+        if target == :relay do
+          assert terminal["response"]["error"]["misalignment"] == %{
+                   "error_type" => "synthetic_error_type",
+                   "detailed_explanation" => "synthetic detailed explanation",
+                   "steer" => %{"message" => "synthetic steer message"}
+                 }
+        else
+          refute Map.has_key?(terminal["response"]["error"], "misalignment")
+        end
+
+        refute chunk =~ "unknown-detail-sibling"
+        refute chunk =~ "unknown-steer-sibling"
+      end
+    end
+
+    test "omits all private native SSE details when one known field is malformed" do
+      event =
+        sse_event("response.failed", %{
+          "type" => "response.failed",
+          "response" => %{
+            "status" => "failed",
+            "error" => %{
+              "code" => "misalignment_policy_violation",
+              "message" => "synthetic policy wording",
+              "misalignment" => %{
+                "error_type" => "synthetic_error_type",
+                "detailed_explanation" => 17,
+                "steer" => %{"message" => "synthetic steer message"}
+              }
+            }
+          }
+        })
+
+      opts = RequestOptions.build(%{}, "/backend-api/codex/responses", %{"stream" => true})
+      state = DownstreamStream.initial_state(:relay, opts)
+
+      assert {chunk, _state} =
+               DownstreamStream.normalize_data(
+                 event,
+                 "/backend-api/codex/responses",
+                 opts,
+                 state
+               )
+
+      assert [%{"data" => terminal}] = public_sse_events(chunk)
+      refute Map.has_key?(terminal["response"]["error"], "misalignment")
+    end
+
     test "normalizes standalone-CR backend Responses events on normal and compact endpoints" do
       payload = %{
         "type" => "response.completed",

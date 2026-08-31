@@ -145,33 +145,166 @@ defmodule CodexPooler.Gateway.Transports.MisalignmentPolicyViolationTest do
              MisalignmentPolicyViolation.classify_http(400, exact_body("blocked"), chat_options)
   end
 
-  test "response-private summary contains exactly code and normalized message" do
+  test "response-private summary retains only normalized optional misalignment details" do
     response = %Req.Response{status: 403}
-    summary = %{code: "misalignment_policy_violation", message: "blocked"}
+
+    summary = %{
+      code: "misalignment_policy_violation",
+      message: "blocked",
+      misalignment: %{
+        "error_type" => "synthetic_error_type",
+        "detailed_explanation" => "synthetic detailed explanation",
+        "steer" => %{
+          "message" => "synthetic steer message",
+          "unknown" => "must not escape"
+        },
+        "unknown" => "must not escape"
+      }
+    }
 
     response = MisalignmentPolicyViolation.put_summary(response, summary)
 
-    assert MisalignmentPolicyViolation.fetch_summary(response) == summary
+    assert MisalignmentPolicyViolation.fetch_summary(response) == %{
+             code: "misalignment_policy_violation",
+             message: "blocked",
+             misalignment: %{
+               "error_type" => "synthetic_error_type",
+               "detailed_explanation" => "synthetic detailed explanation",
+               "steer" => %{"message" => "synthetic steer message"}
+             }
+           }
 
     assert Map.keys(MisalignmentPolicyViolation.fetch_summary(response)) |> Enum.sort() ==
-             [:code, :message]
+             [:code, :message, :misalignment]
 
     refute inspect(response.private) =~ "param"
     refute inspect(response.private) =~ "sibling"
+    refute inspect(response.private) =~ "unknown"
   end
 
-  defp exact_body(message) do
-    Jason.encode!(%{
-      "error" => %{
+  test "normalizes only bounded direct-native misalignment continuation details" do
+    details = %{
+      "error_type" => "synthetic_error_type",
+      "detailed_explanation" => "synthetic detailed explanation",
+      "steer" => %{
+        "message" => "synthetic steer message",
+        "unknown" => "must not escape"
+      },
+      "unknown" => "must not escape"
+    }
+
+    for route <- ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"],
+        status <- [400, 403] do
+      assert {:ok,
+              %{
+                code: "misalignment_policy_violation",
+                message: "blocked",
+                misalignment: %{
+                  "error_type" => "synthetic_error_type",
+                  "detailed_explanation" => "synthetic detailed explanation",
+                  "steer" => %{"message" => "synthetic steer message"}
+                }
+              }} =
+               MisalignmentPolicyViolation.classify_http(
+                 status,
+                 exact_body("blocked", details),
+                 request_options(route, %{"stream" => true})
+               )
+    end
+  end
+
+  test "omits the whole optional detail projection for absent empty malformed or oversized details" do
+    invalid_details = [
+      nil,
+      %{},
+      %{"error_type" => 17},
+      %{"detailed_explanation" => []},
+      %{"steer" => "invalid"},
+      %{"steer" => %{}},
+      %{"steer" => %{"message" => 17}},
+      %{"error_type" => "valid", "steer" => %{"message" => 17}},
+      %{"error_type" => String.duplicate("x", 65_537)}
+    ]
+
+    for details <- invalid_details do
+      assert {:ok, summary} =
+               MisalignmentPolicyViolation.classify_http(
+                 400,
+                 exact_body("blocked", details),
+                 request_options("/backend-api/codex/responses", %{"stream" => false})
+               )
+
+      refute Map.has_key?(summary, :misalignment)
+    end
+  end
+
+  test "keeps details off public compact chat and translated routes" do
+    details = %{"error_type" => "private", "steer" => %{"message" => "private"}}
+
+    for route <-
+          @eligible_routes -- ["/backend-api/codex/responses", "/backend-api/codex/v1/responses"] do
+      assert {:ok, summary} =
+               MisalignmentPolicyViolation.classify_http(
+                 400,
+                 exact_body("blocked", details),
+                 request_options(route)
+               )
+
+      refute Map.has_key?(summary, :misalignment)
+    end
+  end
+
+  test "request SSE transport label does not suppress pre-stream HTTP JSON details" do
+    details = %{"error_type" => "private", "steer" => %{"message" => "private"}}
+
+    assert {:ok, %{misalignment: ^details}} =
+             MisalignmentPolicyViolation.classify_http(
+               400,
+               exact_body("blocked", details),
+               request_options("/backend-api/codex/responses", %{"stream" => true})
+             )
+  end
+
+  test "keeps details off websocket transport" do
+    details = %{"error_type" => "private", "steer" => %{"message" => "private"}}
+
+    options =
+      RequestOptions.build(
+        %{transport: "websocket"},
+        "/backend-api/codex/responses",
+        %{"stream" => true}
+      )
+
+    assert {:ok, summary} =
+             MisalignmentPolicyViolation.classify_http(
+               400,
+               exact_body("blocked", details),
+               options
+             )
+
+    refute Map.has_key?(summary, :misalignment)
+  end
+
+  defp exact_body(message, misalignment \\ nil) do
+    error =
+      %{
         "code" => "misalignment_policy_violation",
         "message" => message,
         "param" => "input[0]"
-      },
+      }
+      |> maybe_put_misalignment(misalignment)
+
+    Jason.encode!(%{
+      "error" => error,
       "sibling" => "must not escape"
     })
   end
 
-  defp request_options(route) do
-    RequestOptions.build(%{}, route, %{"stream" => true})
-  end
+  defp maybe_put_misalignment(error, nil), do: error
+
+  defp maybe_put_misalignment(error, misalignment),
+    do: Map.put(error, "misalignment", misalignment)
+
+  defp request_options(route, payload \\ %{"stream" => true}),
+    do: RequestOptions.build(%{}, route, payload)
 end

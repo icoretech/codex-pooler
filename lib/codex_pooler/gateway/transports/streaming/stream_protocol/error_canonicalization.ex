@@ -38,6 +38,16 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
     end
   end
 
+  @spec normalize_private_native_misalignment_block(binary(), binary()) :: iodata()
+  def normalize_private_native_misalignment_block(block, separator \\ "\n\n") do
+    {event_type, decoded} = SSEParser.stream_block_event(block)
+
+    case private_native_misalignment(event_type, decoded) do
+      nil -> normalize_block(block, separator)
+      misalignment -> encode_private_native_misalignment_sse(decoded, misalignment)
+    end
+  end
+
   @spec normalize_terminal_event(String.t() | nil, map()) :: {String.t() | nil, map()}
   def normalize_terminal_event(event_type, decoded) when is_map(decoded) do
     if event_type == "response.incomplete" and failed_incomplete_decoded?(decoded) do
@@ -243,7 +253,11 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
   end
 
   defp canonical_codex_responses_error(decoded) do
-    error = canonical_codex_responses_error_source(decoded) || %{}
+    error =
+      decoded
+      |> canonical_codex_responses_error_source()
+      |> Kernel.||(%{})
+      |> Map.delete("misalignment")
 
     upstream_code = ErrorCodes.upstream_error_code(decoded)
     code = ErrorCodes.client_visible_error_code(upstream_code) || "upstream_terminal_failure"
@@ -265,6 +279,31 @@ defmodule CodexPooler.Gateway.Transports.Streaming.StreamProtocol.ErrorCanonical
       true ->
         Map.put_new(error, "message", message)
     end
+  end
+
+  defp private_native_misalignment("response.failed", %{
+         "response" => %{
+           "status" => "failed",
+           "error" => %{"code" => code} = error
+         }
+       }) do
+    if code == MisalignmentPolicyViolation.code() do
+      MisalignmentPolicyViolation.normalize_details(Map.get(error, "misalignment"))
+    end
+  end
+
+  defp private_native_misalignment(_event_type, _decoded), do: nil
+
+  defp encode_private_native_misalignment_sse(decoded, misalignment) do
+    event = canonical_codex_responses_error_event(decoded)
+    error = Map.put(event["response"]["error"], "misalignment", misalignment)
+
+    event =
+      event
+      |> Map.put("error", error)
+      |> put_in(["response", "error"], error)
+
+    ["event: response.failed\n", "data: ", Jason.encode!(event), "\n\n"]
   end
 
   defp canonical_codex_responses_error_response(decoded, error) do

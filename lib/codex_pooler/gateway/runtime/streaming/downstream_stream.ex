@@ -4,6 +4,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   alias CodexPooler.Gateway.OpenAICompatibility.ChatCompletions
   alias CodexPooler.Gateway.Payloads.RequestOptions
   alias CodexPooler.Gateway.Runtime.Streaming.BufferTelemetry
+  alias CodexPooler.Gateway.Transports.MisalignmentPolicyViolation
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.PublicResponses
 
@@ -248,7 +249,7 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
           previous_buffer <> data
         else
           blocks
-          |> Enum.map(&StreamProtocol.normalize_codex_responses_sse_block/1)
+          |> Enum.map(&normalize_codex_responses_sse_block(&1, opts, state))
           |> IO.iodata_to_binary()
         end
 
@@ -257,6 +258,18 @@ defmodule CodexPooler.Gateway.Runtime.Streaming.DownstreamStream do
   end
 
   defp normalize_codex_responses_stream_data(data, _endpoint, _opts, state), do: {data, state}
+
+  defp normalize_codex_responses_sse_block(block, opts, %{target: target})
+       when target != :websocket do
+    if MisalignmentPolicyViolation.details_allowed?(opts) do
+      StreamProtocol.normalize_private_native_misalignment_sse_block(block)
+    else
+      StreamProtocol.normalize_codex_responses_sse_block(block)
+    end
+  end
+
+  defp normalize_codex_responses_sse_block(block, _opts, _state),
+    do: StreamProtocol.normalize_codex_responses_sse_block(block)
 
   defp normalize_endpoint_data("/backend-api/codex/responses", data) when is_binary(data) do
     StreamProtocol.normalize_codex_responses_sse_data(data)

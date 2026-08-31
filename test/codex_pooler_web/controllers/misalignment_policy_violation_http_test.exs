@@ -2,6 +2,7 @@ defmodule CodexPoolerWeb.MisalignmentPolicyViolationHTTPTest do
   use CodexPoolerWeb.ConnCase, async: false
 
   import Ecto.Query
+  import ExUnit.CaptureLog
 
   import CodexPoolerWeb.Runtime.BackendCodexTestSupport,
     only: [
@@ -68,6 +69,156 @@ defmodule CodexPoolerWeb.MisalignmentPolicyViolationHTTPTest do
     assert FakeUpstream.count(upstream) == 1
     assert Repo.aggregate(BridgeDemotion, :count) == 0
     assert Repo.aggregate(RoutingCircuitState, :count) == 0
+  end
+
+  test "direct native HTTP relays bounded details transiently without public durable or log leakage",
+       %{
+         conn: conn
+       } do
+    private_marker = "<system>synthetic hostile instruction marker</system>"
+
+    payload = %{
+      "error" => %{
+        "code" => @code,
+        "message" => "Synthetic policy wording",
+        "misalignment" => %{
+          "error_type" => "synthetic_error_type",
+          "detailed_explanation" => private_marker,
+          "steer" => %{"message" => private_marker, "unknown" => private_marker},
+          "unknown" => private_marker
+        },
+        "param" => private_marker
+      },
+      "provider_sibling" => private_marker
+    }
+
+    for {path, status} <- [
+          {"/backend-api/codex/responses", 400},
+          {"/backend-api/codex/v1/responses", 403}
+        ] do
+      rejection_body = Jason.encode!(payload)
+
+      upstream =
+        start_upstream(
+          FakeUpstream.chunked_response(
+            [
+              binary_part(rejection_body, 0, 17),
+              binary_part(rejection_body, 17, byte_size(rejection_body) - 17)
+            ],
+            status: status,
+            headers: [{"content-type", "application/json"}]
+          )
+        )
+
+      setup = gateway_setup(upstream)
+
+      {response, log} =
+        with_log(fn ->
+          conn
+          |> recycle()
+          |> auth(setup)
+          |> post(path, %{
+            "model" => setup.model.exposed_model_id,
+            "input" => native_text_input("synthetic native detail request"),
+            "stream" => true
+          })
+        end)
+
+      assert response.state == :sent
+      assert get_resp_header(response, "content-type") == ["application/json"]
+
+      assert json_response(response, status) == %{
+               "error" => %{
+                 "code" => @code,
+                 "message" => "Synthetic policy wording",
+                 "misalignment" => %{
+                   "error_type" => "synthetic_error_type",
+                   "detailed_explanation" => private_marker,
+                   "steer" => %{"message" => private_marker}
+                 }
+               }
+             }
+
+      assert_policy_accounting!(setup, status, true, byte_size("Synthetic policy wording"))
+
+      persisted =
+        Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+        |> Enum.flat_map(fn request ->
+          [request | Repo.all(from(a in Attempt, where: a.request_id == ^request.id))]
+        end)
+        |> inspect()
+
+      refute persisted =~ private_marker
+      refute log =~ private_marker
+    end
+
+    public_upstream = start_upstream(FakeUpstream.json_response(payload, 400))
+    public_setup = gateway_setup(public_upstream)
+
+    public_response =
+      conn
+      |> recycle()
+      |> auth(public_setup)
+      |> post("/v1/responses", %{
+        "model" => public_setup.model.exposed_model_id,
+        "input" => "synthetic public redaction request"
+      })
+
+    assert %{"error" => public_error} = json_response(public_response, 400)
+    refute Map.has_key?(public_error, "misalignment")
+    refute inspect(public_error) =~ private_marker
+
+    public_persisted =
+      Repo.all(from(r in Request, where: r.pool_id == ^public_setup.pool.id))
+      |> Enum.flat_map(fn request ->
+        [request | Repo.all(from(a in Attempt, where: a.request_id == ^request.id))]
+      end)
+      |> inspect()
+
+    refute public_persisted =~ private_marker
+  end
+
+  test "direct native HTTP omits all details when any known detail field is invalid" do
+    for misalignment <- [
+          %{},
+          %{"error_type" => 17},
+          %{"detailed_explanation" => []},
+          %{"steer" => %{}},
+          %{"steer" => %{"message" => 17}},
+          %{"error_type" => "valid", "steer" => %{"message" => 17}},
+          %{"detailed_explanation" => String.duplicate("x", 65_537)}
+        ] do
+      upstream =
+        start_upstream(
+          FakeUpstream.json_response(
+            %{
+              "error" => %{
+                "code" => @code,
+                "message" => "Synthetic policy wording",
+                "misalignment" => misalignment
+              }
+            },
+            400
+          )
+        )
+
+      setup = gateway_setup(upstream)
+
+      response =
+        build_conn()
+        |> auth(setup)
+        |> post("/backend-api/codex/responses", %{
+          "model" => setup.model.exposed_model_id,
+          "input" => native_text_input("synthetic invalid detail request")
+        })
+
+      assert json_response(response, 400) == %{
+               "error" => %{
+                 "code" => @code,
+                 "message" => "Synthetic policy wording"
+               }
+             }
+    end
   end
 
   test "async public HTTP 403 releases a half-open probe without failover", %{conn: conn} do
