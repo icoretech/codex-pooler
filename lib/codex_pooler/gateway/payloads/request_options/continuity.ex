@@ -28,6 +28,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
     :codex_session,
     :semantic_turn_key,
     :turn_claim_key,
+    :request_claim_key,
     :authenticated_owner_attach,
     upstream_previous_response_id?: false
   ]
@@ -47,6 +48,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
           codex_session: term(),
           semantic_turn_key: <<_::256>> | nil,
           turn_claim_key: String.t() | nil,
+          request_claim_key: String.t() | nil,
           authenticated_owner_attach: boolean(),
           upstream_previous_response_id?: boolean()
         }
@@ -71,6 +73,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
       codex_session: Map.get(opts, :codex_session),
       semantic_turn_key: semantic_turn_key(Map.get(opts, :semantic_turn_key)),
       turn_claim_key: turn_claim_key(Map.get(opts, :turn_claim_key)),
+      request_claim_key: request_claim_key(Map.get(opts, :request_claim_key)),
       authenticated_owner_attach: Map.get(opts, :authenticated_owner_attach, false) == true,
       upstream_previous_response_id?: false
     }
@@ -92,6 +95,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
     |> Normalization.normalize_optional_update(:session_header_source, &session_header_source/1)
     |> Normalization.normalize_optional_update(:semantic_turn_key, &semantic_turn_key/1)
     |> Normalization.normalize_optional_update(:turn_claim_key, &turn_claim_key/1)
+    |> Normalization.normalize_optional_update(:request_claim_key, &request_claim_key/1)
     |> Normalization.normalize_optional_update(:upstream_previous_response_id?, &(&1 == true))
     |> then(&struct!(continuity, &1))
   end
@@ -126,4 +130,16 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions.Continuity do
   end
 
   defp turn_claim_key(_value), do: nil
+
+  @spec request_claim_key(term()) :: String.t() | nil
+  defp request_claim_key("codex-turn:" <> _encoded = value), do: turn_claim_key(value)
+
+  defp request_claim_key("codex-request:" <> encoded = value) when byte_size(encoded) == 43 do
+    case Base.url_decode64(encoded, padding: false) do
+      {:ok, digest} when byte_size(digest) == 32 -> value
+      _invalid -> nil
+    end
+  end
+
+  defp request_claim_key(_value), do: nil
 end

@@ -814,9 +814,24 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       reason: reason,
       endpoint: endpoint,
       payload: payload,
-      opts: request_options(opts, endpoint, payload)
+      opts:
+        opts
+        |> request_options(endpoint, payload)
+        |> prefer_request_claim_for_denial()
     }
   end
+
+  defp prefer_request_claim_for_denial(
+         %RequestOptions{
+           transport: %{transport: "websocket"},
+           continuity: %{request_claim_key: request_claim_key}
+         } = request_options
+       )
+       when is_binary(request_claim_key) do
+    RequestOptions.put_continuity(request_options, turn_claim_key: request_claim_key)
+  end
+
+  defp prefer_request_claim_for_denial(%RequestOptions{} = request_options), do: request_options
 
   defp log_gateway_denial(%Denials.Context{
          reason: %{accounting_disposition: :zero_work} = reason
@@ -894,12 +909,12 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          endpoint,
          %RequestOptions{
            transport: %{transport: "websocket"},
-           continuity: %{turn_claim_key: turn_claim_key}
+           continuity: %{request_claim_key: request_claim_key}
          } = request_options,
          %RouteState{} = route_state,
          nil
        )
-       when is_binary(turn_claim_key) do
+       when is_binary(request_claim_key) do
     attrs = AccountingReservation.attrs(auth, payload, endpoint, request_options, route_state)
 
     case Accounting.claim_websocket_turn(auth, model, attrs) do
@@ -1044,10 +1059,10 @@ defmodule CodexPooler.Gateway.Runtime.Service do
          %Ecto.ConstraintError{constraint: "requests_correlation_id_uq"},
          %RequestOptions{
            transport: %{transport: "websocket"},
-           continuity: %{turn_claim_key: turn_claim_key}
+           continuity: %{request_claim_key: request_claim_key}
          }
        )
-       when is_binary(turn_claim_key),
+       when is_binary(request_claim_key),
        do: true
 
   defp duplicate_turn_reservation_constraint?(_error, _opts), do: false

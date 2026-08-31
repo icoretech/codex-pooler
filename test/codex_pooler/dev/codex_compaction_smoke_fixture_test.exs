@@ -206,6 +206,20 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
     assert {:ok, :release, _} =
              CodexCompactionSmokeFixture.parse_args(["release", "--run-id", context.run_id])
 
+    assert {:ok, :receipt, receipt_options} =
+             CodexCompactionSmokeFixture.parse_args([
+               "receipt",
+               "--run-id",
+               context.run_id,
+               "--upstream-frame-count",
+               "2",
+               "--duplicate-error-count",
+               "0"
+             ])
+
+    assert receipt_options[:upstream_frame_count] == 2
+    assert receipt_options[:duplicate_error_count] == 0
+
     assert {:error, _} = CodexCompactionSmokeFixture.parse_args(["status"])
 
     assert {:error, _} =
@@ -216,6 +230,50 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixtureTest do
                "--upstream-base-url",
                "https://example.com"
              ])
+  end
+
+  test "native tool continuation receipt is metadata-only", context do
+    options = fixture_options(context)
+    assert {:ok, _acquired} = CodexCompactionSmokeFixture.acquire(options)
+
+    assert {:ok, receipt} =
+             CodexCompactionSmokeFixture.receipt(
+               Keyword.merge(options,
+                 upstream_frame_count: 2,
+                 duplicate_error_count: 0
+               )
+             )
+
+    assert Map.keys(receipt) |> Enum.sort() ==
+             [
+               :attempt_count,
+               :codex_turn_count,
+               :duplicate_error_count,
+               :logical_turn_fingerprints,
+               :request_count,
+               :request_fingerprints,
+               :settlement_count,
+               :status,
+               :turn_sequences,
+               :upstream_frame_count
+             ]
+
+    assert receipt.status == "closed"
+    assert receipt.request_count == 0
+    assert receipt.attempt_count == 0
+    assert receipt.codex_turn_count == 0
+    assert receipt.settlement_count == 0
+    assert receipt.turn_sequences == []
+    assert receipt.upstream_frame_count == 2
+    assert receipt.duplicate_error_count == 0
+    assert receipt.logical_turn_fingerprints == []
+    assert receipt.request_fingerprints == []
+
+    encoded = Jason.encode!(receipt)
+    refute encoded =~ context.run_id
+    refute encoded =~ context.root
+    refute encoded =~ "pool_id"
+    refute encoded =~ "identity_id"
   end
 
   defp fixture_options(context) do

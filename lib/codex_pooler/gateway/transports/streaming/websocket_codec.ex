@@ -61,6 +61,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
     with {:ok, payload} <- decode_prepared_payload(raw_payload),
          {:ok, prepared} <- prepare_decoded_frame(payload, opts, push_frame),
          {:ok, completed_validations} <- validate_before_seal(prepared) do
+      prepared = put_native_request_claim(prepared)
       prepared = seal_prepared_frame(prepared, completed_validations)
       notify_preparation_observer(prepared.request_options)
       {:ok, prepared}
@@ -270,7 +271,10 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
         } = prepared,
         %RequestOptions.NativeCompactionAdmission{} = admission
       ) do
-    request_options = %{prepared.request_options | native_compaction_admission: admission}
+    request_options =
+      prepared.request_options
+      |> RequestOptions.put_continuity(request_claim_key: prepared.turn_claim_key)
+      |> then(&%{&1 | native_compaction_admission: admission})
 
     with true <- valid_prepared_frame?(prepared),
          {:ok, _digest} <-
@@ -376,6 +380,7 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
       prepared.payload,
       prepared.semantic_turn_key,
       prepared.turn_claim_key,
+      prepared.request_options.continuity.request_claim_key,
       prepared.request_options.native_compaction_admission,
       prepared.request_options.native_compaction_reservation,
       validation_claim,
@@ -641,6 +646,80 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
       turn_claim_key: identity.turn_claim_key
     )
   end
+
+  defp put_native_request_claim(
+         %PreparedWebsocketFrame{
+           variant: :native_response_create,
+           payload: payload,
+           request_options: %RequestOptions{} = request_options,
+           semantic_turn_key: semantic_turn_key,
+           turn_claim_key: turn_claim_key
+         } = prepared
+       )
+       when is_binary(semantic_turn_key) and is_binary(turn_claim_key) do
+    request_claim_key =
+      if ordinary_native_tool_continuation?(payload, request_options) do
+        WebsocketTurnIdentity.request_claim_key(semantic_turn_key, payload)
+      else
+        turn_claim_key
+      end
+
+    request_options =
+      RequestOptions.put_continuity(request_options, request_claim_key: request_claim_key)
+
+    %{prepared | request_options: request_options}
+  end
+
+  defp put_native_request_claim(%PreparedWebsocketFrame{} = prepared), do: prepared
+
+  defp ordinary_native_tool_continuation?(
+         %{"input" => input} = payload,
+         %RequestOptions{
+           native_compaction_admission: nil,
+           payload_context: %{compaction_trigger_bridge?: false},
+           openai_compatibility: %{public_openai_responses_stream: false}
+         }
+       )
+       when is_list(input) do
+    ordinary_native_turn_continuation?(payload) and ToolResultShape.any?(input) and
+      not native_final_compaction?(input)
+  end
+
+  defp ordinary_native_tool_continuation?(_payload, %RequestOptions{}), do: false
+
+  defp ordinary_native_turn_continuation?(
+         %{
+           "client_metadata" => %{"x-codex-turn-metadata" => metadata}
+         } = payload
+       ),
+       do:
+         match?(%{"request_kind" => "turn"}, canonical_metadata_map(metadata)) or
+           previous_response_present?(payload)
+
+  defp ordinary_native_turn_continuation?(payload), do: previous_response_present?(payload)
+
+  defp native_final_compaction?(input) do
+    Enum.any?(
+      input,
+      &match?(%{"type" => type} when type in ["compaction", "compaction_summary"], &1)
+    )
+  end
+
+  defp previous_response_present?(%{"previous_response_id" => value}) when is_binary(value),
+    do: String.trim(value) != ""
+
+  defp previous_response_present?(_payload), do: false
+
+  defp canonical_metadata_map(metadata) when is_map(metadata), do: metadata
+
+  defp canonical_metadata_map(metadata) when is_binary(metadata) do
+    case Jason.decode(metadata) do
+      {:ok, decoded} when is_map(decoded) -> decoded
+      _invalid -> %{}
+    end
+  end
+
+  defp canonical_metadata_map(_metadata), do: %{}
 
   defp namespace_restoring_writer(
          push_frame,

@@ -175,6 +175,90 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentityTest do
     end
   end
 
+  describe "request_claim_key/2" do
+    test "pins the deterministic native response claim vector" do
+      semantic_turn_key = :crypto.hash(:sha256, "semantic-turn-vector")
+
+      payload = %{
+        "type" => "response.create",
+        "model" => "gpt-example",
+        "previous_response_id" => "resp_vector_0001",
+        "input" => [
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_vector_0001",
+            "output" => %{"count" => 2, "status" => "ok"}
+          }
+        ],
+        "client_metadata" => %{"meaningful" => "kept"}
+      }
+
+      assert WebsocketTurnIdentity.request_claim_key(semantic_turn_key, payload) ==
+               "codex-request:kuxYokaG14TbR87mK2-_QJTJWkNUQm-l_4_Du-AKlG8"
+    end
+
+    test "is stable across map order and excluded metadata but diverges on request semantics" do
+      semantic_turn_key = :crypto.hash(:sha256, "semantic-turn-stability")
+      base = request_claim_payload()
+      encoded_turn_metadata = Jason.encode!(%{"turn_id" => "encoded-turn", "nonce" => "ignored"})
+
+      reordered_and_volatile = %{
+        "client_metadata" => %{
+          "ws_request_header_tracestate" => "volatile-b",
+          "meaningful" => "kept",
+          "x-codex-turn-metadata" => encoded_turn_metadata,
+          "ws_request_header_traceparent" => "volatile-a",
+          "x-codex-ws-stream-request-start-ms" => 999,
+          "turn_id" => "direct-turn"
+        },
+        "request_id" => "request-b",
+        "input" => [
+          %{
+            "output" => %{"status" => "ok"},
+            "call_id" => "call_1",
+            "type" => "function_call_output"
+          }
+        ],
+        "previous_response_id" => "resp_1",
+        "model" => "gpt-example",
+        "type" => "response.create",
+        "turn_id" => "turn-b"
+      }
+
+      claim = WebsocketTurnIdentity.request_claim_key(semantic_turn_key, base)
+
+      assert claim ==
+               WebsocketTurnIdentity.request_claim_key(
+                 semantic_turn_key,
+                 reordered_and_volatile
+               )
+
+      for changed <- [
+            put_in(base, ["previous_response_id"], "resp_2"),
+            put_in(base, ["input", Access.at(0), "call_id"], "call_2"),
+            put_in(base, ["input", Access.at(0), "output"], %{"status" => "changed"}),
+            Map.put(base, "input", [
+              %{
+                "type" => "function_call_output",
+                "call_id" => "call_2",
+                "output" => %{"status" => "second"}
+              },
+              hd(base["input"])
+            ]),
+            Map.put(base, "input", [
+              hd(base["input"]),
+              %{
+                "type" => "function_call_output",
+                "call_id" => "call_2",
+                "output" => %{"status" => "second"}
+              }
+            ])
+          ] do
+        refute claim == WebsocketTurnIdentity.request_claim_key(semantic_turn_key, changed)
+      end
+    end
+  end
+
   defp assert_identity(payload, raw_turn_id) do
     expected = :crypto.hash(:sha256, @session_id <> <<0>> <> raw_turn_id)
 
@@ -200,5 +284,30 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentityTest do
   defp resolve!(payload, session_id) do
     assert {:ok, identity} = WebsocketTurnIdentity.resolve(payload, session_id)
     identity
+  end
+
+  defp request_claim_payload do
+    %{
+      "type" => "response.create",
+      "model" => "gpt-example",
+      "previous_response_id" => "resp_1",
+      "input" => [
+        %{
+          "type" => "function_call_output",
+          "call_id" => "call_1",
+          "output" => %{"status" => "ok"}
+        }
+      ],
+      "turn_id" => "turn-a",
+      "request_id" => "request-a",
+      "client_metadata" => %{
+        "turn_id" => "direct-turn",
+        "x-codex-turn-metadata" => %{"turn_id" => "encoded-turn", "nonce" => "ignored"},
+        "x-codex-ws-stream-request-start-ms" => 1,
+        "ws_request_header_traceparent" => "volatile-x",
+        "ws_request_header_tracestate" => "volatile-y",
+        "meaningful" => "kept"
+      }
+    }
   end
 end

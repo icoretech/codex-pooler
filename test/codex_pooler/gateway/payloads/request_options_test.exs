@@ -440,12 +440,18 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
       semantic_turn_key = :crypto.strong_rand_bytes(32)
       turn_claim_key = "codex-turn:" <> Base.url_encode64(semantic_turn_key, padding: false)
 
+      request_claim_key =
+        "codex-request:" <>
+          (:crypto.hash(:sha256, "synthetic-request-claim")
+           |> Base.url_encode64(padding: false))
+
       options =
         RequestOptions.build(
           %{
             transport: "websocket",
             semantic_turn_key: semantic_turn_key,
-            turn_claim_key: turn_claim_key
+            turn_claim_key: turn_claim_key,
+            request_claim_key: request_claim_key
           },
           "/backend-api/codex/responses",
           %{"model" => "example-model"}
@@ -453,8 +459,12 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
 
       assert options.continuity.semantic_turn_key == semantic_turn_key
       assert options.continuity.turn_claim_key == turn_claim_key
+      assert options.continuity.request_claim_key == request_claim_key
       assert RequestOptions.server_correlation_id(options) == turn_claim_key
       assert RequestOptions.websocket_request_correlation_id(options) == turn_claim_key
+
+      invalid = RequestOptions.put_continuity(options, request_claim_key: "codex-request:invalid")
+      assert invalid.continuity.request_claim_key == request_claim_key
     end
 
     test "compaction-shaped native frames keep the durable claim correlation without capability" do

@@ -19,6 +19,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   alias CodexPooler.Gateway.Metadata.CodexCatalog
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
+  alias CodexPooler.Gateway.Payloads.WebsocketTurnIdentity
   alias CodexPooler.Gateway.Runtime.Dispatch.SelectedCandidateContext
   alias CodexPooler.Gateway.Runtime.Finalization
   alias CodexPoolerWeb.GatewayControllerHelpers, as: GatewayHelpers
@@ -7575,6 +7576,200 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   end
 
   @tag :duplicate_turn
+  test "released 0.151.0 same-socket native tool continuation without previous response gets a request claim" do
+    previous_response_id = "resp_native_tool_continuation_anchor"
+    logical_turn_id = "native-tool-continuation-turn"
+    released_thread_id = Ecto.UUID.generate()
+    released_context_window_id = Ecto.UUID.generate()
+
+    released_turn_metadata =
+      Jason.encode!(%{
+        "installation_id" => Ecto.UUID.generate(),
+        "session_id" => released_thread_id,
+        "thread_id" => released_thread_id,
+        "turn_id" => logical_turn_id,
+        "request_kind" => "turn",
+        "window_id" => "#{released_thread_id}:1",
+        "window_number" => 1,
+        "context_window_id" => released_context_window_id,
+        "sandbox_mode" => "danger-full-access"
+      })
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           FakeUpstream.json_response(%{
+             "id" => previous_response_id,
+             "object" => "response",
+             "usage" => %{"input_tokens" => 4, "output_tokens" => 3, "total_tokens" => 7}
+           }),
+           FakeUpstream.json_response(%{
+             "id" => "resp_native_tool_continuation_complete",
+             "object" => "response",
+             "usage" => %{"input_tokens" => 5, "output_tokens" => 2, "total_tokens" => 7}
+           })
+         ]}
+      )
+
+    setup = gateway_setup(upstream)
+
+    identity =
+      setup.identity
+      |> UpstreamIdentity.changeset(%{
+        metadata: saved_reset_metadata(upstream, 1),
+        saved_reset_auto_redeem_enabled: true,
+        saved_reset_auto_redeem_min_blocked_minutes: 60,
+        saved_reset_auto_redeem_keep_credits: 0,
+        updated_at: DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      })
+      |> Repo.update!()
+
+    setup = %{setup | identity: identity}
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    {:ok, state} =
+      CodexResponsesSocket.init(%{
+        auth: auth,
+        opts: %{
+          request_id: "native-tool-continuation-socket",
+          accepted_turn_state: "native-tool-continuation-state",
+          client_ip: "127.0.0.1"
+        }
+      })
+
+    anchor = %{
+      "type" => "response.create",
+      "model" => setup.model.exposed_model_id,
+      "client_metadata" => %{
+        "turn_id" => logical_turn_id,
+        "x-codex-turn-metadata" => released_turn_metadata
+      },
+      "input" => native_text_input("anchor"),
+      "stream" => true,
+      "generate" => true
+    }
+
+    continuation = %{
+      "type" => "response.create",
+      "model" => setup.model.exposed_model_id,
+      "client_metadata" => %{
+        "turn_id" => logical_turn_id,
+        "x-codex-turn-metadata" => released_turn_metadata
+      },
+      "input" => [
+        %{
+          "type" => "function_call_output",
+          "call_id" => "call_native_tool_continuation",
+          "output" => "synthetic continuation output"
+        }
+      ],
+      "stream" => true,
+      "generate" => true
+    }
+
+    try do
+      assert {:ok, state} =
+               CodexResponsesSocket.handle_in({Jason.encode!(anchor), [opcode: :text]}, state)
+
+      assert {:push, {:text, anchor_frame}, state} = receive_socket_push(state)
+      assert %{"id" => ^previous_response_id} = Jason.decode!(anchor_frame)
+      assert {:ok, state} = receive_socket_done(state)
+
+      assert {:ok, state} =
+               CodexResponsesSocket.handle_in(
+                 {Jason.encode!(continuation), [opcode: :text]},
+                 state
+               )
+
+      assert {:push, {:text, continuation_frame}, state} = receive_socket_push(state)
+
+      assert %{"id" => "resp_native_tool_continuation_complete"} =
+               Jason.decode!(continuation_frame)
+
+      assert {:ok, state} = receive_socket_done(state)
+
+      assert [anchor_request, continuation_request] =
+               Repo.all(
+                 from request in Request,
+                   where: request.pool_id == ^setup.pool.id,
+                   order_by: [asc: request.admitted_at]
+               )
+
+      {:ok, logical_identity} =
+        WebsocketTurnIdentity.resolve(anchor, state.codex_session.id)
+
+      assert {:ok, ^logical_identity} =
+               WebsocketTurnIdentity.resolve(continuation, state.codex_session.id)
+
+      assert anchor_request.correlation_id == logical_identity.turn_claim_key
+
+      assert continuation_request.correlation_id ==
+               WebsocketTurnIdentity.request_claim_key(
+                 logical_identity.semantic_turn_key,
+                 continuation
+               )
+
+      refute anchor_request.correlation_id == continuation_request.correlation_id
+      assert Repo.aggregate(from(a in Attempt), :count) == 2
+
+      assert [1, 2] ==
+               Repo.all(
+                 from turn in CodexTurn,
+                   where: turn.codex_session_id == ^state.codex_session.id,
+                   order_by: [asc: turn.turn_sequence],
+                   select: turn.turn_sequence
+               )
+
+      assert Repo.aggregate(
+               from(entry in LedgerEntry, where: entry.entry_kind == "settlement"),
+               :count
+             ) == 2
+
+      assert FakeUpstream.count(upstream) == 2
+
+      prime_weekly_exhausted_quota!(identity)
+      saved_reset_before_replay = Repo.reload!(identity).metadata["saved_reset_redemption"]
+
+      assert {:error, %{status: 409, code: "duplicate_turn"}} =
+               execute_websocket_response(
+                 auth,
+                 Jason.encode!(continuation),
+                 %{
+                   request_id: "native-tool-continuation-replay",
+                   codex_session: state.codex_session
+                 },
+                 fn frame -> send(self(), {:websocket_frame, :replay, frame}) end
+               )
+
+      refute_received {:websocket_frame, :replay, _frame}
+      assert FakeUpstream.count(upstream) == 2
+      assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 2
+      assert Repo.aggregate(from(a in Attempt), :count) == 2
+
+      assert Repo.aggregate(
+               from(turn in CodexTurn, where: turn.codex_session_id == ^state.codex_session.id),
+               :count
+             ) == 2
+
+      assert Repo.aggregate(
+               from(entry in LedgerEntry, where: entry.entry_kind == "settlement"),
+               :count
+             ) == 2
+
+      assert Repo.reload!(identity).metadata["saved_reset_redemption"] ==
+               saved_reset_before_replay
+
+      refute Enum.any?(FakeUpstream.requests(upstream), fn request ->
+               request.path == "/api/codex/rate-limit-reset-credits/consume"
+             end)
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
+
+
+  @tag :duplicate_turn
   test "duplicate explicit websocket turn id does not double account attempts or usage" do
     upstream =
       start_upstream(
@@ -7758,7 +7953,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
   end
 
   @tag :duplicate_turn
-  test "concurrent duplicate explicit websocket turn id is atomically rejected" do
+  test "concurrent identical native tool continuations admit exactly one lifecycle" do
     upstream =
       start_upstream(
         FakeUpstream.json_response(%{
@@ -7774,12 +7969,31 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
 
     opts = %{request_id: "connection-request-id", codex_session: session}
     parent = self()
+    logical_turn_id = "duplicate-race-turn-id"
+
+    anchor =
+      Jason.encode!(%{
+        "type" => "response.create",
+        "model" => setup.model.exposed_model_id,
+        "client_metadata" => %{"turn_id" => logical_turn_id},
+        "input" => native_text_input("anchor")
+      })
+
+    assert :ok = execute_websocket_response(auth, anchor, opts, fn _frame -> :ok end)
 
     payload =
       Jason.encode!(%{
+        "type" => "response.create",
         "model" => setup.model.exposed_model_id,
-        "turn_id" => "duplicate-race-turn-id",
-        "input" => native_text_input("dedupe me concurrently")
+        "client_metadata" => %{"turn_id" => logical_turn_id},
+        "previous_response_id" => "resp_concurrent_duplicate_turn",
+        "input" => [
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_concurrent_duplicate_turn",
+            "output" => "synthetic concurrent output"
+          }
+        ]
       })
 
     tasks =
@@ -7816,17 +8030,17 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     assert_receive {:websocket_frame, _label, _frame}, @websocket_frame_timeout
     refute_received {:websocket_frame, _label, _frame}
 
-    assert FakeUpstream.count(upstream) == 1
-    assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 1
-    assert Repo.aggregate(from(a in Attempt), :count) == 1
+    assert FakeUpstream.count(upstream) == 2
+    assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 2
+    assert Repo.aggregate(from(a in Attempt), :count) == 2
 
     assert Repo.aggregate(from(t in CodexTurn, where: t.codex_session_id == ^session.id), :count) ==
-             1
+             2
 
     assert Repo.aggregate(
              from(entry in LedgerEntry, where: entry.entry_kind == "settlement"),
              :count
-           ) == 1
+           ) == 2
   end
 
   @tag :demoted_owner

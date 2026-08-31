@@ -120,7 +120,7 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
       transport: transport.transport,
       correlation_id:
         authorized_correlation_id ||
-          RequestOptions.server_correlation_id(request_options, payload),
+          durable_request_correlation_id(request_options, payload),
       idempotency_key: request_metadata.idempotency_key,
       client_ip: request_metadata.client_ip,
       user_agent: request_metadata.user_agent,
@@ -130,6 +130,19 @@ defmodule CodexPooler.Gateway.Runtime.Dispatch.AccountingReservation do
         request_metadata_attrs(auth, payload, accounting_endpoint, request_options, route_state)
     }
   end
+
+  defp durable_request_correlation_id(
+         %RequestOptions{
+           transport: %{transport: "websocket"},
+           continuity: %{request_claim_key: request_claim_key}
+         },
+         _payload
+       )
+       when is_binary(request_claim_key),
+       do: request_claim_key
+
+  defp durable_request_correlation_id(%RequestOptions{} = request_options, payload),
+    do: RequestOptions.server_correlation_id(request_options, payload)
 
   @spec reservation_snapshot_inputs(auth(), Model.t(), map(), String.t(), RequestOptions.t()) ::
           RouteState.reservation_snapshot_inputs()

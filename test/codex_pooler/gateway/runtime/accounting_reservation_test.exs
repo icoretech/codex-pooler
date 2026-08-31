@@ -400,13 +400,16 @@ defmodule CodexPooler.Gateway.Runtime.AccountingReservationTest do
   defp request_options(auth, payload, model, request_id \\ "pre-attempt-rollback") do
     {:ok, policy} = Access.normalize_api_key_policy(auth.api_key)
 
+    turn_claim_key =
+      "codex-turn:" <>
+        (:crypto.hash(:sha256, request_id) |> Base.url_encode64(padding: false))
+
     %{
       request_id: request_id,
       upstream_endpoint: @endpoint,
       transport: "websocket",
-      turn_claim_key:
-        "codex-turn:" <>
-          (:crypto.hash(:sha256, request_id) |> Base.url_encode64(padding: false))
+      turn_claim_key: turn_claim_key,
+      request_claim_key: turn_claim_key
     }
     |> RequestOptions.build(@endpoint, payload)
     |> RequestOptions.put_routing(

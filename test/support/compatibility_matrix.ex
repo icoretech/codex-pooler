@@ -1768,6 +1768,28 @@ defmodule CodexPooler.CompatibilityMatrix do
         semantic_key: "opaque_session_scoped_sha256_32_bytes",
         claim_key: "opaque_session_scoped_full_base64url_sha256_claim"
       },
+      native_tool_continuation: %{
+        logical_turn: %{
+          identity: "semantic_turn_key_and_turn_claim_key",
+          client_turns: 1
+        },
+        request_claim: %{
+          kind: "deterministic_continuation_claim",
+          separate_from_logical_turn_identity: true
+        },
+        accepted_semantic_continuation: %{
+          requests: 2,
+          attempts: 2,
+          codex_turns: 2,
+          settlements: 2,
+          sequences: [1, 2]
+        },
+        exact_replay: %{
+          status: 409,
+          new_request_attempt_codex_turn_or_settlement: false,
+          upstream_dispatch: false
+        }
+      },
       active_reconnect: %{
         same_active_non_cancelled: %{
           disposition: "same_turn_replay",

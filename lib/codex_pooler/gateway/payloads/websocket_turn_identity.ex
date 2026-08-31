@@ -11,6 +11,15 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   @request_param "request_id"
   @turn_id_pattern ~r/\A[A-Za-z0-9_.:-]+\z/
   @claim_prefix "codex-turn:"
+  @request_claim_prefix "codex-request:"
+  @request_claim_domain "native_websocket_response_claim_v1"
+  @excluded_client_metadata_keys [
+    "turn_id",
+    @canonical_metadata_key,
+    "x-codex-ws-stream-request-start-ms",
+    "ws_request_header_traceparent",
+    "ws_request_header_tracestate"
+  ]
 
   @type identity :: %{
           required(:semantic_turn_key) => <<_::256>>,
@@ -48,6 +57,25 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
       {:error, _reason} = error ->
         error
     end
+  end
+
+  @spec request_claim_key(<<_::256>>, map()) :: String.t()
+  def request_claim_key(semantic_turn_key, payload)
+      when is_binary(semantic_turn_key) and byte_size(semantic_turn_key) == 32 and is_map(payload) do
+    projection = request_claim_projection(payload)
+
+    digest =
+      :crypto.mac(
+        :hmac,
+        :sha256,
+        request_claim_hmac_key(),
+        :erlang.term_to_binary(
+          {@request_claim_domain, semantic_turn_key, projection},
+          [:deterministic]
+        )
+      )
+
+    @request_claim_prefix <> Base.url_encode64(digest, padding: false)
   end
 
   @spec raw_turn_id(map()) :: {:ok, String.t()} | :missing | {:error, Error.reason()}
@@ -153,5 +181,32 @@ defmodule CodexPooler.Gateway.Payloads.WebsocketTurnIdentity do
   @spec invalid(String.t()) :: {:error, Error.reason()}
   defp invalid(param) do
     {:error, Error.invalid_request("native websocket turn identity is invalid", param)}
+  end
+
+  defp request_claim_projection(payload) do
+    payload
+    |> Map.drop([@turn_param, @request_param])
+    |> scrub_request_client_metadata()
+  end
+
+  defp scrub_request_client_metadata(%{"client_metadata" => client_metadata} = payload)
+       when is_map(client_metadata) do
+    Map.put(
+      payload,
+      "client_metadata",
+      Map.drop(client_metadata, @excluded_client_metadata_keys)
+    )
+  end
+
+  defp scrub_request_client_metadata(payload), do: payload
+
+  defp request_claim_hmac_key do
+    :crypto.hash(:sha256, secret_key_base() <> <<0>> <> @request_claim_domain)
+  end
+
+  defp secret_key_base do
+    :codex_pooler
+    |> Application.fetch_env!(CodexPoolerWeb.Endpoint)
+    |> Keyword.fetch!(:secret_key_base)
   end
 end

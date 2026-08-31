@@ -476,6 +476,193 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
       end
     end
 
+    test "assigns deterministic request claims only to validated ordinary native tool continuations" do
+      session_id = "018f60df-713f-7ca8-b9a0-0d12c508a901"
+      turn_id = "turn-request-claim"
+      anchor = native_request_claim_payload(turn_id, nil, [])
+
+      assert {:ok, anchor_prepared} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(anchor),
+                 native_responses_options(anchor, session_id),
+                 fn _frame -> :ok end
+               )
+
+      assert anchor_prepared.request_options.continuity.request_claim_key ==
+               anchor_prepared.turn_claim_key
+
+      continuation =
+        native_request_claim_payload(turn_id, "resp_claim_0001", [
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_claim_0001",
+            "output" => %{"status" => "ok"}
+          }
+        ])
+
+      assert {:ok, continuation_prepared} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(continuation),
+                 native_responses_options(continuation, session_id),
+                 fn _frame -> :ok end
+               )
+
+      assert continuation_prepared.semantic_turn_key == anchor_prepared.semantic_turn_key
+      assert continuation_prepared.turn_claim_key == anchor_prepared.turn_claim_key
+
+      assert continuation_prepared.request_options.continuity.request_claim_key =~
+               ~r/\Acodex-request:[A-Za-z0-9_-]{43}\z/
+
+      refute continuation_prepared.request_options.continuity.request_claim_key ==
+               continuation_prepared.turn_claim_key
+
+      released_continuation =
+        continuation
+        |> Map.delete("previous_response_id")
+        |> put_in(
+          ["client_metadata", "x-codex-turn-metadata"],
+          Jason.encode!(%{
+            "turn_id" => turn_id,
+            "request_kind" => "turn",
+            "window_id" => "window-released-continuation",
+            "window_number" => 1,
+            "context_window_id" => "00000000-0000-4000-8000-000000000151"
+          })
+        )
+
+      assert {:ok, released_prepared} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(released_continuation),
+                 native_responses_options(released_continuation, session_id),
+                 fn _frame -> :ok end
+               )
+
+      assert released_prepared.request_options.continuity.request_claim_key =~
+               ~r/\Acodex-request:[A-Za-z0-9_-]{43}\z/
+
+      refute released_prepared.request_options.continuity.request_claim_key ==
+               released_prepared.turn_claim_key
+
+      assert {:ok, replay_prepared} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(continuation),
+                 native_responses_options(continuation, session_id),
+                 fn _frame -> :ok end
+               )
+
+      assert replay_prepared.request_options.continuity.request_claim_key ==
+               continuation_prepared.request_options.continuity.request_claim_key
+
+      assert {:ok, direct_prepared} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(continuation),
+                 direct_responses_options(continuation),
+                 fn _frame -> :ok end
+               )
+
+      assert direct_prepared.request_options.continuity.request_claim_key =~
+               ~r/\Acodex-request:[A-Za-z0-9_-]{43}\z/
+
+      admission = direct_admission(direct_prepared)
+
+      assert {:ok, compaction_admitted} =
+               WebsocketCodec.attach_native_compaction_admission(
+                 direct_prepared,
+                 admission
+               )
+
+      assert compaction_admitted.request_options.continuity.request_claim_key ==
+               compaction_admitted.turn_claim_key
+    end
+
+    test "falls back to the logical turn claim for non-tool, public, and native compaction paths" do
+      turn_id = "turn-fallback-claim"
+
+      non_tool =
+        native_request_claim_payload(turn_id, "resp_non_tool", [
+          %{"type" => "message", "role" => "user", "content" => "synthetic"}
+        ])
+
+      assert {:ok, non_tool_prepared} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(non_tool),
+                 native_responses_options(non_tool),
+                 fn _frame -> :ok end
+               )
+
+      assert non_tool_prepared.request_options.continuity.request_claim_key ==
+               non_tool_prepared.turn_claim_key
+
+      public =
+        native_request_claim_payload(turn_id, "resp_public", [
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_public",
+            "output" => %{"status" => "ok"}
+          }
+        ])
+        |> Map.drop(["turn_id", "client_metadata"])
+
+      assert {:ok, public_prepared} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(public),
+                 public_responses_options(public),
+                 fn _frame -> :ok end
+               )
+
+      assert is_nil(public_prepared.request_options.continuity.request_claim_key)
+
+      compaction =
+        native_compaction_trigger_payload(%{"turn_id" => turn_id})
+        |> Map.put("previous_response_id", "resp_compaction")
+
+      assert {:ok, compaction_prepared} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(compaction),
+                 native_responses_options(compaction),
+                 fn _frame -> :ok end
+               )
+
+      assert compaction_prepared.request_options.continuity.request_claim_key ==
+               compaction_prepared.turn_claim_key
+
+      explicit_compaction_metadata =
+        native_request_claim_payload(turn_id, nil, [
+          %{
+            "type" => "function_call_output",
+            "call_id" => "call_explicit_compaction",
+            "output" => %{"status" => "ok"}
+          }
+        ])
+        |> put_in(
+          ["client_metadata", "x-codex-turn-metadata"],
+          Jason.encode!(%{
+            "turn_id" => turn_id,
+            "request_kind" => "compaction",
+            "window_id" => "window-explicit-compaction",
+            "window_number" => 1,
+            "context_window_id" => "00000000-0000-4000-8000-000000000152",
+            "compaction" => %{
+              "trigger" => "auto",
+              "reason" => "context_limit",
+              "implementation" => "responses_compaction_v2",
+              "phase" => "mid_turn",
+              "strategy" => "memento"
+            }
+          })
+        )
+
+      assert {:ok, explicit_compaction_prepared} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(explicit_compaction_metadata),
+                 native_responses_options(explicit_compaction_metadata),
+                 fn _frame -> :ok end
+               )
+
+      assert explicit_compaction_prepared.request_options.continuity.request_claim_key ==
+               explicit_compaction_prepared.turn_claim_key
+    end
+
     test "rejects unsupported compaction placement during preparation" do
       payload = %{
         "type" => "response.create",
@@ -1467,6 +1654,23 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
       "include" => ["reasoning.encrypted_content"],
       "tool_choice" => "auto"
     }
+  end
+
+  defp native_request_claim_payload(turn_id, previous_response_id, input) do
+    %{
+      "type" => "response.create",
+      "model" => "gpt-example",
+      "input" => input,
+      "turn_id" => turn_id,
+      "client_metadata" => %{"turn_id" => turn_id}
+    }
+    |> then(fn payload ->
+      if is_binary(previous_response_id) do
+        Map.put(payload, "previous_response_id", previous_response_id)
+      else
+        payload
+      end
+    end)
   end
 
   defp direct_admission(%PreparedWebsocketFrame{} = prepared) do

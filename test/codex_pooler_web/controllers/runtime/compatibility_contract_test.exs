@@ -2423,6 +2423,29 @@ defmodule CodexPoolerWeb.Runtime.CompatibilityContractTest do
       assert feature.contract =~ "saved-reset probe or redeem activity"
       assert feature.contract =~ "public /v1 never inherits the native owner capability or proof"
       assert fixture.native_compaction_admission == @native_compaction_admission_contract
+      assert fixture.native_tool_continuation == %{
+               logical_turn: %{
+                 identity: "semantic_turn_key_and_turn_claim_key",
+                 client_turns: 1
+               },
+               request_claim: %{
+                 kind: "deterministic_continuation_claim",
+                 separate_from_logical_turn_identity: true
+               },
+               accepted_semantic_continuation: %{
+                 requests: 2,
+                 attempts: 2,
+                 codex_turns: 2,
+                 settlements: 2,
+                 sequences: [1, 2]
+               },
+               exact_replay: %{
+                 status: 409,
+                 new_request_attempt_codex_turn_or_settlement: false,
+                 upstream_dispatch: false
+               }
+             }
+
     end
 
     test "locks native websocket reconnect identity, handoff, and release boundaries" do

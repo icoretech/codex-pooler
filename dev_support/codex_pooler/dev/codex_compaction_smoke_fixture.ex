@@ -5,9 +5,10 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
 
   import Ecto.Query
 
-  alias CodexPooler.Dev.CodexCompactionSmokeFixture.{Journal, Provisioner}
   alias CodexPooler.Access.APIKey
+  alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Catalog.Model
+  alias CodexPooler.Dev.CodexCompactionSmokeFixture.{Journal, Provisioner}
   alias CodexPooler.Gateway.Persistence.{BridgeOwnerLease, CodexSession, CodexTurn}
   alias CodexPooler.Pools.{ModelServingOverride, Pool}
   alias CodexPooler.Repo
@@ -20,7 +21,14 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
 
   @spec parse_args([String.t()]) :: {:ok, atom(), options()} | {:error, String.t()}
   def parse_args(args) do
-    case OptionParser.parse(args, strict: [run_id: :string, upstream_base_url: :string]) do
+    case OptionParser.parse(args,
+           strict: [
+             run_id: :string,
+             upstream_base_url: :string,
+             upstream_frame_count: :integer,
+             duplicate_error_count: :integer
+           ]
+         ) do
       {options, ["acquire"], []} ->
         validate_args(:acquire, options)
 
@@ -30,9 +38,12 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
       {options, ["release"], []} ->
         validate_args(:release, options)
 
+      {options, ["receipt"], []} ->
+        validate_args(:receipt, options)
+
       _invalid ->
         {:error,
-         "use acquire --run-id RUN_ID --upstream-base-url ORIGIN, status --run-id RUN_ID, or release --run-id RUN_ID"}
+         "use acquire --run-id RUN_ID --upstream-base-url ORIGIN, status/release --run-id RUN_ID, or receipt --run-id RUN_ID --upstream-frame-count N --duplicate-error-count N"}
     end
   end
 
@@ -75,6 +86,58 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
         {:error, :missing} -> {:ok, %{status: "absent", run_id: run_id}}
         {:error, _reason} -> {:error, "fixture journal is unsafe or invalid"}
       end
+    end
+  end
+
+  @spec receipt(options()) :: {:ok, map()} | {:error, String.t()}
+  def receipt(options) do
+    with :ok <- validate_environment(options),
+         {:ok, run_id} <- fetch_run_id(options),
+         {:ok, journal} <- read_ready_journal(options, run_id) do
+      request_query = from request in Request, where: request.pool_id == ^journal["pool_id"]
+      request_ids = Repo.all(from request in request_query, select: request.id)
+
+      turns =
+        Repo.all(
+          from turn in CodexTurn,
+            where: turn.request_id in ^request_ids,
+            order_by: [asc: turn.turn_sequence],
+            select: {turn.request_id, turn.codex_session_id, turn.turn_sequence}
+        )
+
+      correlations =
+        Repo.all(
+          from request in request_query,
+            join: turn in CodexTurn,
+            on: turn.request_id == request.id,
+            order_by: [asc: turn.turn_sequence],
+            select: request.correlation_id
+        )
+
+      {:ok,
+       %{
+         status: "closed",
+         request_count: length(request_ids),
+         attempt_count:
+           Repo.aggregate(
+             from(attempt in Attempt, where: attempt.request_id in ^request_ids),
+             :count
+           ),
+         codex_turn_count: length(turns),
+         settlement_count:
+           Repo.aggregate(
+             from(entry in LedgerEntry,
+               where: entry.request_id in ^request_ids and entry.entry_kind == "settlement"
+             ),
+             :count
+           ),
+         turn_sequences: Enum.map(turns, &elem(&1, 2)),
+         upstream_frame_count: Keyword.fetch!(options, :upstream_frame_count),
+         duplicate_error_count: Keyword.fetch!(options, :duplicate_error_count),
+         logical_turn_fingerprints:
+           turns |> Enum.map(&elem(&1, 1)) |> Enum.uniq() |> Enum.map(&fingerprint/1),
+         request_fingerprints: Enum.map(correlations, &fingerprint/1)
+       }}
     end
   end
 
@@ -150,15 +213,13 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
   end
 
   defp cleanup(paths, journal) do
-    try do
-      Provisioner.cleanup!(journal)
-      require_postconditions(journal)
-      Journal.remove_secret(paths)
-      Journal.remove_all(paths)
-      {:ok, %{status: "released", run_id: journal["run_id"]}}
-    rescue
-      _exception -> {:error, "fixture cleanup incomplete; metadata journal retained"}
-    end
+    Provisioner.cleanup!(journal)
+    require_postconditions(journal)
+    Journal.remove_secret(paths)
+    Journal.remove_all(paths)
+    {:ok, %{status: "released", run_id: journal["run_id"]}}
+  rescue
+    _exception -> {:error, "fixture cleanup incomplete; metadata journal retained"}
   end
 
   defp require_postconditions(journal) do
@@ -176,60 +237,101 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
         :count
       )
 
-    active_resources = [
-      is_binary(pool_id) and
-        match?(%Pool{status: status} when status != "archived", Repo.get(Pool, pool_id)),
-      is_binary(journal["api_key_id"]) and
-        match?(
-          %APIKey{status: status} when status != "revoked",
-          Repo.get(APIKey, journal["api_key_id"])
-        ),
-      is_binary(journal["model_id"]) and
-        match?(
-          %Model{status: status} when status != "retired",
-          Repo.get(Model, journal["model_id"])
-        ),
-      is_binary(journal["assignment_id"]) and
-        match?(
-          %PoolUpstreamAssignment{status: status} when status != "deleted",
-          Repo.get(PoolUpstreamAssignment, journal["assignment_id"])
-        ),
-      is_binary(journal["identity_id"]) and
-        match?(
-          %UpstreamIdentity{status: status} when status != "disabled",
-          Repo.get(UpstreamIdentity, journal["identity_id"])
-        ),
-      is_binary(journal["identity_id"]) and
-        Repo.exists?(
-          from secret in EncryptedSecret,
-            where: secret.upstream_identity_id == ^journal["identity_id"]
-        ),
-      is_binary(pool_id) and
-        Repo.exists?(from override in ModelServingOverride, where: override.pool_id == ^pool_id),
-      is_binary(pool_id) and
-        Repo.exists?(
-          from lease in BridgeOwnerLease,
-            where: lease.pool_id == ^pool_id and lease.status == "active"
-        ),
-      is_binary(pool_id) and
-        Repo.exists?(
-          from session in CodexSession,
-            where: session.pool_id == ^pool_id and session.status == "active"
-        ),
-      is_binary(pool_id) and
-        Repo.exists?(
-          from turn in CodexTurn,
-            join: session in CodexSession,
-            on: session.id == turn.codex_session_id,
-            where: session.pool_id == ^pool_id and turn.status == "in_progress"
-        )
-    ]
-
-    if active_jobs != 0 or Enum.any?(active_resources),
+    if active_jobs != 0 or active_resources?(journal),
       do: raise("run-owned resource remained active")
 
     :ok
   end
+
+  defp active_resources?(journal) do
+    Enum.any?([
+      pool_active?(journal["pool_id"]),
+      api_key_active?(journal["api_key_id"]),
+      model_active?(journal["model_id"]),
+      assignment_active?(journal["assignment_id"]),
+      identity_active?(journal["identity_id"]),
+      identity_secret_active?(journal["identity_id"]),
+      serving_override_active?(journal["pool_id"]),
+      owner_lease_active?(journal["pool_id"]),
+      session_active?(journal["pool_id"]),
+      turn_active?(journal["pool_id"])
+    ])
+  end
+
+  defp pool_active?(nil), do: false
+
+  defp pool_active?(pool_id),
+    do: match?(%Pool{status: status} when status != "archived", Repo.get(Pool, pool_id))
+
+  defp api_key_active?(nil), do: false
+
+  defp api_key_active?(api_key_id),
+    do: match?(%APIKey{status: status} when status != "revoked", Repo.get(APIKey, api_key_id))
+
+  defp model_active?(nil), do: false
+
+  defp model_active?(model_id),
+    do: match?(%Model{status: status} when status != "retired", Repo.get(Model, model_id))
+
+  defp assignment_active?(nil), do: false
+
+  defp assignment_active?(assignment_id),
+    do:
+      match?(
+        %PoolUpstreamAssignment{status: status} when status != "deleted",
+        Repo.get(PoolUpstreamAssignment, assignment_id)
+      )
+
+  defp identity_active?(nil), do: false
+
+  defp identity_active?(identity_id),
+    do:
+      match?(
+        %UpstreamIdentity{status: status} when status != "disabled",
+        Repo.get(UpstreamIdentity, identity_id)
+      )
+
+  defp identity_secret_active?(nil), do: false
+
+  defp identity_secret_active?(identity_id),
+    do:
+      Repo.exists?(
+        from secret in EncryptedSecret, where: secret.upstream_identity_id == ^identity_id
+      )
+
+  defp serving_override_active?(nil), do: false
+
+  defp serving_override_active?(pool_id),
+    do: Repo.exists?(from override in ModelServingOverride, where: override.pool_id == ^pool_id)
+
+  defp owner_lease_active?(nil), do: false
+
+  defp owner_lease_active?(pool_id),
+    do:
+      Repo.exists?(
+        from lease in BridgeOwnerLease,
+          where: lease.pool_id == ^pool_id and lease.status == "active"
+      )
+
+  defp session_active?(nil), do: false
+
+  defp session_active?(pool_id),
+    do:
+      Repo.exists?(
+        from session in CodexSession,
+          where: session.pool_id == ^pool_id and session.status == "active"
+      )
+
+  defp turn_active?(nil), do: false
+
+  defp turn_active?(pool_id),
+    do:
+      Repo.exists?(
+        from turn in CodexTurn,
+          join: session in CodexSession,
+          on: session.id == turn.codex_session_id,
+          where: session.pool_id == ^pool_id and turn.status == "in_progress"
+      )
 
   defp public_status(journal) do
     %{
@@ -256,6 +358,16 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
       else: {:error, "acquire requires exact options"}
   end
 
+  defp exact_option_keys(:receipt, options) do
+    expected = [:duplicate_error_count, :run_id, :upstream_frame_count]
+
+    if Enum.sort(Keyword.keys(options)) == expected and
+         non_negative_integer?(options[:upstream_frame_count]) and
+         non_negative_integer?(options[:duplicate_error_count]),
+       do: :ok,
+       else: {:error, "receipt requires exact non-negative count options"}
+  end
+
   defp exact_option_keys(_action, options) do
     if Keyword.keys(options) == [:run_id],
       do: :ok,
@@ -269,6 +381,23 @@ defmodule CodexPooler.Dev.CodexCompactionSmokeFixture do
       |> then(&if &1 == :ok, do: :ok, else: {:error, "invalid upstream origin"})
 
   defp maybe_validate_origin(_action, _options), do: :ok
+
+  defp read_ready_journal(options, run_id) do
+    case Journal.read_journal(paths(options, run_id), run_id) do
+      {:ok, %{"state" => "ready"} = journal} -> {:ok, journal}
+      {:ok, _journal} -> {:error, "fixture is not ready"}
+      {:error, _reason} -> {:error, "fixture journal is unsafe or invalid"}
+    end
+  end
+
+  defp fingerprint(value) when is_binary(value) do
+    :sha256
+    |> :crypto.hash(value)
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, 16)
+  end
+
+  defp non_negative_integer?(value), do: is_integer(value) and value >= 0
 
   defp fetch_run_id(options) do
     case Keyword.get(options, :run_id) do

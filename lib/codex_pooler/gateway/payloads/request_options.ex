@@ -91,6 +91,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
     :codex_turn_id,
     :semantic_turn_key,
     :turn_claim_key,
+    :request_claim_key,
     :collect_openai_image_stream,
     :collect_openai_response_stream,
     :chatgpt_account_id,

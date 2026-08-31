@@ -4421,7 +4421,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     assert_native_turn_correlation!(first_log.correlation_id)
     assert processed_log.correlation_id == "ws-owner-chain-processed"
-    assert_native_turn_correlation!(tool_log.correlation_id)
+    assert_native_request_correlation!(tool_log.correlation_id)
+    refute first_log.correlation_id == tool_log.correlation_id
 
     assert Enum.all?([first_log, processed_log, tool_log], &(&1.status == "succeeded"))
     assert Enum.all?([first_log, processed_log, tool_log], &(&1.transport == "websocket"))
@@ -4527,7 +4528,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
     assert_native_turn_correlation!(first_log.correlation_id)
     assert processed_log.correlation_id == "ws-owner-queue-processed"
-    assert_native_turn_correlation!(tool_log.correlation_id)
+    assert_native_request_correlation!(tool_log.correlation_id)
+    refute first_log.correlation_id == tool_log.correlation_id
 
     assert Enum.all?([first_log, processed_log, tool_log], &(&1.status == "succeeded"))
     assert Enum.all?([first_log, processed_log, tool_log], &(&1.response_status_code == 200))
@@ -10038,6 +10040,10 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketOwnerForwardingTest do
 
   defp assert_native_turn_correlation!(correlation_id) when is_binary(correlation_id) do
     assert correlation_id =~ ~r/\Acodex-turn:[A-Za-z0-9_-]{43}\z/
+  end
+
+  defp assert_native_request_correlation!(correlation_id) when is_binary(correlation_id) do
+    assert correlation_id =~ ~r/\Acodex-request:[A-Za-z0-9_-]{43}\z/
   end
 
   defp event_count(log, message) when is_binary(log) and is_binary(message) do
