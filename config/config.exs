@@ -17,6 +17,10 @@ config :codex_pooler,
   ecto_repos: [CodexPooler.Repo],
   generators: [timestamp_type: :utc_datetime]
 
+config :codex_pooler,
+       CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace,
+       mode: :off
+
 jobs_schedule = [
   %{
     key: :catalog_sync,

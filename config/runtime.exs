@@ -1,5 +1,15 @@
 import Config
 
+native_compaction_trace_mode =
+  CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace.runtime_mode(
+    System.get_env("CODEX_POOLER_NATIVE_COMPACTION_TRACE", "off"),
+    config_env()
+  )
+
+config :codex_pooler,
+       CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace,
+       mode: native_compaction_trace_mode
+
 if System.get_env("PHX_SERVER") in ~w(true 1) do
   config :codex_pooler, CodexPoolerWeb.Endpoint, server: true
 end

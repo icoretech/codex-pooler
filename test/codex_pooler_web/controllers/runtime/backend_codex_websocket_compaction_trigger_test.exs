@@ -7,6 +7,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
   alias CodexPooler.Access
   alias CodexPooler.Accounting.{Attempt, LedgerEntry, Request}
   alias CodexPooler.Dev.NativeCompactionAuthorizationObserver
+  alias CodexPooler.Dev.NativeCompactionTrace
   alias CodexPooler.FakeUpstream
   alias CodexPooler.Gateway.OperationalSettings
   alias CodexPooler.Gateway.Payloads.RequestOptions
@@ -14,7 +15,9 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
   alias CodexPooler.Gateway.Runtime.Service
   alias CodexPooler.Gateway.Transports.Admission
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol
+  alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession
   alias CodexPooler.Gateway.Websocket
+  alias CodexPooler.NativeCompactionTraceTestExport
   alias CodexPooler.Repo
   alias CodexPooler.Upstreams.Assignments.PoolAssignments
   alias CodexPoolerWeb.CodexResponsesSocket
@@ -32,6 +35,208 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
                                          __DIR__
                                        )
   @external_resource @incremental_compaction_fixture_path
+
+  test "full trace records a real socket owner compact lifecycle without injected events" do
+    assert_real_trace_fixture_has_no_manual_emits!()
+    enable_owner_forwarding_for_trace!()
+    root = trace_root("real-socket-success")
+    fixture = incremental_compaction_fixture!()
+    turn_id = "trace-real-turn"
+    context_window_id = "00000000-0000-4000-8000-000000000591"
+    compact_item = incremental_compaction_item("trace-real-success")
+    compact_release_ref = make_ref()
+    response_id = fixture["provider_response_id"]
+
+    upstream =
+      start_upstream(
+        {:sequence,
+         [
+           websocket_completed_response(response_id),
+           delayed_incremental_compaction_response(
+             compact_item,
+             "resp_trace_real_compact",
+             self(),
+             compact_release_ref
+           )
+         ]}
+      )
+
+    setup = gateway_setup(upstream, compact?: true)
+    port = start_public_endpoint!()
+
+    assert {:ok, %{"path" => trace_path}} =
+             NativeCompactionTrace.start_scope("real-socket-success",
+               mode: :full,
+               root: root
+             )
+
+    {conn, websocket, ref} =
+      public_websocket_connect!(
+        port,
+        setup,
+        "trace-real-upgrade",
+        "/backend-api/codex/responses"
+      )
+
+    source_frame =
+      fixture
+      |> get_in([
+        "scenarios",
+        "anchored_tool_output_and_trigger",
+        "projection_relevant_frame_subset"
+      ])
+      |> put_in(["client_metadata"], %{
+        "turn_id" => turn_id,
+        "x-codex-turn-metadata" => native_turn_metadata(turn_id, context_window_id, :compaction)
+      })
+
+    try do
+      lineage_payload =
+        ordinary_payload(setup, %{
+          "client_metadata" => %{
+            "turn_id" => turn_id,
+            "x-codex-turn-metadata" => native_turn_metadata(turn_id, context_window_id, :turn)
+          }
+        })
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, lineage_payload)
+      {conn, websocket, _lineage_frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      {conn, websocket, lineage_terminal} =
+        public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{"type" => "response.completed", "response" => %{"id" => ^response_id}} =
+               Jason.decode!(lineage_terminal)
+
+      compact_payload =
+        source_frame
+        |> Map.put("previous_response_id", response_id)
+        |> then(&incremental_compact_payload(setup, &1, "trace-real-compact"))
+
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, compact_payload)
+
+      assert_receive {:fake_upstream_timeout_barrier, :before_terminal, compact_upstream_pid,
+                      ^compact_release_ref},
+                     @detection_timeout_ms
+
+      send(compact_upstream_pid, {:fake_upstream_release_timeout, compact_release_ref})
+
+      {conn, websocket, done_frame} = public_websocket_receive_text!(conn, websocket, ref)
+      {conn, _websocket, completed_frame} = public_websocket_receive_text!(conn, websocket, ref)
+
+      assert %{"type" => "response.output_item.done", "item" => ^compact_item} =
+               Jason.decode!(done_frame)
+
+      assert %{
+               "type" => "response.completed",
+               "response" => %{"status" => "completed", "output" => [^compact_item]}
+             } = Jason.decode!(completed_frame)
+
+      assert FakeUpstream.websocket_connection_count(upstream) == 1
+      assert [ordinary_request, compact_request] = FakeUpstream.requests(upstream)
+      assert ordinary_request.method == "WEBSOCKET"
+      assert compact_request.method == "WEBSOCKET"
+
+      assert ordinary_request.websocket_connection_id ==
+               compact_request.websocket_connection_id
+
+      {:ok, _conn} = Mint.HTTP.close(conn)
+      await_trace_event!("cleanup_finished")
+      cleanup_trace_owner_sessions()
+      assert :ok = NativeCompactionTrace.flush()
+      assert :ok = NativeCompactionTrace.stop_scope()
+
+      trace = File.read!(trace_path)
+
+      for role <- ~w(socket response_task owner_session upstream_session) do
+        assert trace =~ "\"pid_role\":\"#{role}\""
+      end
+
+      for event <-
+            ~w(downstream_websocket_frame_received downstream_websocket_frame_sent upstream_websocket_frame_sent upstream_websocket_frame_received response_task_started capability_reserve_started capability_reserve_finished capability_reserved accounting_started runtime_proof_redeemed capability_consumed capability_acknowledged owner_terminal finalization_finished delivery_finished cleanup_finished beam_call beam_return beam_receive beam_send beam_spawn) do
+        assert trace =~ "\"event\":\"#{event}\""
+      end
+
+      assert trace =~ "CodexPoolerWeb.CodexResponsesSocket.handle_in/2"
+
+      assert trace =~
+               "CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession.handle_call/3"
+
+      assert trace =~
+               "CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.handle_call/3"
+
+      assert trace =~ "duration_us"
+      assert trace =~ "systemTimeUs"
+      assert trace =~ "monotonicTimeUs"
+      assert trace =~ "forwarded_owner"
+      _export = NativeCompactionTraceTestExport.maybe_export(trace_path, :success)
+    after
+      _result = Mint.HTTP.close(conn)
+      _result = NativeCompactionTrace.stop_scope()
+    end
+  end
+
+  test "full trace attributes a real rejected socket request without injected events" do
+    assert_real_trace_fixture_has_no_manual_emits!()
+    enable_owner_forwarding_for_trace!()
+    root = trace_root("real-socket-failure")
+    upstream = start_upstream(ordinary_response("resp_trace_failure_unused"))
+    setup = gateway_setup(upstream, compact?: true)
+    port = start_public_endpoint!()
+
+    assert {:ok, %{"path" => trace_path}} =
+             NativeCompactionTrace.start_scope("real-socket-failure",
+               mode: :full,
+               root: root
+             )
+
+    {conn, websocket, ref} =
+      public_websocket_connect!(
+        port,
+        setup,
+        "trace-failure-upgrade",
+        "/backend-api/codex/responses"
+      )
+
+    invalid_payload =
+      Jason.encode!(%{
+        "type" => "response.create",
+        "model" => setup.model.exposed_model_id,
+        "input" => [],
+        "client_metadata" => %{"x-codex-turn-metadata" => "not-json"}
+      })
+
+    try do
+      {conn, websocket} = public_websocket_send_text!(conn, websocket, ref, invalid_payload)
+      {conn, _websocket, error_frame} = public_websocket_receive_text!(conn, websocket, ref)
+      assert %{"status" => 400, "error" => %{"param" => param}} = Jason.decode!(error_frame)
+      assert param =~ "x-codex-turn-metadata"
+      assert FakeUpstream.count(upstream) == 0
+
+      {:ok, _conn} = Mint.HTTP.close(conn)
+      await_trace_event!("cleanup_finished")
+      cleanup_trace_owner_sessions()
+      assert :ok = NativeCompactionTrace.flush()
+      assert :ok = NativeCompactionTrace.stop_scope()
+
+      trace = File.read!(trace_path)
+      assert trace =~ "\"event\":\"socket_request_rejected\""
+      assert trace =~ "prepared_response_rejected"
+      assert trace =~ "state_before"
+      assert trace =~ "state_after"
+      assert trace =~ "x-codex-turn-metadata"
+      assert trace =~ "CodexPoolerWeb.CodexResponsesSocket.reject_prepared_response/2"
+      assert trace =~ "\"event\":\"downstream_websocket_frame_received\""
+      assert trace =~ "\"event\":\"downstream_websocket_frame_sent\""
+      assert trace =~ "\"event\":\"cleanup_finished\""
+      assert trace =~ "duration_us"
+      assert trace =~ "\"pid_role\":\"socket\""
+      _export = NativeCompactionTraceTestExport.maybe_export(trace_path, :failure)
+    after
+      _result = Mint.HTTP.close(conn)
+      _result = NativeCompactionTrace.stop_scope()
+    end
+  end
 
   for {path, transport, optional_metadata} <- [
         {"/backend-api/codex/responses", :buffered, :valid},
@@ -1786,6 +1991,77 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       turn_id: turn_id,
       upstream_mode: upstream_mode
     }
+  end
+
+  defp trace_root(label) do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "native-trace-#{label}-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(root)
+    on_exit(fn -> File.rm_rf!(root) end)
+    root
+  end
+
+  defp await_trace_event!(event, attempts \\ 200)
+  defp await_trace_event!(_event, 0), do: flunk("trace event was not observed")
+
+  defp await_trace_event!(event, attempts) do
+    if Enum.any?(NativeCompactionTrace.export()["events"], &(&1["event"] == event)) do
+      :ok
+    else
+      receive after: (10 -> :ok)
+      await_trace_event!(event, attempts - 1)
+    end
+  end
+
+  defp assert_real_trace_fixture_has_no_manual_emits! do
+    source = File.read!(__ENV__.file)
+
+    for forbidden <- [
+          Enum.join(["Trace", "Event", ".", "emit"]),
+          Enum.join(["NativeCompaction", "Trace", ".", "emit"])
+        ] do
+      refute source =~ forbidden
+    end
+  end
+
+  defp enable_owner_forwarding_for_trace! do
+    previous = Application.get_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+    Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, true)
+
+    on_exit(fn ->
+      cleanup_trace_owner_sessions()
+
+      case previous do
+        nil -> Application.delete_env(:codex_pooler, :websocket_owner_forwarding_enabled)
+        value -> Application.put_env(:codex_pooler, :websocket_owner_forwarding_enabled, value)
+      end
+    end)
+
+    :ok
+  end
+
+  defp cleanup_trace_owner_sessions do
+    WebsocketOwnerSession.Registry
+    |> Registry.select([{{:"$1", :_, :_}, [], [:"$1"]}])
+    |> Enum.each(fn codex_session_id ->
+      case WebsocketOwnerSession.lookup(codex_session_id) do
+        {:ok, owner_pid} ->
+          try do
+            GenServer.stop(owner_pid, :shutdown, 1_000)
+          catch
+            :exit, _reason -> :ok
+          end
+
+        {:error, :owner_unavailable} ->
+          :ok
+      end
+    end)
+
+    :ok
   end
 
   defp put_optional_metadata(item, :valid, item_id, turn_id, omitted_sentinel) do

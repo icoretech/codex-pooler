@@ -20,6 +20,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.FirstCompactCollection
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission.Topology.Direct
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAuthorizationObservation
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ConnectionUpgrade
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ReceiveState
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.ReceiveState.Delivery
@@ -79,7 +80,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(_opts \\ []) do
-    GenServer.start_link(__MODULE__, :new)
+    case GenServer.start_link(__MODULE__, :new) do
+      {:ok, pid} = result ->
+        _trace = NativeCompactionTrace.enroll(:upstream_session, pid)
+        result
+
+      other ->
+        other
+    end
   end
 
   @spec request(pid(), Request.t()) :: request_result()
@@ -245,8 +253,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   @impl GenServer
   def init(:new) do
-    Process.flag(:sensitive, true)
-    {:ok, new_connection_lifecycle_state()}
+    sensitivity = NativeCompactionTrace.configure_process_sensitivity(:upstream_session)
+
+    {:ok, put_trace_sensitivity(new_connection_lifecycle_state(), sensitivity)}
   end
 
   @impl GenServer
@@ -269,6 +278,28 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   @impl GenServer
+  def handle_call(:native_compaction_trace_cooperative?, _from, state),
+    do: {:reply, true, state}
+
+  def handle_call(
+        {:native_compaction_trace_sensitivity, :observe, generation, authorization, restorer},
+        _from,
+        state
+      ) do
+    case NativeCompactionTrace.configure_existing_process_sensitivity(
+           :upstream_session,
+           generation,
+           authorization,
+           restorer
+         ) do
+      {:ok, sensitivity} ->
+        {:reply, :ok, Map.put(state, :native_compaction_trace_sensitivity, sensitivity)}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
   def handle_call({:request, %Request{} = request}, {caller_pid, _tag}, state)
       when is_pid(caller_pid) do
     key = request_key(request)
@@ -378,6 +409,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
             :accounting_started
           )
 
+        _trace =
+          NativeCompactionTrace.emit_capability(:accounting_started, capability, %{
+            pid_role: :upstream_session,
+            upstream_pid: self()
+          })
+
         {:reply, :ok, Map.put(state, :native_compaction_admission, admission)}
 
       {:error, reason} ->
@@ -426,6 +463,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
             compact_capability,
             :acknowledged
           )
+
+        _trace =
+          NativeCompactionTrace.emit_capability(:capability_acknowledged, compact_capability, %{
+            pid_role: :upstream_session,
+            upstream_pid: self()
+          })
 
         {:reply, :ok, Map.put(state, :native_compaction_admission, admission)}
 
@@ -508,6 +551,37 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   def handle_info({:upstream_websocket_pong_deadline, _token}, state), do: {:noreply, state}
+
+  def handle_info(
+        {:native_compaction_trace_sensitivity, :restore, generation, authorization, restorer},
+        state
+      ) do
+    sensitivity = Map.get(state, :native_compaction_trace_sensitivity, :sensitive)
+
+    if NativeCompactionTrace.authorized_restore?(
+         sensitivity,
+         generation,
+         authorization,
+         restorer
+       ) do
+      :ok = NativeCompactionTrace.restore_process_sensitivity(sensitivity)
+      {:noreply, Map.put(state, :native_compaction_trace_sensitivity, :sensitive)}
+    else
+      {:noreply, state}
+    end
+  end
+
+  def handle_info({:DOWN, monitor, :process, restorer, _reason}, state) do
+    sensitivity = Map.get(state, :native_compaction_trace_sensitivity, :sensitive)
+
+    case NativeCompactionTrace.restore_on_restorer_down(sensitivity, monitor, restorer) do
+      :restored ->
+        {:noreply, Map.put(state, :native_compaction_trace_sensitivity, :sensitive)}
+
+      :unchanged ->
+        {:noreply, state}
+    end
+  end
 
   def handle_info(message, %{conn: conn} = state) do
     case Mint.WebSocket.stream(conn, message) do
@@ -774,7 +848,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp send_authorized_request_payload(state, request, receive_state, connection_usage) do
     with {:ok, state, consumed_phase} <- consume_request_capability(state, request),
-         {:ok, state} <- send_text(state, request.payload) do
+         :ok <- trace_physical_send(:physical_send_started, request, :started),
+         {:ok, state} <- send_text(state, request.payload),
+         :ok <- trace_physical_send(:physical_send_finished, request, :ok) do
       {:ok, result, state} = await_sent_request(state, receive_state)
 
       state =
@@ -786,9 +862,14 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
       {:ok, put_result_connection_metadata(result, state, connection_usage), state}
     else
       {:error, state} ->
+        :ok =
+          trace_physical_send(:physical_send_finished, request, {:error, :capability_rejected})
+
         {:error, :native_compaction_capability_rejected, state}
 
       {:error, reason, state} ->
+        :ok = trace_physical_send(:physical_send_finished, request, {:error, reason})
+
         state =
           state
           |> clear_admission()
@@ -818,6 +899,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
          {:ok, admission} <-
            NativeCompactionAdmission.consume(admission_state(state), capability, now_ms) do
       :ok = NativeCompactionAuthorizationObservation.emit_capability(capability, :consumed)
+
+      :ok =
+        trace_capability(:capability_consumed, capability, %{
+          pid_role: :upstream_session,
+          upstream_pid: self()
+        })
+
       {:ok, Map.put(state, :native_compaction_admission, admission), capability.phase}
     else
       _rejected -> {:error, clear_admission(state)}
@@ -895,6 +983,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
          %Request{native_compaction_capability: %Capability{} = capability}
        ) do
     :ok = NativeCompactionAuthorizationObservation.emit_capability(capability, :acknowledged)
+    :ok = trace_capability(:capability_acknowledged, capability, %{pid_role: :upstream_session})
     state
   end
 
@@ -1094,12 +1183,54 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   defp pre_response_reconnectable?(_reason), do: false
 
   defp send_text(%{conn: conn, ref: ref, websocket: websocket} = state, text) do
+    _trace =
+      NativeCompactionTrace.emit_full(:upstream_websocket_frame_sent, %{
+        direction: :pooler_to_upstream,
+        upstream_pid: self(),
+        frame_json: decode_text_frame(text),
+        frame_text: text
+      })
+
     case Mint.WebSocket.encode(websocket, {:text, text}) do
       {:ok, websocket, data} ->
         stream_request_body(%{state | websocket: websocket}, conn, ref, data)
 
       {:error, websocket, reason} ->
+        _trace =
+          NativeCompactionTrace.emit_full(:upstream_websocket_frame_send_failed, %{
+            direction: :pooler_to_upstream,
+            upstream_pid: self(),
+            reason: reason
+          })
+
         {:error, reason, %{state | websocket: websocket}}
+    end
+  end
+
+  defp trace_physical_send(
+         event,
+         %Request{native_compaction_capability: %Capability{} = capability},
+         outcome
+       ),
+       do:
+         trace_capability(event, capability, %{
+           pid_role: :upstream_session,
+           upstream_pid: self(),
+           outcome: trace_send_outcome(outcome),
+           reason: trace_send_reason(outcome)
+         })
+
+  defp trace_physical_send(_event, _request, _outcome), do: :ok
+
+  defp trace_send_outcome({:error, _reason}), do: :error
+  defp trace_send_outcome(outcome), do: outcome
+  defp trace_send_reason({:error, reason}), do: reason
+  defp trace_send_reason(_outcome), do: nil
+
+  defp trace_capability(event, capability, metadata) do
+    case NativeCompactionTrace.emit_capability(event, capability, metadata) do
+      :ignored -> :ok
+      :ok -> :ok
     end
   end
 
@@ -1394,6 +1525,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
       {:binary, _data}, state ->
         {:cont, state}
+
+      {:error, _reason}, state ->
+        {:halt, close_state(state)}
     end)
   end
 
@@ -1458,6 +1592,16 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
          mapped_text,
          mapped_decoded
        ) do
+    _trace =
+      NativeCompactionTrace.emit_full(:upstream_websocket_frame_received, %{
+        direction: :upstream_to_pooler,
+        upstream_pid: self(),
+        raw_frame_json: raw_decoded,
+        raw_frame_text: raw_text,
+        mapped_frame_json: mapped_decoded,
+        mapped_frame_text: mapped_text
+      })
+
     terminal_discriminator = TerminalDiscriminator.classify(mapped_decoded)
 
     receive_state =
@@ -1959,7 +2103,10 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   end
 
   defp disconnected_state(state) do
-    lifecycle = connection_lifecycle_state(state)
+    lifecycle =
+      state
+      |> connection_lifecycle_state()
+      |> preserve_trace_sensitivity(state)
 
     if Map.get(state, :reconnect_pending?, false) do
       Map.put(lifecycle, :reconnect_pending?, true)
@@ -1974,11 +2121,32 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp clear_admission(state), do: Map.delete(state, :native_compaction_admission)
 
+  defp put_trace_sensitivity(state, :sensitive), do: state
+
+  defp put_trace_sensitivity(state, sensitivity),
+    do: Map.put(state, :native_compaction_trace_sensitivity, sensitivity)
+
+  defp preserve_trace_sensitivity(lifecycle, state) do
+    case Map.fetch(state, :native_compaction_trace_sensitivity) do
+      {:ok, sensitivity} -> Map.put(lifecycle, :native_compaction_trace_sensitivity, sensitivity)
+      :error -> lifecycle
+    end
+  end
+
   defp emit_reservation_observations(%Capability{} = capability) do
     # One successful owner reserve operation proves both issuance and the
     # immediately stored reserved state. Neither fact is emitted on failure.
     :ok = NativeCompactionAuthorizationObservation.emit_capability(capability, :owner_issued)
     :ok = NativeCompactionAuthorizationObservation.emit_capability(capability, :reserved)
+
+    _trace =
+      NativeCompactionTrace.emit_capability(:capability_reserved, capability, %{
+        pid_role: :upstream_session,
+        upstream_pid: self(),
+        branch: :direct_owner
+      })
+
+    :ok
   end
 
   defp validate_direct_binding(state, %Binding{topology: %Direct{}} = binding) do

@@ -33,6 +33,7 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   alias CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAuthorizationObservation
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace
   alias CodexPooler.Gateway.Transports.Websocket.ResponseProcessed
   alias CodexPooler.Pools.Routing, as: PoolRouting
   alias CodexPooler.Repo
@@ -930,10 +931,18 @@ defmodule CodexPooler.Gateway.Runtime.Service do
   defp emit_runtime_proof_redeemed(%RequestOptions{} = request_options) do
     case RequestOptions.native_compaction_admission(request_options) do
       {:ok, capability, _owner, _lifecycle} ->
-        NativeCompactionAuthorizationObservation.emit_capability(
-          capability,
-          :runtime_proof_redeemed
-        )
+        :ok =
+          NativeCompactionAuthorizationObservation.emit_capability(
+            capability,
+            :runtime_proof_redeemed
+          )
+
+        _trace =
+          NativeCompactionTrace.emit_capability(:runtime_proof_redeemed, capability, %{
+            stage: :runtime_proof_redeemed
+          })
+
+        :ok
 
       :none ->
         :ok

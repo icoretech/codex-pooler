@@ -12,6 +12,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   alias CodexPooler.Gateway.Transports.Websocket.ForwardedSendWitnessV1
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAuthorizationObservation
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession.TerminalDiscriminator
 
@@ -67,6 +68,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     :owner_renewal_ref,
     :handoff_soft_timeout_ms,
     :handoff_absolute_timeout_ms,
+    :native_compaction_trace_sensitivity,
     :native_compaction_admission,
     :native_compaction_admission_downstream,
     :forwarded_send_witness
@@ -497,6 +499,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
             :accounting_started
           )
 
+        _trace =
+          NativeCompactionTrace.emit_capability(:accounting_started, control.capability, %{
+            pid_role: :owner_session,
+            owner_pid: self()
+          })
+
         {:ok, next, %{state | native_compaction_admission: next}}
 
       {:error, reason} ->
@@ -543,6 +551,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
             compact_capability,
             :acknowledged
           )
+
+        _trace =
+          NativeCompactionTrace.emit_capability(:capability_acknowledged, compact_capability, %{
+            pid_role: :owner_session,
+            owner_pid: self()
+          })
 
         {:ok, next, %{state | native_compaction_admission: next}}
 
@@ -615,6 +629,15 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
     # immediately stored reserved state. Neither fact is emitted on failure.
     :ok = NativeCompactionAuthorizationObservation.emit_capability(capability, :owner_issued)
     :ok = NativeCompactionAuthorizationObservation.emit_capability(capability, :reserved)
+
+    _trace =
+      NativeCompactionTrace.emit_capability(:capability_reserved, capability, %{
+        pid_role: :owner_session,
+        owner_pid: self(),
+        branch: :forwarded_owner
+      })
+
+    :ok
   end
 
   defp emit_final_completed(%{
@@ -643,6 +666,13 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          {:ok, consumed} <- NativeCompactionAdmission.consume(admission, capability, now_ms),
          {:ok, witness} <- ForwardedSendWitnessV1.issue(capability, downstream, now_ms) do
       :ok = NativeCompactionAuthorizationObservation.emit_capability(capability, :consumed)
+
+      _trace =
+        NativeCompactionTrace.emit_capability(:capability_consumed, capability, %{
+          pid_role: :owner_session,
+          owner_pid: self(),
+          branch: :forwarded_owner
+        })
 
       {:ok, witness,
        %{
@@ -758,8 +788,9 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
 
   @impl GenServer
   def init(opts) do
-    Process.flag(:sensitive, true)
+    sensitivity = NativeCompactionTrace.configure_process_sensitivity(:owner_session)
     Process.flag(:trap_exit, true)
+    _trace = NativeCompactionTrace.enroll(:owner_session, self())
 
     codex_session_id = Keyword.fetch!(opts, :codex_session_id)
     owner_lease_token = Keyword.fetch!(opts, :owner_lease_token)
@@ -796,6 +827,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
          idle_shutdown_ms: idle_shutdown_ms,
          owner_renewal_ms: owner_renewal_ms,
          owner_renewal_delay: owner_renewal_delay,
+         native_compaction_trace_sensitivity: sensitivity,
          handoff_soft_timeout_ms: handoff_soft_timeout_ms,
          handoff_absolute_timeout_ms: handoff_absolute_timeout_ms,
          draining?: false,
@@ -809,6 +841,28 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   @impl GenServer
+  def handle_call(:native_compaction_trace_cooperative?, _from, state),
+    do: {:reply, true, state}
+
+  def handle_call(
+        {:native_compaction_trace_sensitivity, :observe, generation, authorization, restorer},
+        _from,
+        state
+      ) do
+    case NativeCompactionTrace.configure_existing_process_sensitivity(
+           :owner_session,
+           generation,
+           authorization,
+           restorer
+         ) do
+      {:ok, sensitivity} ->
+        {:reply, :ok, %{state | native_compaction_trace_sensitivity: sensitivity}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
   def handle_call(:owner_identity, _from, state) do
     {:reply,
      {:ok,
@@ -1595,6 +1649,37 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
       {:error, reason} ->
         Logger.owner_renewal_failed(reason, state)
         {:noreply, schedule_owner_renewal(state)}
+    end
+  end
+
+  def handle_info(
+        {:native_compaction_trace_sensitivity, :restore, generation, authorization, restorer},
+        state
+      ) do
+    sensitivity = state.native_compaction_trace_sensitivity
+
+    if NativeCompactionTrace.authorized_restore?(
+         sensitivity,
+         generation,
+         authorization,
+         restorer
+       ) do
+      :ok = NativeCompactionTrace.restore_process_sensitivity(sensitivity)
+      {:noreply, %{state | native_compaction_trace_sensitivity: :sensitive}}
+    else
+      {:noreply, state}
+    end
+  end
+
+  def handle_info({:DOWN, monitor, :process, restorer, _reason}, state) do
+    sensitivity = state.native_compaction_trace_sensitivity
+
+    case NativeCompactionTrace.restore_on_restorer_down(sensitivity, monitor, restorer) do
+      :restored ->
+        {:noreply, %{state | native_compaction_trace_sensitivity: :sensitive}}
+
+      :unchanged ->
+        {:noreply, state}
     end
   end
 

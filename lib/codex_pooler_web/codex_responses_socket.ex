@@ -15,6 +15,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   alias CodexPooler.Gateway.Transports.Streaming.WebsocketCodec
   alias CodexPooler.Gateway.Transports.Websocket.{ActivityRegistry, WebsocketOwnerContract}
   alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace
   alias CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerAdmissionControlV1
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerForwarder
@@ -85,6 +86,15 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp handle_unrevoked_in({payload, [opcode: :text]}, state) when is_binary(payload) do
+    _trace =
+      NativeCompactionTrace.emit_full(:downstream_websocket_frame_received, %{
+        direction: :downstream_to_pooler,
+        opcode: :text,
+        socket_pid: self(),
+        frame_json: decode_trace_frame(payload),
+        frame_text: payload
+      })
+
     prepare_and_dispatch_response(payload, state)
   end
 
@@ -120,6 +130,15 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   # dropped rather than injected into whatever turn is running now.
   def handle_info({:codex_response_chunk, task_pid, data}, state)
       when is_pid(task_pid) and is_binary(data) do
+    _trace =
+      NativeCompactionTrace.emit_full(:downstream_websocket_frame_sent, %{
+        direction: :pooler_to_downstream,
+        response_task_pid: task_pid,
+        socket_pid: self(),
+        frame_json: decode_trace_frame(data),
+        frame_text: data
+      })
+
     cond do
       active_public_turn?(state, task_pid) and not public_turn_aborted?(state) ->
         public_chunk_result(data, state)
@@ -187,6 +206,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   def handle_info({:websocket_response_activity, pid, token}, state)
       when is_pid(pid) and is_reference(token) do
+    _trace =
+      NativeCompactionTrace.emit(:response_task_started, %{
+        pid_role: :response_task,
+        response_task_pid: pid,
+        activity_token: token
+      })
+
     state =
       state
       |> put_response_task_activity(pid, token)
@@ -196,6 +222,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   def handle_info({:codex_response_done, pid, result}, state) when is_pid(pid) do
+    _trace =
+      NativeCompactionTrace.emit(:finalization_finished, %{
+        pid_role: :response_task,
+        response_task_pid: pid,
+        activity_token: get_in(state, [:response_task_activities, pid]),
+        outcome: response_result_outcome(result)
+      })
+
     state = mark_response_task_result_ready(state, pid)
 
     result =
@@ -340,6 +374,9 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
   @impl WebSock
   def terminate(reason, state) do
+    _trace =
+      NativeCompactionTrace.emit(:cleanup_finished, %{pid_role: :socket, outcome: :finished})
+
     state =
       state
       |> clear_pending_owner_handoff(:socket_closed)
@@ -1141,6 +1178,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     do: {:ok, state}
 
   defp prepare_and_dispatch_response(payload, state) do
+    _trace = NativeCompactionTrace.enroll(:socket, self())
     original_public_context = public_response_context(state)
 
     case prepare_response_payload(payload, state) do
@@ -1174,6 +1212,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     with {:ok, prepared} <- prepare_websocket_frame(payload, prepared_state),
          {:ok, prepared} <-
            reserve_native_compaction_admission(prepared, payload, prepared_state) do
+      _trace = NativeCompactionTrace.emit(:prepared_frame, %{pid_role: :socket})
       {:ok, prepared}
     else
       {:error, reason} -> {:error, reason, prepared_state}
@@ -1251,17 +1290,48 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp reserve_known_native_compaction_phase(prepared, metadata, phase, state) do
     control_ref = make_ref()
 
+    _trace =
+      NativeCompactionTrace.emit(:capability_reserve_started, %{
+        phase: phase,
+        control_ref: control_ref,
+        semantic_turn_key: metadata.semantic_turn_key,
+        window_number: metadata.window_number,
+        pid_role: :socket,
+        socket_pid: self()
+      })
+
     case reserve_owner_capability(prepared, metadata, phase, control_ref, state) do
       {:ok, prepared} ->
+        trace_reserve_finished(metadata, phase, control_ref, :ok)
         {:ok, prepared}
 
       {:error, :owner_unavailable} ->
+        trace_reserve_finished(metadata, phase, control_ref, :queued)
         maybe_defer_native_compaction(prepared, metadata, phase, control_ref, state)
 
       {:error, reason} ->
+        trace_reserve_finished(metadata, phase, control_ref, {:error, reason})
         {:error, reason}
     end
   end
+
+  defp trace_reserve_finished(metadata, phase, control_ref, result) do
+    NativeCompactionTrace.emit(:capability_reserve_finished, %{
+      phase: phase,
+      control_ref: control_ref,
+      semantic_turn_key: metadata.semantic_turn_key,
+      window_number: metadata.window_number,
+      pid_role: :socket,
+      socket_pid: self(),
+      outcome: trace_outcome(result),
+      reason: trace_reason(result)
+    })
+  end
+
+  defp trace_outcome({:error, _reason}), do: :error
+  defp trace_outcome(outcome), do: outcome
+  defp trace_reason({:error, reason}), do: reason
+  defp trace_reason(_outcome), do: nil
 
   defp maybe_defer_native_compaction(prepared, metadata, phase, control_ref, state) do
     if active_response_task?(state) do
@@ -1574,7 +1644,25 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp put_owner_capability(prepared, capability, owner, lifecycle) do
     with {:ok, admission} <-
            RequestOptions.NativeCompactionAdmission.new(capability, owner, lifecycle) do
+      _trace =
+        NativeCompactionTrace.emit_capability(:capability_reserved, capability, %{
+          pid_role: :socket,
+          branch: owner_branch(owner)
+        })
+
       WebsocketCodec.attach_native_compaction_admission(prepared, admission)
+    end
+  end
+
+  defp owner_branch({:direct, _owner}), do: :direct_owner
+
+  defp owner_branch({:forwarded, _session, _lease_token, _downstream, _opts}),
+    do: :forwarded_owner
+
+  defp decode_trace_frame(text) when is_binary(text) do
+    case Jason.decode(text) do
+      {:ok, decoded} -> decoded
+      {:error, _reason} -> :not_json
     end
   end
 
@@ -1662,13 +1750,46 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp reject_prepared_response(reason, state) do
     if identity_error?(reason), do: log_reconnect_disposition(state, :identity_rejected)
 
+    rejected_state = clear_public_response_context(state)
+
+    _trace =
+      NativeCompactionTrace.emit_full(:socket_request_rejected, %{
+        pid_role: :socket,
+        socket_pid: self(),
+        branch: :prepared_response_rejected,
+        reason: reason,
+        state_before: trace_socket_state(state),
+        state_after: trace_socket_state(rejected_state)
+      })
+
     payload =
       reason
       |> Adapter.websocket_error()
       |> maybe_put_public_stream_id(Map.get(state, :public_response_stream_id))
       |> Jason.encode!()
 
-    {:push, {:text, payload}, clear_public_response_context(state)}
+    _trace =
+      NativeCompactionTrace.emit_full(:downstream_websocket_frame_sent, %{
+        direction: :pooler_to_downstream,
+        socket_pid: self(),
+        frame_json: decode_trace_frame(payload),
+        frame_text: payload,
+        outcome: :error,
+        branch: :prepared_response_rejected
+      })
+
+    {:push, {:text, payload}, rejected_state}
+  end
+
+  defp trace_socket_state(state) do
+    %{
+      task_count: state |> Map.get(:tasks, MapSet.new()) |> MapSet.size(),
+      queued_count: state |> Map.get(:queued_response_payloads, :queue.new()) |> :queue.len(),
+      public_turn_active: is_pid(Map.get(state, :public_response_task_pid)),
+      owner_forwarded: owner_forwarded_socket?(state),
+      native_output_count:
+        state |> Map.get(:native_turn_output_task_pids, MapSet.new()) |> MapSet.size()
+    }
   end
 
   defp identity_error?(%{param: param}) when is_binary(param) do
@@ -1906,6 +2027,7 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
         parent = self()
         {:ok, pid} = start_response_task(parent, prepared, state)
+        _trace_enroll = NativeCompactionTrace.enroll(:response_task, pid)
         monitor = Process.monitor(pid)
 
         state
@@ -2223,6 +2345,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
 
         :ok = acknowledge_response_task_delivery(ack_pid, token, outcome)
 
+        _trace =
+          NativeCompactionTrace.emit(:delivery_finished, %{
+            pid_role: :response_task,
+            response_task_pid: pid,
+            activity_token: token,
+            outcome: outcome
+          })
+
         state
         |> Map.update(:response_task_activities, %{}, &Map.delete(&1, pid))
         |> Map.update(
@@ -2371,6 +2501,14 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   defp maybe_accept_response_task_terminal(state, pid, data) do
     if response_task_delivery_candidate?(state, pid) and
          match?({:ok, _outcome}, StreamProtocol.terminal_outcome(data)) do
+      _trace =
+        NativeCompactionTrace.emit(:owner_terminal, %{
+          pid_role: :response_task,
+          response_task_pid: pid,
+          activity_token: get_in(state, [:response_task_activities, pid]),
+          outcome: terminal_outcome(data)
+        })
+
       Map.update(
         state,
         :response_task_terminals_accepted,
@@ -2409,6 +2547,26 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       Map.put(state, :native_owner_terminal_delivered?, false)
     else
       state
+    end
+  end
+
+  defp response_result_outcome({:ok, _result}), do: :ok
+  defp response_result_outcome({:error, _reason}), do: :error
+
+  defp response_result_outcome({:socket_response_result, _source, result}),
+    do: response_result_outcome(result)
+
+  defp response_result_outcome({:response_task_result, result, _visible?}),
+    do: response_result_outcome(result)
+
+  defp response_result_outcome({:response_task_failure, _result}), do: :error
+  defp response_result_outcome(_result), do: :finished
+
+  defp terminal_outcome(data) do
+    case StreamProtocol.terminal_outcome(data) do
+      {:ok, %{kind: :completed}} -> :ok
+      {:ok, _outcome} -> :error
+      _other -> :error
     end
   end
 

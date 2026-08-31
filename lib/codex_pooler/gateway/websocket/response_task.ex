@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
   @moduledoc false
 
   alias CodexPooler.Gateway.Transports.Websocket.ActivityRegistry
+  alias CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace
 
   @type activity_kind :: :direct | :proxy | :local_owner
   @type run_callback :: (pid() -> term())
@@ -14,16 +15,25 @@ defmodule CodexPooler.Gateway.Websocket.ResponseTask do
       when is_pid(parent) and kind in [:direct, :proxy, :local_owner] and
              is_function(run_callback, 1) and is_function(cancel_callback, 2) do
     Task.start(fn ->
-      Process.flag(:sensitive, true)
+      sensitivity = NativeCompactionTrace.configure_process_sensitivity(:response_task)
+      _trace = NativeCompactionTrace.enroll(:response_task, self())
 
-      case kind do
-        :local_owner ->
-          result = run_callback.(self())
-          run_before_local_completion_handoff(Keyword.get(opts, :before_local_completion_handoff))
-          complete_local_owner(parent, result)
+      try do
+        case kind do
+          :local_owner ->
+            result = run_callback.(self())
 
-        tracked_kind ->
-          run_tracked(parent, tracked_kind, run_callback, cancel_callback, opts)
+            run_before_local_completion_handoff(
+              Keyword.get(opts, :before_local_completion_handoff)
+            )
+
+            complete_local_owner(parent, result)
+
+          tracked_kind ->
+            run_tracked(parent, tracked_kind, run_callback, cancel_callback, opts)
+        end
+      after
+        NativeCompactionTrace.restore_process_sensitivity(sensitivity)
       end
     end)
   end

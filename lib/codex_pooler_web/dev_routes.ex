@@ -43,6 +43,8 @@ defmodule CodexPoolerWeb.DevRoutes do
 
           forward "/native-compaction/authorization-capture",
                   CodexPooler.Dev.NativeCompactionAuthorizationObserver.Plug
+
+          forward "/native-compaction/trace", CodexPooler.Dev.NativeCompactionTrace.Plug
         end
       end
     end
