@@ -29,6 +29,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   alias CodexPooler.Gateway.Transports.Websocket.WebsocketFrameWriter
 
   @default_keepalive_interval_ms 25_000
+  @dev_features_build_enabled Application.compile_env(
+                                :codex_pooler,
+                                :dev_features_build_enabled,
+                                false
+                              )
   @connection_lifecycle_keys [:lifecycle_id, :generation]
   @five_seconds_ms :timer.seconds(5)
   @thirty_seconds_ms :timer.seconds(30)
@@ -281,23 +286,33 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
   def handle_call(:native_compaction_trace_cooperative?, _from, state),
     do: {:reply, true, state}
 
-  def handle_call(
-        {:native_compaction_trace_sensitivity, :observe, generation, authorization, restorer},
-        _from,
-        state
-      ) do
-    case apply(NativeCompactionTrace, :configure_existing_process_sensitivity, [
-           :upstream_session,
-           generation,
-           authorization,
-           restorer
-         ]) do
-      {:ok, sensitivity} ->
-        {:reply, :ok, Map.put(state, :native_compaction_trace_sensitivity, sensitivity)}
+  if @dev_features_build_enabled do
+    def handle_call(
+          {:native_compaction_trace_sensitivity, :observe, generation, authorization, restorer},
+          _from,
+          state
+        ) do
+      case NativeCompactionTrace.configure_existing_process_sensitivity(
+             :upstream_session,
+             generation,
+             authorization,
+             restorer
+           ) do
+        {:ok, sensitivity} ->
+          {:reply, :ok, Map.put(state, :native_compaction_trace_sensitivity, sensitivity)}
 
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+        {:error, reason} ->
+          {:reply, {:error, reason}, state}
+      end
     end
+  else
+    def handle_call(
+          {:native_compaction_trace_sensitivity, :observe, _generation, _authorization,
+           _restorer},
+          _from,
+          state
+        ),
+        do: {:reply, {:error, :full_trace_unavailable}, state}
   end
 
   def handle_call({:request, %Request{} = request}, {caller_pid, _tag}, state)

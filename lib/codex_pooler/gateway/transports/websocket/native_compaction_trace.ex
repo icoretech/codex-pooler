@@ -176,6 +176,8 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace do
   @doc false
   @spec configure_process_sensitivity(atom()) :: :sensitive | tuple()
   if @full_build_enabled do
+    alias CodexPooler.Dev.NativeCompactionTrace.SensitivityWatchdog
+
     def configure_process_sensitivity(role) when is_atom(role) do
       case sensitivity_control() do
         {generation, authorization, restorer, collector}
@@ -189,13 +191,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace do
               monitor = Process.monitor(restorer)
 
               {:ok, watchdog} =
-                CodexPooler.Dev.NativeCompactionTrace.SensitivityWatchdog.start(
-                  self(),
-                  role,
-                  generation,
-                  authorization,
-                  restorer,
-                  collector
+                Task.start(
+                  SensitivityWatchdog,
+                  :run,
+                  [
+                    self(),
+                    role,
+                    generation,
+                    authorization,
+                    restorer,
+                    collector
+                  ]
                 )
 
               Process.flag(:sensitive, false)
@@ -243,13 +249,17 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace do
             monitor = Process.monitor(restorer)
 
             {:ok, watchdog} =
-              CodexPooler.Dev.NativeCompactionTrace.SensitivityWatchdog.start(
-                self(),
-                role,
-                generation,
-                authorization,
-                restorer,
-                collector
+              Task.start(
+                SensitivityWatchdog,
+                :run,
+                [
+                  self(),
+                  role,
+                  generation,
+                  authorization,
+                  restorer,
+                  collector
+                ]
               )
 
             Process.flag(:sensitive, false)

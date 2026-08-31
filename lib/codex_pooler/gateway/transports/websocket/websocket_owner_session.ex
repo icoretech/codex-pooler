@@ -33,6 +33,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   end
 
   @registry __MODULE__.Registry
+  @dev_features_build_enabled Application.compile_env(
+                                :codex_pooler,
+                                :dev_features_build_enabled,
+                                false
+                              )
   @task_supervisor __MODULE__.TaskSupervisor
   @restore_downstream_keys [:correlation_id, :epoch, :pid]
   @stable_downstream_keys [:active_turn_reconnect? | @restore_downstream_keys]
@@ -844,23 +849,33 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
   def handle_call(:native_compaction_trace_cooperative?, _from, state),
     do: {:reply, true, state}
 
-  def handle_call(
-        {:native_compaction_trace_sensitivity, :observe, generation, authorization, restorer},
-        _from,
-        state
-      ) do
-    case apply(NativeCompactionTrace, :configure_existing_process_sensitivity, [
-           :owner_session,
-           generation,
-           authorization,
-           restorer
-         ]) do
-      {:ok, sensitivity} ->
-        {:reply, :ok, %{state | native_compaction_trace_sensitivity: sensitivity}}
+  if @dev_features_build_enabled do
+    def handle_call(
+          {:native_compaction_trace_sensitivity, :observe, generation, authorization, restorer},
+          _from,
+          state
+        ) do
+      case NativeCompactionTrace.configure_existing_process_sensitivity(
+             :owner_session,
+             generation,
+             authorization,
+             restorer
+           ) do
+        {:ok, sensitivity} ->
+          {:reply, :ok, %{state | native_compaction_trace_sensitivity: sensitivity}}
 
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+        {:error, reason} ->
+          {:reply, {:error, reason}, state}
+      end
     end
+  else
+    def handle_call(
+          {:native_compaction_trace_sensitivity, :observe, _generation, _authorization,
+           _restorer},
+          _from,
+          state
+        ),
+        do: {:reply, {:error, :full_trace_unavailable}, state}
   end
 
   def handle_call(:owner_identity, _from, state) do

@@ -5,24 +5,27 @@ defmodule CodexPooler.Dev.NativeCompactionTrace.SensitivityWatchdog do
 
   @spec start(pid(), atom(), reference(), reference(), pid(), pid()) :: {:ok, pid()}
   def start(target, role, generation, authorization, restorer, collector) do
-    Task.start(fn ->
-      target_monitor = Process.monitor(target)
-      restorer_monitor = Process.monitor(restorer)
-      collector_monitor = Process.monitor(collector)
+    Task.start(__MODULE__, :run, [target, role, generation, authorization, restorer, collector])
+  end
 
-      loop(%{
-        target: target,
-        role: role,
-        generation: generation,
-        authorization: authorization,
-        restorer: restorer,
-        collector: collector,
-        target_monitor: target_monitor,
-        restorer_monitor: restorer_monitor,
-        collector_monitor: collector_monitor,
-        force_timer: nil
-      })
-    end)
+  @doc false
+  def run(target, role, generation, authorization, restorer, collector) do
+    target_monitor = Process.monitor(target)
+    restorer_monitor = Process.monitor(restorer)
+    collector_monitor = Process.monitor(collector)
+
+    loop(%{
+      target: target,
+      role: role,
+      generation: generation,
+      authorization: authorization,
+      restorer: restorer,
+      collector: collector,
+      target_monitor: target_monitor,
+      restorer_monitor: restorer_monitor,
+      collector_monitor: collector_monitor,
+      force_timer: nil
+    })
   end
 
   defp loop(state) do
