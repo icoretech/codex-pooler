@@ -1790,6 +1790,33 @@ defmodule CodexPooler.CompatibilityMatrix do
           upstream_dispatch: false
         }
       },
+      released_native_metadata: %{
+        request_kinds: [:turn, :prewarm, :compaction, :memory],
+        canonical_envelope: %{
+          accepted_encodings: [:map, :json_string],
+          ordinary_and_prewarm: %{
+            optional: [:window_id, :context_window_id, :window_number],
+            explicit_null: "rejected",
+            compaction: "omitted_only"
+          },
+          compaction: %{
+            authority: "strict_complete_enum_map",
+            malformed: "pre_dispatch_rejected"
+          },
+          memory: %{
+            semantic_turn_identity: false,
+            ordinary_websocket_accounting_continuity_owner_or_compaction_lifecycle: false
+          }
+        },
+        prewarm: %{
+          admitted_without_compaction_authority: true
+        },
+        rejection_diagnostics: %{
+          vocabulary: :fixed,
+          metadata_only: true,
+          raw_metadata_values: false
+        }
+      },
       active_reconnect: %{
         same_active_non_cancelled: %{
           disposition: "same_turn_replay",

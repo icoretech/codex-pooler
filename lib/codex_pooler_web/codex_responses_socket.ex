@@ -1238,7 +1238,8 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
     with {:ok, payload} <- WebsocketCodec.decode_payload(raw_payload),
          true <- canonical_native_turn_metadata?(payload),
          {:ok, metadata} <-
-           NativeCodexTurnMetadata.parse(payload, options.continuity.codex_session.id) do
+           NativeCodexTurnMetadata.parse(payload, options.continuity.codex_session.id),
+         true <- compaction_authority_metadata?(metadata) do
       RequestOptions.put_payload_context(options, native_codex_turn_metadata: metadata)
     else
       _missing_or_invalid -> options
@@ -1246,10 +1247,11 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
   end
 
   defp reserve_native_compaction_admission(
-         %PreparedWebsocketFrame{variant: :native_response_create} = prepared,
+         %PreparedWebsocketFrame{variant: variant} = prepared,
          raw_payload,
          state
-       ) do
+       )
+       when variant in [:native_response_create, :prewarm] do
     with {:ok, payload} <- WebsocketCodec.decode_payload(raw_payload),
          true <- canonical_native_turn_metadata?(payload),
          {:ok, metadata} <-
@@ -1257,12 +1259,25 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
              payload,
              prepared.request_options.continuity.codex_session.id
            ) do
-      reserve_native_compaction_phase(prepared, payload, metadata, state)
+      case metadata.request_kind do
+        :prewarm ->
+          log_native_prewarm_admission(prepared)
+          {:ok, prepared}
+
+        :memory ->
+          reason = native_memory_websocket_error()
+          log_native_metadata_rejection(prepared, raw_payload, reason)
+          {:error, reason}
+
+        _native_turn ->
+          reserve_native_compaction_phase(prepared, payload, metadata, state)
+      end
     else
       false ->
         {:ok, prepared}
 
       {:error, %{code: _code} = reason} ->
+        log_native_metadata_rejection(prepared, raw_payload, reason)
         {:error, reason}
 
       {:error, _owner_reason} ->
@@ -1277,6 +1292,77 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
        ),
        do: {:ok, prepared}
 
+  defp log_native_metadata_rejection(prepared, raw_payload, reason) do
+    request_kind_class =
+      case WebsocketCodec.decode_payload(raw_payload) do
+        {:ok, payload} -> native_metadata_request_kind_class(payload)
+        _invalid -> :missing
+      end
+
+    Logger.warning(
+      "native websocket turn metadata rejected " <>
+        "route_class=proxy_websocket " <>
+        "frame_class=#{native_metadata_frame_class(prepared)} " <>
+        "request_kind_class=#{request_kind_class} " <>
+        "rejection_class=#{NativeCodexTurnMetadata.rejection_class(reason)}"
+    )
+
+    :ok
+  end
+
+  defp log_native_prewarm_admission(prepared) do
+    Logger.info(
+      "native websocket prewarm admitted " <>
+        "route_class=proxy_websocket " <>
+        "frame_class=#{native_metadata_frame_class(prepared)} " <>
+        "request_kind_class=prewarm compaction_authority=absent"
+    )
+
+    :ok
+  end
+
+  defp native_metadata_frame_class(%PreparedWebsocketFrame{variant: :prewarm}), do: :prewarm
+
+  defp native_metadata_frame_class(%PreparedWebsocketFrame{variant: :native_response_create}),
+    do: :response_create
+
+  defp native_metadata_frame_class(_prepared), do: :other
+
+  defp native_metadata_request_kind_class(%{
+         "client_metadata" => %{"x-codex-turn-metadata" => canonical}
+       }) do
+    with {:ok, metadata} <- decode_native_metadata_for_class(canonical),
+         request_kind when request_kind in ["turn", "prewarm", "compaction", "memory"] <-
+           Map.get(metadata, "request_kind") do
+      String.to_existing_atom(request_kind)
+    else
+      _unknown -> :unsupported
+    end
+  end
+
+  defp native_metadata_request_kind_class(_payload), do: :missing
+
+  defp decode_native_metadata_for_class(value) when is_map(value), do: {:ok, value}
+
+  defp decode_native_metadata_for_class(value) when is_binary(value) do
+    case Jason.decode(value) do
+      {:ok, metadata} when is_map(metadata) -> {:ok, metadata}
+      _invalid -> :error
+    end
+  end
+
+  defp decode_native_metadata_for_class(_value), do: :error
+
+  defp native_memory_websocket_error do
+    %{
+      status: 400,
+      code: "invalid_request",
+      message: "native Codex turn metadata is invalid",
+      param: "client_metadata.x-codex-turn-metadata.request_kind",
+      native_metadata_rejection_class: :unsupported_request_kind
+    }
+  end
+
   defp reserve_native_compaction_phase(prepared, payload, metadata, state) do
     case native_compaction_phase(metadata, payload, prepared.request_options) do
       phase when phase in [:compact, :final] ->
@@ -1285,6 +1371,13 @@ defmodule CodexPoolerWeb.CodexResponsesSocket do
       nil ->
         authorize_first_full_history_compact(prepared, metadata, state)
     end
+  end
+
+  defp compaction_authority_metadata?(%NativeCodexTurnMetadata{
+         window_id_digest: window_digest,
+         context_window_id_digest: context_digest
+       }) do
+    is_binary(window_digest) and is_binary(context_digest)
   end
 
   defp reserve_known_native_compaction_phase(prepared, metadata, phase, state) do

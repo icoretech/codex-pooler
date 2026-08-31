@@ -7768,6 +7768,63 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     end
   end
 
+  test "released memory metadata is rejected before native websocket lifecycle work" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "unexpected"}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    sentinel = "raw-memory-diagnostic-sentinel"
+
+    {:ok, state} =
+      CodexResponsesSocket.init(%{
+        auth: auth,
+        opts: %{
+          request_id: "memory-non-native",
+          accepted_turn_state: "memory-non-native-state",
+          client_ip: "127.0.0.1"
+        }
+      })
+
+    payload =
+      Jason.encode!(%{
+        "type" => "response.create",
+        "model" => setup.model.exposed_model_id,
+        "client_metadata" => %{
+          "x-codex-turn-metadata" =>
+            Jason.encode!(%{
+              "session_id" => sentinel,
+              "thread_id" => Ecto.UUID.generate(),
+              "request_kind" => "memory"
+            })
+        },
+        "input" => native_text_input("memory must not enter native turn lifecycle")
+      })
+
+    try do
+      {result, log} =
+        with_log(fn -> CodexResponsesSocket.handle_in({payload, [opcode: :text]}, state) end)
+
+      assert {:push, {:text, error_frame}, state} = result
+      assert log =~ "route_class=proxy_websocket"
+      assert log =~ "frame_class=response_create"
+      assert log =~ "request_kind_class=memory"
+      assert log =~ "rejection_class=unsupported_request_kind"
+      refute log =~ sentinel
+
+      assert %{"type" => "error", "status" => 400, "error" => %{"code" => "invalid_request"}} =
+               Jason.decode!(error_frame)
+
+      assert FakeUpstream.count(upstream) == 0
+      assert Repo.aggregate(from(r in Request, where: r.pool_id == ^setup.pool.id), :count) == 0
+      assert Repo.aggregate(from(a in Attempt), :count) == 0
+
+      assert Repo.aggregate(
+               from(t in CodexTurn, where: t.codex_session_id == ^state.codex_session.id),
+               :count
+             ) == 0
+    after
+      CodexResponsesSocket.terminate(:closed, state)
+    end
+  end
 
   @tag :duplicate_turn
   test "duplicate explicit websocket turn id does not double account attempts or usage" do

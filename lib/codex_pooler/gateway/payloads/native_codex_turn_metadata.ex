@@ -20,7 +20,6 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata do
   end
 
   @enforce_keys [
-    :semantic_turn_key,
     :window_id_digest,
     :context_window_id_digest,
     :request_kind
@@ -34,12 +33,12 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata do
     :compaction
   ]
 
-  @type request_kind :: :turn | :compaction
+  @type request_kind :: :turn | :prewarm | :compaction | :memory
   @type digest :: <<_::256>>
   @type t :: %__MODULE__{
-          semantic_turn_key: digest(),
-          window_id_digest: digest(),
-          context_window_id_digest: digest(),
+          semantic_turn_key: digest() | nil,
+          window_id_digest: digest() | nil,
+          context_window_id_digest: digest() | nil,
           window_number: non_neg_integer() | nil,
           request_kind: request_kind(),
           compaction: Compaction.t() | nil
@@ -55,16 +54,15 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata do
   @spec parse(map(), String.t()) :: {:ok, t()} | {:error, Error.reason()}
   def parse(payload, codex_session_id) when is_map(payload) and is_binary(codex_session_id) do
     with {:ok, canonical} <- fetch_canonical(payload),
-         {:ok, identity} <- validated_identity(canonical, codex_session_id),
-         {:ok, window_id} <- required_identifier(canonical, "window_id"),
-         {:ok, context_window_id} <- required_context_id(canonical),
-         {:ok, window_number} <- optional_window_number(canonical),
-         {:ok, request_kind, compaction} <- request_kind(canonical) do
+         {:ok, request_kind, compaction} <- request_kind(canonical),
+         {:ok, semantic_turn_key} <- semantic_turn_key(canonical, codex_session_id, request_kind),
+         {:ok, window_id, context_window_id, window_number} <-
+           request_identity(canonical, request_kind) do
       {:ok,
        %__MODULE__{
-         semantic_turn_key: identity.semantic_turn_key,
-         window_id_digest: window_id_digest(window_id),
-         context_window_id_digest: context_id_digest(context_window_id),
+         semantic_turn_key: semantic_turn_key,
+         window_id_digest: maybe_digest(window_id, &window_id_digest/1),
+         context_window_id_digest: maybe_digest(context_window_id, &context_id_digest/1),
          window_number: window_number,
          request_kind: request_kind,
          compaction: compaction
@@ -73,6 +71,40 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata do
   end
 
   def parse(_payload, _codex_session_id), do: invalid(@canonical_param)
+
+  @spec rejection_class(Error.reason()) :: atom()
+  def rejection_class(%{native_metadata_rejection_class: rejection_class})
+      when rejection_class in [
+             :missing_canonical,
+             :malformed_canonical,
+             :invalid_turn_id,
+             :invalid_window_id,
+             :invalid_context_window_id,
+             :invalid_window_number,
+             :unsupported_request_kind,
+             :invalid_compaction
+           ],
+      do: rejection_class
+
+  def rejection_class(%{param: "client_metadata.x-codex-turn-metadata.turn_id"}),
+    do: :invalid_turn_id
+
+  def rejection_class(%{param: "client_metadata.x-codex-turn-metadata.window_id"}),
+    do: :invalid_window_id
+
+  def rejection_class(%{param: "client_metadata.x-codex-turn-metadata.context_window_id"}),
+    do: :invalid_context_window_id
+
+  def rejection_class(%{param: "client_metadata.x-codex-turn-metadata.window_number"}),
+    do: :invalid_window_number
+
+  def rejection_class(%{param: "client_metadata.x-codex-turn-metadata.request_kind"}),
+    do: :unsupported_request_kind
+
+  def rejection_class(%{param: "client_metadata.x-codex-turn-metadata.compaction"}),
+    do: :invalid_compaction
+
+  def rejection_class(_reason), do: :malformed_canonical
 
   @spec response_id_digest(String.t()) :: digest()
   def response_id_digest(value), do: digest(:provider_response_id, value)
@@ -91,7 +123,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata do
   defp fetch_canonical(%{"client_metadata" => client_metadata}) when is_map(client_metadata) do
     case Map.fetch(client_metadata, @canonical_key) do
       {:ok, value} -> decode_canonical(value)
-      :error -> invalid(@canonical_param)
+      :error -> invalid(:missing_canonical, @canonical_param)
     end
   end
 
@@ -101,7 +133,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata do
     if byte_size(:erlang.term_to_binary(value, [:deterministic])) <= @max_metadata_bytes do
       {:ok, value}
     else
-      invalid(@canonical_param)
+      invalid(:malformed_canonical, @canonical_param)
     end
   end
 
@@ -109,12 +141,12 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata do
        when is_binary(value) and byte_size(value) <= @max_metadata_bytes do
     case Jason.decode(value) do
       {:ok, decoded} when is_map(decoded) -> {:ok, decoded}
-      {:ok, _other} -> invalid(@canonical_param)
-      {:error, _reason} -> invalid(@canonical_param)
+      {:ok, _other} -> invalid(:malformed_canonical, @canonical_param)
+      {:error, _reason} -> invalid(:malformed_canonical, @canonical_param)
     end
   end
 
-  defp decode_canonical(_value), do: invalid(@canonical_param)
+  defp decode_canonical(_value), do: invalid(:malformed_canonical, @canonical_param)
 
   defp validated_identity(canonical, codex_session_id) do
     case WebsocketTurnIdentity.resolve(
@@ -122,8 +154,26 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata do
            codex_session_id
          ) do
       {:ok, _identity} = result -> result
-      :missing -> invalid(param("turn_id"))
+      :missing -> invalid(:invalid_turn_id, param("turn_id"))
       {:error, _reason} = error -> error
+    end
+  end
+
+  defp semantic_turn_key(_canonical, _codex_session_id, :memory), do: {:ok, nil}
+
+  defp semantic_turn_key(canonical, codex_session_id, :prewarm) do
+    case Map.fetch(canonical, "turn_id") do
+      :error -> {:ok, nil}
+      {:ok, nil} -> {:ok, nil}
+      {:ok, ""} -> {:ok, nil}
+      {:ok, _turn_id} -> semantic_turn_key(canonical, codex_session_id, :turn)
+    end
+  end
+
+  defp semantic_turn_key(canonical, codex_session_id, request_kind)
+       when request_kind in [:turn, :compaction] do
+    with {:ok, identity} <- validated_identity(canonical, codex_session_id) do
+      {:ok, identity.semantic_turn_key}
     end
   end
 
@@ -135,11 +185,11 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata do
         if String.valid?(value) and String.trim(value) != "" do
           {:ok, value}
         else
-          invalid(param(key))
+          invalid(identifier_rejection_class(key), param(key))
         end
 
       _other ->
-        invalid(param(key))
+        invalid(identifier_rejection_class(key), param(key))
     end
   end
 
@@ -148,7 +198,7 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata do
          {:ok, _uuid} <- Ecto.UUID.cast(value) do
       {:ok, value}
     else
-      _other -> invalid(param("context_window_id"))
+      _other -> invalid(:invalid_context_window_id, param("context_window_id"))
     end
   end
 
@@ -161,14 +211,28 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata do
         {:ok, value}
 
       {:ok, _invalid} ->
-        invalid(param("window_number"))
+        invalid(:invalid_window_number, param("window_number"))
     end
   end
 
   defp request_kind(%{"request_kind" => "turn"} = metadata) do
     case Map.fetch(metadata, "compaction") do
       :error -> {:ok, :turn, nil}
-      {:ok, _invalid} -> invalid(param("compaction"))
+      {:ok, _invalid} -> invalid(:invalid_compaction, param("compaction"))
+    end
+  end
+
+  defp request_kind(%{"request_kind" => "prewarm"} = metadata) do
+    case Map.fetch(metadata, "compaction") do
+      :error -> {:ok, :prewarm, nil}
+      {:ok, _invalid} -> invalid(:invalid_compaction, param("compaction"))
+    end
+  end
+
+  defp request_kind(%{"request_kind" => "memory"} = metadata) do
+    case Map.fetch(metadata, "compaction") do
+      :error -> {:ok, :memory, nil}
+      {:ok, _invalid} -> invalid(:invalid_compaction, param("compaction"))
     end
   end
 
@@ -177,11 +241,44 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata do
          {:ok, parsed} <- parse_compaction(compaction) do
       {:ok, :compaction, parsed}
     else
-      _other -> invalid(param("compaction"))
+      _other -> invalid(:invalid_compaction, param("compaction"))
     end
   end
 
-  defp request_kind(_metadata), do: invalid(param("request_kind"))
+  defp request_kind(_metadata),
+    do: invalid(:unsupported_request_kind, param("request_kind"))
+
+  defp request_identity(metadata, :compaction) do
+    with {:ok, window_id} <- required_identifier(metadata, "window_id"),
+         {:ok, context_window_id} <- required_context_id(metadata),
+         {:ok, window_number} <- optional_window_number(metadata) do
+      {:ok, window_id, context_window_id, window_number}
+    end
+  end
+
+  defp request_identity(metadata, request_kind) when request_kind in [:turn, :prewarm] do
+    with {:ok, window_id} <- optional_identifier(metadata, "window_id"),
+         {:ok, context_window_id} <- optional_context_id(metadata),
+         {:ok, window_number} <- optional_window_number(metadata) do
+      {:ok, window_id, context_window_id, window_number}
+    end
+  end
+
+  defp request_identity(_metadata, :memory), do: {:ok, nil, nil, nil}
+
+  defp optional_identifier(metadata, key) do
+    case Map.fetch(metadata, key) do
+      :error -> {:ok, nil}
+      {:ok, _value} -> required_identifier(metadata, key)
+    end
+  end
+
+  defp optional_context_id(metadata) do
+    case Map.fetch(metadata, "context_window_id") do
+      :error -> {:ok, nil}
+      {:ok, _value} -> required_context_id(metadata)
+    end
+  end
 
   defp parse_compaction(compaction) when is_map(compaction) do
     with {:ok, trigger} <- enum(compaction, "trigger", %{"auto" => :auto, "manual" => :manual}),
@@ -242,8 +339,18 @@ defmodule CodexPooler.Gateway.Payloads.NativeCodexTurnMetadata do
 
   defp param(field), do: @canonical_param <> "." <> field
 
-  defp invalid(param) do
-    {:error, Error.invalid_request("native Codex turn metadata is invalid", param)}
+  defp maybe_digest(nil, _digest), do: nil
+  defp maybe_digest(value, digest), do: digest.(value)
+
+  defp identifier_rejection_class("window_id"), do: :invalid_window_id
+  defp identifier_rejection_class("context_window_id"), do: :invalid_context_window_id
+  defp identifier_rejection_class(_key), do: :malformed_canonical
+
+  defp invalid(param), do: invalid(:malformed_canonical, param)
+
+  defp invalid(rejection_class, param) do
+    reason = Error.invalid_request("native Codex turn metadata is invalid", param)
+    {:error, Map.put(reason, :native_metadata_rejection_class, rejection_class)}
   end
 end
 

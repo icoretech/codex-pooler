@@ -412,6 +412,34 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodecTest do
                  writer
                )
 
+      released_prewarm = %{
+        "type" => "response.create",
+        "generate" => false,
+        "model" => "gpt-example",
+        "client_metadata" => %{
+          "x-codex-turn-metadata" =>
+            Jason.encode!(%{
+              "session_id" => "untrusted-session",
+              "thread_id" => Ecto.UUID.generate(),
+              "turn_id" => "",
+              "request_kind" => "prewarm",
+              "sandbox_mode" => "read-only"
+            })
+        }
+      }
+
+      assert {:ok, %PreparedWebsocketFrame{variant: :prewarm} = prepared_prewarm} =
+               WebsocketCodec.prepare_frame(
+                 Jason.encode!(released_prewarm),
+                 native_responses_options(released_prewarm),
+                 writer
+               )
+
+      assert prepared_prewarm.semantic_turn_key == nil
+      assert prepared_prewarm.turn_claim_key == nil
+      assert prepared_prewarm.request_options.continuity.semantic_turn_key == nil
+      assert prepared_prewarm.request_options.continuity.turn_claim_key == nil
+
       processed = %{"type" => "response.processed", "response_id" => "resp_example"}
 
       assert {:ok, %PreparedWebsocketFrame{variant: :response_processed}} =

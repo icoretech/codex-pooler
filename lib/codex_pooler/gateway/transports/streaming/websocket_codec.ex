@@ -91,7 +91,9 @@ defmodule CodexPooler.Gateway.Transports.Streaming.WebsocketCodec do
          variant: :prewarm,
          endpoint: "/backend-api/codex/responses",
          payload: payload,
-         request_options: websocket_request_options(opts, payload)
+         request_options: websocket_request_options(opts, payload),
+         semantic_turn_key: nil,
+         turn_claim_key: nil
        }}
     end
   end
