@@ -1081,6 +1081,164 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
     assert Jason.decode!(flushed.resp_body)["truncated"]
   end
 
+  test "dev trace endpoint locks the F3 happy preset module scope and budgets" do
+    started =
+      :post
+      |> Plug.Test.conn(
+        "/start",
+        Jason.encode!(%{
+          "run" => "f3-happy",
+          "mode" => "safe",
+          "preset" => "f3_happy",
+          "includeModules" => [inspect(NativeAdmission)],
+          "maxEvents" => 1,
+          "maxBytes" => 4_096
+        })
+      )
+      |> TracePlug.call([])
+
+    assert started.status == 200
+    body = Jason.decode!(started.resp_body)
+    assert body["mode"] == "full"
+    assert body["preset"] == "f3_happy"
+    assert body["maxEvents"] == 250_000
+    assert body["maxBytes"] == 128 * 1024 * 1024
+
+    expected_modules = [
+      CodexPoolerWeb.CodexResponsesSocket,
+      CodexPooler.Gateway.Websocket.ResponseTask,
+      CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession,
+      UpstreamWebsocketSession,
+      NativeAdmission,
+      RequestAdmission,
+      WebsocketCodec,
+      CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.Capability,
+      RuntimeAdmissionProof,
+      CodexPooler.Gateway.Runtime.Service,
+      CodexPooler.Gateway.Runtime.Dispatch.PreDispatch,
+      CodexPooler.Gateway.Runtime.Finalization,
+      CodexPooler.Gateway.Runtime.Finalization.Websocket,
+      CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector
+    ]
+
+    assert body["traceModules"] == Enum.map(expected_modules, &inspect/1)
+    assert length(body["traceModules"]) == 14
+
+    assert :ok = NativeCompactionTrace.stop_scope()
+  end
+
+  test "full trace limit boundaries reject explicit invalid values and preserve omitted defaults" do
+    root = private_root("limit-boundaries")
+
+    assert {:ok, omitted} =
+             NativeCompactionTrace.start_scope("limits-omitted",
+               mode: :full,
+               root: root,
+               include_modules: [NativeAdmission]
+             )
+
+    assert omitted["maxEvents"] == 2_000_000
+    assert omitted["maxBytes"] == 512 * 1024 * 1024
+    assert :ok = NativeCompactionTrace.stop_scope()
+
+    for {field, invalid, minimum, maximum} <- [
+          {:max_events, 0, 1, 2_000_000},
+          {:max_events, 2_000_001, 1, 2_000_000},
+          {:max_bytes, 2_048, 2_049, 512 * 1024 * 1024},
+          {:max_bytes, 512 * 1024 * 1024 + 1, 2_049, 512 * 1024 * 1024}
+        ] do
+      assert {:error,
+              %{
+                code: :invalid_trace_limit,
+                field: ^field,
+                value: ^invalid,
+                minimum: ^minimum,
+                maximum: ^maximum
+              }} =
+               NativeCompactionTrace.start_scope(
+                 "invalid-#{field}-#{invalid}",
+                 [mode: :full, root: root, include_modules: [NativeAdmission]] ++
+                   [{field, invalid}]
+               )
+
+      assert Process.whereis(NativeCompactionTrace) == nil
+      assert TraceEvent.mode() == :off
+    end
+
+    for {max_events, max_bytes} <- [
+          {1, 2_049},
+          {250_000, 64_000},
+          {2_000_000, 512 * 1024 * 1024}
+        ] do
+      assert {:ok, status} =
+               NativeCompactionTrace.start_scope("valid-#{max_events}-#{max_bytes}",
+                 mode: :full,
+                 root: root,
+                 include_modules: [NativeAdmission],
+                 max_events: max_events,
+                 max_bytes: max_bytes
+               )
+
+      assert status["maxEvents"] == max_events
+      assert status["maxBytes"] == max_bytes
+      assert :ok = NativeCompactionTrace.stop_scope()
+    end
+  end
+
+  test "trace start endpoint returns deterministic limit boundary errors" do
+    for {field, value, minimum, maximum} <- [
+          {"maxEvents", 0, 1, 2_000_000},
+          {"maxEvents", 2_000_001, 1, 2_000_000},
+          {"maxBytes", 2_048, 2_049, 512 * 1024 * 1024},
+          {"maxBytes", 512 * 1024 * 1024 + 1, 2_049, 512 * 1024 * 1024}
+        ] do
+      response = trace_start(%{"run" => "invalid-endpoint", "mode" => "full", field => value})
+      assert response.status == 400
+
+      assert Jason.decode!(response.resp_body) == %{
+               "error" => "invalid_trace_limit",
+               "field" => Macro.underscore(field),
+               "value" => value,
+               "minimum" => minimum,
+               "maximum" => maximum
+             }
+    end
+
+    for {max_events, max_bytes} <- [
+          {1, 2_049},
+          {250_000, 64_000},
+          {2_000_000, 512 * 1024 * 1024}
+        ] do
+      response =
+        trace_start(%{
+          "run" => "valid-endpoint-#{max_events}-#{max_bytes}",
+          "mode" => "full",
+          "maxEvents" => max_events,
+          "maxBytes" => max_bytes,
+          "includeModules" => [inspect(NativeAdmission)]
+        })
+
+      assert response.status == 200
+      body = Jason.decode!(response.resp_body)
+      assert body["maxEvents"] == max_events
+      assert body["maxBytes"] == max_bytes
+      assert :ok = NativeCompactionTrace.stop_scope()
+    end
+
+    omitted =
+      trace_start(%{
+        "run" => "omitted-endpoint",
+        "mode" => "full",
+        "includeModules" => [inspect(NativeAdmission)]
+      })
+
+    assert omitted.status == 200
+    omitted_body = Jason.decode!(omitted.resp_body)
+    assert omitted_body["maxEvents"] == 2_000_000
+    assert omitted_body["maxBytes"] == 512 * 1024 * 1024
+    assert :ok = NativeCompactionTrace.stop_scope()
+  end
+
   test "full trace records exception class value and duration from an allowlisted call" do
     root =
       Path.join(System.tmp_dir!(), "native-trace-exception-#{System.unique_integer([:positive])}")
@@ -1374,6 +1532,12 @@ defmodule CodexPooler.Dev.NativeCompactionTraceTest do
   end
 
   defp read_entries(path), do: path |> File.stream!() |> Enum.map(&Jason.decode!/1)
+
+  defp trace_start(body) do
+    :post
+    |> Plug.Test.conn("/start", Jason.encode!(body))
+    |> TracePlug.call([])
+  end
 
   defp sensitivity_state(status, pid),
     do:

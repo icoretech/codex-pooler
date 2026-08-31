@@ -849,12 +849,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession do
         _from,
         state
       ) do
-    case NativeCompactionTrace.configure_existing_process_sensitivity(
+    case apply(NativeCompactionTrace, :configure_existing_process_sensitivity, [
            :owner_session,
            generation,
            authorization,
            restorer
-         ) do
+         ]) do
       {:ok, sensitivity} ->
         {:reply, :ok, %{state | native_compaction_trace_sensitivity: sensitivity}}
 

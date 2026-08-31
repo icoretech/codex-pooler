@@ -286,12 +286,12 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
         _from,
         state
       ) do
-    case NativeCompactionTrace.configure_existing_process_sensitivity(
+    case apply(NativeCompactionTrace, :configure_existing_process_sensitivity, [
            :upstream_session,
            generation,
            authorization,
            restorer
-         ) do
+         ]) do
       {:ok, sensitivity} ->
         {:reply, :ok, Map.put(state, :native_compaction_trace_sensitivity, sensitivity)}
 
@@ -2121,10 +2121,11 @@ defmodule CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession do
 
   defp clear_admission(state), do: Map.delete(state, :native_compaction_admission)
 
-  defp put_trace_sensitivity(state, :sensitive), do: state
-
-  defp put_trace_sensitivity(state, sensitivity),
-    do: Map.put(state, :native_compaction_trace_sensitivity, sensitivity)
+  defp put_trace_sensitivity(state, sensitivity) do
+    if sensitivity == :sensitive,
+      do: state,
+      else: Map.put(state, :native_compaction_trace_sensitivity, sensitivity)
+  end
 
   defp preserve_trace_sensitivity(lifecycle, state) do
     case Map.fetch(state, :native_compaction_trace_sensitivity) do

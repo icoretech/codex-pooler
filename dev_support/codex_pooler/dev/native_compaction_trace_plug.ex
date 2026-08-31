@@ -33,12 +33,13 @@ defmodule CodexPooler.Dev.NativeCompactionTrace.Plug do
          true <- valid_start_keys?(decoded),
          limit when is_integer(limit) and limit > 0 <- Map.get(decoded, "limit", 512),
          {:ok, mode} <- parse_mode(Map.get(decoded, "mode", "safe")),
+         {:ok, preset} <- parse_preset(Map.get(decoded, "preset")),
          {:ok, modules} <- parse_module_filters(decoded),
          {:ok, limits} <- parse_full_limits(decoded),
          {:ok, status} <-
            NativeCompactionTrace.start_scope(
              run,
-             [limit: limit, mode: mode] ++ modules ++ limits
+             [limit: limit, mode: mode] ++ preset ++ modules ++ limits
            ) do
       json(conn, 200, status)
     else
@@ -47,6 +48,15 @@ defmodule CodexPooler.Dev.NativeCompactionTrace.Plug do
 
       {:error, {:trace_modules_unavailable, modules}} ->
         json(conn, 400, %{"error" => "trace_modules_unavailable", "modules" => modules})
+
+      {:error, %{code: :invalid_trace_limit} = error} ->
+        json(conn, 400, %{
+          "error" => "invalid_trace_limit",
+          "field" => to_string(error.field),
+          "value" => error.value,
+          "minimum" => error.minimum,
+          "maximum" => error.maximum
+        })
 
       _invalid ->
         json(conn, 400, %{"error" => "invalid_trace_scope"})
@@ -65,9 +75,13 @@ defmodule CodexPooler.Dev.NativeCompactionTrace.Plug do
   defp parse_mode(_mode), do: {:error, :invalid_trace_mode}
 
   defp valid_start_keys?(decoded) do
-    allowed = ~w(run limit mode includeModules excludeModules maxEvents maxBytes)
+    allowed = ~w(run limit mode preset includeModules excludeModules maxEvents maxBytes)
     Map.has_key?(decoded, "run") and Enum.all?(Map.keys(decoded), &(&1 in allowed))
   end
+
+  defp parse_preset(nil), do: {:ok, []}
+  defp parse_preset("f3_happy"), do: {:ok, [preset: :f3_happy]}
+  defp parse_preset(_preset), do: {:error, :invalid_trace_preset}
 
   defp parse_module_filters(decoded) do
     include = Map.get(decoded, "includeModules", [])
@@ -85,18 +99,16 @@ defmodule CodexPooler.Dev.NativeCompactionTrace.Plug do
     max_events = Map.get(decoded, "maxEvents")
     max_bytes = Map.get(decoded, "maxBytes")
 
-    if valid_optional_positive?(max_events) and valid_optional_positive?(max_bytes) do
-      {:ok,
-       []
-       |> maybe_put(:max_events, max_events)
-       |> maybe_put(:max_bytes, max_bytes)}
-    else
-      {:error, :invalid_full_limits}
+    opts =
+      []
+      |> maybe_put(:max_events, max_events)
+      |> maybe_put(:max_bytes, max_bytes)
+
+    case NativeCompactionTrace.validate_full_limits(opts) do
+      :ok -> {:ok, opts}
+      {:error, _reason} = error -> error
     end
   end
-
-  defp valid_optional_positive?(nil), do: true
-  defp valid_optional_positive?(value), do: is_integer(value) and value > 0
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)

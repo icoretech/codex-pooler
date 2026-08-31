@@ -7,8 +7,6 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace do
   the local collector after recursively removing credentials and secrets.
   """
 
-  alias CodexPooler.Dev.NativeCompactionTrace.SensitivityWatchdog
-
   @event [:codex_pooler, :gateway, :native_compaction, :trace]
   @control_event [:codex_pooler, :gateway, :native_compaction, :trace_control]
   @active_mode_key {__MODULE__, :active_mode}
@@ -191,7 +189,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace do
               monitor = Process.monitor(restorer)
 
               {:ok, watchdog} =
-                SensitivityWatchdog.start(
+                CodexPooler.Dev.NativeCompactionTrace.SensitivityWatchdog.start(
                   self(),
                   role,
                   generation,
@@ -245,7 +243,7 @@ defmodule CodexPooler.Gateway.Transports.Websocket.NativeCompactionTrace do
             monitor = Process.monitor(restorer)
 
             {:ok, watchdog} =
-              SensitivityWatchdog.start(
+              CodexPooler.Dev.NativeCompactionTrace.SensitivityWatchdog.start(
                 self(),
                 role,
                 generation,

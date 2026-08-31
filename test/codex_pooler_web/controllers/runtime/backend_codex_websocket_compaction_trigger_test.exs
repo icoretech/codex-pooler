@@ -66,8 +66,8 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
 
     assert {:ok, %{"path" => trace_path}} =
              NativeCompactionTrace.start_scope("real-socket-success",
-               mode: :full,
-               root: root
+               root: root,
+               preset: :f3_happy
              )
 
     {conn, websocket, ref} =
@@ -144,6 +144,13 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketCompactionTriggerTest do
       await_trace_event!("cleanup_finished")
       cleanup_trace_owner_sessions()
       assert :ok = NativeCompactionTrace.flush()
+      status = NativeCompactionTrace.status()
+      assert status["preset"] == "f3_happy"
+      assert status["maxEvents"] == 250_000
+      assert status["maxBytes"] == 128 * 1024 * 1024
+      refute status["truncated"]
+      assert status["writtenEvents"] < status["maxEvents"]
+      assert status["writtenBytes"] < status["maxBytes"]
       assert :ok = NativeCompactionTrace.stop_scope()
 
       trace = File.read!(trace_path)

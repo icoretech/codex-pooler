@@ -17,9 +17,15 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
   @trace_event [:codex_pooler, :gateway, :native_compaction, :trace]
   @trace_control_event [:codex_pooler, :gateway, :native_compaction, :trace_control]
   @default_limit 512
+  @truncation_reserve_bytes 2_048
   @default_full_max_events 2_000_000
   @default_full_max_bytes 512 * 1024 * 1024
-  @truncation_reserve_bytes 2_048
+  @min_full_max_events 1
+  @max_full_max_events @default_full_max_events
+  @min_full_max_bytes @truncation_reserve_bytes + 1
+  @max_full_max_bytes @default_full_max_bytes
+  @f3_happy_max_events 250_000
+  @f3_happy_max_bytes 128 * 1024 * 1024
   @sensitivity_fail_safe_ms 1_000
   @roles [:socket, :response_task, :owner_session, :upstream_session]
   @full_beam_flags [:call, :procs, :send, :receive, :set_on_spawn, :monotonic_timestamp]
@@ -71,6 +77,22 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
     CodexPooler.Gateway.Runtime.Finalization.Websocket,
     CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector
   ]
+  @f3_happy_modules [
+    CodexPoolerWeb.CodexResponsesSocket,
+    CodexPooler.Gateway.Websocket.ResponseTask,
+    CodexPooler.Gateway.Transports.Websocket.WebsocketOwnerSession,
+    CodexPooler.Gateway.Transports.Websocket.UpstreamWebsocketSession,
+    CodexPooler.Gateway.Transports.Websocket.NativeCompactionAdmission,
+    CodexPooler.Gateway.Payloads.RequestOptions.NativeCompactionAdmission,
+    CodexPooler.Gateway.Transports.Streaming.WebsocketCodec,
+    CodexPooler.Gateway.Transports.Streaming.PreparedWebsocketFrame.Capability,
+    CodexPooler.Gateway.Transports.Streaming.RuntimeAdmissionProof,
+    CodexPooler.Gateway.Runtime.Service,
+    CodexPooler.Gateway.Runtime.Dispatch.PreDispatch,
+    CodexPooler.Gateway.Runtime.Finalization,
+    CodexPooler.Gateway.Runtime.Finalization.Websocket,
+    CodexPooler.Gateway.Runtime.Streaming.CompactionResultCollector
+  ]
   @secret_key ~r/(authorization|api.?key|(^|[_-])token($|[_-])|access.?token|refresh.?token|bearer|cookie|credential|secret|password|private.?key|encryption.?key|auth.?json)/i
   @credential_value ~r/^(bearer\s+|sk-[A-Za-z0-9_-]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)/i
 
@@ -84,6 +106,30 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
           | {:exclude_modules, [module() | String.t()]}
           | {:max_events, pos_integer()}
           | {:max_bytes, pos_integer()}
+          | {:preset, :f3_happy}
+
+  @spec preset_options(:f3_happy) :: keyword()
+  def preset_options(:f3_happy) do
+    [
+      preset: :f3_happy,
+      mode: :full,
+      include_modules: @f3_happy_modules,
+      exclude_modules: [],
+      max_events: @f3_happy_max_events,
+      max_bytes: @f3_happy_max_bytes
+    ]
+  end
+
+  @doc false
+  @spec validate_full_limits(keyword()) :: :ok | {:error, map()}
+  def validate_full_limits(opts) when is_list(opts) do
+    with :ok <-
+           validate_optional_limit(opts, :max_events, @min_full_max_events, @max_full_max_events),
+         :ok <-
+           validate_optional_limit(opts, :max_bytes, @min_full_max_bytes, @max_full_max_bytes) do
+      :ok
+    end
+  end
 
   @spec start_scope(term(), [start_option()]) :: {:ok, map()} | {:error, term()}
   def start_scope(run_label, opts \\ []) do
@@ -94,13 +140,16 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
   end
 
   defp do_start_scope(run_label, opts) do
+    supplied_opts = opts
+    opts = apply_preset(opts)
     mode = Keyword.get(opts, :mode, :safe)
     limit = opts |> Keyword.get(:limit, configured_limit()) |> normalize_limit()
     generation = make_ref()
     sensitivity_authorization = make_ref()
 
     result =
-      with :ok <- validate_requested_mode(mode),
+      with :ok <- validate_full_limits(supplied_opts),
+           :ok <- validate_requested_mode(mode),
            {:ok, trace_plan} <- build_trace_plan(mode, opts),
            {:ok, restorer} <-
              maybe_start_sensitivity_restorer(mode, generation, sensitivity_authorization),
@@ -256,6 +305,7 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
         truncation_reason: nil,
         trace_plan: trace_plan,
         pattern_report: [],
+        preset: Keyword.get(opts, :preset),
         sensitivity_status: %{},
         flush_waiters: %{},
         started_system_us: now_system,
@@ -1193,6 +1243,7 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
       "writtenBytes" => state.file_bytes,
       "maxEvents" => state.max_events,
       "maxBytes" => state.max_bytes,
+      "preset" => encode_optional(state.preset),
       "truncated" => state.truncated,
       "truncationReason" => encode_optional(state.truncation_reason),
       "traceModules" => Enum.map(state.trace_plan.modules, &inspect/1),
@@ -1254,18 +1305,48 @@ defmodule CodexPooler.Dev.NativeCompactionTrace do
 
   defp normalize_max_events(:safe, _value), do: @default_limit
 
-  defp normalize_max_events(:full, value) when is_integer(value) and value > 0,
-    do: value
+  defp normalize_max_events(:full, value)
+       when is_integer(value) and value >= @min_full_max_events and
+              value <= @max_full_max_events,
+       do: value
 
   defp normalize_max_events(:full, _value), do: @default_full_max_events
 
   defp normalize_max_bytes(:safe, _value), do: 0
 
   defp normalize_max_bytes(:full, value)
-       when is_integer(value) and value > @truncation_reserve_bytes,
+       when is_integer(value) and value >= @min_full_max_bytes and
+              value <= @max_full_max_bytes,
        do: value
 
   defp normalize_max_bytes(:full, _value), do: @default_full_max_bytes
+
+  defp apply_preset(opts) do
+    case Keyword.get(opts, :preset) do
+      :f3_happy -> Keyword.merge(opts, preset_options(:f3_happy))
+      nil -> opts
+    end
+  end
+
+  defp validate_optional_limit(opts, key, minimum, maximum) do
+    case Keyword.fetch(opts, key) do
+      :error ->
+        :ok
+
+      {:ok, value} when is_integer(value) and value >= minimum and value <= maximum ->
+        :ok
+
+      {:ok, value} ->
+        {:error,
+         %{
+           code: :invalid_trace_limit,
+           field: key,
+           value: value,
+           minimum: minimum,
+           maximum: maximum
+         }}
+    end
+  end
 
   defp encode_optional(nil), do: nil
   defp encode_optional(value), do: to_string(value)
