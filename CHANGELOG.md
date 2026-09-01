@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.6.13](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.12...codex-pooler-v0.6.13) (2026-09-01)
+
+
+### Features
+
+* **dev:** add a bounded exact-smoke trace preset ([80d1926](https://github.com/icoretech/codex-pooler/commit/80d19263d22602f2197ad1d109b44bfb48d4a4e6))
+* **dev:** add full native compaction tracing ([24d7612](https://github.com/icoretech/codex-pooler/commit/24d7612036bf402b837c60438952862f28e58688))
+
+
+### Bug Fixes
+
+* **catalog:** recover stranded sync jobs ([a8c483e](https://github.com/icoretech/codex-pooler/commit/a8c483eeb0fe32bc22c0f2ded2205f46756817da))
+* **compression:** preserve command-backed file reads ([382210f](https://github.com/icoretech/codex-pooler/commit/382210faf135d16411723250fb19848ba3eb3050))
+* **deps:** update dependency @astrojs/starlight to v0.41.10 ([#310](https://github.com/icoretech/codex-pooler/issues/310)) ([e678da5](https://github.com/icoretech/codex-pooler/commit/e678da5c8707e65ae23d8baddbe5dcec3db1dc73))
+* **deps:** update dependency astro to v7.2.9 ([12e5d6d](https://github.com/icoretech/codex-pooler/commit/12e5d6d1ac9bd66e73ea1863b551e9fe07497dfc))
+* **dev:** keep native tracing local and secret-safe ([bf6dab5](https://github.com/icoretech/codex-pooler/commit/bf6dab5488a3f4f00e1919491278347d13156820))
+* **dev:** keep trace sensitivity boundaries production-safe ([d3e55d4](https://github.com/icoretech/codex-pooler/commit/d3e55d4370c9d11665c9f8100bd85fe0a5a7ff31))
+* **dev:** restart the current runtime before smoke checks ([95c27d2](https://github.com/icoretech/codex-pooler/commit/95c27d2451cfb21e55bb41b37ab67d27e0d0baaf))
+* **gateway:** bind native compaction transitions to owner state ([edc3f52](https://github.com/icoretech/codex-pooler/commit/edc3f52b7da27cbc65e138258bd8644bc5f73a92))
+* **gateway:** distinguish native tool continuation requests ([3a83940](https://github.com/icoretech/codex-pooler/commit/3a83940a08a4738b5c61c1c219eb56ac3d37c7bc))
+* **gateway:** propagate native request correlations ([579ef03](https://github.com/icoretech/codex-pooler/commit/579ef03a7ff1f240615135d1f97d63c16be84360))
+* **gateway:** relay native misalignment continuation details ([5d083a4](https://github.com/icoretech/codex-pooler/commit/5d083a4458446ea8793a2da3adbace6f39b6ce17))
+* **oban:** keep scheduler stager enabled ([8834ec9](https://github.com/icoretech/codex-pooler/commit/8834ec99f0411a59d8b30537468589ad1ccd30e3))
+* **websocket:** add trusted compaction admission controls ([f044fdc](https://github.com/icoretech/codex-pooler/commit/f044fdceb26f9875d9f263edaed2bbcac7646809))
+* **websocket:** distinguish reconnect replays from replacements ([3272d7c](https://github.com/icoretech/codex-pooler/commit/3272d7c8b6211890ec5dd42ead5ec8dff6f57cd5))
+* **websocket:** preserve native compaction continuations ([8f4c31c](https://github.com/icoretech/codex-pooler/commit/8f4c31c8f360d0635454243d4058345cc5f24a40))
+* **websocket:** restore released native turn admission ([08125e0](https://github.com/icoretech/codex-pooler/commit/08125e01f068c4f10bfa194d42954fedd07f8c07))
+
 ## [0.6.12](https://github.com/icoretech/codex-pooler/compare/codex-pooler-v0.6.11...codex-pooler-v0.6.12) (2026-08-28)
 
 
