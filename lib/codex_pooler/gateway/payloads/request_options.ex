@@ -278,9 +278,12 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
 
   def server_correlation_id(%__MODULE__{
         transport: %{transport: "websocket"},
-        continuity: %{turn_claim_key: turn_claim_key}
+        continuity: %{
+          request_claim_key: request_claim_key,
+          turn_claim_key: turn_claim_key
+        }
       }) do
-    turn_claim_key || Ecto.UUID.generate()
+    request_claim_key || turn_claim_key || Ecto.UUID.generate()
   end
 
   def server_correlation_id(%__MODULE__{}), do: Ecto.UUID.generate()
@@ -289,9 +292,12 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
   def websocket_request_correlation_id(%__MODULE__{
         request_metadata: %{request_id: request_id},
         transport: %{transport: "websocket"},
-        continuity: %{turn_claim_key: turn_claim_key}
+        continuity: %{
+          request_claim_key: request_claim_key,
+          turn_claim_key: turn_claim_key
+        }
       }) do
-    turn_claim_key || request_id || Ecto.UUID.generate()
+    request_claim_key || turn_claim_key || request_id || Ecto.UUID.generate()
   end
 
   def websocket_request_correlation_id(%__MODULE__{} = options),
@@ -299,9 +305,31 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptions do
 
   @spec websocket_denial_correlation_id(t(), CodexPooler.Accounting.Request.t() | nil) ::
           Ecto.UUID.t() | String.t()
-  def websocket_denial_correlation_id(%__MODULE__{} = options, %CodexPooler.Accounting.Request{}) do
-    websocket_request_correlation_id(options)
-  end
+  def websocket_denial_correlation_id(
+        %__MODULE__{},
+        %CodexPooler.Accounting.Request{correlation_id: correlation_id}
+      )
+      when is_binary(correlation_id) and correlation_id != "",
+      do: correlation_id
+
+  def websocket_denial_correlation_id(
+        %__MODULE__{} = options,
+        %CodexPooler.Accounting.Request{}
+      ),
+      do: websocket_request_correlation_id(options)
+
+  def websocket_denial_correlation_id(
+        %__MODULE__{
+          transport: %{transport: "websocket"},
+          continuity: %{
+            request_claim_key: request_claim_key,
+            turn_claim_key: turn_claim_key
+          }
+        },
+        nil
+      )
+      when is_binary(request_claim_key) and request_claim_key != turn_claim_key,
+      do: request_claim_key
 
   def websocket_denial_correlation_id(
         %__MODULE__{

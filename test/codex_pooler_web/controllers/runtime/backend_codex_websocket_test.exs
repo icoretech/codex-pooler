@@ -7768,6 +7768,59 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexWebsocketTest do
     end
   end
 
+  test "qualifying native continuation denial persists the request claim without changing the turn claim" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"id" => "must_not_dispatch"}))
+    setup = gateway_setup(upstream)
+
+    setup.api_key
+    |> Ecto.Changeset.change(maximum_reasoning_effort: "medium")
+    |> Repo.update!()
+
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+    {:ok, session} = Gateway.start_codex_session(auth, %{accepted_turn_state: "denial-state"})
+
+    payload = %{
+      "type" => "response.create",
+      "model" => setup.model.exposed_model_id,
+      "previous_response_id" => "resp_qualifying_denial_anchor",
+      "client_metadata" => %{"turn_id" => "qualifying-denial-turn"},
+      "input" => [
+        %{
+          "type" => "function_call_output",
+          "call_id" => "call_qualifying_denial",
+          "output" => "synthetic denial output"
+        }
+      ],
+      "reasoning" => %{"effort" => "high"},
+      "stream" => true,
+      "generate" => true
+    }
+
+    assert {:ok, logical_identity} = WebsocketTurnIdentity.resolve(payload, session.id)
+
+    request_claim_key =
+      WebsocketTurnIdentity.request_claim_key(logical_identity.semantic_turn_key, payload)
+
+    assert {:error, %{status: 400, code: "reasoning_effort_not_allowed"}} =
+             execute_websocket_response(
+               auth,
+               Jason.encode!(payload),
+               %{request_id: "qualifying-denial-frame", codex_session: session},
+               fn frame -> send(self(), {:websocket_frame, frame}) end
+             )
+
+    refute_received {:websocket_frame, _frame}
+    assert FakeUpstream.count(upstream) == 0
+    assert Repo.aggregate(Attempt, :count) == 0
+
+    assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
+    assert request.status == "rejected"
+    assert request.correlation_id == request_claim_key
+    refute request.correlation_id == logical_identity.turn_claim_key
+
+    assert request.request_metadata["gateway_denial"]["code"] == "reasoning_effort_not_allowed"
+  end
+
   test "released memory metadata is rejected before native websocket lifecycle work" do
     upstream = start_upstream(FakeUpstream.json_response(%{"id" => "unexpected"}))
     setup = gateway_setup(upstream)

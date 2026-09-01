@@ -103,7 +103,7 @@ defmodule CodexPooler.Gateway.DenialsTest do
     refute inspect(request.request_metadata) =~ raw_effort
   end
 
-  test "websocket denial inserts a separate rejected row with current frame correlation" do
+  test "websocket denial inserts a separate rejected row with current request claim" do
     fake = start_upstream(FakeUpstream.json_response(%{"data" => []}))
     setup = gateway_setup(fake)
     {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
@@ -114,6 +114,11 @@ defmodule CodexPooler.Gateway.DenialsTest do
         Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
     frame_correlation = "frame-#{System.unique_integer([:positive])}"
+
+    request_claim_key =
+      "codex-request:" <>
+        (:crypto.hash(:sha256, frame_correlation)
+         |> Base.url_encode64(padding: false))
 
     assert {:ok, %{request: anchor}} =
              CodexPooler.Accounting.record_denied_request(auth, setup.model, %{
@@ -129,7 +134,8 @@ defmodule CodexPooler.Gateway.DenialsTest do
       RequestOptions.build(
         %{
           transport: "websocket",
-          request_id: frame_correlation
+          request_id: frame_correlation,
+          request_claim_key: request_claim_key
         },
         @endpoint_path,
         payload
@@ -138,6 +144,7 @@ defmodule CodexPooler.Gateway.DenialsTest do
 
     assert anchor.correlation_id == anchor_correlation
     assert opts.continuity.turn_claim_key == anchor_correlation
+    assert opts.continuity.request_claim_key == request_claim_key
     assert opts.request_metadata.request_id == frame_correlation
 
     reason = %{
@@ -157,7 +164,7 @@ defmodule CodexPooler.Gateway.DenialsTest do
              })
 
     assert [^anchor, rejected] = Repo.all(from request in Request, order_by: request.admitted_at)
-    assert rejected.correlation_id == frame_correlation
+    assert rejected.correlation_id == request_claim_key
     assert rejected.status == "rejected"
 
     assert {:error, ^reason} =

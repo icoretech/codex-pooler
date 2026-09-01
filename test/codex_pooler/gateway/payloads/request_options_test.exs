@@ -436,7 +436,7 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
       assert %Request{connection_bound_continuation?: false} = %Request{}
     end
 
-    test "keeps transient semantic identity separate from the durable websocket claim" do
+    test "uses the durable request claim without changing transient semantic identity" do
       semantic_turn_key = :crypto.strong_rand_bytes(32)
       turn_claim_key = "codex-turn:" <> Base.url_encode64(semantic_turn_key, padding: false)
 
@@ -460,11 +460,62 @@ defmodule CodexPooler.Gateway.Payloads.RequestOptionsTest do
       assert options.continuity.semantic_turn_key == semantic_turn_key
       assert options.continuity.turn_claim_key == turn_claim_key
       assert options.continuity.request_claim_key == request_claim_key
-      assert RequestOptions.server_correlation_id(options) == turn_claim_key
-      assert RequestOptions.websocket_request_correlation_id(options) == turn_claim_key
+      assert RequestOptions.server_correlation_id(options) == request_claim_key
+      assert RequestOptions.websocket_request_correlation_id(options) == request_claim_key
+
+      persisted_request = %CodexPooler.Accounting.Request{correlation_id: request_claim_key}
+
+      assert RequestOptions.websocket_denial_correlation_id(options, persisted_request) ==
+               request_claim_key
+
+      assert RequestOptions.websocket_denial_correlation_id(options, nil) == request_claim_key
+
+      assert options.continuity.turn_claim_key == turn_claim_key
 
       invalid = RequestOptions.put_continuity(options, request_claim_key: "codex-request:invalid")
       assert invalid.continuity.request_claim_key == request_claim_key
+    end
+
+    test "websocket correlations fall back through turn claim and request id" do
+      turn_claim_key =
+        "codex-turn:" <>
+          (:crypto.hash(:sha256, "fallback-turn-claim")
+           |> Base.url_encode64(padding: false))
+
+      turn_options =
+        RequestOptions.build(
+          %{
+            transport: "websocket",
+            request_id: "fallback-request-id",
+            turn_claim_key: turn_claim_key
+          },
+          "/backend-api/codex/responses",
+          %{"model" => "example-model"}
+        )
+
+      assert RequestOptions.server_correlation_id(turn_options) == turn_claim_key
+      assert RequestOptions.websocket_request_correlation_id(turn_options) == turn_claim_key
+
+      assert RequestOptions.websocket_denial_correlation_id(turn_options, nil) ==
+               "fallback-request-id"
+
+      request_options =
+        RequestOptions.build(
+          %{transport: "websocket", request_id: "fallback-request-id"},
+          "/backend-api/codex/responses",
+          %{"model" => "example-model"}
+        )
+
+      assert {:ok, _generated_id} =
+               request_options
+               |> RequestOptions.server_correlation_id()
+               |> Ecto.UUID.cast()
+
+      assert RequestOptions.websocket_request_correlation_id(request_options) ==
+               "fallback-request-id"
+
+      assert RequestOptions.websocket_denial_correlation_id(request_options, nil) ==
+               "fallback-request-id"
     end
 
     test "compaction-shaped native frames keep the durable claim correlation without capability" do

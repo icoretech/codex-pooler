@@ -50,6 +50,7 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
   alias CodexPooler.Gateway.Routing.CandidateEligibility
   alias CodexPooler.Gateway.Transports.BoundedResponseBody
   alias CodexPooler.Gateway.Transports.Streaming.StreamProtocol.SSEParser
+  alias CodexPooler.Gateway.Usage
 
   alias CodexPooler.Gateway.Persistence.{
     BridgeDemotion,
@@ -1584,6 +1585,55 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexControllerTest do
     assert [request] = Repo.all(from(r in Request, where: r.pool_id == ^setup.pool.id))
     assert request.endpoint == "/backend-api/codex/models"
     assert request.status == "succeeded"
+  end
+
+  test "metadata and usage accounting distinguish request claims within one logical turn" do
+    upstream = start_upstream(FakeUpstream.json_response(%{"data" => []}))
+    setup = gateway_setup(upstream)
+    {:ok, auth} = Access.authenticate_authorization_header(setup.authorization)
+
+    semantic_turn_key = :crypto.strong_rand_bytes(32)
+    turn_claim_key = "codex-turn:" <> Base.url_encode64(semantic_turn_key, padding: false)
+
+    request_claims =
+      for label <- ["metadata", "usage"] do
+        "codex-request:" <>
+          (:crypto.hash(:sha256, label <> turn_claim_key)
+           |> Base.url_encode64(padding: false))
+      end
+
+    [metadata_claim, usage_claim] = request_claims
+
+    request_options = fn request_claim_key ->
+      RequestOptions.build(
+        %{
+          transport: "websocket",
+          semantic_turn_key: semantic_turn_key,
+          turn_claim_key: turn_claim_key,
+          request_claim_key: request_claim_key
+        },
+        "/backend-api/codex/responses",
+        %{}
+      )
+    end
+
+    assert {:ok, %{status: 200}} =
+             Metadata.serve_codex_models(auth, request_options.(metadata_claim))
+
+    assert {:ok, %{status: 200}} =
+             Usage.codex_usage(auth, "/api/codex/usage", request_options.(usage_claim))
+
+    assert request_claims ==
+             Repo.all(
+               from request in Request,
+                 where: request.pool_id == ^setup.pool.id,
+                 order_by: [asc: request.admitted_at],
+                 select: request.correlation_id
+             )
+
+    refute metadata_claim == usage_claim
+    refute metadata_claim == turn_claim_key
+    refute usage_claim == turn_claim_key
   end
 
   test "GET /backend-api/codex/models keeps generic backend API-key auth semantics", %{

@@ -814,24 +814,9 @@ defmodule CodexPooler.Gateway.Runtime.Service do
       reason: reason,
       endpoint: endpoint,
       payload: payload,
-      opts:
-        opts
-        |> request_options(endpoint, payload)
-        |> prefer_request_claim_for_denial()
+      opts: request_options(opts, endpoint, payload)
     }
   end
-
-  defp prefer_request_claim_for_denial(
-         %RequestOptions{
-           transport: %{transport: "websocket"},
-           continuity: %{request_claim_key: request_claim_key}
-         } = request_options
-       )
-       when is_binary(request_claim_key) do
-    RequestOptions.put_continuity(request_options, turn_claim_key: request_claim_key)
-  end
-
-  defp prefer_request_claim_for_denial(%RequestOptions{} = request_options), do: request_options
 
   defp log_gateway_denial(%Denials.Context{
          reason: %{accounting_disposition: :zero_work} = reason
