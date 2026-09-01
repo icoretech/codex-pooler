@@ -1,12 +1,16 @@
 {
   "fixture_source": {
-    "tag": "rust-v0.150.0",
-    "annotated_tag_object": "9bdd7a39c5034657dfbbb89381cd9364f61eee11",
-    "peeled_commit": "3b3b4f8fb3f6403e72c2d0533ed0d2f309c59717",
+    "tag": "rust-v0.152.0",
+    "annotated_tag_object": "7f6bee13af649d0da23ac0c2bf5c83f571fcd611",
+    "peeled_commit": "316795b3cf2a45e90d121d9f46499d4658b2645c",
     "source_paths": [
       "codex-rs/codex-api/src/common.rs",
       "codex-rs/core/src/client.rs",
+      "codex-rs/core/src/compact_remote_v2.rs",
       "codex-rs/core/src/compact_remote_v2_attempt.rs",
+      "codex-rs/core/src/responses_metadata.rs",
+      "codex-rs/core/src/session/session.rs",
+      "codex-rs/core/src/turn_metadata_tests.rs",
       "codex-rs/protocol/src/models.rs"
     ]
   },
@@ -35,7 +39,7 @@
     ],
     "provider_response_id": "resp_fixture_incremental_0001",
     "v2_trigger_metadata": {
-      "x-codex-turn-metadata": "{\"context_window_id\":\"00000000-0000-4000-8000-000000000150\",\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
+      "x-codex-turn-metadata": "{\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000152\",\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
     },
     "scenarios": {
       "anchored_tool_output_and_trigger": {
@@ -85,7 +89,7 @@
           ],
           "stream": true,
           "client_metadata": {
-            "x-codex-turn-metadata": "{\"context_window_id\":\"00000000-0000-4000-8000-000000000150\",\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
+            "x-codex-turn-metadata": "{\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000152\",\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
           }
         }
       },
@@ -122,7 +126,7 @@
           ],
           "stream": true,
           "client_metadata": {
-            "x-codex-turn-metadata": "{\"context_window_id\":\"00000000-0000-4000-8000-000000000150\",\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
+            "x-codex-turn-metadata": "{\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000152\",\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
           }
         }
       },
@@ -189,7 +193,7 @@
           ],
           "stream": true,
           "client_metadata": {
-            "x-codex-turn-metadata": "{\"context_window_id\":\"00000000-0000-4000-8000-000000000150\",\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
+            "x-codex-turn-metadata": "{\"window_number\":0,\"context_window_id\":\"00000000-0000-4000-8000-000000000152\",\"compaction\":{\"implementation\":\"responses_compaction_v2\"}}"
           }
         }
       }

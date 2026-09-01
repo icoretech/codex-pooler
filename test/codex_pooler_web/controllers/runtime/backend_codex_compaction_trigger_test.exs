@@ -16,11 +16,11 @@ defmodule CodexPoolerWeb.Runtime.BackendCodexCompactionTriggerTest do
   alias CodexPooler.Repo
 
   @codex_remote_compaction_fixture_path Path.expand(
-                                          "../../../fixtures/codex/rust-v0.150.0-3b3b4f8fb3f6403e72c2d0533ed0d2f309c59717/remote_compaction_v2_request.json",
+                                          "../../../fixtures/codex/rust-v0.152.0-316795b3cf2a45e90d121d9f46499d4658b2645c/remote_compaction_v2_request.json",
                                           __DIR__
                                         )
   @codex_incremental_compaction_fixture_path Path.expand(
-                                               "../../../fixtures/codex/rust-v0.150.0-3b3b4f8fb3f6403e72c2d0533ed0d2f309c59717/remote_compaction_v2_incremental_request.json",
+                                               "../../../fixtures/codex/rust-v0.152.0-316795b3cf2a45e90d121d9f46499d4658b2645c/remote_compaction_v2_incremental_request.json",
                                                __DIR__
                                              )
   @external_resource @codex_incremental_compaction_fixture_path

@@ -219,7 +219,7 @@ Native backend RemoteCompactionV2 transport classification reads only the
 request-side nested `compaction.implementation=responses_compaction_v2` marker;
 unrelated additive turn metadata is ignored, and returned compaction-item
 metadata is a separate normalization contract. Harness applicability is
-bounded: Codex `rust-v0.150.0` is the native V2 classifier authority and its
+bounded: Codex `rust-v0.152.0` is the native V2 classifier authority and its
 case is commit-blocking; OMP `18.0.4` uses a distinct V2/configured-direct-
 fallback adapter; OpenCode covers HTTP and websocket replay only; Hermes has no
 independent native classifier authority; Pi native remote compaction is

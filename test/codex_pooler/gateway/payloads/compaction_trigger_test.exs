@@ -4,13 +4,13 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTriggerTest do
   alias CodexPooler.Gateway.Payloads.CompactionTrigger
 
   @fixture_path Path.expand(
-                  "../../../fixtures/codex/rust-v0.150.0-3b3b4f8fb3f6403e72c2d0533ed0d2f309c59717/remote_compaction_v2_request.json",
+                  "../../../fixtures/codex/rust-v0.152.0-316795b3cf2a45e90d121d9f46499d4658b2645c/remote_compaction_v2_request.json",
                   __DIR__
                 )
   @external_resource @fixture_path
 
   @incremental_fixture_path Path.expand(
-                              "../../../fixtures/codex/rust-v0.150.0-3b3b4f8fb3f6403e72c2d0533ed0d2f309c59717/remote_compaction_v2_incremental_request.json",
+                              "../../../fixtures/codex/rust-v0.152.0-316795b3cf2a45e90d121d9f46499d4658b2645c/remote_compaction_v2_incremental_request.json",
                               __DIR__
                             )
   @external_resource @incremental_fixture_path
@@ -106,13 +106,17 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTriggerTest do
       fixture = load_incremental_fixture!()
 
       assert fixture["fixture_source"] == %{
-               "tag" => "rust-v0.150.0",
-               "annotated_tag_object" => "9bdd7a39c5034657dfbbb89381cd9364f61eee11",
-               "peeled_commit" => "3b3b4f8fb3f6403e72c2d0533ed0d2f309c59717",
+               "tag" => "rust-v0.152.0",
+               "annotated_tag_object" => "7f6bee13af649d0da23ac0c2bf5c83f571fcd611",
+               "peeled_commit" => "316795b3cf2a45e90d121d9f46499d4658b2645c",
                "source_paths" => [
                  "codex-rs/codex-api/src/common.rs",
                  "codex-rs/core/src/client.rs",
+                 "codex-rs/core/src/compact_remote_v2.rs",
                  "codex-rs/core/src/compact_remote_v2_attempt.rs",
+                 "codex-rs/core/src/responses_metadata.rs",
+                 "codex-rs/core/src/session/session.rs",
+                 "codex-rs/core/src/turn_metadata_tests.rs",
                  "codex-rs/protocol/src/models.rs"
                ]
              }
@@ -123,7 +127,8 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTriggerTest do
       assert contract["v2_trigger_metadata"]
              |> Map.fetch!("x-codex-turn-metadata")
              |> Jason.decode!() == %{
-               "context_window_id" => "00000000-0000-4000-8000-000000000150",
+               "window_number" => 0,
+               "context_window_id" => "00000000-0000-4000-8000-000000000152",
                "compaction" => %{"implementation" => "responses_compaction_v2"}
              }
 
@@ -304,16 +309,36 @@ defmodule CodexPooler.Gateway.Payloads.CompactionTriggerTest do
       fixture = load_fixture!()
 
       assert fixture["fixture_source"] == %{
-               "tag" => "rust-v0.150.0",
-               "annotated_tag_object" => "9bdd7a39c5034657dfbbb89381cd9364f61eee11",
-               "peeled_commit" => "3b3b4f8fb3f6403e72c2d0533ed0d2f309c59717",
+               "tag" => "rust-v0.152.0",
+               "annotated_tag_object" => "7f6bee13af649d0da23ac0c2bf5c83f571fcd611",
+               "peeled_commit" => "316795b3cf2a45e90d121d9f46499d4658b2645c",
                "source_paths" => [
-                 "codex-rs/core/src/compact_remote_v2_attempt.rs",
                  "codex-rs/core/src/client.rs",
+                 "codex-rs/core/src/compact_remote_v2.rs",
+                 "codex-rs/core/src/compact_remote_v2_attempt.rs",
                  "codex-rs/core/src/responses_metadata.rs",
-                 "codex-rs/core/src/turn_metadata_tests.rs"
+                 "codex-rs/core/src/session/session.rs",
+                 "codex-rs/core/src/turn_metadata_tests.rs",
+                 "codex-rs/protocol/src/models.rs"
                ]
              }
+
+      assert fixture["request"]
+             |> get_in(["client_metadata", "x-codex-turn-metadata"])
+             |> Jason.decode!()
+             |> Map.take(["window_number", "context_window_id", "request_kind", "compaction"]) ==
+               %{
+                 "window_number" => 0,
+                 "context_window_id" => "00000000-0000-4000-8000-000000000152",
+                 "request_kind" => "compaction",
+                 "compaction" => %{
+                   "trigger" => "auto",
+                   "reason" => "context_limit",
+                   "implementation" => "responses_compaction_v2",
+                   "phase" => "mid_turn",
+                   "strategy" => "memento"
+                 }
+               }
 
       assert result_transport(fixture["request"]) == :sse
     end
