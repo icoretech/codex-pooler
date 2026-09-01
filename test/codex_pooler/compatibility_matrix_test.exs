@@ -792,7 +792,10 @@ defmodule CodexPooler.CompatibilityMatrixTest do
       assert feature.contract =~ "metadata-only"
       assert feature.contract =~ "payload_compression"
       assert feature.contract =~ "command-backed file reads"
-      assert feature.contract =~ "remain byte-exact before output range lookup or content detection"
+
+      assert feature.contract =~
+               "remain byte-exact before output range lookup or content detection"
+
       assert feature.contract =~ "malformed or unrecognized commands retain existing behavior"
       assert feature.contract =~ "valid JSON object or array spans embedded in ordinary prose"
 

@@ -13,9 +13,15 @@ defmodule CodexPooler.Gateway.RequestCompression.DirectReadCommandTest do
       %{"cmd" => "head src/example.ex"},
       %{"cmd" => "head -n 75 -- src/example.ex"},
       %{"cmd" => "head -75 src/example.ex"},
+      %{"cmd" => "head -- -n src/example.ex"},
+      %{"cmd" => "head -- -10"},
+      %{"cmd" => "head -- -generated.txt"},
       %{"cmd" => "tail src/example.ex"},
       %{"cmd" => "tail -n 75 src/example.ex"},
       %{"cmd" => "tail -75 -- -generated.txt"},
+      %{"cmd" => "tail -- -n src/example.ex"},
+      %{"cmd" => "tail -- -10"},
+      %{"cmd" => "tail -- -generated.txt"},
       %{"cmd" => "sed -n 1p src/example.ex"},
       %{"cmd" => "sed -n 1,75p -- src/example.ex"},
       %{"cmd" => "sed -n '$p' src/example.ex"},
@@ -132,7 +138,6 @@ defmodule CodexPooler.Gateway.RequestCompression.DirectReadCommandTest do
       "head -n -1 src/example.ex",
       "head -n 1x src/example.ex",
       "head '-n' 1 src/example.ex",
-      "head -- -n src/example.ex",
       "tail -c 10 src/example.ex",
       "sed -n 1p",
       "sed -ne 1p src/example.ex",
@@ -204,6 +209,29 @@ defmodule CodexPooler.Gateway.RequestCompression.DirectReadCommandTest do
     ]
 
     assert Enum.all?(accepted, &DirectReadCommand.read?/1)
+  end
+
+  @tag :command_read_protection
+  test "recognizes literal shell operator bytes as native filename arguments" do
+    accepted = [
+      native_call(%{"id" => "shell_pipe_filename"}, ["cat", "|"]),
+      native_call(%{"id" => "shell_operator_filename"}, ["cat", ";&<>(){}!#$`"])
+    ]
+
+    assert Enum.all?(accepted, &DirectReadCommand.read?/1)
+  end
+
+  @tag :command_read_protection
+  test "rejects control bytes in native argv file operands" do
+    rejected =
+      for byte <- [0, 1, 10, 13, 127] do
+        native_call(%{"id" => "shell_control_#{byte}"}, [
+          "cat",
+          "src/example" <> <<byte>> <> ".ex"
+        ])
+      end
+
+    refute Enum.any?(rejected, &DirectReadCommand.read?/1)
   end
 
   @tag :command_read_protection

@@ -2,6 +2,7 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
   @moduledoc false
 
   alias CodexPooler.Gateway.RequestCompression.ContentDetector
+  alias CodexPooler.Gateway.RequestCompression.DirectReadCommand
   alias CodexPooler.Gateway.RequestCompression.JsonStringRanges
 
   defmodule Candidate do
@@ -69,6 +70,17 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
           required(:candidates) => [Candidate.t()],
           required(:protected_tool_output_skipped_count) => non_neg_integer()
         }
+  @type scan_context :: %{
+          required(:json) => binary(),
+          required(:range_by_path) => %{
+            optional(JsonStringRanges.path()) => JsonStringRanges.range()
+          },
+          required(:skipped_call_ids) => MapSet.t(),
+          required(:known_function_call_ids) => MapSet.t(),
+          required(:schema_bound_call_ids) => MapSet.t(),
+          required(:command_owners) => map(),
+          required(:min_bytes) => non_neg_integer()
+        }
 
   @spec plan(binary(), opts()) :: {:ok, plan()} | {:error, :invalid_json}
   def plan(json, opts \\ []) do
@@ -127,19 +139,22 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
     {skipped_call_ids, known_function_call_ids, schema_bound_call_ids} =
       call_id_sets(items, excluded_function_tool_names, schema_bound_tool_names)
 
+    command_owners = command_owners(items)
+
+    context = %{
+      json: json,
+      range_by_path: range_by_path,
+      skipped_call_ids: skipped_call_ids,
+      known_function_call_ids: known_function_call_ids,
+      schema_bound_call_ids: schema_bound_call_ids,
+      command_owners: command_owners,
+      min_bytes: min_bytes
+    }
+
     candidates =
       items
       |> Enum.reduce([], fn {item, path}, candidates ->
-        case candidate(
-               json,
-               range_by_path,
-               skipped_call_ids,
-               known_function_call_ids,
-               schema_bound_call_ids,
-               item,
-               path,
-               min_bytes
-             ) do
+        case candidate(context, item, path) do
           {:ok, candidate} -> [candidate | candidates]
           :skip -> candidates
         end
@@ -148,46 +163,23 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
 
     %{
       candidates: candidates,
-      protected_tool_output_skipped_count:
-        protected_tool_output_skipped_count(
-          json,
-          range_by_path,
-          items,
-          skipped_call_ids,
-          known_function_call_ids,
-          schema_bound_call_ids,
-          min_bytes
-        )
+      protected_tool_output_skipped_count: protected_tool_output_skipped_count(context, items)
     }
   end
 
   defp collect_candidates(_json, _payload, _ranges, _min_bytes, _excluded_function_tool_names),
     do: %{candidates: [], protected_tool_output_skipped_count: 0}
 
-  defp candidate(
-         json,
-         range_by_path,
-         skipped_call_ids,
-         known_function_call_ids,
-         schema_bound_call_ids,
-         item,
-         path,
-         min_bytes
-       ) do
+  @spec candidate(scan_context(), map(), JsonStringRanges.path()) :: {:ok, Candidate.t()} | :skip
+  defp candidate(context, item, path) do
     with item_type when is_binary(item_type) <- Map.get(item, "type"),
          true <- supported_output_item_type?(item_type),
-         false <-
-           protected_tool_output?(
-             item,
-             skipped_call_ids,
-             known_function_call_ids,
-             schema_bound_call_ids
-           ),
+         false <- protected_tool_output?(item, context),
          output_path <- path ++ ["output"],
          %{byte_start: byte_start, byte_end: byte_end, encoded_byte_size: encoded_byte_size} =
-           range <- Map.get(range_by_path, output_path),
-         {:ok, output} <- JsonStringRanges.decode_string(json, range),
-         true <- byte_size(output) >= min_bytes do
+           range <- Map.get(context.range_by_path, output_path),
+         {:ok, output} <- JsonStringRanges.decode_string(context.json, range),
+         true <- byte_size(output) >= context.min_bytes do
       decision = ContentDetector.detect(output)
 
       {:ok,
@@ -229,6 +221,56 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
 
       {skipped_call_ids, known_call_ids, schema_bound_call_ids}
     end)
+  end
+
+  defp command_owners(items) do
+    Enum.reduce(items, %{aliases: %{}, owners: %{}}, fn {item, path}, registry ->
+      case producer(item, path) do
+        nil -> registry
+        owner -> put_owner(registry, owner)
+      end
+    end)
+  end
+
+  defp producer(%{"type" => "function_call"} = item, path) do
+    case usable_alias(Map.get(item, "call_id")) do
+      nil ->
+        nil
+
+      call_id ->
+        %{
+          path: path,
+          kind: :function_call,
+          aliases: [call_id],
+          read?: DirectReadCommand.read?(item["arguments"])
+        }
+    end
+  end
+
+  defp producer(%{"type" => "local_shell_call"} = item, path) do
+    aliases = usable_aliases(item, ["call_id", "id"])
+
+    if aliases == [] do
+      nil
+    else
+      %{
+        path: path,
+        kind: :local_shell_call,
+        aliases: aliases,
+        read?: DirectReadCommand.read?(item)
+      }
+    end
+  end
+
+  defp producer(_item, _path), do: nil
+
+  defp put_owner(registry, owner) do
+    aliases =
+      Enum.reduce(owner.aliases, registry.aliases, fn alias_id, aliases ->
+        Map.update(aliases, alias_id, MapSet.new([owner.path]), &MapSet.put(&1, owner.path))
+      end)
+
+    %{registry | aliases: aliases, owners: Map.put(registry.owners, owner.path, owner)}
   end
 
   defp put_known_function_call_id(call_ids, %{"type" => "function_call", "call_id" => call_id})
@@ -282,25 +324,80 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
 
   defp excluded_function_tool_call?(_item, _excluded_function_tool_names), do: false
 
-  defp protected_tool_output?(
-         %{"type" => "function_call_output"} = item,
-         skipped_call_ids,
-         known_function_call_ids,
-         schema_bound_call_ids
-       ) do
-    skipped_call_id?(item, skipped_call_ids) or
-      unknown_function_tool_output?(item, known_function_call_ids) or
-      schema_bound_function_tool_output?(item, schema_bound_call_ids)
+  @spec protected_tool_output?(map(), scan_context()) :: boolean()
+  defp protected_tool_output?(%{"type" => "function_call_output"} = item, context) do
+    command_output_protected?(item, context.command_owners) or
+      skipped_call_id?(item, context.skipped_call_ids) or
+      unknown_function_tool_output?(item, context.known_function_call_ids) or
+      schema_bound_function_tool_output?(item, context.schema_bound_call_ids)
   end
 
-  defp protected_tool_output?(
-         item,
-         skipped_call_ids,
-         _known_function_call_ids,
-         _schema_bound_call_ids
-       ) do
-    skipped_call_id?(item, skipped_call_ids)
+  defp protected_tool_output?(item, context) do
+    command_output_protected?(item, context.command_owners) or
+      skipped_call_id?(item, context.skipped_call_ids)
   end
+
+  defp command_output_protected?(item, command_owners) do
+    case resolve_command_owner(item, command_owners) do
+      :ambiguous -> true
+      {:resolved, %{read?: true}} -> true
+      _unprotected -> false
+    end
+  end
+
+  defp resolve_command_owner(%{"type" => "function_call_output"} = item, registry) do
+    resolve_aliases(usable_aliases(item, ["call_id"]), registry, [
+      :function_call,
+      :local_shell_call
+    ])
+  end
+
+  defp resolve_command_owner(%{"type" => "local_shell_call_output"} = item, registry) do
+    resolve_aliases(usable_aliases(item, ["call_id", "id"]), registry, [:local_shell_call])
+  end
+
+  defp resolve_command_owner(_item, _registry), do: :unresolved
+
+  defp resolve_aliases([], _registry, _allowed_kinds), do: :unresolved
+
+  defp resolve_aliases(alias_ids, registry, allowed_kinds) do
+    owner_sets = Enum.map(alias_ids, &Map.get(registry.aliases, &1))
+
+    cond do
+      Enum.all?(owner_sets, &is_nil/1) ->
+        :unresolved
+
+      Enum.any?(owner_sets, &is_nil/1) ->
+        :ambiguous
+
+      Enum.any?(owner_sets, &(MapSet.size(&1) != 1)) ->
+        :ambiguous
+
+      true ->
+        owner_paths = Enum.map(owner_sets, &(&1 |> MapSet.to_list() |> hd()))
+        resolve_single_owner(Enum.uniq(owner_paths), registry, allowed_kinds)
+    end
+  end
+
+  defp resolve_single_owner([owner_path], registry, allowed_kinds) do
+    owner = Map.fetch!(registry.owners, owner_path)
+    if owner.kind in allowed_kinds, do: {:resolved, owner}, else: :ambiguous
+  end
+
+  defp resolve_single_owner(_owner_paths, _registry, _allowed_kinds), do: :ambiguous
+
+  defp usable_aliases(item, keys) do
+    keys
+    |> Enum.map(&usable_alias(Map.get(item, &1)))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp usable_alias(value) when is_binary(value) do
+    if String.trim(value) == "", do: nil, else: value
+  end
+
+  defp usable_alias(_value), do: nil
 
   defp unknown_function_tool_output?(%{"call_id" => call_id}, known_function_call_ids)
        when is_binary(call_id) and call_id != "" do
@@ -327,52 +424,22 @@ defmodule CodexPooler.Gateway.RequestCompression.ResponsesLiveZone do
     MapSet.member?(@supported_output_item_types, item_type)
   end
 
-  defp protected_tool_output_skipped_count(
-         json,
-         range_by_path,
-         items,
-         skipped_call_ids,
-         known_function_call_ids,
-         schema_bound_call_ids,
-         min_bytes
-       ) do
+  defp protected_tool_output_skipped_count(context, items) do
     Enum.count(items, fn {item, path} ->
-      protected_tool_output_skipped?(
-        json,
-        range_by_path,
-        item,
-        path,
-        skipped_call_ids,
-        known_function_call_ids,
-        schema_bound_call_ids,
-        min_bytes
-      )
+      protected_tool_output_skipped?(context, item, path)
     end)
   end
 
-  defp protected_tool_output_skipped?(
-         json,
-         range_by_path,
-         item,
-         path,
-         skipped_call_ids,
-         known_function_call_ids,
-         schema_bound_call_ids,
-         min_bytes
-       ) do
+  @spec protected_tool_output_skipped?(scan_context(), map(), JsonStringRanges.path()) ::
+          boolean()
+  defp protected_tool_output_skipped?(context, item, path) do
     with item_type when is_binary(item_type) <- Map.get(item, "type"),
          true <- supported_output_item_type?(item_type),
-         true <-
-           protected_tool_output?(
-             item,
-             skipped_call_ids,
-             known_function_call_ids,
-             schema_bound_call_ids
-           ),
+         true <- protected_tool_output?(item, context),
          output_path <- path ++ ["output"],
-         range when is_map(range) <- Map.get(range_by_path, output_path),
-         {:ok, output} <- JsonStringRanges.decode_string(json, range) do
-      byte_size(output) >= min_bytes
+         range when is_map(range) <- Map.get(context.range_by_path, output_path),
+         {:ok, output} <- JsonStringRanges.decode_string(context.json, range) do
+      byte_size(output) >= context.min_bytes
     else
       _not_protected -> false
     end
